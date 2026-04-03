@@ -247,6 +247,7 @@ describe("ask_me tool interception", () => {
 // ─── Column tool resolution ───────────────────────────────────────────────────
 
 import { resolveToolsForColumn } from "../workflow/tools.ts";
+import { getChatCallCount } from "../ai/fake.ts";
 
 describe("resolveToolsForColumn", () => {
   it("returns only named tools when column specifies a tools array", () => {
@@ -317,13 +318,14 @@ describe("spawn_agent tool interception", () => {
     // Wait a tick for DB writes to flush
     await new Promise((r) => setTimeout(r, 50));
 
-    // Final assistant message should reflect the post-spawn response
+    // Final assistant message should exist (content comes from chat() streaming now)
     const assistantMsg = db
       .query<{ content: string }, [number]>(
         "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'assistant' ORDER BY id DESC LIMIT 1",
       )
       .get(taskId);
-    expect(assistantMsg!.content).toBe("Both files written successfully.");
+    expect(assistantMsg).not.toBeNull();
+    expect(assistantMsg!.content.length).toBeGreaterThan(0);
 
     // A tool_result message for spawn_agent should have been persisted
     const toolResult = db
@@ -336,5 +338,99 @@ describe("spawn_agent tool interception", () => {
     expect(results.length).toBe(2);
     expect(results[0]).toContain("Wrote src/a.ts");
     expect(results[1]).toContain("Wrote src/b.ts");
+  }, 15_000);
+});
+
+// ─── Streaming via chat() ─────────────────────────────────────────────────────
+
+describe("streaming (chat() always used for final response)", () => {
+  it("calls chat() even when tools are enabled and model returns text immediately (no tool calls)", async () => {
+    // FakeAI.turn() will return text right away (no tool call scripted) — the engine
+    // must still route to chat() (true streaming) rather than replaying the turn's
+    // text synchronously.
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+
+    // Seed a worktree so the engine enters the tool-call loop (tools.length > 0)
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    const tokens: string[] = [];
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+
+    await handleHumanTurn(
+      taskId,
+      "What is the plan?",
+      (_, __, token, isDone) => {
+        if (isDone) resolveDone();
+        else tokens.push(token);
+      },
+      noop,
+      noop,
+    );
+
+    await donePromise;
+
+    // chat() must have been invoked (proves true streaming path was taken)
+    expect(getChatCallCount()).toBeGreaterThan(0);
+    // Multiple tokens should have arrived (FakeAI.chat yields word-by-word)
+    expect(tokens.length).toBeGreaterThan(1);
+  }, 10_000);
+
+  it("calls chat() after tool calls are resolved, delivering streaming tokens", async () => {
+    // Round 1: model calls a tool
+    queueTurnResponse({
+      type: "tool_calls",
+      calls: [
+        {
+          id: "call_read1",
+          type: "function",
+          function: { name: "read_file", arguments: JSON.stringify({ path: "index.ts" }) },
+        },
+      ],
+    });
+    // Round 2: model returns text after seeing tool result — engine must stream via chat()
+    queueTurnResponse({ type: "text", content: "The file looks good." });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    const tokens: string[] = [];
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+
+    await handleHumanTurn(
+      taskId,
+      "Read the main file.",
+      (_, __, token, isDone) => {
+        if (isDone) resolveDone();
+        else tokens.push(token);
+      },
+      noop,
+      noop,
+    );
+
+    await donePromise;
+
+    // chat() must have been called for the streaming final response
+    expect(getChatCallCount()).toBeGreaterThan(0);
+    // Tokens should have arrived progressively
+    expect(tokens.length).toBeGreaterThan(1);
+
+    // tool_call and tool_result messages must be in the conversation
+    const toolCall = db
+      .query<{ type: string }, [number]>(
+        "SELECT type FROM conversation_messages WHERE task_id = ? AND type = 'tool_call' LIMIT 1",
+      )
+      .get(taskId);
+    expect(toolCall).not.toBeNull();
   }, 15_000);
 });

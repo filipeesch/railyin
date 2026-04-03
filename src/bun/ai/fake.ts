@@ -5,6 +5,7 @@ import type { AIProvider, AIMessage, AITurnResult, AICallOptions } from "./types
 
 const _scriptedTurnResponses: AITurnResult[] = [];
 const _capturedTurnOptions: AICallOptions[] = [];
+let _chatCallCount = 0;
 
 /** Queue a response to be returned by the next `turn()` call (FIFO). */
 export function queueTurnResponse(result: AITurnResult): void {
@@ -16,10 +17,16 @@ export function getCapturedTurnOptions(): AICallOptions[] {
   return [..._capturedTurnOptions];
 }
 
+/** Return the number of times `chat()` has been called since last reset. */
+export function getChatCallCount(): number {
+  return _chatCallCount;
+}
+
 /** Reset scripted responses and captured calls. Call in `afterEach`. */
 export function resetFakeAI(): void {
   _scriptedTurnResponses.length = 0;
   _capturedTurnOptions.length = 0;
+  _chatCallCount = 0;
 }
 
 const FAKE_RESPONSES = [
@@ -47,6 +54,7 @@ export class FakeAIProvider implements AIProvider {
   }
 
   async *chat(messages: AIMessage[], _options: AICallOptions = {}): AsyncIterable<string> {
+    _chatCallCount++;
     // Pick a deterministic response based on message count
     const response = FAKE_RESPONSES[messages.length % FAKE_RESPONSES.length];
     const words = response.split(" ");

@@ -423,7 +423,6 @@ async function runExecution(
 
     const tools = toolCtx ? resolveToolsForColumn(column?.tools) : [];
     const liveMessages: AIMessage[] = [...messages];
-    let turnTextResponse: string | null = null;
 
     if (tools.length > 0) {
       let toolRounds = 0;
@@ -437,7 +436,7 @@ async function runExecution(
         const turn = await provider.turn(liveMessages, { tools, signal });
 
         if (turn.type === "text") {
-          turnTextResponse = (turn.content && turn.content.length > 0) ? turn.content : null;
+          // Model is done with tools — stream the final response via chat() below
           break;
         }
 
@@ -575,20 +574,16 @@ async function runExecution(
     }
 
     // ── Stream the final text response ────────────────────────────────────────
+    // Always use provider.chat() (true async streaming). When the tool-call loop
+    // exited because the model returned text (no tool calls), liveMessages holds
+    // everything up to that point; chat() re-requests the same final answer with
+    // streaming so tokens are delivered progressively to the UI.
     let fullResponse = "";
 
     try {
-      if (turnTextResponse !== null) {
-        for (const char of turnTextResponse) {
-          if (signal.aborted) break;
-          fullResponse += char;
-          onToken(taskId, executionId, char, false);
-        }
-      } else {
-        for await (const token of provider.chat(liveMessages, { signal })) {
-          fullResponse += token;
-          onToken(taskId, executionId, token, false);
-        }
+      for await (const token of provider.chat(liveMessages, { signal })) {
+        fullResponse += token;
+        onToken(taskId, executionId, token, false);
       }
     } catch (streamErr) {
       // Distinguish abort from real stream errors
