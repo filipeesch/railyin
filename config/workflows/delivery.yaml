@@ -11,11 +11,17 @@ columns:
     on_enter_prompt: |
       Create a clear, detailed implementation plan for this task.
       Break it down into concrete steps. Focus on WHAT needs to be
-      done and WHY, not implementation details.
+      done and WHY, not implementation details. If you need
+      clarification from the user, use the ask_user tool.
     stage_instructions: |
       You are in the Planning phase. Do NOT write code or
       implementation details. Focus only on understanding the
       problem and defining what needs to be done.
+    # Tools available to the model in this column:
+    tools:
+      - read_file
+      - list_dir
+      - ask_user
 
   - id: in_progress
     label: In Progress
@@ -27,6 +33,12 @@ columns:
       You are in the Implementation phase. Work in the Git
       worktree provided. Make minimal, focused changes. Follow
       the plan established in the planning phase.
+    # Tools available to the model in this column:
+    tools:
+      - read_file
+      - list_dir
+      - run_command
+      - ask_user
 
   - id: in_review
     label: In Review

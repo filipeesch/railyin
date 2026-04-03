@@ -52,7 +52,53 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["command"],
     },
   },
+  {
+    name: "ask_user",
+    description:
+      "Ask the user a question and present structured options for them to choose from. Use this when you need clarification or a decision from the user before proceeding. The execution will pause until the user responds.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "The question to ask the user.",
+        },
+        selection_mode: {
+          type: "string",
+          enum: ["single", "multi"],
+          description: "Whether the user can select one option ('single') or multiple ('multi').",
+        },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description: "The list of options to present to the user.",
+        },
+      },
+      required: ["question", "selection_mode", "options"],
+    },
+  },
 ];
+
+/** Default tool names used when a column has no explicit 'tools' config. */
+const DEFAULT_TOOL_NAMES = ["read_file", "list_dir", "run_command"];
+
+/**
+ * Resolve the tool definitions to offer for a given column.
+ * If the column declares a 'tools' array, only those tools are returned.
+ * If omitted, the default set is used. Unknown names are skipped with a warning.
+ */
+export function resolveToolsForColumn(columnTools: string[] | undefined): AIToolDefinition[] {
+  const names = columnTools ?? DEFAULT_TOOL_NAMES;
+  const byName = new Map(TOOL_DEFINITIONS.map((t) => [t.name, t]));
+  return names.flatMap((name) => {
+    const def = byName.get(name);
+    if (!def) {
+      console.warn(`[tools] Unknown tool "${name}" in column config — skipping`);
+      return [];
+    }
+    return [def];
+  });
+}
 
 // ─── Safety: block writes & destructive ops ───────────────────────────────────
 

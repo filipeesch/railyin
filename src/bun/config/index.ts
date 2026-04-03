@@ -27,6 +27,7 @@ export interface WorkflowColumnConfig {
   stage_instructions?: string;
   allowed_transitions?: string[];
   is_backlog?: boolean;
+  tools?: string[];
 }
 
 export interface WorkflowTemplateConfig {

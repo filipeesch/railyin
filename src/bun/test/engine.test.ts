@@ -13,6 +13,7 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { handleHumanTurn, handleTransition } from "../workflow/engine.ts";
+import { queueTurnResponse, getCapturedTurnOptions, resetFakeAI } from "../ai/fake.ts";
 import type { Database } from "bun:sqlite";
 
 let db: Database;
@@ -36,6 +37,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(gitDir, { recursive: true, force: true });
   configCleanup();
+  resetFakeAI();
 });
 
 function noop() {}
@@ -170,4 +172,96 @@ describe("handleTransition", () => {
       .get(executionId!);
     expect(["running", "completed"]).toContain(exec!.status);
   }, 10_000);
+});
+
+// ─── ask_user interception ────────────────────────────────────────────────────
+
+describe("ask_user tool interception", () => {
+  it("sets execution_state to waiting_user and writes ask_user_prompt message", async () => {
+    // Queue a scripted ask_user tool call as the first AI response
+    queueTurnResponse({
+      type: "tool_calls",
+      calls: [
+        {
+          id: "call_ask1",
+          type: "function",
+          function: {
+            name: "ask_user",
+            arguments: JSON.stringify({
+              question: "Which approach do you prefer?",
+              selection_mode: "single",
+              options: ["Option A", "Option B"],
+            }),
+          },
+        },
+      ],
+    });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+
+    // Provide a worktree so the engine enables the tool-call loop
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    // runExecution fires async; use onTaskUpdated callback to detect waiting_user state
+    let resolveWaiting!: () => void;
+    const waitingPromise = new Promise<void>((resolve) => { resolveWaiting = resolve; });
+    const onTaskUpdated = (task: { executionState: string }) => {
+      if (task.executionState === "waiting_user") resolveWaiting();
+    };
+
+    await handleHumanTurn(taskId, "Start planning.", noop, noop, onTaskUpdated as never);
+    await waitingPromise;
+
+    // Engine should have suspended — task is waiting_user
+    const task = db
+      .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(task!.execution_state).toBe("waiting_user");
+
+    // An ask_user_prompt message should have been written to the conversation
+    const promptMsg = db
+      .query<{ type: string; content: string }, [number]>(
+        "SELECT type, content FROM conversation_messages WHERE task_id = ? AND type = 'ask_user_prompt' LIMIT 1",
+      )
+      .get(taskId);
+    expect(promptMsg).not.toBeNull();
+    const payload = JSON.parse(promptMsg!.content);
+    expect(payload.question).toBe("Which approach do you prefer?");
+    expect(payload.selection_mode).toBe("single");
+    expect(payload.options).toEqual(["Option A", "Option B"]);
+
+    // The execution record should reflect waiting_user status
+    const exec = db
+      .query<{ status: string }, [number]>(
+        "SELECT status FROM executions WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+      )
+      .get(taskId);
+    expect(exec!.status).toBe("waiting_user");
+  });
+});
+
+// ─── Column tool resolution ───────────────────────────────────────────────────
+
+import { resolveToolsForColumn } from "../workflow/tools.ts";
+
+describe("resolveToolsForColumn", () => {
+  it("returns only named tools when column specifies a tools array", () => {
+    const tools = resolveToolsForColumn(["read_file"]);
+    const names = tools.map((t) => t.name);
+    expect(names).toEqual(["read_file"]);
+    expect(names).not.toContain("list_dir");
+    expect(names).not.toContain("run_command");
+  });
+
+  it("returns the default tool set when column has no tools key", () => {
+    const tools = resolveToolsForColumn(undefined);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read_file");
+    expect(names).toContain("list_dir");
+    expect(names).toContain("run_command");
+  });
 });

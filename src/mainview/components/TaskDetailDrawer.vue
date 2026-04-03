@@ -34,9 +34,10 @@
         <div class="task-detail__conversation" ref="scrollEl" @scroll.passive="onScroll">
           <div class="conversation-inner">
             <MessageBubble
-              v-for="msg in taskStore.messages"
+              v-for="(msg, idx) in taskStore.messages"
               :key="msg.id"
               :chunk="msg"
+              :index="idx"
             />
 
             <!-- Live streaming bubble (only when this task is the one streaming) -->
@@ -99,7 +100,7 @@
           <!-- Retry button (9.5) -->
           <div
             class="side-section"
-            v-if="task.executionState === 'failed' || task.executionState === 'waiting_user'"
+            v-if="task.executionState === 'failed'"
           >
             <Button
               label="Retry"

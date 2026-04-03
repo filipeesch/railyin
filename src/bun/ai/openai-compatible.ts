@@ -25,6 +25,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       model: this.model,
       messages: messages.map(toWireMessage),
       stream: false,
+      enable_thinking: false,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
     };
 

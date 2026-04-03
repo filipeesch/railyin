@@ -37,14 +37,36 @@
     <i class="pi pi-file" />
     <span>{{ chunk.content }}</span>
   </div>
+
+  <div v-else-if="chunk.type === 'ask_user_prompt'" class="msg msg--ask-prompt">
+    <AskUserPrompt
+      :question="askPayload.question"
+      :selection-mode="askPayload.selection_mode"
+      :options="askPayload.options"
+      :answered-text="answeredText"
+      @submit="onAskSubmit"
+    />
+  </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { marked } from "marked";
 import type { ConversationMessage } from "@shared/rpc-types";
+import AskUserPrompt from "./AskUserPrompt.vue";
+import { useTaskStore } from "../stores/task";
 
-const props = defineProps<{ chunk: ConversationMessage }>();
+const props = defineProps<{
+  chunk: ConversationMessage;
+  /** Index of this message in the full list — used to detect if ask_user_prompt was answered */
+  index?: number;
+}>();
+
+const emit = defineEmits<{
+  sendMessage: [content: string];
+}>();
+
+const taskStore = useTaskStore();
 
 function renderMd(content: string): string {
   return marked.parse(content, { async: false }) as string;
@@ -65,6 +87,35 @@ const truncated = computed(() => {
   const c = props.chunk.content;
   return c.length > 800 ? c.slice(0, 800) + "\n…[truncated]" : c;
 });
+
+// ─── ask_user_prompt support ──────────────────────────────────────────────────
+
+const askPayload = computed(() => {
+  if (props.chunk.type !== "ask_user_prompt") {
+    return { question: "", selection_mode: "single" as const, options: [] as string[] };
+  }
+  try {
+    const p = JSON.parse(props.chunk.content) as { question: string; selection_mode: "single" | "multi"; options: string[] };
+    return p;
+  } catch {
+    return { question: props.chunk.content, selection_mode: "single" as const, options: [] as string[] };
+  }
+});
+
+/** The answer text if a user message follows this prompt in conversation history. */
+const answeredText = computed(() => {
+  if (props.chunk.type !== "ask_user_prompt" || props.index === undefined) return undefined;
+  const messages = taskStore.messages;
+  const later = messages.slice(props.index + 1);
+  const reply = later.find((m) => m.type === "user");
+  return reply?.content;
+});
+
+async function onAskSubmit(answer: string) {
+  const taskId = taskStore.activeTaskId;
+  if (taskId === null) return;
+  await taskStore.sendMessage(taskId, answer);
+}
 </script>
 
 <style scoped>
@@ -235,5 +286,10 @@ const truncated = computed(() => {
   color: var(--p-text-color, #334155);
   max-height: 200px;
   overflow-y: auto;
+}
+
+.msg--ask-prompt {
+  align-items: flex-start;
+  max-width: 100%;
 }
 </style>

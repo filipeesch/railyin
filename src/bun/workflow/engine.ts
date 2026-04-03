@@ -5,7 +5,7 @@ import type { AIMessage } from "../ai/types.ts";
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
-import { TOOL_DEFINITIONS, executeTool } from "./tools.ts";
+import { resolveToolsForColumn, executeTool } from "./tools.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -243,6 +243,8 @@ async function runExecution(
 
   try {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+    const templateId = getBoardTemplateId(task.board_id);
+    const column = getColumnConfig(templateId, task.workflow_state);
     const history = db
       .query<ConversationMessageRow, [number]>(
         "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
@@ -286,8 +288,9 @@ async function runExecution(
       ? { worktreePath: gitContext.worktree_path }
       : null;
 
-    // Whether to offer tools (only when a worktree is available)
-    const tools = toolCtx ? TOOL_DEFINITIONS : [];
+    // Whether to offer tools (only when a worktree is available).
+    // Filter by column's tools config; fall back to defaults when absent.
+    const tools = toolCtx ? resolveToolsForColumn(column?.tools) : [];
 
     // Live messages list — we'll extend it with tool rounds
     const liveMessages: AIMessage[] = [...messages];
@@ -306,7 +309,9 @@ async function runExecution(
           // Model is done with tool calls — capture the final text so we don't
           // need an extra chat() round-trip that would cause the model to re-read
           // tool results and echo them back instead of giving a real answer.
-          turnTextResponse = turn.content ?? null;
+          // Treat empty content as null so we fall through to the streaming chat() call.
+          // Some thinking-mode models return content:"" with all output in reasoning_content.
+          turnTextResponse = (turn.content && turn.content.length > 0) ? turn.content : null;
           break;
         }
 
@@ -319,6 +324,32 @@ async function runExecution(
           content: "",
           tool_calls: turn.calls,
         });
+
+        // Intercept ask_user before executing any tools — it suspends execution
+        const askUserCall = turn.calls.find((c) => c.function.name === "ask_user");
+        if (askUserCall) {
+          let payload: { question: string; selection_mode: string; options: string[] };
+          try {
+            payload = JSON.parse(askUserCall.function.arguments);
+          } catch {
+            payload = { question: askUserCall.function.arguments, selection_mode: "single", options: [] };
+          }
+          appendMessage(
+            taskId,
+            task.conversation_id ?? 0,
+            "ask_user_prompt" as MessageType,
+            null,
+            JSON.stringify(payload),
+          );
+          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+          db.run(
+            "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+            [executionId],
+          );
+          const waitingRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+          if (waitingRow) onTaskUpdated(mapTask(waitingRow));
+          return; // suspend — do not continue tool loop or stream
+        }
 
         // Execute each tool and append results
         for (const call of turn.calls) {

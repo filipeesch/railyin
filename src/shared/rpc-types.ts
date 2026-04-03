@@ -58,7 +58,8 @@ export type MessageType =
   | "tool_call"
   | "tool_result"
   | "transition_event"
-  | "artifact_event";
+  | "artifact_event"
+  | "ask_user_prompt";
 
 export interface ConversationMessage {
   id: number;
