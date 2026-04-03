@@ -1,10 +1,14 @@
 import { getDb } from "../db/index.ts";
-import { getConfig } from "../config/index.ts";
+import { getConfig, resetConfig, loadConfig } from "../config/index.ts";
 import type { WorkspaceConfig } from "../../shared/rpc-types.ts";
 
 export function workspaceHandlers() {
   return {
     "workspace.getConfig": async (): Promise<WorkspaceConfig> => {
+      // Always reload from disk so the Reload config button picks up changes
+      resetConfig();
+      const { error } = loadConfig();
+      if (error) throw new Error(error);
       const db = getDb();
       const config = getConfig();
 

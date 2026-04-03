@@ -20,3 +20,9 @@ export function getDb(): Database {
   }
   return _db;
 }
+
+/** Only for tests — closes and discards the current DB singleton. */
+export function _resetForTests(): void {
+  _db?.close();
+  _db = null;
+}

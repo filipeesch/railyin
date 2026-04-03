@@ -42,7 +42,7 @@ const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
       ...workspaceHandlers(),
       ...boardHandlers(),
       ...projectHandlers(),
-      ...taskHandlers(onToken, onError),
+      ...taskHandlers(onToken, onError, notifyTaskUpdated),
       ...conversationHandlers(),
     },
     messages: {},

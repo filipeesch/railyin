@@ -1,4 +1,4 @@
-import type { AIProvider, AIMessage } from "./types.ts";
+import type { AIProvider, AIMessage, AITurnResult } from "./types.ts";
 
 const FAKE_RESPONSES = [
   "I've analysed the task and here is my plan:\n\n1. First, I'll review the existing code structure.\n2. Then I'll identify the key integration points.\n3. Finally, I'll implement the changes incrementally.\n\nLet me start by reading the relevant files.",
@@ -11,6 +11,12 @@ export class FakeAIProvider implements AIProvider {
 
   constructor(delayMs = 30) {
     this.delayMs = delayMs;
+  }
+
+  async turn(messages: AIMessage[]): Promise<AITurnResult> {
+    // Fake provider never issues tool calls — return text directly
+    const response = FAKE_RESPONSES[messages.length % FAKE_RESPONSES.length];
+    return { type: "text", content: response };
   }
 
   async *chat(messages: AIMessage[]): AsyncIterable<string> {

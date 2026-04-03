@@ -5,6 +5,7 @@ import type { AIMessage } from "../ai/types.ts";
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
+import { TOOL_DEFINITIONS, executeTool } from "./tools.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -18,6 +19,7 @@ const CONTEXT_WARN_FRACTION = 0.8;
 
 export type OnToken = (taskId: number, executionId: number, token: string, done: boolean) => void;
 export type OnError = (taskId: number, executionId: number, error: string) => void;
+export type OnTaskUpdated = (task: Task) => void;
 
 // ─── Helper: get column config ────────────────────────────────────────────────
 
@@ -88,10 +90,18 @@ function assembleMessages(
   // Task 6.5: Inject git/worktree context when worktree is ready
   if (gitContext?.worktree_status === "ready" && gitContext.worktree_path) {
     const lines = [
-      "Git context for this task:",
-      `  git_root_path:  ${gitContext.git_root_path}`,
-      `  project_path:  ${gitContext.project_path}`,
-      `  worktree_path: ${gitContext.worktree_path}`,
+      "## Worktree context",
+      `You are working inside a dedicated Git worktree for this task.`,
+      `- worktree_path: ${gitContext.worktree_path}`,
+      `- git_root_path: ${gitContext.git_root_path}`,
+      `- project_path:  ${gitContext.project_path}`,
+      "",
+      "You have access to the following tools to inspect the project files:",
+      "- list_dir(path): list files/directories relative to the worktree root",
+      "- read_file(path): read the contents of a file",
+      "- run_command(command): run a read-only shell command (grep, git log, git diff, etc.)",
+      "",
+      "Use these tools to understand the codebase before responding.",
     ];
     messages.push({ role: "system", content: lines.join("\n") });
   }
@@ -157,6 +167,7 @@ export async function handleTransition(
   toState: string,
   onToken: OnToken,
   onError: OnError,
+  onTaskUpdated: OnTaskUpdated,
 ): Promise<{ task: Task; executionId: number | null }> {
   const db = getDb();
 
@@ -210,7 +221,7 @@ export async function handleTransition(
 
   // 8. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, onToken, onError).catch(
+  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, onToken, onError, onTaskUpdated).catch(
     () => {},
   );
 
@@ -226,6 +237,7 @@ async function runExecution(
   stageInstructions: string | undefined,
   onToken: OnToken,
   onError: OnError,
+  onTaskUpdated: OnTaskUpdated,
 ): Promise<void> {
   const db = getDb();
 
@@ -266,16 +278,117 @@ async function runExecution(
     const config = getConfig();
     const provider = createProvider(config.workspace.ai);
 
+    // ── Tool-call loop ────────────────────────────────────────────────────────
+    // Run non-streaming turns until the model stops issuing tool calls, then
+    // stream the final text response to the user.
+    const MAX_TOOL_ROUNDS = 10;
+    const toolCtx = gitContext?.worktree_path
+      ? { worktreePath: gitContext.worktree_path }
+      : null;
+
+    // Whether to offer tools (only when a worktree is available)
+    const tools = toolCtx ? TOOL_DEFINITIONS : [];
+
+    // Live messages list — we'll extend it with tool rounds
+    const liveMessages: AIMessage[] = [...messages];
+    // If the model returns text directly from a non-streaming turn(), capture it here
+    // so we can skip the redundant chat() streaming call.
+    let turnTextResponse: string | null = null;
+
+    // Only run the non-streaming tool loop when tools are actually available.
+    // Without tools, go straight to the streaming response to avoid an extra round-trip.
+    if (tools.length > 0) {
+      let toolRounds = 0;
+      while (toolRounds < MAX_TOOL_ROUNDS) {
+        const turn = await provider.turn(liveMessages, { tools });
+
+        if (turn.type === "text") {
+          // Model is done with tool calls — capture the final text so we don't
+          // need an extra chat() round-trip that would cause the model to re-read
+          // tool results and echo them back instead of giving a real answer.
+          turnTextResponse = turn.content ?? null;
+          break;
+        }
+
+        // Model issued tool calls — execute each one
+        toolRounds++;
+
+        // Append the assistant tool-call message to the live context
+        liveMessages.push({
+          role: "assistant",
+          content: "",
+          tool_calls: turn.calls,
+        });
+
+        // Execute each tool and append results
+        for (const call of turn.calls) {
+          const fnName = call.function.name;
+          const fnArgs = call.function.arguments;
+
+          // Surface the tool call in the conversation log (collapsed in UI)
+          appendMessage(
+            taskId,
+            task.conversation_id ?? 0,
+            "tool_call",
+            null,
+            JSON.stringify({ name: fnName, arguments: fnArgs }),
+          );
+
+          const result = executeTool(fnName, fnArgs, toolCtx!);
+
+          // Truncate large results before storing
+          const storedResult = result.length > TOOL_RESULT_MAX_CHARS
+            ? result.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+            : result;
+
+          appendMessage(
+            taskId,
+            task.conversation_id ?? 0,
+            "tool_result",
+            null,
+            storedResult,
+            { tool_call_id: call.id, name: fnName },
+          );
+
+          // Add tool result to live context for next turn
+          liveMessages.push({
+            role: "tool",
+            content: storedResult,
+            tool_call_id: call.id,
+            name: fnName,
+          });
+        }
+      }
+
+      if (toolRounds >= MAX_TOOL_ROUNDS) {
+        liveMessages.push({
+          role: "user",
+          content: "You have reached the tool call limit. Please summarise your findings and respond now.",
+        });
+      }
+    }
+
+    // ── Stream the final text response ────────────────────────────────────────
     let fullResponse = "";
 
-    // Task 4.5 + 5.7: Stream tokens, handle errors
     try {
-      for await (const token of provider.chat(messages)) {
-        fullResponse += token;
-        onToken(taskId, executionId, token, false);
+      if (turnTextResponse !== null) {
+        // Model already returned its final answer in the non-streaming turn() call.
+        // Emit it token-by-token so the UI sees the streaming behaviour, then we're done.
+        // (Calling chat() again here would cause the model to re-read tool results and echo them.)
+        for (const char of turnTextResponse) {
+          fullResponse += char;
+          onToken(taskId, executionId, char, false);
+        }
+      } else {
+        // No tool loop ran (or loop hit the round limit) — stream the final answer.
+        for await (const token of provider.chat(liveMessages, {})) {
+          fullResponse += token;
+          onToken(taskId, executionId, token, false);
+        }
       }
     } catch (streamErr) {
-      // Task 4.5: On stream error, retain partial response and mark failed
+      // On stream error, retain partial response and mark failed
       if (fullResponse) {
         appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
       }
@@ -290,14 +403,18 @@ async function runExecution(
         [errMsg, executionId],
       );
       onError(taskId, executionId, errMsg);
+      // Notify frontend of failed state
+      const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+      if (failedRow) onTaskUpdated(mapTask(failedRow));
       return;
     }
 
+    // Append full assistant response to conversation BEFORE signalling done,
+    // so the DB is ready if the frontend calls loadMessages immediately.
+    appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
+
     // Signal streaming done
     onToken(taskId, executionId, "", true);
-
-    // Append full assistant response to conversation
-    appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
 
     // Task 5.6: Default execution result to completed
     // (In future, parse structured result from response)
@@ -309,6 +426,9 @@ async function runExecution(
       "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ? WHERE id = ?",
       [fullResponse.slice(0, 500), executionId],
     );
+    // Notify frontend that execution is complete
+    const completedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+    if (completedRow) onTaskUpdated(mapTask(completedRow));
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const task = db.query<{ conversation_id: number }, [number]>(
@@ -323,6 +443,9 @@ async function runExecution(
       [errMsg, executionId],
     );
     onError(taskId, executionId, errMsg);
+    // Notify frontend of failed state
+    const outerFailedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+    if (outerFailedRow) onTaskUpdated(mapTask(outerFailedRow));
   }
 }
 
@@ -333,6 +456,7 @@ export async function handleHumanTurn(
   content: string,
   onToken: OnToken,
   onError: OnError,
+  onTaskUpdated: OnTaskUpdated,
 ): Promise<{ message: ConversationMessage; executionId: number }> {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -364,6 +488,10 @@ export async function handleHumanTurn(
     [executionId, taskId],
   );
 
+  // Notify frontend immediately so the card flips to "running"
+  const runningRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+  onTaskUpdated(mapTask(runningRow));
+
   const msgRow = db
     .query<ConversationMessageRow, [number]>(
       "SELECT * FROM conversation_messages WHERE id = ?",
@@ -371,7 +499,7 @@ export async function handleHumanTurn(
     .get(msgId)!;
 
   // Run async
-  runExecution(taskId, executionId, content, column?.stage_instructions, onToken, onError).catch(
+  runExecution(taskId, executionId, content, column?.stage_instructions, onToken, onError, onTaskUpdated).catch(
     () => {},
   );
 
@@ -384,6 +512,7 @@ export async function handleRetry(
   taskId: number,
   onToken: OnToken,
   onError: OnError,
+  onTaskUpdated: OnTaskUpdated,
 ): Promise<{ task: Task; executionId: number }> {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -426,6 +555,7 @@ export async function handleRetry(
     column?.stage_instructions,
     onToken,
     onError,
+    onTaskUpdated,
   ).catch(() => {});
 
   return { task: mapTask(updatedRow), executionId };

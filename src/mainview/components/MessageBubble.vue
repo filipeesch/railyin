@@ -5,7 +5,7 @@
   </div>
 
   <div v-else-if="chunk.type === 'assistant'" class="msg msg--assistant">
-    <div class="msg__bubble">{{ chunk.content }}</div>
+    <div class="msg__bubble prose" v-html="renderMd(chunk.content)" />
     <div class="msg__meta">AI</div>
   </div>
 
@@ -41,9 +41,14 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { marked } from "marked";
 import type { ConversationMessage } from "@shared/rpc-types";
 
 const props = defineProps<{ chunk: ConversationMessage }>();
+
+function renderMd(content: string): string {
+  return marked.parse(content, { async: false }) as string;
+}
 
 const meta = computed(() => props.chunk.metadata as Record<string, string> | null);
 
@@ -93,8 +98,94 @@ const truncated = computed(() => {
   border-radius: 12px 12px 12px 2px;
   padding: 10px 14px;
   max-width: 85%;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ── Prose styles for rendered markdown ─────────────────────────────────── */
+.prose :deep(p) {
+  margin: 0 0 0.6em;
+  line-height: 1.6;
+}
+.prose :deep(p:last-child) { margin-bottom: 0; }
+
+.prose :deep(h1),
+.prose :deep(h2),
+.prose :deep(h3),
+.prose :deep(h4) {
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
+  line-height: 1.3;
+}
+.prose :deep(h1) { font-size: 1.1rem; }
+.prose :deep(h2) { font-size: 1rem; }
+.prose :deep(h3) { font-size: 0.9rem; }
+
+.prose :deep(ul),
+.prose :deep(ol) {
+  margin: 0.4em 0 0.6em 1.4em;
+  padding: 0;
+}
+.prose :deep(li) { margin: 0.15em 0; line-height: 1.5; }
+
+.prose :deep(code) {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.82em;
+  background: var(--p-surface-100, #f1f5f9);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.prose :deep(pre) {
+  background: var(--p-surface-900, #0f172a);
+  color: var(--p-surface-100, #f1f5f9);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.prose :deep(pre code) {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+.prose :deep(blockquote) {
+  border-left: 3px solid var(--p-surface-300, #cbd5e1);
+  margin: 0.5em 0;
+  padding: 2px 0 2px 12px;
+  color: var(--p-text-muted-color, #94a3b8);
+  font-style: italic;
+}
+
+.prose :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.6em 0;
+  font-size: 0.82rem;
+}
+.prose :deep(th),
+.prose :deep(td) {
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  padding: 5px 10px;
+  text-align: left;
+}
+.prose :deep(th) {
+  background: var(--p-surface-50, #f8fafc);
+  font-weight: 600;
+}
+
+.prose :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--p-surface-200, #e2e8f0);
+  margin: 0.8em 0;
+}
+
+.prose :deep(a) {
+  color: var(--p-primary-color, #6366f1);
+  text-decoration: underline;
 }
 
 .msg__meta {

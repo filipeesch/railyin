@@ -1,32 +1,10 @@
 name: My Workspace
 
 ai:
-  # Provider: openrouter | ollama | lmstudio | fake
-  # Fake AI for UI development (no network required):
-  provider: fake
-  base_url: ""
+  provider: lmstudio
+  base_url: http://localhost:1234/
   api_key: ""
-  model: fake
-
-  # OpenRouter (default — supports many models via one endpoint)
-  # provider: openrouter
-  # base_url: https://openrouter.ai/api/v1
-  # api_key: sk-or-YOUR_KEY_HERE
-  # model: anthropic/claude-3.5-sonnet
-
-  # Ollama local example (no api_key needed):
-  # provider: ollama
-  # base_url: http://localhost:11434/v1
-  # api_key: ""
-  # model: llama3.2
-
-  # LM Studio local example:
-  # provider: lmstudio
-  # base_url: http://localhost:1234/v1
-  # api_key: ""
-  # model: lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF
-
-  # Context window token limit (used for compaction warnings)
+  model: qwen/qwen3.5-9b
   context_window_tokens: 128000
 
 # Where to store Git worktrees. Defaults to ~/.railyn/worktrees

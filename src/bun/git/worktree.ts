@@ -1,5 +1,7 @@
 import { getDb } from "../db/index.ts";
 import { getConfig } from "../config/index.ts";
+import { existsSync, mkdirSync } from "fs";
+import { dirname } from "path";
 import type { TaskRow, TaskGitContextRow } from "../db/row-types.ts";
 
 // ─── Branch naming ────────────────────────────────────────────────────────────
@@ -14,6 +16,33 @@ function slugify(text: string): string {
 
 export function branchName(taskId: number, title: string): string {
   return `task/${taskId}-${slugify(title)}`;
+}
+
+// ─── Resolve git binary path ──────────────────────────────────────────────────
+
+const FALLBACK_GIT_PATHS = ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"];
+
+function resolveGit(): string {
+  // 1. Config override takes top priority
+  const config = getConfig();
+  if (config.workspace.git_path) return config.workspace.git_path;
+
+  // 2. Try Bun.which with augmented PATH
+  const found = Bun.which("git", {
+    PATH: [process.env.PATH, "/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin"]
+      .filter(Boolean)
+      .join(":"),
+  });
+  if (found) return found;
+
+  // 3. Hard-coded fallbacks
+  for (const p of FALLBACK_GIT_PATHS) {
+    if (existsSync(p)) return p;
+  }
+
+  throw new Error(
+    "git not found. Set workspace.git_path in railyn.yaml (e.g. git_path: /usr/bin/git)",
+  );
 }
 
 // ─── Resolve worktree base path ───────────────────────────────────────────────
@@ -48,6 +77,24 @@ export async function createWorktree(
   const branch = branchName(taskId, task.title);
   const worktreePath = `${resolveWorktreeBase(row.git_root_path)}/${branch}`;
 
+  // Validate git root exists — ENOENT on posix_spawn is misleading when cwd is missing
+  if (!existsSync(row.git_root_path)) {
+    db.run(
+      "UPDATE task_git_context SET worktree_status = 'error' WHERE task_id = ?",
+      [taskId],
+    );
+    throw new Error(
+      `git_root_path does not exist: "${row.git_root_path}". ` +
+      `Check the project's Git Root Path in settings.`,
+    );
+  }
+
+  // Ensure worktree parent directory exists (git worktree add requires it)
+  const worktreeParent = dirname(worktreePath);
+  if (!existsSync(worktreeParent)) {
+    mkdirSync(worktreeParent, { recursive: true });
+  }
+
   // Update status to creating
   db.run(
     "UPDATE task_git_context SET worktree_status = 'creating', worktree_path = ?, branch_name = ? WHERE task_id = ?",
@@ -57,7 +104,7 @@ export async function createWorktree(
   try {
     // Task 6.2: Create branch + worktree
     const proc = Bun.spawn(
-      ["git", "worktree", "add", "-b", branch, worktreePath, "HEAD"],
+      [resolveGit(), "worktree", "add", "-b", branch, worktreePath, "HEAD"],
       {
         cwd: row.git_root_path,
         stdout: "pipe",
@@ -105,7 +152,7 @@ export async function removeWorktree(taskId: number): Promise<void> {
   if (!row?.worktree_path) return;
 
   const proc = Bun.spawn(
-    ["git", "worktree", "remove", "--force", row.worktree_path],
+    [resolveGit(), "worktree", "remove", "--force", row.worktree_path],
     {
       cwd: row.git_root_path,
       stdout: "pipe",
@@ -130,8 +177,8 @@ export function registerProjectGitContext(
   const db = getDb();
 
   const existing = db
-    .query<{ id: number }, [number]>(
-      "SELECT id FROM task_git_context WHERE task_id = ?",
+    .query<{ task_id: number }, [number]>(
+      "SELECT task_id FROM task_git_context WHERE task_id = ?",
     )
     .get(taskId);
 
@@ -150,7 +197,10 @@ export function registerProjectGitContext(
 
 // ─── Trigger worktree creation on first active transition ─────────────────────
 
-export async function triggerWorktreeIfNeeded(taskId: number): Promise<void> {
+export async function triggerWorktreeIfNeeded(
+  taskId: number,
+  onStatus?: (msg: string) => void,
+): Promise<void> {
   const db = getDb();
 
   const row = db
@@ -159,8 +209,10 @@ export async function triggerWorktreeIfNeeded(taskId: number): Promise<void> {
     )
     .get(taskId);
 
-  // Only create worktree if git root is known and not yet created
-  if (row?.git_root_path && row.worktree_status === "not_created") {
-    await createWorktree(taskId);
+  // Create worktree if not yet created, or retry after a previous failure
+  if (row?.git_root_path && (row.worktree_status === "not_created" || row.worktree_status === "error")) {
+    onStatus?.("Creating worktree for this task…");
+    const result = await createWorktree(taskId);
+    onStatus?.(`Worktree ready at \`${result.branch}\``);
   }
 }

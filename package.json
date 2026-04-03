@@ -6,24 +6,27 @@
   "scripts": {
     "dev": "vite build && electrobun dev --watch",
     "dev:watch": "concurrently -n vite,electrobun -c cyan,magenta \"vite build --watch\" \"electrobun dev --watch\"",
-    "build:canary": "vite build && electrobun build --env=canary"
+    "build:canary": "vite build && electrobun build --env=canary",
+    "test": "bun test src/bun/test --timeout 20000"
   },
   "dependencies": {
     "electrobun": "latest",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.0",
+    "marked": "^17.0.5"
   },
   "devDependencies": {
+    "@primevue/themes": "^4.0.0",
     "@types/bun": "latest",
     "@types/js-yaml": "^4.0.9",
+    "@types/marked": "^6.0.0",
     "@vitejs/plugin-vue": "^5.2.1",
     "concurrently": "^9.1.2",
+    "pinia": "^2.2.0",
+    "primeicons": "^7.0.0",
+    "primevue": "^4.0.0",
     "typescript": "^5.0.0",
     "vite": "^6.0.0",
     "vue": "^3.5.0",
-    "vue-router": "^4.4.0",
-    "primevue": "^4.0.0",
-    "@primevue/themes": "^4.0.0",
-    "primeicons": "^7.0.0",
-    "pinia": "^2.2.0"
+    "vue-router": "^4.4.0"
   }
 }

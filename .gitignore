@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 build/
+artifacts/
 
 # Bun lockfile (commit bun.lock if you want reproducible installs, otherwise ignore)
 # bun.lock

@@ -10,7 +10,8 @@ export const useTaskStore = defineStore("task", () => {
   // Active task detail
   const activeTaskId = ref<number | null>(null);
   const messages = ref<ConversationMessage[]>([]);
-  const streamingToken = ref("");  // accumulates current stream
+  const streamingToken = ref("");     // accumulates current stream
+  const streamingTaskId = ref<number | null>(null);   // which task is streaming
   const streamingExecutionId = ref<number | null>(null);
 
   const loading = ref(false);
@@ -73,6 +74,7 @@ export const useTaskStore = defineStore("task", () => {
       content,
     });
     messages.value.push(message);
+    streamingTaskId.value = taskId;
     streamingExecutionId.value = executionId;
     streamingToken.value = "";
   }
@@ -82,8 +84,12 @@ export const useTaskStore = defineStore("task", () => {
   async function loadMessages(taskId: number) {
     messagesLoading.value = true;
     activeTaskId.value = taskId;
-    streamingToken.value = "";
-    streamingExecutionId.value = null;
+    // Only reset streaming state if this task is NOT currently streaming.
+    // If it is streaming, we keep the accumulated token so the bubble stays visible.
+    if (streamingTaskId.value !== taskId) {
+      streamingToken.value = "";
+      streamingExecutionId.value = null;
+    }
     try {
       messages.value = await electroview.rpc.request["conversations.getMessages"]({ taskId });
     } finally {
@@ -101,16 +107,20 @@ export const useTaskStore = defineStore("task", () => {
   function closeTask() {
     activeTaskId.value = null;
     messages.value = [];
-    streamingToken.value = "";
-    streamingExecutionId.value = null;
+    // Keep streamingToken/streamingTaskId/streamingExecutionId alive so tokens
+    // that arrive while the drawer is closed are not dropped. They will be
+    // restored when the user re-opens the same task.
   }
 
   // ─── IPC push handlers ────────────────────────────────────────────────────
 
   function onStreamToken(payload: StreamToken) {
-    if (payload.taskId !== activeTaskId.value) return;
+    // Always accumulate tokens regardless of which task is open in the drawer.
+    // We track the streaming task separately from the active (visible) task.
+    if (payload.taskId !== streamingTaskId.value) return;
     if (payload.done) {
-      // Flush accumulated stream as a new assistant message
+      // Always flush the accumulated token, even if the drawer was closed.
+      // The drawer re-opening will call loadMessages() which replaces messages from DB.
       if (streamingToken.value) {
         messages.value.push({
           id: Date.now(),
@@ -122,18 +132,21 @@ export const useTaskStore = defineStore("task", () => {
           metadata: null,
           createdAt: new Date().toISOString(),
         });
-        streamingToken.value = "";
       }
+      streamingToken.value = "";
       streamingExecutionId.value = null;
+      streamingTaskId.value = null;
     } else {
       streamingToken.value += payload.token;
     }
   }
 
   function onStreamError(payload: StreamError) {
-    if (payload.taskId !== activeTaskId.value) return;
+    if (payload.taskId !== streamingTaskId.value) return;
     streamingToken.value = "";
     streamingExecutionId.value = null;
+    streamingTaskId.value = null;
+    if (payload.taskId !== activeTaskId.value) return;
     messages.value.push({
       id: Date.now(),
       taskId: payload.taskId,
@@ -168,6 +181,7 @@ export const useTaskStore = defineStore("task", () => {
     activeTask,
     messages,
     streamingToken,
+    streamingTaskId,
     streamingExecutionId,
     loading,
     messagesLoading,

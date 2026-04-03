@@ -16,6 +16,7 @@ export interface WorkspaceYaml {
   name?: string;
   ai: AIProviderConfig;
   worktree_base_path?: string;
+  git_path?: string; // absolute path to git binary, e.g. /usr/bin/git
 }
 
 export interface WorkflowColumnConfig {
@@ -211,6 +212,11 @@ export function getConfig(): LoadedConfig {
 
 export function getConfigError(): string | null {
   return _configError;
+}
+
+export function resetConfig(): void {
+  _config = null;
+  _configError = null;
 }
 
 // ─── Bundled default workflow template ───────────────────────────────────────
