@@ -34,7 +34,8 @@ export type ExecutionState =
   | "waiting_user"
   | "waiting_external"
   | "failed"
-  | "completed";
+  | "completed"
+  | "cancelled";
 
 export interface Task {
   id: number;
@@ -49,6 +50,11 @@ export interface Task {
   retryCount: number;
   createdFromTaskId: number | null;
   createdFromExecutionId: number | null;
+  model: string | null;
+  worktreeStatus: string | null;
+  branchName: string | null;
+  worktreePath: string | null;
+  executionCount: number;
 }
 
 export type MessageType =
@@ -106,6 +112,7 @@ export interface WorkflowColumn {
   onEnterPrompt?: string;
   stageInstructions?: string;
   allowedTransitions?: string[];
+  model?: string;
 }
 
 export interface WorkflowTemplate {
@@ -198,6 +205,34 @@ export type RailynRPCType = {
       "conversations.getMessages": {
         params: { taskId: number };
         response: ConversationMessage[];
+      };
+
+      // Models
+      "models.list": {
+        params: Record<string, never>;
+        response: string[];
+      };
+
+      // Task management (edit / delete / cancel / model / git stat)
+      "tasks.setModel": {
+        params: { taskId: number; model: string | null };
+        response: Task;
+      };
+      "tasks.cancel": {
+        params: { taskId: number };
+        response: Task;
+      };
+      "tasks.update": {
+        params: { taskId: number; title: string; description: string };
+        response: Task;
+      };
+      "tasks.delete": {
+        params: { taskId: number };
+        response: { success: boolean };
+      };
+      "tasks.getGitStat": {
+        params: { taskId: number };
+        response: string | null;
       };
     };
     messages: Record<string, never>;

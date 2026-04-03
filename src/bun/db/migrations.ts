@@ -101,6 +101,12 @@ const migrations: Array<{ id: string; sql: string }> = [
       CREATE INDEX IF NOT EXISTS idx_executions_task   ON executions(task_id);
     `,
   },
+  {
+    id: "002_task_ux_improvements",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN model TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(): void {

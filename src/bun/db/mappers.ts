@@ -27,6 +27,11 @@ export function mapTask(row: TaskRow): Task {
     retryCount: row.retry_count,
     createdFromTaskId: row.created_from_task_id,
     createdFromExecutionId: row.created_from_execution_id,
+    model: row.model ?? null,
+    worktreeStatus: row.worktree_status ?? null,
+    branchName: row.branch_name ?? null,
+    worktreePath: row.worktree_path ?? null,
+    executionCount: row.execution_count ?? 0,
   };
 }
 

@@ -23,6 +23,37 @@
           rounded
           class="ml-2"
         />
+        <!-- Edit button: visible only when worktree not yet created -->
+        <Button
+          v-if="!task.worktreeStatus || task.worktreeStatus === 'not_created'"
+          icon="pi pi-pencil"
+          text
+          rounded
+          size="small"
+          class="ml-auto"
+          v-tooltip="'Edit title & description'"
+          @click="openEditDialog"
+        />
+        <Button
+          v-else
+          icon="pi pi-pencil"
+          text
+          rounded
+          size="small"
+          class="ml-auto"
+          disabled
+          v-tooltip="'Cannot edit after worktree is created'"
+        />
+        <!-- Delete button -->
+        <Button
+          icon="pi pi-trash"
+          text
+          rounded
+          size="small"
+          severity="danger"
+          v-tooltip="'Delete task'"
+          @click="confirmDelete"
+        />
       </div>
     </template>
 
@@ -74,11 +105,49 @@
           </div>
           <div class="side-section">
             <div class="side-label">Execution</div>
-            <div class="side-value">{{ task.executionState }}</div>
+            <div class="side-value">{{ execLabel }}</div>
           </div>
           <div class="side-section" v-if="task.retryCount > 0">
             <div class="side-label">Retries</div>
             <div class="side-value">{{ task.retryCount }}</div>
+          </div>
+          <div class="side-section" v-if="task.executionCount > 0">
+            <div class="side-label">Executions</div>
+            <div class="side-value">{{ task.executionCount }}</div>
+          </div>
+
+          <!-- Branch / worktree info -->
+          <div class="side-section" v-if="task.branchName">
+            <div class="side-label">Branch</div>
+            <div class="side-value side-value--mono">{{ task.branchName }}</div>
+          </div>
+          <div class="side-section" v-if="task.worktreeStatus">
+            <div class="side-label">Worktree</div>
+            <div class="side-value">{{ task.worktreeStatus }}</div>
+          </div>
+          <div class="side-section" v-if="task.worktreePath">
+            <div class="side-label">Worktree path</div>
+            <div class="side-value side-value--mono side-value--break">{{ task.worktreePath }}</div>
+          </div>
+
+          <!-- Git diff stat -->
+          <div class="side-section" v-if="gitStat">
+            <div class="side-label">Changes</div>
+            <pre class="side-git-stat">{{ gitStat }}</pre>
+          </div>
+
+          <!-- Model picker -->
+          <div class="side-section">
+            <div class="side-label">Model</div>
+            <Select
+              v-if="taskStore.availableModels.length > 0"
+              :model-value="task.model ?? taskStore.availableModels[0]"
+              :options="taskStore.availableModels"
+              size="small"
+              class="side-model-select"
+              @change="(e: { value: string }) => onModelChange(e.value)"
+            />
+            <div v-else class="side-value">{{ task.model ?? '(workspace default)' }}</div>
           </div>
 
           <!-- Transition buttons -->
@@ -97,7 +166,18 @@
             </div>
           </div>
 
-          <!-- Retry button (9.5) -->
+          <!-- Cancel button (visible when running) -->
+          <div class="side-section" v-if="task.executionState === 'running'">
+            <Button
+              label="Cancel"
+              icon="pi pi-stop-circle"
+              severity="warn"
+              :loading="cancelling"
+              @click="cancel"
+            />
+          </div>
+
+          <!-- Retry button -->
           <div
             class="side-section"
             v-if="task.executionState === 'failed'"
@@ -132,15 +212,42 @@
       </div>
     </div>
   </Drawer>
+
+  <!-- Edit task dialog -->
+  <Dialog v-model:visible="editDialogVisible" header="Edit task" :modal="true" :style="{ width: '480px' }">
+    <div class="edit-form">
+      <label class="edit-label">Title</label>
+      <InputText v-model="editTitle" class="w-full" />
+      <label class="edit-label mt-2">Description</label>
+      <Textarea v-model="editDescription" rows="5" class="w-full" autoResize />
+    </div>
+    <template #footer>
+      <Button label="Cancel" text @click="editDialogVisible = false" />
+      <Button label="Save" :loading="editSaving" :disabled="!editTitle.trim()" @click="saveEdit" />
+    </template>
+  </Dialog>
+
+  <!-- Delete confirm dialog -->
+  <Dialog v-model:visible="deleteDialogVisible" header="Delete task" :modal="true" :style="{ width: '420px' }">
+    <p>Are you sure you want to delete <strong>{{ task?.title }}</strong>?</p>
+    <p class="delete-warn">This will remove the worktree and all conversation history. The branch will be kept.</p>
+    <template #footer>
+      <Button label="Cancel" text @click="deleteDialogVisible = false" />
+      <Button label="Delete" severity="danger" :loading="deleteLoading" @click="deleteTask" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from "vue";
 import { marked } from "marked";
 import Drawer from "primevue/drawer";
+import Dialog from "primevue/dialog";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Textarea from "primevue/textarea";
+import InputText from "primevue/inputtext";
+import Select from "primevue/select";
 import ProgressSpinner from "primevue/progressspinner";
 import MessageBubble from "./MessageBubble.vue";
 import { useTaskStore } from "../stores/task";
@@ -185,8 +292,22 @@ const task = computed(() => taskStore.activeTask);
 const inputText = ref("");
 const transitioning = ref(false);
 const retrying = ref(false);
+const cancelling = ref(false);
 const scrollEl = ref<HTMLElement | null>(null);
 const contextWarning = ref<string | null>(null);
+
+// Git diff stat (fetched on drawer open when worktree is ready)
+const gitStat = ref<string | null>(null);
+
+// Edit dialog state
+const editDialogVisible = ref(false);
+const editTitle = ref("");
+const editDescription = ref("");
+const editSaving = ref(false);
+
+// Delete dialog state
+const deleteDialogVisible = ref(false);
+const deleteLoading = ref(false);
 
 // Columns from the active board template
 const columns = computed(() => {
@@ -243,6 +364,7 @@ const execLabel = computed(() => {
     waiting_external: "Waiting",
     failed: "Failed",
     completed: "Done",
+    cancelled: "Cancelled",
   };
   return task.value ? (map[task.value.executionState] ?? task.value.executionState) : "";
 });
@@ -255,6 +377,7 @@ const execSeverity = computed(() => {
     waiting_external: "warn",
     failed: "danger",
     completed: "success",
+    cancelled: "secondary",
   };
   return task.value ? (map[task.value.executionState] ?? "secondary") : "secondary";
 });
@@ -285,6 +408,69 @@ async function retry() {
     retrying.value = false;
   }
 }
+
+async function cancel() {
+  if (!task.value) return;
+  cancelling.value = true;
+  try {
+    await taskStore.cancelTask(task.value.id);
+  } finally {
+    cancelling.value = false;
+  }
+}
+
+async function onModelChange(model: string) {
+  if (!task.value) return;
+  await taskStore.setModel(task.value.id, model);
+}
+
+function openEditDialog() {
+  if (!task.value) return;
+  editTitle.value = task.value.title;
+  editDescription.value = task.value.description;
+  editDialogVisible.value = true;
+}
+
+async function saveEdit() {
+  if (!task.value || !editTitle.value.trim()) return;
+  editSaving.value = true;
+  try {
+    await taskStore.updateTask(task.value.id, editTitle.value.trim(), editDescription.value.trim());
+    editDialogVisible.value = false;
+  } finally {
+    editSaving.value = false;
+  }
+}
+
+function confirmDelete() {
+  deleteDialogVisible.value = true;
+}
+
+async function deleteTask() {
+  if (!task.value) return;
+  deleteLoading.value = true;
+  try {
+    await taskStore.deleteTask(task.value.id);
+    deleteDialogVisible.value = false;
+  } finally {
+    deleteLoading.value = false;
+  }
+}
+
+// Fetch git stat and models when drawer opens / task changes
+watch(
+  () => taskStore.activeTaskId,
+  async (id) => {
+    gitStat.value = null;
+    if (!id) return;
+    taskStore.loadModels();
+    const t = taskStore.activeTask;
+    if (t?.worktreeStatus === "ready") {
+      gitStat.value = await taskStore.getGitStat(id);
+    }
+  },
+  { immediate: true },
+);
 </script>
 
 <style scoped>
@@ -472,5 +658,51 @@ async function retry() {
   font-size: 0.8rem;
   color: var(--p-text-muted-color, #94a3b8);
   padding: 4px 0;
+}
+
+.side-value--mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+}
+
+.side-value--break {
+  word-break: break-all;
+}
+
+.side-git-stat {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  margin: 0;
+  color: var(--p-text-color, #1e293b);
+  background: var(--p-surface-100, #f1f5f9);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.side-model-select {
+  width: 100%;
+}
+
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edit-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--p-text-muted-color, #94a3b8);
+}
+
+.mt-2 {
+  margin-top: 8px;
+}
+
+.delete-warn {
+  font-size: 0.85rem;
+  color: var(--p-text-muted-color, #94a3b8);
+  margin-top: 6px;
 }
 </style>

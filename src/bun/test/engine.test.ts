@@ -174,11 +174,11 @@ describe("handleTransition", () => {
   }, 10_000);
 });
 
-// ─── ask_user interception ────────────────────────────────────────────────────
+// ─── ask_me interception ──────────────────────────────────────────────────────
 
-describe("ask_user tool interception", () => {
+describe("ask_me tool interception", () => {
   it("sets execution_state to waiting_user and writes ask_user_prompt message", async () => {
-    // Queue a scripted ask_user tool call as the first AI response
+    // Queue a scripted ask_me tool call as the first AI response
     queueTurnResponse({
       type: "tool_calls",
       calls: [
@@ -186,7 +186,7 @@ describe("ask_user tool interception", () => {
           id: "call_ask1",
           type: "function",
           function: {
-            name: "ask_user",
+            name: "ask_me",
             arguments: JSON.stringify({
               question: "Which approach do you prefer?",
               selection_mode: "single",
@@ -264,4 +264,77 @@ describe("resolveToolsForColumn", () => {
     expect(names).toContain("list_dir");
     expect(names).toContain("run_command");
   });
+});
+
+// ─── spawn_agent interception ─────────────────────────────────────────────────
+
+describe("spawn_agent tool interception", () => {
+  it("runs child sub-agents and injects results as a tool_result message", async () => {
+    // Round 1: parent issues spawn_agent
+    queueTurnResponse({
+      type: "tool_calls",
+      calls: [
+        {
+          id: "call_spawn1",
+          type: "function",
+          function: {
+            name: "spawn_agent",
+            arguments: JSON.stringify({
+              children: [
+                { instructions: "Write a hello comment in src/a.ts", tools: ["write"] },
+                { instructions: "Write a hello comment in src/b.ts", tools: ["write"] },
+              ],
+            }),
+          },
+        },
+      ],
+    });
+    // Child 1 response (write_file call)
+    queueTurnResponse({ type: "text", content: "Wrote src/a.ts" });
+    // Child 2 response
+    queueTurnResponse({ type: "text", content: "Wrote src/b.ts" });
+    // Round 2 (parent resumes after spawn): return final text
+    queueTurnResponse({ type: "text", content: "Both files written successfully." });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    // Provide a worktree so the tool-call loop is enabled
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    const tokens: string[] = [];
+    let resolveCompleted!: () => void;
+    const completedPromise = new Promise<void>((resolve) => { resolveCompleted = resolve; });
+    const trackCompletion = (task: { executionState: string }) => {
+      if (task.executionState === "completed") resolveCompleted();
+    };
+
+    await handleHumanTurn(taskId, "Go.", noop, noop, trackCompletion as never);
+    await completedPromise;
+
+    // Wait a tick for DB writes to flush
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Final assistant message should reflect the post-spawn response
+    const assistantMsg = db
+      .query<{ content: string }, [number]>(
+        "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'assistant' ORDER BY id DESC LIMIT 1",
+      )
+      .get(taskId);
+    expect(assistantMsg!.content).toBe("Both files written successfully.");
+
+    // A tool_result message for spawn_agent should have been persisted
+    const toolResult = db
+      .query<{ content: string }, [number]>(
+        "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'tool_result' ORDER BY id ASC LIMIT 1",
+      )
+      .get(taskId);
+    expect(toolResult).not.toBeNull();
+    const results = JSON.parse(toolResult!.content) as string[];
+    expect(results.length).toBe(2);
+    expect(results[0]).toContain("Wrote src/a.ts");
+    expect(results[1]).toContain("Wrote src/b.ts");
+  }, 15_000);
 });

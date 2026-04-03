@@ -53,6 +53,7 @@ export function initDb(): Database {
       retry_count               INTEGER NOT NULL DEFAULT 0,
       created_from_task_id      INTEGER REFERENCES tasks(id),
       created_from_execution_id INTEGER,
+      model                     TEXT,
       created_at                TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS task_git_context (

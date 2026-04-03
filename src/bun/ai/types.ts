@@ -41,6 +41,7 @@ export type AITurnResult =
 export interface AICallOptions {
   maxTokens?: number;
   tools?: AIToolDefinition[];
+  signal?: AbortSignal;
 }
 
 export interface AIProvider {

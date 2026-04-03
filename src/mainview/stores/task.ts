@@ -17,6 +17,9 @@ export const useTaskStore = defineStore("task", () => {
   const loading = ref(false);
   const messagesLoading = ref(false);
 
+  // Available AI models fetched from the provider endpoint
+  const availableModels = ref<string[]>([]);
+
   const activeTask = computed(() => {
     for (const tasks of Object.values(tasksByBoard.value)) {
       const found = tasks.find((t) => t.id === activeTaskId.value);
@@ -54,7 +57,7 @@ export const useTaskStore = defineStore("task", () => {
 
   async function transitionTask(taskId: number, toState: string) {
     const { task } = await electroview.rpc.request["tasks.transition"]({ taskId, toState });
-    _replaceTask(task);
+    onTaskUpdated(task);
     return task;
   }
 
@@ -62,7 +65,7 @@ export const useTaskStore = defineStore("task", () => {
 
   async function retryTask(taskId: number) {
     const { task } = await electroview.rpc.request["tasks.retry"]({ taskId });
-    _replaceTask(task);
+    onTaskUpdated(task);
     return task;
   }
 
@@ -177,6 +180,59 @@ export const useTaskStore = defineStore("task", () => {
     }
   }
 
+  // ─── Load available models ────────────────────────────────────────────────
+
+  async function loadModels() {
+    availableModels.value = await electroview.rpc.request["models.list"]({});
+  }
+
+  // ─── Set model on task ────────────────────────────────────────────────────
+
+  async function setModel(taskId: number, model: string | null) {
+    const task = await electroview.rpc.request["tasks.setModel"]({ taskId, model });
+    _replaceTask(task);
+    return task;
+  }
+
+  // ─── Cancel running execution ─────────────────────────────────────────────
+
+  async function cancelTask(taskId: number) {
+    const task = await electroview.rpc.request["tasks.cancel"]({ taskId });
+    _replaceTask(task);
+    return task;
+  }
+
+  // ─── Update task title/description ───────────────────────────────────────
+
+  async function updateTask(taskId: number, title: string, description: string) {
+    const task = await electroview.rpc.request["tasks.update"]({ taskId, title, description });
+    _replaceTask(task);
+    return task;
+  }
+
+  // ─── Delete task ──────────────────────────────────────────────────────────
+
+  async function deleteTask(taskId: number) {
+    await electroview.rpc.request["tasks.delete"]({ taskId });
+    for (const [boardId, tasks] of Object.entries(tasksByBoard.value)) {
+      const idx = tasks.findIndex((t) => t.id === taskId);
+      if (idx !== -1) {
+        tasksByBoard.value[Number(boardId)].splice(idx, 1);
+        break;
+      }
+    }
+    if (activeTaskId.value === taskId) {
+      activeTaskId.value = null;
+      messages.value = [];
+    }
+  }
+
+  // ─── Get git diff stat ────────────────────────────────────────────────────
+
+  async function getGitStat(taskId: number): Promise<string | null> {
+    return electroview.rpc.request["tasks.getGitStat"]({ taskId });
+  }
+
   // ─── Internal helpers ─────────────────────────────────────────────────────
 
   function _replaceTask(updated: Task) {
@@ -199,6 +255,7 @@ export const useTaskStore = defineStore("task", () => {
     streamingExecutionId,
     loading,
     messagesLoading,
+    availableModels,
     loadTasks,
     createTask,
     transitionTask,
@@ -207,6 +264,12 @@ export const useTaskStore = defineStore("task", () => {
     loadMessages,
     selectTask,
     closeTask,
+    loadModels,
+    setModel,
+    cancelTask,
+    updateTask,
+    deleteTask,
+    getGitStat,
     onStreamToken,
     onStreamError,
     onTaskUpdated,

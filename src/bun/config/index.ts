@@ -17,6 +17,10 @@ export interface WorkspaceYaml {
   ai: AIProviderConfig;
   worktree_base_path?: string;
   git_path?: string; // absolute path to git binary, e.g. /usr/bin/git
+  search?: {
+    engine: string; // "tavily" | "brave" | "none"
+    api_key: string;
+  };
 }
 
 export interface WorkflowColumnConfig {
@@ -28,6 +32,7 @@ export interface WorkflowColumnConfig {
   allowed_transitions?: string[];
   is_backlog?: boolean;
   tools?: string[];
+  model?: string;
 }
 
 export interface WorkflowTemplateConfig {
@@ -78,6 +83,11 @@ ai:
   api_key: ""
   model: fake
   context_window_tokens: 128000
+
+# Web search (used by the search_internet tool)
+# search:
+#   engine: tavily   # "tavily" is the only supported engine in v1
+#   api_key: ""      # get a free key at https://tavily.com
 `.trimStart();
 
 const DEFAULT_DELIVERY_YAML = `

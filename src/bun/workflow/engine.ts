@@ -21,6 +21,16 @@ export type OnToken = (taskId: number, executionId: number, token: string, done:
 export type OnError = (taskId: number, executionId: number, error: string) => void;
 export type OnTaskUpdated = (task: Task) => void;
 
+// ─── Cancellation map ─────────────────────────────────────────────────────────
+// Keyed by executionId. Populated at execution start, removed on finish.
+
+const executionControllers = new Map<number, AbortController>();
+
+export function cancelExecution(executionId: number): void {
+  const controller = executionControllers.get(executionId);
+  if (controller) controller.abort();
+}
+
 // ─── Helper: get column config ────────────────────────────────────────────────
 
 function getColumnConfig(templateId: string, columnId: string) {
@@ -96,12 +106,36 @@ function assembleMessages(
       `- git_root_path: ${gitContext.git_root_path}`,
       `- project_path:  ${gitContext.project_path}`,
       "",
-      "You have access to the following tools to inspect the project files:",
-      "- list_dir(path): list files/directories relative to the worktree root",
-      "- read_file(path): read the contents of a file",
-      "- run_command(command): run a read-only shell command (grep, git log, git diff, etc.)",
+      "You have access to the following tools to work with the project files:",
       "",
-      "Use these tools to understand the codebase before responding.",
+      "**Read tools:**",
+      "- list_dir(path): list files/directories relative to the worktree root",
+      "- read_file(path, start_line?, end_line?): read a file; use start_line/end_line (1-based) for partial reads of large files",
+      "",
+      "**Write tools:**",
+      "- write_file(path, content): create or fully overwrite a file",
+      "- patch_file(path, content, position, anchor?): targeted edit — position is start/end/before/after/replace; anchor required for before/after/replace and must appear exactly once",
+      "- delete_file(path): delete a file",
+      "- rename_file(from_path, to_path): move or rename a file",
+      "",
+      "**Search tools:**",
+      "- search_text(pattern, glob?, context_lines?): grep for a text/regex pattern; context_lines shows N lines around each match",
+      "- find_files(glob): find files matching a glob pattern",
+      "",
+      "**Web tools:**",
+      "- fetch_url(url): fetch a public URL and return its text content",
+      "- search_internet(query): search the web (requires search config in workspace.yaml)",
+      "",
+      "**Shell tool:**",
+      "- run_command(command): run a read-only shell command (grep, git log, git diff, etc.) — write redirections are blocked",
+      "",
+      "**Interaction tool:**",
+      "- ask_me(question, selection_mode, options): pause and ask me a question",
+      "",
+      "**Agent tool:**",
+      "- spawn_agent(children): run parallel sub-agents in this worktree; each child gets its own instructions and tools",
+      "",
+      "Always read before you write. Use patch_file for targeted edits to existing files.",
     ];
     messages.push({ role: "system", content: lines.join("\n") });
   }
@@ -189,6 +223,11 @@ export async function handleTransition(
   const templateId = getBoardTemplateId(task.board_id);
   const column = getColumnConfig(templateId, toState);
 
+  // Resolve and persist the model for this column (D1)
+  const config = getConfig();
+  const resolvedModel = column?.model ?? config.workspace.ai.model;
+  db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedModel, taskId]);
+
   // 4. If no prompt configured → idle (design D7)
   if (!column?.on_enter_prompt) {
     db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
@@ -219,13 +258,94 @@ export async function handleTransition(
     `Running prompt: ${column.id}`,
   );
 
-  // 8. Run async (non-blocking)
+  // 8. Register AbortController for cancellation (D3)
+  const controller = new AbortController();
+  executionControllers.set(executionId, controller);
+
+  // 9. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, onToken, onError, onTaskUpdated).catch(
+  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated).catch(
     () => {},
   );
 
   return { task: mapTask(updatedRow), executionId };
+}
+
+// ─── Sub-agent helper ─────────────────────────────────────────────────────────
+
+/**
+ * Run an in-memory sub-execution for spawn_agent.
+ * No DB records are created. Returns a plain text summary string.
+ * Each child starts fresh — the parent's conversation history is NOT passed.
+ */
+async function runSubExecution({
+  worktreePath,
+  instructions,
+  tools,
+}: {
+  worktreePath: string;
+  instructions: string;
+  tools: string[];
+}): Promise<string> {
+  const config = getConfig();
+  const provider = createProvider(config.workspace.ai);
+  const toolCtx = { worktreePath, searchConfig: config.workspace.search };
+  const toolDefs = resolveToolsForColumn(tools);
+
+  const liveMessages: AIMessage[] = [
+    { role: "user", content: instructions },
+  ];
+
+  const MAX_SUB_ROUNDS = 10;
+  let toolRounds = 0;
+
+  while (toolRounds < MAX_SUB_ROUNDS) {
+    const turn = await provider.turn(liveMessages, { tools: toolDefs });
+
+    if (turn.type === "text") {
+      return (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
+    }
+
+    toolRounds++;
+
+    liveMessages.push({
+      role: "assistant",
+      content: "",
+      tool_calls: turn.calls,
+    });
+
+    for (const call of turn.calls) {
+      const fnName = call.function.name;
+      // spawn_agent cannot recursively spawn (prevent infinite nesting)
+      if (fnName === "spawn_agent") {
+        liveMessages.push({
+          role: "tool",
+          content: "Error: spawn_agent cannot be called from within a sub-agent.",
+          tool_call_id: call.id,
+          name: fnName,
+        });
+        continue;
+      }
+      const result = await executeTool(fnName, call.function.arguments, toolCtx);
+      const stored = result.length > TOOL_RESULT_MAX_CHARS
+        ? result.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+        : result;
+      liveMessages.push({
+        role: "tool",
+        content: stored,
+        tool_call_id: call.id,
+        name: fnName,
+      });
+    }
+  }
+
+  // Hit round limit — ask for a summary
+  liveMessages.push({
+    role: "user",
+    content: "You have reached the tool call limit. Please summarise your work so far.",
+  });
+  const final = await provider.turn(liveMessages, { tools: [] });
+  return final.type === "text" ? (final.content ?? "(no response)") : "(sub-agent hit tool limit)";
 }
 
 // ─── Task 5.2 + 5.3: Execute prompt ──────────────────────────────────────────
@@ -235,11 +355,25 @@ async function runExecution(
   executionId: number,
   prompt: string,
   stageInstructions: string | undefined,
+  model: string,
+  signal: AbortSignal,
   onToken: OnToken,
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
 ): Promise<void> {
   const db = getDb();
+
+  // Helper: handle cancellation — tidy up DB and notify frontend
+  function handleCancelled(task: { conversation_id: number | null }): void {
+    executionControllers.delete(executionId);
+    db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+    db.run(
+      "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
+      [executionId],
+    );
+    const cancelledRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+    if (cancelledRow) onTaskUpdated(mapTask(cancelledRow));
+  }
 
   try {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
@@ -278,55 +412,45 @@ async function runExecution(
     const messages = assembleMessages(task, stageInstructions, history, prompt, gitContext);
 
     const config = getConfig();
-    const provider = createProvider(config.workspace.ai);
+    // Use the task-level model override (D1 + D3)
+    const provider = createProvider({ ...config.workspace.ai, model });
 
     // ── Tool-call loop ────────────────────────────────────────────────────────
-    // Run non-streaming turns until the model stops issuing tool calls, then
-    // stream the final text response to the user.
     const MAX_TOOL_ROUNDS = 10;
     const toolCtx = gitContext?.worktree_path
-      ? { worktreePath: gitContext.worktree_path }
+      ? { worktreePath: gitContext.worktree_path, searchConfig: config.workspace.search }
       : null;
 
-    // Whether to offer tools (only when a worktree is available).
-    // Filter by column's tools config; fall back to defaults when absent.
     const tools = toolCtx ? resolveToolsForColumn(column?.tools) : [];
-
-    // Live messages list — we'll extend it with tool rounds
     const liveMessages: AIMessage[] = [...messages];
-    // If the model returns text directly from a non-streaming turn(), capture it here
-    // so we can skip the redundant chat() streaming call.
     let turnTextResponse: string | null = null;
 
-    // Only run the non-streaming tool loop when tools are actually available.
-    // Without tools, go straight to the streaming response to avoid an extra round-trip.
     if (tools.length > 0) {
       let toolRounds = 0;
       while (toolRounds < MAX_TOOL_ROUNDS) {
-        const turn = await provider.turn(liveMessages, { tools });
+        // Check for cancellation between turns
+        if (signal.aborted) {
+          handleCancelled(task);
+          return;
+        }
+
+        const turn = await provider.turn(liveMessages, { tools, signal });
 
         if (turn.type === "text") {
-          // Model is done with tool calls — capture the final text so we don't
-          // need an extra chat() round-trip that would cause the model to re-read
-          // tool results and echo them back instead of giving a real answer.
-          // Treat empty content as null so we fall through to the streaming chat() call.
-          // Some thinking-mode models return content:"" with all output in reasoning_content.
           turnTextResponse = (turn.content && turn.content.length > 0) ? turn.content : null;
           break;
         }
 
-        // Model issued tool calls — execute each one
         toolRounds++;
 
-        // Append the assistant tool-call message to the live context
         liveMessages.push({
           role: "assistant",
           content: "",
           tool_calls: turn.calls,
         });
 
-        // Intercept ask_user before executing any tools — it suspends execution
-        const askUserCall = turn.calls.find((c) => c.function.name === "ask_user");
+        // Intercept ask_me before executing any tools — it suspends execution
+        const askUserCall = turn.calls.find((c) => c.function.name === "ask_me");
         if (askUserCall) {
           let payload: { question: string; selection_mode: string; options: string[] };
           try {
@@ -341,6 +465,7 @@ async function runExecution(
             null,
             JSON.stringify(payload),
           );
+          executionControllers.delete(executionId);
           db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
           db.run(
             "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
@@ -348,15 +473,61 @@ async function runExecution(
           );
           const waitingRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
           if (waitingRow) onTaskUpdated(mapTask(waitingRow));
-          return; // suspend — do not continue tool loop or stream
+          return;
         }
 
-        // Execute each tool and append results
+        // Intercept spawn_agent
+        const spawnCall = turn.calls.find((c) => c.function.name === "spawn_agent");
+        if (spawnCall && toolCtx) {
+          let spawnArgs: { children: Array<{ instructions: string; tools: string[]; scope?: string }> };
+          try {
+            spawnArgs = JSON.parse(spawnCall.function.arguments);
+          } catch {
+            spawnArgs = { children: [] };
+          }
+
+          const childResults = await Promise.all(
+            (spawnArgs.children ?? []).map(async (child, idx) => {
+              try {
+                const result = await runSubExecution({
+                  worktreePath: toolCtx.worktreePath,
+                  instructions: child.instructions,
+                  tools: child.tools,
+                });
+                return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
+              } catch (e) {
+                return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: Error — ${e instanceof Error ? e.message : String(e)}`;
+              }
+            }),
+          );
+
+          const spawnResultStr = JSON.stringify(childResults);
+          const stored = spawnResultStr.length > TOOL_RESULT_MAX_CHARS
+            ? spawnResultStr.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+            : spawnResultStr;
+
+          appendMessage(
+            taskId,
+            task.conversation_id ?? 0,
+            "tool_result",
+            null,
+            stored,
+            { tool_call_id: spawnCall.id, name: "spawn_agent" },
+          );
+
+          liveMessages.push({
+            role: "tool",
+            content: stored,
+            tool_call_id: spawnCall.id,
+            name: "spawn_agent",
+          });
+          continue;
+        }
+
         for (const call of turn.calls) {
           const fnName = call.function.name;
           const fnArgs = call.function.arguments;
 
-          // Surface the tool call in the conversation log (collapsed in UI)
           appendMessage(
             taskId,
             task.conversation_id ?? 0,
@@ -365,9 +536,8 @@ async function runExecution(
             JSON.stringify({ name: fnName, arguments: fnArgs }),
           );
 
-          const result = executeTool(fnName, fnArgs, toolCtx!);
+          const result = await executeTool(fnName, fnArgs, toolCtx!);
 
-          // Truncate large results before storing
           const storedResult = result.length > TOOL_RESULT_MAX_CHARS
             ? result.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
             : result;
@@ -381,7 +551,6 @@ async function runExecution(
             { tool_call_id: call.id, name: fnName },
           );
 
-          // Add tool result to live context for next turn
           liveMessages.push({
             role: "tool",
             content: storedResult,
@@ -399,68 +568,83 @@ async function runExecution(
       }
     }
 
+    // Check cancellation before streaming
+    if (signal.aborted) {
+      handleCancelled(task);
+      return;
+    }
+
     // ── Stream the final text response ────────────────────────────────────────
     let fullResponse = "";
 
     try {
       if (turnTextResponse !== null) {
-        // Model already returned its final answer in the non-streaming turn() call.
-        // Emit it token-by-token so the UI sees the streaming behaviour, then we're done.
-        // (Calling chat() again here would cause the model to re-read tool results and echo them.)
         for (const char of turnTextResponse) {
+          if (signal.aborted) break;
           fullResponse += char;
           onToken(taskId, executionId, char, false);
         }
       } else {
-        // No tool loop ran (or loop hit the round limit) — stream the final answer.
-        for await (const token of provider.chat(liveMessages, {})) {
+        for await (const token of provider.chat(liveMessages, { signal })) {
           fullResponse += token;
           onToken(taskId, executionId, token, false);
         }
       }
     } catch (streamErr) {
-      // On stream error, retain partial response and mark failed
+      // Distinguish abort from real stream errors
+      if (streamErr instanceof Error && streamErr.name === "AbortError") {
+        if (fullResponse) {
+          appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
+        }
+        handleCancelled(task);
+        return;
+      }
       if (fullResponse) {
         appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
       }
       const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
       appendMessage(taskId, task.conversation_id ?? 0, "system", null, `Stream error: ${errMsg}`);
-      db.run(
-        "UPDATE tasks SET execution_state = 'failed' WHERE id = ?",
-        [taskId],
-      );
+      executionControllers.delete(executionId);
+      db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
       db.run(
         "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
         [errMsg, executionId],
       );
       onError(taskId, executionId, errMsg);
-      // Notify frontend of failed state
       const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
       if (failedRow) onTaskUpdated(mapTask(failedRow));
       return;
     }
 
-    // Append full assistant response to conversation BEFORE signalling done,
-    // so the DB is ready if the frontend calls loadMessages immediately.
-    appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
+    // If signal aborted mid-stream (turnTextResponse path)
+    if (signal.aborted) {
+      if (fullResponse) {
+        appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
+      }
+      handleCancelled(task);
+      return;
+    }
 
-    // Signal streaming done
+    appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
     onToken(taskId, executionId, "", true);
 
-    // Task 5.6: Default execution result to completed
-    // (In future, parse structured result from response)
-    db.run(
-      "UPDATE tasks SET execution_state = 'completed' WHERE id = ?",
-      [taskId],
-    );
+    executionControllers.delete(executionId);
+    db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
     db.run(
       "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ? WHERE id = ?",
       [fullResponse.slice(0, 500), executionId],
     );
-    // Notify frontend that execution is complete
     const completedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (completedRow) onTaskUpdated(mapTask(completedRow));
   } catch (err) {
+    // Top-level abort catch
+    if (err instanceof Error && err.name === "AbortError") {
+      const task = db.query<{ conversation_id: number | null }, [number]>(
+        "SELECT conversation_id FROM tasks WHERE id = ?",
+      ).get(taskId);
+      handleCancelled(task ?? { conversation_id: null });
+      return;
+    }
     const errMsg = err instanceof Error ? err.message : String(err);
     const task = db.query<{ conversation_id: number }, [number]>(
       "SELECT conversation_id FROM tasks WHERE id = ?",
@@ -468,18 +652,17 @@ async function runExecution(
     if (task) {
       appendMessage(taskId, task.conversation_id, "system", null, `Execution error: ${errMsg}`);
     }
+    executionControllers.delete(executionId);
     db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
     db.run(
       "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
       [errMsg, executionId],
     );
     onError(taskId, executionId, errMsg);
-    // Notify frontend of failed state
     const outerFailedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (outerFailedRow) onTaskUpdated(mapTask(outerFailedRow));
   }
 }
-
 // ─── Task 5.7: Human turn ─────────────────────────────────────────────────────
 
 export async function handleHumanTurn(
@@ -529,8 +712,16 @@ export async function handleHumanTurn(
     )
     .get(msgId)!;
 
+  // Register AbortController for cancellation (D3)
+  const controller = new AbortController();
+  executionControllers.set(executionId, controller);
+
+  // Resolve model: use the task's persisted model (D1) or workspace default
+  const config = getConfig();
+  const resolvedModel = task.model ?? config.workspace.ai.model;
+
   // Run async
-  runExecution(taskId, executionId, content, column?.stage_instructions, onToken, onError, onTaskUpdated).catch(
+  runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated).catch(
     () => {},
   );
 
@@ -579,11 +770,21 @@ export async function handleRetry(
 
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
 
+  // Register AbortController for cancellation
+  const controller = new AbortController();
+  executionControllers.set(executionId, controller);
+
+  // Resolve model: use the task's persisted model or workspace default
+  const config = getConfig();
+  const resolvedModel = updatedRow.model ?? config.workspace.ai.model;
+
   runExecution(
     taskId,
     executionId,
     column?.on_enter_prompt ?? "Please continue with the task.",
     column?.stage_instructions,
+    resolvedModel,
+    controller.signal,
     onToken,
     onError,
     onTaskUpdated,

@@ -38,6 +38,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(body),
+      signal: options.signal,
     });
 
     if (!response.ok) {
@@ -80,6 +81,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(body),
+      signal: options.signal,
     });
 
     if (!response.ok) {

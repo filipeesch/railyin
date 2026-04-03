@@ -14,6 +14,7 @@ function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"]
       description: c.description,
       onEnterPrompt: c.on_enter_prompt,
       stageInstructions: c.stage_instructions,
+      model: c.model,
     })),
   };
 }

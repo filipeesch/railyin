@@ -47,6 +47,12 @@ export interface TaskRow {
   created_from_task_id: number | null;
   created_from_execution_id: number | null;
   created_at: string;
+  model: string | null;
+  // Fields from LEFT JOIN task_git_context (populated by extended queries)
+  worktree_status?: string | null;
+  branch_name?: string | null;
+  worktree_path?: string | null;
+  execution_count?: number | null;
 }
 
 export interface TaskGitContextRow {

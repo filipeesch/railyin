@@ -8,10 +8,28 @@ import {
   handleRetry,
   appendMessage,
   estimateContextWarning,
+  cancelExecution,
 } from "../workflow/engine.ts";
-import { triggerWorktreeIfNeeded, registerProjectGitContext } from "../git/worktree.ts";
+import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
 import type { ProjectRow } from "../db/row-types.ts";
 import type { OnToken, OnError, OnTaskUpdated } from "../workflow/engine.ts";
+import { getConfig } from "../config/index.ts";
+
+// ─── Helper: fetch a single task with git context + execution count ───────────
+
+function fetchTaskWithDetail(db: ReturnType<typeof getDb>, taskId: number): Task | null {
+  const row = db
+    .query<TaskRow, [number]>(
+      `SELECT t.*,
+              gc.worktree_status, gc.branch_name, gc.worktree_path,
+              (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
+       FROM tasks t
+       LEFT JOIN task_git_context gc ON gc.task_id = t.id
+       WHERE t.id = ?`,
+    )
+    .get(taskId);
+  return row ? mapTask(row) : null;
+}
 
 export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: OnTaskUpdated) {
   return {
@@ -19,7 +37,13 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       const db = getDb();
       return db
         .query<TaskRow, [number]>(
-          "SELECT * FROM tasks WHERE board_id = ? ORDER BY created_at ASC",
+          `SELECT t.*,
+                  gc.worktree_status, gc.branch_name, gc.worktree_path,
+                  (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
+           FROM tasks t
+           LEFT JOIN task_git_context gc ON gc.task_id = t.id
+           WHERE t.board_id = ?
+           ORDER BY t.created_at ASC`,
         )
         .all(params.boardId)
         .map(mapTask);
@@ -188,6 +212,119 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       }
 
       return handleRetry(params.taskId, onToken, onError, onTaskUpdated);
+    },
+
+    // ─── models.list ─────────────────────────────────────────────────────────
+    "models.list": async (): Promise<string[]> => {
+      const config = getConfig();
+      const { base_url, api_key } = config.workspace.ai;
+      try {
+        const res = await fetch(`${base_url}/v1/models`, {
+          headers: api_key ? { Authorization: `Bearer ${api_key}` } : {},
+        });
+        if (!res.ok) return [];
+        const json = await res.json() as { data?: Array<{ id: string }> };
+        return (json.data ?? []).map((m) => m.id).filter(Boolean);
+      } catch {
+        return [];
+      }
+    },
+
+    // ─── tasks.setModel ──────────────────────────────────────────────────────
+    "tasks.setModel": async (params: { taskId: number; model: string | null }): Promise<Task> => {
+      const db = getDb();
+      db.run("UPDATE tasks SET model = ? WHERE id = ?", [params.model, params.taskId]);
+      const task = fetchTaskWithDetail(db, params.taskId);
+      if (!task) throw new Error(`Task ${params.taskId} not found`);
+      return task;
+    },
+
+    // ─── tasks.cancel ────────────────────────────────────────────────────────
+    "tasks.cancel": async (params: { taskId: number }): Promise<Task> => {
+      const db = getDb();
+      const row = db
+        .query<{ current_execution_id: number | null }, [number]>(
+          "SELECT current_execution_id FROM tasks WHERE id = ?",
+        )
+        .get(params.taskId);
+      if (row?.current_execution_id != null) {
+        cancelExecution(row.current_execution_id);
+      }
+      const task = fetchTaskWithDetail(db, params.taskId);
+      if (!task) throw new Error(`Task ${params.taskId} not found`);
+      return task;
+    },
+
+    // ─── tasks.update ────────────────────────────────────────────────────────
+    "tasks.update": async (params: { taskId: number; title: string; description: string }): Promise<Task> => {
+      const db = getDb();
+      const gitRow = db
+        .query<{ worktree_status: string | null }, [number]>(
+          "SELECT worktree_status FROM task_git_context WHERE task_id = ?",
+        )
+        .get(params.taskId);
+      if (gitRow && gitRow.worktree_status && gitRow.worktree_status !== "not_created") {
+        throw new Error("Cannot edit task once a worktree has been created");
+      }
+      db.run(
+        "UPDATE tasks SET title = ?, description = ? WHERE id = ?",
+        [params.title.trim(), params.description.trim(), params.taskId],
+      );
+      const task = fetchTaskWithDetail(db, params.taskId);
+      if (!task) throw new Error(`Task ${params.taskId} not found`);
+      return task;
+    },
+
+    // ─── tasks.delete ────────────────────────────────────────────────────────
+    "tasks.delete": async (params: { taskId: number }): Promise<{ success: boolean }> => {
+      const db = getDb();
+
+      // Cancel any running execution first
+      const row = db
+        .query<{ current_execution_id: number | null; conversation_id: number }, [number]>(
+          "SELECT current_execution_id, conversation_id FROM tasks WHERE id = ?",
+        )
+        .get(params.taskId);
+      if (row?.current_execution_id != null) {
+        cancelExecution(row.current_execution_id);
+      }
+
+      // Remove worktree (no-op if not created)
+      await removeWorktree(params.taskId);
+
+      // Cascade delete
+      db.run("DELETE FROM conversation_messages WHERE task_id = ?", [params.taskId]);
+      db.run("DELETE FROM executions WHERE task_id = ?", [params.taskId]);
+      db.run("DELETE FROM task_git_context WHERE task_id = ?", [params.taskId]);
+      if (row?.conversation_id) {
+        db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
+      }
+      db.run("DELETE FROM tasks WHERE id = ?", [params.taskId]);
+
+      return { success: true };
+    },
+
+    // ─── tasks.getGitStat ────────────────────────────────────────────────────
+    "tasks.getGitStat": async (params: { taskId: number }): Promise<string | null> => {
+      const db = getDb();
+      const gitRow = db
+        .query<{ worktree_path: string | null; worktree_status: string | null }, [number]>(
+          "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+        )
+        .get(params.taskId);
+      if (!gitRow?.worktree_path || gitRow.worktree_status !== "ready") return null;
+      try {
+        const proc = Bun.spawn(["git", "diff", "--stat", "HEAD"], {
+          cwd: gitRow.worktree_path,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        await proc.exited;
+        const out = await new Response(proc.stdout).text();
+        return out.trim() || null;
+      } catch {
+        return null;
+      }
     },
   };
 }

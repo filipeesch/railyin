@@ -9,3 +9,8 @@ ai:
 
 # Where to store Git worktrees. Defaults to ~/.railyn/worktrees
 # worktree_base_path: /path/to/worktrees
+
+# Web search (used by the search_internet tool)
+# search:
+#   engine: tavily   # "tavily" is the only supported engine in v1
+#   api_key: ""      # get a free key at https://tavily.com

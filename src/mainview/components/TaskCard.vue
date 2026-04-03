@@ -33,6 +33,7 @@ const execLabel = computed(() => {
     waiting_external: "Waiting",
     failed: "Failed",
     completed: "Done",
+    cancelled: "Cancelled",
   };
   return map[props.task.executionState] ?? props.task.executionState;
 });
@@ -45,6 +46,7 @@ const execSeverity = computed(() => {
     waiting_external: "warn",
     failed: "danger",
     completed: "success",
+    cancelled: "secondary",
   };
   return map[props.task.executionState] ?? "secondary";
 });
