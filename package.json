@@ -1,0 +1,29 @@
+{
+  "name": "railyin",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AI-assisted delivery orchestration for software teams",
+  "scripts": {
+    "dev": "vite build && electrobun dev --watch",
+    "dev:watch": "concurrently -n vite,electrobun -c cyan,magenta \"vite build --watch\" \"electrobun dev --watch\"",
+    "build:canary": "vite build && electrobun build --env=canary"
+  },
+  "dependencies": {
+    "electrobun": "latest",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/js-yaml": "^4.0.9",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.0.0",
+    "vite": "^6.0.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0",
+    "primevue": "^4.0.0",
+    "@primevue/themes": "^4.0.0",
+    "primeicons": "^7.0.0",
+    "pinia": "^2.2.0"
+  }
+}

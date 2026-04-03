@@ -1,0 +1,44 @@
+id: delivery
+name: Delivery Flow
+columns:
+  - id: backlog
+    label: Backlog
+    description: Tasks waiting to be started
+
+  - id: plan
+    label: Plan
+    description: Define what needs to be done
+    on_enter_prompt: |
+      Create a clear, detailed implementation plan for this task.
+      Break it down into concrete steps. Focus on WHAT needs to be
+      done and WHY, not implementation details.
+    stage_instructions: |
+      You are in the Planning phase. Do NOT write code or
+      implementation details. Focus only on understanding the
+      problem and defining what needs to be done.
+
+  - id: in_progress
+    label: In Progress
+    description: Active development
+    on_enter_prompt: |
+      Implement this task according to the plan. Work in the
+      provided Git worktree. Make focused, clean changes.
+    stage_instructions: |
+      You are in the Implementation phase. Work in the Git
+      worktree provided. Make minimal, focused changes. Follow
+      the plan established in the planning phase.
+
+  - id: in_review
+    label: In Review
+    description: Awaiting human review
+    on_enter_prompt: |
+      Summarize the changes made, highlight anything that needs
+      reviewer attention, and flag any open questions or concerns.
+    stage_instructions: |
+      You are in the Review phase. Summarize changes clearly.
+      Do not make further code changes unless the reviewer
+      requests them.
+
+  - id: done
+    label: Done
+    description: Task complete
