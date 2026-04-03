@@ -119,8 +119,8 @@ export const useTaskStore = defineStore("task", () => {
     // We track the streaming task separately from the active (visible) task.
     if (payload.taskId !== streamingTaskId.value) return;
     if (payload.done) {
-      // Always flush the accumulated token, even if the drawer was closed.
-      // The drawer re-opening will call loadMessages() which replaces messages from DB.
+      // Flush the streaming bubble to the messages list immediately so there's
+      // no visible gap while loadMessages fetches from DB.
       if (streamingToken.value) {
         messages.value.push({
           id: Date.now(),
@@ -136,6 +136,11 @@ export const useTaskStore = defineStore("task", () => {
       streamingToken.value = "";
       streamingExecutionId.value = null;
       streamingTaskId.value = null;
+      // Sync with DB so the real persisted message (with correct id/metadata) replaces
+      // the optimistic in-memory copy above. Fire-and-forget; task must be active.
+      if (activeTaskId.value === payload.taskId) {
+        loadMessages(payload.taskId);
+      }
     } else {
       streamingToken.value += payload.token;
     }
@@ -161,6 +166,15 @@ export const useTaskStore = defineStore("task", () => {
 
   function onTaskUpdated(task: Task) {
     _replaceTask(task);
+    // Prime streaming state as soon as execution starts. The engine always sends
+    // task.updated → running before emitting any stream.token, so setting
+    // streamingTaskId here guarantees tokens are never dropped by the early-return
+    // guard in onStreamToken. This also covers auto-executions triggered by
+    // handleTransition (on_enter_prompt), which never go through sendMessage.
+    if (task.executionState === "running" && streamingTaskId.value === null) {
+      streamingTaskId.value = task.id;
+      streamingToken.value = "";
+    }
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────────────
