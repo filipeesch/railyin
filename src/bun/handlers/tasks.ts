@@ -8,6 +8,9 @@ import {
   handleRetry,
   appendMessage,
   estimateContextWarning,
+  estimateContextUsage,
+  compactConversation,
+  resolveModelContextWindow,
   cancelExecution,
 } from "../workflow/engine.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
@@ -215,16 +218,40 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
     },
 
     // ─── models.list ─────────────────────────────────────────────────────────
-    "models.list": async (): Promise<string[]> => {
+    "models.list": async () => {
       const config = getConfig();
       const { base_url, api_key } = config.workspace.ai;
+      const headers: Record<string, string> = api_key ? { Authorization: `Bearer ${api_key}` } : {};
+
+      // Try LM Studio native API — gives loaded context_length per model
       try {
-        const res = await fetch(`${base_url}/v1/models`, {
-          headers: api_key ? { Authorization: `Bearer ${api_key}` } : {},
-        });
+        const nativeBase = base_url.replace(/\/v1\/?$/, "");
+        const res = await fetch(`${nativeBase}/api/v1/models`, { headers });
+        if (res.ok) {
+          const json = await res.json() as { models?: Array<{ key: string; type?: string; loaded_instances?: Array<{ config?: { context_length?: number } }>; max_context_length?: number }> };
+          const llms = (json.models ?? []).filter((m) => !m.type || m.type === "llm");
+          if (llms.length > 0) {
+            return llms.map((m) => ({
+              id: m.key,
+              contextWindow: m.loaded_instances?.[0]?.config?.context_length
+                ?? m.max_context_length
+                ?? null,
+            }));
+          }
+        }
+      } catch { /* not LM Studio */ }
+
+      // Standard OpenAI-compatible fallback
+      try {
+        const res = await fetch(`${base_url}/v1/models`, { headers });
         if (!res.ok) return [];
-        const json = await res.json() as { data?: Array<{ id: string }> };
-        return (json.data ?? []).map((m) => m.id).filter(Boolean);
+        const json = await res.json() as { data?: Array<{ id: string; context_length?: number }> };
+        return (json.data ?? [])
+          .filter((m) => Boolean(m.id))
+          .map((m) => ({
+            id: m.id,
+            contextWindow: typeof m.context_length === "number" ? m.context_length : null,
+          }));
       } catch {
         return [];
       }
@@ -237,6 +264,23 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       const task = fetchTaskWithDetail(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
       return task;
+    },
+
+    // ─── tasks.contextUsage ──────────────────────────────────────────────────
+    "tasks.contextUsage": async (params: { taskId: number }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
+      const config = getConfig();
+      const db = getDb();
+      const task = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
+      const taskModel = task?.model ?? config.workspace.ai.model ?? null;
+      const maxTokens = taskModel
+        ? await resolveModelContextWindow(taskModel)
+        : (config.workspace.ai.context_window_tokens ?? 128_000);
+      return estimateContextUsage(params.taskId, maxTokens);
+    },
+
+    // ─── tasks.compact ───────────────────────────────────────────────────────
+    "tasks.compact": async (params: { taskId: number }): Promise<ConversationMessage> => {
+      return compactConversation(params.taskId);
     },
 
     // ─── tasks.cancel ────────────────────────────────────────────────────────

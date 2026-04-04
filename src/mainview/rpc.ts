@@ -12,6 +12,7 @@ let _onTaskUpdated: (task: Task) => void = () => {};
 let _onNewMessage: (message: ConversationMessage) => void = () => {};
 
 const viewRpc = Electroview.defineRPC<RailynRPCType>({
+  maxRequestTime: 120_000, // 2 minutes — LLM calls (compaction, model list) can be slow
   handlers: {
     requests: {},
     messages: {

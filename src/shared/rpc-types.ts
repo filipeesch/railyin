@@ -61,7 +61,13 @@ export type MessageType =
   | "transition_event"
   | "ask_user_prompt"
   | "file_diff"
-  | "reasoning";
+  | "reasoning"
+  | "compaction_summary";
+
+export interface ModelInfo {
+  id: string;
+  contextWindow: number | null;
+}
 
 // ─── File diff types ─────────────────────────────────────────────────────────
 
@@ -214,7 +220,19 @@ export type RailynRPCType = {
       // Models
       "models.list": {
         params: Record<string, never>;
-        response: string[];
+        response: ModelInfo[];
+      };
+
+      // Context usage
+      "tasks.contextUsage": {
+        params: { taskId: number };
+        response: { usedTokens: number; maxTokens: number; fraction: number };
+      };
+
+      // Conversation compaction
+      "tasks.compact": {
+        params: { taskId: number };
+        response: ConversationMessage;
       };
 
       // Task management (edit / delete / cancel / model / git stat)

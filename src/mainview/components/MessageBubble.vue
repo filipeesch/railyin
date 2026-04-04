@@ -38,6 +38,17 @@
     :content="chunk.content"
     :streaming="false"
   />
+
+  <!-- Conversation compaction marker -->
+  <div v-else-if="chunk.type === 'compaction_summary'" class="msg msg--compaction">
+    <div class="msg--compaction__divider">
+      <span class="msg--compaction__label">— Conversation compacted —</span>
+    </div>
+    <details class="msg--compaction__details">
+      <summary>Show summary</summary>
+      <div class="msg--compaction__summary prose" v-html="renderMd(chunk.content)" />
+    </details>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -239,5 +250,49 @@ async function onAskSubmit(answer: string) {
 .msg--ask-prompt {
   align-items: flex-start;
   max-width: 100%;
+}
+
+.msg--compaction {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+}
+
+.msg--compaction__divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--p-text-muted-color, #94a3b8);
+  font-size: 0.75rem;
+}
+
+.msg--compaction__divider::before,
+.msg--compaction__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--p-surface-200, #e2e8f0);
+}
+
+.msg--compaction__label {
+  white-space: nowrap;
+}
+
+.msg--compaction__details summary {
+  font-size: 0.75rem;
+  color: var(--p-primary-color, #6366f1);
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.msg--compaction__summary {
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: var(--p-surface-50, #f8fafc);
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border-radius: 8px;
+  font-size: 0.82rem;
 }
 </style>

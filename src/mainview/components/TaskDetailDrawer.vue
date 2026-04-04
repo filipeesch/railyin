@@ -191,31 +191,62 @@
             class="flex-1"
             rows="1"
             autoResize
-            :disabled="task.executionState === 'running'"
+            :disabled="task.executionState === 'running' || compacting"
             @keydown.enter.exact.prevent="send"
           />
-          <!-- Context-aware send / cancel button -->
+          <!-- Context-aware send / cancel / compacting button -->
           <Button
-            v-if="task.executionState !== 'running'"
-            icon="pi pi-send"
-            :disabled="!inputText.trim()"
-            @click="send"
-          />
-          <Button
-            v-else
+            v-if="task.executionState === 'running'"
             icon="pi pi-stop-circle"
             severity="warn"
             @click="cancel"
           />
+          <Button
+            v-else-if="compacting"
+            :loading="true"
+            :disabled="true"
+          />
+          <Button
+            v-else
+            icon="pi pi-send"
+            :disabled="!inputText.trim()"
+            @click="send"
+          />
         </div>
-        <!-- Model selector -->
+        <!-- Model selector + context gauge -->
         <div class="task-detail__model-row" v-if="taskStore.availableModels.length > 0">
           <Select
-            :model-value="task.model ?? taskStore.availableModels[0]"
+            :model-value="task.model ?? taskStore.availableModels[0]?.id ?? null"
             :options="taskStore.availableModels"
+            option-label="id"
+            option-value="id"
             size="small"
             class="input-model-select"
             @change="(e: { value: string }) => onModelChange(e.value)"
+          />
+          <!-- Context gauge -->
+          <div
+            v-if="taskStore.contextUsage"
+            class="context-gauge"
+            :title="`~${taskStore.contextUsage.usedTokens.toLocaleString()} / ${taskStore.contextUsage.maxTokens.toLocaleString()} tokens (${Math.round(taskStore.contextUsage.fraction * 100)}%)`"
+          >
+            <div
+              class="context-gauge__bar"
+              :class="{
+                'context-gauge__bar--warn': taskStore.contextUsage.fraction >= 0.70 && taskStore.contextUsage.fraction < 0.90,
+                'context-gauge__bar--danger': taskStore.contextUsage.fraction >= 0.90,
+              }"
+              :style="{ width: `${Math.round(taskStore.contextUsage.fraction * 100)}%` }"
+            />
+          </div>
+          <!-- Compact button -->
+          <Button
+            label="Compact"
+            size="small"
+            text
+            :disabled="task.executionState === 'running' || compacting"
+            :loading="compacting"
+            @click="compactConversation"
           />
         </div>
       </div>
@@ -275,10 +306,12 @@ import ToolCallGroup, { type ToolEntry } from "./ToolCallGroup.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
+import { useToast } from "primevue/usetoast";
 import type { ConversationMessage, ExecutionState } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
+const toast = useToast();
 
 // ─── Message grouping ─────────────────────────────────────────────────────────
 // Consecutive tool_call / tool_result / file_diff messages are collapsed into a
@@ -404,6 +437,7 @@ const retrying = ref(false);
 const cancelling = ref(false);
 const scrollEl = ref<HTMLElement | null>(null);
 const contextWarning = ref<string | null>(null);
+const compacting = ref(false);
 
 // Git diff stat (fetched on drawer open when worktree is ready)
 const gitStat = ref<string | null>(null);
@@ -536,6 +570,18 @@ async function cancel() {
 async function onModelChange(model: string) {
   if (!task.value) return;
   await taskStore.setModel(task.value.id, model);
+}
+
+async function compactConversation() {
+  if (!task.value) return;
+  compacting.value = true;
+  try {
+    await taskStore.compactTask(task.value.id);
+  } catch (err) {
+    toast.add({ severity: "error", summary: "Compact failed", detail: err instanceof Error ? err.message : String(err), life: 6000 });
+  } finally {
+    compacting.value = false;
+  }
 }
 
 function openEditDialog() {
@@ -721,10 +767,36 @@ watch(
 .task-detail__model-row {
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 
 .input-model-select {
   min-width: 180px;
+}
+
+.context-gauge {
+  flex: 1;
+  max-width: 80px;
+  height: 6px;
+  background: var(--p-surface-200, #e2e8f0);
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: default;
+}
+
+.context-gauge__bar {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--p-green-500, #22c55e);
+  transition: width 0.3s ease;
+}
+
+.context-gauge__bar--warn {
+  background: var(--p-yellow-500, #eab308);
+}
+
+.context-gauge__bar--danger {
+  background: var(--p-red-500, #ef4444);
 }
 
 .context-warning {

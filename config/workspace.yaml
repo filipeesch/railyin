@@ -5,12 +5,12 @@ ai:
   # base_url: http://127.0.0.1:1234/
   base_url: http://192.168.86.129:1234/
   api_key: ""
-  model: qwen/qwen3.5-9b
+  # model: qwen/qwen3.5-9b  # optional — model selected per-task from the UI
   # provider: openrouter
   # base_url: https://openrouter.ai/v1
   # api_key: 
   # model: qwen/qwen3.6-plus
-  context_window_tokens: 128000
+  # context_window_tokens: 128000  # optional override — auto-detected from provider when omitted
 
 # Where to store Git worktrees. Defaults to ~/.railyn/worktrees
 # worktree_base_path: /path/to/worktrees

@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { electroview } from "../rpc";
-import type { Task, ConversationMessage, StreamToken, StreamError } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamToken, StreamError, ModelInfo } from "@shared/rpc-types";
 
 export const useTaskStore = defineStore("task", () => {
   // All tasks keyed by boardId
@@ -21,7 +21,10 @@ export const useTaskStore = defineStore("task", () => {
   const messagesLoading = ref(false);
 
   // Available AI models fetched from the provider endpoint
-  const availableModels = ref<string[]>([]);
+  const availableModels = ref<ModelInfo[]>([]);
+
+  // Context usage for the active task (stale-on-load, updated after executions)
+  const contextUsage = ref<{ usedTokens: number; maxTokens: number; fraction: number } | null>(null);
 
   const activeTask = computed(() => {
     for (const tasks of Object.values(tasksByBoard.value)) {
@@ -105,7 +108,9 @@ export const useTaskStore = defineStore("task", () => {
 
   async function selectTask(taskId: number) {
     activeTaskId.value = taskId;
+    contextUsage.value = null;
     await loadMessages(taskId);
+    fetchContextUsage(taskId);
   }
 
   function closeTask() {
@@ -193,6 +198,13 @@ export const useTaskStore = defineStore("task", () => {
       streamingReasoningToken.value = "";
       isStreamingReasoning.value = false;
     }
+    // Refresh context usage when the active task finishes an execution
+    if (
+      task.id === activeTaskId.value &&
+      task.executionState !== "running"
+    ) {
+      fetchContextUsage(task.id);
+    }
   }
 
   function onNewMessage(message: ConversationMessage) {
@@ -214,6 +226,16 @@ export const useTaskStore = defineStore("task", () => {
 
   async function loadModels() {
     availableModels.value = await electroview.rpc.request["models.list"]({});
+  }
+
+  // ─── Fetch context usage for active task ──────────────────────────────────
+
+  async function fetchContextUsage(taskId: number) {
+    try {
+      contextUsage.value = await electroview.rpc.request["tasks.contextUsage"]({ taskId });
+    } catch {
+      contextUsage.value = null;
+    }
   }
 
   // ─── Set model on task ────────────────────────────────────────────────────
@@ -258,7 +280,13 @@ export const useTaskStore = defineStore("task", () => {
     return { warning: result.warning };
   }
 
-  // ─── Get git diff stat ────────────────────────────────────────────────────
+  // ─── Compact conversation ─────────────────────────────────────────────────
+
+  async function compactTask(taskId: number) {
+    await electroview.rpc.request["tasks.compact"]({ taskId });
+    await loadMessages(taskId);
+    await fetchContextUsage(taskId);
+  }
 
   async function getGitStat(taskId: number): Promise<string | null> {
     return electroview.rpc.request["tasks.getGitStat"]({ taskId });
@@ -288,6 +316,7 @@ export const useTaskStore = defineStore("task", () => {
     loading,
     messagesLoading,
     availableModels,
+    contextUsage,
     loadTasks,
     createTask,
     transitionTask,
@@ -297,6 +326,8 @@ export const useTaskStore = defineStore("task", () => {
     selectTask,
     closeTask,
     loadModels,
+    fetchContextUsage,
+    compactTask,
     setModel,
     cancelTask,
     updateTask,

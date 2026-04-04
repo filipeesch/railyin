@@ -8,8 +8,8 @@ export interface AIProviderConfig {
   provider: string; // "openrouter" | "ollama" | "lmstudio" | "fake"
   base_url: string;
   api_key: string;
-  model: string;
-  context_window_tokens?: number;
+  model?: string; // optional – model selected per-task from UI; falls back to provider default
+  context_window_tokens?: number; // manual override; auto-detected from provider when absent
 }
 
 export interface WorkspaceYaml {
@@ -77,12 +77,12 @@ ai:
   # provider: openrouter
   # base_url: https://openrouter.ai/api/v1
   # api_key: sk-or-YOUR_KEY_HERE
-  # model: anthropic/claude-3.5-sonnet
+  # model: anthropic/claude-3.5-sonnet  # optional — model selected per-task from the UI
   provider: fake
   base_url: ""
   api_key: ""
   model: fake
-  context_window_tokens: 128000
+  # context_window_tokens: 128000  # optional override — auto-detected from provider when omitted
 
 # Web search (used by the search_internet tool)
 # search:
@@ -177,10 +177,6 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
   const isFake = workspace.ai.provider === "fake";
   if (!isFake && !workspace.ai.base_url) {
     _configError = "workspace.yaml: ai.base_url is required.";
-    return { config: null, error: _configError };
-  }
-  if (!isFake && !workspace.ai.model) {
-    _configError = "workspace.yaml: ai.model is required.";
     return { config: null, error: _configError };
   }
 

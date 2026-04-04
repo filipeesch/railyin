@@ -82,10 +82,25 @@ function stripXmlToolCalls(text: string): { clean: string; hadToolCalls: boolean
 
 
 function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
+  // If a compaction_summary exists, use the most recent one as the history baseline:
+  // inject it as a system message and only process messages that came after it.
+  const lastSummaryIdx = messages.map((m) => m.type).lastIndexOf("compaction_summary");
+  let toProcess: ConversationMessageRow[];
+  const prefixResult: AIMessage[] = [];
+  if (lastSummaryIdx !== -1) {
+    prefixResult.push({
+      role: "system",
+      content: `## Conversation Summary (earlier history compacted)\n\n${messages[lastSummaryIdx].content}`,
+    });
+    toProcess = messages.slice(lastSummaryIdx + 1);
+  } else {
+    toProcess = messages;
+  }
+
   const result: AIMessage[] = [];
   let i = 0;
-  while (i < messages.length) {
-    const m = messages[i];
+  while (i < toProcess.length) {
+    const m = toProcess[i];
 
     if (m.type === "user" || m.type === "assistant") {
       result.push({ role: m.role as "user" | "assistant", content: m.content });
@@ -116,9 +131,9 @@ function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
       }
       // Find the tool_call_id from the next tool_result's metadata
       let toolCallId = `call_${m.id}`;
-      if (i + 1 < messages.length && messages[i + 1].type === "tool_result") {
+      if (i + 1 < toProcess.length && toProcess[i + 1].type === "tool_result") {
         try {
-          const meta = JSON.parse(messages[i + 1].metadata ?? "{}") as { tool_call_id?: string };
+          const meta = JSON.parse(toProcess[i + 1].metadata ?? "{}") as { tool_call_id?: string };
           if (meta.tool_call_id) toolCallId = meta.tool_call_id;
         } catch { /* keep default */ }
       }
@@ -138,14 +153,14 @@ function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
       } as AIMessage);
       i++;
       // Consume the paired tool_result
-      if (i < messages.length && messages[i].type === "tool_result") {
+      if (i < toProcess.length && toProcess[i].type === "tool_result") {
         let resultMeta: { tool_call_id?: string; name?: string } = {};
-        try { resultMeta = JSON.parse(messages[i].metadata ?? "{}"); } catch { /* ok */ }
+        try { resultMeta = JSON.parse(toProcess[i].metadata ?? "{}"); } catch { /* ok */ }
         result.push({
           role: "tool",
-          content: messages[i].content.length > TOOL_RESULT_MAX_CHARS
-            ? messages[i].content.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
-            : messages[i].content,
+          content: toProcess[i].content.length > TOOL_RESULT_MAX_CHARS
+            ? toProcess[i].content.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+            : toProcess[i].content,
           tool_call_id: resultMeta.tool_call_id ?? toolCallId,
           name: resultMeta.name ?? callContent.name,
         } as AIMessage);
@@ -168,7 +183,7 @@ function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
   // system error messages between them are excluded. Models like Qwen3 require
   // strict user/assistant alternation; consecutive user turns cause a Jinja
   // template error ("No user query found in messages").
-  const collapsed: AIMessage[] = [];
+  const collapsed: AIMessage[] = [...prefixResult];
   for (const msg of result) {
     if (
       msg.role === "user" &&
@@ -294,6 +309,31 @@ function assembleMessages(
 
 // ─── Task 5.6: Context size warning ──────────────────────────────────────────
 
+// Approximate overhead of injected system messages (stage_instructions + worktree context + task block)
+// These are not stored in DB but are always included in the assembled context.
+const SYSTEM_MESSAGE_OVERHEAD_TOKENS = 400;
+
+export function estimateContextUsage(
+  taskId: number,
+  maxTokens: number,
+): { usedTokens: number; maxTokens: number; fraction: number } {
+  const db = getDb();
+  const messages = db
+    .query<ConversationMessageRow, [number]>(
+      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+    )
+    .all(taskId);
+
+  // Only count types that compactMessages() actually sends to the LLM
+  const sentTypes = new Set(["user", "assistant", "tool_call", "tool_result"]);
+  const totalChars = messages
+    .filter((m) => sentTypes.has(m.type))
+    .reduce((sum, m) => sum + m.content.length, 0);
+  const usedTokens = Math.floor(totalChars / 4) + SYSTEM_MESSAGE_OVERHEAD_TOKENS;
+  const fraction = maxTokens > 0 ? Math.min(usedTokens / maxTokens, 1) : 0;
+  return { usedTokens, maxTokens, fraction };
+}
+
 export function estimateContextWarning(taskId: number): string | null {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -303,17 +343,10 @@ export function estimateContextWarning(taskId: number): string | null {
   const contextWindowTokens = config.workspace.ai.context_window_tokens ?? 128_000;
   const warnAt = Math.floor(contextWindowTokens * CONTEXT_WARN_FRACTION);
 
-  const messages = db
-    .query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
-    )
-    .all(taskId);
+  const { usedTokens } = estimateContextUsage(taskId, contextWindowTokens);
 
-  const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
-  const estimatedTokens = Math.floor(totalChars / 4);
-
-  if (estimatedTokens >= warnAt) {
-    return `Context is ~${estimatedTokens.toLocaleString()} tokens (${Math.round((estimatedTokens / contextWindowTokens) * 100)}% of model limit). Consider archiving this task's conversation.`;
+  if (usedTokens >= warnAt) {
+    return `Context is ~${usedTokens.toLocaleString()} tokens (${Math.round((usedTokens / contextWindowTokens) * 100)}% of model limit). Consider archiving this task's conversation.`;
   }
   return null;
 }
@@ -335,6 +368,156 @@ export function appendMessage(
     [taskId, conversationId, type, role, content, metadata ? JSON.stringify(metadata) : null],
   );
   return result.lastInsertRowid as number;
+}
+
+// ─── Conversation compaction ──────────────────────────────────────────────────
+
+const COMPACTION_SYSTEM_PROMPT =
+  "You are a conversation summarizer. Given the conversation history below, produce a compact summary that preserves: key decisions made, code or files changed, the current state of the work, and any open questions. Be concise but complete. Output only the summary text, no preamble.";
+
+/** Fetch context_length for a model from the provider API. Falls back to config then 128k. */
+export async function resolveModelContextWindow(model: string): Promise<number> {
+  const config = getConfig();
+  const fallback = config.workspace.ai.context_window_tokens ?? 128_000;
+  const { base_url, api_key } = config.workspace.ai;
+  const headers: Record<string, string> = api_key ? { Authorization: `Bearer ${api_key}` } : {};
+
+  // Try LM Studio native API first — it exposes the actual loaded context_length
+  // under loaded_instances[0].config.context_length, keyed by model id.
+  try {
+    const nativeBase = base_url.replace(/\/v1\/?$/, "");
+    const res = await fetch(`${nativeBase}/api/v1/models`, { headers });
+    if (res.ok) {
+      const json = await res.json() as { models?: Array<{ key: string; loaded_instances?: Array<{ config?: { context_length?: number } }>; max_context_length?: number }> };
+      const found = (json.models ?? []).find((m) => m.key === model);
+      if (found) {
+        const loaded = found.loaded_instances?.[0]?.config?.context_length;
+        if (typeof loaded === "number") return loaded;
+        if (typeof found.max_context_length === "number") return found.max_context_length;
+      }
+    }
+  } catch { /* not LM Studio, fall through */ }
+
+  // Standard OpenAI-compatible /v1/models fallback (OpenRouter, Ollama, etc.)
+  try {
+    const res = await fetch(`${base_url}/v1/models`, { headers });
+    if (res.ok) {
+      const json = await res.json() as { data?: Array<{ id: string; context_length?: number }> };
+      const found = (json.data ?? []).find((m) => m.id === model);
+      if (found && typeof found.context_length === "number") return found.context_length;
+    }
+  } catch { /* fall through */ }
+
+  return fallback;
+}
+
+export async function compactConversation(taskId: number): Promise<ConversationMessage> {
+  const db = getDb();
+  const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  const history = db
+    .query<ConversationMessageRow, [number]>(
+      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+    )
+    .all(taskId);
+
+  const config = getConfig();
+  const resolvedModel = task.model ?? config.workspace.ai.model;
+  if (!resolvedModel) throw new Error("No model configured for this task. Select a model first.");
+  const provider = createProvider({ ...config.workspace.ai, model: resolvedModel });
+
+  // Render history as plain text to avoid Jinja template issues (tool_call/tool role
+  // sequences can't be sent to models with strict chat templates like Qwen3).
+  const lines = history
+    .filter((m) => !["transition_event", "compaction_summary", "reasoning"].includes(m.type))
+    .map((m) => {
+      const label = m.role ?? m.type;
+      const content = m.type === "tool_call"
+        ? (() => { try { const c = JSON.parse(m.content) as { name?: string; arguments?: string }; return `[tool: ${c.name}] ${c.arguments ?? ""}`; } catch { return m.content; } })()
+        : m.content;
+      return `[${label}]: ${content}`;
+    });
+
+  const wordCount = (s: string) => s.split(/\s+/).filter(Boolean).length;
+
+  const buildMessages = (maxWords: number): { callMessages: AIMessage[]; totalWords: number; truncated: boolean } => {
+    let historyText = "";
+    let totalWords = 0;
+    let truncated = false;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i] + "\n\n";
+      const w = wordCount(line);
+      if (totalWords + w > maxWords) { truncated = true; break; }
+      historyText = line + historyText;
+      totalWords += w;
+    }
+    if (truncated) historyText = "[… earlier messages omitted …]\n\n" + historyText;
+    return {
+      callMessages: [
+        { role: "system", content: COMPACTION_SYSTEM_PROMPT },
+        { role: "user", content: `<conversation>\n${historyText}</conversation>\n\nPlease summarize the conversation above.` },
+      ],
+      totalWords,
+      truncated,
+    };
+  };
+
+  // Start with API-reported context window. If the model is loaded with a smaller
+  // n_ctx (common in LM Studio), the API returns 400. Retry with halved budget.
+  const contextWindow = await resolveModelContextWindow(resolvedModel);
+  const RESERVED_TOKENS = 500;
+  let maxWords = Math.floor((contextWindow - RESERVED_TOKENS) / 1.3);
+  const MAX_RETRIES = 5;
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const { callMessages, totalWords, truncated } = buildMessages(maxWords);
+    log("info", `compaction: attempt ${attempt}`, { taskId, data: { model: resolvedModel, contextWindow, maxWords, words: totalWords, truncated } });
+    try {
+      const result = await provider.turn(callMessages, {});
+      const summary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
+      log("info", `compaction: done on attempt ${attempt}, summary length=${summary.length}`, { taskId });
+
+      const msgId = appendMessage(
+        taskId,
+        task.conversation_id ?? 0,
+        "compaction_summary",
+        null,
+        summary,
+      );
+      const msgRow = db
+        .query<ConversationMessageRow, [number]>(
+          "SELECT * FROM conversation_messages WHERE id = ?",
+        )
+        .get(msgId)!;
+      return mapConversationMessage(msgRow);
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      // Detect actual context overflow: LM Studio returns "n_keep: X >= n_ctx: Y"
+      if (/n_keep.*n_ctx|context length|context window/i.test(msg)) {
+        // Parse the real n_ctx from the error if available, then use a conservative
+        // 4 chars/token ratio (code is dense; 1.3 words/token was too optimistic).
+        const nCtxMatch = msg.match(/n_ctx:\s*(\d+)/);
+        const realCtx = nCtxMatch ? parseInt(nCtxMatch[1], 10) : Math.floor(maxWords / 2);
+        const newMaxWords = Math.floor((realCtx - 500) / 4);
+        log("warn", `compaction: context overflow on attempt ${attempt}, n_ctx=${realCtx ?? "unknown"}, new budget: ${newMaxWords} words`, { taskId });
+        maxWords = newMaxWords;
+        if (maxWords < 50) {
+          log("error", "compaction: budget too small to continue", { taskId });
+          break;
+        }
+        continue;
+      }
+      // Non-recoverable error
+      log("error", `compaction: provider.turn failed: ${msg}`, { taskId });
+      throw err;
+    }
+  }
+
+  log("error", `compaction: all ${MAX_RETRIES} attempts failed`, { taskId });
+  throw lastErr;
 }
 
 // ─── Task 5.1: Transition handler ─────────────────────────────────────────────
@@ -369,7 +552,7 @@ export async function handleTransition(
 
   // Resolve and persist the model for this column (D1)
   const config = getConfig();
-  const resolvedModel = column?.model ?? config.workspace.ai.model;
+  const resolvedModel = column?.model ?? config.workspace.ai.model ?? null;
   db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedModel, taskId]);
 
   // 4. If no prompt configured → idle (design D7)
@@ -408,7 +591,7 @@ export async function handleTransition(
 
   // 9. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
+  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel ?? "", controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
     () => {},
   );
 
@@ -1090,6 +1273,19 @@ export async function handleHumanTurn(
     content,
   );
 
+  // Auto-compact if context usage is at or above 90%
+  const config = getConfig();
+  const contextWindowTokens = config.workspace.ai.context_window_tokens ?? 128_000;
+  const { fraction } = estimateContextUsage(taskId, contextWindowTokens);
+  if (fraction >= 0.90) {
+    appendMessage(taskId, task.conversation_id ?? 0, "system", null, "Compacting conversation…");
+    try {
+      await compactConversation(taskId);
+    } catch {
+      // compaction failure should not block the send
+    }
+  }
+
   // Get stage instructions for current column
   const templateId = getBoardTemplateId(task.board_id);
   const column = getColumnConfig(templateId, task.workflow_state);
@@ -1122,8 +1318,7 @@ export async function handleHumanTurn(
   executionControllers.set(executionId, controller);
 
   // Resolve model: use the task's persisted model (D1) or workspace default
-  const config = getConfig();
-  const resolvedModel = task.model ?? config.workspace.ai.model;
+  const resolvedModel = task.model ?? config.workspace.ai.model ?? "";
 
   // Run async
   runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
@@ -1182,7 +1377,7 @@ export async function handleRetry(
 
   // Resolve model: use the task's persisted model or workspace default
   const config = getConfig();
-  const resolvedModel = updatedRow.model ?? config.workspace.ai.model;
+  const resolvedModel = updatedRow.model ?? config.workspace.ai.model ?? "";
 
   runExecution(
     taskId,
