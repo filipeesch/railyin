@@ -10,6 +10,7 @@
     "test": "bun test src/bun/test --timeout 20000"
   },
   "dependencies": {
+    "@monaco-editor/loader": "^1.4.0",
     "electrobun": "latest",
     "js-yaml": "^4.1.0",
     "marked": "^17.0.5"

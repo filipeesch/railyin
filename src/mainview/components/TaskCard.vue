@@ -3,7 +3,7 @@
     <!-- Title -->
     <div class="task-card__title">{{ task.title }}</div>
 
-    <!-- Execution state badge -->
+    <!-- Execution state badge + changed files badge -->
     <div class="task-card__footer">
       <Tag
         :value="execLabel"
@@ -13,6 +13,12 @@
       <span v-if="task.retryCount > 0" class="task-card__retry-count">
         ↺ {{ task.retryCount }}
       </span>
+      <span
+        v-if="changedCount > 0"
+        class="task-card__changed-badge"
+        :title="`${changedCount} file${changedCount !== 1 ? 's' : ''} changed — click to review`"
+        @click.stop="emit('openReview')"
+      >⬡ {{ changedCount }}</span>
     </div>
   </div>
 </template>
@@ -21,9 +27,13 @@
 import { computed } from "vue";
 import Tag from "primevue/tag";
 import type { Task } from "@shared/rpc-types";
+import { useTaskStore } from "../stores/task";
 
 const props = defineProps<{ task: Task }>();
-const emit = defineEmits<{ click: [] }>();
+const emit = defineEmits<{ click: []; openReview: [] }>();
+
+const taskStore = useTaskStore();
+const changedCount = computed(() => taskStore.changedFileCounts[props.task.id] ?? 0);
 
 const execLabel = computed(() => {
   const map: Record<string, string> = {
@@ -91,5 +101,22 @@ const execSeverity = computed(() => {
 .task-card__retry-count {
   font-size: 0.75rem;
   color: var(--p-text-muted-color, #94a3b8);
+}
+
+.task-card__changed-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--p-primary-color, #6366f1);
+  background: var(--p-primary-50, #eef2ff);
+  border: 1px solid var(--p-primary-200, #c7d2fe);
+  border-radius: 10px;
+  padding: 1px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+
+.task-card__changed-badge:hover {
+  background: var(--p-primary-100, #e0e7ff);
 }
 </style>

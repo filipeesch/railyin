@@ -58,6 +58,7 @@
             :task="task"
             @pointerdown="onCardPointerDown($event, task.id)"
             @click="onCardClick(task.id)"
+            @open-review="onOpenReview(task.id)"
           />
         </div>
       </div>
@@ -72,6 +73,9 @@
     <!-- Task detail drawer -->
     <TaskDetailDrawer />
 
+    <!-- Code review overlay -->
+    <CodeReviewOverlay />
+
     <!-- Create task dialog -->
     <CreateTaskDialog
       v-if="boardStore.activeBoardId"
@@ -85,20 +89,24 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
+import { electroview } from "../rpc";
 import Select from "primevue/select";
 import Button from "primevue/button";
 import Badge from "primevue/badge";
 import { useBoardStore } from "../stores/board";
 import { useTaskStore } from "../stores/task";
 import { useProjectStore } from "../stores/project";
+import { useReviewStore } from "../stores/review";
 import TaskCard from "../components/TaskCard.vue";
 import TaskDetailDrawer from "../components/TaskDetailDrawer.vue";
 import CreateTaskDialog from "../components/CreateTaskDialog.vue";
+import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 
 const router = useRouter();
 const boardStore = useBoardStore();
 const taskStore = useTaskStore();
 const projectStore = useProjectStore();
+const reviewStore = useReviewStore();
 
 const showCreateTask = ref(false);
 const dragOverColumnId = ref<string | null>(null);
@@ -225,6 +233,11 @@ async function onPointerUp(event: PointerEvent) {
 function onCardClick(taskId: number) {
   if (Date.now() - lastDragEndTime < 200) return;
   taskStore.selectTask(taskId);
+}
+
+async function onOpenReview(taskId: number) {
+  const files = await electroview.rpc.request["tasks.getChangedFiles"]({ taskId });
+  reviewStore.openReview(taskId, files);
 }
 
 async function onTaskCreated() {
