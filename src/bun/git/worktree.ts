@@ -14,7 +14,7 @@ function slugify(text: string): string {
     .slice(0, 50);
 }
 
-export function branchName(taskId: number, title: string): string {
+function branchName(taskId: number, title: string): string {
   return `task/${taskId}-${slugify(title)}`;
 }
 

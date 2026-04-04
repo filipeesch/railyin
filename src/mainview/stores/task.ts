@@ -12,7 +12,6 @@ export const useTaskStore = defineStore("task", () => {
   const messages = ref<ConversationMessage[]>([]);
   const streamingToken = ref("");     // accumulates current stream
   const streamingTaskId = ref<number | null>(null);   // which task is streaming
-  const streamingExecutionId = ref<number | null>(null);
 
   // Reasoning display (task 4.1-4.3)
   const streamingReasoningToken = ref("");   // live reasoning text for active round
@@ -82,7 +81,6 @@ export const useTaskStore = defineStore("task", () => {
     });
     messages.value.push(message);
     streamingTaskId.value = taskId;
-    streamingExecutionId.value = executionId;
     streamingToken.value = "";
   }
 
@@ -95,7 +93,6 @@ export const useTaskStore = defineStore("task", () => {
     // If it is streaming, we keep the accumulated token so the bubble stays visible.
     if (streamingTaskId.value !== taskId) {
       streamingToken.value = "";
-      streamingExecutionId.value = null;
     }
     try {
       messages.value = await electroview.rpc.request["conversations.getMessages"]({ taskId });
@@ -114,7 +111,7 @@ export const useTaskStore = defineStore("task", () => {
   function closeTask() {
     activeTaskId.value = null;
     messages.value = [];
-    // Keep streamingToken/streamingTaskId/streamingExecutionId alive so tokens
+    // Keep streamingToken/streamingTaskId alive so tokens
     // that arrive while the drawer is closed are not dropped. They will be
     // restored when the user re-opens the same task.
   }
@@ -143,7 +140,6 @@ export const useTaskStore = defineStore("task", () => {
       streamingToken.value = "";
       streamingReasoningToken.value = "";
       isStreamingReasoning.value = false;
-      streamingExecutionId.value = null;
       streamingTaskId.value = null;
       // Sync with DB so the real persisted message (with correct id/metadata) replaces
       // the optimistic in-memory copy above. Fire-and-forget; task must be active.
@@ -170,7 +166,6 @@ export const useTaskStore = defineStore("task", () => {
   function onStreamError(payload: StreamError) {
     if (payload.taskId !== streamingTaskId.value) return;
     streamingToken.value = "";
-    streamingExecutionId.value = null;
     streamingTaskId.value = null;
     if (payload.taskId !== activeTaskId.value) return;
     messages.value.push({
@@ -290,7 +285,6 @@ export const useTaskStore = defineStore("task", () => {
     streamingReasoningToken,
     isStreamingReasoning,
     streamingTaskId,
-    streamingExecutionId,
     loading,
     messagesLoading,
     availableModels,

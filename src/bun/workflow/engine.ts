@@ -41,7 +41,7 @@ function getColumnConfig(templateId: string, columnId: string) {
   return template?.columns.find((c) => c.id === columnId) ?? null;
 }
 
-export function getBoardTemplateId(boardId: number): string {
+function getBoardTemplateId(boardId: number): string {
   const db = getDb();
   const board = db
     .query<{ workflow_template_id: string }, [number]>(
@@ -1200,46 +1200,3 @@ export async function handleRetry(
   return { task: mapTask(updatedRow), executionId };
 }
 
-// ─── Task 5.10: Handle spawned tasks from execution result ─────────────────────
-
-export function createSpawnedTask(params: {
-  boardId: number;
-  projectId: number;
-  title: string;
-  description: string;
-  createdFromTaskId: number;
-  createdFromExecutionId: number;
-}): Task {
-  const db = getDb();
-
-  const convResult = db.run("INSERT INTO conversations (task_id) VALUES (0)");
-  const conversationId = convResult.lastInsertRowid as number;
-
-  const taskResult = db.run(
-    `INSERT INTO tasks
-       (board_id, project_id, title, description, workflow_state, execution_state,
-        conversation_id, created_from_task_id, created_from_execution_id)
-     VALUES (?, ?, ?, ?, 'backlog', 'idle', ?, ?, ?)`,
-    [
-      params.boardId,
-      params.projectId,
-      params.title,
-      params.description,
-      conversationId,
-      params.createdFromTaskId,
-      params.createdFromExecutionId,
-    ],
-  );
-  const newTaskId = taskResult.lastInsertRowid as number;
-
-  // Update conversation to point to real task
-  db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [newTaskId, conversationId]);
-
-  appendMessage(newTaskId, conversationId, "system", null, "Task created from execution result", {
-    createdFromTaskId: params.createdFromTaskId,
-    createdFromExecutionId: params.createdFromExecutionId,
-  });
-
-  const newRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(newTaskId)!;
-  return mapTask(newRow);
-}

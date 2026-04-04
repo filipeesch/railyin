@@ -7,6 +7,22 @@ import type { FileDiffPayload, Hunk, HunkLine } from "../../shared/rpc-types.ts"
 
 // ─── Myers diff algorithm ─────────────────────────────────────────────────────
 
+/** Convert a glob pattern to a RegExp matching relative file paths.
+ *  Supports `*` (within a path segment), `**` (any depth), `?` (single char).
+ *  Returns null when `g` is empty. Case-sensitivity follows `caseInsensitive`. */
+function globToRegex(g: string, caseInsensitive = false): RegExp | null {
+  if (!g) return null;
+  const escaped = g
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, "\x00")
+    .replace(/\*\*/g, "\x01")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\x00/g, "(.*/)?")
+    .replace(/\x01/g, ".*");
+  return new RegExp(`^${escaped}$`, caseInsensitive ? "i" : "");
+}
+
 const CONTEXT_LINES = 3;
 
 /**
@@ -312,21 +328,6 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         },
       },
       required: ["path", "content"],
-    },
-  },
-  {
-    name: "delete_file",
-    description:
-      "Delete a file from the project worktree. Use relative paths from the worktree root.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Relative path to the file to delete.",
-        },
-      },
-      required: ["path"],
     },
   },
   {
@@ -830,22 +831,7 @@ export async function executeTool(
         }
 
         // Convert a glob pattern to a RegExp for relative path matching.
-        // Supports: * (any chars within a path segment), ** (any depth), ? (single char).
-        // "**/*.ts" matches root-level "hello.ts" as well as "src/foo.ts".
-        const globToRegex = (g: string): RegExp | null => {
-          if (!g) return null;
-          const escaped = g
-            .replace(/[.+^${}()|[\]\\]/g, "\\$&")   // escape regex special chars
-            .replace(/\*\*\//g, "\x00")               // **/ → placeholder (optional path prefix)
-            .replace(/\*\*/g, "\x01")                 // ** → placeholder (any depth)
-            .replace(/\*/g, "[^/]*")                  // single-segment wildcard
-            .replace(/\?/g, "[^/]")
-            .replace(/\x00/g, "(.*/)?")
-            .replace(/\x01/g, ".*");
-          return new RegExp(`^${escaped}$`, "i");
-        };
-        const globRe = globToRegex(globPat);
-
+        const globRe = globToRegex(globPat, /* caseInsensitive */ true);
         const IGNORE_DIRS = new Set([".git", "node_modules", "dist", ".cache"]);
         const MAX_OUTPUT = 8_000;
         const matches: string[] = [];
@@ -897,18 +883,7 @@ export async function executeTool(
     case "find_files": {
       const globPat = args.glob ?? "";
       try {
-        const globToRegex = (g: string): RegExp => {
-          const escaped = g
-            .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-            .replace(/\*\*\//g, "\x00")   // **/ → placeholder (optional path prefix)
-            .replace(/\*\*/g, "\x01")     // ** → placeholder (any depth)
-            .replace(/\*/g, "[^/]*")      // single * → single segment wildcard
-            .replace(/\?/g, "[^/]")
-            .replace(/\x00/g, "(.*/)?")
-            .replace(/\x01/g, ".*");
-          return new RegExp(`^${escaped}$`, process.platform === "win32" ? "i" : "");
-        };
-        const re = globToRegex(globPat);
+        const re = globToRegex(globPat, process.platform === "win32") ?? /(?:)/;
         const IGNORE_DIRS = new Set([".git", "node_modules", "dist", ".cache"]);
         const found: string[] = [];
 

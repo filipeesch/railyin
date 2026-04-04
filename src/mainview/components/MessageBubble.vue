@@ -22,22 +22,6 @@
     </span>
   </div>
 
-  <div v-else-if="chunk.type === 'tool_call'" class="msg msg--tool">
-    <i class="pi pi-code" />
-    <span class="msg__tool-name">{{ toolName }}</span>
-    <pre class="msg__tool-body">{{ chunk.content }}</pre>
-  </div>
-
-  <div v-else-if="chunk.type === 'tool_result'" class="msg msg--tool-result">
-    <i class="pi pi-check-square" />
-    <pre class="msg__tool-body">{{ truncated }}</pre>
-  </div>
-
-  <div v-else-if="chunk.type === 'artifact_event'" class="msg msg--artifact">
-    <i class="pi pi-file" />
-    <span>{{ chunk.content }}</span>
-  </div>
-
   <div v-else-if="chunk.type === 'ask_user_prompt'" class="msg msg--ask-prompt">
     <AskUserPrompt
       :question="askPayload.question"
@@ -46,10 +30,6 @@
       :answered-text="answeredText"
       @submit="onAskSubmit"
     />
-  </div>
-
-  <div v-else-if="chunk.type === 'file_diff'" class="msg msg--file-diff">
-    <FileDiff :payload="fileDiffPayload" />
   </div>
 
   <!-- Persisted reasoning messages from DB (collapsed, non-streaming) -->
@@ -63,9 +43,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { marked } from "marked";
-import type { ConversationMessage, FileDiffPayload } from "@shared/rpc-types";
+import type { ConversationMessage } from "@shared/rpc-types";
 import AskUserPrompt from "./AskUserPrompt.vue";
-import FileDiff from "./FileDiff.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import { useTaskStore } from "../stores/task";
 
@@ -73,10 +52,6 @@ const props = defineProps<{
   chunk: ConversationMessage;
   /** Index of this message in the full list — used to detect if ask_user_prompt was answered */
   index?: number;
-}>();
-
-const emit = defineEmits<{
-  sendMessage: [content: string];
 }>();
 
 const taskStore = useTaskStore();
@@ -87,32 +62,11 @@ function renderMd(content: string): string {
 
 const meta = computed(() => props.chunk.metadata as Record<string, string> | null);
 
-const toolName = computed(() => {
-  try {
-    const parsed = JSON.parse(props.chunk.content);
-    return parsed?.function?.name ?? parsed?.name ?? "tool";
-  } catch {
-    return "tool";
-  }
-});
-
-const truncated = computed(() => {
-  const c = props.chunk.content;
-  return c.length > 800 ? c.slice(0, 800) + "\n…[truncated]" : c;
-});
-
 /** True when an assistant message was generated in XML <tool_call> format instead of the JSON API format. These should be silently hidden. */
 const isXmlToolCall = computed(() =>
   props.chunk.type === "assistant" && props.chunk.content.trimStart().startsWith("<tool_call>"),
 );
 
-const fileDiffPayload = computed<FileDiffPayload>(() => {
-  try {
-    return JSON.parse(props.chunk.content) as FileDiffPayload;
-  } catch {
-    return { operation: "write_file", path: "unknown", added: 0, removed: 0 };
-  }
-});
 
 // ─── ask_user_prompt support ──────────────────────────────────────────────────
 
@@ -273,45 +227,13 @@ async function onAskSubmit(answer: string) {
 }
 
 .msg--system,
-.msg--transition,
-.msg--artifact {
+.msg--transition {
   flex-direction: row;
   align-items: center;
   gap: 6px;
   font-size: 0.8rem;
   color: var(--p-text-muted-color, #94a3b8);
   padding: 4px 0;
-}
-
-.msg--tool,
-.msg--tool-result {
-  flex-direction: column;
-  gap: 4px;
-  background: var(--p-surface-50, #f8fafc);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
-  border-radius: 6px;
-  padding: 8px 12px;
-  font-size: 0.8rem;
-}
-
-.msg--tool {
-  align-items: flex-start;
-}
-
-.msg__tool-name {
-  font-weight: 600;
-  font-size: 0.78rem;
-  color: var(--p-primary-color, #6366f1);
-}
-
-.msg__tool-body {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-size: 0.75rem;
-  color: var(--p-text-color, #334155);
-  max-height: 200px;
-  overflow-y: auto;
 }
 
 .msg--ask-prompt {

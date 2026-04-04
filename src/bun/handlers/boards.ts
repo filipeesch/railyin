@@ -11,9 +11,6 @@ function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"]
     columns: t.columns.map((c) => ({
       id: c.id,
       label: c.label,
-      description: c.description,
-      onEnterPrompt: c.on_enter_prompt,
-      stageInstructions: c.stage_instructions,
       model: c.model,
     })),
   };

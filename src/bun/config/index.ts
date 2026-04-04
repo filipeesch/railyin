@@ -221,10 +221,6 @@ export function getConfig(): LoadedConfig {
   return _config;
 }
 
-export function getConfigError(): string | null {
-  return _configError;
-}
-
 export function resetConfig(): void {
   _config = null;
   _configError = null;

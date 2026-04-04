@@ -2,11 +2,6 @@ import type { RPCSchema } from "electrobun/bun";
 
 // ─── Domain types ───────────────────────────────────────────────────────────
 
-export interface Workspace {
-  id: number;
-  name: string;
-}
-
 export interface Board {
   id: number;
   workspaceId: number;
@@ -64,7 +59,6 @@ export type MessageType =
   | "tool_call"
   | "tool_result"
   | "transition_event"
-  | "artifact_event"
   | "ask_user_prompt"
   | "file_diff"
   | "reasoning";
@@ -105,20 +99,6 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
-export interface Execution {
-  id: number;
-  taskId: number;
-  fromState: string;
-  toState: string;
-  promptId: string | null;
-  status: ExecutionState;
-  attempt: number;
-  startedAt: string;
-  finishedAt: string | null;
-  summary: string | null;
-  details: string | null;
-}
-
 export interface WorkspaceConfig {
   id: number;
   name: string;
@@ -135,10 +115,6 @@ export interface WorkspaceConfig {
 export interface WorkflowColumn {
   id: string;
   label: string;
-  description?: string;
-  onEnterPrompt?: string;
-  stageInstructions?: string;
-  allowedTransitions?: string[];
   model?: string;
 }
 
