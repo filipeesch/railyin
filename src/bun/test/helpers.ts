@@ -87,6 +87,15 @@ export function initDb(): Database {
       metadata        TEXT,
       created_at      TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS logs (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      level        TEXT    NOT NULL DEFAULT 'info',
+      task_id      INTEGER,
+      execution_id INTEGER,
+      message      TEXT    NOT NULL,
+      data         TEXT,
+      created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
   `);
   db.run("INSERT INTO workspaces (id, name) VALUES (1, 'test-workspace')");
   return db;

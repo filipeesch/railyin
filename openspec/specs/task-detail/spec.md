@@ -97,3 +97,55 @@ The system SHALL display the task's worktree status, branch name, worktree path,
 #### Scenario: Execution count shown in side panel
 - **WHEN** a task detail drawer is open
 - **THEN** the total number of executions for the task is displayed in the side panel
+
+### Requirement: Tool calls are displayed as individual collapsible rows in the conversation
+The system SHALL render each tool call triplet (`tool_call` + `tool_result` + optional `file_diff`) as a single self-contained collapsible row in the conversation thread. Each row SHALL be independent — there is no outer grouping wrapper around consecutive tool calls.
+
+The collapsed header SHALL show, left to right:
+- A chevron indicating collapsed/expanded state
+- A tool-type icon
+- The tool name in monospace
+- The primary argument (path, pattern, URL, or command) truncated if necessary
+- Green `+N` badge when `diff.added > 0`
+- Red `-N` badge when `diff.removed > 0`
+
+The expanded body SHALL show:
+- For write tools (tools that produced a `file_diff` message): the `FileDiff` component rendering the diff payload
+- For read/search tools (no `file_diff`): the raw tool output in a scrollable `<pre>` block
+
+`file_diff` messages SHALL NOT be rendered as standalone conversation items — they are consumed exclusively by the tool call row.
+
+#### Scenario: Read tool row shows output on expand
+- **WHEN** the user expands a tool call row for `read_file` or `list_dir`
+- **THEN** the body shows the tool output text, not a file diff
+
+#### Scenario: Write tool row shows diff on expand
+- **WHEN** the user expands a tool call row for `write_file` or `patch_file`
+- **THEN** the body shows the FileDiff component with added/removed hunks
+
+#### Scenario: Stat badges shown for write tools with changes
+- **WHEN** a write tool produced `diff.added > 0` or `diff.removed > 0`
+- **THEN** the corresponding green `+N` or red `-N` badge is visible in the collapsed header
+
+#### Scenario: No stat badges for tools with zero lines changed
+- **WHEN** a write tool produced `diff.added === 0` and `diff.removed === 0`
+- **THEN** no stat badge is rendered in the header
+
+#### Scenario: Each tool call is its own independent row
+- **WHEN** three consecutive tool calls appear in the conversation
+- **THEN** three separate collapsible rows are rendered, each independently expandable
+
+### Requirement: Task detail drawer renders `reasoning` messages as collapsible ReasoningBubble components
+The system SHALL dispatch on `type: "reasoning"` in the conversation timeline and render a `ReasoningBubble` component. Messages loaded from DB SHALL render collapsed. Messages actively streaming SHALL render expanded with animation (handled via the transient store state keyed by round ID).
+
+#### Scenario: Reasoning message from DB renders collapsed
+- **WHEN** the drawer opens and the conversation history contains a `reasoning` message
+- **THEN** a collapsed `ReasoningBubble` is rendered at the correct position in the timeline showing the reasoning text when expanded
+
+#### Scenario: Active reasoning renders expanded with animation
+- **WHEN** the task store has an active reasoning round (streaming in progress)
+- **THEN** the `ReasoningBubble` for that round is rendered expanded with a pulsing "Thinking…" header
+
+#### Scenario: Reasoning bubble positioned before its associated response
+- **WHEN** a `reasoning` message is followed by a `tool_call` or `assistant` message in the timeline
+- **THEN** the `ReasoningBubble` appears immediately above the associated message in the rendered list

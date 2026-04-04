@@ -13,7 +13,7 @@ import Toast from "primevue/toast";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
-import { onStreamToken, onStreamError, onTaskUpdated } from "./rpc";
+import { onStreamToken, onStreamError, onTaskUpdated, onNewMessage } from "./rpc";
 
 const router = useRouter();
 const toast = useToast();
@@ -40,6 +40,10 @@ onMounted(async () => {
 
   onTaskUpdated((task) => {
     taskStore.onTaskUpdated(task);
+  });
+
+  onNewMessage((message) => {
+    taskStore.onNewMessage(message);
   });
 
   // Boot: load workspace config

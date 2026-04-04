@@ -14,6 +14,10 @@ export const useTaskStore = defineStore("task", () => {
   const streamingTaskId = ref<number | null>(null);   // which task is streaming
   const streamingExecutionId = ref<number | null>(null);
 
+  // Reasoning display (task 4.1-4.3)
+  const streamingReasoningToken = ref("");   // live reasoning text for active round
+  const isStreamingReasoning = ref(false);   // true while reasoning tokens are arriving
+
   const loading = ref(false);
   const messagesLoading = ref(false);
 
@@ -137,6 +141,8 @@ export const useTaskStore = defineStore("task", () => {
         });
       }
       streamingToken.value = "";
+      streamingReasoningToken.value = "";
+      isStreamingReasoning.value = false;
       streamingExecutionId.value = null;
       streamingTaskId.value = null;
       // Sync with DB so the real persisted message (with correct id/metadata) replaces
@@ -144,7 +150,19 @@ export const useTaskStore = defineStore("task", () => {
       if (activeTaskId.value === payload.taskId) {
         loadMessages(payload.taskId);
       }
+    } else if (payload.isReasoning) {
+      // Reasoning token: if this is the start of a new round (prev round collapsed),
+      // clear old content so we start a fresh live bubble.
+      if (!isStreamingReasoning.value) {
+        streamingReasoningToken.value = "";
+      }
+      streamingReasoningToken.value += payload.token;
+      isStreamingReasoning.value = true;
     } else {
+      // Regular text token: if reasoning was active, mark it as done (auto-collapse)
+      if (isStreamingReasoning.value) {
+        isStreamingReasoning.value = false;
+      }
       streamingToken.value += payload.token;
     }
   }
@@ -177,7 +195,24 @@ export const useTaskStore = defineStore("task", () => {
     if (task.executionState === "running" && streamingTaskId.value === null) {
       streamingTaskId.value = task.id;
       streamingToken.value = "";
+      streamingReasoningToken.value = "";
+      isStreamingReasoning.value = false;
     }
+  }
+
+  function onNewMessage(message: ConversationMessage) {
+    // Only append if this task is currently open in the drawer
+    if (message.taskId !== activeTaskId.value) return;
+    // Avoid duplicates — loadMessages after stream done may re-add the same messages
+    if (messages.value.some((m) => m.id === message.id)) return;
+    // When a reasoning round is persisted to DB, the live streaming bubble has served
+    // its purpose — clear it so the collapsed DB card takes its place and the next
+    // round's reasoning starts fresh.
+    if (message.type === "reasoning") {
+      streamingReasoningToken.value = "";
+      isStreamingReasoning.value = false;
+    }
+    messages.value.push(message);
   }
 
   // ─── Load available models ────────────────────────────────────────────────
@@ -252,6 +287,8 @@ export const useTaskStore = defineStore("task", () => {
     activeTask,
     messages,
     streamingToken,
+    streamingReasoningToken,
+    isStreamingReasoning,
     streamingTaskId,
     streamingExecutionId,
     loading,
@@ -274,5 +311,6 @@ export const useTaskStore = defineStore("task", () => {
     onStreamToken,
     onStreamError,
     onTaskUpdated,
+    onNewMessage,
   };
 });

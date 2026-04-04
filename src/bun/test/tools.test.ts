@@ -194,7 +194,7 @@ describe("executeTool / unknown", () => {
 // ─── write_file ───────────────────────────────────────────────────────────────
 
 describe("executeTool / write_file", () => {
-  it("creates a new file and returns is_new FileDiffPayload", async () => {
+  it("creates a new file and returns is_new FileDiffPayload with added hunks", async () => {
     const r = asWrite(await executeTool("write_file", JSON.stringify({ path: "new.ts", content: "const a = 1;" }), ctx()));
     expect(r.content).toMatch(/OK/);
     expect(r.content).toMatch(/\+\d+ lines?/);
@@ -203,7 +203,8 @@ describe("executeTool / write_file", () => {
     expect(r.diff.is_new).toBe(true);
     expect(r.diff.added).toBeGreaterThan(0);
     expect(r.diff.removed).toBe(0);
-    expect(r.diff.hunks).toBeUndefined();
+    expect(r.diff.hunks).toBeDefined();
+    expect(r.diff.hunks![0].lines.every(l => l.type === "added")).toBe(true);
   });
 
   it("overwrites an existing file and returns Myers diff hunks", async () => {
@@ -235,7 +236,7 @@ describe("executeTool / write_file", () => {
 // ─── delete_file ──────────────────────────────────────────────────────────────
 
 describe("executeTool / delete_file", () => {
-  it("deletes file and returns line-count FileDiffPayload (no hunks)", async () => {
+  it("deletes file and returns FileDiffPayload with removed hunks", async () => {
     // README.md fixture: '# Test project\n' → 1 line
     const r = asWrite(await executeTool("delete_file", JSON.stringify({ path: "README.md" }), ctx()));
     expect(r.content).toMatch(/OK: deleted/i);
@@ -244,7 +245,9 @@ describe("executeTool / delete_file", () => {
     expect(r.diff.operation).toBe("delete_file");
     expect(r.diff.removed).toBeGreaterThan(0);
     expect(r.diff.added).toBe(0);
-    expect(r.diff.hunks).toBeUndefined();
+    expect(r.diff.hunks).toBeDefined();
+    expect(r.diff.hunks!.length).toBeGreaterThan(0);
+    expect(r.diff.hunks![0].lines.every(l => l.type === "removed")).toBe(true);
   });
 
   it("returns error string for non-existent file", async () => {
@@ -493,12 +496,98 @@ describe("executeTool / patch_file", () => {
     expect(allLines.some(l => l.type === "added" && l.content === "const a = 42;")).toBe(true);
   });
 
+  it("deletes content via position=replace with content='' (deleted line shows as removed)", async () => {
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
+      path: "target.ts", content: "", position: "replace", anchor: "const a = 1;\n",
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    const fileContent = readFileSync(join(worktreeDir, "target.ts"), "utf-8");
+    expect(fileContent).not.toContain("const a = 1;");
+    expect(r.diff.removed).toBe(1);
+    expect(r.diff.added).toBe(0);
+    // LLM message must NOT claim lines were added
+    expect(r.content).not.toMatch(/\+[1-9]/);
+    const allLines = r.diff.hunks!.flatMap(h => h.lines);
+    expect(allLines.some(l => l.type === "removed")).toBe(true);
+    expect(allLines.some(l => l.type === "added")).toBe(false);
+  });
+
+  it("deletes a multi-line block via position=replace with content=''", async () => {
+    writeFileSync(join(worktreeDir, "block.ts"), "// header\nline1\nline2\n// footer\n");
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
+      path: "block.ts", content: "", position: "replace", anchor: "line1\nline2\n",
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    const fileContent = readFileSync(join(worktreeDir, "block.ts"), "utf-8");
+    expect(fileContent).not.toContain("line1");
+    expect(fileContent).not.toContain("line2");
+    expect(fileContent).toContain("// header");
+    expect(fileContent).toContain("// footer");
+    expect(r.diff.removed).toBe(2);
+    expect(r.diff.added).toBe(0);
+  });
+
+  it("replaces multi-line anchor with new content and counts correctly", async () => {
+    writeFileSync(join(worktreeDir, "multi.ts"), "start\nold line 1\nold line 2\nend\n");
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
+      path: "multi.ts", content: "new line\n", position: "replace", anchor: "old line 1\nold line 2\n",
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    const fileContent = readFileSync(join(worktreeDir, "multi.ts"), "utf-8");
+    expect(fileContent).toContain("new line");
+    expect(fileContent).not.toContain("old line 1");
+    expect(r.diff.removed).toBe(2);
+    expect(r.diff.added).toBe(1);
+    // Confirmation string counts must match diff counts exactly
+    expect(r.content).toContain("+1");
+    expect(r.content).toContain("-2");
+  });
+
+  it("exact count: start prepend of 2 lines reports added=2 in both diff and message", async () => {
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
+      path: "target.ts", content: "line1\nline2\n", position: "start",
+    }), ctx()));
+    expect(r.diff.added).toBe(2);
+    expect(r.diff.removed).toBe(0);
+    expect(r.content).toContain("+2");
+  });
+
+  it("empty content before anchor returns no-op error", async () => {
+    const result = await executeTool("patch_file", JSON.stringify({
+      path: "target.ts", content: "", position: "before", anchor: "const b = 2;",
+    }), ctx()) as string;
+    expect(result).toMatch(/would not modify the file/i);
+  });
+
+  it("returns error when file does not exist", async () => {
+    const result = await executeTool("patch_file", JSON.stringify({
+      path: "nonexistent.ts", content: "x", position: "end",
+    }), ctx()) as string;
+    expect(result).toMatch(/file not found|not found/i);
+  });
+
   it("rejects ambiguous anchor", async () => {
     writeFileSync(join(worktreeDir, "dup.ts"), "dup\ndup\n");
     const result = await executeTool("patch_file", JSON.stringify({
       path: "dup.ts", content: "x", position: "replace", anchor: "dup",
     }), ctx()) as string;
     expect(result).toMatch(/appears.*times|ambiguous/i);
+  });
+
+  it("empty content insertion (position=after) returns no-op error", async () => {
+    const result = await executeTool("patch_file", JSON.stringify({
+      path: "target.ts", content: "", position: "after", anchor: "const a = 1;",
+    }), ctx()) as string;
+    expect(result).toMatch(/would not modify the file/i);
+  });
+
+  it("single blank-line insertion reports 1 added", async () => {
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
+      path: "target.ts", content: "\n", position: "after", anchor: "const a = 1;",
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    expect(r.diff.added).toBe(1);
+    expect(r.diff.removed).toBe(0);
   });
 
   it("rejects anchor not found", async () => {

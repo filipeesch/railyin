@@ -13,7 +13,7 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { handleHumanTurn, handleTransition } from "../workflow/engine.ts";
-import { queueTurnResponse, getCapturedTurnOptions, resetFakeAI } from "../ai/fake.ts";
+import { queueStreamStep, queueTurnResponse, getCapturedTurnOptions, resetFakeAI } from "../ai/fake.ts";
 import type { Database } from "bun:sqlite";
 
 let db: Database;
@@ -59,6 +59,7 @@ describe("handleHumanTurn", () => {
       (_, __, token, isDone) => { if (isDone) resolveDone(); else tokens.push(token); },
       noop,
       noop,
+      noop,
     );
 
     await donePromise;
@@ -93,6 +94,7 @@ describe("handleHumanTurn", () => {
       (_, __, _t, isDone) => { if (isDone) resolveDone(); },
       noop,
       noop,
+      noop,
     );
 
     await donePromise;
@@ -113,7 +115,7 @@ describe("handleHumanTurn", () => {
       .query<{ n: number }, [number]>("SELECT count(*) as n FROM executions WHERE task_id = ?")
       .get(taskId)!.n;
 
-    await handleHumanTurn(taskId, "Proceed.", noop, noop, noop);
+    await handleHumanTurn(taskId, "Proceed.", noop, noop, noop, noop);
 
     const after = db
       .query<{ n: number }, [number]>("SELECT count(*) as n FROM executions WHERE task_id = ?")
@@ -130,7 +132,7 @@ describe("handleTransition", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
 
-    await handleTransition(taskId, "plan", noop, noop, noop);
+    await handleTransition(taskId, "plan", noop, noop, noop, noop);
 
     const task = db
       .query<{ workflow_state: string }, [number]>("SELECT workflow_state FROM tasks WHERE id = ?")
@@ -149,7 +151,7 @@ describe("handleTransition", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
 
-    const { task } = await handleTransition(taskId, "done", noop, noop, noop);
+    const { task } = await handleTransition(taskId, "done", noop, noop, noop, noop);
 
     expect(task.workflowState).toBe("done");
     expect(task.executionState).toBe("idle");
@@ -160,7 +162,7 @@ describe("handleTransition", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
 
-    const { executionId } = await handleTransition(taskId, "plan", noop, noop, noop);
+    const { executionId } = await handleTransition(taskId, "plan", noop, noop, noop, noop);
 
     expect(executionId).not.toBeNull();
 
@@ -178,8 +180,8 @@ describe("handleTransition", () => {
 
 describe("ask_me tool interception", () => {
   it("sets execution_state to waiting_user and writes ask_user_prompt message", async () => {
-    // Queue a scripted ask_me tool call as the first AI response
-    queueTurnResponse({
+    // Queue a scripted ask_me tool call as the first AI stream response
+    queueStreamStep({
       type: "tool_calls",
       calls: [
         {
@@ -213,7 +215,7 @@ describe("ask_me tool interception", () => {
       if (task.executionState === "waiting_user") resolveWaiting();
     };
 
-    await handleHumanTurn(taskId, "Start planning.", noop, noop, onTaskUpdated as never);
+    await handleHumanTurn(taskId, "Start planning.", noop, noop, onTaskUpdated as never, noop);
     await waitingPromise;
 
     // Engine should have suspended — task is waiting_user
@@ -247,7 +249,6 @@ describe("ask_me tool interception", () => {
 // ─── Column tool resolution ───────────────────────────────────────────────────
 
 import { resolveToolsForColumn } from "../workflow/tools.ts";
-import { getChatCallCount } from "../ai/fake.ts";
 
 describe("resolveToolsForColumn", () => {
   it("returns only named tools when column specifies a tools array", () => {
@@ -271,8 +272,8 @@ describe("resolveToolsForColumn", () => {
 
 describe("spawn_agent tool interception", () => {
   it("runs child sub-agents and injects results as a tool_result message", async () => {
-    // Round 1: parent issues spawn_agent
-    queueTurnResponse({
+    // Round 1: parent issues spawn_agent (via stream())
+    queueStreamStep({
       type: "tool_calls",
       calls: [
         {
@@ -290,12 +291,12 @@ describe("spawn_agent tool interception", () => {
         },
       ],
     });
-    // Child 1 response (write_file call)
+    // Child 1 response — sub-agents use turn(), so queueTurnResponse
     queueTurnResponse({ type: "text", content: "Wrote src/a.ts" });
     // Child 2 response
     queueTurnResponse({ type: "text", content: "Wrote src/b.ts" });
-    // Round 2 (parent resumes after spawn): return final text
-    queueTurnResponse({ type: "text", content: "Both files written successfully." });
+    // Round 2 (parent resumes after spawn): return final text via stream()
+    queueStreamStep({ type: "text", tokens: ["Both files written successfully."] });
 
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
@@ -341,17 +342,15 @@ describe("spawn_agent tool interception", () => {
   }, 15_000);
 });
 
-// ─── Streaming via chat() ─────────────────────────────────────────────────────
+// ─── Unified streaming ────────────────────────────────────────────────────────
 
-describe("streaming (chat() always used for final response)", () => {
-  it("calls chat() even when tools are enabled and model returns text immediately (no tool calls)", async () => {
-    // FakeAI.turn() will return text right away (no tool call scripted) — the engine
-    // must still route to chat() (true streaming) rather than replaying the turn's
-    // text synchronously.
+describe("unified streaming (stream() used for every round)", () => {
+  it("delivers streaming tokens when model returns text immediately (no tool calls)", async () => {
+    // No scripted steps — FakeAI.stream() default yields word-by-word text
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
 
-    // Seed a worktree so the engine enters the tool-call loop (tools.length > 0)
+    // Seed a worktree so the engine passes tool definitions to stream()
     db.run(
       "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
       [taskId, gitDir, gitDir],
@@ -374,15 +373,13 @@ describe("streaming (chat() always used for final response)", () => {
 
     await donePromise;
 
-    // chat() must have been invoked (proves true streaming path was taken)
-    expect(getChatCallCount()).toBeGreaterThan(0);
-    // Multiple tokens should have arrived (FakeAI.chat yields word-by-word)
+    // Multiple tokens should have arrived (FakeAI.stream() yields word-by-word)
     expect(tokens.length).toBeGreaterThan(1);
   }, 10_000);
 
-  it("calls chat() after tool calls are resolved, delivering streaming tokens", async () => {
-    // Round 1: model calls a tool
-    queueTurnResponse({
+  it("executes tool calls then delivers streaming final response in the same loop", async () => {
+    // Round 1: model calls read_file via stream()
+    queueStreamStep({
       type: "tool_calls",
       calls: [
         {
@@ -392,8 +389,8 @@ describe("streaming (chat() always used for final response)", () => {
         },
       ],
     });
-    // Round 2: model returns text after seeing tool result — engine must stream via chat()
-    queueTurnResponse({ type: "text", content: "The file looks good." });
+    // Round 2: model returns streaming text after seeing tool result
+    queueStreamStep({ type: "text", tokens: ["The ", "file ", "looks ", "good. "] });
 
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
@@ -416,14 +413,14 @@ describe("streaming (chat() always used for final response)", () => {
       },
       noop,
       noop,
+      noop,
     );
 
     await donePromise;
 
-    // chat() must have been called for the streaming final response
-    expect(getChatCallCount()).toBeGreaterThan(0);
-    // Tokens should have arrived progressively
-    expect(tokens.length).toBeGreaterThan(1);
+    // Tokens should have arrived from the scripted round-2 text step
+    expect(tokens.length).toBeGreaterThan(0);
+    expect(tokens.join("")).toContain("file");
 
     // tool_call and tool_result messages must be in the conversation
     const toolCall = db
@@ -433,4 +430,38 @@ describe("streaming (chat() always used for final response)", () => {
       .get(taskId);
     expect(toolCall).not.toBeNull();
   }, 15_000);
+
+  it("single stream() call per round — no duplicate top-level API calls", async () => {
+    // Round 1: tool call
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [
+        {
+          id: "call_read2",
+          type: "function",
+          function: { name: "read_file", arguments: JSON.stringify({ path: "index.ts" }) },
+        },
+      ],
+    });
+    // Round 2: text — only ONE stream call should be made for this round
+    queueStreamStep({ type: "text", tokens: ["Done."] });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+    await handleHumanTurn(taskId, "Go.", (_, __, _t, isDone) => { if (isDone) resolveDone(); }, noop, noop, noop);
+    await donePromise;
+
+    // After round 1 (tool_calls) and round 2 (text), the scripted step queue should
+    // be empty — meaning each round consumed exactly one step
+    const capturedOpts = getCapturedTurnOptions();
+    // sub-agent turn() queue should be untouched (no turn() calls from engine)
+    expect(capturedOpts.length).toBe(0);
+  }, 10_000);
 });

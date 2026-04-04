@@ -1,7 +1,8 @@
 import { getDb } from "../db/index.ts";
 import { getConfig } from "../config/index.ts";
+import { log } from "../logger.ts";
 import { createProvider } from "../ai/index.ts";
-import type { AIMessage } from "../ai/types.ts";
+import type { AIMessage, AIToolCall } from "../ai/types.ts";
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
@@ -17,9 +18,10 @@ const CONTEXT_WARN_FRACTION = 0.8;
 
 // ─── Streaming callback type ──────────────────────────────────────────────────
 
-export type OnToken = (taskId: number, executionId: number, token: string, done: boolean) => void;
+export type OnToken = (taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean) => void;
 export type OnError = (taskId: number, executionId: number, error: string) => void;
 export type OnTaskUpdated = (task: Task) => void;
+export type OnNewMessage = (message: ConversationMessage) => void;
 
 // ─── Cancellation map ─────────────────────────────────────────────────────────
 // Keyed by executionId. Populated at execution start, removed on finish.
@@ -49,33 +51,138 @@ export function getBoardTemplateId(boardId: number): string {
   return board?.workflow_template_id ?? "delivery";
 }
 
-// ─── Task 5.5: Context compaction ────────────────────────────────────────────
+/**
+ * Safety-net filter: returns true when the model response is empty or contains
+ * tool-call syntax emitted as raw text (XML `<tool_call>`, JSON fences, bare JSON blobs).
+ * With unified streaming, the model always calls tools via the structured API;
+ * this guard protects against edge-case model misbehaviour and avoids poisoning history.
+ */
+function isBadAssistantResponse(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === "") return true;
+  // JSON tool-call blob in markdown code fence (```json { "name": ...)
+  if (/```(?:json)?\s*\{\s*"name"\s*:/.test(trimmed)) return true;
+  // Bare JSON tool-call at end of response (no fence)
+  if (/\{\s*"name"\s*:\s*"[a-z_]+"\s*,\s*"arguments"/.test(trimmed.slice(-300))) return true;
+  return false;
+}
+
+/**
+ * Strip XML tool-call blocks (`<tool_call>...</tool_call>`) from a response.
+ * Returns { clean, hadToolCalls }.
+ * `clean` is the text with all tool-call blocks removed and excess whitespace collapsed.
+ * `hadToolCalls` is true when at least one block was found.
+ */
+function stripXmlToolCalls(text: string): { clean: string; hadToolCalls: boolean } {
+  const hadToolCalls = text.includes("<tool_call>");
+  const clean = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return { clean, hadToolCalls };
+}
+
+
 
 function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
-  return messages
-    .filter(
-      (m) =>
-        m.type === "user" ||
-        m.type === "assistant" ||
-        m.type === "system" ||
-        m.type === "tool_call" ||
-        m.type === "tool_result",
-        // "file_diff" is intentionally excluded — UI-only, never sent to LLM
-    )
-    .map((m) => {
-      let content = m.content;
+  const result: AIMessage[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const m = messages[i];
 
-      // Truncate tool_result messages that exceed the token budget
-      if (m.type === "tool_result" && content.length > TOOL_RESULT_MAX_CHARS) {
-        const kept = content.slice(0, TOOL_RESULT_MAX_CHARS);
-        content = `${kept}\n\n[truncated — full content stored in conversation history]`;
+    if (m.type === "user" || m.type === "assistant") {
+      result.push({ role: m.role as "user" | "assistant", content: m.content });
+      i++;
+      continue;
+    }
+
+    // system messages (UI markers like "Running prompt: plan") are excluded from
+    // LLM context — they are display-only artifacts, not conversation turns.
+    if (m.type === "system") {
+      i++;
+      continue;
+    }
+
+    // tool_call rows: reconstruct as an OpenAI-format assistant message with
+    // tool_calls array, then consume the paired tool_result(s).
+    if (m.type === "tool_call") {
+      // Collect all consecutive tool_call messages in this round (they may be
+      // stored interleaved with their results when roundCalls has multiple calls).
+      // Strategy: gather all consecutive tool_call + tool_result pairs as
+      // individual paired assistant+tool turns (valid for OpenAI-compat APIs).
+      let callContent: { name: string; arguments: string };
+      try {
+        callContent = JSON.parse(m.content);
+      } catch {
+        i++;
+        continue;
       }
+      // Find the tool_call_id from the next tool_result's metadata
+      let toolCallId = `call_${m.id}`;
+      if (i + 1 < messages.length && messages[i + 1].type === "tool_result") {
+        try {
+          const meta = JSON.parse(messages[i + 1].metadata ?? "{}") as { tool_call_id?: string };
+          if (meta.tool_call_id) toolCallId = meta.tool_call_id;
+        } catch { /* keep default */ }
+      }
+      // Ensure arguments is always a valid JSON string (empty string → "{}") so
+      // OpenAI-compatible servers don't return 500 on malformed tool_calls.
+      const safeArgs = callContent.arguments && callContent.arguments.trim() !== ""
+        ? callContent.arguments
+        : "{}";
+      result.push({
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: toolCallId,
+          type: "function",
+          function: { name: callContent.name, arguments: safeArgs },
+        }],
+      } as AIMessage);
+      i++;
+      // Consume the paired tool_result
+      if (i < messages.length && messages[i].type === "tool_result") {
+        let resultMeta: { tool_call_id?: string; name?: string } = {};
+        try { resultMeta = JSON.parse(messages[i].metadata ?? "{}"); } catch { /* ok */ }
+        result.push({
+          role: "tool",
+          content: messages[i].content.length > TOOL_RESULT_MAX_CHARS
+            ? messages[i].content.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+            : messages[i].content,
+          tool_call_id: resultMeta.tool_call_id ?? toolCallId,
+          name: resultMeta.name ?? callContent.name,
+        } as AIMessage);
+        i++;
+      }
+      continue;
+    }
 
-      return {
-        role: (m.role as "user" | "assistant" | "system") ?? "user",
-        content,
-      };
-    });
+    // Orphaned tool_result with no preceding tool_call — skip
+    if (m.type === "tool_result") {
+      i++;
+      continue;
+    }
+
+    // file_diff, ask_user_prompt, transition_event, artifact_event, reasoning — excluded
+    i++;
+  }
+
+  // Collapse consecutive user messages — caused by failed retries where the
+  // system error messages between them are excluded. Models like Qwen3 require
+  // strict user/assistant alternation; consecutive user turns cause a Jinja
+  // template error ("No user query found in messages").
+  const collapsed: AIMessage[] = [];
+  for (const msg of result) {
+    if (
+      msg.role === "user" &&
+      collapsed.length > 0 &&
+      collapsed[collapsed.length - 1].role === "user"
+    ) {
+      // Merge into the previous user message
+      collapsed[collapsed.length - 1].content =
+        (collapsed[collapsed.length - 1].content as string) + "\n\n" + (msg.content as string);
+    } else {
+      collapsed.push(msg);
+    }
+  }
+  return collapsed;
 }
 
 // ─── Task 5.4 + 6.5: Assemble messages for AI call ──────────────────────────
@@ -98,7 +205,13 @@ function assembleMessages(
     messages.push({ role: "system", content: stageInstructions });
   }
 
-  // Task 6.5: Inject git/worktree context when worktree is ready
+  // Task title and description — critical context the model needs to know what
+  // it is working on ("create a plan for this task" needs to know what the task is).
+  const taskLines = [`## Task`, `**Title:** ${task.title}`];
+  if (task.description?.trim()) {
+    taskLines.push(`**Description:** ${task.description.trim()}`);
+  }
+  messages.push({ role: "system", content: taskLines.join("\n") });
   if (gitContext?.worktree_status === "ready" && gitContext.worktree_path) {
     const lines = [
       "## Worktree context",
@@ -137,15 +250,44 @@ function assembleMessages(
       "- spawn_agent(children): run parallel sub-agents in this worktree; each child gets its own instructions and tools",
       "",
       "Always read before you write. Use patch_file for targeted edits to existing files.",
+      "",
+      "CRITICAL: Always invoke tools using the API tool_call mechanism. NEVER write tool calls as XML (`<tool_call>`), JSON, or any other text format in your response — those formats are silently ignored and the tool will not run.",
     ];
     messages.push({ role: "system", content: lines.join("\n") });
   }
 
   // Compacted conversation history
-  messages.push(...compactMessages(history));
+  const compacted = compactMessages(history);
 
-  // The triggering message
-  messages.push({ role: "user", content: newMessage });
+  // If the compacted history begins with an assistant message, the conversation
+  // was initiated by a workflow on_enter_prompt that was never persisted to DB
+  // (only used in-memory for the LLM call). Re-inject that prompt as the opening
+  // user turn so models like Qwen3 (which require strict user/assistant alternation)
+  // don't error with "No user query found in messages".
+  if (compacted.length > 0 && compacted[0].role !== "user") {
+    compacted.unshift({ role: "user", content: newMessage });
+  }
+
+  messages.push(...compacted);
+
+  // The triggering message — handle three cases to avoid consecutive user messages
+  // (Qwen3's Jinja template requires strict user/assistant alternation):
+  //   1. newMessage already at end of history (handleHumanTurn stores in DB before calling
+  //      runExecution, so compactMessages includes it) — skip the push entirely.
+  //   2. Last compacted message is user but content differs (on_enter_prompt from handleRetry
+  //      or handleTransition) — merge to avoid consecutive user turns.
+  //   3. Last compacted message is not user — push normally.
+  const lastMsg = messages[messages.length - 1];
+  if (lastMsg?.role === "user") {
+    const lastContent = lastMsg.content as string;
+    const alreadyPresent =
+      lastContent === newMessage || lastContent.endsWith("\n\n" + newMessage);
+    if (!alreadyPresent) {
+      lastMsg.content = lastContent + "\n\n" + newMessage;
+    }
+  } else {
+    messages.push({ role: "user", content: newMessage });
+  }
 
   return messages;
 }
@@ -203,6 +345,7 @@ export async function handleTransition(
   onToken: OnToken,
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
+  onNewMessage: OnNewMessage,
 ): Promise<{ task: Task; executionId: number | null }> {
   const db = getDb();
 
@@ -265,7 +408,7 @@ export async function handleTransition(
 
   // 9. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated).catch(
+  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
     () => {},
   );
 
@@ -344,10 +487,12 @@ async function runSubExecution({
   }
 
   // Hit round limit — ask for a summary
-  liveMessages.push({
-    role: "user",
-    content: "You have reached the tool call limit. Please summarise your work so far.",
-  });
+  const lastSubMsg = liveMessages[liveMessages.length - 1];
+  if (lastSubMsg?.role === "user") {
+    lastSubMsg.content = (lastSubMsg.content as string) + "\n\nYou have reached the tool call limit. Please summarise your work so far.";
+  } else {
+    liveMessages.push({ role: "user", content: "You have reached the tool call limit. Please summarise your work so far." });
+  }
   const final = await provider.turn(liveMessages, { tools: [] });
   return final.type === "text" ? (final.content ?? "(no response)") : "(sub-agent hit tool limit)";
 }
@@ -364,11 +509,13 @@ async function runExecution(
   onToken: OnToken,
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
+  onNewMessage: OnNewMessage,
 ): Promise<void> {
   const db = getDb();
 
   // Helper: handle cancellation — tidy up DB and notify frontend
   function handleCancelled(task: { conversation_id: number | null }): void {
+    log("info", "Execution cancelled", { taskId, executionId });
     executionControllers.delete(executionId);
     db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
     db.run(
@@ -381,6 +528,7 @@ async function runExecution(
 
   try {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+    log("info", "Execution started", { taskId, executionId, data: { model, column: task.workflow_state } });
     const templateId = getBoardTemplateId(task.board_id);
     const column = getColumnConfig(templateId, task.workflow_state);
     const history = db
@@ -425,49 +573,257 @@ async function runExecution(
       ? { worktreePath: gitContext.worktree_path, searchConfig: config.workspace.search }
       : null;
 
-    const tools = toolCtx ? resolveToolsForColumn(column?.tools) : [];
+    let tools = toolCtx ? resolveToolsForColumn(column?.tools) : [];
+    log("debug", `Tools resolved: ${tools.length} tools`, { taskId, executionId, data: { tools: tools.map(t => t.name), worktreePath: toolCtx?.worktreePath ?? null } });
     const liveMessages: AIMessage[] = [...messages];
 
-    if (tools.length > 0) {
-      let toolRounds = 0;
-      while (toolRounds < MAX_TOOL_ROUNDS) {
-        // Check for cancellation between turns
-        if (signal.aborted) {
+    // ── Unified streaming loop ────────────────────────────────────────────────
+    // stream() always receives tool definitions. When the model responds with
+    // text and no tool calls, that IS the final response (streamed live).
+    // When the model responds with tool calls, they are executed and the loop
+    // continues. No separate chat() call is needed.
+    let fullResponse = "";
+    let toolRounds = 0;
+    let emptyResponseNudges = 0;
+    let totalNudges = 0;
+    const MAX_NUDGES = 5;
+    // Per-round reasoning accumulator — reset at start of each round
+    let reasoningAccum = "";
+    let hadReasoning = false;
+
+    // Safely push a user nudge — if the last message is already a user turn,
+    // append to it to avoid consecutive user messages (Qwen3 Jinja template error).
+    function pushUserNudge(content: string) {
+      const last = liveMessages[liveMessages.length - 1];
+      if (last?.role === "user") {
+        last.content = (last.content as string) + "\n\n" + content;
+      } else {
+        liveMessages.push({ role: "user", content });
+      }
+    }
+
+    mainLoop: while (true) {
+      // Check for cancellation between rounds
+      if (signal.aborted) {
+        handleCancelled(task);
+        return;
+      }
+
+      let roundCalls: AIToolCall[] | null = null;
+      // Reset per-round reasoning state
+      reasoningAccum = "";
+      hadReasoning = false;
+
+      try {
+        log("debug", `Stream round ${toolRounds + 1} started`, { taskId, executionId, data: { toolCount: tools.length } });
+        for await (const event of provider.stream(liveMessages, { tools, signal })) {
+          if (event.type === "token") {
+            fullResponse += event.content;
+            onToken(taskId, executionId, event.content, false);
+          } else if (event.type === "reasoning") {
+            reasoningAccum += event.content;
+            hadReasoning = true;
+            onToken(taskId, executionId, event.content, false, true);
+          } else if (event.type === "tool_calls") {
+            log("debug", `Tool calls received: ${event.calls.map(c => c.function.name).join(", ")}`, { taskId, executionId });
+            roundCalls = event.calls;
+          } else if (event.type === "done") {
+            break;
+          }
+        }
+      } catch (streamErr) {
+        // Distinguish abort from real stream errors
+        if (streamErr instanceof Error && streamErr.name === "AbortError") {
+          if (fullResponse) {
+            const { clean } = stripXmlToolCalls(fullResponse);
+            if (clean && !isBadAssistantResponse(clean)) {
+              appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+            }
+          }
           handleCancelled(task);
           return;
         }
-
-        const turn = await provider.turn(liveMessages, { tools, signal });
-
-        if (turn.type === "text") {
-          // Model is done with tools — stream the final response via chat() below
-          break;
-        }
-
-        toolRounds++;
-
-        liveMessages.push({
-          role: "assistant",
-          content: "",
-          tool_calls: turn.calls,
-        });
-
-        // Intercept ask_me before executing any tools — it suspends execution
-        const askUserCall = turn.calls.find((c) => c.function.name === "ask_me");
-        if (askUserCall) {
-          let payload: { question: string; selection_mode: string; options: string[] };
-          try {
-            payload = JSON.parse(askUserCall.function.arguments);
-          } catch {
-            payload = { question: askUserCall.function.arguments, selection_mode: "single", options: [] };
+        if (fullResponse) {
+          const { clean } = stripXmlToolCalls(fullResponse);
+          if (clean && !isBadAssistantResponse(clean)) {
+            appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
           }
-          appendMessage(
+        }
+        const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+        log("error", `Stream error: ${errMsg}`, { taskId, executionId });
+        appendMessage(taskId, task.conversation_id ?? 0, "system", null, `Stream error: ${errMsg}`);
+        executionControllers.delete(executionId);
+        db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+        db.run(
+          "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
+          [errMsg, executionId],
+        );
+        onError(taskId, executionId, errMsg);
+        const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+        if (failedRow) onTaskUpdated(mapTask(failedRow));
+        return;
+      }
+
+      // If no tool calls — the stream was the final response; exit
+      if (!roundCalls) {
+        // Qwen3 (and similar thinking models) sometimes emit <tool_call> XML blocks
+        // inside their reasoning_content rather than delta.content. The result:
+        // hadReasoning=true, fullResponse="", roundCalls=null. If we just break here
+        // the task silently "completes" with no work done.
+        // Detection: reasoning content contains a <tool_call> XML block.
+        // Fix: persist the reasoning, nudge the model to re-emit using the API format.
+        if (hadReasoning && !fullResponse) {
+          hadReasoning = false;
+          const reasoningHadXmlCalls = reasoningAccum.includes("<tool_call>");
+          if (reasoningAccum) {
+            const { clean: cleanReasoning } = stripXmlToolCalls(reasoningAccum);
+            if (cleanReasoning) {
+              const rId = appendMessage(taskId, task.conversation_id ?? 0, "reasoning" as MessageType, null, cleanReasoning);
+              onNewMessage({ id: rId, taskId, conversationId: task.conversation_id ?? 0, type: "reasoning", role: null, content: cleanReasoning, metadata: null, createdAt: new Date().toISOString() });
+            }
+            reasoningAccum = "";
+          }
+          if (reasoningHadXmlCalls && emptyResponseNudges < 3 && totalNudges < MAX_NUDGES) {
+            emptyResponseNudges++;
+            totalNudges++;
+            log("warn", `Model emitted tool calls inside reasoning_content — nudging for API format (nudge ${emptyResponseNudges})`, { taskId, executionId });
+            pushUserNudge(
+              "Please continue. Important: call tools using the API tool_call format, not inside your thinking. Output your next tool call or final response now.",
+            );
+            continue;
+          }
+          break mainLoop;
+        }
+        // Some models (e.g. Qwen3 thinking mode) emit reasoning internally
+        // and produce an empty delta.content response. Nudge once — keep
+        // tools enabled so the model can still call them if needed.
+        if (!fullResponse && emptyResponseNudges < 3 && totalNudges < MAX_NUDGES) {
+          emptyResponseNudges++;
+          totalNudges++;
+          log("warn", `Empty response from model, nudging for text output (nudge ${emptyResponseNudges})`, { taskId, executionId });
+          pushUserNudge(
+            "Please continue: either call the next tool you need using the API tool_call mechanism, or write your response directly if you have enough information.",
+          );
+          continue;
+        }
+        break mainLoop;
+      }
+
+      // ── Execute tool calls ────────────────────────────────────────────────
+      toolRounds++;
+      // Reset nudge counters — productive tool round means the empty-response
+      // nudge budget is fully restored for the next round.
+      emptyResponseNudges = 0;
+      totalNudges = 0;
+
+      // Persist reasoning accumulated before these tool calls (task 2.3)
+      // Strip any embedded XML tool-call blocks from the thinking text before storing.
+      if (reasoningAccum) {
+        const { clean: cleanReasoning } = stripXmlToolCalls(reasoningAccum);
+        if (cleanReasoning) {
+          const rId = appendMessage(taskId, task.conversation_id ?? 0, "reasoning" as MessageType, null, cleanReasoning);
+          onNewMessage({ id: rId, taskId, conversationId: task.conversation_id ?? 0, type: "reasoning", role: null, content: cleanReasoning, metadata: null, createdAt: new Date().toISOString() });
+        }
+        reasoningAccum = "";
+        hadReasoning = false;
+      }
+
+      // Preserve any preamble text the model emitted before its tool calls
+      // (usually just whitespace, but send it faithfully so the model recognises
+      // its own prior turn correctly). Reset for the next round.
+      const preamble = fullResponse || null;
+      fullResponse = "";
+
+      // If the model emitted meaningful text before the tool calls, save it to
+      // DB immediately (in order) so the conversation timeline shows text →
+      // tools rather than tools → text.
+      if (preamble && !isBadAssistantResponse(preamble)) {
+        const { clean: preambleClean } = stripXmlToolCalls(preamble);
+        if (preambleClean && !isBadAssistantResponse(preambleClean)) {
+          const preambleId = appendMessage(
+            taskId,
+            task.conversation_id ?? 0,
+            "assistant",
+            "assistant",
+            preambleClean,
+          );
+          onNewMessage({
+            id: preambleId,
+            taskId,
+            conversationId: task.conversation_id ?? 0,
+            type: "assistant",
+            role: "assistant",
+            content: preambleClean,
+            metadata: null,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      // Sanitize tool call arguments — ensure each call has valid JSON args
+      // (empty string → "{}") to prevent OpenAI-compat servers from returning 500.
+      const sanitizedRoundCalls = roundCalls.map((c) => ({
+        ...c,
+        function: {
+          ...c.function,
+          arguments: c.function.arguments && c.function.arguments.trim() !== ""
+            ? c.function.arguments
+            : "{}",
+        },
+      }));
+
+      liveMessages.push({
+        role: "assistant",
+        content: preamble,
+        tool_calls: sanitizedRoundCalls,
+      });
+
+      // Intercept ask_me before executing any tools — it suspends execution
+      const askUserCall = sanitizedRoundCalls.find((c) => c.function.name === "ask_me");
+      if (askUserCall) {
+        let payload: { question: string; selection_mode: string; options: string[] };
+        try {
+          payload = JSON.parse(askUserCall.function.arguments);
+        } catch {
+          payload = { question: askUserCall.function.arguments, selection_mode: "single", options: [] };
+        }
+        // Qwen3 sometimes calls ask_me with empty arguments {} — the actual question
+        // was only in its reasoning_content. Nudge it to re-call with proper args.
+        if (!payload.question || !payload.question.trim() || !Array.isArray(payload.options) || payload.options.length === 0) {
+          if (emptyResponseNudges < 3 && totalNudges < MAX_NUDGES) {
+            emptyResponseNudges++;
+            totalNudges++;
+            log("warn", `ask_me called with missing question or options — nudging for proper arguments (nudge ${emptyResponseNudges})`, { taskId, executionId });
+            liveMessages.push({
+              role: "tool",
+              content: "Error: ask_me was called with missing or empty fields. You MUST call ask_me again with all three fields filled in: 'question' (the question text), 'selection_mode' ('single' or 'multi'), and 'options' (a non-empty array of choices).",
+              tool_call_id: askUserCall.id,
+            });
+            continue;
+          }
+          // Budget exhausted — fall through to normal tool execution which will skip ask_me
+          log("warn", "ask_me called without question/options repeatedly — skipping", { taskId, executionId });
+        } else {
+          const askMsgId = appendMessage(
             taskId,
             task.conversation_id ?? 0,
             "ask_user_prompt" as MessageType,
             null,
             JSON.stringify(payload),
           );
+          // Push the ask_user_prompt to the frontend immediately and fire the
+          // streaming-done signal so the streaming bubble is cleared.
+          onNewMessage({
+            id: askMsgId,
+            taskId,
+            conversationId: task.conversation_id ?? 0,
+            type: "ask_user_prompt" as MessageType,
+            role: null,
+            content: JSON.stringify(payload),
+            metadata: null,
+            createdAt: new Date().toISOString(),
+          });
+          onToken(taskId, executionId, "", true);
           executionControllers.delete(executionId);
           db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
           db.run(
@@ -478,105 +834,124 @@ async function runExecution(
           if (waitingRow) onTaskUpdated(mapTask(waitingRow));
           return;
         }
+      }
 
-        // Intercept spawn_agent
-        const spawnCall = turn.calls.find((c) => c.function.name === "spawn_agent");
-        if (spawnCall && toolCtx) {
-          let spawnArgs: { children: Array<{ instructions: string; tools: string[]; scope?: string }> };
-          try {
-            spawnArgs = JSON.parse(spawnCall.function.arguments);
-          } catch {
-            spawnArgs = { children: [] };
-          }
-
-          const childResults = await Promise.all(
-            (spawnArgs.children ?? []).map(async (child, idx) => {
-              try {
-                const result = await runSubExecution({
-                  worktreePath: toolCtx.worktreePath,
-                  instructions: child.instructions,
-                  tools: child.tools,
-                });
-                return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
-              } catch (e) {
-                return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: Error — ${e instanceof Error ? e.message : String(e)}`;
-              }
-            }),
-          );
-
-          const spawnResultStr = JSON.stringify(childResults);
-          const stored = spawnResultStr.length > TOOL_RESULT_MAX_CHARS
-            ? spawnResultStr.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
-            : spawnResultStr;
-
-          appendMessage(
-            taskId,
-            task.conversation_id ?? 0,
-            "tool_result",
-            null,
-            stored,
-            { tool_call_id: spawnCall.id, name: "spawn_agent" },
-          );
-
-          liveMessages.push({
-            role: "tool",
-            content: stored,
-            tool_call_id: spawnCall.id,
-            name: "spawn_agent",
-          });
-          continue;
+      // Intercept spawn_agent
+      const spawnCall = sanitizedRoundCalls.find((c) => c.function.name === "spawn_agent");
+      if (spawnCall && toolCtx) {
+        let spawnArgs: { children: Array<{ instructions: string; tools: string[]; scope?: string }> };
+        try {
+          spawnArgs = JSON.parse(spawnCall.function.arguments);
+        } catch {
+          spawnArgs = { children: [] };
         }
 
-        for (const call of turn.calls) {
-          const fnName = call.function.name;
-          const fnArgs = call.function.arguments;
+        const childResults = await Promise.all(
+          (spawnArgs.children ?? []).map(async (child, idx) => {
+            try {
+              const result = await runSubExecution({
+                worktreePath: toolCtx.worktreePath,
+                instructions: child.instructions,
+                tools: child.tools,
+              });
+              return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
+            } catch (e) {
+              return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: Error — ${e instanceof Error ? e.message : String(e)}`;
+            }
+          }),
+        );
 
-          appendMessage(
+        const spawnResultStr = JSON.stringify(childResults);
+        const stored = spawnResultStr.length > TOOL_RESULT_MAX_CHARS
+          ? spawnResultStr.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+          : spawnResultStr;
+
+        appendMessage(
+          taskId,
+          task.conversation_id ?? 0,
+          "tool_result",
+          null,
+          stored,
+          { tool_call_id: spawnCall.id, name: "spawn_agent" },
+        );
+
+        liveMessages.push({
+          role: "tool",
+          content: stored,
+          tool_call_id: spawnCall.id,
+          name: "spawn_agent",
+        });
+        continue;
+      }
+
+      for (const call of sanitizedRoundCalls) {
+        const fnName = call.function.name;
+        const fnArgs = call.function.arguments;
+        log("debug", `Tool call: ${fnName}`, { taskId, executionId, data: { args: fnArgs } });
+
+        const callContent = JSON.stringify({ name: fnName, arguments: fnArgs });
+        const callId = appendMessage(
+          taskId,
+          task.conversation_id ?? 0,
+          "tool_call",
+          null,
+          callContent,
+        );
+        onNewMessage({
+          id: callId, taskId, conversationId: task.conversation_id ?? 0,
+          type: "tool_call", role: null, content: callContent, metadata: null,
+          createdAt: new Date().toISOString(),
+        });
+
+        const result = await executeTool(fnName, fnArgs, toolCtx!);
+
+        // Write tools return { content, diff }; read/search tools return a plain string
+        const isWriteResult = typeof result === "object" && result !== null && "content" in result;
+        const llmContent = isWriteResult ? (result as WriteResult).content : result as string;
+        const diff = isWriteResult ? (result as WriteResult).diff : undefined;
+
+        const storedResult = llmContent.length > TOOL_RESULT_MAX_CHARS
+          ? llmContent.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+          : llmContent;
+
+        const resultMeta = { tool_call_id: call.id, name: fnName };
+        const resultId = appendMessage(
+          taskId,
+          task.conversation_id ?? 0,
+          "tool_result",
+          null,
+          storedResult,
+          resultMeta,
+        );
+        onNewMessage({
+          id: resultId, taskId, conversationId: task.conversation_id ?? 0,
+          type: "tool_result", role: null, content: storedResult, metadata: resultMeta,
+          createdAt: new Date().toISOString(),
+        });
+
+        // Emit UI-only file_diff message (never forwarded to LLM)
+        if (diff) {
+          const diffContent = JSON.stringify(diff);
+          const diffId = appendMessage(
             taskId,
             task.conversation_id ?? 0,
-            "tool_call",
+            "file_diff",
             null,
-            JSON.stringify({ name: fnName, arguments: fnArgs }),
+            diffContent,
           );
-
-          const result = await executeTool(fnName, fnArgs, toolCtx!);
-
-          // Write tools return { content, diff }; read/search tools return a plain string
-          const isWriteResult = typeof result === "object" && result !== null && "content" in result;
-          const llmContent = isWriteResult ? (result as WriteResult).content : result as string;
-          const diff = isWriteResult ? (result as WriteResult).diff : undefined;
-
-          const storedResult = llmContent.length > TOOL_RESULT_MAX_CHARS
-            ? llmContent.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
-            : llmContent;
-
-          appendMessage(
-            taskId,
-            task.conversation_id ?? 0,
-            "tool_result",
-            null,
-            storedResult,
-            { tool_call_id: call.id, name: fnName },
-          );
-
-          // Emit UI-only file_diff message (never forwarded to LLM)
-          if (diff) {
-            appendMessage(
-              taskId,
-              task.conversation_id ?? 0,
-              "file_diff",
-              null,
-              JSON.stringify(diff),
-            );
-          }
-
-          liveMessages.push({
-            role: "tool",
-            content: storedResult,
-            tool_call_id: call.id,
-            name: fnName,
+          onNewMessage({
+            id: diffId, taskId, conversationId: task.conversation_id ?? 0,
+            type: "file_diff", role: null, content: diffContent, metadata: null,
+            createdAt: new Date().toISOString(),
           });
         }
+
+        liveMessages.push({
+          role: "tool",
+          content: storedResult,
+          tool_call_id: call.id,
+          name: fnName,
+        });
       }
 
       if (toolRounds >= MAX_TOOL_ROUNDS) {
@@ -584,70 +959,83 @@ async function runExecution(
           role: "user",
           content: "You have reached the tool call limit. Please summarise your findings and respond now.",
         });
+        // Remove tools so the model is forced to respond with text
+        tools = [];
       }
     }
 
-    // Check cancellation before streaming
+    // If signal aborted mid-stream
     if (signal.aborted) {
+      if (fullResponse) {
+        const { clean } = stripXmlToolCalls(fullResponse);
+        if (clean && !isBadAssistantResponse(clean)) {
+          appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+        }
+      }
       handleCancelled(task);
       return;
     }
 
-    // ── Stream the final text response ────────────────────────────────────────
-    // Always use provider.chat() (true async streaming). When the tool-call loop
-    // exited because the model returned text (no tool calls), liveMessages holds
-    // everything up to that point; chat() re-requests the same final answer with
-    // streaming so tokens are delivered progressively to the UI.
-    let fullResponse = "";
+    // Strip any XML tool-call blocks the model emitted as raw text
+    log("debug", "Model response received", { taskId, executionId, data: { response: fullResponse } });
+    const { clean: cleanResponse, hadToolCalls: hadXmlToolCalls } = stripXmlToolCalls(fullResponse);
 
-    try {
-      for await (const token of provider.chat(liveMessages, { signal })) {
-        fullResponse += token;
-        onToken(taskId, executionId, token, false);
+    if (hadXmlToolCalls) {
+      log("warn", "Model used XML tool call format — stripping and correcting", { taskId, executionId });
+    }
+
+    // Persist any reasoning that preceded the final response (task 2.3)
+    // Strip any embedded XML tool-call blocks from the thinking text before storing.
+    if (reasoningAccum) {
+      const { clean: cleanReasoning } = stripXmlToolCalls(reasoningAccum);
+      if (cleanReasoning) {
+        const rId = appendMessage(taskId, task.conversation_id ?? 0, "reasoning" as MessageType, null, cleanReasoning);
+        onNewMessage({ id: rId, taskId, conversationId: task.conversation_id ?? 0, type: "reasoning", role: null, content: cleanReasoning, metadata: null, createdAt: new Date().toISOString() });
       }
-    } catch (streamErr) {
-      // Distinguish abort from real stream errors
-      if (streamErr instanceof Error && streamErr.name === "AbortError") {
-        if (fullResponse) {
-          appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
-        }
-        handleCancelled(task);
-        return;
-      }
-      if (fullResponse) {
-        appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
-      }
-      const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
-      appendMessage(taskId, task.conversation_id ?? 0, "system", null, `Stream error: ${errMsg}`);
+      reasoningAccum = "";
+    }
+
+    if (!isBadAssistantResponse(cleanResponse)) {
+      appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", cleanResponse);
+    }
+
+    // If the model emitted XML tool calls, append a corrective system message so
+    // it knows they were not executed and learns to use the API mechanism next time.
+    if (hadXmlToolCalls) {
+      appendMessage(
+        taskId,
+        task.conversation_id ?? 0,
+        "system",
+        null,
+        "Your tool calls were written as XML (`<tool_call>`) and were NOT executed. " +
+        "You MUST invoke tools using the API tool_call mechanism only — never write tool calls as XML, JSON, or any text format in your response.",
+      );
+    }
+
+    // If the model produced nothing at all (no tool calls, no text) after all nudges,
+    // treat it as a failure — don't silently mark as completed with no visible output.
+    if (toolRounds === 0 && isBadAssistantResponse(cleanResponse)) {
+      const emptyErrMsg = "Model produced no output after multiple attempts. This may indicate the conversation context is too large for the model's context window. Try switching to a model with a larger context window, or start a new task.";
+      log("warn", "Execution produced no output — failing", { taskId, executionId });
+      appendMessage(taskId, task.conversation_id ?? 0, "system", null, emptyErrMsg);
       executionControllers.delete(executionId);
       db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
       db.run(
         "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
-        [errMsg, executionId],
+        [emptyErrMsg, executionId],
       );
-      onError(taskId, executionId, errMsg);
-      const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
-      if (failedRow) onTaskUpdated(mapTask(failedRow));
+      onError(taskId, executionId, emptyErrMsg);
+      const emptyFailedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+      if (emptyFailedRow) onTaskUpdated(mapTask(emptyFailedRow));
       return;
     }
 
-    // If signal aborted mid-stream (turnTextResponse path)
-    if (signal.aborted) {
-      if (fullResponse) {
-        appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
-      }
-      handleCancelled(task);
-      return;
-    }
-
-    appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", fullResponse);
+    log("info", "Execution completed", { taskId, executionId });
     onToken(taskId, executionId, "", true);
-
-    executionControllers.delete(executionId);
     db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
     db.run(
       "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ? WHERE id = ?",
-      [fullResponse.slice(0, 500), executionId],
+      [cleanResponse.slice(0, 500), executionId],
     );
     const completedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (completedRow) onTaskUpdated(mapTask(completedRow));
@@ -661,6 +1049,7 @@ async function runExecution(
       return;
     }
     const errMsg = err instanceof Error ? err.message : String(err);
+    log("error", `Execution failed: ${errMsg}`, { taskId, executionId });
     const task = db.query<{ conversation_id: number }, [number]>(
       "SELECT conversation_id FROM tasks WHERE id = ?",
     ).get(taskId);
@@ -686,6 +1075,7 @@ export async function handleHumanTurn(
   onToken: OnToken,
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
+  onNewMessage: OnNewMessage,
 ): Promise<{ message: ConversationMessage; executionId: number }> {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -736,7 +1126,7 @@ export async function handleHumanTurn(
   const resolvedModel = task.model ?? config.workspace.ai.model;
 
   // Run async
-  runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated).catch(
+  runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
     () => {},
   );
 
@@ -750,6 +1140,7 @@ export async function handleRetry(
   onToken: OnToken,
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
+  onNewMessage: OnNewMessage,
 ): Promise<{ task: Task; executionId: number }> {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -803,6 +1194,7 @@ export async function handleRetry(
     onToken,
     onError,
     onTaskUpdated,
+    onNewMessage,
   ).catch(() => {});
 
   return { task: mapTask(updatedRow), executionId };

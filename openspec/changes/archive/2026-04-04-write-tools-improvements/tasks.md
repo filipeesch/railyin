@@ -26,10 +26,10 @@
 
 ## 5. Frontend
 
-- [ ] 5.1 Create `src/mainview/components/FileDiff.vue` — collapsed header with `path`, `+added` (green), `-removed` (red); click toggles expanded hunk view with line number gutter, green/red line backgrounds, and context lines
-- [ ] 5.2 Handle `delete_file` case in `FileDiff.vue`: show count-only summary, no expand interaction
-- [ ] 5.3 Handle `rename_file` case in `FileDiff.vue`: show `from → to (renamed)` summary, no expand interaction
-- [ ] 5.4 Add `file_diff` branch to `MessageBubble.vue` that renders `<FileDiff :payload="parsed" />`
+- [x] 5.1 Create `src/mainview/components/FileDiff.vue` — collapsed header with `path`, `+added` (green), `-removed` (red); click toggles expanded hunk view with line number gutter, green/red line backgrounds, and context lines
+- [x] 5.2 Handle `delete_file` case in `FileDiff.vue`: show count-only summary, no expand interaction
+- [x] 5.3 Handle `rename_file` case in `FileDiff.vue`: show `from → to (renamed)` summary, no expand interaction
+- [x] 5.4 Add `file_diff` branch to `MessageBubble.vue` that renders `<FileDiff :payload="parsed" />`
 
 ## 6. Tests
 

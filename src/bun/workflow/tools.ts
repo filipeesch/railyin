@@ -18,74 +18,10 @@ export function myersDiff(before: string[], after: string[]): Hunk[] {
   const n = before.length;
   const m = after.length;
 
-  // Build the edit script via Myers forward algorithm
-  const max = n + m;
-  const v: number[] = new Array(2 * max + 1).fill(0);
-  const trace: number[][] = [];
+  // Degenerate cases — no need to run the algorithm
+  if (n === 0 && m === 0) return [];
 
-  outer:
-  for (let d = 0; d <= max; d++) {
-    trace.push([...v]);
-    for (let k = -d; k <= d; k += 2) {
-      const ki = k + max;
-      let x: number;
-      if (k === -d || (k !== d && v[ki - 1] < v[ki + 1])) {
-        x = v[ki + 1]; // move down
-      } else {
-        x = v[ki - 1] + 1; // move right
-      }
-      let y = x - k;
-      while (x < n && y < m && before[x] === after[y]) { x++; y++; }
-      v[ki] = x;
-      if (x >= n && y >= m) { trace.push([...v]); break outer; }
-    }
-  }
-
-  // Back-track through the trace to produce edit operations
-  type Op = { type: "eq" | "ins" | "del"; old?: number; new?: number; content: string };
-  const ops: Op[] = [];
-  let x = n, y = m;
-
-  for (let d = trace.length - 1; d > 0; d--) {
-    const vPrev = trace[d - 1];
-    const k = x - y;
-    const ki = k + max;
-    let prevK: number;
-    if (k === -d + 1 || (k !== d - 1 && (vPrev[ki - 1] ?? -1) < (vPrev[ki + 1] ?? -1))) {
-      prevK = k + 1;
-    } else {
-      prevK = k - 1;
-    }
-    const prevKi = prevK + max;
-    const prevX = vPrev[prevKi] ?? 0;
-    const prevY = prevX - prevK;
-
-    while (x > prevX + 1 && y > prevY + 1) {
-      x--; y--;
-      ops.unshift({ type: "eq", old: x, new: y, content: before[x] });
-    }
-    if (d > 0) {
-      if (x === prevX + 1 && y === prevY) {
-        x--;
-        ops.unshift({ type: "del", old: x, content: before[x] });
-      } else if (y === prevY + 1 && x === prevX) {
-        y--;
-        ops.unshift({ type: "ins", new: y, content: after[y] });
-      } else if (x > prevX && y > prevY) {
-        x--; y--;
-        ops.unshift({ type: "eq", old: x, new: y, content: before[x] });
-      }
-    }
-  }
-
-  if (ops.length === 0 && n === 0 && m === 0) return [];
-
-  // Convert ops to HunkLine[] with 1-based line numbers
-  const allLines: HunkLine[] = ops.map(op => {
-    if (op.type === "eq")  return { type: "context" as const, old_line: (op.old! + 1), new_line: (op.new! + 1), content: op.content };
-    if (op.type === "del") return { type: "removed" as const, old_line: (op.old! + 1), content: op.content };
-    return { type: "added" as const, new_line: (op.new! + 1), content: op.content };
-  });
+  const allLines = computeEditOps(before, after, n, m);
 
   // Group into hunks: changed lines ± CONTEXT_LINES, merge if gap ≤ 2*CONTEXT_LINES
   const changed: number[] = [];
@@ -116,6 +52,111 @@ export function myersDiff(before: string[], after: string[]): Hunk[] {
   });
 }
 
+/**
+ * Compute edit operations (context/removed/added lines) using the Myers diff algorithm.
+ * Returns a flat array of HunkLine covering the entire file — myersDiff slices it into hunks.
+ */
+function computeEditOps(before: string[], after: string[], n: number, m: number): HunkLine[] {
+  if (n === 0) {
+    return after.map((c, j) => ({ type: "added" as const, new_line: j + 1, content: c }));
+  }
+  if (m === 0) {
+    return before.map((c, i) => ({ type: "removed" as const, old_line: i + 1, content: c }));
+  }
+
+  // Myers forward algorithm.
+  // v[k + offset] = furthest x reached on diagonal k; k = x - y.
+  // trace[d] = snapshot of v BEFORE step d's updates.
+  // At step d, only even-k (or odd-k) indices are updated depending on parity.
+  // Values read (v[k-1], v[k+1]) always have opposite parity → they reflect d-1 state.
+  const max = n + m;
+  const offset = max;
+  const v = new Array(2 * max + 2).fill(0);
+  v[1 + offset] = 0;
+  const trace: number[][] = [];
+
+  let found = false;
+  for (let d = 0; d <= max && !found; d++) {
+    trace.push([...v]); // snapshot BEFORE step d
+    for (let k = -d; k <= d; k += 2) {
+      const ki = k + offset;
+      let x: number;
+      if (k === -d || (k !== d && v[ki - 1] < v[ki + 1])) {
+        x = v[ki + 1]; // insert: move down, x stays
+      } else {
+        x = v[ki - 1] + 1; // delete: move right, x++
+      }
+      let y = x - k;
+      while (x < n && y < m && before[x] === after[y]) { x++; y++; }
+      v[ki] = x;
+      if (x >= n && y >= m) { found = true; break; }
+    }
+  }
+
+  // Backtrack: at step d, trace[d] has the v values used for the decision at that step.
+  const ops: HunkLine[] = [];
+  let x = n, y = m;
+
+  for (let d = trace.length - 1; d >= 1; d--) {
+    const vd = trace[d]; // v BEFORE step d → used to determine step d's move
+    const k = x - y;
+    const ki = k + offset;
+
+    let prevK: number;
+    if (k === -d || (k !== d && (vd[ki - 1] ?? 0) < (vd[ki + 1] ?? 0))) {
+      prevK = k + 1; // came via insert (y++): from diagonal k+1
+    } else {
+      prevK = k - 1; // came via delete (x++): from diagonal k-1
+    }
+
+    const prevX = vd[prevK + offset] ?? 0;
+    const prevY = prevX - prevK;
+
+    if (prevK === k + 1) {
+      // Insert: started at (prevX, prevY+1) then extended diagonal to (x, y)
+      while (x > prevX) {
+        x--; y--;
+        ops.unshift({ type: "context", old_line: x + 1, new_line: y + 1, content: before[x] });
+      }
+      // x === prevX, y === prevY + 1
+      y--;
+      ops.unshift({ type: "added", new_line: y + 1, content: after[y] });
+    } else {
+      // Delete: started at (prevX+1, prevY) then extended diagonal to (x, y)
+      while (x > prevX + 1) {
+        x--; y--;
+        ops.unshift({ type: "context", old_line: x + 1, new_line: y + 1, content: before[x] });
+      }
+      // x === prevX + 1, y === prevY
+      x--;
+      ops.unshift({ type: "removed", old_line: x + 1, content: before[x] });
+    }
+    // x === prevX, y === prevY
+  }
+
+  // Any remaining lines at index 0 are equal (d=0 means entire prefix matched)
+  while (x > 0 && y > 0) {
+    x--; y--;
+    ops.unshift({ type: "context", old_line: x + 1, new_line: y + 1, content: before[x] });
+  }
+
+  return ops;
+}
+
+/**
+ * Split text into lines for diff counting/building.
+ * "" → []  (no lines)
+ * "\n" → [""]  (one blank line)
+ * "a\nb\n" → ["a","b"]  (trailing newline does not add an extra line)
+ * "a\nb" → ["a","b"]
+ */
+function splitLines(text: string): string[] {
+  if (text === "") return [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
 /** Build a FileDiffPayload for patch_file using pre-known anchor/content info. */
 function patchDiff(
   operation: "patch_file",
@@ -126,10 +167,10 @@ function patchDiff(
   addedText: string,
   position: string,
 ): FileDiffPayload {
-  const removedLines = removedText ? removedText.split("\n") : [];
-  const addedLines = addedText ? addedText.split("\n") : [];
-  const removed = removedLines.filter(l => l !== "" || removedText.endsWith("\n")).length;
-  const added = addedLines.filter(l => l !== "" || addedText.endsWith("\n")).length;
+  const removedLines = splitLines(removedText);
+  const addedLines = splitLines(addedText);
+  const removed = removedLines.length;
+  const added = addedLines.length;
 
   // Build a single hunk with context for anchor-based modes
   let hunks: Hunk[] | undefined;
@@ -145,6 +186,24 @@ function patchDiff(
     for (let i = anchorLineIdx + removedLines.length; i <= ctxEnd; i++) {
       lines.push({ type: "context", old_line: i + 1, new_line: i + 1 - removed + added, content: fileLines[i] });
     }
+    hunks = [{ old_start: ctxStart + 1, new_start: ctxStart + 1, lines }];
+  } else if (position === "start") {
+    // Added lines prepended before file — show them followed by first CONTEXT_LINES as context
+    const lines: HunkLine[] = [];
+    addedLines.forEach((c, j) => lines.push({ type: "added", new_line: j + 1, content: c }));
+    const ctxEnd = Math.min(fileLines.length - 1, CONTEXT_LINES - 1);
+    for (let i = 0; i <= ctxEnd; i++) {
+      lines.push({ type: "context", old_line: i + 1, new_line: added + i + 1, content: fileLines[i] });
+    }
+    hunks = [{ old_start: 1, new_start: 1, lines }];
+  } else if (position === "end") {
+    // Added lines appended after file — show last CONTEXT_LINES as context then the added lines
+    const ctxStart = Math.max(0, fileLines.length - CONTEXT_LINES);
+    const lines: HunkLine[] = [];
+    for (let i = ctxStart; i < fileLines.length; i++) {
+      lines.push({ type: "context", old_line: i + 1, new_line: i + 1, content: fileLines[i] });
+    }
+    addedLines.forEach((c, j) => lines.push({ type: "added", new_line: fileLines.length + j + 1, content: c }));
     hunks = [{ old_start: ctxStart + 1, new_start: ctxStart + 1, lines }];
   }
 
@@ -213,13 +272,13 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "ask_me",
     description:
-      "Ask me a question and present structured options to choose from. Use this when you need clarification or a decision before proceeding. Execution will pause until I respond.",
+      "Ask me a question and present structured options to choose from. Use this when you need clarification or a decision before proceeding. Execution will pause until I respond. You MUST always provide a non-empty 'options' array — never call this tool with an empty options list.",
     parameters: {
       type: "object",
       properties: {
         question: {
           type: "string",
-          description: "The question to ask the user.",
+          description: "The question to ask the user. Must be non-empty.",
         },
         selection_mode: {
           type: "string",
@@ -229,7 +288,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         options: {
           type: "array",
           items: { type: "string" },
-          description: "The list of options to present to the user.",
+          description: "The list of options to present to the user. Must contain at least one option.",
         },
       },
       required: ["question", "selection_mode", "options"],
@@ -307,7 +366,17 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "patch_file",
     description:
-      "Make a targeted edit to a file. Choose a position mode: \"start\" (prepend), \"end\" (append), \"before\" (insert before anchor), \"after\" (insert after anchor), or \"replace\" (replace anchor with content). For anchor-based modes the anchor must appear exactly once in the file.",
+      "Make a targeted edit to an existing file. Choose a position mode:\n" +
+      "- \"start\": prepend content before the first line\n" +
+      "- \"end\": append content after the last line\n" +
+      "- \"before\": insert content immediately before the anchor string\n" +
+      "- \"after\": insert content immediately after the anchor string\n" +
+      "- \"replace\": replace the anchor string with content (use content=\"\" to DELETE the anchor)\n\n" +
+      "ANCHOR RULES (before/after/replace):\n" +
+      "- The anchor must appear EXACTLY ONCE in the file. If it appears multiple times, the call will fail.\n" +
+      "- Use a long, distinctive anchor (full line or multiple lines) — never use short repeated patterns like '---', '#', or empty lines as anchors.\n" +
+      "- To delete a section, use position=\"replace\" with the full section text as anchor and content=\"\".\n" +
+      "- Prefer write_file when making large structural changes; use patch_file for small targeted edits.",
     parameters: {
       type: "object",
       properties: {
@@ -326,7 +395,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         },
         anchor: {
           type: "string",
-          description: "Required for before/after/replace modes. Must appear exactly once in the file.",
+          description: "Required for before/after/replace modes. Must be a unique string that appears exactly once in the file. Use full lines or multiple lines for uniqueness — avoid short or repeated patterns.",
         },
       },
       required: ["path", "content", "position"],
@@ -600,9 +669,13 @@ export async function executeTool(
         let removed: number;
 
         if (isNew) {
-          const newLines = (args.content ?? "").split("\n");
-          added = newLines.length;
+          const newFileLines = splitLines(args.content ?? "");
+          added = newFileLines.length;
           removed = 0;
+          hunks = [{
+            old_start: 1, new_start: 1,
+            lines: newFileLines.map((c, j) => ({ type: "added" as const, new_line: j + 1, content: c })),
+          }];
         } else {
           const beforeContent = readFileSync(abs, "utf-8");
           const beforeLines = beforeContent.split("\n");
@@ -637,15 +710,19 @@ export async function executeTool(
       try {
         const stat = statSync(abs);
         if (!stat.isFile()) return `Error: ${args.path} is not a file.`;
-        const lineCount = readFileSync(abs, "utf-8").split("\n").length;
+        const deletedLines = splitLines(readFileSync(abs, "utf-8"));
         unlinkSync(abs);
         const diff: FileDiffPayload = {
           operation: "delete_file",
           path: args.path,
           added: 0,
-          removed: lineCount,
+          removed: deletedLines.length,
+          hunks: [{
+            old_start: 1, new_start: 1,
+            lines: deletedLines.map((c, i) => ({ type: "removed" as const, old_line: i + 1, content: c })),
+          }],
         };
-        return { content: `OK: deleted ${args.path} (${lineCount} lines)`, diff } as WriteResult;
+        return { content: `OK: deleted ${args.path} (${deletedLines.length} lines)`, diff } as WriteResult;
       } catch (e) {
         return `Error deleting file: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -688,13 +765,13 @@ export async function executeTool(
 
         if (position === "start") {
           writeFileSync(abs, insertion + content, "utf-8");
-          const added = insertion.split("\n").length;
+          const added = splitLines(insertion).length;
           const diff = patchDiff("patch_file", args.path, fileLines, null, "", insertion, position);
           return { content: `OK: patched ${args.path} (+${added} lines, prepended)`, diff } as WriteResult;
         }
         if (position === "end") {
           writeFileSync(abs, content + insertion, "utf-8");
-          const added = insertion.split("\n").length;
+          const added = splitLines(insertion).length;
           const diff = patchDiff("patch_file", args.path, fileLines, null, "", insertion, position);
           return { content: `OK: patched ${args.path} (+${added} lines, appended)`, diff } as WriteResult;
         }
@@ -722,10 +799,13 @@ export async function executeTool(
         } else {
           return `Error: unknown position "${position}". Use start, end, before, after, or replace.`;
         }
+        if (newContent === content) {
+          return `Error: this patch would not modify the file. For deletion use position="replace" with content="" and anchor set to the exact text to remove. For insertion ensure content is non-empty.`;
+        }
         writeFileSync(abs, newContent, "utf-8");
 
-        const added = addedText.split("\n").length;
-        const removed = removedText ? removedText.split("\n").length : 0;
+        const added = splitLines(addedText).length;
+        const removed = splitLines(removedText).length;
         const lineNum = anchorLineIdx >= 0 ? anchorLineIdx + 1 : "?";
         const countStr = position === "replace" ? `(+${added} -${removed} at line ${lineNum})` : `(+${added} at line ${lineNum})`;
         const diff = patchDiff("patch_file", args.path, fileLines, anchorLineIdx >= 0 ? anchorLineIdx : null, removedText, addedText, position);
@@ -739,62 +819,121 @@ export async function executeTool(
 
     case "search_text": {
       const pattern = args.pattern ?? "";
-      const glob = args.glob ?? "";
-      const contextLines = args.context_lines ? parseInt(args.context_lines, 10) : 0;
+      const globPat = args.glob ?? "";
+      const contextLines = args.context_lines ? parseInt(String(args.context_lines), 10) : 0;
       try {
-        const grepArgs = ["-rn", "--color=never"];
-        if (contextLines > 0) grepArgs.push(`-C`, String(contextLines));
-        grepArgs.push(pattern);
-        if (glob) grepArgs.push("--include", glob);
-        grepArgs.push(".");
-        const result = spawnSync("grep", grepArgs, {
-          cwd: ctx.worktreePath,
-          timeout: 15_000,
-          maxBuffer: 500_000,
-          encoding: "utf-8",
-        });
-        if (result.error) return `Error running search: ${result.error.message}`;
-        // Exit code 1 means no matches — not an error
-        if (result.status === 1) return "(no matches found)";
-        const out = (result.stdout ?? "").slice(0, 8_000);
-        return out.trim() || "(no matches found)";
+        let regex: RegExp;
+        try {
+          regex = new RegExp(pattern, "i");
+        } catch {
+          return `Error: invalid regex pattern: ${pattern}`;
+        }
+
+        // Convert a glob pattern to a RegExp for relative path matching.
+        // Supports: * (any chars within a path segment), ** (any depth), ? (single char).
+        // "**/*.ts" matches root-level "hello.ts" as well as "src/foo.ts".
+        const globToRegex = (g: string): RegExp | null => {
+          if (!g) return null;
+          const escaped = g
+            .replace(/[.+^${}()|[\]\\]/g, "\\$&")   // escape regex special chars
+            .replace(/\*\*\//g, "\x00")               // **/ → placeholder (optional path prefix)
+            .replace(/\*\*/g, "\x01")                 // ** → placeholder (any depth)
+            .replace(/\*/g, "[^/]*")                  // single-segment wildcard
+            .replace(/\?/g, "[^/]")
+            .replace(/\x00/g, "(.*/)?")
+            .replace(/\x01/g, ".*");
+          return new RegExp(`^${escaped}$`, "i");
+        };
+        const globRe = globToRegex(globPat);
+
+        const IGNORE_DIRS = new Set([".git", "node_modules", "dist", ".cache"]);
+        const MAX_OUTPUT = 8_000;
+        const matches: string[] = [];
+
+        const walkAndSearch = (dir: string): void => {
+          if (matches.join("\n").length >= MAX_OUTPUT) return;
+          let entries: string[];
+          try { entries = readdirSync(dir); } catch { return; }
+          for (const entry of entries) {
+            if (IGNORE_DIRS.has(entry)) continue;
+            const fullPath = join(dir, entry);
+            let stat;
+            try { stat = statSync(fullPath); } catch { continue; }
+            if (stat.isDirectory()) {
+              walkAndSearch(fullPath);
+            } else if (stat.isFile()) {
+              const relPath = relative(ctx.worktreePath, fullPath);
+              if (globRe && !globRe.test(relPath)) continue;
+              let content: string;
+              try { content = readFileSync(fullPath, "utf-8"); } catch { continue; }
+              const lines = content.split("\n");
+              for (let i = 0; i < lines.length; i++) {
+                if (!regex.test(lines[i])) continue;
+                // Collect context window around the match
+                const from = Math.max(0, i - contextLines);
+                const to = Math.min(lines.length - 1, i + contextLines);
+                for (let j = from; j <= to; j++) {
+                  const prefix = j === i ? `${relPath}:${j + 1}:` : `${relPath}-${j + 1}-`;
+                  matches.push(`${prefix}${lines[j]}`);
+                }
+                if (contextLines > 0 && i + contextLines < lines.length - 1) {
+                  matches.push("--");
+                }
+                if (matches.join("\n").length >= MAX_OUTPUT) return;
+              }
+            }
+          }
+        };
+
+        walkAndSearch(ctx.worktreePath);
+        if (matches.length === 0) return "(no matches found)";
+        const out = matches.join("\n");
+        return out.length > MAX_OUTPUT ? out.slice(0, MAX_OUTPUT) + "\n[truncated]" : out;
       } catch (e) {
         return `Error: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
     case "find_files": {
-      const glob = args.glob ?? "";
+      const globPat = args.glob ?? "";
       try {
-        // For **/<pattern> globs, strip the **/ prefix and use -name so root-level
-        // files are included. For path-restricted globs (e.g. src/**/*.ts), use
-        // the directory prefix with -name. In v1 we handle the two most common forms:
-        //   **/<name>   → find . -type f -name <name>
-        //   <dir>/**/<name> → find ./<dir> -type f -name <name>
-        let findDir = ".";
-        let namePattern = glob;
-        const doubleStar = glob.lastIndexOf("**/");
-        if (doubleStar !== -1) {
-          if (doubleStar > 0) {
-            findDir = join(".", glob.slice(0, doubleStar).replace(/\/$/, ""));
+        const globToRegex = (g: string): RegExp => {
+          const escaped = g
+            .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+            .replace(/\*\*\//g, "\x00")   // **/ → placeholder (optional path prefix)
+            .replace(/\*\*/g, "\x01")     // ** → placeholder (any depth)
+            .replace(/\*/g, "[^/]*")      // single * → single segment wildcard
+            .replace(/\?/g, "[^/]")
+            .replace(/\x00/g, "(.*/)?")
+            .replace(/\x01/g, ".*");
+          return new RegExp(`^${escaped}$`, process.platform === "win32" ? "i" : "");
+        };
+        const re = globToRegex(globPat);
+        const IGNORE_DIRS = new Set([".git", "node_modules", "dist", ".cache"]);
+        const found: string[] = [];
+
+        const walk = (dir: string): void => {
+          if (found.length >= 500) return;
+          let entries: string[];
+          try { entries = readdirSync(dir); } catch { return; }
+          for (const entry of entries) {
+            if (IGNORE_DIRS.has(entry)) continue;
+            const fullPath = join(dir, entry);
+            let stat;
+            try { stat = statSync(fullPath); } catch { continue; }
+            const relPath = relative(ctx.worktreePath, fullPath);
+            if (stat.isDirectory()) {
+              walk(fullPath);
+            } else if (stat.isFile() && re.test(relPath)) {
+              found.push(relPath);
+            }
           }
-          namePattern = glob.slice(doubleStar + 3); // strip "**/"
-        }
-        const result = spawnSync("find", [findDir, "-type", "f", "-name", namePattern], {
-          cwd: ctx.worktreePath,
-          timeout: 15_000,
-          maxBuffer: 500_000,
-          encoding: "utf-8",
-        });
-        if (result.error) return `Error running find: ${result.error.message}`;
-        const lines = (result.stdout ?? "")
-          .trim()
-          .split("\n")
-          .filter(Boolean)
-          .map((l) => l.replace(/^\.\//, ""))
-          .sort();
-        if (lines.length === 0) return "(no files found)";
-        return lines.slice(0, 500).join("\n");
+        };
+
+        walk(ctx.worktreePath);
+        found.sort();
+        if (found.length === 0) return "(no files found)";
+        return found.join("\n");
       } catch (e) {
         return `Error: ${e instanceof Error ? e.message : String(e)}`;
       }

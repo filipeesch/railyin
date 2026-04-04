@@ -4,7 +4,7 @@
     <div class="msg__meta">You</div>
   </div>
 
-  <div v-else-if="chunk.type === 'assistant'" class="msg msg--assistant">
+  <div v-else-if="chunk.type === 'assistant' && !isXmlToolCall && chunk.content.trim()" class="msg msg--assistant">
     <div class="msg__bubble prose" v-html="renderMd(chunk.content)" />
     <div class="msg__meta">AI</div>
   </div>
@@ -47,13 +47,26 @@
       @submit="onAskSubmit"
     />
   </div>
+
+  <div v-else-if="chunk.type === 'file_diff'" class="msg msg--file-diff">
+    <FileDiff :payload="fileDiffPayload" />
+  </div>
+
+  <!-- Persisted reasoning messages from DB (collapsed, non-streaming) -->
+  <ReasoningBubble
+    v-else-if="chunk.type === 'reasoning'"
+    :content="chunk.content"
+    :streaming="false"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { marked } from "marked";
-import type { ConversationMessage } from "@shared/rpc-types";
+import type { ConversationMessage, FileDiffPayload } from "@shared/rpc-types";
 import AskUserPrompt from "./AskUserPrompt.vue";
+import FileDiff from "./FileDiff.vue";
+import ReasoningBubble from "./ReasoningBubble.vue";
 import { useTaskStore } from "../stores/task";
 
 const props = defineProps<{
@@ -86,6 +99,19 @@ const toolName = computed(() => {
 const truncated = computed(() => {
   const c = props.chunk.content;
   return c.length > 800 ? c.slice(0, 800) + "\n…[truncated]" : c;
+});
+
+/** True when an assistant message was generated in XML <tool_call> format instead of the JSON API format. These should be silently hidden. */
+const isXmlToolCall = computed(() =>
+  props.chunk.type === "assistant" && props.chunk.content.trimStart().startsWith("<tool_call>"),
+);
+
+const fileDiffPayload = computed<FileDiffPayload>(() => {
+  try {
+    return JSON.parse(props.chunk.content) as FileDiffPayload;
+  } catch {
+    return { operation: "write_file", path: "unknown", added: 0, removed: 0 };
+  }
 });
 
 // ─── ask_user_prompt support ──────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall } from "./types.ts";
+import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, StreamEvent } from "./types.ts";
 
 export class OpenAICompatibleProvider implements AIProvider {
   private baseUrl: string;
@@ -65,9 +65,9 @@ export class OpenAICompatibleProvider implements AIProvider {
     return { type: "text", content: message.content ?? "" };
   }
 
-  // ─── Streaming chat (used for the final text response) ──────────────────────
+  // ─── Unified streaming (text tokens + tool calls in same SSE stream) ─────────
 
-  async *chat(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<string> {
+  async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: messages.map(toWireMessage),
@@ -76,6 +76,11 @@ export class OpenAICompatibleProvider implements AIProvider {
       enable_thinking: false,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
     };
+
+    if (options.tools?.length) {
+      body.tools = options.tools.map((t) => ({ type: "function", function: t }));
+      body.tool_choice = "auto";
+    }
 
     const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
       method: "POST",
@@ -95,9 +100,18 @@ export class OpenAICompatibleProvider implements AIProvider {
 
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
+
     // State for stripping <think>...</think> blocks that some models emit
     let inThinkBlock = false;
     let thinkBuf = "";
+
+    // Accumulator for streaming tool_calls deltas (index-keyed)
+    const toolCallAccum: Array<{
+      id: string;
+      type: "function";
+      function: { name: string; arguments: string };
+    }> = [];
+    let hasToolCalls = false;
 
     try {
       while (true) {
@@ -112,23 +126,49 @@ export class OpenAICompatibleProvider implements AIProvider {
           if (!trimmed || trimmed === "data: [DONE]") continue;
           if (!trimmed.startsWith("data: ")) continue;
 
-          const json = trimmed.slice(6);
-          try {
-            const parsed = JSON.parse(json) as {
-              choices?: Array<{ delta?: { content?: string } }>;
-            };
-            const token = parsed.choices?.[0]?.delta?.content;
-            if (!token) continue;
+          const jsonStr = trimmed.slice(6);
+          let parsed: {
+            choices?: Array<{
+              delta?: {
+                content?: string;
+                reasoning_content?: string;
+                tool_calls?: Array<{
+                  index: number;
+                  id?: string;
+                  type?: "function";
+                  function?: { name?: string; arguments?: string };
+                }>;
+              };
+              finish_reason?: string | null;
+            }>;
+          };
 
+          try {
+            parsed = JSON.parse(jsonStr);
+          } catch {
+            continue; // Ignore malformed SSE lines
+          }
+
+          const choice = parsed.choices?.[0];
+          if (!choice) continue;
+
+          const delta = choice.delta;
+
+          // ── Reasoning tokens (e.g. Qwen3 thinking mode) ───────────────────
+          if (delta?.reasoning_content) {
+            yield { type: "reasoning", content: delta.reasoning_content };
+          }
+
+          // ── Text tokens ───────────────────────────────────────────────────
+          if (delta?.content) {
             // Strip <think>...</think> blocks
-            thinkBuf += token;
+            thinkBuf += delta.content;
             let out = "";
             while (thinkBuf.length > 0) {
               if (inThinkBlock) {
                 const end = thinkBuf.indexOf("</think>");
                 if (end === -1) {
-                  // Still inside think block — keep buffering
-                  thinkBuf = thinkBuf.slice(-8); // keep only tail in case tag spans chunks
+                  thinkBuf = thinkBuf.slice(-8);
                   break;
                 }
                 inThinkBlock = false;
@@ -145,22 +185,53 @@ export class OpenAICompatibleProvider implements AIProvider {
                 thinkBuf = thinkBuf.slice(start + 7);
               }
             }
-            if (out) yield out;
-          } catch {
-            // Ignore malformed SSE lines
+            if (out) yield { type: "token", content: out };
+          }
+
+          // ── Tool call deltas ──────────────────────────────────────────────
+          if (delta?.tool_calls) {
+            hasToolCalls = true;
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index;
+              if (!toolCallAccum[idx]) {
+                toolCallAccum[idx] = {
+                  id: tc.id ?? "",
+                  type: "function",
+                  function: { name: tc.function?.name ?? "", arguments: tc.function?.arguments ?? "" },
+                };
+              } else {
+                if (tc.id) toolCallAccum[idx].id = tc.id;
+                if (tc.function?.name) toolCallAccum[idx].function.name += tc.function.name;
+                if (tc.function?.arguments) toolCallAccum[idx].function.arguments += tc.function.arguments;
+              }
+            }
+          }
+
+          // ── Finish reason ─────────────────────────────────────────────────
+          if (choice.finish_reason === "tool_calls" || (choice.finish_reason === "stop" && hasToolCalls)) {
+            // Snapshot before clearing — toolCallAccum is mutated in-place and
+            // yielding a reference then clearing it would empty the caller's copy.
+            const calls = toolCallAccum.slice();
+            toolCallAccum.length = 0;
+            hasToolCalls = false;
+            yield { type: "tool_calls", calls: calls as AIToolCall[] };
           }
         }
       }
     } finally {
       reader.releaseLock();
     }
+
+    yield { type: "done" };
   }
 }
 
 // ─── Map internal AIMessage to what the wire expects ─────────────────────────
 
 function toWireMessage(m: AIMessage): Record<string, unknown> {
-  const base: Record<string, unknown> = { role: m.role, content: m.content ?? null };
+  // Use null (not empty string) for missing content — some models behave differently
+  // when they see content:"" vs content:null in an assistant message with tool_calls.
+  const base: Record<string, unknown> = { role: m.role, content: m.content || null };
   if (m.tool_calls) base.tool_calls = m.tool_calls;
   if (m.tool_call_id) base.tool_call_id = m.tool_call_id;
   if (m.name) base.name = m.name;

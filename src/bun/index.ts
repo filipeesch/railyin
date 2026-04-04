@@ -7,7 +7,7 @@ import { projectHandlers } from "./handlers/projects.ts";
 import { taskHandlers } from "./handlers/tasks.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import type { RailynRPCType } from "../shared/rpc-types.ts";
-import type { Task } from "../shared/rpc-types.ts";
+import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -22,8 +22,8 @@ seedDefaultWorkspace();
 
 let win!: BrowserWindow;
 
-function onToken(taskId: number, executionId: number, token: string, done: boolean): void {
-  win.webview.rpc.send["stream.token"]({ taskId, executionId, token, done });
+function onToken(taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean): void {
+  win.webview.rpc.send["stream.token"]({ taskId, executionId, token, done, isReasoning });
 }
 
 function onError(taskId: number, executionId: number, error: string): void {
@@ -34,6 +34,10 @@ function notifyTaskUpdated(task: Task): void {
   win.webview.rpc.send["task.updated"](task);
 }
 
+function notifyNewMessage(message: ConversationMessage): void {
+  win.webview.rpc.send["message.new"](message);
+}
+
 // ─── Wire up RPC handlers ─────────────────────────────────────────────────────
 
 const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
@@ -42,7 +46,7 @@ const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
       ...workspaceHandlers(),
       ...boardHandlers(),
       ...projectHandlers(),
-      ...taskHandlers(onToken, onError, notifyTaskUpdated),
+      ...taskHandlers(onToken, onError, notifyTaskUpdated, notifyNewMessage),
       ...conversationHandlers(),
     },
     messages: {},

@@ -66,7 +66,8 @@ export type MessageType =
   | "transition_event"
   | "artifact_event"
   | "ask_user_prompt"
-  | "file_diff";
+  | "file_diff"
+  | "reasoning";
 
 // ─── File diff types ─────────────────────────────────────────────────────────
 
@@ -154,6 +155,7 @@ export interface StreamToken {
   executionId: number;
   token: string;
   done: boolean;
+  isReasoning?: boolean;
 }
 
 export interface StreamError {
@@ -270,6 +272,7 @@ export type RailynRPCType = {
       "stream.token": StreamToken;
       "stream.error": StreamError;
       "task.updated": Task;
+      "message.new": ConversationMessage;
     };
   }>;
 };

@@ -12,7 +12,7 @@ import {
 } from "../workflow/engine.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
 import type { ProjectRow } from "../db/row-types.ts";
-import type { OnToken, OnError, OnTaskUpdated } from "../workflow/engine.ts";
+import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import { getConfig } from "../config/index.ts";
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
@@ -31,7 +31,7 @@ function fetchTaskWithDetail(db: ReturnType<typeof getDb>, taskId: number): Task
   return row ? mapTask(row) : null;
 }
 
-export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: OnTaskUpdated) {
+export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) {
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
       const db = getDb();
@@ -156,7 +156,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         }
       }
 
-      return handleTransition(params.taskId, params.toState, onToken, onError, onTaskUpdated);
+      return handleTransition(params.taskId, params.toState, onToken, onError, onTaskUpdated, onNewMessage);
     },
 
     "tasks.sendMessage": async (params: {
@@ -167,7 +167,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       if (warning) {
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
-      return handleHumanTurn(params.taskId, params.content, onToken, onError, onTaskUpdated);
+      return handleHumanTurn(params.taskId, params.content, onToken, onError, onTaskUpdated, onNewMessage);
     },
 
     "tasks.retry": async (params: {
@@ -211,7 +211,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         }
       }
 
-      return handleRetry(params.taskId, onToken, onError, onTaskUpdated);
+      return handleRetry(params.taskId, onToken, onError, onTaskUpdated, onNewMessage);
     },
 
     // ─── models.list ─────────────────────────────────────────────────────────

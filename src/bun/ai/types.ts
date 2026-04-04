@@ -4,7 +4,7 @@
 
 export interface AIMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: string | null;
   // Present on assistant messages that issued tool calls
   tool_calls?: AIToolCall[];
   // Present on tool result messages
@@ -33,10 +33,17 @@ export interface AIToolCall {
   };
 }
 
-// Returned by chatWithTools — either the final text or a list of tool calls
+// Returned by turn() — either the final text or a list of tool calls
 export type AITurnResult =
   | { type: "text"; content: string }
   | { type: "tool_calls"; calls: AIToolCall[] };
+
+// Yielded by stream() — unified streaming events covering tokens and tool calls
+export type StreamEvent =
+  | { type: "token"; content: string }
+  | { type: "reasoning"; content: string }
+  | { type: "tool_calls"; calls: AIToolCall[] }
+  | { type: "done" };
 
 export interface AICallOptions {
   maxTokens?: number;
@@ -45,11 +52,15 @@ export interface AICallOptions {
 }
 
 export interface AIProvider {
-  /** Streaming chat — used for the final text response to the user. */
-  chat(messages: AIMessage[], options?: AICallOptions): AsyncIterable<string>;
   /**
-   * Non-streaming turn with tool support.  Returns either the assistant's
-   * final text or a list of tool calls that need executing.
+   * Unified streaming method — handles both text tokens and structured tool
+   * calls in the same SSE stream. Tools are always passed so the model is
+   * never switched out of tool-aware mode between rounds.
+   */
+  stream(messages: AIMessage[], options?: AICallOptions): AsyncIterable<StreamEvent>;
+  /**
+   * Non-streaming turn with tool support — retained for sub-agent use only.
+   * Returns either the assistant's final text or a list of tool calls.
    */
   turn(messages: AIMessage[], options?: AICallOptions): Promise<AITurnResult>;
 }

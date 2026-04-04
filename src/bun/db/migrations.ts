@@ -107,6 +107,24 @@ const migrations: Array<{ id: string; sql: string }> = [
       ALTER TABLE tasks ADD COLUMN model TEXT;
     `,
   },
+  {
+    id: "003_logs",
+    sql: `
+      CREATE TABLE IF NOT EXISTS logs (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        level        TEXT    NOT NULL DEFAULT 'info',
+        task_id      INTEGER,
+        execution_id INTEGER,
+        message      TEXT    NOT NULL,
+        data         TEXT,
+        created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_logs_task      ON logs(task_id);
+      CREATE INDEX IF NOT EXISTS idx_logs_execution ON logs(execution_id);
+      CREATE INDEX IF NOT EXISTS idx_logs_level     ON logs(level);
+      CREATE INDEX IF NOT EXISTS idx_logs_created   ON logs(created_at);
+    `,
+  },
 ];
 
 export function runMigrations(): void {

@@ -1,7 +1,7 @@
 <template>
   <!-- Read-only (already answered) -->
   <div v-if="answered" class="ask-prompt ask-prompt--answered">
-    <div class="ask-prompt__question">{{ question }}</div>
+    <div class="ask-prompt__question prose" v-html="renderMd(question)" />
     <div class="ask-prompt__answer">
       <i class="pi pi-check-circle" />
       <span>{{ answeredText }}</span>
@@ -10,7 +10,7 @@
 
   <!-- Interactive -->
   <div v-else class="ask-prompt">
-    <div class="ask-prompt__question">{{ question }}</div>
+    <div class="ask-prompt__question prose" v-html="renderMd(question)" />
 
     <div class="ask-prompt__options">
       <!-- Single select: radio buttons -->
@@ -93,6 +93,11 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import { marked } from "marked";
+
+function renderMd(content: string): string {
+  return marked.parse(content, { async: false }) as string;
+}
 
 const props = defineProps<{
   question: string;
@@ -159,7 +164,6 @@ function submit() {
 }
 
 .ask-prompt__question {
-  font-weight: 600;
   font-size: 0.92rem;
   margin-bottom: 12px;
   line-height: 1.4;

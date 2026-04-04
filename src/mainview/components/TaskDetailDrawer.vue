@@ -65,11 +65,24 @@
         <!-- Conversation timeline -->
         <div class="task-detail__conversation" ref="scrollEl" @scroll.passive="onScroll">
           <div class="conversation-inner">
-            <MessageBubble
-              v-for="(msg, idx) in taskStore.messages"
-              :key="msg.id"
-              :chunk="msg"
-              :index="idx"
+            <template v-for="item in displayItems" :key="item.key">
+              <ToolCallGroup
+                v-if="item.kind === 'tool_entry'"
+                :entry="item.entry"
+              />
+              <MessageBubble
+                v-else
+                :chunk="item.message"
+                :index="item.msgIndex"
+              />
+            </template>
+
+            <!-- Live streaming reasoning bubble (task 6.2) -->
+            <ReasoningBubble
+              v-if="taskStore.streamingReasoningToken && taskStore.streamingTaskId === task.id"
+              :content="taskStore.streamingReasoningToken"
+              :streaming="taskStore.isStreamingReasoning"
+              key="live-reasoning"
             />
 
             <!-- Live streaming bubble (only when this task is the one streaming) -->
@@ -258,12 +271,66 @@ import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import ProgressSpinner from "primevue/progressspinner";
 import MessageBubble from "./MessageBubble.vue";
+import ToolCallGroup, { type ToolEntry } from "./ToolCallGroup.vue";
+import ReasoningBubble from "./ReasoningBubble.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
-import type { ExecutionState } from "@shared/rpc-types";
+import type { ConversationMessage, ExecutionState } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
+
+// ─── Message grouping ─────────────────────────────────────────────────────────
+// Consecutive tool_call / tool_result / file_diff messages are collapsed into a
+// single ToolCallGroup accordion, matching the Cursor / Copilot UX pattern.
+
+const TOOL_MSG_TYPES = new Set(["tool_call", "tool_result", "file_diff"]);
+
+type DisplayItem =
+  | { kind: "tool_entry"; entry: ToolEntry; key: string }
+  | { kind: "single";     message: ConversationMessage; msgIndex: number; key: string };
+
+function pairToolMessages(msgs: ConversationMessage[]): ToolEntry[] {
+  const entries: ToolEntry[] = [];
+  let i = 0;
+  while (i < msgs.length) {
+    if (msgs[i].type === "tool_call") {
+      const entry: ToolEntry = { call: msgs[i], result: null, diff: null };
+      i++;
+      if (i < msgs.length && msgs[i].type === "tool_result")  { entry.result = msgs[i]; i++; }
+      if (i < msgs.length && msgs[i].type === "file_diff")    { entry.diff   = msgs[i]; i++; }
+      entries.push(entry);
+    } else {
+      i++; // skip orphaned result/diff
+    }
+  }
+  return entries;
+}
+
+const displayItems = computed<DisplayItem[]>(() => {
+  const msgs = taskStore.messages;
+  const items: DisplayItem[] = [];
+  let i = 0;
+  while (i < msgs.length) {
+    if (TOOL_MSG_TYPES.has(msgs[i].type)) {
+      const toolMsgs: ConversationMessage[] = [];
+      while (i < msgs.length && TOOL_MSG_TYPES.has(msgs[i].type)) {
+        toolMsgs.push(msgs[i]);
+        i++;
+      }
+      const entries = pairToolMessages(toolMsgs);
+      if (entries.length > 0) {
+        for (const entry of entries) {
+          items.push({ kind: "tool_entry", entry, key: `e-${entry.call.id}` });
+        }
+      }
+    } else {
+      items.push({ kind: "single", message: msgs[i], msgIndex: i, key: `s-${msgs[i].id}` });
+      i++;
+    }
+  }
+  return items;
+});
 
 // ─── Resizable drawer ────────────────────────────────────────────────────────
 const drawerWidth = ref(Math.round(window.innerWidth * 0.7));
