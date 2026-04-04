@@ -7,6 +7,7 @@ import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-ty
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { resolveToolsForColumn, executeTool, type WriteResult } from "./tools.ts";
+import { formatReviewMessageForLLM } from "./review.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ function stripXmlToolCalls(text: string): { clean: string; hadToolCalls: boolean
 
 
 
-function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
+export function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
   const result: AIMessage[] = [];
   let i = 0;
   while (i < messages.length) {
@@ -160,7 +161,7 @@ function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
       continue;
     }
 
-    // file_diff, ask_user_prompt, transition_event, artifact_event, reasoning — excluded
+    // file_diff, code_review, ask_user_prompt, transition_event, artifact_event, reasoning — excluded
     i++;
   }
 
@@ -1198,5 +1199,123 @@ export async function handleRetry(
   ).catch(() => {});
 
   return { task: mapTask(updatedRow), executionId };
+}
+
+// ─── Code review turn ─────────────────────────────────────────────────────────
+
+export async function handleCodeReview(
+  taskId: number,
+  onToken: OnToken,
+  onError: OnError,
+  onTaskUpdated: OnTaskUpdated,
+  onNewMessage: OnNewMessage,
+): Promise<{ message: import("../../shared/rpc-types.ts").ConversationMessage; executionId: number }> {
+  const db = getDb();
+  const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  // Build CodeReviewPayload from DB decisions (human reviewer only)
+  type DecisionRow = {
+    hunk_hash: string;
+    file_path: string;
+    decision: string;
+    comment: string | null;
+    original_start: number;
+    modified_start: number;
+  };
+  const decisionRows = db
+    .query<DecisionRow, [number]>(
+      `SELECT hunk_hash, file_path, decision, comment, original_start, modified_start
+       FROM task_hunk_decisions
+       WHERE task_id = ? AND reviewer_id = 'user'
+       ORDER BY file_path, modified_start`,
+    )
+    .all(taskId);
+
+  // Group decisions by file and build CodeReviewPayload
+  const fileMap = new Map<string, import("../../shared/rpc-types.ts").CodeReviewHunk[]>();
+  for (const row of decisionRows) {
+    if (!fileMap.has(row.file_path)) fileMap.set(row.file_path, []);
+    fileMap.get(row.file_path)!.push({
+      hunkIndex: 0, // not meaningful in payload — positional reference replaced by hash
+      originalRange: [row.original_start, row.original_start],
+      modifiedRange: [row.modified_start, row.modified_start],
+      decision: row.decision as import("../../shared/rpc-types.ts").HunkDecision,
+      comment: row.comment,
+    });
+  }
+
+  const payload: import("../../shared/rpc-types.ts").CodeReviewPayload = {
+    taskId,
+    files: Array.from(fileMap.entries()).map(([path, hunks]) => ({ path, hunks })),
+  };
+
+  const llmText = formatReviewMessageForLLM(payload);
+
+  // Store the structured code_review message (UI-only, excluded from LLM)
+  const reviewMsgId = appendMessage(
+    taskId,
+    task.conversation_id ?? 0,
+    "code_review",
+    "user",
+    JSON.stringify(payload),
+  );
+
+  // Store the plain-text user message that the LLM will actually see
+  appendMessage(
+    taskId,
+    task.conversation_id ?? 0,
+    "user",
+    "user",
+    llmText,
+  );
+
+  const templateId = getBoardTemplateId(task.board_id);
+  const column = getColumnConfig(templateId, task.workflow_state);
+
+  const execResult = db.run(
+    `INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt)
+     VALUES (?, ?, ?, 'code-review', 'running', ?)`,
+    [taskId, task.workflow_state, task.workflow_state, task.retry_count + 1],
+  );
+  const executionId = execResult.lastInsertRowid as number;
+
+  db.run(
+    "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+    [executionId, taskId],
+  );
+
+  const runningRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+  onTaskUpdated(mapTask(runningRow));
+
+  const reviewMsgRow = db
+    .query<ConversationMessageRow, [number]>(
+      "SELECT * FROM conversation_messages WHERE id = ?",
+    )
+    .get(reviewMsgId)!;
+
+  // Notify frontend of the code_review message
+  onNewMessage(mapConversationMessage(reviewMsgRow));
+
+  const controller = new AbortController();
+  executionControllers.set(executionId, controller);
+
+  const config = getConfig();
+  const resolvedModel = task.model ?? config.workspace.ai.model;
+
+  runExecution(
+    taskId,
+    executionId,
+    llmText,
+    column?.stage_instructions,
+    resolvedModel,
+    controller.signal,
+    onToken,
+    onError,
+    onTaskUpdated,
+    onNewMessage,
+  ).catch(() => {});
+
+  return { message: mapConversationMessage(reviewMsgRow), executionId };
 }
 

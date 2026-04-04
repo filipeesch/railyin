@@ -61,7 +61,8 @@ export type MessageType =
   | "transition_event"
   | "ask_user_prompt"
   | "file_diff"
-  | "reasoning";
+  | "reasoning"
+  | "code_review";
 
 // ─── File diff types ─────────────────────────────────────────────────────────
 
@@ -86,6 +87,58 @@ export interface FileDiffPayload {
   added: number;
   removed: number;
   hunks?: Hunk[];
+}
+
+// ─── Code review types ──────────────────────────────────────────────────────
+
+export type HunkDecision = "accepted" | "rejected" | "change_request" | "pending";
+
+export interface CodeReviewHunk {
+  hunkIndex: number;
+  originalRange: [number, number];
+  modifiedRange: [number, number];
+  decision: HunkDecision;
+  comment: string | null;
+}
+
+export interface CodeReviewFile {
+  path: string;
+  hunks: CodeReviewHunk[];
+}
+
+export interface CodeReviewPayload {
+  taskId: number;
+  files: CodeReviewFile[];
+}
+
+/** A single reviewer's decision on a hunk (human or future AI reviewer). */
+export interface ReviewerDecision {
+  reviewerId: string;       // 'user' for human; model name for AI
+  reviewerType: "human" | "ai";
+  decision: HunkDecision;
+  comment: string | null;
+}
+
+/** A parsed hunk from git diff, enriched with all reviewer decisions from DB. */
+export interface HunkWithDecisions {
+  /** Content-hash identity: SHA-256(filePath + "\0" + originalLines + "\0" + modifiedLines) */
+  hash: string;
+  hunkIndex: number;
+  originalStart: number;
+  originalEnd: number;
+  modifiedStart: number;
+  modifiedEnd: number;
+  decisions: ReviewerDecision[];
+  /** Convenience: the human reviewer's current decision (defaults to 'pending') */
+  humanDecision: HunkDecision;
+  humanComment: string | null;
+}
+
+export interface FileDiffContent {
+  original: string;
+  modified: string;
+  /** Parsed hunks with decisions joined from DB. Empty if no diff. */
+  hunks: HunkWithDecisions[];
 }
 
 export interface ConversationMessage {
@@ -237,6 +290,30 @@ export type RailynRPCType = {
       "tasks.getGitStat": {
         params: { taskId: number };
         response: string | null;
+      };
+      "tasks.getChangedFiles": {
+        params: { taskId: number };
+        response: string[];
+      };
+      "tasks.getFileDiff": {
+        params: { taskId: number; filePath: string };
+        response: FileDiffContent;
+      };
+      "tasks.rejectHunk": {
+        params: { taskId: number; filePath: string; hunkIndex: number };
+        response: FileDiffContent;
+      };
+      "tasks.setHunkDecision": {
+        params: {
+          taskId: number;
+          hunkHash: string;
+          filePath: string;
+          decision: HunkDecision;
+          comment: string | null;
+          originalStart: number;
+          modifiedStart: number;
+        };
+        response: void;
       };
     };
     messages: Record<string, never>;

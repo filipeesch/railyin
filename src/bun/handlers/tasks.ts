@@ -1,10 +1,12 @@
 import { getDb } from "../db/index.ts";
-import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
+import { createHash } from "crypto";
+import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, ReviewerDecision, FileDiffContent } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
 import {
   handleTransition,
   handleHumanTurn,
+  handleCodeReview,
   handleRetry,
   appendMessage,
   estimateContextWarning,
@@ -14,6 +16,7 @@ import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } fr
 import type { ProjectRow } from "../db/row-types.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import { getConfig } from "../config/index.ts";
+
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
 
@@ -163,6 +166,14 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       taskId: number;
       content: string;
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
+      // Check if content is a code review trigger
+      try {
+        const parsed = JSON.parse(params.content) as { _type?: string };
+        if (parsed._type === "code_review") {
+          return handleCodeReview(params.taskId, onToken, onError, onTaskUpdated, onNewMessage);
+        }
+      } catch { /* not JSON — treat as plain text */ }
+
       const warning = estimateContextWarning(params.taskId);
       if (warning) {
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
@@ -326,5 +337,304 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         return null;
       }
     },
+
+    // ─── tasks.getChangedFiles ───────────────────────────────────────────────
+    "tasks.getChangedFiles": async (params: { taskId: number }): Promise<string[]> => {
+      const db = getDb();
+      const gitRow = db
+        .query<{ worktree_path: string | null; worktree_status: string | null }, [number]>(
+          "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+        )
+        .get(params.taskId);
+      if (!gitRow?.worktree_path || gitRow.worktree_status !== "ready") return [];
+      try {
+        const proc = Bun.spawn(
+          ["git", "diff", "HEAD", "--name-only", "--diff-filter=ACDMR"],
+          { cwd: gitRow.worktree_path, stdout: "pipe", stderr: "pipe" },
+        );
+        await proc.exited;
+        const out = await new Response(proc.stdout).text();
+        return out.trim() ? out.trim().split("\n") : [];
+      } catch {
+        return [];
+      }
+    },
+
+    // ─── tasks.getFileDiff ───────────────────────────────────────────────────
+    "tasks.getFileDiff": async (params: { taskId: number; filePath: string }): Promise<FileDiffContent> => {
+      const db = getDb();
+      const gitRow = db
+        .query<{ worktree_path: string | null }, [number]>(
+          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+        )
+        .get(params.taskId);
+      if (!gitRow?.worktree_path) return { original: "", modified: "", hunks: [] };
+      return readFileDiffContent(db, params.taskId, gitRow.worktree_path, params.filePath);
+    },
+
+    // ─── tasks.rejectHunk ────────────────────────────────────────────────────
+    "tasks.rejectHunk": async (params: { taskId: number; filePath: string; hunkIndex: number }): Promise<FileDiffContent> => {
+      const db = getDb();
+      const gitRow = db
+        .query<{ worktree_path: string | null }, [number]>(
+          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+        )
+        .get(params.taskId);
+      if (!gitRow?.worktree_path) throw new Error("Worktree not found for task");
+
+      const worktreePath = gitRow.worktree_path;
+      const { filePath, hunkIndex } = params;
+
+      // Get the current diff for the file
+      const diffProc = Bun.spawn(["git", "diff", "HEAD", "--", filePath], {
+        cwd: worktreePath,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await diffProc.exited;
+      const diffOutput = await new Response(diffProc.stdout).text();
+
+      if (!diffOutput.trim()) throw new Error("No diff found for file — it may already be at HEAD");
+
+      // Parse hunks to get hash of the hunk being rejected
+      const parsedHunks = parseGitDiffHunks(diffOutput, filePath);
+      if (hunkIndex >= parsedHunks.length) {
+        throw new Error(`Hunk index ${hunkIndex} out of range (${parsedHunks.length} hunks found)`);
+      }
+      const targetHunk = parsedHunks[hunkIndex];
+
+      // Apply the inverse patch
+      const hunkPatch = extractHunkPatch(diffOutput, hunkIndex, filePath);
+      const applyProc = Bun.spawn(
+        ["git", "apply", "--reverse", "--whitespace=fix"],
+        {
+          cwd: worktreePath,
+          stdout: "pipe",
+          stderr: "pipe",
+          stdin: new TextEncoder().encode(hunkPatch),
+        },
+      );
+      await applyProc.exited;
+      if (applyProc.exitCode !== 0) {
+        const errText = await new Response(applyProc.stderr).text();
+        throw new Error(`Could not revert this hunk — the file has been modified manually. ${errText.trim()}`);
+      }
+
+      // Persist the rejected decision to DB
+      db.run(
+        `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start, updated_at)
+         VALUES (?, ?, ?, 'human', 'user', 'rejected', NULL, ?, ?, datetime('now'))
+         ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
+           decision = 'rejected', comment = NULL, updated_at = datetime('now')`,
+        [params.taskId, targetHunk.hash, filePath, targetHunk.originalStart, targetHunk.modifiedStart],
+      );
+
+      // Return updated content
+      return readFileDiffContent(db, params.taskId, worktreePath, filePath);
+    },
+
+    // ─── tasks.setHunkDecision ───────────────────────────────────────────────
+    "tasks.setHunkDecision": async (params: {
+      taskId: number;
+      hunkHash: string;
+      filePath: string;
+      decision: HunkDecision;
+      comment: string | null;
+      originalStart: number;
+      modifiedStart: number;
+    }): Promise<void> => {
+      const db = getDb();
+      db.run(
+        `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start, updated_at)
+         VALUES (?, ?, ?, 'human', 'user', ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
+           decision = excluded.decision,
+           comment  = excluded.comment,
+           file_path = excluded.file_path,
+           updated_at = datetime('now')`,
+        [params.taskId, params.hunkHash, params.filePath, params.decision, params.comment, params.originalStart, params.modifiedStart],
+      );
+    },
   };
+}
+
+// ─── Shared helpers for file diff content ────────────────────────────────────
+
+async function readFileDiffContent(
+  db: ReturnType<typeof getDb>,
+  taskId: number,
+  worktreePath: string,
+  filePath: string,
+): Promise<FileDiffContent> {
+  let original = "";
+  try {
+    const headProc = Bun.spawn(["git", "show", `HEAD:${filePath}`], {
+      cwd: worktreePath,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await headProc.exited;
+    if (headProc.exitCode === 0) {
+      original = await new Response(headProc.stdout).text();
+    }
+  } catch { /* new file */ }
+
+  let modified = "";
+  try {
+    const file = Bun.file(`${worktreePath}/${filePath}`);
+    if (await file.exists()) {
+      modified = await file.text();
+    }
+  } catch { /* deleted file */ }
+
+  // Parse git diff to get hunk metadata + hashes
+  let hunks: HunkWithDecisions[] = [];
+  try {
+    const diffProc = Bun.spawn(["git", "diff", "HEAD", "--", filePath], {
+      cwd: worktreePath,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await diffProc.exited;
+    const diffOutput = await new Response(diffProc.stdout).text();
+    if (diffOutput.trim()) {
+      const parsed = parseGitDiffHunks(diffOutput, filePath);
+      // Join with decisions from DB for the human reviewer
+      const decisionRows = db
+        .query<{ hunk_hash: string; reviewer_type: string; reviewer_id: string; decision: string; comment: string | null }, [number, string]>(
+          "SELECT hunk_hash, reviewer_type, reviewer_id, decision, comment FROM task_hunk_decisions WHERE task_id = ? AND file_path = ?",
+        )
+        .all(taskId, filePath);
+      const decisionMap = new Map<string, { reviewerType: string; reviewerId: string; decision: string; comment: string | null }[]>();
+      for (const row of decisionRows) {
+        const existing = decisionMap.get(row.hunk_hash) ?? [];
+        existing.push({ reviewerType: row.reviewer_type, reviewerId: row.reviewer_id, decision: row.decision, comment: row.comment });
+        decisionMap.set(row.hunk_hash, existing);
+      }
+
+      hunks = parsed.map((h) => {
+        const allDecisions = decisionMap.get(h.hash) ?? [];
+        const decisions: ReviewerDecision[] = allDecisions.map((d) => ({
+          reviewerId: d.reviewerId,
+          reviewerType: d.reviewerType as "human" | "ai",
+          decision: d.decision as HunkDecision,
+          comment: d.comment,
+        }));
+        const humanDecisionRow = allDecisions.find((d) => d.reviewerId === "user");
+        return {
+          hash: h.hash,
+          hunkIndex: h.hunkIndex,
+          originalStart: h.originalStart,
+          originalEnd: h.originalEnd,
+          modifiedStart: h.modifiedStart,
+          modifiedEnd: h.modifiedEnd,
+          decisions,
+          humanDecision: (humanDecisionRow?.decision ?? "pending") as HunkDecision,
+          humanComment: humanDecisionRow?.comment ?? null,
+        };
+      });
+    }
+  } catch { /* ignore diff parse errors */ }
+
+  return { original, modified, hunks };
+}
+
+// ─── Hunk hash computation ───────────────────────────────────────────────────
+
+function computeHunkHash(filePath: string, originalLines: string[], modifiedLines: string[]): string {
+  return createHash("sha256")
+    .update(filePath + "\0" + originalLines.join("\n") + "\0" + modifiedLines.join("\n"))
+    .digest("hex");
+}
+
+// ─── Git diff hunk parser ────────────────────────────────────────────────────
+
+interface ParsedHunk {
+  hash: string;
+  hunkIndex: number;
+  originalStart: number;
+  originalEnd: number;
+  modifiedStart: number;
+  modifiedEnd: number;
+}
+
+function parseGitDiffHunks(diffOutput: string, filePath: string): ParsedHunk[] {
+  const lines = diffOutput.split("\n");
+  const result: ParsedHunk[] = [];
+  let hunkIndex = 0;
+
+  // Regex: @@ -<orig_start>,<orig_count> +<mod_start>,<mod_count> @@
+  const hhRe = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+  let i = 0;
+  while (i < lines.length) {
+    const m = hhRe.exec(lines[i]);
+    if (!m) { i++; continue; }
+
+    const origStart = parseInt(m[1], 10);
+    const origCount = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+    const modStart  = parseInt(m[3], 10);
+    const modCount  = m[4] !== undefined ? parseInt(m[4], 10) : 1;
+
+    // Collect lines of this hunk (until next @@ or end)
+    const hunkBodyLines: string[] = [];
+    i++;
+    while (i < lines.length && !hhRe.test(lines[i])) {
+      hunkBodyLines.push(lines[i]);
+      i++;
+    }
+
+    const originalLines = hunkBodyLines.filter((l) => l.startsWith("-") || l.startsWith(" ")).map((l) => l.slice(1));
+    const modifiedLines = hunkBodyLines.filter((l) => l.startsWith("+") || l.startsWith(" ")).map((l) => l.slice(1));
+    const hash = computeHunkHash(filePath, originalLines, modifiedLines);
+
+    result.push({
+      hash,
+      hunkIndex,
+      originalStart: origStart,
+      originalEnd: origStart + origCount - 1,
+      modifiedStart: modStart,
+      modifiedEnd: modStart + modCount - 1,
+    });
+    hunkIndex++;
+  }
+
+  return result;
+}
+
+// ─── Hunk patch extraction helper ───────────────────────────────────────────
+
+function extractHunkPatch(diffOutput: string, hunkIndex: number, filePath: string): string {
+  const lines = diffOutput.split("\n");
+
+  // Find the file header lines (--- and +++ lines)
+  let headerLines: string[] = [];
+  let hunkStarts: number[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith("--- ") || line.startsWith("+++ ")) {
+      headerLines.push(line);
+    } else if (line.startsWith("@@ ")) {
+      hunkStarts.push(i);
+    }
+  }
+
+  if (hunkIndex >= hunkStarts.length) {
+    throw new Error(`Hunk index ${hunkIndex} out of range (${hunkStarts.length} hunks found)`);
+  }
+
+  const hunkStart = hunkStarts[hunkIndex];
+  const hunkEnd = hunkIndex + 1 < hunkStarts.length ? hunkStarts[hunkIndex + 1] : lines.length;
+  const hunkLines = lines.slice(hunkStart, hunkEnd);
+
+  // Build a minimal patch with just this hunk
+  const patch = [
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    ...hunkLines,
+    "",
+  ].join("\n");
+
+  return patch;
 }

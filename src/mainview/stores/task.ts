@@ -23,6 +23,9 @@ export const useTaskStore = defineStore("task", () => {
   // Available AI models fetched from the provider endpoint
   const availableModels = ref<string[]>([]);
 
+  // Changed file counts per task (populated from file_diff events and task completion)
+  const changedFileCounts = ref<Record<number, number>>({});
+
   const activeTask = computed(() => {
     for (const tasks of Object.values(tasksByBoard.value)) {
       const found = tasks.find((t) => t.id === activeTaskId.value);
@@ -182,6 +185,10 @@ export const useTaskStore = defineStore("task", () => {
 
   function onTaskUpdated(task: Task) {
     _replaceTask(task);
+    // Refresh changed file count when execution completes
+    if (task.executionState === "completed") {
+      refreshChangedFiles(task.id);
+    }
     // Prime streaming state as soon as execution starts. The engine always sends
     // task.updated → running before emitting any stream.token, so setting
     // streamingTaskId here guarantees tokens are never dropped by the early-return
@@ -196,6 +203,10 @@ export const useTaskStore = defineStore("task", () => {
   }
 
   function onNewMessage(message: ConversationMessage) {
+    // Refresh changed file count when a file_diff arrives
+    if (message.type === "file_diff") {
+      refreshChangedFiles(message.taskId);
+    }
     // Only append if this task is currently open in the drawer
     if (message.taskId !== activeTaskId.value) return;
     // Avoid duplicates — loadMessages after stream done may re-add the same messages
@@ -264,6 +275,17 @@ export const useTaskStore = defineStore("task", () => {
     return electroview.rpc.request["tasks.getGitStat"]({ taskId });
   }
 
+  // ─── Get changed files (for badge) ───────────────────────────────────────
+
+  async function refreshChangedFiles(taskId: number) {
+    try {
+      const files = await electroview.rpc.request["tasks.getChangedFiles"]({ taskId });
+      changedFileCounts.value[taskId] = files.length;
+    } catch {
+      // ignore — badge stays stale
+    }
+  }
+
   // ─── Internal helpers ─────────────────────────────────────────────────────
 
   function _replaceTask(updated: Task) {
@@ -288,6 +310,7 @@ export const useTaskStore = defineStore("task", () => {
     loading,
     messagesLoading,
     availableModels,
+    changedFileCounts,
     loadTasks,
     createTask,
     transitionTask,
@@ -302,6 +325,7 @@ export const useTaskStore = defineStore("task", () => {
     updateTask,
     deleteTask,
     getGitStat,
+    refreshChangedFiles,
     onStreamToken,
     onStreamError,
     onTaskUpdated,

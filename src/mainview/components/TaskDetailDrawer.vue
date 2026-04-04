@@ -24,6 +24,22 @@
           rounded
           class="ml-2"
         />
+        <!-- Changed files badge -->
+        <span
+          v-if="changedCount > 0"
+          class="drawer-header__changed-badge"
+          :title="`${changedCount} file${changedCount !== 1 ? 's' : ''} changed — click to review`"
+          @click="openReviewOverlay"
+        >&#x2B21; {{ changedCount }}</span>
+        <Button
+          icon="pi pi-refresh"
+          text
+          rounded
+          size="small"
+          v-tooltip="'Sync changed files'"
+          :loading="syncingChanges"
+          @click="syncChangedFiles"
+        />
         <!-- Edit button: visible only when worktree not yet created -->
         <Button
           v-if="!task.worktreeStatus || task.worktreeStatus === 'not_created'"
@@ -69,6 +85,10 @@
               <ToolCallGroup
                 v-if="item.kind === 'tool_entry'"
                 :entry="item.entry"
+              />
+              <CodeReviewCard
+                v-else-if="item.kind === 'code_review'"
+                :message="item.message"
               />
               <MessageBubble
                 v-else
@@ -273,12 +293,35 @@ import ProgressSpinner from "primevue/progressspinner";
 import MessageBubble from "./MessageBubble.vue";
 import ToolCallGroup, { type ToolEntry } from "./ToolCallGroup.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
+import CodeReviewCard from "./CodeReviewCard.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
+import { useReviewStore } from "../stores/review";
+import { electroview } from "../rpc";
 import type { ConversationMessage, ExecutionState } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
+const reviewStore = useReviewStore();
+
+const changedCount = computed(() => task.value ? (taskStore.changedFileCounts[task.value.id] ?? 0) : 0);
+const syncingChanges = ref(false);
+
+async function openReviewOverlay() {
+  if (!task.value) return;
+  const files = await electroview.rpc.request["tasks.getChangedFiles"]({ taskId: task.value.id });
+  reviewStore.openReview(task.value.id, files);
+}
+
+async function syncChangedFiles() {
+  if (!task.value) return;
+  syncingChanges.value = true;
+  try {
+    await taskStore.refreshChangedFiles(task.value.id);
+  } finally {
+    syncingChanges.value = false;
+  }
+}
 
 // ─── Message grouping ─────────────────────────────────────────────────────────
 // Consecutive tool_call / tool_result / file_diff messages are collapsed into a
@@ -288,6 +331,7 @@ const TOOL_MSG_TYPES = new Set(["tool_call", "tool_result", "file_diff"]);
 
 type DisplayItem =
   | { kind: "tool_entry"; entry: ToolEntry; key: string }
+  | { kind: "code_review"; message: ConversationMessage; key: string }
   | { kind: "single";     message: ConversationMessage; msgIndex: number; key: string };
 
 function pairToolMessages(msgs: ConversationMessage[]): ToolEntry[] {
@@ -312,7 +356,10 @@ const displayItems = computed<DisplayItem[]>(() => {
   const items: DisplayItem[] = [];
   let i = 0;
   while (i < msgs.length) {
-    if (TOOL_MSG_TYPES.has(msgs[i].type)) {
+    if (msgs[i].type === "code_review") {
+      items.push({ kind: "code_review", message: msgs[i], key: `cr-${msgs[i].id}` });
+      i++;
+    } else if (TOOL_MSG_TYPES.has(msgs[i].type)) {
       const toolMsgs: ConversationMessage[] = [];
       while (i < msgs.length && TOOL_MSG_TYPES.has(msgs[i].type)) {
         toolMsgs.push(msgs[i]);
@@ -596,6 +643,7 @@ watch(
     const t = taskStore.activeTask;
     if (t?.worktreeStatus === "ready") {
       gitStat.value = await taskStore.getGitStat(id);
+      taskStore.refreshChangedFiles(id);
     }
   },
   { immediate: true },
@@ -618,6 +666,24 @@ watch(
 .drawer-resize-handle:active {
   background: var(--p-primary-color, #6366f1);
   opacity: 0.35;
+}
+
+.drawer-header__changed-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--p-primary-color, #6366f1);
+  background: var(--p-primary-50, #eef2ff);
+  border: 1px solid var(--p-primary-200, #c7d2fe);
+  border-radius: 10px;
+  padding: 1px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+  margin-left: 6px;
+}
+
+.drawer-header__changed-badge:hover {
+  background: var(--p-primary-100, #e0e7ff);
 }
 
 .drawer-header {
