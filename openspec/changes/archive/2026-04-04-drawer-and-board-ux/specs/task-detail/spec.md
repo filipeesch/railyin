@@ -1,7 +1,4 @@
-## Purpose
-The task detail drawer is the primary surface for interacting with a task. Beyond conversation, it surfaces git context, execution metadata, and management actions.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Task detail drawer opens at 70% of viewport width by default and resets on close
 The system SHALL initialise the task detail drawer width to 70% of the current viewport width when the component is first mounted, and SHALL reset to that value each time the drawer is closed.
@@ -70,6 +67,8 @@ The system SHALL display the model selector below the message textarea, within t
 #### Scenario: Selecting a model does not close the drawer
 - **WHEN** the user opens the model selector and selects a different model
 - **THEN** the selected model is applied to the task and the drawer remains open
+
+## MODIFIED Requirements
 
 ### Requirement: Task drawer displays git context and execution summary
 The system SHALL display the task's worktree status, branch name, worktree path, git diff stat, and total execution attempt count in the side panel of the task detail drawer. The side panel SHALL NOT contain model selector or cancel execution controls.

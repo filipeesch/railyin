@@ -212,8 +212,8 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── Delete task ──────────────────────────────────────────────────────────
 
-  async function deleteTask(taskId: number) {
-    await electroview.rpc.request["tasks.delete"]({ taskId });
+  async function deleteTask(taskId: number): Promise<{ warning?: string }> {
+    const result = await electroview.rpc.request["tasks.delete"]({ taskId });
     for (const [boardId, tasks] of Object.entries(tasksByBoard.value)) {
       const idx = tasks.findIndex((t) => t.id === taskId);
       if (idx !== -1) {
@@ -225,6 +225,7 @@ export const useTaskStore = defineStore("task", () => {
       activeTaskId.value = null;
       messages.value = [];
     }
+    return { warning: result.warning };
   }
 
   // ─── Get git diff stat ────────────────────────────────────────────────────

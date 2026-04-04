@@ -289,19 +289,19 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         cancelExecution(row.current_execution_id);
       }
 
-      // Remove worktree (no-op if not created)
-      await removeWorktree(params.taskId);
+      // Remove worktree (no-op if not created, returns warning if directory is gone)
+      const { warning } = await removeWorktree(params.taskId);
 
-      // Cascade delete
+      // Cascade delete — tasks must be deleted before conversations (FK ref)
       db.run("DELETE FROM conversation_messages WHERE task_id = ?", [params.taskId]);
       db.run("DELETE FROM executions WHERE task_id = ?", [params.taskId]);
       db.run("DELETE FROM task_git_context WHERE task_id = ?", [params.taskId]);
+      db.run("DELETE FROM tasks WHERE id = ?", [params.taskId]);
       if (row?.conversation_id) {
         db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
       }
-      db.run("DELETE FROM tasks WHERE id = ?", [params.taskId]);
 
-      return { success: true };
+      return { success: true, ...(warning ? { warning } : {}) };
     },
 
     // ─── tasks.getGitStat ────────────────────────────────────────────────────

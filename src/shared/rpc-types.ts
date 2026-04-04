@@ -65,7 +65,33 @@ export type MessageType =
   | "tool_result"
   | "transition_event"
   | "artifact_event"
-  | "ask_user_prompt";
+  | "ask_user_prompt"
+  | "file_diff";
+
+// ─── File diff types ─────────────────────────────────────────────────────────
+
+export interface HunkLine {
+  type: "context" | "added" | "removed";
+  old_line?: number;
+  new_line?: number;
+  content: string;
+}
+
+export interface Hunk {
+  old_start: number;
+  new_start: number;
+  lines: HunkLine[];
+}
+
+export interface FileDiffPayload {
+  operation: "write_file" | "patch_file" | "delete_file" | "rename_file";
+  path: string;
+  to_path?: string;
+  is_new?: boolean;
+  added: number;
+  removed: number;
+  hunks?: Hunk[];
+}
 
 export interface ConversationMessage {
   id: number;
@@ -228,7 +254,7 @@ export type RailynRPCType = {
       };
       "tasks.delete": {
         params: { taskId: number };
-        response: { success: boolean };
+        response: { success: boolean; warning?: string };
       };
       "tasks.getGitStat": {
         params: { taskId: number };

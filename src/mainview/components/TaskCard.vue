@@ -58,7 +58,7 @@ const execSeverity = computed(() => {
   border: 1px solid var(--p-surface-200, #e2e8f0);
   border-radius: 8px;
   padding: 12px;
-  cursor: pointer;
+  cursor: default;
   transition: box-shadow 0.15s;
   margin-bottom: 8px;
 }

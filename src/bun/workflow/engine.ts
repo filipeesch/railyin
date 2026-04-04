@@ -5,7 +5,7 @@ import type { AIMessage } from "../ai/types.ts";
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
-import { resolveToolsForColumn, executeTool } from "./tools.ts";
+import { resolveToolsForColumn, executeTool, type WriteResult } from "./tools.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,7 @@ function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
         m.type === "system" ||
         m.type === "tool_call" ||
         m.type === "tool_result",
+        // "file_diff" is intentionally excluded — UI-only, never sent to LLM
     )
     .map((m) => {
       let content = m.content;
@@ -327,9 +328,12 @@ async function runSubExecution({
         continue;
       }
       const result = await executeTool(fnName, call.function.arguments, toolCtx);
-      const stored = result.length > TOOL_RESULT_MAX_CHARS
-        ? result.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
-        : result;
+      const llmStr = typeof result === "object" && result !== null && "content" in result
+        ? (result as WriteResult).content
+        : result as string;
+      const stored = llmStr.length > TOOL_RESULT_MAX_CHARS
+        ? llmStr.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+        : llmStr;
       liveMessages.push({
         role: "tool",
         content: stored,
@@ -537,9 +541,14 @@ async function runExecution(
 
           const result = await executeTool(fnName, fnArgs, toolCtx!);
 
-          const storedResult = result.length > TOOL_RESULT_MAX_CHARS
-            ? result.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
-            : result;
+          // Write tools return { content, diff }; read/search tools return a plain string
+          const isWriteResult = typeof result === "object" && result !== null && "content" in result;
+          const llmContent = isWriteResult ? (result as WriteResult).content : result as string;
+          const diff = isWriteResult ? (result as WriteResult).diff : undefined;
+
+          const storedResult = llmContent.length > TOOL_RESULT_MAX_CHARS
+            ? llmContent.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+            : llmContent;
 
           appendMessage(
             taskId,
@@ -549,6 +558,17 @@ async function runExecution(
             storedResult,
             { tool_call_id: call.id, name: fnName },
           );
+
+          // Emit UI-only file_diff message (never forwarded to LLM)
+          if (diff) {
+            appendMessage(
+              taskId,
+              task.conversation_id ?? 0,
+              "file_diff",
+              null,
+              JSON.stringify(diff),
+            );
+          }
 
           liveMessages.push({
             role: "tool",

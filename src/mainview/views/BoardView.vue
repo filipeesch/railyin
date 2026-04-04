@@ -37,8 +37,9 @@
         v-for="column in boardStore.activeBoard.template.columns"
         :key="column.id"
         class="board-column"
-        @dragover.prevent
-        @drop="onDrop($event, column.id)"
+        :class="{ 'is-drag-over': dragOverColumnId === column.id }"
+        :data-column-id="column.id"
+        @drop.prevent
       >
         <!-- Column header -->
         <div class="board-column__header">
@@ -55,9 +56,8 @@
             v-for="task in columnTasks(column.id)"
             :key="task.id"
             :task="task"
-            draggable="true"
-            @dragstart="onDragStart($event, task.id)"
-            @click="taskStore.selectTask(task.id)"
+            @pointerdown="onCardPointerDown($event, task.id)"
+            @click="onCardClick(task.id)"
           />
         </div>
       </div>
@@ -101,7 +101,20 @@ const taskStore = useTaskStore();
 const projectStore = useProjectStore();
 
 const showCreateTask = ref(false);
-const draggingTaskId = ref<number | null>(null);
+const dragOverColumnId = ref<string | null>(null);
+let lastDragEndTime = 0;
+
+type DragState = {
+  taskId: number;
+  startX: number;
+  startY: number;
+  offsetX: number;
+  offsetY: number;
+  active: boolean;
+  ghostEl: HTMLElement | null;
+  sourceEl: HTMLElement | null;
+};
+let activeDrag: DragState | null = null;
 
 // Load tasks when active board changes
 watch(
@@ -131,24 +144,87 @@ async function onBoardChange() {
   if (id != null) await taskStore.loadTasks(id);
 }
 
-function onDragStart(event: DragEvent, taskId: number) {
-  draggingTaskId.value = taskId;
-  event.dataTransfer?.setData("text/plain", String(taskId));
+function onCardPointerDown(event: PointerEvent, taskId: number) {
+  if (event.button !== 0) return;
+  event.preventDefault(); // prevents Chromium from starting a text selection gesture
+  const sourceEl = (event.currentTarget as HTMLElement);
+  const rect = sourceEl.getBoundingClientRect();
+  activeDrag = {
+    taskId,
+    startX: event.clientX,
+    startY: event.clientY,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+    active: false,
+    ghostEl: null,
+    sourceEl,
+  };
+  document.body.style.userSelect = 'none';
+  document.documentElement.style.userSelect = 'none';
+  // setPointerCapture prevents text selection and ensures pointermove/pointerup
+  // are received even if the pointer leaves the element.
+  sourceEl.setPointerCapture(event.pointerId);
+  document.addEventListener('pointermove', onPointerMove);
+  document.addEventListener('pointerup', onPointerUp);
+  document.addEventListener('pointercancel', onPointerUp);
 }
 
-async function onDrop(event: DragEvent, columnId: string) {
-  const taskIdStr = event.dataTransfer?.getData("text/plain");
-  const taskId = taskIdStr ? Number(taskIdStr) : null;
-  if (!taskId) return;
+function onPointerMove(event: PointerEvent) {
+  if (!activeDrag) return;
+  const dx = event.clientX - activeDrag.startX;
+  const dy = event.clientY - activeDrag.startY;
+  if (!activeDrag.active) {
+    if (Math.hypot(dx, dy) < 5) return;
+    activeDrag.active = true;
+    document.body.style.cursor = 'grabbing';
+    // Clone the actual card element so the ghost looks identical
+    const sourceEl = activeDrag.sourceEl!;
+    const rect = sourceEl.getBoundingClientRect();
+    const ghost = sourceEl.cloneNode(true) as HTMLElement;
+    ghost.style.cssText = `position:fixed;pointer-events:none;z-index:9999;width:${rect.width}px;opacity:0.9;box-shadow:0 8px 24px rgba(0,0,0,0.18);transform:rotate(1.5deg);`;
+    document.body.appendChild(ghost);
+    activeDrag.ghostEl = ghost;
+    // Hide original card in place (preserves layout slot)
+    sourceEl.style.opacity = '0';
+  }
+  if (activeDrag.ghostEl) {
+    activeDrag.ghostEl.style.left = (event.clientX - activeDrag.offsetX) + 'px';
+    activeDrag.ghostEl.style.top = (event.clientY - activeDrag.offsetY) + 'px';
+  }
+  // Detect column under cursor (hide ghost first so it doesn't interfere with elementFromPoint)
+  if (activeDrag.ghostEl) activeDrag.ghostEl.style.display = 'none';
+  const el = document.elementFromPoint(event.clientX, event.clientY);
+  if (activeDrag.ghostEl) activeDrag.ghostEl.style.display = '';
+  const col = el?.closest('[data-column-id]');
+  dragOverColumnId.value = col?.getAttribute('data-column-id') ?? null;
+}
 
-  const task = Object.values(taskStore.tasksByBoard)
-    .flat()
-    .find((t) => t.id === taskId);
+async function onPointerUp(event: PointerEvent) {
+  document.removeEventListener('pointermove', onPointerMove);
+  document.removeEventListener('pointerup', onPointerUp);
+  document.removeEventListener('pointercancel', onPointerUp);
+  if (!activeDrag) return;
+  if (activeDrag.active) {
+    lastDragEndTime = Date.now();
+    if (dragOverColumnId.value) {
+      const task = Object.values(taskStore.tasksByBoard).flat().find((t) => t.id === activeDrag!.taskId);
+      if (task && task.workflowState !== dragOverColumnId.value) {
+        await taskStore.transitionTask(activeDrag.taskId, dragOverColumnId.value);
+      }
+    }
+    if (activeDrag.ghostEl) document.body.removeChild(activeDrag.ghostEl);
+    if (activeDrag.sourceEl) activeDrag.sourceEl.style.opacity = '';
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.documentElement.style.userSelect = '';
+    dragOverColumnId.value = null;
+  }
+  activeDrag = null;
+}
 
-  if (!task || task.workflowState === columnId) return;
-
-  await taskStore.transitionTask(taskId, columnId);
-  draggingTaskId.value = null;
+function onCardClick(taskId: number) {
+  if (Date.now() - lastDragEndTime < 200) return;
+  taskStore.selectTask(taskId);
 }
 
 async function onTaskCreated() {
@@ -205,6 +281,11 @@ async function onTaskCreated() {
   border-radius: 10px;
   padding: 12px;
   max-height: 100%;
+  transition: outline 0.1s;
+}
+
+.board-column.is-drag-over {
+  outline: 2px dashed var(--p-primary-color, #6366f1);
 }
 
 .board-column__header {

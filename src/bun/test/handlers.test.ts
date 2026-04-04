@@ -162,3 +162,106 @@ describe("tasks.transition / git context backfill", () => {
     expect(["ready", "error", "creating"]).toContain(ctx!.worktree_status);
   }, 15_000);
 });
+
+// ─── tasks.delete ─────────────────────────────────────────────────────────────
+
+describe("tasks.delete", () => {
+  it("removes task, messages, git context, and conversation from DB", async () => {
+    const { projectId, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectId,
+      title: "To be deleted",
+      description: "Temporary task",
+    });
+
+    // Verify task and associated rows exist
+    const beforeTask = db.query<{ id: number }, [number]>("SELECT id FROM tasks WHERE id = ?").get(task.id);
+    expect(beforeTask).not.toBeNull();
+
+    const beforeMsgs = db
+      .query<{ count: number }, [number]>(
+        "SELECT COUNT(*) AS count FROM conversation_messages WHERE task_id = ?",
+      )
+      .get(task.id);
+    expect(beforeMsgs!.count).toBeGreaterThan(0); // seeded system message exists
+
+    const result = await handlers["tasks.delete"]({ taskId: task.id });
+    expect(result.success).toBe(true);
+
+    // Task row gone
+    const afterTask = db.query<{ id: number }, [number]>("SELECT id FROM tasks WHERE id = ?").get(task.id);
+    expect(afterTask).toBeNull();
+
+    // Conversation messages gone
+    const afterMsgs = db
+      .query<{ count: number }, [number]>(
+        "SELECT COUNT(*) AS count FROM conversation_messages WHERE task_id = ?",
+      )
+      .get(task.id);
+    expect(afterMsgs!.count).toBe(0);
+
+    // Git context gone
+    const afterCtx = db
+      .query<{ task_id: number }, [number]>("SELECT task_id FROM task_git_context WHERE task_id = ?")
+      .get(task.id);
+    expect(afterCtx).toBeNull();
+
+    // Conversation gone
+    const afterConv = db
+      .query<{ id: number }, [number]>("SELECT id FROM conversations WHERE id = ?")
+      .get(task.conversationId);
+    expect(afterConv).toBeNull();
+  });
+
+  it("returns success even when task has no git context row", async () => {
+    const { boardId, projectId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    // Insert a bare task without git context
+    db.run("INSERT INTO conversations (task_id) VALUES (0)");
+    const convId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "INSERT INTO tasks (board_id, project_id, title, workflow_state, execution_state, conversation_id) VALUES (?, ?, 'Bare', 'backlog', 'idle', ?)",
+      [boardId, projectId, convId],
+    );
+    const bareTaskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [bareTaskId, convId]);
+
+    const result = await handlers["tasks.delete"]({ taskId: bareTaskId });
+    expect(result.success).toBe(true);
+
+    const afterTask = db.query<{ id: number }, [number]>("SELECT id FROM tasks WHERE id = ?").get(bareTaskId);
+    expect(afterTask).toBeNull();
+  });
+
+  it("returns a warning (not an error) when git_root_path no longer exists on disk", async () => {
+    const { projectId, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectId,
+      title: "Orphaned task",
+      description: "Has a missing git root",
+    });
+
+    // Simulate a missing git root by patching the git context row
+    db.run(
+      "UPDATE task_git_context SET git_root_path = '/nonexistent/gone', worktree_path = '/nonexistent/gone/wt', worktree_status = 'ready' WHERE task_id = ?",
+      [task.id],
+    );
+
+    const result = await handlers["tasks.delete"]({ taskId: task.id });
+
+    expect(result.success).toBe(true);
+    expect(result.warning).toMatch(/git root.*no longer exists/i);
+
+    // Task must still be gone from DB despite the warning
+    const afterTask = db.query<{ id: number }, [number]>("SELECT id FROM tasks WHERE id = ?").get(task.id);
+    expect(afterTask).toBeNull();
+  });
+});
+

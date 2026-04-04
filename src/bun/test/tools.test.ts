@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { executeTool, resolveToolsForColumn, TOOL_GROUPS } from "../workflow/tools.ts";
+import { executeTool, resolveToolsForColumn, TOOL_GROUPS, myersDiff } from "../workflow/tools.ts";
+import type { FileDiffPayload } from "../../shared/rpc-types.ts";
+
+/** Cast helper: write tools return { content, diff } on success, a string on error. */
+const asWrite = (r: unknown) => r as { content: string; diff: FileDiffPayload };
 
 // ─── Fixture setup ────────────────────────────────────────────────────────────
 
@@ -21,6 +25,67 @@ afterEach(() => {
 });
 
 const ctx = () => ({ worktreePath: worktreeDir });
+
+// ─── myersDiff ────────────────────────────────────────────────────────────────
+
+describe("myersDiff", () => {
+  it("returns empty array for identical input", () => {
+    const hunks = myersDiff(["a", "b", "c"], ["a", "b", "c"]);
+    expect(hunks).toEqual([]);
+  });
+
+  it("returns all-added hunk when before is empty", () => {
+    const hunks = myersDiff([], ["a", "b"]);
+    expect(hunks.length).toBe(1);
+    expect(hunks[0].lines.every(l => l.type === "added")).toBe(true);
+    expect(hunks[0].lines.map(l => l.content)).toEqual(["a", "b"]);
+  });
+
+  it("returns all-removed hunk when after is empty", () => {
+    const hunks = myersDiff(["a", "b"], []);
+    expect(hunks.length).toBe(1);
+    expect(hunks[0].lines.every(l => l.type === "removed")).toBe(true);
+    expect(hunks[0].lines.map(l => l.content)).toEqual(["a", "b"]);
+  });
+
+  it("produces correct removed/added/context lines for a single-line change", () => {
+    const hunks = myersDiff(["line1", "line2", "line3"], ["line1", "changed", "line3"]);
+    expect(hunks.length).toBe(1);
+    const lines = hunks[0].lines;
+    expect(lines.find(l => l.type === "removed")?.content).toBe("line2");
+    expect(lines.find(l => l.type === "added")?.content).toBe("changed");
+    expect(lines.find(l => l.type === "context" && l.content === "line1")).toBeDefined();
+    expect(lines.find(l => l.type === "context" && l.content === "line3")).toBeDefined();
+  });
+
+  it("caps trailing context at 3 lines per hunk boundary", () => {
+    // change at index 3 (d→X); "h" is the 4th line after the change → must be excluded
+    const before = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const after  = ["a", "b", "c", "X", "e", "f", "g", "h"];
+    const hunks = myersDiff(before, after);
+    expect(hunks.length).toBe(1);
+    const contents = hunks[0].lines.map(l => l.content);
+    expect(contents).not.toContain("h");
+  });
+
+  it("produces two hunks for distant changes", () => {
+    // Changes at positions 0 and 11 — more than 6 lines apart → separate hunks
+    const before = ["A","b","c","d","e","f","g","h","i","j","k","L"];
+    const after  = ["X","b","c","d","e","f","g","h","i","j","k","Z"];
+    const hunks = myersDiff(before, after);
+    expect(hunks.length).toBe(2);
+  });
+
+  it("assigns correct old_line and new_line numbers", () => {
+    const hunks = myersDiff(["a", "b", "c"], ["a", "X", "c"]);
+    const removed = hunks[0].lines.find(l => l.type === "removed")!;
+    const added   = hunks[0].lines.find(l => l.type === "added")!;
+    expect(removed.old_line).toBe(2);
+    expect(removed.new_line).toBeUndefined();
+    expect(added.new_line).toBe(2);
+    expect(added.old_line).toBeUndefined();
+  });
+});
 
 // ─── read_file ────────────────────────────────────────────────────────────────
 
@@ -129,26 +194,40 @@ describe("executeTool / unknown", () => {
 // ─── write_file ───────────────────────────────────────────────────────────────
 
 describe("executeTool / write_file", () => {
-  it("creates a new file", async () => {
-    const result = await executeTool("write_file", JSON.stringify({ path: "new.ts", content: "const a = 1;" }), ctx());
-    expect(result).toMatch(/OK/);
+  it("creates a new file and returns is_new FileDiffPayload", async () => {
+    const r = asWrite(await executeTool("write_file", JSON.stringify({ path: "new.ts", content: "const a = 1;" }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    expect(r.content).toMatch(/\+\d+ lines?/);
     expect(readFileSync(join(worktreeDir, "new.ts"), "utf-8")).toBe("const a = 1;");
+    expect(r.diff.operation).toBe("write_file");
+    expect(r.diff.is_new).toBe(true);
+    expect(r.diff.added).toBeGreaterThan(0);
+    expect(r.diff.removed).toBe(0);
+    expect(r.diff.hunks).toBeUndefined();
   });
 
-  it("overwrites an existing file", async () => {
-    const result = await executeTool("write_file", JSON.stringify({ path: "hello.ts", content: "const b = 2;" }), ctx());
-    expect(result).toMatch(/OK/);
+  it("overwrites an existing file and returns Myers diff hunks", async () => {
+    // hello.ts fixture: 'export const x = 1;\n'
+    const r = asWrite(await executeTool("write_file", JSON.stringify({ path: "hello.ts", content: "const b = 2;" }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    expect(r.content).toMatch(/\+\d+ -\d+/);
     expect(readFileSync(join(worktreeDir, "hello.ts"), "utf-8")).toBe("const b = 2;");
+    expect(r.diff.operation).toBe("write_file");
+    expect(r.diff.is_new).toBeFalsy();
+    expect(r.diff.hunks).toBeDefined();
+    const allLines = r.diff.hunks!.flatMap(h => h.lines);
+    expect(allLines.some(l => l.type === "removed")).toBe(true);
+    expect(allLines.some(l => l.type === "added")).toBe(true);
   });
 
   it("creates parent directories if missing", async () => {
-    const result = await executeTool("write_file", JSON.stringify({ path: "deep/nested/file.ts", content: "x" }), ctx());
-    expect(result).toMatch(/OK/);
+    const r = asWrite(await executeTool("write_file", JSON.stringify({ path: "deep/nested/file.ts", content: "x" }), ctx()));
+    expect(r.content).toMatch(/OK/);
     expect(existsSync(join(worktreeDir, "deep", "nested", "file.ts"))).toBe(true);
   });
 
   it("blocks path traversal", async () => {
-    const result = await executeTool("write_file", JSON.stringify({ path: "../../evil.ts", content: "x" }), ctx());
+    const result = await executeTool("write_file", JSON.stringify({ path: "../../evil.ts", content: "x" }), ctx()) as string;
     expect(result).toMatch(/path traversal/i);
   });
 });
@@ -156,19 +235,25 @@ describe("executeTool / write_file", () => {
 // ─── delete_file ──────────────────────────────────────────────────────────────
 
 describe("executeTool / delete_file", () => {
-  it("deletes an existing file", async () => {
-    const result = await executeTool("delete_file", JSON.stringify({ path: "README.md" }), ctx());
-    expect(result).toMatch(/OK/);
+  it("deletes file and returns line-count FileDiffPayload (no hunks)", async () => {
+    // README.md fixture: '# Test project\n' → 1 line
+    const r = asWrite(await executeTool("delete_file", JSON.stringify({ path: "README.md" }), ctx()));
+    expect(r.content).toMatch(/OK: deleted/i);
+    expect(r.content).toMatch(/\d+ lines?/);
     expect(existsSync(join(worktreeDir, "README.md"))).toBe(false);
+    expect(r.diff.operation).toBe("delete_file");
+    expect(r.diff.removed).toBeGreaterThan(0);
+    expect(r.diff.added).toBe(0);
+    expect(r.diff.hunks).toBeUndefined();
   });
 
-  it("returns error for non-existent file", async () => {
-    const result = await executeTool("delete_file", JSON.stringify({ path: "ghost.ts" }), ctx());
+  it("returns error string for non-existent file", async () => {
+    const result = await executeTool("delete_file", JSON.stringify({ path: "ghost.ts" }), ctx()) as string;
     expect(result).toMatch(/Error.*not found/i);
   });
 
   it("blocks path traversal", async () => {
-    const result = await executeTool("delete_file", JSON.stringify({ path: "../../important" }), ctx());
+    const result = await executeTool("delete_file", JSON.stringify({ path: "../../important" }), ctx()) as string;
     expect(result).toMatch(/path traversal/i);
   });
 });
@@ -176,20 +261,26 @@ describe("executeTool / delete_file", () => {
 // ─── rename_file ──────────────────────────────────────────────────────────────
 
 describe("executeTool / rename_file", () => {
-  it("renames a file", async () => {
-    const result = await executeTool("rename_file", JSON.stringify({ from_path: "README.md", to_path: "NOTES.md" }), ctx());
-    expect(result).toMatch(/OK/);
+  it("renames file and returns FileDiffPayload with to_path", async () => {
+    const r = asWrite(await executeTool("rename_file", JSON.stringify({ from_path: "README.md", to_path: "NOTES.md" }), ctx()));
+    expect(r.content).toMatch(/OK/);
     expect(existsSync(join(worktreeDir, "NOTES.md"))).toBe(true);
     expect(existsSync(join(worktreeDir, "README.md"))).toBe(false);
+    expect(r.diff.operation).toBe("rename_file");
+    expect(r.diff.path).toBe("README.md");
+    expect(r.diff.to_path).toBe("NOTES.md");
+    expect(r.diff.added).toBe(0);
+    expect(r.diff.removed).toBe(0);
+    expect(r.diff.hunks).toBeUndefined();
   });
 
-  it("returns error when source does not exist", async () => {
-    const result = await executeTool("rename_file", JSON.stringify({ from_path: "ghost.ts", to_path: "newname.ts" }), ctx());
+  it("returns error string when source does not exist", async () => {
+    const result = await executeTool("rename_file", JSON.stringify({ from_path: "ghost.ts", to_path: "newname.ts" }), ctx()) as string;
     expect(result).toMatch(/Error.*not found/i);
   });
 
   it("blocks path traversal in to_path", async () => {
-    const result = await executeTool("rename_file", JSON.stringify({ from_path: "hello.ts", to_path: "../../evil.ts" }), ctx());
+    const result = await executeTool("rename_file", JSON.stringify({ from_path: "hello.ts", to_path: "../../evil.ts" }), ctx()) as string;
     expect(result).toMatch(/path traversal/i);
   });
 });
@@ -337,76 +428,97 @@ describe("executeTool / patch_file", () => {
     writeFileSync(join(worktreeDir, "target.ts"), "const a = 1;\nconst b = 2;\n");
   });
 
-  it("prepends content (position=start)", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
+  it("prepends content (position=start) and returns added-only diff", async () => {
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
       path: "target.ts", content: "// header\n", position: "start",
-    }), ctx());
-    expect(result).toMatch(/OK/);
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    expect(r.content).toMatch(/\+\d+/);
     expect(readFileSync(join(worktreeDir, "target.ts"), "utf-8")).toMatch(/^\/\/ header/);
+    expect(r.diff.operation).toBe("patch_file");
+    expect(r.diff.added).toBeGreaterThan(0);
+    expect(r.diff.removed).toBe(0);
   });
 
-  it("appends content (position=end)", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
+  it("appends content (position=end) and returns added-only diff", async () => {
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
       path: "target.ts", content: "// footer\n", position: "end",
-    }), ctx());
-    expect(result).toMatch(/OK/);
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    expect(r.content).toMatch(/\+\d+/);
     expect(readFileSync(join(worktreeDir, "target.ts"), "utf-8")).toMatch(/\/\/ footer\n$/);
+    expect(r.diff.added).toBeGreaterThan(0);
+    expect(r.diff.removed).toBe(0);
   });
 
-  it("inserts before anchor (position=before)", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
+  it("inserts before anchor (position=before) and includes line number in LLM string", async () => {
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
       path: "target.ts", content: "// inserted\n", position: "before", anchor: "const b = 2;",
-    }), ctx());
-    expect(result).toMatch(/OK/);
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    expect(r.content).toMatch(/at line \d+/i);
     const content = readFileSync(join(worktreeDir, "target.ts"), "utf-8");
     expect(content).toContain("// inserted\nconst b = 2;");
+    expect(r.diff.added).toBeGreaterThan(0);
+    expect(r.diff.removed).toBe(0);
   });
 
-  it("inserts after anchor (position=after)", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
+  it("inserts after anchor (position=after) and includes line number in LLM string", async () => {
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
       path: "target.ts", content: "\n// after", position: "after", anchor: "const a = 1;",
-    }), ctx());
-    expect(result).toMatch(/OK/);
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    expect(r.content).toMatch(/at line \d+/i);
     const content = readFileSync(join(worktreeDir, "target.ts"), "utf-8");
     expect(content).toContain("const a = 1;\n// after");
+    expect(r.diff.added).toBeGreaterThan(0);
+    expect(r.diff.removed).toBe(0);
   });
 
-  it("replaces anchor with content (position=replace)", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
+  it("replaces anchor (position=replace) and returns removed+added diff with hunks", async () => {
+    const r = asWrite(await executeTool("patch_file", JSON.stringify({
       path: "target.ts", content: "const a = 42;", position: "replace", anchor: "const a = 1;",
-    }), ctx());
-    expect(result).toMatch(/OK/);
+    }), ctx()));
+    expect(r.content).toMatch(/OK/);
+    expect(r.content).toMatch(/\+\d+ -\d+/);
+    expect(r.content).toMatch(/at line \d+/i);
     const content = readFileSync(join(worktreeDir, "target.ts"), "utf-8");
     expect(content).toContain("const a = 42;");
     expect(content).not.toContain("const a = 1;");
+    expect(r.diff.removed).toBeGreaterThan(0);
+    expect(r.diff.added).toBeGreaterThan(0);
+    expect(r.diff.hunks).toBeDefined();
+    const allLines = r.diff.hunks!.flatMap(h => h.lines);
+    expect(allLines.some(l => l.type === "removed" && l.content === "const a = 1;")).toBe(true);
+    expect(allLines.some(l => l.type === "added" && l.content === "const a = 42;")).toBe(true);
   });
 
   it("rejects ambiguous anchor", async () => {
     writeFileSync(join(worktreeDir, "dup.ts"), "dup\ndup\n");
     const result = await executeTool("patch_file", JSON.stringify({
       path: "dup.ts", content: "x", position: "replace", anchor: "dup",
-    }), ctx());
+    }), ctx()) as string;
     expect(result).toMatch(/appears.*times|ambiguous/i);
   });
 
   it("rejects anchor not found", async () => {
     const result = await executeTool("patch_file", JSON.stringify({
       path: "target.ts", content: "x", position: "replace", anchor: "notexist",
-    }), ctx());
+    }), ctx()) as string;
     expect(result).toMatch(/anchor not found/i);
   });
 
   it("rejects missing anchor param for anchor-based positions", async () => {
     const result = await executeTool("patch_file", JSON.stringify({
       path: "target.ts", content: "x", position: "before",
-    }), ctx());
+    }), ctx()) as string;
     expect(result).toMatch(/anchor is required/i);
   });
 
   it("blocks path traversal", async () => {
     const result = await executeTool("patch_file", JSON.stringify({
       path: "../../evil.ts", content: "x", position: "end",
-    }), ctx());
+    }), ctx()) as string;
     expect(result).toMatch(/path traversal/i);
   });
 });

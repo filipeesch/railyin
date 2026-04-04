@@ -3,8 +3,157 @@ import { join, resolve, relative, dirname } from "path";
 import { spawnSync } from "child_process";
 import { lookup as dnsLookup } from "dns/promises";
 import type { AIToolDefinition } from "../ai/types.ts";
+import type { FileDiffPayload, Hunk, HunkLine } from "../../shared/rpc-types.ts";
 
-// ─── Tool definitions (JSON schema for the model) ─────────────────────────────
+// ─── Myers diff algorithm ─────────────────────────────────────────────────────
+
+const CONTEXT_LINES = 3;
+
+/**
+ * Compute a line-level diff between two arrays of strings using the Myers
+ * algorithm. Returns an array of Hunks with up to CONTEXT_LINES surrounding
+ * context lines per changed region. Distant changed regions become separate hunks.
+ */
+export function myersDiff(before: string[], after: string[]): Hunk[] {
+  const n = before.length;
+  const m = after.length;
+
+  // Build the edit script via Myers forward algorithm
+  const max = n + m;
+  const v: number[] = new Array(2 * max + 1).fill(0);
+  const trace: number[][] = [];
+
+  outer:
+  for (let d = 0; d <= max; d++) {
+    trace.push([...v]);
+    for (let k = -d; k <= d; k += 2) {
+      const ki = k + max;
+      let x: number;
+      if (k === -d || (k !== d && v[ki - 1] < v[ki + 1])) {
+        x = v[ki + 1]; // move down
+      } else {
+        x = v[ki - 1] + 1; // move right
+      }
+      let y = x - k;
+      while (x < n && y < m && before[x] === after[y]) { x++; y++; }
+      v[ki] = x;
+      if (x >= n && y >= m) { trace.push([...v]); break outer; }
+    }
+  }
+
+  // Back-track through the trace to produce edit operations
+  type Op = { type: "eq" | "ins" | "del"; old?: number; new?: number; content: string };
+  const ops: Op[] = [];
+  let x = n, y = m;
+
+  for (let d = trace.length - 1; d > 0; d--) {
+    const vPrev = trace[d - 1];
+    const k = x - y;
+    const ki = k + max;
+    let prevK: number;
+    if (k === -d + 1 || (k !== d - 1 && (vPrev[ki - 1] ?? -1) < (vPrev[ki + 1] ?? -1))) {
+      prevK = k + 1;
+    } else {
+      prevK = k - 1;
+    }
+    const prevKi = prevK + max;
+    const prevX = vPrev[prevKi] ?? 0;
+    const prevY = prevX - prevK;
+
+    while (x > prevX + 1 && y > prevY + 1) {
+      x--; y--;
+      ops.unshift({ type: "eq", old: x, new: y, content: before[x] });
+    }
+    if (d > 0) {
+      if (x === prevX + 1 && y === prevY) {
+        x--;
+        ops.unshift({ type: "del", old: x, content: before[x] });
+      } else if (y === prevY + 1 && x === prevX) {
+        y--;
+        ops.unshift({ type: "ins", new: y, content: after[y] });
+      } else if (x > prevX && y > prevY) {
+        x--; y--;
+        ops.unshift({ type: "eq", old: x, new: y, content: before[x] });
+      }
+    }
+  }
+
+  if (ops.length === 0 && n === 0 && m === 0) return [];
+
+  // Convert ops to HunkLine[] with 1-based line numbers
+  const allLines: HunkLine[] = ops.map(op => {
+    if (op.type === "eq")  return { type: "context" as const, old_line: (op.old! + 1), new_line: (op.new! + 1), content: op.content };
+    if (op.type === "del") return { type: "removed" as const, old_line: (op.old! + 1), content: op.content };
+    return { type: "added" as const, new_line: (op.new! + 1), content: op.content };
+  });
+
+  // Group into hunks: changed lines ± CONTEXT_LINES, merge if gap ≤ 2*CONTEXT_LINES
+  const changed: number[] = [];
+  allLines.forEach((l, i) => { if (l.type !== "context") changed.push(i); });
+  if (changed.length === 0) return [];
+
+  const regions: Array<[number, number]> = [];
+  let start = Math.max(0, changed[0] - CONTEXT_LINES);
+  let end = Math.min(allLines.length - 1, changed[0] + CONTEXT_LINES);
+  for (let ci = 1; ci < changed.length; ci++) {
+    const nextStart = Math.max(0, changed[ci] - CONTEXT_LINES);
+    const nextEnd = Math.min(allLines.length - 1, changed[ci] + CONTEXT_LINES);
+    if (nextStart <= end + 1) {
+      end = nextEnd;
+    } else {
+      regions.push([start, end]);
+      start = nextStart;
+      end = nextEnd;
+    }
+  }
+  regions.push([start, end]);
+
+  return regions.map(([from, to]) => {
+    const lines = allLines.slice(from, to + 1);
+    const firstOld = lines.find(l => l.old_line !== undefined)?.old_line ?? 1;
+    const firstNew = lines.find(l => l.new_line !== undefined)?.new_line ?? 1;
+    return { old_start: firstOld, new_start: firstNew, lines };
+  });
+}
+
+/** Build a FileDiffPayload for patch_file using pre-known anchor/content info. */
+function patchDiff(
+  operation: "patch_file",
+  path: string,
+  fileLines: string[],
+  anchorLineIdx: number | null, // 0-based index in file; null for start/end
+  removedText: string,
+  addedText: string,
+  position: string,
+): FileDiffPayload {
+  const removedLines = removedText ? removedText.split("\n") : [];
+  const addedLines = addedText ? addedText.split("\n") : [];
+  const removed = removedLines.filter(l => l !== "" || removedText.endsWith("\n")).length;
+  const added = addedLines.filter(l => l !== "" || addedText.endsWith("\n")).length;
+
+  // Build a single hunk with context for anchor-based modes
+  let hunks: Hunk[] | undefined;
+  if (anchorLineIdx !== null) {
+    const ctxStart = Math.max(0, anchorLineIdx - CONTEXT_LINES);
+    const ctxEnd = Math.min(fileLines.length - 1, anchorLineIdx + removedLines.length - 1 + CONTEXT_LINES);
+    const lines: HunkLine[] = [];
+    for (let i = ctxStart; i < anchorLineIdx; i++) {
+      lines.push({ type: "context", old_line: i + 1, new_line: i + 1, content: fileLines[i] });
+    }
+    for (const c of removedLines) lines.push({ type: "removed", old_line: anchorLineIdx + 1, content: c });
+    for (const c of addedLines)   lines.push({ type: "added",   new_line: anchorLineIdx + 1, content: c });
+    for (let i = anchorLineIdx + removedLines.length; i <= ctxEnd; i++) {
+      lines.push({ type: "context", old_line: i + 1, new_line: i + 1 - removed + added, content: fileLines[i] });
+    }
+    hunks = [{ old_start: ctxStart + 1, new_start: ctxStart + 1, lines }];
+  }
+
+  return { operation, path, added, removed, hunks };
+}
+
+/** Successful write result type — distinguishes from plain error strings. */
+export type WriteResult = { content: string; diff: FileDiffPayload };
+
 
 export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
@@ -104,6 +253,21 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         },
       },
       required: ["path", "content"],
+    },
+  },
+  {
+    name: "delete_file",
+    description:
+      "Delete a file from the project worktree. Use relative paths from the worktree root.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Relative path to the file to delete.",
+        },
+      },
+      required: ["path"],
     },
   },
   {
@@ -351,7 +515,7 @@ export async function executeTool(
   name: string,
   rawArgs: string,
   ctx: ToolContext,
-): Promise<string> {
+): Promise<string | WriteResult> {
   let args: Record<string, string>;
   try {
     args = JSON.parse(rawArgs) as Record<string, string>;
@@ -430,9 +594,37 @@ export async function executeTool(
       const abs = safePath(ctx.worktreePath, args.path ?? "");
       if (!abs) return "Error: path traversal detected — path must be inside the worktree.";
       try {
+        const isNew = !existsSync(abs);
+        let hunks: Hunk[] | undefined;
+        let added: number;
+        let removed: number;
+
+        if (isNew) {
+          const newLines = (args.content ?? "").split("\n");
+          added = newLines.length;
+          removed = 0;
+        } else {
+          const beforeContent = readFileSync(abs, "utf-8");
+          const beforeLines = beforeContent.split("\n");
+          const afterLines = (args.content ?? "").split("\n");
+          hunks = myersDiff(beforeLines, afterLines);
+          added = hunks.flatMap(h => h.lines).filter(l => l.type === "added").length;
+          removed = hunks.flatMap(h => h.lines).filter(l => l.type === "removed").length;
+        }
+
         mkdirSync(dirname(abs), { recursive: true });
         writeFileSync(abs, args.content ?? "", "utf-8");
-        return `OK: wrote ${args.path}`;
+
+        const countStr = isNew ? `(+${added} lines)` : `(+${added} -${removed})`;
+        const diff: FileDiffPayload = {
+          operation: "write_file",
+          path: args.path,
+          added,
+          removed,
+          ...(isNew ? { is_new: true } : {}),
+          ...(hunks ? { hunks } : {}),
+        };
+        return { content: `OK: wrote ${args.path} ${countStr}`, diff } as WriteResult;
       } catch (e) {
         return `Error writing file: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -445,8 +637,15 @@ export async function executeTool(
       try {
         const stat = statSync(abs);
         if (!stat.isFile()) return `Error: ${args.path} is not a file.`;
+        const lineCount = readFileSync(abs, "utf-8").split("\n").length;
         unlinkSync(abs);
-        return `OK: deleted ${args.path}`;
+        const diff: FileDiffPayload = {
+          operation: "delete_file",
+          path: args.path,
+          added: 0,
+          removed: lineCount,
+        };
+        return { content: `OK: deleted ${args.path} (${lineCount} lines)`, diff } as WriteResult;
       } catch (e) {
         return `Error deleting file: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -461,7 +660,14 @@ export async function executeTool(
       try {
         mkdirSync(dirname(absTo), { recursive: true });
         renameSync(absFrom, absTo);
-        return `OK: renamed ${args.from_path} → ${args.to_path}`;
+        const diff: FileDiffPayload = {
+          operation: "rename_file",
+          path: args.from_path,
+          to_path: args.to_path,
+          added: 0,
+          removed: 0,
+        };
+        return { content: `OK: renamed ${args.from_path} → ${args.to_path}`, diff } as WriteResult;
       } catch (e) {
         return `Error renaming file: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -475,17 +681,22 @@ export async function executeTool(
         const stat = statSync(abs);
         if (!stat.isFile()) return `Error: ${args.path} is not a file.`;
         const content = readFileSync(abs, "utf-8");
+        const fileLines = content.split("\n");
         const insertion = args.content ?? "";
         const position = args.position ?? "";
         const anchor = args.anchor as string | undefined;
 
         if (position === "start") {
           writeFileSync(abs, insertion + content, "utf-8");
-          return `OK: patched ${args.path} (prepended)`;
+          const added = insertion.split("\n").length;
+          const diff = patchDiff("patch_file", args.path, fileLines, null, "", insertion, position);
+          return { content: `OK: patched ${args.path} (+${added} lines, prepended)`, diff } as WriteResult;
         }
         if (position === "end") {
           writeFileSync(abs, content + insertion, "utf-8");
-          return `OK: patched ${args.path} (appended)`;
+          const added = insertion.split("\n").length;
+          const diff = patchDiff("patch_file", args.path, fileLines, null, "", insertion, position);
+          return { content: `OK: patched ${args.path} (+${added} lines, appended)`, diff } as WriteResult;
         }
         // Anchor-based positions
         if (!anchor) return `Error: anchor is required for position "${position}"`;
@@ -494,18 +705,31 @@ export async function executeTool(
         if (occurrences > 1) {
           return `Error: anchor appears ${occurrences} times in ${args.path} — must be unique. Add more context to make it unambiguous.`;
         }
+
+        // Find anchor line index (0-based)
+        const anchorLineIdx = fileLines.findIndex((_, i) => fileLines.slice(i).join("\n").startsWith(anchor));
+
         let newContent: string;
+        let removedText = "";
+        let addedText = insertion;
         if (position === "before") {
           newContent = content.replace(anchor, insertion + anchor);
         } else if (position === "after") {
           newContent = content.replace(anchor, anchor + insertion);
         } else if (position === "replace") {
           newContent = content.replace(anchor, insertion);
+          removedText = anchor;
         } else {
           return `Error: unknown position "${position}". Use start, end, before, after, or replace.`;
         }
         writeFileSync(abs, newContent, "utf-8");
-        return `OK: patched ${args.path} (${position})`;
+
+        const added = addedText.split("\n").length;
+        const removed = removedText ? removedText.split("\n").length : 0;
+        const lineNum = anchorLineIdx >= 0 ? anchorLineIdx + 1 : "?";
+        const countStr = position === "replace" ? `(+${added} -${removed} at line ${lineNum})` : `(+${added} at line ${lineNum})`;
+        const diff = patchDiff("patch_file", args.path, fileLines, anchorLineIdx >= 0 ? anchorLineIdx : null, removedText, addedText, position);
+        return { content: `OK: patched ${args.path} ${countStr}`, diff } as WriteResult;
       } catch (e) {
         return `Error patching file: ${e instanceof Error ? e.message : String(e)}`;
       }

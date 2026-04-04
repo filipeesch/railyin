@@ -12,7 +12,8 @@
     position="right"
     :style="{ width: drawerWidth + 'px' }"
     :modal="false"
-    @hide="taskStore.closeTask()"
+    :dismissable="false"
+    @hide="onHide"
   >
     <template #header>
       <div class="drawer-header" v-if="task">
@@ -136,20 +137,6 @@
             <pre class="side-git-stat">{{ gitStat }}</pre>
           </div>
 
-          <!-- Model picker -->
-          <div class="side-section">
-            <div class="side-label">Model</div>
-            <Select
-              v-if="taskStore.availableModels.length > 0"
-              :model-value="task.model ?? taskStore.availableModels[0]"
-              :options="taskStore.availableModels"
-              size="small"
-              class="side-model-select"
-              @change="(e: { value: string }) => onModelChange(e.value)"
-            />
-            <div v-else class="side-value">{{ task.model ?? '(workspace default)' }}</div>
-          </div>
-
           <!-- Transition buttons -->
           <div class="side-section" v-if="columns.length">
             <div class="side-label">Move to</div>
@@ -164,17 +151,6 @@
                 @click="transition(col.id)"
               />
             </div>
-          </div>
-
-          <!-- Cancel button (visible when running) -->
-          <div class="side-section" v-if="task.executionState === 'running'">
-            <Button
-              label="Cancel"
-              icon="pi pi-stop-circle"
-              severity="warn"
-              :loading="cancelling"
-              @click="cancel"
-            />
           </div>
 
           <!-- Retry button -->
@@ -195,20 +171,40 @@
 
       <!-- Chat input (9.4) -->
       <div class="task-detail__input">
-        <Textarea
-          v-model="inputText"
-          placeholder="Send a message… (Shift+Enter for newline)"
-          class="flex-1"
-          rows="1"
-          autoResize
-          :disabled="task.executionState === 'running'"
-          @keydown.enter.exact.prevent="send"
-        />
-        <Button
-          icon="pi pi-send"
-          :disabled="!inputText.trim() || task.executionState === 'running'"
-          @click="send"
-        />
+        <div class="task-detail__input-row">
+          <Textarea
+            v-model="inputText"
+            placeholder="Send a message… (Shift+Enter for newline)"
+            class="flex-1"
+            rows="1"
+            autoResize
+            :disabled="task.executionState === 'running'"
+            @keydown.enter.exact.prevent="send"
+          />
+          <!-- Context-aware send / cancel button -->
+          <Button
+            v-if="task.executionState !== 'running'"
+            icon="pi pi-send"
+            :disabled="!inputText.trim()"
+            @click="send"
+          />
+          <Button
+            v-else
+            icon="pi pi-stop-circle"
+            severity="warn"
+            @click="cancel"
+          />
+        </div>
+        <!-- Model selector -->
+        <div class="task-detail__model-row" v-if="taskStore.availableModels.length > 0">
+          <Select
+            :model-value="task.model ?? taskStore.availableModels[0]"
+            :options="taskStore.availableModels"
+            size="small"
+            class="input-model-select"
+            @change="(e: { value: string }) => onModelChange(e.value)"
+          />
+        </div>
       </div>
     </div>
   </Drawer>
@@ -221,8 +217,12 @@
       <label class="edit-label mt-2">Description</label>
       <Textarea v-model="editDescription" rows="5" class="w-full" autoResize />
     </div>
+    <div v-if="saveError" class="dialog-error">
+      <i class="pi pi-exclamation-circle" />
+      {{ saveError }}
+    </div>
     <template #footer>
-      <Button label="Cancel" text @click="editDialogVisible = false" />
+      <Button label="Cancel" text @click="editDialogVisible = false; saveError = null" />
       <Button label="Save" :loading="editSaving" :disabled="!editTitle.trim()" @click="saveEdit" />
     </template>
   </Dialog>
@@ -231,15 +231,23 @@
   <Dialog v-model:visible="deleteDialogVisible" header="Delete task" :modal="true" :style="{ width: '420px' }">
     <p>Are you sure you want to delete <strong>{{ task?.title }}</strong>?</p>
     <p class="delete-warn">This will remove the worktree and all conversation history. The branch will be kept.</p>
+    <div v-if="deleteWarning" class="dialog-warning">
+      <i class="pi pi-exclamation-triangle" />
+      Task deleted. {{ deleteWarning }}
+    </div>
+    <div v-if="deleteError" class="dialog-error">
+      <i class="pi pi-exclamation-circle" />
+      {{ deleteError }}
+    </div>
     <template #footer>
-      <Button label="Cancel" text @click="deleteDialogVisible = false" />
-      <Button label="Delete" severity="danger" :loading="deleteLoading" @click="deleteTask" />
+      <Button label="Cancel" text @click="deleteDialogVisible = false; deleteError = null; deleteWarning = null" />
+      <Button label="Delete" severity="danger" :loading="deleteLoading" :disabled="!!deleteWarning" @click="deleteTask" />
     </template>
   </Dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { marked } from "marked";
 import Drawer from "primevue/drawer";
 import Dialog from "primevue/dialog";
@@ -258,9 +266,43 @@ const taskStore = useTaskStore();
 const boardStore = useBoardStore();
 
 // ─── Resizable drawer ────────────────────────────────────────────────────────
-const drawerWidth = ref(860);
+const drawerWidth = ref(Math.round(window.innerWidth * 0.7));
 const MIN_WIDTH = 480;
 const MAX_WIDTH = 1400;
+
+function onHide() {
+  drawerWidth.value = Math.round(window.innerWidth * 0.7);
+  taskStore.closeTask();
+}
+
+// ─── Outside-click guard ─────────────────────────────────────────────────────
+// PrimeVue teleports overlays (Select panels, Dialog backdrops) to document.body,
+// outside the Drawer subtree. We disable PrimeVue's built-in dismissable and
+// implement a smarter guard that ignores those overlay clicks.
+// Note: relies on PrimeVue 4.x adding 'p-overlay-open' to document.body when
+// any overlay is active.
+
+function handleOutsideClick(e: MouseEvent) {
+  if (!open.value) return;
+  // Skip if any PrimeVue overlay is open
+  if (document.body.classList.contains('p-overlay-open')) return;
+  // Skip if our own dialogs are open
+  if (editDialogVisible.value || deleteDialogVisible.value) return;
+  // PrimeVue Drawer teleports its panel to document.body, so $el is a comment
+  // node — not the visible panel. Query the rendered panel by its CSS class instead.
+  const drawerPanel = document.querySelector('.p-drawer');
+  if (drawerPanel && drawerPanel.contains(e.target as Node)) return;
+  // True outside click — close
+  taskStore.closeTask();
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', handleOutsideClick);
+});
+
+onUnmounted(() => {
+  document.removeEventListener('mousedown', handleOutsideClick);
+});
 
 function startResize(e: MouseEvent) {
   e.preventDefault();
@@ -308,6 +350,11 @@ const editSaving = ref(false);
 // Delete dialog state
 const deleteDialogVisible = ref(false);
 const deleteLoading = ref(false);
+const deleteError = ref<string | null>(null);
+const deleteWarning = ref<string | null>(null);
+
+// Edit error state
+const saveError = ref<string | null>(null);
 
 // Columns from the active board template
 const columns = computed(() => {
@@ -434,24 +481,39 @@ function openEditDialog() {
 async function saveEdit() {
   if (!task.value || !editTitle.value.trim()) return;
   editSaving.value = true;
+  saveError.value = null;
   try {
     await taskStore.updateTask(task.value.id, editTitle.value.trim(), editDescription.value.trim());
     editDialogVisible.value = false;
+  } catch (err) {
+    saveError.value = err instanceof Error ? err.message : 'Failed to save changes';
   } finally {
     editSaving.value = false;
   }
 }
 
 function confirmDelete() {
+  deleteError.value = null;
+  deleteWarning.value = null;
   deleteDialogVisible.value = true;
 }
 
 async function deleteTask() {
   if (!task.value) return;
   deleteLoading.value = true;
+  deleteError.value = null;
+  deleteWarning.value = null;
   try {
-    await taskStore.deleteTask(task.value.id);
-    deleteDialogVisible.value = false;
+    const { warning } = await taskStore.deleteTask(task.value.id);
+    if (warning) {
+      deleteWarning.value = warning;
+      // Task is deleted — close after a short delay so the user can read the warning
+      setTimeout(() => { deleteDialogVisible.value = false; }, 4000);
+    } else {
+      deleteDialogVisible.value = false;
+    }
+  } catch (err) {
+    deleteError.value = err instanceof Error ? err.message : 'Failed to delete task';
   } finally {
     deleteLoading.value = false;
   }
@@ -496,6 +558,7 @@ watch(
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 
 .drawer-header__title {
@@ -570,15 +633,31 @@ watch(
 
 .task-detail__input {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding-top: 12px;
   border-top: 1px solid var(--p-surface-200, #e2e8f0);
   flex-shrink: 0;
 }
 
-.task-detail__input .flex-1 {
+.task-detail__input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.task-detail__input-row .flex-1 {
   flex: 1;
   resize: none;
+}
+
+.task-detail__model-row {
+  display: flex;
+  align-items: center;
+}
+
+.input-model-select {
+  min-width: 180px;
 }
 
 .context-warning {
@@ -680,10 +759,6 @@ watch(
   padding: 6px 8px;
 }
 
-.side-model-select {
-  width: 100%;
-}
-
 .edit-form {
   display: flex;
   flex-direction: column;
@@ -704,5 +779,31 @@ watch(
   font-size: 0.85rem;
   color: var(--p-text-muted-color, #94a3b8);
   margin-top: 6px;
+}
+
+.dialog-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--p-red-600, #dc2626);
+  background: var(--p-red-50, #fef2f2);
+  border: 1px solid var(--p-red-200, #fecaca);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-top: 10px;
+}
+
+.dialog-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--p-orange-700, #c2410c);
+  background: var(--p-orange-50, #fff7ed);
+  border: 1px solid var(--p-orange-200, #fed7aa);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-top: 10px;
 }
 </style>

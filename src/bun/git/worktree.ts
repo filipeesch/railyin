@@ -140,7 +140,7 @@ function branchFromPath(worktreePath: string): string {
 
 // ─── Task 6.3: Remove worktree ────────────────────────────────────────────────
 
-export async function removeWorktree(taskId: number): Promise<void> {
+export async function removeWorktree(taskId: number): Promise<{ warning?: string }> {
   const db = getDb();
 
   const row = db
@@ -149,22 +149,35 @@ export async function removeWorktree(taskId: number): Promise<void> {
     )
     .get(taskId);
 
-  if (!row?.worktree_path) return;
+  if (!row?.worktree_path) return {};
 
-  const proc = Bun.spawn(
-    [resolveGit(), "worktree", "remove", "--force", row.worktree_path],
-    {
-      cwd: row.git_root_path,
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  await proc.exited;
+  // If the git root no longer exists on disk, skip the git command and warn.
+  if (!existsSync(row.git_root_path)) {
+    return {
+      warning: `Worktree directory could not be removed: git root "${row.git_root_path}" no longer exists on disk.`,
+    };
+  }
+
+  try {
+    const proc = Bun.spawn(
+      [resolveGit(), "worktree", "remove", "--force", row.worktree_path],
+      {
+        cwd: row.git_root_path,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    await proc.exited;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { warning: `Worktree could not be removed: ${msg}` };
+  }
 
   db.run(
     "UPDATE task_git_context SET worktree_status = 'removed' WHERE task_id = ?",
     [taskId],
   );
+  return {};
 }
 
 // ─── Task 6.4: Register project git context (monorepo / subrepo) ──────────────
