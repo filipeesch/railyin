@@ -67,16 +67,24 @@ function applyModels() {
   // Dispose previous diff listener to prevent accumulation
   diffUpdateDisposable?.dispose();
 
-  const lang = props.language;
-  editor.setModel({
-    original: monacoInstance.editor.createModel(props.original, lang),
-    modified: monacoInstance.editor.createModel(props.modified, lang),
-  });
-
+  // IMPORTANT: register the listener BEFORE calling setModel.
+  // Monaco fires onDidUpdateDiff synchronously during setModel when the diff is
+  // trivial (e.g. new files with only additions). If we registered after, we'd
+  // miss the event and never emit hunksReady for those files.
   diffUpdateDisposable = editor.onDidUpdateDiff(() => {
     const changes: ILineChange[] = editor.getLineChanges() ?? [];
     emit("hunksReady", changes);
   });
+
+  const lang = props.language;
+  const oldModel = editor.getModel();
+  editor.setModel({
+    original: monacoInstance.editor.createModel(props.original, lang),
+    modified: monacoInstance.editor.createModel(props.modified, lang),
+  });
+  // Dispose old models after setModel to avoid memory leaks
+  oldModel?.original?.dispose();
+  oldModel?.modified?.dispose();
 }
 
 watch(

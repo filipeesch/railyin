@@ -591,10 +591,10 @@ async function readFileDiffContent(
       const modifiedLines = modified.split("\n");
       const hash = computeHunkHash(filePath, [], modifiedLines);
       const humanDecisionRow = db
-        .query<{ decision: string; comment: string | null }, [number, string, string]>(
+        .query<{ decision: string; comment: string | null }, [number, string]>(
           "SELECT decision, comment FROM task_hunk_decisions WHERE task_id = ? AND hunk_hash = ? AND reviewer_id = 'user' LIMIT 1",
         )
-        .get(taskId, hash, filePath);
+        .get(taskId, hash);
       hunks = [{
         hash,
         hunkIndex: 0,

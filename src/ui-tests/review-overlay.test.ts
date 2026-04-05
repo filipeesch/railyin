@@ -540,13 +540,16 @@ describe("Code Review Overlay — all changed files have action bars", () => {
   const allResults: FileHunkResult[] = [];
 
   beforeAll(async () => {
-    // Clean slate
+    // Clean slate — clear DB decisions and in-memory state, then open a fresh overlay
+    // in review mode so we get the true current file list from git.
     await resetDecisions(1);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
+    // Open a fresh overlay so the file list reflects the actual worktree state.
+    await openReviewOverlay();
 
     // Get all files in the review
     const files = await webEval<string[]>(`
