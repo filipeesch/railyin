@@ -143,6 +143,74 @@ const _debugServer = Bun.serve({
       return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
     }
 
+    // Test-only: create a self-contained test task in a temp git worktree with
+    // known files. Returns { taskId, files, worktreePath } so tests are not
+    // coupled to any pre-existing app data.
+    //
+    // The worktree is a fresh git repo where 3 files are created as new untracked
+    // additions, matching the simplest test scenario (each file = 1 hunk = 1 bar).
+    if (url.pathname === "/setup-test-env") {
+      try {
+        const db = getDb();
+
+        // Clean up any previous test task so we don't accumulate stale rows.
+        const prev = db.query<{ id: number }, []>("SELECT id FROM tasks WHERE title = 'UI Test Task' LIMIT 1").get();
+        if (prev) {
+          db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [prev.id]);
+          db.run("DELETE FROM task_git_context WHERE task_id = ?", [prev.id]);
+          db.run("DELETE FROM tasks WHERE id = ?", [prev.id]);
+        }
+
+        // Resolve stable required IDs (board + project must exist).
+        const board = db.query<{ id: number; project_id: number }, []>("SELECT id, project_id FROM boards LIMIT 1").get();
+        if (!board) return new Response(JSON.stringify({ __error: "No board found. Run the app and create a project first." }), { status: 500, headers: { "content-type": "application/json" } });
+
+        // Create a temp git repo with known test files.
+        const worktreePath = `/tmp/railyn-test-worktree-${Date.now()}`;
+        const run = (cmd: string[], cwd?: string) => {
+          const p = Bun.spawnSync(cmd, { cwd: cwd ?? worktreePath, stdout: "pipe", stderr: "pipe" });
+          if (p.exitCode !== 0) throw new Error(`${cmd.join(" ")} failed: ${p.stderr.toString().trim()}`);
+        };
+
+        Bun.spawnSync(["mkdir", "-p", worktreePath]);
+        run(["git", "init"], worktreePath);
+        run(["git", "config", "user.email", "test@railyn.internal"]);
+        run(["git", "config", "user.name", "Railyn Test"]);
+
+        // Commit an empty initial state so HEAD exists (required for git diff HEAD to work).
+        run(["git", "commit", "--allow-empty", "-m", "initial"]);
+
+        // Create 3 test files as new (untracked) additions — each becomes 1 hunk.
+        const testFiles: [string, string][] = [
+          ["feature-a.ts", Array.from({ length: 20 }, (_, i) => `export const lineA${i + 1} = ${i + 1};`).join("\n")],
+          ["feature-b.vue", ["<template>", "  <div class=\"feature-b\">", "    <h1>Feature B</h1>", "    <p>Test component</p>", "  </div>", "</template>", "", "<script setup lang=\"ts\">", "const msg = 'hello from B';", "</script>"].join("\n")],
+          ["feature-c.md", ["# Feature C", "", "This is a test markdown file.", "", "## Details", "", "- Point one", "- Point two", "- Point three"].join("\n")],
+        ];
+
+        for (const [name, content] of testFiles) {
+          await Bun.write(`${worktreePath}/${name}`, content);
+        }
+
+        // Insert the test task.
+        db.run(
+          "INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state) VALUES (?, ?, 'UI Test Task', 'Auto-created by test suite', 'backlog', 'idle')",
+          [board.id, board.project_id],
+        );
+        const taskRow = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!;
+        const taskId = taskRow.id;
+
+        db.run(
+          "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+          [taskId, worktreePath, worktreePath],
+        );
+
+        const files = testFiles.map(([name]) => name);
+        return new Response(JSON.stringify({ taskId, files, worktreePath }), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
+      }
+    }
+
     return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=", { status: 200 });
   },
 });

@@ -112,6 +112,22 @@ export async function resetDecisions(taskId: number): Promise<void> {
   }
 }
 
+/**
+ * Set up a self-contained test environment with a fresh git worktree and
+ * known test files. Returns the taskId and file list so tests are not
+ * coupled to any pre-existing app data.
+ *
+ * The worktree is a temporary git repo with 3 new untracked files. Each
+ * represents one pending hunk, giving tests a predictable isolated baseline.
+ */
+export async function setupTestEnv(): Promise<{ taskId: number; files: string[] }> {
+  const res = await fetch(`${BRIDGE_BASE}/setup-test-env`);
+  const data = await res.json() as { taskId?: number; files?: string[]; __error?: string };
+  if (data.__error) throw new Error(`setupTestEnv failed: ${data.__error}`);
+  if (!data.taskId || !data.files) throw new Error("setupTestEnv: unexpected response");
+  return { taskId: data.taskId, files: data.files };
+}
+
 // ─── Timing ───────────────────────────────────────────────────────────────────
 
 export function sleep(ms: number): Promise<void> {
@@ -167,15 +183,23 @@ export function reviewSelectedFile(): Promise<string> {
 }
 
 /**
- * Open the code review overlay for task 1 in "review" mode:
+ * Open the code review overlay in "review" mode.
+ *
+ * When `opts` is provided (taskId + files), the overlay is opened directly via
+ * the Pinia store — no badge click required. This path works for any task,
+ * including dynamically-created test tasks.
+ *
+ * When called without arguments it falls back to the badge-click path for
+ * whatever task is already visible on the board (legacy / manual-testing use).
+ *
+ * Steps:
  *  1. Close any already-open overlay.
- *  2. Refresh the changed-file badge count (may be stale on cold start).
- *  3. Click the badge — BoardView fetches files async then calls reviewStore.openReview().
- *  4. Wait for .review-overlay to appear.
- *  5. Ensure mode is "review" (required for action bars + nav buttons to render).
- * Throws if the overlay does not appear within 8 seconds.
+ *  2a. (opts path) Call reviewStore.openReview(taskId, files) via Pinia directly.
+ *  2b. (badge path) Refresh badge count, click .task-card__changed-badge.
+ *  3. Wait for .review-overlay to appear.
+ *  4. Assert mode === "review" (required for action bars + nav buttons to render).
  */
-export async function openReviewOverlay(): Promise<void> {
+export async function openReviewOverlay(opts?: { taskId: number; files: string[] }): Promise<void> {
   // Close any already-open overlay
   await webEval(`
     var pinia = document.querySelector('#app')?.__vue_app__?.config?.globalProperties?.['$pinia'];
@@ -185,23 +209,31 @@ export async function openReviewOverlay(): Promise<void> {
   `);
   await sleep(400);
 
-  // Refresh badge (changedFileCounts may be empty on cold start)
-  await webEval(`
-    return new Promise(async function(resolve) {
+  if (opts) {
+    // Direct Pinia path — works for any task without needing a task card in the UI.
+    await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
-      await pinia._s.get('task').refreshChangedFiles(1);
-      resolve('ok');
-    });
-  `);
-  await sleep(400);
+      pinia._s.get('review').openReview(${opts.taskId}, ${JSON.stringify(opts.files)});
+      return 'ok';
+    `);
+  } else {
+    // Badge-click path — requires task 1 to be visible as a card in BoardView.
+    await webEval(`
+      return new Promise(async function(resolve) {
+        var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+        await pinia._s.get('task').refreshChangedFiles(1);
+        resolve('ok');
+      });
+    `);
+    await sleep(400);
+    await webClick(".task-card__changed-badge");
+  }
 
-  // Badge click emits @open-review → BoardView.onOpenReview (async RPC) → reviewStore.openReview
-  await webClick(".task-card__changed-badge");
   const opened = await waitFor(".review-overlay", 8_000);
-  if (!opened) throw new Error("Review overlay did not open — .task-card__changed-badge may be missing");
+  if (!opened) throw new Error("Review overlay did not open");
   await sleep(1_000);
 
-  // reviewStore.openReview() sets mode = "review" automatically.
+  // openReview() sets mode = "review" automatically.
   // Verify this — action bars and nav buttons only render in review mode.
   const mode = await webEval<string>(
     `return document.querySelector('#app').__vue_app__.config.globalProperties['$pinia']._s.get('review').mode`,

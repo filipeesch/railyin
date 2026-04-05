@@ -60,8 +60,23 @@ import {
   selectRichTestFile,
   navToFirstHunk,
   resetDecisions,
+  setupTestEnv,
   screenshot,
 } from "./bridge";
+
+// ─── Global test environment ───────────────────────────────────────────────────
+// Set up once before any suite runs. `setupTestEnv` creates an isolated temp git
+// repo with 3 known test files and a fresh task row — tests are not coupled to
+// any pre-existing app data (worktrees, boards, or real task IDs).
+
+let testTaskId = 0;
+let testFiles: string[] = [];
+
+beforeAll(async () => {
+  const env = await setupTestEnv();
+  testTaskId = env.taskId;
+  testFiles = env.files;
+}, 30_000);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Suite A — shared setup: overlay open on SetupView.vue, first hunk in viewport
@@ -74,14 +89,14 @@ describe("Code Review Overlay — ViewZone UX", () => {
     if (!ping?.ok) throw new Error("App not running — start it with: bun run dev");
 
     // Clear any decisions left over from previous test runs so all hunks are pending.
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
 
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
     await selectRichTestFile(); // → SetupView.vue
 
     // Navigate to the very first hunk so Monaco scrolls to it and triggers layoutZone.
@@ -334,7 +349,7 @@ describe("Code Review Overlay — per-hunk navigation (rich test file)", () => {
 
   beforeAll(async () => {
     // Clear persisted hunk decisions from DB and in-memory optimistic state
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
@@ -459,7 +474,7 @@ describe("Code Review Overlay — reject hunk regression", () => {
 
   beforeAll(async () => {
     // Clean slate: clear DB + in-memory decisions
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
@@ -563,14 +578,14 @@ describe("Code Review Overlay — all changed files have action bars", () => {
   beforeAll(async () => {
     // Clean slate — clear DB decisions and in-memory state, then open a fresh overlay
     // in review mode so we get the true current file list from git.
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
     // Open a fresh overlay so the file list reflects the actual worktree state.
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
 
     // Get all files in the review
     const files = await webEval<string[]>(`
@@ -692,13 +707,13 @@ describe("Code Review Overlay — bars match Monaco ILineChanges per file", () =
   const counts: FileChangeCount[] = [];
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
 
     const files = await webEval<string[]>(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
@@ -771,13 +786,13 @@ describe("Code Review Overlay — reject precision", () => {
   let skipped = false;
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
 
     // Use the richest available file
     await selectRichTestFile();
@@ -892,13 +907,13 @@ describe("Code Review Overlay — pending counter accuracy", () => {
   }
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
     // Select richest available file and navigate to its first hunk
     await selectRichTestFile();
     // Wait for bars to stabilise
@@ -1029,13 +1044,13 @@ describe("Code Review Overlay — Change Request validation and behaviour", () =
   let decidedBadgeVisible = false;
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
     await selectRichTestFile();
     let prev = -1;
     for (let i = 0; i < 20; i++) {
@@ -1140,13 +1155,13 @@ describe("Code Review Overlay — decision persistence across file switches", ()
   let monacoChangesAfterSwitch = 0;
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
 
     // Pick the first two files from the review's file list
     const files = await webEval<string[]>(`
@@ -1274,13 +1289,13 @@ describe("Code Review Overlay — accept precision", () => {
   let skipped = false;
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
     await selectRichTestFile();
     let prev = -1;
     for (let i = 0; i < 20; i++) {
