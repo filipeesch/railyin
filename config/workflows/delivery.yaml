@@ -14,24 +14,19 @@ columns:
       done and WHY, not implementation details. If you need
       clarification from the user, use the ask_me tool.
     stage_instructions: |
-      You are in the Planning phase. Do NOT write code or
-      implementation details. Focus only on understanding the
-      problem and defining what needs to be done.
+      Lets keep the plan focused on WHAT and WHY. Avoid implementation details.
     # Tools available to the model in this column (group names or individual tool names):
     tools:
       - read
       - interactions
+      - search
 
   - id: in_progress
     label: In Progress
     description: Active development
     on_enter_prompt: |
-      Implement this task according to the plan. Work in the
-      provided Git worktree. Make focused, clean changes.
-    stage_instructions: |
-      You are in the Implementation phase. Work in the Git
-      worktree provided. Make minimal, focused changes. Follow
-      the plan established in the planning phase.
+      Implement this task according to the plan.
+    stage_instructions:
     # Tools available to the model in this column (group names or individual tool names):
     tools:
       - read

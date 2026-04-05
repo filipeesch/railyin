@@ -16,6 +16,7 @@ import {
   cancelExecution,
 } from "../workflow/engine.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
+import { readSessionMemory } from "../workflow/session-memory.ts";
 import type { ProjectRow } from "../db/row-types.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import { getConfig } from "../config/index.ts";
@@ -445,13 +446,17 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         .get(params.taskId);
       if (!gitRow?.worktree_path || gitRow.worktree_status !== "ready") return [];
       try {
-        const proc = Bun.spawn(
-          ["git", "diff", "HEAD", "--name-only", "--diff-filter=ACDMR"],
-          { cwd: gitRow.worktree_path, stdout: "pipe", stderr: "pipe" },
-        );
-        await proc.exited;
-        const out = await new Response(proc.stdout).text();
-        return out.trim() ? out.trim().split("\n") : [];
+        const [trackedProc, untrackedProc] = [
+          Bun.spawn(["git", "diff", "HEAD", "--name-only", "--diff-filter=ACDMR"], { cwd: gitRow.worktree_path, stdout: "pipe", stderr: "pipe" }),
+          Bun.spawn(["git", "ls-files", "--others", "--exclude-standard"], { cwd: gitRow.worktree_path, stdout: "pipe", stderr: "pipe" }),
+        ];
+        await Promise.all([trackedProc.exited, untrackedProc.exited]);
+        const trackedOut = await new Response(trackedProc.stdout).text();
+        const untrackedOut = await new Response(untrackedProc.stdout).text();
+        const tracked = trackedOut.trim() ? trackedOut.trim().split("\n") : [];
+        const untracked = untrackedOut.trim() ? untrackedOut.trim().split("\n") : [];
+        // Deduplicate (shouldn't overlap, but be safe)
+        return [...new Set([...tracked, ...untracked])];
       } catch {
         return [];
       }
@@ -491,7 +496,26 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       await diffProc.exited;
       const diffOutput = await new Response(diffProc.stdout).text();
 
-      if (!diffOutput.trim()) throw new Error("No diff found for file — it may already be at HEAD");
+      if (!diffOutput.trim()) {
+        // File may be untracked (never `git add`ed) — no diff against HEAD exists.
+        // For untracked files the entire content IS the "hunk", so we just record
+        // the rejection and let readFileDiffContent return the updated state.
+        const diskFile = Bun.file(`${worktreePath}/${filePath}`);
+        if (!(await diskFile.exists())) {
+          throw new Error("No diff found for file — it may already be at HEAD");
+        }
+        const content = await diskFile.text();
+        const modifiedLines = content.split("\n");
+        const hash = computeHunkHash(filePath, [], modifiedLines);
+        db.run(
+          `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start, updated_at)
+           VALUES (?, ?, ?, 'human', 'user', 'rejected', NULL, 0, 1, datetime('now'))
+           ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
+             decision = 'rejected', comment = NULL, updated_at = datetime('now')`,
+          [params.taskId, hash, filePath],
+        );
+        return readFileDiffContent(db, params.taskId, worktreePath, filePath);
+      }
 
       // Parse hunks to get hash of the hunk being rejected
       const parsedHunks = parseGitDiffHunks(diffOutput, filePath);
@@ -551,6 +575,11 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
            updated_at = datetime('now')`,
         [params.taskId, params.hunkHash, params.filePath, params.decision, params.comment, params.originalStart, params.modifiedStart],
       );
+    },
+
+    // ─── tasks.sessionMemory ─────────────────────────────────────────────────
+    "tasks.sessionMemory": async (params: { taskId: number }): Promise<{ content: string | null }> => {
+      return { content: readSessionMemory(params.taskId) };
     },
   };
 }
@@ -625,11 +654,42 @@ async function readFileDiffContent(
           originalEnd: h.originalEnd,
           modifiedStart: h.modifiedStart,
           modifiedEnd: h.modifiedEnd,
+          modifiedContentStart: h.modifiedContentStart,
+          modifiedContentEnd: h.modifiedContentEnd,
+          originalContentStart: h.originalContentStart,
+          originalContentEnd: h.originalContentEnd,
           decisions,
           humanDecision: (humanDecisionRow?.decision ?? "pending") as HunkDecision,
           humanComment: humanDecisionRow?.comment ?? null,
         };
       });
+    } else if (!original && modified) {
+      // Untracked file (never `git add`ed): no diff from git, but file exists on disk.
+      // Synthesize a single hunk covering the whole file so the review UI can show it.
+      const modifiedLines = modified.split("\n");
+      const hash = computeHunkHash(filePath, [], modifiedLines);
+      const humanDecisionRow = db
+        .query<{ decision: string; comment: string | null }, [number, string]>(
+          "SELECT decision, comment FROM task_hunk_decisions WHERE task_id = ? AND hunk_hash = ? AND reviewer_id = 'user' LIMIT 1",
+        )
+        .get(taskId, hash);
+      hunks = [{
+        hash,
+        hunkIndex: 0,
+        originalStart: 0,
+        originalEnd: 0,
+        modifiedStart: 1,
+        modifiedEnd: modifiedLines.length,
+        modifiedContentStart: 1,
+        modifiedContentEnd: modifiedLines.length,
+        originalContentStart: 0,
+        originalContentEnd: 0,
+        decisions: humanDecisionRow
+          ? [{ reviewerId: "user", reviewerType: "human", decision: humanDecisionRow.decision as HunkDecision, comment: humanDecisionRow.comment }]
+          : [],
+        humanDecision: (humanDecisionRow?.decision ?? "pending") as HunkDecision,
+        humanComment: humanDecisionRow?.comment ?? null,
+      }];
     }
   } catch { /* ignore diff parse errors */ }
 
@@ -653,6 +713,12 @@ interface ParsedHunk {
   originalEnd: number;
   modifiedStart: number;
   modifiedEnd: number;
+  /** First/last "+" line in the modified file (excluding context). Both 0 for pure deletions. */
+  modifiedContentStart: number;
+  modifiedContentEnd: number;
+  /** First/last "-" line in the original file (excluding context). Both 0 for pure additions. */
+  originalContentStart: number;
+  originalContentEnd: number;
 }
 
 function parseGitDiffHunks(diffOutput: string, filePath: string): ParsedHunk[] {
@@ -685,6 +751,27 @@ function parseGitDiffHunks(diffOutput: string, filePath: string): ParsedHunk[] {
     const modifiedLines = hunkBodyLines.filter((l) => l.startsWith("+") || l.startsWith(" ")).map((l) => l.slice(1));
     const hash = computeHunkHash(filePath, originalLines, modifiedLines);
 
+    // Compute content ranges: first/last actual +/- lines, excluding surrounding context.
+    // These are used by correlateHunks in the frontend to correctly place action bar zones.
+    let origI = origStart;
+    let modI = modStart;
+    let modifiedContentStart = 0, modifiedContentEnd = 0;
+    let originalContentStart = 0, originalContentEnd = 0;
+    for (const line of hunkBodyLines) {
+      if (line.startsWith("+")) {
+        if (modifiedContentStart === 0) modifiedContentStart = modI;
+        modifiedContentEnd = modI;
+        modI++;
+      } else if (line.startsWith("-")) {
+        if (originalContentStart === 0) originalContentStart = origI;
+        originalContentEnd = origI;
+        origI++;
+      } else if (line.startsWith(" ")) {
+        modI++;
+        origI++;
+      }
+    }
+
     result.push({
       hash,
       hunkIndex,
@@ -692,6 +779,10 @@ function parseGitDiffHunks(diffOutput: string, filePath: string): ParsedHunk[] {
       originalEnd: origStart + origCount - 1,
       modifiedStart: modStart,
       modifiedEnd: modStart + modCount - 1,
+      modifiedContentStart,
+      modifiedContentEnd,
+      originalContentStart,
+      originalContentEnd,
     });
     hunkIndex++;
   }

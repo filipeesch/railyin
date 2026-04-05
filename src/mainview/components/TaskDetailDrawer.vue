@@ -179,6 +179,12 @@
             <pre class="side-git-stat">{{ gitStat }}</pre>
           </div>
 
+          <!-- Session notes -->
+          <div class="side-section" v-if="sessionMemoryContent">
+            <div class="side-label">Session Notes</div>
+            <pre class="side-session-notes">{{ sessionMemoryContent }}</pre>
+          </div>
+
           <!-- Transition buttons -->
           <div class="side-section" v-if="columns.length">
             <div class="side-label">Move to</div>
@@ -553,6 +559,9 @@ const compacting = ref(false);
 // Git diff stat (fetched on drawer open when worktree is ready)
 const gitStat = ref<string | null>(null);
 
+// Session memory notes (fetched on drawer open)
+const sessionMemoryContent = ref<string | null>(null);
+
 // Edit dialog state
 const editDialogVisible = ref(false);
 const editTitle = ref("");
@@ -748,6 +757,7 @@ watch(
   () => taskStore.activeTaskId,
   async (id) => {
     gitStat.value = null;
+    sessionMemoryContent.value = null;
     if (!id) return;
     taskStore.loadEnabledModels();
     const t = taskStore.activeTask;
@@ -755,6 +765,10 @@ watch(
       gitStat.value = await taskStore.getGitStat(id);
       taskStore.refreshChangedFiles(id);
     }
+    try {
+      const { content } = await electroview.rpc!.request["tasks.sessionMemory"]({ taskId: id });
+      sessionMemoryContent.value = content;
+    } catch { /* non-fatal */ }
   },
   { immediate: true },
 );

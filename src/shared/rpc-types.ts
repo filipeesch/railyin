@@ -105,6 +105,25 @@ export interface FileDiffPayload {
   hunks?: Hunk[];
 }
 
+// ─── Ask user prompt types ───────────────────────────────────────────────────
+
+export interface AskUserOption {
+  label: string;
+  description?: string;
+  recommended?: boolean;
+  preview?: string;
+}
+
+export interface AskUserQuestion {
+  question: string;
+  selection_mode: "single" | "multi";
+  options: AskUserOption[];
+}
+
+export interface AskUserPromptContent {
+  questions: AskUserQuestion[];
+}
+
 // ─── Code review types ──────────────────────────────────────────────────────
 
 export type HunkDecision = "accepted" | "rejected" | "change_request" | "pending";
@@ -144,6 +163,12 @@ export interface HunkWithDecisions {
   originalEnd: number;
   modifiedStart: number;
   modifiedEnd: number;
+  /** First/last "+" line in modified file (excludes leading/trailing context). Both 0 for pure deletions. */
+  modifiedContentStart: number;
+  modifiedContentEnd: number;
+  /** First/last "-" line in original file (excludes leading/trailing context). Both 0 for pure additions. */
+  originalContentStart: number;
+  originalContentEnd: number;
   decisions: ReviewerDecision[];
   /** Convenience: the human reviewer's current decision (defaults to 'pending') */
   humanDecision: HunkDecision;
@@ -363,6 +388,10 @@ export type RailynRPCType = {
         params: { templateId: string; yaml: string };
         response: { ok: true };
       };
+      "tasks.sessionMemory": {
+        params: { taskId: number };
+        response: { content: string | null };
+      };
     };
     messages: Record<string, never>;
   }>;
@@ -375,6 +404,15 @@ export type RailynRPCType = {
       "task.updated": Task;
       "message.new": ConversationMessage;
       "workflow.reloaded": Record<string, never>;
+      "debug.log": { level: string; args: string };
+    };
+  }>;
+
+  // webview → bun one-way debug log forwarding (dev only)
+  debugLog: RPCSchema<{
+    requests: Record<string, never>;
+    messages: {
+      "debug.log": { level: string; args: string };
     };
   }>;
 };

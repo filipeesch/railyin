@@ -7,7 +7,8 @@
     "dev": "vite build && electrobun dev --watch",
     "dev:watch": "concurrently -n vite,electrobun -c cyan,magenta \"vite build --watch\" \"electrobun dev --watch\"",
     "build:canary": "vite build && electrobun build --env=canary",
-    "test": "bun test src/bun/test --timeout 20000"
+    "test": "bun test src/bun/test --timeout 20000",
+    "test:ui": "bun test src/ui-tests --timeout 60000"
   },
   "dependencies": {
     "@monaco-editor/loader": "^1.4.0",

@@ -288,26 +288,59 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "ask_me",
     description:
-      "Ask me a question and present structured options to choose from. Use this when you need clarification or a decision before proceeding. Execution will pause until I respond. You MUST always provide a non-empty 'options' array — never call this tool with an empty options list.",
+      "Ask one or more questions and present structured options to choose from. Use this when you need clarification or a decision before proceeding. Execution will pause until I respond. " +
+      "For each option you may set: 'description' (one-line explanation of the option), 'recommended: true' (highlight the suggested default), 'preview' (markdown string shown as a comparison pane when the option is focused). " +
+      "You MUST always provide a non-empty 'options' array for every question.",
     parameters: {
       type: "object",
       properties: {
-        question: {
-          type: "string",
-          description: "The question to ask the user. Must be non-empty.",
-        },
-        selection_mode: {
-          type: "string",
-          enum: ["single", "multi"],
-          description: "Whether the user can select one option ('single') or multiple ('multi').",
-        },
-        options: {
+        questions: {
           type: "array",
-          items: { type: "string" },
-          description: "The list of options to present to the user. Must contain at least one option.",
+          description: "One or more questions to ask. Batch related decisions into the same call to reduce round-trips.",
+          items: {
+            type: "object",
+            properties: {
+              question: {
+                type: "string",
+                description: "The question text. Must be non-empty.",
+              },
+              selection_mode: {
+                type: "string",
+                enum: ["single", "multi"],
+                description: "Whether the user can select one option ('single') or multiple ('multi').",
+              },
+              options: {
+                type: "array",
+                description: "The list of options to present. Must contain at least one option.",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: {
+                      type: "string",
+                      description: "The option text shown to the user.",
+                    },
+                    description: {
+                      type: "string",
+                      description: "Optional secondary text explaining what this option means.",
+                    },
+                    recommended: {
+                      type: "boolean",
+                      description: "Set to true to highlight this option as the recommended default.",
+                    },
+                    preview: {
+                      type: "string",
+                      description: "Optional markdown string shown as a preview pane when this option is focused.",
+                    },
+                  },
+                  required: ["label"],
+                },
+              },
+            },
+            required: ["question", "selection_mode", "options"],
+          },
         },
       },
-      required: ["question", "selection_mode", "options"],
+      required: ["questions"],
     },
   },
   // ── write group ────────────────────────────────────────────────────────────

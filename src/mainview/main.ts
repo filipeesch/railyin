@@ -7,6 +7,15 @@ import ConfirmationService from "primevue/confirmationservice";
 import "primeicons/primeicons.css";
 import App from "./App.vue";
 import router from "./router";
+import { sendDebugLog } from "./rpc";
+
+// ─── Forward console.* to bun's stdout so logs appear in the dev terminal ────────
+const _origLog = console.log.bind(console);
+const _origWarn = console.warn.bind(console);
+const _origError = console.error.bind(console);
+console.log = (...args) => { _origLog(...args); sendDebugLog("log", ...args); };
+console.warn = (...args) => { _origWarn(...args); sendDebugLog("warn", ...args); };
+console.error = (...args) => { _origError(...args); sendDebugLog("error", ...args); };
 
 const app = createApp(App);
 const pinia = createPinia();
