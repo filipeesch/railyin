@@ -158,6 +158,10 @@ const hunkZones = new Map<string, ZoneRecord>();
 // Set in onDecideHunk so the editor doesn't jump to top; consumed in onHunksReady.
 let pendingScrollRestore: number | null = null;
 
+// Flag set by loadDiff so that onHunksReady auto-scrolls Monaco to the first
+// pending hunk when a file is freshly loaded (not after accept/reject rebuilds).
+let isInitialFileLoad = false;
+
 // ——— Static config ———————————————————————————————————————————————————————
 
 const filterOptions = [
@@ -271,6 +275,39 @@ function layoutZone(hash: string) {
     // the true content size. The first child is the Vue-mounted HunkActionBar.
     const innerEl = (record.domNode.firstElementChild as HTMLElement) ?? record.domNode;
     const actualHeight = Math.max(innerEl.scrollHeight, innerEl.offsetHeight) || record.domNode.scrollHeight;
+    if (actualHeight > 0) {
+      record.zoneDescriptor.heightInPx = actualHeight;
+      if (record.spacerDescriptor) record.spacerDescriptor.heightInPx = actualHeight;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    editor.getModifiedEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.zoneId));
+    if (record.spacerZoneId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      editor.getOriginalEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.spacerZoneId!));
+    }
+  }
+}
+
+/**
+ * Force-layout every active zone. Called after injection so that zones placed
+ * below the visible viewport (e.g. the bottom of a large new/untracked file)
+ * still get their correct height set even if the ResizeObserver hasn't fired yet
+ * (WKWebView may not notify for off-screen elements inside Monaco's container).
+ *
+ * When the inner element is off-screen its height reads as 0. We use a fallback
+ * so Monaco allocates visible space; the ResizeObserver then corrects the height
+ * once the zone scrolls into view.
+ */
+const FALLBACK_ZONE_HEIGHT_PX = 56; // approximate HunkActionBar height
+function layoutAllZones() {
+  const editor = diffEditorRef.value?.getEditor();
+  if (!editor) return;
+  for (const [, record] of hunkZones) {
+    const innerEl = (record.domNode.firstElementChild as HTMLElement) ?? record.domNode;
+    const actualHeight =
+      Math.max(innerEl.scrollHeight, innerEl.offsetHeight) ||
+      record.domNode.scrollHeight ||
+      FALLBACK_ZONE_HEIGHT_PX;
     if (actualHeight > 0) {
       record.zoneDescriptor.heightInPx = actualHeight;
       if (record.spacerDescriptor) record.spacerDescriptor.heightInPx = actualHeight;
@@ -478,6 +515,12 @@ function onHunksReady(lineChanges: ILineChange[]) {
   clearAllZones();
   injectViewZones(lineChanges);
 
+  // Force layout for all injected zones. Zones placed below the visible viewport
+  // (e.g. the entire content of a new file) may not trigger ResizeObserver in
+  // WKWebView, leaving their Monaco container at height:0. A forced layout pass
+  // immediately after injection corrects this.
+  nextTick(() => layoutAllZones());
+
   // Restore scroll after accept/reject rebuilds the diff model (setModel resets scroll to 0).
   // Only set during onDecideHunk — NOT during file navigation — so it never conflicts
   // with scrollToPendingHunk.
@@ -493,8 +536,21 @@ function onHunksReady(lineChanges: ILineChange[]) {
   if (pendingNavTarget.value !== null) {
     const target = pendingNavTarget.value;
     pendingNavTarget.value = null;
+    isInitialFileLoad = false;
     nextTick(() => {
       currentPendingIdx.value = target === "first" ? 0 : Math.max(0, pendingHunks.value.length - 1);
+      scrollToPendingHunk();
+    });
+    return;
+  }
+
+  // Initial file load: scroll Monaco to the first pending hunk so it is immediately
+  // visible. This handles files where the first hunk is below the editor's default
+  // scroll position (e.g. new/untracked files whose only change is at the last line).
+  if (isInitialFileLoad && pendingScrollRestore === null && hunkZones.size > 0) {
+    isInitialFileLoad = false;
+    nextTick(() => {
+      currentPendingIdx.value = 0;
       scrollToPendingHunk();
     });
   }
@@ -662,6 +718,7 @@ async function loadDiff(path: string | null) {
   if (!path || !reviewStore.taskId) return;
   clearAllZones();
   currentPendingIdx.value = 0;
+  isInitialFileLoad = true;
   diffLoading.value = true;
   diffError.value = null;
   try {

@@ -442,7 +442,26 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       await diffProc.exited;
       const diffOutput = await new Response(diffProc.stdout).text();
 
-      if (!diffOutput.trim()) throw new Error("No diff found for file — it may already be at HEAD");
+      if (!diffOutput.trim()) {
+        // File may be untracked (never `git add`ed) — no diff against HEAD exists.
+        // For untracked files the entire content IS the "hunk", so we just record
+        // the rejection and let readFileDiffContent return the updated state.
+        const diskFile = Bun.file(`${worktreePath}/${filePath}`);
+        if (!(await diskFile.exists())) {
+          throw new Error("No diff found for file — it may already be at HEAD");
+        }
+        const content = await diskFile.text();
+        const modifiedLines = content.split("\n");
+        const hash = computeHunkHash(filePath, [], modifiedLines);
+        db.run(
+          `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start, updated_at)
+           VALUES (?, ?, ?, 'human', 'user', 'rejected', NULL, 0, 1, datetime('now'))
+           ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
+             decision = 'rejected', comment = NULL, updated_at = datetime('now')`,
+          [params.taskId, hash, filePath],
+        );
+        return readFileDiffContent(db, params.taskId, worktreePath, filePath);
+      }
 
       // Parse hunks to get hash of the hunk being rejected
       const parsedHunks = parseGitDiffHunks(diffOutput, filePath);

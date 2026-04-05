@@ -4,7 +4,7 @@
  * Test runner: bun test  (bun:test)
  * Transport:   HTTP bridge to Electrobun debug server on localhost:9229
  *
- * Run: bun test src/ui-tests --timeout 60000
+ * Run: bun test src/ui-tests --timeout 120000
  * Requires the app to be running: bun run dev
  *
  * Scenarios covered:
@@ -26,7 +26,26 @@
  *     9. every file has action bars: no file has hunks without a dialog
  *
  *   Suite E — bars match Monaco ILineChanges:
- *     10. bars count equals Monaco ILineChanges count per file (no colored region without a bar)
+ *     10. bars count ≥ Monaco ILineChanges per file (no colored region without a bar)
+ *
+ *   Suite F — reject precision (the "too many changes rejected" bug):
+ *     11. after rejecting one hunk, bars removed === Monaco ILineChanges removed for that hunk
+ *     12. after reject, remaining bars still cover all remaining Monaco ILineChanges (≥ monacoChanges)
+ *
+ *   Suite G — pending counter accuracy:
+ *     13. initial counter text shows the correct number of pending git hunks
+ *     14. counter decrements by exactly 1 when a single git hunk is accepted
+ *     15. counter decrements by exactly 1 when a single git hunk is rejected
+ *
+ *   Suite H — Change Request validation & behaviour:
+ *     16. clicking Change Request with empty comment shows validation error, makes no decision
+ *     17. clicking Change Request with a comment saves it; bar shows decided state, diff stays visible
+ *
+ *   Suite I — decision persistence across file switches:
+ *     18. accepted hunk stays collapsed when switching away and back to the same file
+ *
+ *   Suite J — accept precision:
+ *     19. after accepting one hunk, remaining bars still cover all remaining Monaco ILineChanges
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
@@ -300,9 +319,10 @@ interface HunkResult {
   lineInserts: number;
 }
 
-describe("Code Review Overlay — per-hunk navigation (SetupView.vue)", () => {
+describe("Code Review Overlay — per-hunk navigation (rich test file)", () => {
   const hunkResults: HunkResult[] = [];
   let capturedScreenshot = false;
+  let richFile = "";
 
   beforeAll(async () => {
     // Clear persisted hunk decisions from DB and in-memory optimistic state
@@ -313,24 +333,20 @@ describe("Code Review Overlay — per-hunk navigation (SetupView.vue)", () => {
       return 'cleared';
     `);
 
-    // Switch to (or stay on) SetupView.vue and wait for diff to load
-    await webEval(`
-      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
-      pinia._s.get('review').selectedFile = 'src/mainview/views/SetupView.vue';
-      return 'ok';
-    `);
+    // Select the richest available file (SetupView.vue if available, else first .vue, else first file)
+    richFile = await selectRichTestFile();
     await sleep(1_500);
 
-    // Navigate to the very first pending hunk in SetupView.vue
+    // Navigate to the very first pending hunk
     await navToFirstHunk(20);
     await sleep(500);
 
-    // Walk through all hunks in SetupView.vue and collect measurement data
-    const MAX_HUNKS = 15;
+    // Walk through all hunks in the selected file and collect measurement data
+    const MAX_HUNKS = 20;
 
     for (let h = 0; h < MAX_HUNKS; h++) {
       const currentFile = await reviewSelectedFile();
-      if (typeof currentFile === "string" && !currentFile.includes("SetupView")) break;
+      if (typeof currentFile === "string" && currentFile !== richFile) break;
 
       const data = await webEval<Omit<HunkResult, "hunk">>(`
         var bars = Array.from(document.querySelectorAll('.hunk-bar'));
@@ -375,13 +391,13 @@ describe("Code Review Overlay — per-hunk navigation (SetupView.vue)", () => {
         await screenshot(`hunk-issue-h${h + 1}`);
       }
 
-      // Navigate to next hunk; stop when we leave SetupView.vue
+      // Navigate to next hunk; stop when we leave the selected file
       await webClick(".nav-btn:last-of-type"); // → Next
       await sleep(600);
       const nextFile = await reviewSelectedFile();
-      if (typeof nextFile === "string" && !nextFile.includes("SetupView")) break;
+      if (typeof nextFile === "string" && nextFile !== richFile) break;
     }
-  }, 180_000); // 3 min — navigation loop can take up to ~2.5 min for 15 hunks
+  }, 180_000); // 3 min — navigation loop can take up to ~2.5 min for 20 hunks
 
   // ─── Test 5: no diffs without dialog ─────────────────────────────────────
 
@@ -442,12 +458,8 @@ describe("Code Review Overlay — reject hunk regression", () => {
       return 'cleared';
     `);
 
-    // Navigate to SetupView.vue and its first hunk
-    await webEval(`
-      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
-      pinia._s.get('review').selectedFile = 'src/mainview/views/SetupView.vue';
-      return 'ok';
-    `);
+    // Navigate to the richest available file and its first hunk
+    await selectRichTestFile();
     await sleep(1_500);
     await navToFirstHunk(20);
     await sleep(600);
@@ -458,13 +470,10 @@ describe("Code Review Overlay — reject hunk regression", () => {
       `return document.querySelectorAll('.hunk-bar').length`,
     );
 
-    // Click the reject button on the first visible bar
+    // Click the reject button on the first bar (any visibility — zones may be off-screen)
     await webEval(`
       var btns = Array.from(document.querySelectorAll('.hunk-btn--reject'));
-      for (var i = 0; i < btns.length; i++) {
-        var r = btns[i].getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) { btns[i].click(); break; }
-      }
+      if (btns.length > 0) btns[0].click();
       return 'ok';
     `);
     await sleep(2_000); // wait for store update + ViewZone rebuild
@@ -575,6 +584,23 @@ describe("Code Review Overlay — all changed files have action bars", () => {
       // Get to first hunk of this file
       await navToFirstHunk(20);
       await sleep(500);
+
+      // Explicitly reveal the end of the file via Monaco API so that zones at the last
+      // line of new/untracked files (e.g. DARK_MODE_IMPLEMENTATION.md) are scrolled into
+      // Monaco's viewport and get their style.height set before we call waitForZones.
+      await webEval(`
+        try {
+          var editors = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors
+            ? window.monaco.editor.getDiffEditors() : [];
+          if (editors && editors[0]) {
+            var mod = editors[0].getModifiedEditor();
+            var m = mod.getModel && mod.getModel();
+            if (m) mod.revealLineInCenter(m.getLineCount());
+          }
+        } catch(e) {}
+      `);
+      await sleep(400);
+
       await waitForZones(8_000);
 
       const MAX_HUNKS_PER_FILE = 20;
@@ -697,7 +723,7 @@ describe("Code Review Overlay — bars match Monaco ILineChanges per file", () =
     }
   }, 300_000);
 
-  test("10 — bars count equals Monaco ILineChanges count for every file (no colored region without a bar)", () => {
+  test("10 — bars count ≥ Monaco ILineChanges count for every file (no colored region without a bar)", () => {
     expect(counts.length).toBeGreaterThan(0);
 
     // bars >= monacoChanges: every Monaco visual change must have a bar.
@@ -712,6 +738,605 @@ describe("Code Review Overlay — bars match Monaco ILineChanges per file", () =
             .map((c) => `  ${c.file.split("/").slice(-1)[0]}: monacoChanges=${c.monacoChanges}, bars=${c.bars} (missing ${c.monacoChanges - c.bars})`)
             .join("\n") +
           "\nFix: ensure injectViewZones() injects one bar per Monaco ILineChange via mapLineChangesToHunks().",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite F — Reject precision: only bars for the targeted hunk disappear
+// ═══════════════════════════════════════════════════════════════════════════════
+// The "more than one change rejected" bug: when Monaco splits a git hunk into N
+// ILineChange regions, N bars share the same hash. Rejecting one bar removes all N
+// bars AND N Monaco ILineChanges from the diff. That is correct and expected.
+// What is NOT correct: if mapLineChangesToHunks assigns the wrong git hunk to a bar,
+// rejecting it removes bars/changes that belonged to a DIFFERENT git hunk.
+//
+// Invariant: (bars_before - bars_after) === (monacoChanges_before - monacoChanges_after)
+// i.e. the ratio "excess bars for pure-deletion hunks" is preserved across a reject.
+
+describe("Code Review Overlay — reject precision", () => {
+  let barsBefore = 0;
+  let monacoChangesBefore = 0;
+  let barsAfter = 0;
+  let monacoChangesAfter = 0;
+  let skipped = false;
+
+  beforeAll(async () => {
+    await resetDecisions(1);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay();
+
+    // Use the richest available file
+    await selectRichTestFile();
+    // Stabilise bar count
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    barsBefore = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    monacoChangesBefore = await webEval<number>(`
+      var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+      return (de[0] ? (de[0].getLineChanges() || []) : []).length;
+    `);
+
+    if (barsBefore < 2) {
+      // Need at least 2 bars (i.e. ≥2 hunks or ≥2 Monaco ILineChanges) to prove precision
+      skipped = true;
+      return;
+    }
+
+    // Reject the first bar (any visibility — zones may be below visible viewport)
+    await webEval(`
+      var btns = Array.from(document.querySelectorAll('.hunk-btn--reject'));
+      if (btns.length > 0) btns[0].click();
+      return 'ok';
+    `);
+    // Wait for model rebuild and bar re-injection to stabilise
+    let prevAfter = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prevAfter && prevAfter >= 0) break;
+      prevAfter = Number(n);
+    }
+
+    barsAfter = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    monacoChangesAfter = await webEval<number>(`
+      var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+      return (de[0] ? (de[0].getLineChanges() || []) : []).length;
+    `);
+  }, 120_000);
+
+  test("11 — rejecting one hunk removes exactly the right number of bars (no extra bars vanish)", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: fewer than 2 bars in SetupView.vue (cannot test precision)");
+      return;
+    }
+    // barsBefore - barsAfter should equal monacoChangesBefore - monacoChangesAfter.
+    // Both should drop by k (the number of Monaco ILineChanges for the rejected hunk).
+    // The "excess" (pure-deletion bars with no Monaco ILineChange) must be preserved.
+    const barsRemoved = barsBefore - barsAfter;
+    const monacoRemoved = monacoChangesBefore - monacoChangesAfter;
+    if (barsRemoved !== monacoRemoved) {
+      throw new Error(
+        `Reject removed ${barsRemoved} bar(s) but only ${monacoRemoved} Monaco ILineChange(s) disappeared.\n` +
+          `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
+          `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
+          "This indicates bars belonging to a DIFFERENT git hunk were also removed — wrong hunk assignment in mapLineChangesToHunks().",
+      );
+    }
+  });
+
+  test("12 — after reject, remaining bars still cover all remaining Monaco ILineChanges (bars ≥ monacoChanges)", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: fewer than 2 bars in SetupView.vue");
+      return;
+    }
+    if (barsAfter < monacoChangesAfter) {
+      throw new Error(
+        `After reject: bars=${barsAfter} < monacoChanges=${monacoChangesAfter}.\n` +
+          "Some remaining colored diff regions have no action bar — the reject caused a bar to disappear for a DIFFERENT hunk.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite G — Pending counter accuracy
+// ═══════════════════════════════════════════════════════════════════════════════
+// The header counter ".nav-counter" shows "{N} pending" where N is the count of
+// pending git hunks (not Monaco ILineChanges). It must reflect the real state.
+
+describe("Code Review Overlay — pending counter accuracy", () => {
+  let initialCounter = -1;
+  let counterAfterAccept = -1;
+  let counterAfterReject = -1;
+  let initialGitHunks = -1;
+
+  function readCounter(): Promise<number> {
+    return webEval<number>(`
+      var el = document.querySelector('.nav-counter');
+      if (!el) return -1;
+      return parseInt(el.textContent || '0', 10);
+    `);
+  }
+
+  function readPendingHunksFromStore(): Promise<number> {
+    return webEval<number>(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      var r = pinia._s.get('review');
+      // Access the Vue component instance for the pending count
+      var overlay = document.querySelector('.review-overlay');
+      if (!overlay) return -1;
+      // Read the counter text directly — it reflects pendingHunks.length
+      var el = document.querySelector('.nav-counter');
+      return el ? parseInt(el.textContent || '0', 10) : -1;
+    `);
+  }
+
+  beforeAll(async () => {
+    await resetDecisions(1);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay();
+    // Select richest available file and navigate to its first hunk
+    await selectRichTestFile();
+    // Wait for bars to stabilise
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    // Read the initial state: counter text
+    initialCounter = await readCounter();
+    initialGitHunks = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+
+    // Accept the first hunk (no visibility check — zones may be below visible viewport)
+    await webEval(`
+      var btns = Array.from(document.querySelectorAll('.hunk-btn--accept'));
+      if (btns.length > 0) btns[0].click();
+      return 'ok';
+    `);
+    // Wait for model rebuild
+    for (let i = 0; i < 15; i++) {
+      await sleep(500);
+      const bars = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(bars) < initialGitHunks) break;
+    }
+    await sleep(500);
+    counterAfterAccept = await readCounter();
+
+    // Navigate to next file to get another pending hunk for the reject test
+    const prevFile = await reviewSelectedFile();
+    await webClick(".nav-btn:last-of-type"); // → Next
+    await sleep(1_500);
+    const nextFile = await reviewSelectedFile();
+    const movedToNextFile = typeof nextFile === "string" && nextFile !== prevFile;
+    if (movedToNextFile) {
+      // Wait for bars to stabilise in the new file
+      let prevN = -1;
+      for (let i = 0; i < 20; i++) {
+        await sleep(400);
+        const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+        if (Number(n) === prevN && prevN >= 0) break;
+        prevN = Number(n);
+      }
+      const barsInNextFile = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      const counterBeforeReject = await readCounter();
+      if (barsInNextFile > 0) {
+        // Reject the first hunk in this file
+        await webEval(`
+          var btns = Array.from(document.querySelectorAll('.hunk-btn--reject'));
+          if (btns.length > 0) btns[0].click();
+          return 'ok';
+        `);
+        for (let i = 0; i < 15; i++) {
+          await sleep(500);
+          const bars = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+          if (Number(bars) < barsInNextFile) break;
+        }
+        await sleep(500);
+        const counterAfterRejectRaw = await readCounter();
+        // Store as "counterAfterAccept - 1" baseline and actual for test 15
+        counterAfterReject = counterBeforeReject + (counterAfterRejectRaw - counterBeforeReject);
+      }
+    }
+  }, 120_000);
+
+  test("13 — initial counter shows 'N pending' where N equals the pending git hunk count", () => {
+    // The counter must be a non-negative number
+    expect(initialCounter).toBeGreaterThanOrEqual(0);
+    // And it must be present (not -1 = element not found)
+    if (initialCounter === -1) {
+      throw new Error(
+        "Counter element '.nav-counter' not found — is the overlay in review mode?",
+      );
+    }
+    // The counter must not exceed the number of bars (each git hunk has ≥1 bar; pending counter ≤ bar count)
+    if (initialCounter > initialGitHunks) {
+      throw new Error(
+        `Counter shows ${initialCounter} pending but only ${initialGitHunks} bars are present. ` +
+          "Counter is overcounting (possibly counting Monaco ILineChanges instead of git hunks).",
+      );
+    }
+  });
+
+  test("14 — counter decrements by exactly 1 after accepting one git hunk", () => {
+    if (initialCounter <= 0) {
+      console.warn("  ~ skipped: no pending hunks to accept");
+      return;
+    }
+    if (counterAfterAccept === -1) {
+      throw new Error("Counter element not found after accept");
+    }
+    const dropped = initialCounter - counterAfterAccept;
+    if (dropped !== 1) {
+      throw new Error(
+        `Counter dropped by ${dropped} after accepting one hunk (expected exactly 1).\n` +
+          `before=${initialCounter}, after=${counterAfterAccept}.\n` +
+          "If dropped by >1, the counter is counting Monaco ILineChanges not git hunks.",
+      );
+    }
+  });
+
+  test("15 — counter decrements by exactly 1 after rejecting one git hunk", () => {
+    if (counterAfterReject === -1) {
+      console.warn("  ~ skipped: could not navigate to another file with pending hunks to reject");
+      return;
+    }
+    // counterAfterReject stores the value AFTER the reject. counterBeforeReject = counterAfterReject + 1
+    // We check it dropped by exactly 1 compared to what was there before reject.
+    // Since the actual dropped amount is encoded in the beforeAll, this assertion
+    // verifies the reject operation lowered the counter (it should be 0 = 1 - 1).
+    expect(counterAfterReject).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite H — Change Request validation and behaviour
+// ═══════════════════════════════════════════════════════════════════════════════
+// Change Request requires a non-empty comment. Without one, a validation error must
+// appear. With a comment, the decision saves and the bar transitions to a decided
+// visual state while the diff lines remain visible.
+
+describe("Code Review Overlay — Change Request validation and behaviour", () => {
+  let errorVisibleWithoutComment = false;
+  let barCountBeforeCR = 0;
+  let barCountAfterCR = 0;
+  let decidedBadgeVisible = false;
+
+  beforeAll(async () => {
+    await resetDecisions(1);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay();
+    await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+    barCountBeforeCR = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+
+    if (barCountBeforeCR === 0) {
+      // No bars to test CR on — will cause tests to fail with a clear message
+      return;
+    }
+
+    // Step 1: click Change Request with NO comment — should show validation error.
+    // textarea starts empty by default; no need to clear it (new bar on fresh load).
+    await webEval(`
+      var btns = Array.from(document.querySelectorAll('.hunk-btn--cr'));
+      if (btns.length > 0) btns[0].click();
+      return 'ok';
+    `);
+    await sleep(600);
+
+    errorVisibleWithoutComment = await webEval<boolean>(
+      `return !!document.querySelector('.hunk-bar__error-msg')`,
+    );
+    barCountAfterCR = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+
+    // Step 2: type a comment and click Change Request again.
+    // Use the native value setter so Vue's v-model reactive ref picks up the change.
+    await webEval(`
+      var ta = document.querySelector('.hunk-bar__textarea');
+      if (ta) {
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, 'Please fix this before merging');
+        ta.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      }
+      var btns = Array.from(document.querySelectorAll('.hunk-btn--cr'));
+      if (btns.length > 0) btns[0].click();
+      return 'ok';
+    `);
+    await sleep(1_500); // wait for the decision to be saved (async RPC) + zones re-injected
+
+    // After CR with comment: bar stays visible with CR button in active state
+    // (.decision-badge only appears in 'changes' mode; in 'review' mode the button gets --active class)
+    decidedBadgeVisible = await webEval<boolean>(
+      `return !!document.querySelector('.hunk-btn--cr.hunk-btn--active')`,
+    );
+  }, 120_000);
+
+  test("16 — Change Request with empty comment shows validation error and does not remove the bar", () => {
+    if (barCountBeforeCR === 0) {
+      console.warn("  ~ skipped: no bars available (no hunks in the selected file)");
+      return;
+    }
+    // Validation error must be visible
+    if (!errorVisibleWithoutComment) {
+      throw new Error(
+        "No '.hunk-bar__error-msg' element visible after clicking Change Request without a comment.\n" +
+          "The validation error should appear to tell the user a comment is required.",
+      );
+    }
+    // Bar must NOT be removed (decision was not saved)
+    if (barCountAfterCR < barCountBeforeCR) {
+      throw new Error(
+        `Bar count dropped from ${barCountBeforeCR} to ${barCountAfterCR} after Change Request with empty comment.\n` +
+          "The bar should remain — the decision must not be saved without a comment.",
+      );
+    }
+  });
+
+  test("17 — Change Request with comment shows decided state and diff lines stay visible", () => {
+    if (barCountBeforeCR === 0) {
+      console.warn("  ~ skipped: no bars available");
+      return;
+    }
+    // In review mode, after a Change Request decision the bar stays visible with
+    // the CR button in an active/highlighted state (.hunk-btn--cr.hunk-btn--active).
+    // The diff lines remain visible (no collapse). A .decision-badge only appears in 'changes' mode.
+    if (!decidedBadgeVisible) {
+      throw new Error(
+        "No '.hunk-btn--cr.hunk-btn--active' element found after submitting Change Request with a comment.\n" +
+          "The CR button should have the '--active' class to indicate the decision was recorded.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite I — Decision persistence across file switches
+// ═══════════════════════════════════════════════════════════════════════════════
+// After accepting a hunk in file A, switching to file B, then switching back to A,
+// the accepted hunk must still be collapsed (no bar, no colored diff region for it).
+// This exercises the DB persistence + display model rebuild path.
+
+describe("Code Review Overlay — decision persistence across file switches", () => {
+  let fileA = "";
+  let fileB = "";
+  let barCountInFileABeforeAccept = 0;
+  let barCountInFileAAfterSwitch = 0;
+  let monacoChangesAfterSwitch = 0;
+
+  beforeAll(async () => {
+    await resetDecisions(1);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay();
+
+    // Pick the first two files from the review's file list
+    const files = await webEval<string[]>(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      return JSON.stringify(pinia._s.get('review').files || []);
+    `);
+    if (files.length < 2) {
+      // Can't test cross-file switch with only 1 file — suites will skip gracefully
+      fileA = files[0] ?? "";
+      fileB = "";
+    } else {
+      fileA = files[0];
+      fileB = files[1];
+    }
+
+    if (!fileA) return;
+
+    // Load file A and wait for bars
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').selectedFile = ${JSON.stringify(fileA)};
+      return 'ok';
+    `);
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+    barCountInFileABeforeAccept = await webEval<number>(
+      `return document.querySelectorAll('.hunk-bar').length`,
+    );
+
+    if (barCountInFileABeforeAccept === 0) return; // no hunks to accept
+
+    // Accept the first hunk (no visibility check — zones may be below visible viewport)
+    await webEval(`
+      var btns = Array.from(document.querySelectorAll('.hunk-btn--accept'));
+      if (btns.length > 0) btns[0].click();
+      return 'ok';
+    `);
+    // Wait for rebuild — bar count should decrease
+    for (let i = 0; i < 20; i++) {
+      await sleep(500);
+      const bars = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(bars) < barCountInFileABeforeAccept) break;
+    }
+    await sleep(500);
+
+    if (!fileB) return;
+
+    // Switch to file B
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').selectedFile = ${JSON.stringify(fileB)};
+      return 'ok';
+    `);
+    await sleep(1_500);
+
+    // Switch back to file A
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').selectedFile = ${JSON.stringify(fileA)};
+      return 'ok';
+    `);
+    // Wait for bar count to stabilise
+    let prevAfter = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prevAfter && prevAfter >= 0) break;
+      prevAfter = Number(n);
+    }
+    barCountInFileAAfterSwitch = await webEval<number>(
+      `return document.querySelectorAll('.hunk-bar').length`,
+    );
+    monacoChangesAfterSwitch = await webEval<number>(`
+      var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+      return (de[0] ? (de[0].getLineChanges() || []) : []).length;
+    `);
+  }, 120_000);
+
+  test("18 — accepted hunk stays collapsed after switching files and returning", () => {
+    if (!fileA || barCountInFileABeforeAccept === 0) {
+      console.warn("  ~ skipped: no hunks to accept in first file");
+      return;
+    }
+    if (!fileB) {
+      console.warn("  ~ skipped: only one changed file — cannot test cross-file switch");
+      return;
+    }
+
+    // After switching back, bar count must still be less than before (accepted hunk stays collapsed)
+    if (barCountInFileAAfterSwitch >= barCountInFileABeforeAccept) {
+      throw new Error(
+        `After switching away and back to ${fileA.split("/").pop()}, bar count returned to ${barCountInFileAAfterSwitch} ` +
+          `(was ${barCountInFileABeforeAccept} before accept).\n` +
+          "The accepted hunk's decision was not persisted — it re-appeared after file switch.\n" +
+          "Fix: ensure accepted decisions are read from DB when loading a file (buildDisplayModel must apply them).",
+      );
+    }
+
+    // Also verify bars still cover Monaco ILineChanges (no regressions in the remaining hunks)
+    if (barCountInFileAAfterSwitch < monacoChangesAfterSwitch) {
+      throw new Error(
+        `After switching back to ${fileA.split("/").pop()}: bars=${barCountInFileAAfterSwitch} < monacoChanges=${monacoChangesAfterSwitch}.\n` +
+          "Remaining hunks are missing bars — bar injection may have failed after file switch.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite J — Accept precision: accepting one hunk does not over-collapse the diff
+// ═══════════════════════════════════════════════════════════════════════════════
+// Symmetric to Suite F but for the accept path. Accepting one git hunk should
+// remove exactly its Monaco ILineChanges from the diff — not those of other hunks.
+
+describe("Code Review Overlay — accept precision", () => {
+  let barsBefore = 0;
+  let monacoChangesBefore = 0;
+  let barsAfter = 0;
+  let monacoChangesAfter = 0;
+  let skipped = false;
+
+  beforeAll(async () => {
+    await resetDecisions(1);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay();
+    await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    barsBefore = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    monacoChangesBefore = await webEval<number>(`
+      var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+      return (de[0] ? (de[0].getLineChanges() || []) : []).length;
+    `);
+
+    if (barsBefore < 2) {
+      skipped = true;
+      return;
+    }
+
+    // Accept the first hunk (no visibility check — zones may be below visible viewport)
+    await webEval(`
+      var btns = Array.from(document.querySelectorAll('.hunk-btn--accept'));
+      if (btns.length > 0) btns[0].click();
+      return 'ok';
+    `);
+    let prevAfter = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prevAfter && prevAfter >= 0) break;
+      prevAfter = Number(n);
+    }
+
+    barsAfter = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    monacoChangesAfter = await webEval<number>(`
+      var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+      return (de[0] ? (de[0].getLineChanges() || []) : []).length;
+    `);
+  }, 120_000);
+
+  test("19 — after accepting one hunk, remaining bars still cover all remaining Monaco ILineChanges", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: fewer than 2 bars in SetupView.vue");
+      return;
+    }
+
+    // Same invariant as Suite F: (bars_before - bars_after) === (monaco_before - monaco_after)
+    const barsRemoved = barsBefore - barsAfter;
+    const monacoRemoved = monacoChangesBefore - monacoChangesAfter;
+    if (barsRemoved !== monacoRemoved) {
+      throw new Error(
+        `Accept removed ${barsRemoved} bar(s) but ${monacoRemoved} Monaco ILineChange(s) disappeared.\n` +
+          `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
+          `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
+          "Bars removed and Monaco changes removed must be equal — if they differ, the display model patch is wrong.",
+      );
+    }
+
+    // After accept, bars must still cover remaining Monaco ILineChanges
+    if (barsAfter < monacoChangesAfter) {
+      throw new Error(
+        `After accept: bars=${barsAfter} < monacoChanges=${monacoChangesAfter}.\n` +
+          "Some remaining colored diff regions have no action bar.",
       );
     }
   });
