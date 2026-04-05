@@ -161,9 +161,10 @@ const _debugServer = Bun.serve({
           db.run("DELETE FROM tasks WHERE id = ?", [prev.id]);
         }
 
-        // Resolve stable required IDs (board + project must exist).
-        const board = db.query<{ id: number; project_id: number }, []>("SELECT id, project_id FROM boards LIMIT 1").get();
-        if (!board) return new Response(JSON.stringify({ __error: "No board found. Run the app and create a project first." }), { status: 500, headers: { "content-type": "application/json" } });
+        // Resolve stable required IDs (board + project) from an existing task.
+        const existingTask = db.query<{ board_id: number; project_id: number }, []>("SELECT board_id, project_id FROM tasks WHERE title != 'UI Test Task' LIMIT 1").get();
+        if (!existingTask) return new Response(JSON.stringify({ __error: "No existing task found. Open the app, create a project and task first." }), { status: 500, headers: { "content-type": "application/json" } });
+        const board = { id: existingTask.board_id, project_id: existingTask.project_id };
 
         // Create a temp git repo with known test files.
         const worktreePath = `/tmp/railyn-test-worktree-${Date.now()}`;
