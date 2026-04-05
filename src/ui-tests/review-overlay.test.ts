@@ -73,6 +73,14 @@ describe("Code Review Overlay — ViewZone UX", () => {
     const ping = await fetch(BRIDGE_BASE + "/").catch(() => null);
     if (!ping?.ok) throw new Error("App not running — start it with: bun run dev");
 
+    // Clear any decisions left over from previous test runs so all hunks are pending.
+    await resetDecisions(1);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+
     await openReviewOverlay();
     await selectRichTestFile(); // → SetupView.vue
 
