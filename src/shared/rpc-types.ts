@@ -70,6 +70,16 @@ export interface ModelInfo {
   contextWindow: number | null;
 }
 
+export interface ProviderModelList {
+  id: string;
+  models: Array<{
+    id: string;
+    contextWindow: number | null;
+    enabled: boolean;
+  }>;
+  error?: string;
+}
+
 // ─── File diff types ─────────────────────────────────────────────────────────
 
 export interface HunkLine {
@@ -93,6 +103,25 @@ export interface FileDiffPayload {
   added: number;
   removed: number;
   hunks?: Hunk[];
+}
+
+// ─── Ask user prompt types ───────────────────────────────────────────────────
+
+export interface AskUserOption {
+  label: string;
+  description?: string;
+  recommended?: boolean;
+  preview?: string;
+}
+
+export interface AskUserQuestion {
+  question: string;
+  selection_mode: "single" | "multi";
+  options: AskUserOption[];
+}
+
+export interface AskUserPromptContent {
+  questions: AskUserQuestion[];
 }
 
 // ─── Code review types ──────────────────────────────────────────────────────
@@ -279,6 +308,14 @@ export type RailynRPCType = {
       // Models
       "models.list": {
         params: Record<string, never>;
+        response: ProviderModelList[];
+      };
+      "models.setEnabled": {
+        params: { qualifiedModelId: string; enabled: boolean };
+        response: Record<string, never>;
+      };
+      "models.listEnabled": {
+        params: Record<string, never>;
         response: ModelInfo[];
       };
 
@@ -338,6 +375,10 @@ export type RailynRPCType = {
           modifiedStart: number;
         };
         response: void;
+      };
+      "tasks.sessionMemory": {
+        params: { taskId: number };
+        response: { content: string | null };
       };
     };
     messages: Record<string, never>;

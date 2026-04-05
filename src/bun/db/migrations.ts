@@ -126,6 +126,16 @@ const migrations: Array<{ id: string; sql: string }> = [
     `,
   },
   {
+    id: "005_enabled_models",
+    sql: `
+      CREATE TABLE IF NOT EXISTS enabled_models (
+        workspace_id        INTEGER NOT NULL,
+        qualified_model_id  TEXT    NOT NULL,
+        PRIMARY KEY (workspace_id, qualified_model_id)
+      );
+    `,
+  },
+  {
     id: "004_hunk_decisions",
     sql: `
       CREATE TABLE IF NOT EXISTS task_hunk_decisions (

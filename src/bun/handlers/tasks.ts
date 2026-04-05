@@ -1,6 +1,6 @@
 import { getDb } from "../db/index.ts";
 import { createHash } from "crypto";
-import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, ReviewerDecision, FileDiffContent } from "../../shared/rpc-types.ts";
+import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, ReviewerDecision, FileDiffContent, ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
 import {
@@ -16,9 +16,11 @@ import {
   cancelExecution,
 } from "../workflow/engine.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
+import { readSessionMemory } from "../workflow/session-memory.ts";
 import type { ProjectRow } from "../db/row-types.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import { getConfig } from "../config/index.ts";
+import { listOpenAICompatibleModels } from "../ai/index.ts";
 
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
@@ -229,43 +231,95 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
     },
 
     // ─── models.list ─────────────────────────────────────────────────────────
-    "models.list": async () => {
+    "models.list": async (): Promise<ProviderModelList[]> => {
+      const db = getDb();
       const config = getConfig();
-      const { base_url, api_key } = config.workspace.ai;
-      const headers: Record<string, string> = api_key ? { Authorization: `Bearer ${api_key}` } : {};
 
-      // Try LM Studio native API — gives loaded context_length per model
-      try {
-        const nativeBase = base_url.replace(/\/v1\/?$/, "");
-        const res = await fetch(`${nativeBase}/api/v1/models`, { headers });
-        if (res.ok) {
-          const json = await res.json() as { models?: Array<{ key: string; type?: string; loaded_instances?: Array<{ config?: { context_length?: number } }>; max_context_length?: number }> };
-          const llms = (json.models ?? []).filter((m) => !m.type || m.type === "llm");
-          if (llms.length > 0) {
-            return llms.map((m) => ({
-              id: m.key,
-              contextWindow: m.loaded_instances?.[0]?.config?.context_length
-                ?? m.max_context_length
-                ?? null,
-            }));
+      const enabledSet = new Set(
+        db
+          .query<{ qualified_model_id: string }, [number]>(
+            "SELECT qualified_model_id FROM enabled_models WHERE workspace_id = ?",
+          )
+          .all(1)
+          .map((r) => r.qualified_model_id),
+      );
+
+      const results = await Promise.allSettled(
+        config.providers.map(async (provConfig): Promise<ProviderModelList> => {
+          if (provConfig.type === "fake") {
+            return { id: provConfig.id, models: [] };
           }
-        }
-      } catch { /* not LM Studio */ }
 
-      // Standard OpenAI-compatible fallback
-      try {
-        const res = await fetch(`${base_url}/v1/models`, { headers });
-        if (!res.ok) return [];
-        const json = await res.json() as { data?: Array<{ id: string; context_length?: number }> };
-        return (json.data ?? [])
-          .filter((m) => Boolean(m.id))
-          .map((m) => ({
-            id: m.id,
-            contextWindow: typeof m.context_length === "number" ? m.context_length : null,
-          }));
-      } catch {
-        return [];
+          try {
+            let rawModels: Array<{ id: string; contextWindow: number | null }>;
+
+            if (provConfig.type === "anthropic") {
+              const baseUrl = provConfig.base_url ?? "https://api.anthropic.com";
+              const res = await fetch(`${baseUrl}/v1/models`, {
+                headers: {
+                  "x-api-key": provConfig.api_key ?? "",
+                  "anthropic-version": "2023-06-01",
+                },
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const json = await res.json() as { data?: Array<{ id: string; context_window?: number }> };
+              rawModels = (json.data ?? []).map((m) => ({
+                id: m.id,
+                contextWindow: m.context_window ?? null,
+              }));
+            } else {
+              rawModels = await listOpenAICompatibleModels(provConfig);
+            }
+
+            return {
+              id: provConfig.id,
+              models: rawModels.map((m) => ({
+                id: `${provConfig.id}/${m.id}`,
+                contextWindow: m.contextWindow,
+                enabled: enabledSet.has(`${provConfig.id}/${m.id}`),
+              })),
+            };
+          } catch (err) {
+            return {
+              id: provConfig.id,
+              models: [],
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        }),
+      );
+
+      return results.map((r) =>
+        r.status === "fulfilled" ? r.value : { id: "unknown", models: [], error: String(r.reason) },
+      );
+    },
+
+    // ─── models.setEnabled ───────────────────────────────────────────────────
+    "models.setEnabled": async (params: { qualifiedModelId: string; enabled: boolean }): Promise<Record<string, never>> => {
+      const db = getDb();
+      if (params.enabled) {
+        db.run(
+          "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, ?)",
+          [1, params.qualifiedModelId],
+        );
+      } else {
+        db.run(
+          "DELETE FROM enabled_models WHERE workspace_id = ? AND qualified_model_id = ?",
+          [1, params.qualifiedModelId],
+        );
       }
+      return {};
+    },
+
+    // ─── models.listEnabled ──────────────────────────────────────────────────
+    "models.listEnabled": async (): Promise<ModelInfo[]> => {
+      const db = getDb();
+      return db
+        .query<{ qualified_model_id: string }, [number]>(
+          "SELECT qualified_model_id FROM enabled_models WHERE workspace_id = ? ORDER BY qualified_model_id",
+        )
+        .all(1)
+        .map((r) => ({ id: r.qualified_model_id, contextWindow: null }));
     },
 
     // ─── tasks.setModel ──────────────────────────────────────────────────────
@@ -282,10 +336,10 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       const config = getConfig();
       const db = getDb();
       const task = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
-      const taskModel = task?.model ?? config.workspace.ai.model ?? null;
+      const taskModel = task?.model ?? null;
       const maxTokens = taskModel
         ? await resolveModelContextWindow(taskModel)
-        : (config.workspace.ai.context_window_tokens ?? 128_000);
+        : 128_000;
       return estimateContextUsage(params.taskId, maxTokens);
     },
 
@@ -521,6 +575,11 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
            updated_at = datetime('now')`,
         [params.taskId, params.hunkHash, params.filePath, params.decision, params.comment, params.originalStart, params.modifiedStart],
       );
+    },
+
+    // ─── tasks.sessionMemory ─────────────────────────────────────────────────
+    "tasks.sessionMemory": async (params: { taskId: number }): Promise<{ content: string | null }> => {
+      return { content: readSessionMemory(params.taskId) };
     },
   };
 }

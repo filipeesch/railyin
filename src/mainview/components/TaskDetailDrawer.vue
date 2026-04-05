@@ -170,6 +170,12 @@
             <pre class="side-git-stat">{{ gitStat }}</pre>
           </div>
 
+          <!-- Session notes -->
+          <div class="side-section" v-if="sessionMemoryContent">
+            <div class="side-label">Session Notes</div>
+            <pre class="side-session-notes">{{ sessionMemoryContent }}</pre>
+          </div>
+
           <!-- Transition buttons -->
           <div class="side-section" v-if="columns.length">
             <div class="side-label">Move to</div>
@@ -234,16 +240,47 @@
           />
         </div>
         <!-- Model selector + context gauge -->
-        <div class="task-detail__model-row" v-if="taskStore.availableModels.length > 0">
-          <Select
-            :model-value="task.model ?? taskStore.availableModels[0]?.id ?? null"
-            :options="taskStore.availableModels"
-            option-label="id"
-            option-value="id"
-            size="small"
-            class="input-model-select"
-            @change="(e: { value: string }) => onModelChange(e.value)"
-          />
+        <div class="task-detail__model-row">
+          <!-- Populated: searchable grouped Select -->
+          <template v-if="taskStore.availableModels.length > 0">
+            <Select
+              :model-value="task.model ?? taskStore.availableModels[0]?.id ?? null"
+              :options="groupedModels"
+              option-group-label="label"
+              option-group-children="items"
+              option-label="id"
+              option-value="id"
+              filter
+              filter-placeholder="Search models…"
+              size="small"
+              class="input-model-select"
+              @change="(e: { value: string }) => onModelChange(e.value)"
+            >
+              <template #footer>
+                <div class="model-select-footer">
+                  <Button
+                    label="⚙ Manage models"
+                    text
+                    size="small"
+                    @click="manageModelsOpen = true"
+                  />
+                </div>
+              </template>
+            </Select>
+          </template>
+
+          <!-- Empty state: no models enabled -->
+          <template v-else>
+            <div class="model-empty-state">
+              <span class="model-empty-label">No models enabled</span>
+              <Button
+                label="⚙ Manage models"
+                text
+                size="small"
+                @click="manageModelsOpen = true"
+              />
+            </div>
+          </template>
           <!-- Context gauge -->
           <div
             v-if="taskStore.contextUsage"
@@ -272,6 +309,12 @@
       </div>
     </div>
   </Drawer>
+
+  <!-- Manage models modal -->
+  <ManageModelsModal
+    v-model="manageModelsOpen"
+    @close="onManageModelsClosed"
+  />
 
   <!-- Edit task dialog -->
   <Dialog v-model:visible="editDialogVisible" header="Edit task" :modal="true" :style="{ width: '480px' }">
@@ -325,6 +368,7 @@ import MessageBubble from "./MessageBubble.vue";
 import ToolCallGroup, { type ToolEntry } from "./ToolCallGroup.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
+import ManageModelsModal from "./ManageModelsModal.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
 import { useToast } from "primevue/usetoast";
@@ -336,6 +380,23 @@ const taskStore = useTaskStore();
 const boardStore = useBoardStore();
 const toast = useToast();
 const reviewStore = useReviewStore();
+
+const manageModelsOpen = ref(false);
+
+async function onManageModelsClosed() {
+  await taskStore.loadEnabledModels();
+}
+
+const groupedModels = computed(() => {
+  const groups: Record<string, Array<{ id: string; contextWindow: number | null }>> = {};
+  for (const model of taskStore.availableModels) {
+    const slash = model.id.indexOf("/");
+    const provider = slash !== -1 ? model.id.slice(0, slash) : "other";
+    if (!groups[provider]) groups[provider] = [];
+    groups[provider].push(model);
+  }
+  return Object.entries(groups).map(([label, items]) => ({ label, items }));
+});
 
 const changedCount = computed(() => task.value ? (taskStore.changedFileCounts[task.value.id] ?? 0) : 0);
 const syncingChanges = ref(false);
@@ -488,6 +549,9 @@ const compacting = ref(false);
 
 // Git diff stat (fetched on drawer open when worktree is ready)
 const gitStat = ref<string | null>(null);
+
+// Session memory notes (fetched on drawer open)
+const sessionMemoryContent = ref<string | null>(null);
 
 // Edit dialog state
 const editDialogVisible = ref(false);
@@ -684,13 +748,18 @@ watch(
   () => taskStore.activeTaskId,
   async (id) => {
     gitStat.value = null;
+    sessionMemoryContent.value = null;
     if (!id) return;
-    taskStore.loadModels();
+    taskStore.loadEnabledModels();
     const t = taskStore.activeTask;
     if (t?.worktreeStatus === "ready") {
       gitStat.value = await taskStore.getGitStat(id);
       taskStore.refreshChangedFiles(id);
     }
+    try {
+      const { content } = await electroview.rpc!.request["tasks.sessionMemory"]({ taskId: id });
+      sessionMemoryContent.value = content;
+    } catch { /* non-fatal */ }
   },
   { immediate: true },
 );
@@ -838,6 +907,22 @@ watch(
 
 .input-model-select {
   min-width: 180px;
+}
+
+.model-empty-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-empty-label {
+  font-size: 0.8rem;
+  color: var(--p-text-muted-color);
+}
+
+.model-select-footer {
+  padding: 4px 8px;
+  border-top: 1px solid var(--p-content-border-color);
 }
 
 .context-gauge {

@@ -6,12 +6,12 @@ The `ask_user` tool gives the AI model a structured mechanism to request user in
 
 ### Requirement: Model can call ask_user to request structured input
 
-The system SHALL expose an `ask_user` tool to the model when it is included in the column's tool configuration. The tool accepts a question string, a selection mode, and an array of option strings.
+The system SHALL expose an `ask_me` tool to the model when included in the column's tool configuration. The tool SHALL accept a `questions` array (each item with `question`, `selection_mode`, and `options`). Each option SHALL be an object with required `label` and optional `description`, `recommended`, and `preview` fields. The legacy schema (top-level `question`, `selection_mode`, `options` as strings) SHALL continue to work for backward compatibility.
 
-#### Scenario: ask_user tool definition is sent to model
+#### Scenario: ask_user tool definition is sent to model with extended schema
 
 - **WHEN** a column configuration includes `ask_user` in its `tools` list
-- **THEN** the AI request includes the `ask_user` tool definition with `question`, `selection_mode`, and `options` parameters
+- **THEN** the AI request includes the `ask_me` tool definition with the extended option object schema including `label`, `description`, `recommended`, and `preview` fields (all optional except `label`)
 
 #### Scenario: ask_user is not offered when absent from column tools
 
@@ -20,47 +20,47 @@ The system SHALL expose an `ask_user` tool to the model when it is included in t
 
 ### Requirement: Engine intercepts ask_user call and suspends execution
 
-The system SHALL intercept an `ask_user` tool call before executing it. On interception, the engine SHALL save the question and options as an `ask_user_prompt` conversation message, set `execution_state` to `waiting_user`, and return without continuing the tool loop.
+The system SHALL intercept an `ask_me` tool call before executing it. On interception, the engine SHALL save the questions and options (including all new metadata fields) as an `ask_user_prompt` conversation message, set `execution_state` to `waiting_user`, and return without continuing the tool loop.
 
 #### Scenario: ask_user call suspends execution
 
-- **WHEN** the model returns an `ask_user` tool call during the tool loop
-- **THEN** the engine saves an `ask_user_prompt` message with the question and options, sets `execution_state = 'waiting_user'`, and exits the tool loop
+- **WHEN** the model returns an `ask_me` tool call during the tool loop
+- **THEN** the engine saves an `ask_user_prompt` message with all question and option data, sets `execution_state = 'waiting_user'`, and exits the tool loop
 
 #### Scenario: Tool loop does not continue after ask_user
 
-- **WHEN** the engine intercepts an `ask_user` call
-- **THEN** no further tool calls in the same turn are executed, and no streaming response is initiated
+- **WHEN** the engine intercepts an `ask_me` call
+- **THEN** no further tool calls in the same turn are executed
 
 ### Requirement: Chat widget renders ask_user_prompt message as structured UI
 
-The system SHALL render conversation messages of type `ask_user_prompt` as an interactive widget in the chat pane. The widget SHALL display the question, the model's options as radio buttons (single) or checkboxes (multi), and always include an "Other (specify)" option with a text input that is enabled when selected.
+The system SHALL render conversation messages of type `ask_user_prompt` as an interactive widget. For each question in the `questions` array, the widget SHALL display the question text, options (with label, optional description, optional recommended badge, optional preview), and always include an "Other (specify)" free-text option.
 
 #### Scenario: Single-select renders as radio buttons
 
-- **WHEN** an `ask_user_prompt` message has `selection_mode: "single"`
-- **THEN** the chat widget renders each option as a radio button and includes an "Other" radio option with a text input
+- **WHEN** an `ask_user_prompt` question has `selection_mode: "single"`
+- **THEN** the widget renders each option as a radio button and includes an "Other" radio option with a text input
 
 #### Scenario: Multi-select renders as checkboxes
 
-- **WHEN** an `ask_user_prompt` message has `selection_mode: "multi"`
-- **THEN** the chat widget renders each option as a checkbox and includes an "Other" checkbox with a text input
+- **WHEN** an `ask_user_prompt` question has `selection_mode: "multi"`
+- **THEN** the widget renders each option as a checkbox and includes an "Other" checkbox with a text input
 
-#### Scenario: Other option enables free text
+#### Scenario: Multiple questions rendered sequentially
 
-- **WHEN** the user selects "Other (specify)"
-- **THEN** a text input becomes active for the user to enter their own answer
+- **WHEN** an `ask_user_prompt` message contains more than one question
+- **THEN** each question is rendered as its own section within the widget, stacked vertically
 
 #### Scenario: Submitting sends user message and resumes execution
 
-- **WHEN** the user submits their selection via the widget
-- **THEN** the selected options (and any Other text) are sent as a regular user message, and execution resumes via the normal handleHumanTurn flow
+- **WHEN** the user submits their selections for all questions via the widget
+- **THEN** the answers are sent as a regular user message and execution resumes
 
 ### Requirement: ask_user_prompt widget is read-only after submission
 
-The system SHALL render previously answered `ask_user_prompt` messages as read-only summaries in the conversation history. They SHALL show the question and the selected answer but no interactive controls.
+The system SHALL render the `ask_user_prompt` widget in a read-only state once the user has submitted their response, showing the selected options but disabling all controls.
 
-#### Scenario: Answered widget is not interactive
+#### Scenario: Widget becomes read-only after answer submitted
 
-- **WHEN** the conversation history contains an `ask_user_prompt` message followed by a user message
-- **THEN** the widget is rendered in a read-only/collapsed state showing the selected answer
+- **WHEN** a user response to an `ask_user_prompt` exists in the conversation
+- **THEN** the associated `ask_user_prompt` widget is rendered as read-only with selections shown but controls disabled
