@@ -259,80 +259,29 @@ function clearAllZones() {
 }
 
 function layoutZone(hash: string) {
-  const record = hunkZones.get(hash);
-  if (!record) return;
   const editor = diffEditorRef.value?.getEditor();
   if (!editor) return;
-  // Read the actual rendered content height from the inner hunk-bar element.
-  // Monaco sets an explicit height on domNode (the zone container), making
-  // domNode.scrollHeight always equal to Monaco's allocated height rather than
-  // the true content size. The first child is the Vue-mounted HunkActionBar.
-  const innerEl = (record.domNode.firstElementChild as HTMLElement) ?? record.domNode;
-  const actualHeight = Math.max(innerEl.scrollHeight, innerEl.offsetHeight) || record.domNode.scrollHeight;
-  if (actualHeight > 0) {
-    record.zoneDescriptor.heightInPx = actualHeight;
-    if (record.spacerDescriptor) record.spacerDescriptor.heightInPx = actualHeight;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  editor.getModifiedEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.zoneId));
-  if (record.spacerZoneId) {
+  // Layout ALL zones that belong to this git hunk (there may be multiple when Monaco
+  // splits one git hunk into several ILineChange regions).
+  for (const [, record] of hunkZones) {
+    if (record.hash !== hash) continue;
+    // Read the actual rendered content height from the inner hunk-bar element.
+    // Monaco sets an explicit height on domNode (the zone container), making
+    // domNode.scrollHeight always equal to Monaco's allocated height rather than
+    // the true content size. The first child is the Vue-mounted HunkActionBar.
+    const innerEl = (record.domNode.firstElementChild as HTMLElement) ?? record.domNode;
+    const actualHeight = Math.max(innerEl.scrollHeight, innerEl.offsetHeight) || record.domNode.scrollHeight;
+    if (actualHeight > 0) {
+      record.zoneDescriptor.heightInPx = actualHeight;
+      if (record.spacerDescriptor) record.spacerDescriptor.heightInPx = actualHeight;
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    editor.getOriginalEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.spacerZoneId!));
-  }
-}
-
-function correlateHunks(lineChanges: ILineChange[], undecidedHunks: HunkWithDecisions[]): Map<string, number> {
-  const result = new Map<string, number>();
-  if (!diffContent.value) return result;
-
-  const apiOrigLines = diffContent.value.original.split("\n");
-  const apiModLines = diffContent.value.modified.split("\n");
-  const displayOrigLines = displayOriginal.value.split("\n");
-  const displayModLines = displayModified.value.split("\n");
-
-  // Iterate per-hunk so every hunk is guaranteed a zone (Monaco may merge adjacent hunks)
-  const usedChangeIndices = new Set<number>();
-
-  for (const hunk of undecidedHunks) {
-    // Compare only the actual changed lines (excluding context) from the hunk against
-    // Monaco's reported change range. hunk.modifiedContentEnd is the last "+" line;
-    // hunk.modifiedStart..modifiedEnd includes trailing context that must be excluded.
-    const hunkOrigText = apiOrigLines.slice(Math.max(hunk.originalContentStart - 1, 0), hunk.originalContentEnd).join("\n");
-    const hunkModText = apiModLines.slice(Math.max(hunk.modifiedContentStart - 1, 0), hunk.modifiedContentEnd).join("\n");
-
-    let bestIdx = -1;
-    for (let i = 0; i < lineChanges.length; i++) {
-      if (usedChangeIndices.has(i)) continue;
-      const change = lineChanges[i];
-      const displayOrigText = displayOrigLines
-        .slice(Math.max(change.originalStartLineNumber - 1, 0), change.originalEndLineNumber)
-        .join("\n");
-      const displayModText = displayModLines
-        .slice(Math.max(change.modifiedStartLineNumber - 1, 0), change.modifiedEndLineNumber)
-        .join("\n");
-      if (hunkOrigText === displayOrigText && hunkModText === displayModText) {
-        bestIdx = i;
-        break;
-      }
-    }
-
-    if (bestIdx >= 0) {
-      usedChangeIndices.add(bestIdx);
-      const change = lineChanges[bestIdx];
-      const afterLine = change.modifiedEndLineNumber > 0 ? change.modifiedEndLineNumber : change.modifiedStartLineNumber;
-      result.set(hunk.hash, afterLine);
-    } else {
-      // Fallback: use the hunk's actual content end (last "+" line, no trailing context).
-      // modifiedContentEnd = 0 for pure deletions — fall back to modifiedStart which is
-      // the insertion point Monaco also uses for pure-deletion zones.
-      const afterLine = hunk.modifiedContentEnd > 0
-        ? hunk.modifiedContentEnd
-        : Math.max(hunk.modifiedStart, 1);
-      result.set(hunk.hash, afterLine);
+    editor.getModifiedEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.zoneId));
+    if (record.spacerZoneId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      editor.getOriginalEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.spacerZoneId!));
     }
   }
-
-  return result;
 }
 
 function getVisibleUndecidedHunks(): HunkWithDecisions[] {
@@ -346,6 +295,100 @@ function getVisibleUndecidedHunks(): HunkWithDecisions[] {
   });
 }
 
+/**
+ * Map each Monaco ILineChange to the best matching undecided git hunk, returning
+ * one entry per ILineChange. This ensures every colored diff region gets its own
+ * action bar — Monaco frequently splits a single git hunk into multiple ILineChange
+ * blocks, which would otherwise leave the first block without a bar.
+ *
+ * Algorithm:
+ * 1. Locate each git hunk's modified content in the CURRENT display model via text
+ *    search (so decisions that shift line numbers are handled automatically).
+ * 2. For each Monaco ILineChange, pick the hunk with the greatest line-range overlap
+ *    in display-model space; fall back to nearest hunk by distance.
+ * 3. Append entries for any hunk that had no overlapping ILineChange (pure deletions
+ *    that only appear on the original side).
+ */
+function mapLineChangesToHunks(
+  lineChanges: ILineChange[],
+  undecidedHunks: HunkWithDecisions[],
+): Array<{ afterLineNumber: number; hunk: HunkWithDecisions }> {
+  if (!diffContent.value || undecidedHunks.length === 0) return [];
+
+  const apiModLines = diffContent.value.modified.split("\n");
+  const displayModLines = displayModified.value.split("\n");
+
+  // For each hunk find [start, end] (1-indexed) in the current display model.
+  const displayRange = new Map<string, { start: number; end: number }>();
+  for (const hunk of undecidedHunks) {
+    if (hunk.modifiedContentStart > 0 && hunk.modifiedContentEnd > 0) {
+      const hunkLines = apiModLines.slice(hunk.modifiedContentStart - 1, hunk.modifiedContentEnd);
+      let found = false;
+      outer: for (let i = 0; i <= displayModLines.length - hunkLines.length; i++) {
+        for (let j = 0; j < hunkLines.length; j++) {
+          if (displayModLines[i + j] !== hunkLines[j]) continue outer;
+        }
+        displayRange.set(hunk.hash, { start: i + 1, end: i + hunkLines.length });
+        found = true;
+        break;
+      }
+      if (!found) {
+        // Fallback: use raw API position (valid before any decisions shift lines)
+        displayRange.set(hunk.hash, { start: hunk.modifiedContentStart, end: hunk.modifiedContentEnd });
+      }
+    } else {
+      // Pure deletion — position is the insertion point in the modified editor
+      displayRange.set(hunk.hash, { start: hunk.modifiedStart, end: hunk.modifiedStart });
+    }
+  }
+
+  const result: Array<{ afterLineNumber: number; hunk: HunkWithDecisions }> = [];
+  const matchedHashes = new Set<string>();
+
+  for (const change of lineChanges) {
+    const changeEnd = change.modifiedEndLineNumber > 0
+      ? change.modifiedEndLineNumber
+      : change.modifiedStartLineNumber;
+    const changeStart = change.modifiedStartLineNumber > 0
+      ? change.modifiedStartLineNumber
+      : change.modifiedEndLineNumber;
+
+    let bestHunk: HunkWithDecisions | null = null;
+    let bestOverlap = -Infinity;
+    let bestDist = Infinity;
+
+    for (const hunk of undecidedHunks) {
+      const r = displayRange.get(hunk.hash);
+      if (!r) continue;
+      const overlap = Math.min(changeEnd, r.end) - Math.max(changeStart, r.start) + 1;
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap;
+        bestHunk = hunk;
+        bestDist = 0;
+      } else if (overlap === bestOverlap) {
+        const dist = Math.min(Math.abs(changeStart - r.end), Math.abs(changeEnd - r.start));
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestHunk = hunk;
+        }
+      }
+    }
+
+    if (!bestHunk) continue;
+    matchedHashes.add(bestHunk.hash);
+    result.push({ afterLineNumber: changeEnd, hunk: bestHunk });
+  }
+
+  // Hunks with no matching ILineChange (pure-deletion hunks)
+  for (const hunk of undecidedHunks) {
+    if (matchedHashes.has(hunk.hash)) continue;
+    const r = displayRange.get(hunk.hash);
+    result.push({ afterLineNumber: Math.max(r?.start ?? hunk.modifiedStart, 1), hunk });
+  }
+
+  return result;
+}
+
 function injectViewZones(lineChanges: ILineChange[]) {
   // Changes mode shows a clean read-only diff — no action bars needed
   if (reviewStore.mode === "changes") return;
@@ -354,13 +397,16 @@ function injectViewZones(lineChanges: ILineChange[]) {
   if (!editor || !diffContent.value) return;
 
   const undecidedHunks = getVisibleUndecidedHunks();
-  const zoneMap = correlateHunks(lineChanges, undecidedHunks);
+  // One entry per Monaco ILineChange; multiple entries may share the same git hunk
+  // when Monaco splits a single git hunk into several ILineChange regions.
+  const entries = mapLineChangesToHunks(lineChanges, undecidedHunks);
   const modEditor = editor.getModifiedEditor();
   const origEditor = sideBySide.value ? editor.getOriginalEditor() : null;
 
-  for (const hunk of undecidedHunks) {
-    const afterLineNumber = zoneMap.get(hunk.hash);
-    if (afterLineNumber === undefined) continue;
+  for (const { afterLineNumber, hunk } of entries) {
+    // Key is composite to allow multiple zones per git hunk (Monaco split case).
+    const zoneKey = `${hunk.hash}:${afterLineNumber}`;
+    if (hunkZones.has(zoneKey)) continue; // deduplicate identical positions
 
     const domNode = document.createElement("div");
     // Ensure pointer events reach Vue-mounted content
@@ -411,7 +457,7 @@ function injectViewZones(lineChanges: ILineChange[]) {
     const observeTarget = (domNode.firstElementChild as HTMLElement) ?? domNode;
     observer.observe(observeTarget);
 
-    hunkZones.set(hunk.hash, {
+    hunkZones.set(zoneKey, {
       zoneId,
       spacerZoneId: spacerZoneId || undefined,
       domNode,
@@ -558,7 +604,12 @@ function scrollToPendingHunk() {
   if (!hunk) return;
   const editor = diffEditorRef.value?.getEditor();
   if (!editor) return;
-  const record = hunkZones.get(hunk.hash);
+  // Zones are keyed by `${hash}:${afterLineNumber}`; find the first (topmost) one for this hunk.
+  let record: ZoneRecord | undefined;
+  for (const [, r] of hunkZones) {
+    if (r.hash !== hunk.hash) continue;
+    if (!record || r.afterLineNumber < record.afterLineNumber) record = r;
+  }
   // Fall back to the hunk's own start line when no ViewZone has been injected for it
   const line = record?.afterLineNumber ?? hunk.modifiedStart;
   editor.getModifiedEditor().revealLineInCenter(line);

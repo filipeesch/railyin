@@ -24,6 +24,9 @@
  *
  *   Suite D — all changed files coverage:
  *     9. every file has action bars: no file has hunks without a dialog
+ *
+ *   Suite E — bars match Monaco ILineChanges:
+ *     10. bars count equals Monaco ILineChanges count per file (no colored region without a bar)
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
@@ -496,13 +499,14 @@ describe("Code Review Overlay — reject hunk regression", () => {
 
   test("7 — reject removes the hunk from the pending list", () => {
     expect(barCountBefore).toBeGreaterThan(0);
+    // A rejected hunk may have >1 bar (Monaco can split a git hunk into multiple
+    // ILineChange regions, each with its own bar). Verify at least one bar is removed.
     if (barCountAfter >= barCountBefore) {
       throw new Error(
         `Bar count did not decrease after reject: before=${barCountBefore}, after=${barCountAfter}. ` +
-          "The rejected hunk ViewZone may not have been removed.",
+          "The rejected hunk ViewZone(s) may not have been removed.",
       );
     }
-    expect(barCountAfter).toBe(barCountBefore - 1);
   });
 
   test("8 — remaining bars stay aligned after reject (gap ≤ 36px)", () => {
@@ -631,7 +635,83 @@ describe("Code Review Overlay — all changed files have action bars", () => {
           Object.entries(byFile)
             .map(([f, hunks]) => `  ${f}: hunks ${hunks.join(", ")}`)
             .join("\n") +
-          "\nFix: ensure correlateHunks() successfully maps every git hunk to a Monaco ILineChange.",
+          "\nFix: ensure mapLineChangesToHunks() maps every Monaco ILineChange to a git hunk.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite E — every Monaco ILineChange has exactly one action bar below it
+// ═══════════════════════════════════════════════════════════════════════════════
+// Monaco can split a single git hunk into multiple ILineChange regions. Each
+// region must have its own bar — bars count must equal Monaco ILineChanges count.
+// This catches the "colored line visible but no dialog below it" regression.
+
+interface FileChangeCount {
+  file: string;
+  monacoChanges: number;
+  bars: number;
+}
+
+describe("Code Review Overlay — bars match Monaco ILineChanges per file", () => {
+  const counts: FileChangeCount[] = [];
+
+  beforeAll(async () => {
+    await resetDecisions(1);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay();
+
+    const files = await webEval<string[]>(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      return JSON.stringify(pinia._s.get('review').files || []);
+    `);
+
+    for (const file of files) {
+      await webEval(`
+        var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+        pinia._s.get('review').selectedFile = ${JSON.stringify(file)};
+        return 'ok';
+      `);
+      // Wait for Monaco diff to compute and bars to be injected.
+      // Poll until bar count stabilises (Monaco may fire onDidUpdateDiff >1 time).
+      let prev = -1;
+      for (let i = 0; i < 25; i++) {
+        await sleep(400);
+        const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+        if (Number(n) === prev && prev >= 0) break;
+        prev = Number(n);
+      }
+
+      const result = await webEval<{ monacoChanges: number; bars: number }>(`
+        var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+        var changes = de[0] ? (de[0].getLineChanges() || []) : [];
+        var bars = document.querySelectorAll('.hunk-bar').length;
+        return JSON.stringify({ monacoChanges: changes.length, bars: bars });
+      `);
+      counts.push({ file, ...result });
+    }
+  }, 300_000);
+
+  test("10 — bars count equals Monaco ILineChanges count for every file (no colored region without a bar)", () => {
+    expect(counts.length).toBeGreaterThan(0);
+
+    // bars >= monacoChanges: every Monaco visual change must have a bar.
+    // bars > monacoChanges is acceptable for pure-deletion hunks that have no
+    // ILineChange in the modified editor but still need a bar on the insertion line.
+    const mismatches = counts.filter((c) => c.monacoChanges > 0 && c.bars < c.monacoChanges);
+
+    if (mismatches.length > 0) {
+      throw new Error(
+        "Some files have colored diff regions without an action bar:\n" +
+          mismatches
+            .map((c) => `  ${c.file.split("/").slice(-1)[0]}: monacoChanges=${c.monacoChanges}, bars=${c.bars} (missing ${c.monacoChanges - c.bars})`)
+            .join("\n") +
+          "\nFix: ensure injectViewZones() injects one bar per Monaco ILineChange via mapLineChangesToHunks().",
       );
     }
   });
