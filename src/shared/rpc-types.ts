@@ -351,6 +351,16 @@ export type RailynRPCType = {
         };
         response: void;
       };
+
+      // Workflow
+      "workflow.getYaml": {
+        params: { templateId: string };
+        response: { yaml: string };
+      };
+      "workflow.saveYaml": {
+        params: { templateId: string; yaml: string };
+        response: { ok: true };
+      };
     };
     messages: Record<string, never>;
   }>;
@@ -362,6 +372,7 @@ export type RailynRPCType = {
       "stream.error": StreamError;
       "task.updated": Task;
       "message.new": ConversationMessage;
+      "workflow.reloaded": Record<string, never>;
     };
   }>;
 };

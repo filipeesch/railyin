@@ -12,6 +12,15 @@
           class="board-selector"
           @change="onBoardChange"
         />
+        <Button
+          icon="pi pi-pencil"
+          severity="secondary"
+          text
+          rounded
+          aria-label="Edit workflow"
+          :disabled="!boardStore.activeBoard"
+          @click="onEditWorkflow"
+        />
       </div>
       <div class="board-header__right">
         <Button
@@ -76,6 +85,17 @@
     <!-- Code review overlay -->
     <CodeReviewOverlay />
 
+    <!-- Workflow YAML editor overlay -->
+    <WorkflowEditorOverlay
+      v-if="workflowEditor.templateId"
+      :visible="workflowEditor.visible"
+      :template-id="workflowEditor.templateId"
+      :template-name="workflowEditor.templateName"
+      :initial-yaml="workflowEditor.yaml"
+      @close="workflowEditor.visible = false"
+      @saved="onWorkflowSaved"
+    />
+
     <!-- Create task dialog -->
     <CreateTaskDialog
       v-if="boardStore.activeBoardId"
@@ -89,7 +109,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
-import { electroview } from "../rpc";
+import { electroview, onWorkflowReloaded } from "../rpc";
 import Select from "primevue/select";
 import Button from "primevue/button";
 import Badge from "primevue/badge";
@@ -101,6 +121,7 @@ import TaskCard from "../components/TaskCard.vue";
 import TaskDetailDrawer from "../components/TaskDetailDrawer.vue";
 import CreateTaskDialog from "../components/CreateTaskDialog.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
+import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 
 const router = useRouter();
 const boardStore = useBoardStore();
@@ -111,6 +132,42 @@ const reviewStore = useReviewStore();
 const showCreateTask = ref(false);
 const dragOverColumnId = ref<string | null>(null);
 let lastDragEndTime = 0;
+
+// ─── Workflow editor state ────────────────────────────────────────────────────
+
+const workflowEditor = ref({
+  visible: false,
+  templateId: "",
+  templateName: "",
+  yaml: "",
+});
+
+async function onEditWorkflow() {
+  const board = boardStore.activeBoard;
+  if (!board) return;
+  try {
+    const { yaml } = await electroview.rpc.request["workflow.getYaml"]({
+      templateId: board.workflowTemplateId,
+    });
+    workflowEditor.value = {
+      visible: true,
+      templateId: board.workflowTemplateId,
+      templateName: board.template.name,
+      yaml,
+    };
+  } catch (err) {
+    console.error("[workflow] Failed to load YAML:", err);
+  }
+}
+
+async function onWorkflowSaved() {
+  await boardStore.loadBoards();
+}
+
+// Reload board when backend notifies workflow was saved
+onWorkflowReloaded(async () => {
+  await boardStore.loadBoards();
+});
 
 type DragState = {
   taskId: number;

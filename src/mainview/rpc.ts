@@ -10,6 +10,7 @@ let _onStreamToken: (payload: StreamToken) => void = () => {};
 let _onStreamError: (payload: StreamError) => void = () => {};
 let _onTaskUpdated: (task: Task) => void = () => {};
 let _onNewMessage: (message: ConversationMessage) => void = () => {};
+let _onWorkflowReloaded: () => void = () => {};
 
 const viewRpc = Electroview.defineRPC<RailynRPCType>({
   maxRequestTime: 120_000, // 2 minutes — LLM calls (compaction, model list) can be slow
@@ -20,6 +21,7 @@ const viewRpc = Electroview.defineRPC<RailynRPCType>({
       "stream.error": (payload) => _onStreamError(payload),
       "task.updated": (task) => _onTaskUpdated(task),
       "message.new": (message) => _onNewMessage(message),
+      "workflow.reloaded": () => _onWorkflowReloaded(),
     },
   },
 });
@@ -30,3 +32,4 @@ export function onStreamToken(cb: (payload: StreamToken) => void) { _onStreamTok
 export function onStreamError(cb: (payload: StreamError) => void) { _onStreamError = cb; }
 export function onTaskUpdated(cb: (task: Task) => void) { _onTaskUpdated = cb; }
 export function onNewMessage(cb: (message: ConversationMessage) => void) { _onNewMessage = cb; }
+export function onWorkflowReloaded(cb: () => void) { _onWorkflowReloaded = cb; }

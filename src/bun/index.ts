@@ -6,6 +6,7 @@ import { boardHandlers } from "./handlers/boards.ts";
 import { projectHandlers } from "./handlers/projects.ts";
 import { taskHandlers } from "./handlers/tasks.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
+import { workflowHandlers } from "./handlers/workflow.ts";
 import type { RailynRPCType } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 
@@ -38,6 +39,10 @@ function notifyNewMessage(message: ConversationMessage): void {
   win.webview.rpc.send["message.new"](message);
 }
 
+function notifyWorkflowReloaded(): void {
+  win.webview.rpc.send["workflow.reloaded"]({});
+}
+
 // ─── Wire up RPC handlers ─────────────────────────────────────────────────────
 
 const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
@@ -48,6 +53,7 @@ const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
       ...projectHandlers(),
       ...taskHandlers(onToken, onError, notifyTaskUpdated, notifyNewMessage),
       ...conversationHandlers(),
+      ...workflowHandlers(notifyWorkflowReloaded),
     },
     messages: {},
   },

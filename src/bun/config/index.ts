@@ -73,7 +73,7 @@ let _configError: string | null = null;
 // In production builds this is undefined and the fallback to ~/.railyn/config is used.
 declare const __RAILYN_DEV_CONFIG_DIR__: string | undefined;
 
-function getConfigDir(): string {
+export function getConfigDir(): string {
   // 1. Explicit env override (used by tests and CI)
   if (process.env.RAILYN_CONFIG_DIR) return process.env.RAILYN_CONFIG_DIR;
   // 2. Dev build: absolute path baked in at bundle time by electrobun.config.ts
