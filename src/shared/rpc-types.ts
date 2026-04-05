@@ -105,6 +105,25 @@ export interface FileDiffPayload {
   hunks?: Hunk[];
 }
 
+// ─── Ask user prompt types ───────────────────────────────────────────────────
+
+export interface AskUserOption {
+  label: string;
+  description?: string;
+  recommended?: boolean;
+  preview?: string;
+}
+
+export interface AskUserQuestion {
+  question: string;
+  selection_mode: "single" | "multi";
+  options: AskUserOption[];
+}
+
+export interface AskUserPromptContent {
+  questions: AskUserQuestion[];
+}
+
 // ─── Code review types ──────────────────────────────────────────────────────
 
 export type HunkDecision = "accepted" | "rejected" | "change_request" | "pending";
@@ -350,6 +369,10 @@ export type RailynRPCType = {
           modifiedStart: number;
         };
         response: void;
+      };
+      "tasks.sessionMemory": {
+        params: { taskId: number };
+        response: { content: string | null };
       };
     };
     messages: Record<string, never>;

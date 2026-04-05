@@ -24,9 +24,7 @@
 
   <div v-else-if="chunk.type === 'ask_user_prompt'" class="msg msg--ask-prompt">
     <AskUserPrompt
-      :question="askPayload.question"
-      :selection-mode="askPayload.selection_mode"
-      :options="askPayload.options"
+      :questions="askPayload.questions"
       :answered-text="answeredText"
       @submit="onAskSubmit"
     />
@@ -54,7 +52,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { marked } from "marked";
-import type { ConversationMessage } from "@shared/rpc-types";
+import type { ConversationMessage, AskUserPromptContent } from "@shared/rpc-types";
 import AskUserPrompt from "./AskUserPrompt.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import { useTaskStore } from "../stores/task";
@@ -81,16 +79,43 @@ const isXmlToolCall = computed(() =>
 
 // ─── ask_user_prompt support ──────────────────────────────────────────────────
 
-const askPayload = computed(() => {
-  if (props.chunk.type !== "ask_user_prompt") {
-    return { question: "", selection_mode: "single" as const, options: [] as string[] };
-  }
+/** Normalize stored ask_user_prompt content to the canonical AskUserPromptContent shape.
+ * Handles both the legacy { question, selection_mode, options: string[] } format
+ * and the new { questions: [...] } format so old messages continue to render. */
+function parseAskPayload(content: string): AskUserPromptContent {
   try {
-    const p = JSON.parse(props.chunk.content) as { question: string; selection_mode: "single" | "multi"; options: string[] };
-    return p;
+    const raw = JSON.parse(content) as Record<string, unknown>;
+    if (Array.isArray(raw.questions)) {
+      // New format — ensure options are objects with at least a label
+      return {
+        questions: (raw.questions as Array<Record<string, unknown>>).map((q) => ({
+          question: String(q.question ?? ""),
+          selection_mode: (q.selection_mode as "single" | "multi") ?? "single",
+          options: (Array.isArray(q.options) ? q.options : []).map((o: unknown) =>
+            typeof o === "string" ? { label: o } : (o as { label: string }),
+          ),
+        })),
+      };
+    }
+    // Legacy format: top-level question + options: string[]
+    const legacyOptions: string[] = Array.isArray(raw.options) ? raw.options as string[] : [];
+    return {
+      questions: [{
+        question: String(raw.question ?? content),
+        selection_mode: (raw.selection_mode as "single" | "multi") ?? "single",
+        options: legacyOptions.map((o) => ({ label: o })),
+      }],
+    };
   } catch {
-    return { question: props.chunk.content, selection_mode: "single" as const, options: [] as string[] };
+    return { questions: [{ question: content, selection_mode: "single", options: [] }] };
   }
+}
+
+const askPayload = computed<AskUserPromptContent>(() => {
+  if (props.chunk.type !== "ask_user_prompt") {
+    return { questions: [] };
+  }
+  return parseAskPayload(props.chunk.content);
 });
 
 /** The answer text if a user message follows this prompt in conversation history. */

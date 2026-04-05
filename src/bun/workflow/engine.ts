@@ -3,6 +3,12 @@ import { getConfig } from "../config/index.ts";
 import { log } from "../logger.ts";
 import { resolveProvider, UnresolvableProviderError, listOpenAICompatibleModels } from "../ai/index.ts";
 import type { AIMessage, AIToolCall } from "../ai/types.ts";
+import {
+  readSessionMemory,
+  extractSessionMemory,
+  formatSessionNotesBlock,
+  SESSION_MEMORY_EXTRACTION_INTERVAL,
+} from "./session-memory.ts";
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
@@ -16,6 +22,20 @@ const TOOL_RESULT_MAX_CHARS = 8_000; // ~2,000 tokens
 
 // Task 5.6: Warn when assembled context exceeds this fraction of the context window
 const CONTEXT_WARN_FRACTION = 0.8;
+
+// ─── Micro-compact constants ─────────────────────────────────────────────────
+// Tool results beyond this many turns old are replaced with a sentinel string
+// in the assembled payload (DB is never modified).
+export const MICRO_COMPACT_TURN_WINDOW = 8;
+export const MICRO_COMPACT_SENTINEL = "[tool result cleared — content no longer in active context]";
+export const MICRO_COMPACT_CLEARABLE_TOOLS = new Set([
+  "read_file",
+  "run_command",
+  "search_text",
+  "find_files",
+  "fetch_url",
+  "patch_file",
+]);
 
 // ─── Streaming callback type ──────────────────────────────────────────────────
 
@@ -98,6 +118,27 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
     toProcess = messages;
   }
 
+  // ─── Micro-compact: assign an assistant-turn index to each message ──────────
+  // Two consecutive tool_call/tool_result pairs share the same turn index.
+  // A new turn starts only when a tool_call follows a non-tool message, or
+  // when an assistant text message appears.
+  const turnOf = new Array(toProcess.length).fill(0);
+  let microTurn = 0;
+  let prevWasTool = false;
+  for (let j = 0; j < toProcess.length; j++) {
+    const t = toProcess[j].type;
+    if (t === "tool_call") {
+      if (!prevWasTool) microTurn++;
+      prevWasTool = true;
+    } else if (t === "tool_result") {
+      prevWasTool = true; // same round as preceding tool_call
+    } else {
+      prevWasTool = false;
+    }
+    turnOf[j] = microTurn;
+  }
+  const maxMicroTurn = microTurn;
+
   const result: AIMessage[] = [];
   let i = 0;
   while (i < toProcess.length) {
@@ -157,13 +198,19 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
       if (i < toProcess.length && toProcess[i].type === "tool_result") {
         let resultMeta: { tool_call_id?: string; name?: string } = {};
         try { resultMeta = JSON.parse(toProcess[i].metadata ?? "{}"); } catch { /* ok */ }
+        const toolName = resultMeta.name ?? callContent.name;
+        const turnDistance = maxMicroTurn - turnOf[i];
+        const shouldClear =
+          MICRO_COMPACT_CLEARABLE_TOOLS.has(toolName) &&
+          turnDistance > MICRO_COMPACT_TURN_WINDOW;
+        const rawContent = toProcess[i].content.length > TOOL_RESULT_MAX_CHARS
+          ? toProcess[i].content.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+          : toProcess[i].content;
         result.push({
           role: "tool",
-          content: toProcess[i].content.length > TOOL_RESULT_MAX_CHARS
-            ? toProcess[i].content.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
-            : toProcess[i].content,
+          content: shouldClear ? MICRO_COMPACT_SENTINEL : rawContent,
           tool_call_id: resultMeta.tool_call_id ?? toolCallId,
-          name: resultMeta.name ?? callContent.name,
+          name: toolName,
         } as AIMessage);
         i++;
       }
@@ -213,6 +260,7 @@ function assembleMessages(
   history: ConversationMessageRow[],
   newMessage: string,
   gitContext?: GitContext,
+  sessionNotes?: string | null,
 ): AIMessage[] {
   const messages: AIMessage[] = [];
 
@@ -260,7 +308,7 @@ function assembleMessages(
       "- run_command(command): run a read-only shell command (grep, git log, git diff, etc.) — write redirections are blocked",
       "",
       "**Interaction tool:**",
-      "- ask_me(question, selection_mode, options): pause and ask me a question",
+      "- ask_me(questions): pause and ask one or more questions with structured options (label, description?, recommended?, preview?)",
       "",
       "**Agent tool:**",
       "- spawn_agent(children): run parallel sub-agents in this worktree; each child gets its own instructions and tools",
@@ -270,6 +318,12 @@ function assembleMessages(
       "CRITICAL: Always invoke tools using the API tool_call mechanism. NEVER write tool calls as XML (`<tool_call>`), JSON, or any other text format in your response — those formats are silently ignored and the tool will not run.",
     ];
     messages.push({ role: "system", content: lines.join("\n") });
+  }
+
+  // Session notes — inject as a system message after the worktree context block
+  // so the model can reference them throughout the conversation.
+  if (sessionNotes) {
+    messages.push({ role: "system", content: formatSessionNotesBlock(sessionNotes) });
   }
 
   // Compacted conversation history
@@ -325,11 +379,13 @@ export function estimateContextUsage(
     )
     .all(taskId);
 
-  // Only count types that compactMessages() actually sends to the LLM
-  const sentTypes = new Set(["user", "assistant", "tool_call", "tool_result"]);
-  const totalChars = messages
-    .filter((m) => sentTypes.has(m.type))
-    .reduce((sum, m) => sum + m.content.length, 0);
+  // Use compactMessages() so the estimate reflects post-decay content sizes
+  // (micro-compact clears old tool results, reducing the effective token count).
+  const compacted = compactMessages(messages);
+  const totalChars = compacted.reduce((sum, m) => {
+    if (typeof m.content === "string") return sum + m.content.length;
+    return sum + JSON.stringify(m.content ?? "").length;
+  }, 0);
   const usedTokens = Math.floor(totalChars / 4) + SYSTEM_MESSAGE_OVERHEAD_TOKENS;
   const fraction = maxTokens > 0 ? Math.min(usedTokens / maxTokens, 1) : 0;
   return { usedTokens, maxTokens, fraction };
@@ -377,8 +433,70 @@ export function appendMessage(
 
 // ─── Conversation compaction ──────────────────────────────────────────────────
 
-const COMPACTION_SYSTEM_PROMPT =
-  "You are a conversation summarizer. Given the conversation history below, produce a compact summary that preserves: key decisions made, code or files changed, the current state of the work, and any open questions. Be concise but complete. Output only the summary text, no preamble.";
+const COMPACTION_SYSTEM_PROMPT = `Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
+This summary should be thorough in capturing technical details, code patterns, and decisions that would be essential for continuing development work without losing context.
+
+CRITICAL: Respond with TEXT ONLY. Do NOT call any tools. Your entire response must be an <analysis> block followed by a <summary> block.
+
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts:
+
+1. Chronologically analyze each message and section of the conversation. For each section identify:
+   - The user's explicit requests and intents
+   - Your approach to addressing them
+   - Key decisions, technical concepts, and code patterns
+   - Specific details: file names, full code snippets, function signatures, file edits
+   - Errors you ran into and how you fixed them
+   - Specific user feedback, especially if the user told you to do something differently
+2. Double-check for technical accuracy and completeness.
+
+Your <summary> must include the following sections:
+
+1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail
+2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed
+3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Include full code snippets where applicable and explain why each is important.
+4. Errors and Fixes: List all errors encountered and how they were fixed. Include any specific user feedback received.
+5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
+6. All User Messages: List ALL user messages verbatim (not paraphrased). These are critical for understanding user feedback and intent.
+7. Pending Tasks: Outline any pending tasks explicitly requested.
+8. Current Work: Describe in detail precisely what was being worked on immediately before this summary, paying special attention to the most recent messages. Include file names and code snippets.
+9. Optional Next Step: List the next step directly in line with the most recent work. IMPORTANT: only list a next step if it is explicitly in line with the user's most recent request. Include direct quotes from the most recent conversation showing exactly what task was being worked on.
+
+Format your response exactly as:
+
+<analysis>
+[Your reasoning and analysis here]
+</analysis>
+
+<summary>
+1. Primary Request and Intent:
+   [Detail]
+
+2. Key Technical Concepts:
+   - [Concept]
+
+3. Files and Code Sections:
+   - [File name]
+     - [Why important]
+     - [Code snippet if applicable]
+
+4. Errors and Fixes:
+   - [Error description and fix]
+
+5. Problem Solving:
+   [Description]
+
+6. All User Messages:
+   - [Verbatim user message]
+
+7. Pending Tasks:
+   - [Task]
+
+8. Current Work:
+   [Detailed description with file names and snippets]
+
+9. Optional Next Step:
+   [Next step with direct quote if applicable]
+</summary>`;
 
 /**
  * Fetch context_length for a qualified model from the provider API.
@@ -416,6 +534,20 @@ export async function resolveModelContextWindow(qualifiedModel: string): Promise
   if (found && found.contextWindow !== null) return found.contextWindow;
 
   return fallback;
+}
+
+/**
+ * Extracts the content of the <summary> block from a compaction response.
+ * If a <summary>...</summary> block is present, returns only its inner content.
+ * Falls back to the full response when no tags are detected (e.g. smaller models
+ * that ignore the format instruction), so storage never errors out.
+ */
+export function extractSummaryBlock(raw: string): string {
+  const match = raw.match(/<summary>([\s\S]*?)<\/summary>/i);
+  if (match) return match[1].trim();
+  // No <summary> tags — strip any <analysis> block that may be present and return the rest.
+  const withoutAnalysis = raw.replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").trim();
+  return withoutAnalysis || raw;
 }
 
 export async function compactConversation(taskId: number): Promise<ConversationMessage> {
@@ -483,7 +615,9 @@ export async function compactConversation(taskId: number): Promise<ConversationM
     log("info", `compaction: attempt ${attempt}`, { taskId, data: { model: resolvedModel, contextWindow, maxWords, words: totalWords, truncated } });
     try {
       const result = await provider.turn(callMessages, {});
-      const summary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
+      const rawSummary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
+      // Strip the <analysis> scratchpad block — only the <summary> block is stored.
+      const summary = extractSummaryBlock(rawSummary);
       log("info", `compaction: done on attempt ${attempt}, summary length=${summary.length}`, { taskId });
 
       const msgId = appendMessage(
@@ -759,7 +893,8 @@ async function runExecution(
     }
 
     // Task 5.3: Assemble full execution payload as messages
-    const messages = assembleMessages(task, stageInstructions, history, prompt, gitContext);
+    const sessionNotes = readSessionMemory(taskId);
+    const messages = assembleMessages(task, stageInstructions, history, prompt, gitContext, sessionNotes);
 
     const config = getConfig();
     // Resolve provider from qualified model ID (e.g. "lmstudio/qwen3-8b")
@@ -998,22 +1133,53 @@ async function runExecution(
       // Intercept ask_me before executing any tools — it suspends execution
       const askUserCall = sanitizedRoundCalls.find((c) => c.function.name === "ask_me");
       if (askUserCall) {
-        let payload: { question: string; selection_mode: string; options: string[] };
+        // Parse and normalize: accept both the new { questions: [...] } format
+        // and the legacy { question, selection_mode, options: string[] } format.
+        let normalized: { questions: Array<{ question: string; selection_mode: string; options: Array<{ label: string; description?: string; recommended?: boolean; preview?: string }> }> };
         try {
-          payload = JSON.parse(askUserCall.function.arguments);
+          const raw = JSON.parse(askUserCall.function.arguments);
+          if (Array.isArray(raw.questions)) {
+            // New format — normalize option objects (handle partial objects)
+            normalized = {
+              questions: raw.questions.map((q: Record<string, unknown>) => ({
+                question: q.question ?? "",
+                selection_mode: q.selection_mode ?? "single",
+                options: Array.isArray(q.options)
+                  ? q.options.map((o: unknown) =>
+                      typeof o === "string"
+                        ? { label: o }
+                        : { label: (o as Record<string, unknown>).label ?? String(o), ...(o as Record<string, unknown>) },
+                    )
+                  : [],
+              })),
+            };
+          } else {
+            // Legacy flat format: { question, selection_mode, options: string[] }
+            const legacyOptions: string[] = Array.isArray(raw.options) ? raw.options : [];
+            normalized = {
+              questions: [{
+                question: raw.question ?? "",
+                selection_mode: raw.selection_mode ?? "single",
+                options: legacyOptions.map((o: unknown) =>
+                  typeof o === "string" ? { label: o } : { label: String(o) },
+                ),
+              }],
+            };
+          }
         } catch {
-          payload = { question: askUserCall.function.arguments, selection_mode: "single", options: [] };
+          normalized = { questions: [{ question: askUserCall.function.arguments, selection_mode: "single", options: [] }] };
         }
         // Qwen3 sometimes calls ask_me with empty arguments {} — the actual question
         // was only in its reasoning_content. Nudge it to re-call with proper args.
-        if (!payload.question || !payload.question.trim() || !Array.isArray(payload.options) || payload.options.length === 0) {
+        const firstQ = normalized.questions[0];
+        if (!normalized.questions.length || !firstQ?.question?.trim() || !firstQ?.options?.length) {
           if (emptyResponseNudges < 3 && totalNudges < MAX_NUDGES) {
             emptyResponseNudges++;
             totalNudges++;
             log("warn", `ask_me called with missing question or options — nudging for proper arguments (nudge ${emptyResponseNudges})`, { taskId, executionId });
             liveMessages.push({
               role: "tool",
-              content: "Error: ask_me was called with missing or empty fields. You MUST call ask_me again with all three fields filled in: 'question' (the question text), 'selection_mode' ('single' or 'multi'), and 'options' (a non-empty array of choices).",
+              content: "Error: ask_me was called with missing or empty fields. You MUST call ask_me again with a non-empty 'questions' array. Each question needs 'question' (text), 'selection_mode' ('single' or 'multi'), and 'options' (non-empty array of objects with at least a 'label' field).",
               tool_call_id: askUserCall.id,
             });
             continue;
@@ -1026,7 +1192,7 @@ async function runExecution(
             task.conversation_id ?? 0,
             "ask_user_prompt" as MessageType,
             null,
-            JSON.stringify(payload),
+            JSON.stringify(normalized),
           );
           // Push the ask_user_prompt to the frontend immediately and fire the
           // streaming-done signal so the streaming bubble is cleared.
@@ -1036,7 +1202,7 @@ async function runExecution(
             conversationId: task.conversation_id ?? 0,
             type: "ask_user_prompt" as MessageType,
             role: null,
-            content: JSON.stringify(payload),
+            content: JSON.stringify(normalized),
             metadata: null,
             createdAt: new Date().toISOString(),
           });
@@ -1215,6 +1381,17 @@ async function runExecution(
 
     if (!isBadAssistantResponse(cleanResponse)) {
       appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", cleanResponse);
+
+      // Trigger background session memory extraction every N completed AI turns.
+      // Count only persisted assistant messages so the interval is stable.
+      const assistantCount = db
+        .query<{ count: number }, [number]>(
+          "SELECT COUNT(*) as count FROM conversation_messages WHERE task_id = ? AND role = 'assistant'",
+        )
+        .get(taskId)?.count ?? 0;
+      if (assistantCount > 0 && assistantCount % SESSION_MEMORY_EXTRACTION_INTERVAL === 0) {
+        extractSessionMemory(taskId);
+      }
     }
 
     // If the model emitted XML tool calls, append a corrective system message so

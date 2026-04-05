@@ -16,6 +16,7 @@ import {
   cancelExecution,
 } from "../workflow/engine.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
+import { readSessionMemory } from "../workflow/session-memory.ts";
 import type { ProjectRow } from "../db/row-types.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import { getConfig } from "../config/index.ts";
@@ -551,6 +552,11 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
            updated_at = datetime('now')`,
         [params.taskId, params.hunkHash, params.filePath, params.decision, params.comment, params.originalStart, params.modifiedStart],
       );
+    },
+
+    // ─── tasks.sessionMemory ─────────────────────────────────────────────────
+    "tasks.sessionMemory": async (params: { taskId: number }): Promise<{ content: string | null }> => {
+      return { content: readSessionMemory(params.taskId) };
     },
   };
 }
