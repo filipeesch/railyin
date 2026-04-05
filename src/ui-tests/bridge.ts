@@ -264,6 +264,30 @@ export async function selectRichTestFile(): Promise<string> {
 }
 
 /**
+ * Select the tracked partial-change test file from the review.
+ * Prefers partial-x.ts (committed base + two disjoint hunks modified in the worktree).
+ * Falls back to any .ts file, then the first file.
+ *
+ * Use this in suites that specifically need to test multi-hunk partial diffs
+ * (as opposed to new/untracked single-hunk files).
+ */
+export async function selectPartialTestFile(): Promise<string> {
+  const file = await webEval<string>(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var r = pinia._s.get('review');
+    var files = r.files;
+    var best = files.find(function(f) { return f.includes('partial-x'); })
+      || files.find(function(f) { return f.endsWith('.ts') && !f.includes('feature'); })
+      || files.find(function(f) { return f.endsWith('.ts'); })
+      || files[0];
+    r.selectedFile = best;
+    return best;
+  `);
+  await sleep(1_200);
+  return file;
+}
+
+/**
  * Navigate to the first pending hunk in the current file by pressing Prev until
  * the file changes (we backed out into the previous file), then pressing Next once
  * to arrive back at the first hunk of the original file.

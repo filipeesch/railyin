@@ -74,11 +74,12 @@ win = new BrowserWindow({
   rpc: mainWebviewRPC,
 });
 
-// ─── Debug HTTP server (dev only) ────────────────────────────────────────────
+// ─── Debug HTTP server (dev only, RAILYN_DEBUG=1) ──────────────────────────────
+// Enable with: RAILYN_DEBUG=1 bun run dev
 // curl "http://localhost:9229/inspect?script=return+JSON.stringify(document.querySelector('.hunk-btn--accept')?.getBoundingClientRect())"
 // curl "http://localhost:9229/click?selector=.hunk-btn--accept"
 
-const _debugServer = Bun.serve({
+if (process.env.RAILYN_DEBUG) Bun.serve({
   port: 9229,
   async fetch(req: Request) {
     const url = new URL(req.url);
@@ -161,10 +162,29 @@ const _debugServer = Bun.serve({
           db.run("DELETE FROM tasks WHERE id = ?", [prev.id]);
         }
 
-        // Resolve stable required IDs (board + project) from an existing task.
-        const existingTask = db.query<{ board_id: number; project_id: number }, []>("SELECT board_id, project_id FROM tasks WHERE title != 'UI Test Task' LIMIT 1").get();
-        if (!existingTask) return new Response(JSON.stringify({ __error: "No existing task found. Open the app, create a project and task first." }), { status: 500, headers: { "content-type": "application/json" } });
-        const board = { id: existingTask.board_id, project_id: existingTask.project_id };
+        // Resolve board + project IDs — either from an existing task (real DB mode)
+        // or by seeding minimum rows (in-memory / clean test DB, i.e. RAILYN_DB=:memory:).
+        let boardId: number;
+        let projectId: number;
+        const existingTask = db.query<{ board_id: number; project_id: number }, []
+          >("SELECT board_id, project_id FROM tasks WHERE title != 'UI Test Task' LIMIT 1").get();
+        if (existingTask) {
+          boardId = existingTask.board_id;
+          projectId = existingTask.project_id;
+        } else {
+          // In-memory test mode — seedDefaultWorkspace() has already created a
+          // workspace, project and board. Just look them up.
+          const boardRow = db.query<{ id: number }, []>("SELECT id FROM boards LIMIT 1").get();
+          const projectRow = db.query<{ id: number }, []>("SELECT id FROM projects LIMIT 1").get();
+          if (!boardRow || !projectRow) {
+            return new Response(
+              JSON.stringify({ __error: "No board or project found — make sure the app was started with bun run test:ui:run (which seeds them automatically)." }),
+              { status: 500, headers: { "content-type": "application/json" } },
+            );
+          }
+          boardId = boardRow.id;
+          projectId = projectRow.id;
+        }
 
         // Create a temp git repo with known test files.
         const worktreePath = `/tmp/railyn-test-worktree-${Date.now()}`;
@@ -178,24 +198,106 @@ const _debugServer = Bun.serve({
         run(["git", "config", "user.email", "test@railyn.internal"]);
         run(["git", "config", "user.name", "Railyn Test"]);
 
-        // Commit an empty initial state so HEAD exists (required for git diff HEAD to work).
-        run(["git", "commit", "--allow-empty", "-m", "initial"]);
+        // Commit the base content for the partial-change files so HEAD exists
+        // and diffs can be computed via `git diff HEAD`.
+        //
+        // File mix in the test worktree:
+        //   Untracked / new:   feature-a.ts, feature-b.vue, feature-c.md
+        //     → appear as entirely new additions (1 hunk each = "new file" diff)
+        //   Tracked / partial: partial-x.ts, partial-y.ts
+        //     → committed base content first, then modified — produces ≥2 disjoint
+        //       hunks per file so the multi-hunk acceptance / precision tests have
+        //       real data to work with.
 
-        // Create 3 test files as new (untracked) additions — each becomes 1 hunk.
-        const testFiles: [string, string][] = [
+        // --- Step 1: write and commit base content for the partial-change files ---
+        const partialXBase = [
+          "// partial-x.ts: committed base",
+          "export function alpha() { return 1; }",
+          "export function beta()  { return 2; }",
+          "export function gamma() { return 3; }",
+          "",
+          "// middle section — unchanged",
+          "export const VERSION = '1.0.0';",
+          "export const NAME    = 'partial-x';",
+          "",
+          "export function delta()   { return 4; }",
+          "export function epsilon() { return 5; }",
+          "export function zeta()    { return 6; }",
+        ].join("\n");
+
+        const partialYBase = [
+          "# partial-y.ts: committed base",
+          "export class ServiceA {",
+          "  greet() { return 'hello'; }",
+          "  run()   { return 'running'; }",
+          "}",
+          "",
+          "// stable section",
+          "export const MAX_RETRIES = 3;",
+          "export const TIMEOUT_MS  = 5000;",
+          "",
+          "export class ServiceB {",
+          "  stop()  { return 'stopped'; }",
+          "  reset() { return 'reset'; }",
+          "}",
+        ].join("\n");
+
+        await Bun.write(`${worktreePath}/partial-x.ts`, partialXBase);
+        await Bun.write(`${worktreePath}/partial-y.ts`, partialYBase);
+        run(["git", "add", "partial-x.ts", "partial-y.ts"]);
+        run(["git", "commit", "-m", "add partial base files"]);
+
+        // --- Step 2: modify only the top and bottom sections (two disjoint hunks) ---
+        const partialXModified = [
+          "// partial-x.ts: worktree modifications",
+          "export function alpha() { return 'alpha'; }",  // changed return type
+          "export function beta()  { return 'beta'; }",   // changed return type
+          "export function gamma() { return 'gamma'; }",  // changed return type
+          "",
+          "// middle section — unchanged",
+          "export const VERSION = '1.0.0';",
+          "export const NAME    = 'partial-x';",
+          "",
+          "export function delta()   { return 'delta'; }",    // changed
+          "export function epsilon() { return 'epsilon'; }",  // changed
+          "export function zeta()    { return 'zeta'; }",     // changed
+        ].join("\n");
+
+        const partialYModified = [
+          "# partial-y.ts: worktree modifications",
+          "export class ServiceA {",
+          "  greet() { return 'hi there'; }",   // changed
+          "  run()   { return 'active'; }",      // changed
+          "}",
+          "",
+          "// stable section",
+          "export const MAX_RETRIES = 3;",
+          "export const TIMEOUT_MS  = 5000;",
+          "",
+          "export class ServiceB {",
+          "  stop()  { return 'halted'; }",    // changed
+          "  reset() { return 'cleared'; }",   // changed
+          "}",
+        ].join("\n");
+
+        await Bun.write(`${worktreePath}/partial-x.ts`, partialXModified);
+        await Bun.write(`${worktreePath}/partial-y.ts`, partialYModified);
+        // Files are now modified but NOT staged — git diff HEAD will show them as modified.
+
+        // --- Step 3: create the 3 untracked new-file additions ---
+        const newFiles: [string, string][] = [
           ["feature-a.ts", Array.from({ length: 20 }, (_, i) => `export const lineA${i + 1} = ${i + 1};`).join("\n")],
           ["feature-b.vue", ["<template>", "  <div class=\"feature-b\">", "    <h1>Feature B</h1>", "    <p>Test component</p>", "  </div>", "</template>", "", "<script setup lang=\"ts\">", "const msg = 'hello from B';", "</script>"].join("\n")],
           ["feature-c.md", ["# Feature C", "", "This is a test markdown file.", "", "## Details", "", "- Point one", "- Point two", "- Point three"].join("\n")],
         ];
-
-        for (const [name, content] of testFiles) {
+        for (const [name, content] of newFiles) {
           await Bun.write(`${worktreePath}/${name}`, content);
         }
 
         // Insert the test task.
         db.run(
           "INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state) VALUES (?, ?, 'UI Test Task', 'Auto-created by test suite', 'backlog', 'idle')",
-          [board.id, board.project_id],
+          [boardId, projectId],
         );
         const taskRow = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!;
         const taskId = taskRow.id;
@@ -205,7 +307,8 @@ const _debugServer = Bun.serve({
           [taskId, worktreePath, worktreePath],
         );
 
-        const files = testFiles.map(([name]) => name);
+        // Return all files: tracked-modified first (for partial-change suites), then new.
+        const files = ["partial-x.ts", "partial-y.ts", ...newFiles.map(([name]) => name)];
         return new Response(JSON.stringify({ taskId, files, worktreePath }), { headers: { "content-type": "application/json" } });
       } catch (e) {
         return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
@@ -215,7 +318,7 @@ const _debugServer = Bun.serve({
     return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=", { status: 200 });
   },
 });
-console.log("[Debug] HTTP server listening on http://localhost:9229");
+if (process.env.RAILYN_DEBUG) console.log("[Debug] HTTP server listening on http://localhost:9229");
 
 // ─── Config error: surface to UI ──────────────────────────────────────────────
 

@@ -23,10 +23,20 @@ bun run test
 
 UI tests drive the live app through its debug bridge (`localhost:9229`). The app must be running before you execute them.
 
-**1. Start the app:**
+**Option A — fully automated (recommended):**
 
 ```bash
-bun run dev
+bun run test:ui:run
+```
+
+This kills any existing app, starts it in test mode with the debug bridge enabled, runs the suite, then cleans up.
+
+**Option B — manual:**
+
+**1. Start the app in debug + test mode:**
+```bash
+bun run dev:test
+# equivalent: RAILYN_DEBUG=1 RAILYN_DB=:memory: bun run dev
 ```
 
 **2. In a separate terminal, run the UI tests:**
@@ -35,4 +45,20 @@ bun run dev
 bun run test:ui
 ```
 
-> The tests open the code review overlay, interact with Monaco diff editor zones, click buttons, and assert on visible state. They reset their own DB state at the start of each suite, so no manual cleanup is needed between runs.
+> `RAILYN_DEBUG=1` opens the debug bridge on `localhost:9229`. Without it the bridge is not available and UI tests cannot run. `RAILYN_DB=:memory:` uses an isolated in-memory database so tests never touch your real data. They reset their own DB state at the start of each suite — no manual cleanup needed.
+
+### Debug HTTP bridge
+
+The debug bridge (`localhost:9229`) is only started when `RAILYN_DEBUG=1` is set. It is never open in a normal `bun run dev` session.
+
+```bash
+# Start with debug bridge enabled:
+RAILYN_DEBUG=1 bun run dev
+
+# Useful endpoints:
+# POST /inspect          — evaluate JS in the WebView and return the result
+# GET  /click?selector=  — dispatch click events on a CSS selector
+# GET  /screenshot       — take a screenshot
+# GET  /reset-decisions  — clear hunk decisions for a task (test helper)
+# GET  /setup-test-env   — create a self-contained test task + git worktree
+```
