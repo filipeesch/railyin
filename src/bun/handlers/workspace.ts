@@ -18,15 +18,19 @@ export function workspaceHandlers() {
         )
         .get();
 
+      // Support both legacy `ai:` block and new `providers:` list
+      const legacyAi = config.workspace.ai;
+      const firstProvider = config.providers[0];
+
       return {
         id: workspace?.id ?? 1,
         name: workspace?.name ?? "My Workspace",
         ai: {
-          baseUrl: config.workspace.ai.base_url,
-          apiKey: config.workspace.ai.api_key ?? "",
-          model: config.workspace.ai.model,
-          provider: config.workspace.ai.provider ?? "openai-compatible",
-          contextWindowTokens: config.workspace.ai.context_window_tokens,
+          baseUrl: legacyAi?.base_url ?? firstProvider?.base_url ?? "",
+          apiKey: legacyAi?.api_key ?? firstProvider?.api_key ?? "",
+          model: legacyAi?.model ?? "",
+          provider: legacyAi?.provider ?? firstProvider?.type ?? "openai-compatible",
+          contextWindowTokens: legacyAi?.context_window_tokens ?? firstProvider?.context_window_tokens,
         },
         worktreeBasePath: config.workspace.worktree_base_path ?? "",
       };

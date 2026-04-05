@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { electroview } from "../rpc";
-import type { Task, ConversationMessage, StreamToken, StreamError, ModelInfo } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamToken, StreamError, ModelInfo, ProviderModelList } from "@shared/rpc-types";
 
 export const useTaskStore = defineStore("task", () => {
   // All tasks keyed by boardId
@@ -20,8 +20,11 @@ export const useTaskStore = defineStore("task", () => {
   const loading = ref(false);
   const messagesLoading = ref(false);
 
-  // Available AI models fetched from the provider endpoint
+  // Enabled models for the chat dropdown (flat, only user-enabled)
   const availableModels = ref<ModelInfo[]>([]);
+
+  // All provider models for the tree view (grouped by provider)
+  const allProviderModels = ref<ProviderModelList[]>([]);
 
   // Context usage for the active task (stale-on-load, updated after executions)
   const contextUsage = ref<{ usedTokens: number; maxTokens: number; fraction: number } | null>(null);
@@ -233,10 +236,35 @@ export const useTaskStore = defineStore("task", () => {
     messages.value.push(message);
   }
 
-  // ─── Load available models ────────────────────────────────────────────────
+  // ─── Load enabled models (for chat dropdown) ──────────────────────────────────
 
+  async function loadEnabledModels() {
+    availableModels.value = await electroview.rpc.request["models.listEnabled"]({});
+  }
+
+  // Keep loadModels as an alias for backward compat (called from App.vue etc.)
   async function loadModels() {
-    availableModels.value = await electroview.rpc.request["models.list"]({});
+    await loadEnabledModels();
+  }
+
+  // ─── Load all provider models (for tree view) ─────────────────────────────────
+
+  async function loadAllModels() {
+    allProviderModels.value = await electroview.rpc.request["models.list"]({});
+  }
+
+  // ─── Toggle model enabled state ─────────────────────────────────────────────────
+
+  async function setModelEnabled(qualifiedModelId: string, enabled: boolean) {
+    await electroview.rpc.request["models.setEnabled"]({ qualifiedModelId, enabled });
+    // Optimistic update in allProviderModels
+    for (const provider of allProviderModels.value) {
+      const model = provider.models.find((m) => m.id === qualifiedModelId);
+      if (model) {
+        model.enabled = enabled;
+        break;
+      }
+    }
   }
 
   // ─── Fetch context usage for active task ──────────────────────────────────
@@ -338,6 +366,7 @@ export const useTaskStore = defineStore("task", () => {
     loading,
     messagesLoading,
     availableModels,
+    allProviderModels,
     contextUsage,
     changedFileCounts,
     loadTasks,
@@ -349,6 +378,9 @@ export const useTaskStore = defineStore("task", () => {
     selectTask,
     closeTask,
     loadModels,
+    loadEnabledModels,
+    loadAllModels,
+    setModelEnabled,
     fetchContextUsage,
     compactTask,
     setModel,

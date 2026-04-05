@@ -1,7 +1,7 @@
 import { getDb } from "../db/index.ts";
 import { getConfig } from "../config/index.ts";
 import { log } from "../logger.ts";
-import { createProvider } from "../ai/index.ts";
+import { resolveProvider, UnresolvableProviderError, listOpenAICompatibleModels } from "../ai/index.ts";
 import type { AIMessage, AIToolCall } from "../ai/types.ts";
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
@@ -341,7 +341,11 @@ export function estimateContextWarning(taskId: number): string | null {
   if (!task) return null;
 
   const config = getConfig();
-  const contextWindowTokens = config.workspace.ai.context_window_tokens ?? 128_000;
+  // Resolve fallback context window from task's provider config
+  const qualifiedModel = task?.model ?? "";
+  const provId = qualifiedModel.split("/")[0];
+  const provConfig = config.providers.find((p) => p.id === provId);
+  const contextWindowTokens = provConfig?.context_window_tokens ?? 128_000;
   const warnAt = Math.floor(contextWindowTokens * CONTEXT_WARN_FRACTION);
 
   const { usedTokens } = estimateContextUsage(taskId, contextWindowTokens);
@@ -376,38 +380,40 @@ export function appendMessage(
 const COMPACTION_SYSTEM_PROMPT =
   "You are a conversation summarizer. Given the conversation history below, produce a compact summary that preserves: key decisions made, code or files changed, the current state of the work, and any open questions. Be concise but complete. Output only the summary text, no preamble.";
 
-/** Fetch context_length for a model from the provider API. Falls back to config then 128k. */
-export async function resolveModelContextWindow(model: string): Promise<number> {
+/**
+ * Fetch context_length for a qualified model from the provider API.
+ * model is a fully-qualified model ID like "lmstudio/qwen3-8b".
+ * Falls back to the provider's config override, then 128k.
+ */
+export async function resolveModelContextWindow(qualifiedModel: string): Promise<number> {
   const config = getConfig();
-  const fallback = config.workspace.ai.context_window_tokens ?? 128_000;
-  const { base_url, api_key } = config.workspace.ai;
-  const headers: Record<string, string> = api_key ? { Authorization: `Bearer ${api_key}` } : {};
+  const slashIdx = qualifiedModel.indexOf("/");
+  const providerId = slashIdx !== -1 ? qualifiedModel.slice(0, slashIdx) : "";
+  const modelId = slashIdx !== -1 ? qualifiedModel.slice(slashIdx + 1) : qualifiedModel;
+  const provConfig = config.providers.find((p) => p.id === providerId);
+  const fallback = provConfig?.context_window_tokens ?? 128_000;
 
-  // Try LM Studio native API first — it exposes the actual loaded context_length
-  // under loaded_instances[0].config.context_length, keyed by model id.
-  try {
-    const nativeBase = base_url.replace(/\/v1\/?$/, "");
-    const res = await fetch(`${nativeBase}/api/v1/models`, { headers });
-    if (res.ok) {
-      const json = await res.json() as { models?: Array<{ key: string; loaded_instances?: Array<{ config?: { context_length?: number } }>; max_context_length?: number }> };
-      const found = (json.models ?? []).find((m) => m.key === model);
-      if (found) {
-        const loaded = found.loaded_instances?.[0]?.config?.context_length;
-        if (typeof loaded === "number") return loaded;
-        if (typeof found.max_context_length === "number") return found.max_context_length;
+  if (!provConfig) return fallback;
+
+  // Anthropic: fetch from /v1/models
+  if (provConfig.type === "anthropic") {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/models", {
+        headers: { "x-api-key": provConfig.api_key ?? "", "anthropic-version": "2023-06-01" },
+      });
+      if (res.ok) {
+        const json = await res.json() as { data?: Array<{ id: string; context_window?: number }> };
+        const found = (json.data ?? []).find((m) => m.id === modelId);
+        if (found?.context_window) return found.context_window;
       }
-    }
-  } catch { /* not LM Studio, fall through */ }
+    } catch { /* fall through */ }
+    return fallback;
+  }
 
-  // Standard OpenAI-compatible /v1/models fallback (OpenRouter, Ollama, etc.)
-  try {
-    const res = await fetch(`${base_url}/v1/models`, { headers });
-    if (res.ok) {
-      const json = await res.json() as { data?: Array<{ id: string; context_length?: number }> };
-      const found = (json.data ?? []).find((m) => m.id === model);
-      if (found && typeof found.context_length === "number") return found.context_length;
-    }
-  } catch { /* fall through */ }
+  // OpenAI-compatible providers (LM Studio, OpenRouter, Ollama, etc.)
+  const models = await listOpenAICompatibleModels(provConfig);
+  const found = models.find((m) => m.id === modelId);
+  if (found && found.contextWindow !== null) return found.contextWindow;
 
   return fallback;
 }
@@ -424,9 +430,9 @@ export async function compactConversation(taskId: number): Promise<ConversationM
     .all(taskId);
 
   const config = getConfig();
-  const resolvedModel = task.model ?? config.workspace.ai.model;
+  const resolvedModel = task.model ?? null;
   if (!resolvedModel) throw new Error("No model configured for this task. Select a model first.");
-  const provider = createProvider({ ...config.workspace.ai, model: resolvedModel });
+  const { provider } = resolveProvider(resolvedModel, config.providers);
 
   // Render history as plain text to avoid Jinja template issues (tool_call/tool role
   // sequences can't be sent to models with strict chat templates like Qwen3).
@@ -551,10 +557,10 @@ export async function handleTransition(
   const templateId = getBoardTemplateId(task.board_id);
   const column = getColumnConfig(templateId, toState);
 
-  // Resolve and persist the model for this column (D1)
-  const config = getConfig();
-  const resolvedModel = column?.model ?? config.workspace.ai.model ?? null;
-  db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedModel, taskId]);
+  // Resolve and persist model — only override if the column specifies one
+  if (column?.model != null) {
+    db.run("UPDATE tasks SET model = ? WHERE id = ?", [column.model, taskId]);
+  }
 
   // 4. If no prompt configured → idle (design D7)
   if (!column?.on_enter_prompt) {
@@ -592,7 +598,8 @@ export async function handleTransition(
 
   // 9. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel ?? "", controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
+  const resolvedModel = updatedRow.model ?? "";
+  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
     () => {},
   );
 
@@ -610,13 +617,20 @@ async function runSubExecution({
   worktreePath,
   instructions,
   tools,
+  qualifiedModel,
 }: {
   worktreePath: string;
   instructions: string;
   tools: string[];
+  qualifiedModel: string;
 }): Promise<string> {
   const config = getConfig();
-  const provider = createProvider(config.workspace.ai);
+  let provider;
+  try {
+    ({ provider } = resolveProvider(qualifiedModel, config.providers));
+  } catch {
+    return "(sub-agent skipped: no provider configured for this model)";
+  }
   const toolCtx = { worktreePath, searchConfig: config.workspace.search };
   const toolDefs = resolveToolsForColumn(tools);
 
@@ -748,8 +762,27 @@ async function runExecution(
     const messages = assembleMessages(task, stageInstructions, history, prompt, gitContext);
 
     const config = getConfig();
-    // Use the task-level model override (D1 + D3)
-    const provider = createProvider({ ...config.workspace.ai, model });
+    // Resolve provider from qualified model ID (e.g. "lmstudio/qwen3-8b")
+    let provider;
+    try {
+      ({ provider } = resolveProvider(model, config.providers));
+    } catch (err) {
+      if (err instanceof UnresolvableProviderError) {
+        const msg = err.message;
+        log("warn", `Provider resolution failed: ${msg}`, { taskId, executionId });
+        appendMessage(taskId, task.conversation_id ?? 0, "system", null, msg);
+        db.run("UPDATE tasks SET execution_state = 'awaiting_user' WHERE id = ?", [taskId]);
+        db.run(
+          "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+          [executionId],
+        );
+        executionControllers.delete(executionId);
+        const awaitRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+        if (awaitRow) onTaskUpdated(mapTask(awaitRow));
+        return;
+      }
+      throw err;
+    }
 
     // ── Tool-call loop ────────────────────────────────────────────────────────
     const MAX_TOOL_ROUNDS = 10;
@@ -1037,6 +1070,7 @@ async function runExecution(
                 worktreePath: toolCtx.worktreePath,
                 instructions: child.instructions,
                 tools: child.tools,
+                qualifiedModel: model,
               });
               return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
             } catch (e) {
@@ -1276,7 +1310,10 @@ export async function handleHumanTurn(
 
   // Auto-compact if context usage is at or above 90%
   const config = getConfig();
-  const contextWindowTokens = config.workspace.ai.context_window_tokens ?? 128_000;
+  const qualifiedModel2 = task.model ?? "";
+  const provId2 = qualifiedModel2.split("/")[0];
+  const provConf2 = config.providers.find((p) => p.id === provId2);
+  const contextWindowTokens = provConf2?.context_window_tokens ?? 128_000;
   const { fraction } = estimateContextUsage(taskId, contextWindowTokens);
   if (fraction >= 0.90) {
     appendMessage(taskId, task.conversation_id ?? 0, "system", null, "Compacting conversation…");
@@ -1318,8 +1355,8 @@ export async function handleHumanTurn(
   const controller = new AbortController();
   executionControllers.set(executionId, controller);
 
-  // Resolve model: use the task's persisted model (D1) or workspace default
-  const resolvedModel = task.model ?? config.workspace.ai.model ?? "";
+  // Resolve model: use the task's persisted model (D1)
+  const resolvedModel = task.model ?? "";
 
   // Run async
   runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
@@ -1376,9 +1413,8 @@ export async function handleRetry(
   const controller = new AbortController();
   executionControllers.set(executionId, controller);
 
-  // Resolve model: use the task's persisted model or workspace default
-  const config = getConfig();
-  const resolvedModel = updatedRow.model ?? config.workspace.ai.model ?? "";
+  // Resolve model: use the task's persisted model
+  const resolvedModel = updatedRow.model ?? "";
 
   runExecution(
     taskId,
@@ -1495,8 +1531,7 @@ export async function handleCodeReview(
   const controller = new AbortController();
   executionControllers.set(executionId, controller);
 
-  const config = getConfig();
-  const resolvedModel = task.model ?? config.workspace.ai.model;
+  const resolvedModel = task.model ?? "";
 
   runExecution(
     taskId,

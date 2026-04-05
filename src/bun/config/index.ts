@@ -4,17 +4,33 @@ import yaml from "js-yaml";
 
 // ─── Config types ─────────────────────────────────────────────────────────────
 
+/** Per-entry provider config in the `providers:` list */
+export interface ProviderConfig {
+  id: string;   // unique name used as the prefix in qualified model IDs
+  type: string; // "anthropic" | "openrouter" | "lmstudio" | "openai-compatible" | "fake"
+  base_url?: string;
+  api_key?: string;
+  context_window_tokens?: number; // manual override; auto-detected from provider when absent
+}
+
+/**
+ * @deprecated Use `ProviderConfig` and `WorkspaceYaml.providers` instead.
+ * Kept for backward-compat auto-migration of old `ai:` blocks.
+ */
 export interface AIProviderConfig {
-  provider: string; // "openrouter" | "ollama" | "lmstudio" | "fake"
+  provider: string;
   base_url: string;
   api_key: string;
-  model?: string; // optional – model selected per-task from UI; falls back to provider default
-  context_window_tokens?: number; // manual override; auto-detected from provider when absent
+  model?: string;
+  context_window_tokens?: number;
 }
 
 export interface WorkspaceYaml {
   name?: string;
-  ai: AIProviderConfig;
+  /** New multi-provider format. Takes precedence over `ai` when present. */
+  providers?: ProviderConfig[];
+  /** @deprecated Single-provider legacy format. Auto-migrated to `providers` on load. */
+  ai?: AIProviderConfig;
   worktree_base_path?: string;
   git_path?: string; // absolute path to git binary, e.g. /usr/bin/git
   search?: {
@@ -43,6 +59,8 @@ export interface WorkflowTemplateConfig {
 
 export interface LoadedConfig {
   workspace: WorkspaceYaml;
+  /** Normalized, de-duplicated provider list — always populated after load */
+  providers: ProviderConfig[];
   workflows: WorkflowTemplateConfig[];
 }
 
@@ -72,17 +90,27 @@ function getConfigDir(): string {
 const DEFAULT_WORKSPACE_YAML = `
 name: My Workspace
 
-ai:
-  # Switch to your real provider when ready.
-  # provider: openrouter
-  # base_url: https://openrouter.ai/api/v1
-  # api_key: sk-or-YOUR_KEY_HERE
-  # model: anthropic/claude-3.5-sonnet  # optional — model selected per-task from the UI
-  provider: fake
-  base_url: ""
-  api_key: ""
-  model: fake
-  # context_window_tokens: 128000  # optional override — auto-detected from provider when omitted
+# List all AI providers you want to use simultaneously.
+providers:
+  # Fake provider — used for local UI development. Remove when using a real provider.
+  - id: fake
+    type: fake
+
+  # Anthropic direct API (Claude models)
+  # - id: anthropic
+  #   type: anthropic
+  #   api_key: sk-ant-YOUR_KEY_HERE
+
+  # OpenRouter (access to many models via one API key)
+  # - id: openrouter
+  #   type: openrouter
+  #   base_url: https://openrouter.ai/api/v1
+  #   api_key: sk-or-YOUR_KEY_HERE
+
+  # LM Studio (local models)
+  # - id: lmstudio
+  #   type: lmstudio
+  #   base_url: http://localhost:1234/
 
 # Web search (used by the search_internet tool)
 # search:
@@ -168,16 +196,45 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
     return { config: null, error: _configError };
   }
 
-  // Validate required fields
-  if (!workspace?.ai) {
-    _configError = "workspace.yaml is missing the required 'ai' section.";
+  // Validate required fields — support both new `providers:` and legacy `ai:` block
+  let providers: ProviderConfig[];
+
+  if (workspace.providers && workspace.providers.length > 0) {
+    // New format: `providers:` takes precedence
+    if (workspace.ai) {
+      console.warn("[config] Both 'providers:' and 'ai:' found in workspace.yaml — using 'providers:' and ignoring 'ai:'.");
+    }
+    providers = workspace.providers;
+  } else if (workspace.ai) {
+    // Legacy format: auto-migrate `ai:` block to a single-entry providers list
+    const ai = workspace.ai;
+    providers = [{
+      id: "default",
+      type: ai.provider ?? "fake",
+      base_url: ai.base_url || undefined,
+      api_key: ai.api_key || undefined,
+      context_window_tokens: ai.context_window_tokens,
+    }];
+  } else {
+    _configError = "workspace.yaml is missing both 'providers:' and legacy 'ai:' section.";
     return { config: null, error: _configError };
   }
-  // Skip base_url/model validation when using the fake provider
-  const isFake = workspace.ai.provider === "fake";
-  if (!isFake && !workspace.ai.base_url) {
-    _configError = "workspace.yaml: ai.base_url is required.";
-    return { config: null, error: _configError };
+
+  // Validate provider entries & detect duplicates
+  const seen = new Set<string>();
+  const deduped: ProviderConfig[] = [];
+  for (const p of providers) {
+    if (!p.id) { console.warn("[config] Provider entry missing 'id' — skipping."); continue; }
+    if (seen.has(p.id)) {
+      console.warn(`[config] Duplicate provider id '${p.id}' — ignoring subsequent entries.`);
+      continue;
+    }
+    seen.add(p.id);
+    // Validate base_url for non-fake, non-anthropic providers
+    if (p.type !== "fake" && p.type !== "anthropic" && !p.base_url) {
+      console.warn(`[config] Provider '${p.id}' (type: ${p.type}) is missing 'base_url' — it may not function correctly.`);
+    }
+    deduped.push(p);
   }
 
   // Load workflow templates from config/workflows/
@@ -205,7 +262,7 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
     workflows.push(defaultTemplate);
   }
 
-  _config = { workspace, workflows };
+  _config = { workspace, providers: deduped, workflows };
   _configError = null;
   return { config: _config, error: null };
 }

@@ -465,3 +465,53 @@ describe("unified streaming (stream() used for every round)", () => {
     expect(capturedOpts.length).toBe(0);
   }, 10_000);
 });
+
+// ─── awaiting_user fallback (tasks 5.10 & 5.11) ───────────────────────────────
+
+describe("awaiting_user on UnresolvableProviderError", () => {
+  it("5.10 task with model:null → execution_state awaiting_user + system message", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    // Override model to null — this should trigger UnresolvableProviderError
+    db.run("UPDATE tasks SET workflow_state = 'plan', model = NULL WHERE id = ?", [taskId]);
+
+    let executionId!: number;
+    await handleHumanTurn(
+      taskId,
+      "Please help.",
+      noop,
+      noop,
+      noop,
+      noop,
+    ).then((r) => { executionId = r.executionId; });
+
+    // Give async runExecution time to complete (it should fail fast)
+    await new Promise((r) => setTimeout(r, 300));
+
+    const task = db
+      .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(task!.execution_state).toBe("awaiting_user");
+
+    const sysMsg = db
+      .query<{ content: string }, [number]>(
+        "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'system' ORDER BY id DESC LIMIT 1",
+      )
+      .get(taskId);
+    expect(sysMsg).not.toBeNull();
+    expect(sysMsg!.content).toMatch(/model/i);
+  });
+
+  it("5.11 task with unknown provider prefix → execution_state awaiting_user", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', model = 'unknownprovider/some-model' WHERE id = ?", [taskId]);
+
+    await handleHumanTurn(taskId, "Go.", noop, noop, noop, noop);
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    const task = db
+      .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(task!.execution_state).toBe("awaiting_user");
+  });
+});

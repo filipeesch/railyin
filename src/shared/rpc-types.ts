@@ -70,6 +70,16 @@ export interface ModelInfo {
   contextWindow: number | null;
 }
 
+export interface ProviderModelList {
+  id: string;
+  models: Array<{
+    id: string;
+    contextWindow: number | null;
+    enabled: boolean;
+  }>;
+  error?: string;
+}
+
 // ─── File diff types ─────────────────────────────────────────────────────────
 
 export interface HunkLine {
@@ -272,6 +282,14 @@ export type RailynRPCType = {
 
       // Models
       "models.list": {
+        params: Record<string, never>;
+        response: ProviderModelList[];
+      };
+      "models.setEnabled": {
+        params: { qualifiedModelId: string; enabled: boolean };
+        response: Record<string, never>;
+      };
+      "models.listEnabled": {
         params: Record<string, never>;
         response: ModelInfo[];
       };

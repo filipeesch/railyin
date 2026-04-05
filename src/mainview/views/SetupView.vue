@@ -143,6 +143,17 @@
           </div>
         </TabPanel>
 
+        <!-- Models allowlist -->
+        <TabPanel header="Models">
+          <div class="setup-section">
+            <h3>Enabled Models</h3>
+            <p class="setup-hint">
+              Choose which models appear in the chat dropdown. Only checked models will be available for task execution.
+            </p>
+            <ModelTreeView />
+          </div>
+        </TabPanel>
+
       </TabView>
 
       <!-- Done button (only shown when at least one board exists) -->
@@ -164,6 +175,7 @@ import Message from "primevue/message";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useBoardStore } from "../stores/board";
 import { useProjectStore } from "../stores/project";
+import ModelTreeView from "../components/ModelTreeView.vue";
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();

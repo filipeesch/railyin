@@ -111,6 +111,11 @@ export function initDb(): Database {
       PRIMARY KEY (task_id, hunk_hash, reviewer_id)
     );
     CREATE INDEX IF NOT EXISTS idx_hunk_decisions_task ON task_hunk_decisions(task_id);
+    CREATE TABLE IF NOT EXISTS enabled_models (
+      workspace_id        INTEGER NOT NULL,
+      qualified_model_id  TEXT    NOT NULL,
+      PRIMARY KEY (workspace_id, qualified_model_id)
+    );
   `);
   db.run("INSERT INTO workspaces (id, name) VALUES (1, 'test-workspace')");
   return db;
@@ -142,7 +147,7 @@ export function seedProjectAndTask(
   const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
 
   db.run(
-    "INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, conversation_id) VALUES (?, ?, 'Test task', 'A test task', 'plan', 'idle', ?)",
+    "INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, ?, 'Test task', 'A test task', 'plan', 'idle', ?, 'fake/fake')",
     [boardId, projectId, conversationId],
   );
   const taskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
@@ -160,12 +165,9 @@ export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: (
     join(configDir, "workspace.yaml"),
     [
       "name: test",
-      "ai:",
-      "  provider: fake",
-      '  base_url: ""',
-      '  api_key: ""',
-      "  model: fake",
-      "  context_window_tokens: 128000",
+      "providers:",
+      "  - id: fake",
+      "    type: fake",
       extraYaml,
     ].join("\n") + "\n",
   );
