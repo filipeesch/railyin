@@ -17,6 +17,9 @@ export const useTaskStore = defineStore("task", () => {
   const streamingReasoningToken = ref("");   // live reasoning text for active round
   const isStreamingReasoning = ref(false);   // true while reasoning tokens are arriving
 
+  // Ephemeral status message during non-streaming fallback (never stored in DB)
+  const streamingStatusMessage = ref("");
+
   const loading = ref(false);
   const messagesLoading = ref(false);
 
@@ -150,6 +153,7 @@ export const useTaskStore = defineStore("task", () => {
       }
       streamingToken.value = "";
       streamingReasoningToken.value = "";
+      streamingStatusMessage.value = "";
       isStreamingReasoning.value = false;
       streamingTaskId.value = null;
       // Sync with DB so the real persisted message (with correct id/metadata) replaces
@@ -157,6 +161,9 @@ export const useTaskStore = defineStore("task", () => {
       if (activeTaskId.value === payload.taskId) {
         loadMessages(payload.taskId);
       }
+    } else if (payload.isStatus) {
+      // Ephemeral status event from non-streaming fallback: just update the latest message.
+      streamingStatusMessage.value = payload.token;
     } else if (payload.isReasoning) {
       // Reasoning token: if this is the start of a new round (prev round collapsed),
       // clear old content so we start a fresh live bubble.
@@ -170,6 +177,7 @@ export const useTaskStore = defineStore("task", () => {
       if (isStreamingReasoning.value) {
         isStreamingReasoning.value = false;
       }
+      streamingStatusMessage.value = ""; // clear status when real tokens arrive
       streamingToken.value += payload.token;
     }
   }
@@ -177,6 +185,7 @@ export const useTaskStore = defineStore("task", () => {
   function onStreamError(payload: StreamError) {
     if (payload.taskId !== streamingTaskId.value) return;
     streamingToken.value = "";
+    streamingStatusMessage.value = "";
     streamingTaskId.value = null;
     if (payload.taskId !== activeTaskId.value) return;
     messages.value.push({
@@ -206,6 +215,7 @@ export const useTaskStore = defineStore("task", () => {
       streamingTaskId.value = task.id;
       streamingToken.value = "";
       streamingReasoningToken.value = "";
+      streamingStatusMessage.value = "";
       isStreamingReasoning.value = false;
     }
     // Refresh context usage when the active task finishes an execution
@@ -362,6 +372,7 @@ export const useTaskStore = defineStore("task", () => {
     streamingToken,
     streamingReasoningToken,
     isStreamingReasoning,
+    streamingStatusMessage,
     streamingTaskId,
     loading,
     messagesLoading,

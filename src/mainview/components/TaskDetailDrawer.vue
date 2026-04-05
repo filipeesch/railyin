@@ -114,6 +114,15 @@
               <div class="msg__meta">AI<span class="cursor">▌</span></div>
             </div>
 
+            <!-- Ephemeral status message during non-streaming fallback (cleared when tokens arrive) -->
+            <div
+              v-else-if="taskStore.streamingStatusMessage && taskStore.streamingTaskId === task.id"
+              class="msg msg--system msg--status-ephemeral"
+            >
+              <ProgressSpinner style="width: 16px; height: 16px" />
+              <span>{{ taskStore.streamingStatusMessage }}</span>
+            </div>
+
             <!-- Running spinner when no tokens yet -->
             <div
               v-else-if="task.executionState === 'running'"

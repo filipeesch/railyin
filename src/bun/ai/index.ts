@@ -6,6 +6,9 @@ import type { ProviderConfig } from "../config/index.ts";
 // Keep legacy import for tests/callers that haven't migrated yet
 import type { AIProviderConfig } from "../config/index.ts";
 
+export { ProviderError } from "./retry.ts";
+export { retryStream, retryTurn } from "./retry.ts";
+
 // ─── Error ────────────────────────────────────────────────────────────────────
 
 export class UnresolvableProviderError extends Error {

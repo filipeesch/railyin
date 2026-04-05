@@ -1,4 +1,5 @@
 import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, StreamEvent } from "./types.ts";
+import { ProviderError } from "./retry.ts";
 
 export class OpenAICompatibleProvider implements AIProvider {
   private baseUrl: string;
@@ -43,7 +44,12 @@ export class OpenAICompatibleProvider implements AIProvider {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`AI provider returned ${response.status}: ${text}`);
+      const retryAfter = response.headers.get("retry-after");
+      throw new ProviderError(
+        response.status,
+        `AI provider returned ${response.status}: ${text}`,
+        retryAfter ? parseInt(retryAfter, 10) : undefined,
+      );
     }
 
     const json = await response.json() as {
@@ -91,7 +97,12 @@ export class OpenAICompatibleProvider implements AIProvider {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`AI provider returned ${response.status}: ${text}`);
+      const retryAfter = response.headers.get("retry-after");
+      throw new ProviderError(
+        response.status,
+        `AI provider returned ${response.status}: ${text}`,
+        retryAfter ? parseInt(retryAfter, 10) : undefined,
+      );
     }
 
     if (!response.body) {

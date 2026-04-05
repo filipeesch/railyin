@@ -23,8 +23,8 @@ seedDefaultWorkspace();
 
 let win!: BrowserWindow;
 
-function onToken(taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean): void {
-  win.webview.rpc.send["stream.token"]({ taskId, executionId, token, done, isReasoning });
+function onToken(taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean): void {
+  win.webview.rpc.send["stream.token"]({ taskId, executionId, token, done, isReasoning, isStatus });
 }
 
 function onError(taskId: number, executionId: number, error: string): void {

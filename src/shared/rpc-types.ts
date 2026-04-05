@@ -201,6 +201,8 @@ export interface StreamToken {
   token: string;
   done: boolean;
   isReasoning?: boolean;
+  /** True for ephemeral status events from non-streaming fallback — never stored in DB. */
+  isStatus?: boolean;
 }
 
 export interface StreamError {

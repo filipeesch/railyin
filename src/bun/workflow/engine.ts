@@ -1,7 +1,7 @@
 import { getDb } from "../db/index.ts";
 import { getConfig } from "../config/index.ts";
 import { log } from "../logger.ts";
-import { resolveProvider, UnresolvableProviderError, listOpenAICompatibleModels } from "../ai/index.ts";
+import { resolveProvider, UnresolvableProviderError, listOpenAICompatibleModels, retryStream, retryTurn } from "../ai/index.ts";
 import type { AIMessage, AIToolCall } from "../ai/types.ts";
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
@@ -19,7 +19,7 @@ const CONTEXT_WARN_FRACTION = 0.8;
 
 // ─── Streaming callback type ──────────────────────────────────────────────────
 
-export type OnToken = (taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean) => void;
+export type OnToken = (taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean) => void;
 export type OnError = (taskId: number, executionId: number, error: string) => void;
 export type OnTaskUpdated = (task: Task) => void;
 export type OnNewMessage = (message: ConversationMessage) => void;
@@ -482,7 +482,7 @@ export async function compactConversation(taskId: number): Promise<ConversationM
     const { callMessages, totalWords, truncated } = buildMessages(maxWords);
     log("info", `compaction: attempt ${attempt}`, { taskId, data: { model: resolvedModel, contextWindow, maxWords, words: totalWords, truncated } });
     try {
-      const result = await provider.turn(callMessages, {});
+      const result = await retryTurn(provider, callMessages, {});
       const summary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
       log("info", `compaction: done on attempt ${attempt}, summary length=${summary.length}`, { taskId });
 
@@ -642,7 +642,7 @@ async function runSubExecution({
   let toolRounds = 0;
 
   while (toolRounds < MAX_SUB_ROUNDS) {
-    const turn = await provider.turn(liveMessages, { tools: toolDefs });
+    const turn = await retryTurn(provider, liveMessages, { tools: toolDefs });
 
     if (turn.type === "text") {
       return (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
@@ -691,7 +691,7 @@ async function runSubExecution({
   } else {
     liveMessages.push({ role: "user", content: "You have reached the tool call limit. Please summarise your work so far." });
   }
-  const final = await provider.turn(liveMessages, { tools: [] });
+  const final = await retryTurn(provider, liveMessages, { tools: [] });
   return final.type === "text" ? (final.content ?? "(no response)") : "(sub-agent hit tool limit)";
 }
 
@@ -833,7 +833,7 @@ async function runExecution(
 
       try {
         log("debug", `Stream round ${toolRounds + 1} started`, { taskId, executionId, data: { toolCount: tools.length } });
-        for await (const event of provider.stream(liveMessages, { tools, signal })) {
+        for await (const event of retryStream(provider, liveMessages, { tools, signal })) {
           if (event.type === "token") {
             fullResponse += event.content;
             onToken(taskId, executionId, event.content, false);
@@ -841,6 +841,9 @@ async function runExecution(
             reasoningAccum += event.content;
             hadReasoning = true;
             onToken(taskId, executionId, event.content, false, true);
+          } else if (event.type === "status") {
+            // Ephemeral status event from non-streaming fallback — forward to frontend only, no DB write.
+            onToken(taskId, executionId, event.content, false, false, true);
           } else if (event.type === "tool_calls") {
             log("debug", `Tool calls received: ${event.calls.map(c => c.function.name).join(", ")}`, { taskId, executionId });
             roundCalls = event.calls;
