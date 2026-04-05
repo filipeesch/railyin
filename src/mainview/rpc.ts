@@ -20,6 +20,7 @@ const viewRpc = Electroview.defineRPC<RailynRPCType>({
       "stream.error": (payload) => _onStreamError(payload),
       "task.updated": (task) => _onTaskUpdated(task),
       "message.new": (message) => _onNewMessage(message),
+      "debug.log": () => {}, // direction is webview→bun only; this handler intentionally empty
     },
   },
 });
@@ -30,3 +31,9 @@ export function onStreamToken(cb: (payload: StreamToken) => void) { _onStreamTok
 export function onStreamError(cb: (payload: StreamError) => void) { _onStreamError = cb; }
 export function onTaskUpdated(cb: (task: Task) => void) { _onTaskUpdated = cb; }
 export function onNewMessage(cb: (message: ConversationMessage) => void) { _onNewMessage = cb; }
+
+/** Send a log line to bun's stdout (visible in the terminal running `bun run dev`). */
+export function sendDebugLog(level: "log" | "warn" | "error", ...args: unknown[]) {
+  const text = args.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+  electroview.rpc?.send["debug.log"]?.({ level, args: text });
+}

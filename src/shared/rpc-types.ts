@@ -134,6 +134,12 @@ export interface HunkWithDecisions {
   originalEnd: number;
   modifiedStart: number;
   modifiedEnd: number;
+  /** First/last "+" line in modified file (excludes leading/trailing context). Both 0 for pure deletions. */
+  modifiedContentStart: number;
+  modifiedContentEnd: number;
+  /** First/last "-" line in original file (excludes leading/trailing context). Both 0 for pure additions. */
+  originalContentStart: number;
+  originalContentEnd: number;
   decisions: ReviewerDecision[];
   /** Convenience: the human reviewer's current decision (defaults to 'pending') */
   humanDecision: HunkDecision;
@@ -344,6 +350,15 @@ export type RailynRPCType = {
       "stream.error": StreamError;
       "task.updated": Task;
       "message.new": ConversationMessage;
+      "debug.log": { level: string; args: string };
+    };
+  }>;
+
+  // webview → bun one-way debug log forwarding (dev only)
+  debugLog: RPCSchema<{
+    requests: Record<string, never>;
+    messages: {
+      "debug.log": { level: string; args: string };
     };
   }>;
 };

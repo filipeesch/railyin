@@ -1,9 +1,10 @@
 <template>
-  <div ref="containerEl" class="monaco-diff-editor" :style="{ height: height + 'px' }" />
+  <div ref="containerEl" class="monaco-diff-editor" />
 </template>
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount } from "vue";
+import type { App } from "vue";
 import loader from "@monaco-editor/loader";
 
 export interface ILineChange {
@@ -18,11 +19,11 @@ const props = withDefaults(
     original: string;
     modified: string;
     language?: string;
-    height?: number;
+    sideBySide?: boolean;
   }>(),
   {
     language: "plaintext",
-    height: 500,
+    sideBySide: false,
   },
 );
 
@@ -40,6 +41,9 @@ let monacoInstance: typeof import("monaco-editor") | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let editor: any = null;
 let disposed = false;
+let diffUpdateDisposable: { dispose(): void } | null = null;
+
+const mountedApps: App[] = [];
 
 async function initEditor() {
   if (!containerEl.value || disposed) return;
@@ -47,12 +51,12 @@ async function initEditor() {
   if (disposed || !containerEl.value) return;
 
   editor = monacoInstance.editor.createDiffEditor(containerEl.value, {
-    renderSideBySide: true,
+    renderSideBySide: props.sideBySide,
     readOnly: true,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
     automaticLayout: true,
-    theme: "vs-dark",
+    theme: "vs",
   });
 
   applyModels();
@@ -60,14 +64,16 @@ async function initEditor() {
 
 function applyModels() {
   if (!editor || !monacoInstance) return;
+  // Dispose previous diff listener to prevent accumulation
+  diffUpdateDisposable?.dispose();
+
   const lang = props.language;
   editor.setModel({
     original: monacoInstance.editor.createModel(props.original, lang),
     modified: monacoInstance.editor.createModel(props.modified, lang),
   });
 
-  // Wait for the diff computation then emit hunks
-  editor.onDidUpdateDiff(() => {
+  diffUpdateDisposable = editor.onDidUpdateDiff(() => {
     const changes: ILineChange[] = editor.getLineChanges() ?? [];
     emit("hunksReady", changes);
   });
@@ -80,18 +86,56 @@ watch(
   },
 );
 
+watch(
+  () => props.sideBySide,
+  (val) => {
+    if (editor) editor.updateOptions({ renderSideBySide: val });
+  },
+);
+
 onMounted(() => {
   initEditor();
 });
 
 onBeforeUnmount(() => {
   disposed = true;
+  diffUpdateDisposable?.dispose();
+  for (const app of mountedApps) {
+    try {
+      app.unmount();
+    } catch {
+      /* ignore */
+    }
+  }
+  mountedApps.length = 0;
   editor?.dispose();
+});
+
+defineExpose({
+  getEditor: () => editor,
+  registerApp: (app: App) => {
+    mountedApps.push(app);
+  },
+  unregisterApp: (app: App) => {
+    const idx = mountedApps.indexOf(app);
+    if (idx !== -1) mountedApps.splice(idx, 1);
+  },
+  clearApps: () => {
+    for (const app of mountedApps) {
+      try {
+        app.unmount();
+      } catch {
+        /* ignore */
+      }
+    }
+    mountedApps.length = 0;
+  },
 });
 </script>
 
 <style scoped>
 .monaco-diff-editor {
   width: 100%;
+  height: 100%;
 }
 </style>

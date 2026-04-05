@@ -20,7 +20,7 @@ export const useReviewStore = defineStore("review", () => {
     taskId.value = forTaskId;
     files.value = filePaths;
     isOpen.value = true;
-    mode.value = "changes";
+    mode.value = "review";
     filter.value = "all";
     optimisticUpdates.value.clear();
     selectedFile.value = filePaths[0] ?? null;
