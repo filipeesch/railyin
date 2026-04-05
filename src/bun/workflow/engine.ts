@@ -373,6 +373,20 @@ export function estimateContextUsage(
   maxTokens: number,
 ): { usedTokens: number; maxTokens: number; fraction: number } {
   const db = getDb();
+
+  // Use real input_tokens from the most recent execution when available (task 5.1)
+  const latestExecution = db
+    .query<{ input_tokens: number | null }, [number]>(
+      "SELECT input_tokens FROM executions WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .get(taskId);
+  if (latestExecution?.input_tokens != null) {
+    const usedTokens = latestExecution.input_tokens + SYSTEM_MESSAGE_OVERHEAD_TOKENS;
+    const fraction = maxTokens > 0 ? Math.min(usedTokens / maxTokens, 1) : 0;
+    return { usedTokens, maxTokens, fraction };
+  }
+
+  // Fall back to character-count estimation (task 5.2)
   const messages = db
     .query<ConversationMessageRow, [number]>(
       "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
@@ -979,6 +993,12 @@ async function runExecution(
           } else if (event.type === "status") {
             // Ephemeral status event from non-streaming fallback — forward to frontend only, no DB write.
             onToken(taskId, executionId, event.content, false, false, true);
+          } else if (event.type === "usage") {
+            // Persist real token counts from the provider — used by the context gauge
+            db.run(
+              "UPDATE executions SET input_tokens = ?, output_tokens = ?, cache_creation_input_tokens = ?, cache_read_input_tokens = ? WHERE id = ?",
+              [event.usage.inputTokens, event.usage.outputTokens, event.usage.cacheCreationInputTokens ?? null, event.usage.cacheReadInputTokens ?? null, executionId],
+            );
           } else if (event.type === "tool_calls") {
             log("debug", `Tool calls received: ${event.calls.map(c => c.function.name).join(", ")}`, { taskId, executionId });
             roundCalls = event.calls;
@@ -1338,6 +1358,7 @@ async function runExecution(
           content: storedResult,
           tool_call_id: call.id,
           name: fnName,
+          ...(storedResult.startsWith("Error:") ? { isError: true } : {}),
         });
       }
 

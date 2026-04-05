@@ -155,6 +155,15 @@ const migrations: Array<{ id: string; sql: string }> = [
       CREATE INDEX IF NOT EXISTS idx_hunk_decisions_task ON task_hunk_decisions(task_id);
     `,
   },
+  {
+    id: "006_execution_token_columns",
+    sql: `
+      ALTER TABLE executions ADD COLUMN input_tokens              INTEGER;
+      ALTER TABLE executions ADD COLUMN output_tokens             INTEGER;
+      ALTER TABLE executions ADD COLUMN cache_creation_input_tokens INTEGER;
+      ALTER TABLE executions ADD COLUMN cache_read_input_tokens   INTEGER;
+    `,
+  },
 ];
 
 export function runMigrations(): void {

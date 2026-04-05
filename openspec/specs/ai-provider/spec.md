@@ -152,3 +152,59 @@ The system SHALL drive the entire execution — tool rounds and final text respo
 #### Scenario: Tool call followed by final text in same session
 - **WHEN** the model calls a tool in round N and then produces text in round N+1
 - **THEN** the text from round N+1 is the final response, streamed live; total API calls equal number of rounds
+
+### Requirement: Internal AIMessage supports error flag for tool results
+The `AIMessage` type SHALL include an optional `isError?: boolean` field. The engine SHALL set this field when pushing a failed tool result to `liveMessages`. Provider `adaptMessages()` implementations use the field to apply provider-specific error signalling.
+
+#### Scenario: Engine sets isError on liveMessages for error results
+- **WHEN** the engine receives an error string from `executeTool()` and pushes the tool result to `liveMessages`
+- **THEN** the pushed `AIMessage` has `role: "tool"` and `isError: true`
+
+### Requirement: Tool result messages carry error signal for Anthropic provider
+The system SHALL include `is_error: true` on Anthropic `tool_result` content blocks when the tool invocation returned an error. This enriches the model's understanding of tool failure states.
+
+#### Scenario: Failed tool result has is_error flag in Anthropic wire format
+- **WHEN** `executeTool()` returns a string beginning with `"Error:"` and the active provider is Anthropic
+- **THEN** the `tool_result` content block in the next API request includes `is_error: true` alongside the error content string
+
+#### Scenario: Successful tool result has no is_error flag
+- **WHEN** `executeTool()` returns a success string (e.g. starting with `"OK:"` or file content) or a `WriteResult`
+- **THEN** the `tool_result` content block has no `is_error` field (defaults to false per Anthropic API spec)
+
+#### Scenario: OpenAI-compatible tool result is unaffected
+- **WHEN** a tool fails and the active provider is OpenAI-compatible
+- **THEN** the tool result message is sent as a plain content string with no `is_error` field (OpenAI API has no equivalent)
+
+### Requirement: AI provider wire payloads guarantee no consecutive same-role messages
+The system SHALL merge consecutive messages with the same role into a single message before transmitting to any provider. This normalization SHALL run at the provider boundary — as a post-processing pass inside `adaptMessages()` for the Anthropic provider and as a pre-processing pass in `stream()` and `turn()` for the OpenAI-compatible provider. The engine and `assembleMessages()` SHALL remain provider-agnostic; any provider-specific merging guard in the engine SHALL be removed once this requirement is satisfied.
+
+#### Scenario: Consecutive user messages merged in Anthropic payload
+- **WHEN** `adaptMessages()` produces two consecutive `role: "user"` entries (e.g. a tool result followed by a text prompt injected by the engine)
+- **THEN** they are merged into a single entry whose content concatenates the two with `"\n\n"` as separator
+
+#### Scenario: Consecutive user messages merged in OpenAI-compatible payload
+- **WHEN** the OpenAI-compatible provider's normalization pass finds two consecutive `role: "user"` messages
+- **THEN** they are merged into one message with concatenated content
+
+#### Scenario: Consecutive assistant messages merged
+- **WHEN** two consecutive assistant messages appear in the adapted array
+- **THEN** their text content is concatenated and their `tool_calls` arrays are combined in order into a single assistant message
+
+#### Scenario: Run of three or more consecutive same-role messages merged into one
+- **WHEN** three or more consecutive messages share the same role
+- **THEN** all are merged into a single message as if the pairwise merge were applied repeatedly
+
+#### Scenario: Correctly alternating messages are unaffected
+- **WHEN** user and assistant messages alternate with no consecutive same-role entries
+- **THEN** the normalization pass returns the array unchanged
+
+### Requirement: Anthropic provider sends system content as structured blocks with cache hints
+The system SHALL send the Anthropic `system` field as a `ContentBlock[]` array rather than a plain string when prompt caching is enabled. Each block contains `{ type: "text", text: string, cache_control?: { type: "ephemeral" } }`. The last block always carries the cache breakpoint marker.
+
+#### Scenario: System content block array accepted by Anthropic API
+- **WHEN** `adaptMessages()` is called for an Anthropic API call with system messages present
+- **THEN** the request body contains `system: [{ type: "text", text: "...", cache_control: { type: "ephemeral" } }]` as an array rather than `system: "..."`
+
+#### Scenario: Anthropic non-streaming turn also sends system block array
+- **WHEN** `provider.turn()` is called for a compaction or sub-agent call using AnthropicProvider
+- **THEN** the same block array form is used for the `system` field, consistent with streaming calls

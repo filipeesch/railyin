@@ -7,6 +7,7 @@
 
 import { describe, it, expect, afterEach, beforeEach } from "bun:test";
 import { adaptMessages, adaptTools, AnthropicProvider } from "../ai/anthropic.ts";
+import { OpenAICompatibleProvider } from "../ai/openai-compatible.ts";
 import { resolveProvider, UnresolvableProviderError, clearProviderCache, listOpenAICompatibleModels } from "../ai/index.ts";
 import type { ProviderConfig } from "../config/index.ts";
 import type { AIMessage, AIToolDefinition } from "../ai/types.ts";
@@ -81,7 +82,10 @@ describe("adaptMessages — system extraction (5.7)", () => {
       { role: "user", content: "Hello" },
     ];
     const { system, messages: adapted } = adaptMessages(messages);
-    expect(system).toBe("You are helpful.");
+    // system is now a block array with prompt-caching headers
+    expect(Array.isArray(system)).toBe(true);
+    expect(system!.length).toBe(1);
+    expect(system![0].text).toBe("You are helpful.");
     expect(adapted).toHaveLength(1);
     expect(adapted[0].role).toBe("user");
   });
@@ -93,8 +97,9 @@ describe("adaptMessages — system extraction (5.7)", () => {
       { role: "user", content: "Go." },
     ];
     const { system } = adaptMessages(messages);
-    expect(system).toContain("Instruction A.");
-    expect(system).toContain("Instruction B.");
+    expect(Array.isArray(system)).toBe(true);
+    expect(system![0].text).toContain("Instruction A.");
+    expect(system![0].text).toContain("Instruction B.");
   });
 
   it("returns undefined system when no system messages", () => {
@@ -397,5 +402,427 @@ describe("listOpenAICompatibleModels (5.9)", () => {
 
     const models = await listOpenAICompatibleModels(config);
     expect(models.some((m) => m.id === "fallback-model")).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// two-stage-json-parse — safeParseJSON via stream()
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("two-stage-json-parse — double-encoded tool arguments", () => {
+  let server: ReturnType<typeof Bun.serve>;
+  afterEach(() => { server?.stop(true); });
+
+  it("corrects double-encoded JSON tool arguments emitted by the model", async () => {
+    // The model emits input_json_delta fragments that, when concatenated, form a
+    // JSON string whose top-level value is ITSELF a JSON string (double-encoding).
+    const doubleEncoded = JSON.stringify('{"path":"/tmp/out.txt"}'); // '"{\\"path\\":\\"/tmp/out.txt\\"}"'
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        const body = anthropicSse([
+          { type: "message_start", data: { message: { usage: { input_tokens: 10 } } } },
+          { type: "content_block_start", data: { index: 0, content_block: { type: "tool_use", id: "tu_1", name: "write_file" } } },
+          { type: "content_block_delta", data: { index: 0, delta: { type: "input_json_delta", partial_json: doubleEncoded } } },
+          { type: "content_block_stop", data: { index: 0 } },
+          { type: "message_delta", data: { usage: { output_tokens: 5 } } },
+          { type: "message_stop", data: {} },
+        ]);
+        return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`);
+    const events: Array<{ type: string; calls?: Array<{ function: { arguments: string } }> }> = [];
+    for await (const event of provider.stream([{ role: "user", content: "Write a file." }])) {
+      events.push(event as typeof events[0]);
+    }
+
+    const toolEvent = events.find((e) => e.type === "tool_calls");
+    expect(toolEvent).not.toBeUndefined();
+    const args = JSON.parse(toolEvent!.calls![0].function.arguments);
+    // After safeParseJSON, the result should be the inner object, not the string
+    expect(typeof args).toBe("object");
+    expect(args.path).toBe("/tmp/out.txt");
+  });
+
+  it("passes through correctly-encoded JSON arguments without modification", async () => {
+    const correctJson = '{"path":"/tmp/out.txt"}';
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        const body = anthropicSse([
+          { type: "message_start", data: { message: {} } },
+          { type: "content_block_start", data: { index: 0, content_block: { type: "tool_use", id: "tu_1", name: "read_file" } } },
+          { type: "content_block_delta", data: { index: 0, delta: { type: "input_json_delta", partial_json: correctJson } } },
+          { type: "content_block_stop", data: { index: 0 } },
+          { type: "message_stop", data: {} },
+        ]);
+        return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`);
+    const events: Array<{ type: string; calls?: Array<{ function: { arguments: string } }> }> = [];
+    for await (const event of provider.stream([{ role: "user", content: "Read a file." }])) {
+      events.push(event as typeof events[0]);
+    }
+
+    const toolEvent = events.find((e) => e.type === "tool_calls");
+    expect(toolEvent).not.toBeUndefined();
+    const args = JSON.parse(toolEvent!.calls![0].function.arguments);
+    expect(args.path).toBe("/tmp/out.txt");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// thinking-block-orphan-detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("thinking-block-orphan-detection — empty assistant message filtering", () => {
+  it("removes empty assistant messages with no content and no tool_calls", () => {
+    const messages: AIMessage[] = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "" },      // orphan — no text, no tool calls
+      { role: "assistant", content: "I'm here" }, // real assistant response follows
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    // The empty assistant message should be filtered out; the real one remains
+    expect(adapted).toHaveLength(2);
+    expect(adapted[0].role).toBe("user");
+    expect(adapted[1].role).toBe("assistant");
+    expect(typeof adapted[1].content === "string" && adapted[1].content).toContain("I'm here");
+  });
+
+  it("removes assistant messages with null content and no tool_calls", () => {
+    const messages: AIMessage[] = [
+      { role: "user", content: "go" },
+      { role: "assistant", content: null },   // orphan
+      { role: "assistant", content: "Done!" }, // real assistant message follows
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    expect(adapted).toHaveLength(2);
+    expect(adapted[1].role).toBe("assistant");
+    expect(typeof adapted[1].content === "string" && adapted[1].content).toContain("Done!");
+  });
+
+  it("preserves non-empty assistant messages", () => {
+    const messages: AIMessage[] = [
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "Hello there!" },
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    expect(adapted).toHaveLength(2);
+    expect(adapted[1].role).toBe("assistant");
+  });
+
+  it("preserves empty assistant messages that have tool_calls", () => {
+    const messages: AIMessage[] = [
+      { role: "user", content: "List files." },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "c1", type: "function", function: { name: "ls", arguments: "{}" } }],
+      },
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    const asst = adapted.find((m) => m.role === "assistant");
+    expect(asst).not.toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// tool-error-flag — is_error propagation in Anthropic wire format
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("tool-error-flag — is_error in tool_result block", () => {
+  it("sets is_error:true on Anthropic tool_result block when msg.isError is set", () => {
+    const messages: AIMessage[] = [
+      { role: "user", content: "Run tool." },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: "{}" } }],
+      },
+      { role: "tool", content: "Error: file not found", tool_call_id: "c1", isError: true },
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    const toolResultMsg = adapted.find((m) => Array.isArray(m.content) && (m.content as Array<{ type: string }>).some((b) => b.type === "tool_result"));
+    expect(toolResultMsg).not.toBeUndefined();
+    const block = (toolResultMsg!.content as Array<{ type: string; is_error?: boolean }>).find((b) => b.type === "tool_result");
+    expect(block!.is_error).toBe(true);
+  });
+
+  it("does not set is_error on successful tool results", () => {
+    const messages: AIMessage[] = [
+      { role: "user", content: "Run tool." },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: "{}" } }],
+      },
+      { role: "tool", content: "file contents here", tool_call_id: "c1" },
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    const toolResultMsg = adapted.find((m) => Array.isArray(m.content) && (m.content as Array<{ type: string }>).some((b) => b.type === "tool_result"));
+    const block = (toolResultMsg!.content as Array<{ type: string; is_error?: boolean }>).find((b) => b.type === "tool_result");
+    expect(block!.is_error).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// consecutive-user-message-merging
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("consecutive-user-message-merging — Anthropic adaptMessages", () => {
+  it("merges two consecutive plain user messages into one", () => {
+    const messages: AIMessage[] = [
+      { role: "user", content: "Part A" },
+      { role: "user", content: "Part B" },
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    expect(adapted).toHaveLength(1);
+    expect(adapted[0].role).toBe("user");
+    expect(typeof adapted[0].content === "string" && adapted[0].content).toContain("Part A");
+    expect(typeof adapted[0].content === "string" && adapted[0].content).toContain("Part B");
+  });
+
+  it("merges two consecutive assistant text messages into one", () => {
+    const messages: AIMessage[] = [
+      { role: "assistant", content: "Hello" },
+      { role: "assistant", content: "World" },
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    expect(adapted).toHaveLength(1);
+    expect(adapted[0].role).toBe("assistant");
+  });
+
+  it("does not merge user and assistant messages", () => {
+    const messages: AIMessage[] = [
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "Hello" },
+      { role: "user", content: "Bye" },
+    ];
+    const { messages: adapted } = adaptMessages(messages);
+    expect(adapted).toHaveLength(3);
+  });
+});
+
+describe("consecutive-user-message-merging — OpenAI-compatible normalizeMessages", () => {
+  let server: ReturnType<typeof Bun.serve>;
+  afterEach(() => { server?.stop(true); });
+
+  it("sends a single merged user message when two consecutive user messages are present", async () => {
+    const capturedBodies: string[] = [];
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBodies.push(await req.text());
+        return Response.json({
+          choices: [{ message: { content: "ok", tool_calls: null }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        });
+      },
+    });
+
+    const provider = new OpenAICompatibleProvider(`http://localhost:${server.port}`, "", "test-model");
+    const messages: AIMessage[] = [
+      { role: "user", content: "Hello" },
+      { role: "user", content: "World" },
+    ];
+    await provider.turn(messages);
+
+    const body = JSON.parse(capturedBodies[0]) as { messages: Array<{ role: string; content: string }> };
+    // normalizeMessages should have merged the two user messages into one
+    expect(body.messages.filter((m) => m.role === "user")).toHaveLength(1);
+    expect(body.messages.find((m) => m.role === "user")!.content).toContain("Hello");
+    expect(body.messages.find((m) => m.role === "user")!.content).toContain("World");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// usage-token-tracking — Anthropic
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("usage-token-tracking — Anthropic stream()", () => {
+  let server: ReturnType<typeof Bun.serve>;
+  afterEach(() => { server?.stop(true); });
+
+  it("emits a usage event merging message_start input tokens and message_delta output tokens", async () => {
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        const body = anthropicSse([
+          { type: "message_start", data: { message: { usage: { input_tokens: 42, cache_creation_input_tokens: 5, cache_read_input_tokens: 3 } } } },
+          { type: "content_block_start", data: { index: 0, content_block: { type: "text", text: "" } } },
+          { type: "content_block_delta", data: { index: 0, delta: { type: "text_delta", text: "Hi" } } },
+          { type: "content_block_stop", data: { index: 0 } },
+          { type: "message_delta", data: { usage: { output_tokens: 17 } } },
+          { type: "message_stop", data: {} },
+        ]);
+        return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`);
+    const events: Array<{ type: string; usage?: { inputTokens: number; outputTokens: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number } }> = [];
+    for await (const event of provider.stream([{ role: "user", content: "Hi" }])) {
+      events.push(event as typeof events[0]);
+    }
+
+    const usageEvent = events.find((e) => e.type === "usage");
+    expect(usageEvent).not.toBeUndefined();
+    expect(usageEvent!.usage!.inputTokens).toBe(42);
+    expect(usageEvent!.usage!.outputTokens).toBe(17);
+    expect(usageEvent!.usage!.cacheCreationInputTokens).toBe(5);
+    expect(usageEvent!.usage!.cacheReadInputTokens).toBe(3);
+    // usage event should come before done
+    const usageIdx = events.findIndex((e) => e.type === "usage");
+    const doneIdx = events.findIndex((e) => e.type === "done");
+    expect(usageIdx).toBeLessThan(doneIdx);
+  });
+});
+
+describe("usage-token-tracking — Anthropic turn()", () => {
+  let server: ReturnType<typeof Bun.serve>;
+  afterEach(() => { server?.stop(true); });
+
+  it("populates usage on the AITurnResult from the non-streaming response", async () => {
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        return Response.json({
+          content: [{ type: "text", text: "Hello" }],
+          usage: { input_tokens: 30, output_tokens: 8, cache_creation_input_tokens: 2, cache_read_input_tokens: 0 },
+        });
+      },
+    });
+
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`);
+    const result = await provider.turn([{ role: "user", content: "Hi" }]);
+    expect(result.usage).not.toBeUndefined();
+    expect(result.usage!.inputTokens).toBe(30);
+    expect(result.usage!.outputTokens).toBe(8);
+    expect(result.usage!.cacheCreationInputTokens).toBe(2);
+  });
+});
+
+describe("usage-token-tracking — OpenAI-compatible", () => {
+  let server: ReturnType<typeof Bun.serve>;
+  afterEach(() => { server?.stop(true); });
+
+  it("emits a usage event from the final SSE chunk with usage field", async () => {
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        const lines = [
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "Hello" }, finish_reason: null }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 20, completion_tokens: 6 } })}\n\n`,
+          "data: [DONE]\n\n",
+        ].join("");
+        return new Response(lines, { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+
+    const provider = new OpenAICompatibleProvider(`http://localhost:${server.port}`, "", "test-model");
+    const events: Array<{ type: string; usage?: { inputTokens: number; outputTokens: number } }> = [];
+    for await (const event of provider.stream([{ role: "user", content: "Hello" }])) {
+      events.push(event as typeof events[0]);
+    }
+
+    const usageEvent = events.find((e) => e.type === "usage");
+    expect(usageEvent).not.toBeUndefined();
+    expect(usageEvent!.usage!.inputTokens).toBe(20);
+    expect(usageEvent!.usage!.outputTokens).toBe(6);
+  });
+
+  it("populates usage on AITurnResult from non-streaming response", async () => {
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        return Response.json({
+          choices: [{ message: { content: "ok", tool_calls: null }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 15, completion_tokens: 3 },
+        });
+      },
+    });
+
+    const provider = new OpenAICompatibleProvider(`http://localhost:${server.port}`, "", "test-model");
+    const result = await provider.turn([{ role: "user", content: "Hi" }]);
+    expect(result.usage).not.toBeUndefined();
+    expect(result.usage!.inputTokens).toBe(15);
+    expect(result.usage!.outputTokens).toBe(3);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// prompt-caching — system blocks and conversation breakpoint
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("prompt-caching — system message block array", () => {
+  it("returns system as a block array with cache_control on the last block", () => {
+    const messages: AIMessage[] = [
+      { role: "system", content: "Be helpful." },
+      { role: "user", content: "Hi" },
+    ];
+    const { system } = adaptMessages(messages);
+    expect(Array.isArray(system)).toBe(true);
+    expect(system!.length).toBeGreaterThan(0);
+    expect(system![system!.length - 1].cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("returns undefined system when no system messages are present", () => {
+    const messages: AIMessage[] = [{ role: "user", content: "Hi" }];
+    const { system } = adaptMessages(messages);
+    expect(system).toBeUndefined();
+  });
+
+  it("single system block carries cache_control", () => {
+    const messages: AIMessage[] = [
+      { role: "system", content: "Instructions." },
+      { role: "user", content: "Go" },
+    ];
+    const { system } = adaptMessages(messages);
+    expect(system).toHaveLength(1);
+    expect(system![0].cache_control).toEqual({ type: "ephemeral" });
+    expect(system![0].text).toBe("Instructions.");
+  });
+});
+
+describe("prompt-caching — conversation history breakpoint", () => {
+  /**
+   * Build a conversation with N user/assistant round-trip pairs plus a final user message.
+   * Returns the adapted messages array.
+   */
+  function buildConversation(userTurns: number): ReturnType<typeof adaptMessages>["messages"] {
+    const msgs: AIMessage[] = [];
+    for (let i = 0; i < userTurns; i++) {
+      msgs.push({ role: "user", content: `User turn ${i + 1}` });
+      msgs.push({ role: "assistant", content: `Assistant turn ${i + 1}` });
+    }
+    msgs.push({ role: "user", content: "Final user message" });
+    return adaptMessages(msgs).messages;
+  }
+
+  it("places the cache breakpoint at the 5th-from-last user message when there are 6+ user turns", () => {
+    // With 6 user turns, the 5th-from-last is turn 2 (turns: 1,2,3,4,5,final)
+    const adapted = buildConversation(5); // 5 pairs + 1 final = 6 user msgs
+    // The 5th-from-last user message (index from end: 5th) should have cache_control
+    const userMsgs = adapted.filter((m) => m.role === "user");
+    expect(userMsgs.length).toBe(6);
+    const fifth = userMsgs[userMsgs.length - 5]; // 5th from last
+    const lastBlock = Array.isArray(fifth.content)
+      ? (fifth.content as Array<{ cache_control?: unknown }>)[((fifth.content as unknown[]).length) - 1]
+      : null;
+    expect(lastBlock?.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("does not apply a breakpoint when there are fewer than 5 user messages", () => {
+    const adapted = buildConversation(2); // 2 pairs + 1 final = 3 user msgs
+    const cacheMarked = adapted.filter((m) => {
+      if (!Array.isArray(m.content)) return false;
+      return (m.content as Array<{ cache_control?: unknown }>).some((b) => b.cache_control);
+    });
+    expect(cacheMarked).toHaveLength(0);
   });
 });

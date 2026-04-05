@@ -1,4 +1,4 @@
-import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, StreamEvent } from "./types.ts";
+import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, StreamEvent, UsageStats } from "./types.ts";
 import { ProviderError } from "./retry.ts";
 
 export class OpenAICompatibleProvider implements AIProvider {
@@ -24,7 +24,7 @@ export class OpenAICompatibleProvider implements AIProvider {
   async turn(messages: AIMessage[], options: AICallOptions = {}): Promise<AITurnResult> {
     const body: Record<string, unknown> = {
       model: this.model,
-      messages: messages.map(toWireMessage),
+      messages: normalizeMessages(messages).map(toWireMessage),
       stream: false,
       enable_thinking: false,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
@@ -59,16 +59,22 @@ export class OpenAICompatibleProvider implements AIProvider {
           tool_calls?: AIToolCall[];
         };
       }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
 
     const message = json.choices?.[0]?.message;
     if (!message) throw new Error("AI provider returned empty response");
 
+    const usageRaw = json.usage;
+    const usage: UsageStats | undefined = usageRaw
+      ? { inputTokens: usageRaw.prompt_tokens ?? 0, outputTokens: usageRaw.completion_tokens ?? 0 }
+      : undefined;
+
     if (message.tool_calls?.length) {
-      return { type: "tool_calls", calls: message.tool_calls };
+      return { type: "tool_calls", calls: message.tool_calls, usage };
     }
 
-    return { type: "text", content: message.content ?? "" };
+    return { type: "text", content: message.content ?? "", usage };
   }
 
   // ─── Unified streaming (text tokens + tool calls in same SSE stream) ─────────
@@ -76,7 +82,7 @@ export class OpenAICompatibleProvider implements AIProvider {
   async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
     const body: Record<string, unknown> = {
       model: this.model,
-      messages: messages.map(toWireMessage),
+      messages: normalizeMessages(messages).map(toWireMessage),
       stream: true,
       // Suppress <think> preamble on models that support it (e.g. Qwen3)
       enable_thinking: false,
@@ -123,6 +129,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       function: { name: string; arguments: string };
     }> = [];
     let hasToolCalls = false;
+    // Usage stats from the final SSE chunk (some servers send usage on last chunk)
+    let streamUsage: UsageStats | undefined;
 
     try {
       while (true) {
@@ -152,6 +160,7 @@ export class OpenAICompatibleProvider implements AIProvider {
               };
               finish_reason?: string | null;
             }>;
+            usage?: { prompt_tokens?: number; completion_tokens?: number };
           };
 
           try {
@@ -161,6 +170,15 @@ export class OpenAICompatibleProvider implements AIProvider {
           }
 
           const choice = parsed.choices?.[0];
+
+          // Capture usage data when present (typically on the final chunk)
+          if (parsed.usage) {
+            streamUsage = {
+              inputTokens: parsed.usage.prompt_tokens ?? 0,
+              outputTokens: parsed.usage.completion_tokens ?? 0,
+            };
+          }
+
           if (!choice) continue;
 
           const delta = choice.delta;
@@ -233,6 +251,9 @@ export class OpenAICompatibleProvider implements AIProvider {
       reader.releaseLock();
     }
 
+    if (streamUsage) {
+      yield { type: "usage", usage: streamUsage };
+    }
     yield { type: "done" };
   }
 }
@@ -247,4 +268,31 @@ function toWireMessage(m: AIMessage): Record<string, unknown> {
   if (m.tool_call_id) base.tool_call_id = m.tool_call_id;
   if (m.name) base.name = m.name;
   return base;
+}
+
+// ─── Normalize consecutive same-role messages ─────────────────────────────────
+
+/**
+ * Collapse consecutive messages with the same role by concatenating their content.
+ * Some local-model servers (e.g. llama.cpp) reject conversations with back-to-back
+ * user messages. Tool result messages are always kept distinct (each has its own
+ * tool_call_id), and messages with tool_calls are never merged mid-turn.
+ */
+function normalizeMessages(messages: AIMessage[]): AIMessage[] {
+  const out: AIMessage[] = [];
+  for (const msg of messages) {
+    const prev = out[out.length - 1];
+    if (
+      prev &&
+      prev.role === msg.role &&
+      msg.role !== "tool" &&
+      !msg.tool_calls &&
+      !prev.tool_calls
+    ) {
+      prev.content = ((prev.content ?? "") + "\n\n" + (msg.content ?? "")).trim() || null;
+    } else {
+      out.push({ ...msg });
+    }
+  }
+  return out;
 }

@@ -6,6 +6,7 @@ import type {
   AIToolCall,
   AIToolDefinition,
   StreamEvent,
+  UsageStats,
 } from "./types.ts";
 import { ProviderError } from "./retry.ts";
 
@@ -14,6 +15,7 @@ import { ProviderError } from "./retry.ts";
 interface AnthropicTextBlock {
   type: "text";
   text: string;
+  cache_control?: { type: "ephemeral" };
 }
 
 interface AnthropicToolUseBlock {
@@ -23,11 +25,23 @@ interface AnthropicToolUseBlock {
   input: Record<string, unknown>;
 }
 
+interface AnthropicToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string;
+  is_error?: boolean;
+  cache_control?: { type: "ephemeral" };
+}
+
+// Block type for system and assistant content
 type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock;
+
+// Block type for system messages (supports prompt caching)
+type AnthropicSystemBlock = AnthropicTextBlock;
 
 interface AnthropicUserMessage {
   role: "user";
-  content: string | Array<{ type: "text"; text: string } | { type: "tool_result"; tool_use_id: string; content: string }>;
+  content: string | Array<AnthropicTextBlock | AnthropicToolResultBlock>;
 }
 
 interface AnthropicAssistantMessage {
@@ -47,22 +61,136 @@ interface AnthropicTool {
   };
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Parse a JSON string that may be double-encoded.
+ * Some Anthropic models occasionally wrap their tool JSON in an extra string layer.
+ * If the top-level value is a string, parse it again to unwrap.
+ */
+function safeParseJSON(raw: string): unknown {
+  try {
+    const first = JSON.parse(raw);
+    if (typeof first === "string") {
+      // Double-encoded — parse again
+      try {
+        return JSON.parse(first);
+      } catch {
+        return first;
+      }
+    }
+    return first;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Returns true for empty assistant messages that carry no text and no tool calls.
+ * These are orphans left by aborted thinking blocks or streamed turns that were
+ * cancelled before the model produced content.
+ */
+function isEmptyAssistantMessage(msg: AIMessage): boolean {
+  return (
+    msg.role === "assistant" &&
+    !(msg.tool_calls?.length) &&
+    !((typeof msg.content === "string" ? msg.content : "").trim())
+  );
+}
+
+/**
+ * Collapse consecutive messages with the same role by merging their content.
+ * Anthropic's API rejects conversations that have two user messages or two
+ * assistant messages in a row.
+ */
+function mergeConsecutiveSameRole(msgs: AnthropicMessage[]): AnthropicMessage[] {
+  const toUserBlocks = (m: AnthropicUserMessage): Array<AnthropicTextBlock | AnthropicToolResultBlock> => {
+    if (typeof m.content === "string") {
+      return m.content ? [{ type: "text" as const, text: m.content }] : [];
+    }
+    return m.content;
+  };
+  const toAssistantBlocks = (m: AnthropicAssistantMessage): AnthropicContentBlock[] => {
+    if (typeof m.content === "string") {
+      return m.content ? [{ type: "text" as const, text: m.content }] : [];
+    }
+    return m.content;
+  };
+
+  const out: AnthropicMessage[] = [];
+  for (const msg of msgs) {
+    const prev = out[out.length - 1];
+    if (prev && prev.role === msg.role) {
+      if (prev.role === "user") {
+        const prevU = prev as AnthropicUserMessage;
+        const msgU = msg as AnthropicUserMessage;
+        if (typeof prevU.content === "string" && typeof msgU.content === "string") {
+          prevU.content += "\n\n" + msgU.content;
+        } else {
+          prevU.content = [...toUserBlocks(prevU), ...toUserBlocks(msgU)];
+        }
+      } else {
+        const prevA = prev as AnthropicAssistantMessage;
+        const msgA = msg as AnthropicAssistantMessage;
+        if (typeof prevA.content === "string" && typeof msgA.content === "string") {
+          prevA.content += "\n\n" + msgA.content;
+        } else {
+          prevA.content = [...toAssistantBlocks(prevA), ...toAssistantBlocks(msgA)];
+        }
+      }
+    } else {
+      out.push(msg);
+    }
+  }
+  return out;
+}
+
+/**
+ * Apply a prompt-caching breakpoint to the 5th-from-last user message.
+ * Mutates in place; safe to call on the already-merged array.
+ */
+function applyHistoryCacheBreakpoint(msgs: AnthropicMessage[]): void {
+  let userCount = 0;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "user") {
+      userCount++;
+      if (userCount === 5) {
+        const msg = msgs[i] as AnthropicUserMessage;
+        if (typeof msg.content === "string") {
+          // Upgrade string content to a block so we can attach cache_control
+          msg.content = [{ type: "text" as const, text: msg.content, cache_control: { type: "ephemeral" } }];
+        } else if (msg.content.length > 0) {
+          const blocks = msg.content;
+          blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: "ephemeral" } };
+        }
+        break;
+      }
+    }
+  }
+}
+
 // ─── Message adaptation ───────────────────────────────────────────────────────
 
 /**
  * Adapt internal AIMessage[] to Anthropic's wire format:
- * - system messages extracted into top-level `system` field
- * - `role: "tool"` → `role: "user"` with tool_result content block
+ * - system messages extracted into a block array with prompt-caching header
+ * - empty assistant messages (thinking-block orphans) filtered out
+ * - `role: "tool"` → `role: "user"` with tool_result content block (is_error propagated)
  * - `role: "assistant"` with tool_calls → `role: "assistant"` with tool_use content blocks
+ * - consecutive same-role messages merged
+ * - 5th-from-last user message marked with a prompt-cache breakpoint
  */
 export function adaptMessages(messages: AIMessage[]): {
-  system: string | undefined;
+  system?: AnthropicSystemBlock[];
   messages: AnthropicMessage[];
 } {
   const systemParts: string[] = [];
   const adapted: AnthropicMessage[] = [];
 
-  for (const msg of messages) {
+  // Filter out orphaned empty assistant messages (thinking-block orphan detection)
+  const filtered = messages.filter((msg) => !isEmptyAssistantMessage(msg));
+
+  for (const msg of filtered) {
     if (msg.role === "system") {
       if (msg.content) systemParts.push(msg.content as string);
       continue;
@@ -71,19 +199,20 @@ export function adaptMessages(messages: AIMessage[]): {
     if (msg.role === "tool") {
       // Merge consecutive tool results into a single user message with multiple blocks
       // if the last adapted message is already a tool-result user message, append.
-      const block = {
-        type: "tool_result" as const,
+      const block: AnthropicToolResultBlock = {
+        type: "tool_result",
         tool_use_id: msg.tool_call_id ?? "",
         content: msg.content ?? "",
+        ...(msg.isError ? { is_error: true } : {}),
       };
       const last = adapted[adapted.length - 1];
       if (
         last &&
         last.role === "user" &&
         Array.isArray(last.content) &&
-        last.content.some((b) => b.type === "tool_result")
+        (last.content as Array<{ type: string }>).some((b) => b.type === "tool_result")
       ) {
-        (last.content as Array<{ type: "tool_result"; tool_use_id: string; content: string }>).push(block);
+        (last.content as Array<AnthropicTextBlock | AnthropicToolResultBlock>).push(block);
       } else {
         adapted.push({ role: "user", content: [block] });
       }
@@ -98,7 +227,7 @@ export function adaptMessages(messages: AIMessage[]): {
         name: tc.function.name,
         input: (() => {
           try {
-            return JSON.parse(tc.function.arguments || "{}");
+            return JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>;
           } catch {
             return {};
           }
@@ -117,9 +246,20 @@ export function adaptMessages(messages: AIMessage[]): {
     }
   }
 
+  // Build system blocks with a prompt-caching header on the last block
+  let systemBlocks: AnthropicSystemBlock[] | undefined;
+  if (systemParts.length > 0) {
+    const systemText = systemParts.join("\n\n");
+    systemBlocks = [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }];
+  }
+
+  // Merge consecutive same-role messages, then apply conversation history cache breakpoint
+  const merged = mergeConsecutiveSameRole(adapted);
+  applyHistoryCacheBreakpoint(merged);
+
   return {
-    system: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
-    messages: adapted,
+    system: systemBlocks,
+    messages: merged,
   };
 }
 
@@ -165,14 +305,14 @@ export class AnthropicProvider implements AIProvider {
   // ─── Non-streaming turn ─────────────────────────────────────────────────────
 
   async turn(messages: AIMessage[], options: AICallOptions = {}): Promise<AITurnResult> {
-    const { system, messages: adaptedMessages } = adaptMessages(messages);
+    const { system: systemBlocks, messages: adaptedMessages } = adaptMessages(messages);
 
     const body: Record<string, unknown> = {
       model: this.model,
       max_tokens: options.maxTokens ?? 8192,
       messages: adaptedMessages,
     };
-    if (system) body.system = system;
+    if (systemBlocks?.length) body.system = systemBlocks;
     if (options.tools?.length) body.tools = adaptTools(options.tools);
 
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
@@ -194,7 +334,19 @@ export class AnthropicProvider implements AIProvider {
 
     const json = await response.json() as {
       content?: AnthropicContentBlock[];
+      usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
     };
+
+    // Extract usage stats from the response
+    const usageRaw = json.usage;
+    const usage: UsageStats | undefined = usageRaw
+      ? {
+          inputTokens: usageRaw.input_tokens ?? 0,
+          outputTokens: usageRaw.output_tokens ?? 0,
+          ...(usageRaw.cache_creation_input_tokens != null ? { cacheCreationInputTokens: usageRaw.cache_creation_input_tokens } : {}),
+          ...(usageRaw.cache_read_input_tokens != null ? { cacheReadInputTokens: usageRaw.cache_read_input_tokens } : {}),
+        }
+      : undefined;
 
     const toolUseBlocks = (json.content ?? []).filter((b): b is AnthropicToolUseBlock => b.type === "tool_use");
     if (toolUseBlocks.length > 0) {
@@ -203,17 +355,17 @@ export class AnthropicProvider implements AIProvider {
         type: "function",
         function: { name: b.name, arguments: JSON.stringify(b.input) },
       }));
-      return { type: "tool_calls", calls };
+      return { type: "tool_calls", calls, usage };
     }
 
     const textBlock = (json.content ?? []).find((b): b is AnthropicTextBlock => b.type === "text");
-    return { type: "text", content: textBlock?.text ?? "" };
+    return { type: "text", content: textBlock?.text ?? "", usage };
   }
 
   // ─── Streaming ──────────────────────────────────────────────────────────────
 
   async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
-    const { system, messages: adaptedMessages } = adaptMessages(messages);
+    const { system: systemBlocks, messages: adaptedMessages } = adaptMessages(messages);
 
     const body: Record<string, unknown> = {
       model: this.model,
@@ -221,7 +373,7 @@ export class AnthropicProvider implements AIProvider {
       messages: adaptedMessages,
       stream: true,
     };
-    if (system) body.system = system;
+    if (systemBlocks?.length) body.system = systemBlocks;
     if (options.tools?.length) body.tools = adaptTools(options.tools);
 
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
@@ -251,6 +403,8 @@ export class AnthropicProvider implements AIProvider {
     let hasToolUse = false;
     // Track current content block index → type
     const blockTypes = new Map<number, string>();
+    // Accumulate usage stats across message_start and message_delta events
+    let usageAccum: UsageStats | null = null;
 
     try {
       while (true) {
@@ -271,6 +425,20 @@ export class AnthropicProvider implements AIProvider {
           }
 
           const eventType = parsed.type as string | undefined;
+
+          if (eventType === "message_start") {
+            // Capture input token usage from the opening event
+            const msgUsage = (parsed.message as { usage?: { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } } | undefined)?.usage;
+            if (msgUsage) {
+              usageAccum = {
+                inputTokens: msgUsage.input_tokens ?? 0,
+                outputTokens: 0,
+                ...(msgUsage.cache_creation_input_tokens != null ? { cacheCreationInputTokens: msgUsage.cache_creation_input_tokens } : {}),
+                ...(msgUsage.cache_read_input_tokens != null ? { cacheReadInputTokens: msgUsage.cache_read_input_tokens } : {}),
+              };
+            }
+            continue;
+          }
 
           if (eventType === "content_block_start") {
             const idx = parsed.index as number;
@@ -300,23 +468,36 @@ export class AnthropicProvider implements AIProvider {
             continue;
           }
 
-          if (eventType === "message_stop" || eventType === "message_delta") {
-            if (eventType === "message_stop" && hasToolUse) {
+          if (eventType === "message_delta") {
+            // Capture output token count from the delta stop event
+            const deltaUsage = (parsed.usage as { output_tokens?: number } | undefined);
+            if (deltaUsage?.output_tokens != null && usageAccum) {
+              usageAccum.outputTokens = deltaUsage.output_tokens;
+            }
+            continue;
+          }
+
+          if (eventType === "message_stop") {
+            if (hasToolUse) {
               const calls: AIToolCall[] = Array.from(toolAccum.values()).map((entry) => ({
                 id: entry.id,
                 type: "function",
                 function: {
                   name: entry.name,
-                  arguments: entry.inputJson || "{}",
+                  // safeParseJSON corrects double-encoded tool arguments then re-serialises
+                  arguments: JSON.stringify(safeParseJSON(entry.inputJson || "{}")),
                 },
               }));
               if (calls.length > 0) yield { type: "tool_calls", calls };
               hasToolUse = false;
               toolAccum.clear();
             }
-            if (eventType === "message_stop") {
-              yield { type: "done" };
+            // Emit accumulated usage stats before signalling done
+            if (usageAccum) {
+              yield { type: "usage", usage: usageAccum };
+              usageAccum = null;
             }
+            yield { type: "done" };
             continue;
           }
         }

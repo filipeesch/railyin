@@ -76,6 +76,10 @@ export interface ExecutionRow {
   finished_at: string | null;
   summary: string | null;
   details: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  cache_read_input_tokens: number | null;
 }
 
 export interface ConversationMessageRow {

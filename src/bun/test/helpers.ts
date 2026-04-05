@@ -75,7 +75,11 @@ export function initDb(): Database {
       started_at  TEXT NOT NULL DEFAULT (datetime('now')),
       finished_at TEXT,
       summary     TEXT,
-      details     TEXT
+      details     TEXT,
+      input_tokens               INTEGER,
+      output_tokens              INTEGER,
+      cache_creation_input_tokens INTEGER,
+      cache_read_input_tokens    INTEGER
     );
     CREATE TABLE IF NOT EXISTS conversation_messages (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,

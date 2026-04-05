@@ -10,6 +10,17 @@ export interface AIMessage {
   // Present on tool result messages
   tool_call_id?: string;
   name?: string;
+  // Set on tool result messages when the tool returned an error string
+  isError?: boolean;
+}
+
+// ─── Usage stats ──────────────────────────────────────────────────────────────
+
+export interface UsageStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 // ─── Tool calling types ───────────────────────────────────────────────────────
@@ -35,14 +46,15 @@ export interface AIToolCall {
 
 // Returned by turn() — either the final text or a list of tool calls
 export type AITurnResult =
-  | { type: "text"; content: string }
-  | { type: "tool_calls"; calls: AIToolCall[] };
+  | { type: "text"; content: string; usage?: UsageStats }
+  | { type: "tool_calls"; calls: AIToolCall[]; usage?: UsageStats };
 
 // Yielded by stream() — unified streaming events covering tokens and tool calls
 export type StreamEvent =
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
   | { type: "tool_calls"; calls: AIToolCall[] }
+  | { type: "usage"; usage: UsageStats }
   | { type: "done" }
   // Ephemeral status messages emitted by retryStream() during non-streaming fallback.
   // These are NOT stored in the DB — they describe transient API wait state only.
