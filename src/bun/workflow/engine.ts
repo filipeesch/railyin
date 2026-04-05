@@ -906,7 +906,7 @@ async function runExecution(
         const msg = err.message;
         log("warn", `Provider resolution failed: ${msg}`, { taskId, executionId });
         appendMessage(taskId, task.conversation_id ?? 0, "system", null, msg);
-        db.run("UPDATE tasks SET execution_state = 'awaiting_user' WHERE id = ?", [taskId]);
+        db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
         db.run(
           "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
           [executionId],

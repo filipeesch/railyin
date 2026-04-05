@@ -307,3 +307,133 @@ export async function navToFirstHunk(maxPresses = 20): Promise<void> {
   }
   // Already on first hunk (never changed file within maxPresses presses)
 }
+
+// ─── Chat helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Open the TaskDetailDrawer for the given task.
+ *
+ * Uses the test HTTP bridge to preload tasks (avoids calling async RPC store
+ * methods inside evaluateJavascriptWithResponse, which deadlocks Electrobun).
+ * Then synchronously sets `activeTaskId` in Pinia and calls `loadMessages`
+ * via a fire-and-forget webEval so the drawer renders.
+ */
+export async function openTaskDrawer(taskId: number): Promise<void> {
+  // Step 1: trigger a tasks.list fetch via the bridge so the store is populated.
+  // We do this with a fire-and-forget webEval (no await inside the eval).
+  await webEval(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var taskStore = pinia._s.get('task');
+    var boardStore = pinia._s.get('board');
+    var boardId = boardStore.activeBoardId;
+    if (boardId != null) taskStore.loadTasks(boardId); // fire-and-forget
+    return 'ok';
+  `);
+  // Give loadTasks time to complete (it's async but we can't await it in webEval)
+  await sleep(1_500);
+
+  // Step 2: set activeTaskId and load messages — also fire-and-forget.
+  await webEval(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var taskStore = pinia._s.get('task');
+    taskStore.activeTaskId = ${taskId};
+    taskStore.loadMessages(${taskId}); // fire-and-forget
+    return 'ok';
+  `);
+  await sleep(800);
+
+  const opened = await waitFor(".task-detail", 8_000);
+  if (!opened) throw new Error(`Task drawer did not open for task ${taskId}`);
+  await sleep(200);
+}
+
+/**
+ * Close the TaskDetailDrawer by calling `taskStore.closeTask()` through Pinia.
+ */
+export async function closeTaskDrawer(): Promise<void> {
+  await webEval(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    pinia._s.get('task').closeTask();
+    return 'ok';
+  `);
+  await sleep(400);
+}
+
+/**
+ * Send a chat message to the given task via the dedicated test HTTP endpoint
+ * `/test-send-message`. This bypasses the RPC-over-webEval deadlock (Electrobun
+ * cannot deliver bun→WebView IPC while evaluateJavascriptWithResponse is pending).
+ *
+ * Returns once the user message has been persisted and the async stream has
+ * started. Tokens arrive via the normal IPC path. Call `waitForStreamingDone`
+ * afterwards to wait for completion.
+ */
+export async function sendChatMessage(text: string, taskId?: number): Promise<void> {
+  const id = taskId ?? await webEval<number>(
+    `return document.querySelector('#app').__vue_app__.config.globalProperties['$pinia']._s.get('task').activeTaskId`,
+  );
+  if (!id) throw new Error("sendChatMessage: no active task");
+  const res = await fetch(
+    `${BRIDGE_BASE}/test-send-message?taskId=${id}&text=${encodeURIComponent(text)}`,
+  );
+  const data = await res.json() as { messageId?: number; executionId?: number; __error?: string };
+  if (data.__error) throw new Error(`sendChatMessage failed: ${data.__error}`);
+  await sleep(200);
+}
+
+/**
+ * Wait until the live streaming bubble (`.msg__bubble.streaming`) is gone AND
+ * the task's execution state is no longer `running`.
+ * Returns true when settled, false on timeout.
+ */
+export async function waitForStreamingDone(timeoutMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await webEval<{ streaming: boolean; running: boolean }>(`
+      var streamingBubble = document.querySelector('.msg__bubble.streaming');
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      var store = pinia._s.get('task');
+      var activeTask = store.activeTask;
+      return JSON.stringify({
+        streaming: !!streamingBubble,
+        running: activeTask ? activeTask.executionState === 'running' : false
+      });
+    `);
+    if (!result.streaming && !result.running) return true;
+    await sleep(300);
+  }
+  return false;
+}
+
+/**
+ * Returns the number of message bubbles of the given role in the conversation.
+ * @param role  "user" → `.msg--user`, "assistant" → `.msg--assistant`
+ */
+export async function getMessageCount(role: "user" | "assistant"): Promise<number> {
+  return webEval<number>(
+    `return document.querySelectorAll('.msg--${role}').length`,
+  );
+}
+
+/**
+ * Returns the text content of all messages of the given role (in DOM order).
+ */
+export async function getMessageTexts(role: "user" | "assistant"): Promise<string[]> {
+  return webEval<string[]>(`
+    return JSON.stringify(
+      Array.from(document.querySelectorAll('.msg--${role} .msg__bubble'))
+        .map(function(el) { return el.textContent.trim(); })
+    );
+  `);
+}
+
+/**
+ * Return the current `executionState` of the active task from Pinia.
+ */
+export async function getActiveTaskExecutionState(): Promise<string | null> {
+  return webEval<string | null>(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var task = pinia._s.get('task').activeTask;
+    return task ? task.executionState : null;
+  `);
+}

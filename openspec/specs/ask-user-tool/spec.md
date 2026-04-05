@@ -1,6 +1,6 @@
 ## Purpose
 
-The `ask_user` tool gives the AI model a structured mechanism to request user input mid-execution. When called, it suspends the execution loop and presents the user with a question, a set of options, and a free-text fallback.
+The `ask_me` tool gives the AI model a structured mechanism to request user input mid-execution. When called, it suspends the execution loop and presents the user with a question, a set of options, and a free-text fallback.
 
 ## Requirements
 
@@ -8,15 +8,15 @@ The `ask_user` tool gives the AI model a structured mechanism to request user in
 
 The system SHALL expose an `ask_me` tool to the model when included in the column's tool configuration. The tool SHALL accept a `questions` array (each item with `question`, `selection_mode`, and `options`). Each option SHALL be an object with required `label` and optional `description`, `recommended`, and `preview` fields. The legacy schema (top-level `question`, `selection_mode`, `options` as strings) SHALL continue to work for backward compatibility.
 
-#### Scenario: ask_user tool definition is sent to model with extended schema
+#### Scenario: ask_me tool definition is sent to model with extended schema
 
-- **WHEN** a column configuration includes `ask_user` in its `tools` list
+- **WHEN** a column configuration includes `ask_me` in its `tools` list
 - **THEN** the AI request includes the `ask_me` tool definition with the extended option object schema including `label`, `description`, `recommended`, and `preview` fields (all optional except `label`)
 
-#### Scenario: ask_user is not offered when absent from column tools
+#### Scenario: ask_me is not offered when absent from column tools
 
-- **WHEN** a column configuration does not include `ask_user` in its `tools` list
-- **THEN** the AI request does NOT include the `ask_user` tool definition
+- **WHEN** a column configuration does not include `ask_me` in its `tools` list
+- **THEN** the AI request does NOT include the `ask_me` tool definition
 
 ### Requirement: Engine intercepts ask_user call and suspends execution
 

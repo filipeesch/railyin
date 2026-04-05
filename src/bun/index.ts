@@ -8,6 +8,7 @@ import { projectHandlers } from "./handlers/projects.ts";
 import { taskHandlers } from "./handlers/tasks.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
+import { handleHumanTurn } from "./workflow/engine.ts";
 import type { RailynRPCType } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 
@@ -155,11 +156,16 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
         const db = getDb();
 
         // Clean up any previous test task so we don't accumulate stale rows.
-        const prev = db.query<{ id: number }, []>("SELECT id FROM tasks WHERE title = 'UI Test Task' LIMIT 1").get();
+        const prev = db.query<{ id: number; conversation_id: number | null }, []>("SELECT id, conversation_id FROM tasks WHERE title = 'UI Test Task' LIMIT 1").get();
         if (prev) {
           db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [prev.id]);
           db.run("DELETE FROM task_git_context WHERE task_id = ?", [prev.id]);
+          db.run("DELETE FROM executions WHERE task_id = ?", [prev.id]);
+          db.run("DELETE FROM conversation_messages WHERE task_id = ?", [prev.id]);
           db.run("DELETE FROM tasks WHERE id = ?", [prev.id]);
+          if (prev.conversation_id) {
+            db.run("DELETE FROM conversations WHERE id = ?", [prev.conversation_id]);
+          }
         }
 
         // Resolve board + project IDs — either from an existing task (real DB mode)
@@ -294,13 +300,27 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
           await Bun.write(`${worktreePath}/${name}`, content);
         }
 
-        // Insert the test task.
+        // Create a conversation first (tasks.create always does this — handleHumanTurn
+        // will throw/deadlock if conversation_id is NULL on the task).
+        const convResult = db.run("INSERT INTO conversations (task_id) VALUES (0)");
+        const conversationId = convResult.lastInsertRowid as number;
+
+        // Insert the test task — model is explicitly set to 'fake/test' so the
+        // FakeAI provider resolves correctly in handleHumanTurn (avoids UnresolvableProviderError).
         db.run(
-          "INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state) VALUES (?, ?, 'UI Test Task', 'Auto-created by test suite', 'backlog', 'idle')",
-          [boardId, projectId],
+          "INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, model, conversation_id) VALUES (?, ?, 'UI Test Task', 'Auto-created by test suite', 'backlog', 'idle', 'fake/test', ?)",
+          [boardId, projectId, conversationId],
         );
         const taskRow = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!;
         const taskId = taskRow.id;
+
+        // Fix up the conversation → task back-link
+        db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
+
+        // Ensure the fake model is listed in enabled_models so the UI shows it.
+        db.run(
+          "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (1, 'fake/test')",
+        );
 
         db.run(
           "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
@@ -315,7 +335,36 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
       }
     }
 
-    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=", { status: 200 });
+    // Test-only: send a chat message directly via handleHumanTurn, bypassing the
+    // RPC/IPC path that would deadlock when called from inside webEval.
+    // Returns { messageId, executionId } immediately; streaming arrives via normal IPC.
+    if (url.pathname === "/test-send-message") {
+      const taskId = Number(url.searchParams.get("taskId"));
+      const text = url.searchParams.get("text") ?? "";
+      if (!taskId || !text) {
+        return new Response(JSON.stringify({ __error: "taskId and text required" }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      try {
+        const { message, executionId } = await handleHumanTurn(
+          taskId,
+          text,
+          onToken,
+          onError,
+          notifyTaskUpdated,
+          notifyNewMessage,
+        );
+        // Push the user message to the Vue store via IPC — in the normal RPC
+        // path, sendMessage() does messages.value.push(message) from the RPC
+        // response.  The HTTP endpoint bypasses that, so we push it here.
+        // onNewMessage in the store deduplicates by id, so it's safe to call.
+        notifyNewMessage(message);
+        return new Response(JSON.stringify({ messageId: message.id, executionId }), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
+      }
+    }
+
+    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /test-send-message?taskId=&text=", { status: 200 });
   },
 });
 if (process.env.RAILYN_DEBUG) console.log("[Debug] HTTP server listening on http://localhost:9229");

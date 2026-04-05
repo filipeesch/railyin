@@ -39,7 +39,7 @@ The system SHALL allow each workflow column to declare an optional `model` field
 
 #### Scenario: Task model set to null when column has no model
 - **WHEN** a task transitions into a column with no `model` field
-- **THEN** the task's `model` is set to `null`, and on the next execution attempt the engine moves the task to `awaiting_user`
+- **THEN** the task's `model` is set to `null`, and on the next execution attempt the engine moves the task to `waiting_user`
 
 ### Requirement: Available models are fetched dynamically from the provider
 The system SHALL expose a `models.list` RPC that calls `GET {base_url}/v1/models` on each configured provider and returns provider-grouped results including per-model enabled flags and context window sizes where known.
