@@ -437,3 +437,127 @@ export async function getActiveTaskExecutionState(): Promise<string | null> {
     return task ? task.executionState : null;
   `);
 }
+
+/**
+ * Poll until the active task's `executionState` equals `expected`.
+ * Returns true when matched, false on timeout.
+ */
+export async function waitForExecutionState(expected: string, timeoutMs = 15_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await getActiveTaskExecutionState();
+    if (state === expected) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
+/**
+ * Cancel the running execution for `taskId` via the test HTTP bridge.
+ * The abort signal fires immediately; the DB state update (→ 'waiting_user')
+ * is async — call `waitForExecutionState('waiting_user')` afterwards.
+ */
+export async function cancelExecution(taskId: number): Promise<void> {
+  const res = await fetch(`${BRIDGE_BASE}/test-cancel?taskId=${taskId}`);
+  const data = await res.json() as { ok?: boolean; __error?: string };
+  if (data.__error) throw new Error(`cancelExecution failed: ${data.__error}`);
+}
+
+/**
+ * Change the model for `taskId` via the test HTTP bridge.
+ * Also pushes an updated Task via IPC so the Vue store reflects the change.
+ */
+export async function setTaskModel(taskId: number, model: string): Promise<void> {
+  const res = await fetch(`${BRIDGE_BASE}/test-set-model?taskId=${taskId}&model=${encodeURIComponent(model)}`);
+  const data = await res.json() as { taskId?: number; model?: string; __error?: string };
+  if (data.__error) throw new Error(`setTaskModel failed: ${data.__error}`);
+  await sleep(200); // let Vue re-render the model selector
+}
+
+/**
+ * Return the model ID shown in the task drawer's model selector (from Pinia).
+ */
+export async function getActiveTaskModel(): Promise<string | null> {
+  return webEval<string | null>(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var task = pinia._s.get('task').activeTask;
+    return task ? task.model : null;
+  `);
+}
+
+/**
+ * Trigger compaction for `taskId` via the test HTTP bridge.
+ * The bun side calls compactConversation and pushes the resulting
+ * compaction_summary message via IPC. The test should wait for the
+ * message to appear before asserting.
+ * Returns the messageId of the new compaction_summary.
+ */
+export async function compactTask(taskId: number): Promise<number> {
+  const res = await fetch(`${BRIDGE_BASE}/test-compact?taskId=${taskId}`);
+  const data = await res.json() as { ok?: boolean; messageId?: number; __error?: string };
+  if (data.__error) throw new Error(`compactTask failed: ${data.__error}`);
+  await sleep(300);
+  return data.messageId!;
+}
+
+/**
+ * Return the number of compaction dividers rendered in the conversation
+ * (each one corresponds to a `compaction_summary` message).
+ */
+export async function getCompactionSummaryCount(): Promise<number> {
+  return webEval<number>(`return document.querySelectorAll('.msg--compaction').length`);
+}
+
+/**
+ * Return the label text of the model selector for the active task.
+ * Uses the PrimeVue Select's span.p-select-label element.
+ */
+export async function getModelSelectorLabel(): Promise<string> {
+  return webEval<string>(`
+    var el = document.querySelector('.input-model-select .p-select-label');
+    return el ? el.textContent.trim() : '';
+  `);
+}
+
+/**
+ * Return true if the Compact button is present and NOT disabled.
+ */
+export async function isCompactButtonEnabled(): Promise<boolean> {
+  return webEval<boolean>(`
+    var btns = Array.from(document.querySelectorAll('.task-detail__model-row button'));
+    var compact = btns.find(function(b) { return b.textContent.trim() === 'Compact'; });
+    if (!compact) return false;
+    return !compact.disabled && !compact.hasAttribute('aria-disabled');
+  `);
+}
+
+/**
+ * Return true if the Compact button is present but disabled (e.g. while running).
+ */
+export async function isCompactButtonDisabled(): Promise<boolean> {
+  return webEval<boolean>(`
+    var btns = Array.from(document.querySelectorAll('.task-detail__model-row button'));
+    var compact = btns.find(function(b) { return b.textContent.trim() === 'Compact'; });
+    if (!compact) return true;
+    return compact.disabled || compact.hasAttribute('aria-disabled');
+  `);
+}
+
+/**
+ * Return true if the context gauge element is visible (rendered in DOM).
+ */
+export async function isContextGaugeVisible(): Promise<boolean> {
+  return webEval<boolean>(`return !!document.querySelector('.context-gauge')`);
+}
+
+/**
+ * Return the context usage fraction (0–1) from the Pinia task store.
+ * Returns null if no context usage data is loaded yet.
+ */
+export async function getContextUsageFraction(): Promise<number | null> {
+  return webEval<number | null>(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var usage = pinia._s.get('task').contextUsage;
+    return usage ? usage.fraction : null;
+  `);
+}

@@ -8,7 +8,9 @@ import { projectHandlers } from "./handlers/projects.ts";
 import { taskHandlers } from "./handlers/tasks.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
-import { handleHumanTurn } from "./workflow/engine.ts";
+import { handleHumanTurn, cancelExecution, compactConversation } from "./workflow/engine.ts";
+import { mapTask, mapConversationMessage } from "./db/mappers.ts";
+import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
 import type { RailynRPCType } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 
@@ -321,6 +323,10 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
         db.run(
           "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (1, 'fake/test')",
         );
+        // Register a second fake model so model-switching tests can change the selection.
+        db.run(
+          "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (1, 'fake/v2')",
+        );
 
         db.run(
           "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
@@ -364,7 +370,54 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
       }
     }
 
-    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /test-send-message?taskId=&text=", { status: 200 });
+    // Test-only: cancel the running execution for a task.
+    // Returns { ok, executionState } once the AbortController is signalled.
+    // The actual DB state update happens async in runExecution; tests must
+    // poll getActiveTaskExecutionState() for 'waiting_user'.
+    if (url.pathname === "/test-cancel") {
+      const taskId = Number(url.searchParams.get("taskId"));
+      if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
+      const db = getDb();
+      const row = db.query<{ current_execution_id: number | null }, [number]>(
+        "SELECT current_execution_id FROM tasks WHERE id = ?",
+      ).get(taskId);
+      if (row?.current_execution_id != null) {
+        cancelExecution(row.current_execution_id);
+      }
+      return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
+    }
+
+    // Test-only: change the model for a task and push updated task via IPC.
+    // Returns { taskId, model } on success.
+    if (url.pathname === "/test-set-model") {
+      const taskId = Number(url.searchParams.get("taskId"));
+      const model = url.searchParams.get("model") ?? "";
+      if (!taskId || !model) return new Response(JSON.stringify({ __error: "taskId and model required" }), { status: 400, headers: { "content-type": "application/json" } });
+      const db = getDb();
+      db.run("UPDATE tasks SET model = ? WHERE id = ?", [model, taskId]);
+      const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+      if (taskRow) notifyTaskUpdated(mapTask(taskRow));
+      return new Response(JSON.stringify({ taskId, model }), { headers: { "content-type": "application/json" } });
+    }
+
+    // Test-only: trigger compaction for a task and push the resulting
+    // compaction_summary message via IPC so the Vue store receives it.
+    // Returns { ok, messageId } on success, or { __error } on failure.
+    if (url.pathname === "/test-compact") {
+      const taskId = Number(url.searchParams.get("taskId"));
+      if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
+      try {
+        const summary = await compactConversation(taskId);
+        // Push the new compaction_summary message to Vue so the test can detect it
+        // without having to fire-and-forget a loadMessages call from webEval.
+        notifyNewMessage(summary);
+        return new Response(JSON.stringify({ ok: true, messageId: summary.id }), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
+      }
+    }
+
+    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=", { status: 200 });
   },
 });
 if (process.env.RAILYN_DEBUG) console.log("[Debug] HTTP server listening on http://localhost:9229");
