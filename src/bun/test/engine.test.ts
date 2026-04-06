@@ -178,6 +178,38 @@ describe("handleTransition", () => {
   }, 10_000);
 });
 
+// ─── workspace default_model on column transition ─────────────────────────────
+
+describe("handleTransition / workspace default_model", () => {
+  it("applies workspace default_model when column has no model configured", async () => {
+    configCleanup();
+    const cfgWithDefault = setupTestConfig("default_model: fake/workspace-default");
+    configCleanup = cfgWithDefault.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', model = NULL WHERE id = ?", [taskId]);
+
+    await handleTransition(taskId, "done", noop, noop, noop, noop);
+
+    const task = db
+      .query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(task!.model).toBe("fake/workspace-default");
+  });
+
+  it("leaves model unchanged when neither column nor workspace specifies a model", async () => {
+    // default setupTestConfig has no default_model
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', model = 'fake/existing' WHERE id = ?", [taskId]);
+
+    await handleTransition(taskId, "done", noop, noop, noop, noop);
+
+    const task = db
+      .query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(task!.model).toBe("fake/existing");
+  });
+});
+
 // ─── ask_me interception ──────────────────────────────────────────────────────
 
 describe("ask_me tool interception", () => {

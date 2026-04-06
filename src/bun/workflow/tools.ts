@@ -1322,11 +1322,12 @@ export async function executeTool(
       // Create conversation first
       const convRes = db.run("INSERT INTO conversations (task_id) VALUES (0)");
       const convId = convRes.lastInsertRowid as number;
+      const effectiveModel = args.model || getConfig()?.workspace.default_model || null;
       const taskRes = db.run(
-        `INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, conversation_id${args.model ? ", model" : ""})
-         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?${args.model ? ", ?" : ""})`,
-        args.model
-          ? [boardId, projectId, title, description, convId, args.model]
+        `INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, conversation_id${effectiveModel ? ", model" : ""})
+         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?${effectiveModel ? ", ?" : ""})`,
+        effectiveModel
+          ? [boardId, projectId, title, description, convId, effectiveModel]
           : [boardId, projectId, title, description, convId],
       );
       const newTaskId = taskRes.lastInsertRowid as number;

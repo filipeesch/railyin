@@ -691,9 +691,14 @@ export async function handleTransition(
   const templateId = getBoardTemplateId(task.board_id);
   const column = getColumnConfig(templateId, toState);
 
-  // Resolve and persist model — only override if the column specifies one
+  // Resolve and persist model — column model takes precedence, workspace default is fallback
   if (column?.model != null) {
     db.run("UPDATE tasks SET model = ? WHERE id = ?", [column.model, taskId]);
+  } else {
+    const workspaceDefault = getConfig()?.workspace.default_model;
+    if (workspaceDefault != null) {
+      db.run("UPDATE tasks SET model = ? WHERE id = ?", [workspaceDefault, taskId]);
+    }
   }
 
   // 4. If no prompt configured → idle (design D7)

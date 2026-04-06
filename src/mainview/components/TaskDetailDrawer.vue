@@ -496,13 +496,14 @@ function onHide() {
 // PrimeVue teleports overlays (Select panels, Dialog backdrops) to document.body,
 // outside the Drawer subtree. We disable PrimeVue's built-in dismissable and
 // implement a smarter guard that ignores those overlay clicks.
-// Note: relies on PrimeVue 4.x adding 'p-overlay-open' to document.body when
-// any overlay is active.
+// PrimeVue teleports overlay panels (Select, MultiSelect, etc.) to document.body
+// with the class 'p-select-overlay'. We must skip closing when a click lands inside one.
 
 function handleOutsideClick(e: MouseEvent) {
   if (!open.value) return;
-  // Skip if the click is inside any PrimeVue anchored overlay (Select panel, etc.)
-  if ((e.target as Element)?.closest?.('.p-anchored-overlay')) return;
+  // Skip if the click is inside any PrimeVue overlay panel teleported to body
+  const target = e.target as Element | null;
+  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay')) return;
   // Skip if our own dialogs are open
   if (editDialogVisible.value || deleteDialogVisible.value) return;
   // PrimeVue Drawer teleports its panel to document.body, so $el is a comment

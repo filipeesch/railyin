@@ -33,6 +33,8 @@ export interface WorkspaceYaml {
   ai?: AIProviderConfig;
   worktree_base_path?: string;
   git_path?: string; // absolute path to git binary, e.g. /usr/bin/git
+  /** Workspace-level default model (fully-qualified: providerId/modelId). Used as fallback when a column has no model configured. */
+  default_model?: string;
   search?: {
     engine: string; // "tavily" | "brave" | "none"
     api_key: string;

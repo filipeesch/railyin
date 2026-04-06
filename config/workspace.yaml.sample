@@ -24,6 +24,11 @@ providers:
 # Where to store Git worktrees. Defaults to ~/.railyn/worktrees
 # worktree_base_path: /path/to/worktrees
 
+# Workspace-level default model (fully-qualified: providerId/modelId).
+# Used as a fallback when a column has no model configured and when a task
+# is created without an explicit model. Column-level model always takes precedence.
+# default_model: anthropic/claude-sonnet-4-5
+
 # Web search (used by the search_internet tool)
 # search:
 #   engine: tavily   # "tavily" is the only supported engine in v1
