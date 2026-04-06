@@ -77,4 +77,45 @@ body,
   background: var(--p-surface-50, #f8fafc);
   color: var(--p-text-color, #1e293b);
 }
+
+/* Monaco code-review hunk decorations (applied via deltaDecorations — must be global) */
+.accepted-hunk-decoration {
+  background: rgba(34, 197, 94, 0.08) !important;
+}
+
+.rejected-hunk-decoration {
+  background: rgba(239, 68, 68, 0.08) !important;
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Glyph margin comment icon (shown on hover in review mode) */
+.line-comment-glyph::before {
+  content: "+";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--p-blue-500, #3b82f6);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ContentWidget shown when a multi-line selection is made in review mode */
+.line-comment-widget {
+  background: var(--p-blue-500, #3b82f6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  margin-left: 8px;
+}
 </style>

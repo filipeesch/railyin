@@ -20,10 +20,13 @@ const props = withDefaults(
     modified: string;
     language?: string;
     sideBySide?: boolean;
+    reviewMode?: boolean;
+    onRequestLineComment?: (lineStart: number, lineEnd: number) => void;
   }>(),
   {
     language: "plaintext",
     sideBySide: false,
+    reviewMode: false,
   },
 );
 
@@ -45,6 +48,92 @@ let diffUpdateDisposable: { dispose(): void } | null = null;
 
 const mountedApps: App[] = [];
 
+let glyphHoverDecorations: string[] = [];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let commentWidget: any = null;
+let commentWidgetRange = { startLine: 0, endLine: 0 };
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function showCommentWidget(modEditor: any, startLine: number, endLine: number) {
+  commentWidgetRange = { startLine, endLine };
+  if (commentWidget) {
+    modEditor.layoutContentWidget(commentWidget);
+    return;
+  }
+  const widgetDom = document.createElement("div");
+  widgetDom.className = "line-comment-widget";
+  widgetDom.textContent = "+ Add comment";
+  widgetDom.addEventListener("mousedown", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const { startLine: s, endLine: en } = commentWidgetRange;
+    props.onRequestLineComment?.(s, en);
+    hideCommentWidget(modEditor);
+  });
+  commentWidget = {
+    getId: () => "line-comment-widget",
+    getDomNode: () => widgetDom,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    getPosition: () => ({ position: { lineNumber: commentWidgetRange.endLine, column: 1 }, preference: [2] }),
+  };
+  modEditor.addContentWidget(commentWidget);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function hideCommentWidget(modEditor: any) {
+  if (commentWidget) {
+    modEditor.removeContentWidget(commentWidget);
+    commentWidget = null;
+  }
+}
+
+function registerReviewHandlers() {
+  if (!editor || !monacoInstance) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const modEditor = editor.getModifiedEditor() as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const GLYPH = (monacoInstance as any).editor.MouseTargetType.GUTTER_GLYPH_MARGIN;
+
+  modEditor.onMouseMove((e: any) => {
+    if (!props.reviewMode) {
+      glyphHoverDecorations = modEditor.deltaDecorations(glyphHoverDecorations, []);
+      return;
+    }
+    if (e.target?.type === GLYPH && e.target.position) {
+      const ln = e.target.position.lineNumber;
+      glyphHoverDecorations = modEditor.deltaDecorations(glyphHoverDecorations, [{
+        range: { startLineNumber: ln, startColumn: 1, endLineNumber: ln, endColumn: 1 },
+        options: { glyphMarginClassName: "line-comment-glyph" },
+      }]);
+    } else {
+      glyphHoverDecorations = modEditor.deltaDecorations(glyphHoverDecorations, []);
+    }
+  });
+
+  modEditor.onMouseLeave(() => {
+    glyphHoverDecorations = modEditor.deltaDecorations(glyphHoverDecorations, []);
+  });
+
+  modEditor.onMouseDown((e: any) => {
+    if (!props.reviewMode) return;
+    if (e.target?.type === GLYPH && e.target.position) {
+      const ln = e.target.position.lineNumber;
+      e.event.preventDefault();
+      props.onRequestLineComment?.(ln, ln);
+    }
+  });
+
+  modEditor.onDidChangeCursorSelection((e: any) => {
+    if (!props.reviewMode) { hideCommentWidget(modEditor); return; }
+    const sel = e.selection;
+    if (sel && sel.startLineNumber !== sel.endLineNumber) {
+      showCommentWidget(modEditor, sel.startLineNumber, sel.endLineNumber);
+    } else {
+      hideCommentWidget(modEditor);
+    }
+  });
+}
+
 async function initEditor() {
   if (!containerEl.value || disposed) return;
   monacoInstance = await loader.init();
@@ -57,9 +146,11 @@ async function initEditor() {
     scrollBeyondLastLine: false,
     automaticLayout: true,
     theme: "vs",
+    glyphMargin: true,
   });
 
   applyModels();
+  registerReviewHandlers();
 }
 
 function applyModels() {

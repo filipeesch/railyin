@@ -1671,43 +1671,138 @@ export async function handleCodeReview(
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
-  // Build CodeReviewPayload from DB decisions (human reviewer only)
+  // Get the worktree path for this task (needed to run git diff and read files)
+  const gitRow = db
+    .query<{ worktree_path: string | null }, [number]>(
+      "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+    )
+    .get(taskId);
+  const worktreePath = gitRow?.worktree_path ?? "";
+
+  // Build CodeReviewPayload from unsent DB decisions (human reviewer only)
   type DecisionRow = {
     hunk_hash: string;
     file_path: string;
     decision: string;
     comment: string | null;
     original_start: number;
+    original_end: number;
     modified_start: number;
+    modified_end: number;
   };
   const decisionRows = db
     .query<DecisionRow, [number]>(
-      `SELECT hunk_hash, file_path, decision, comment, original_start, modified_start
+      `SELECT hunk_hash, file_path, decision, comment, original_start, original_end, modified_start, modified_end
        FROM task_hunk_decisions
-       WHERE task_id = ? AND reviewer_id = 'user'
+       WHERE task_id = ? AND reviewer_id = 'user' AND sent = 0
        ORDER BY file_path, modified_start`,
     )
     .all(taskId);
 
-  // Group decisions by file and build CodeReviewPayload
-  const fileMap = new Map<string, import("../../shared/rpc-types.ts").CodeReviewHunk[]>();
+  // Build per-file diff cache to extract originalLines/modifiedLines by hash
+  type HunkLines = { originalLines: string[]; modifiedLines: string[] };
+  const diffCache = new Map<string, Map<string, HunkLines>>(); // file_path → hash → lines
+  const uniqueFiles = [...new Set(decisionRows.map((r) => r.file_path))];
+  for (const filePath of uniqueFiles) {
+    const hunkLineMap = new Map<string, HunkLines>();
+    if (worktreePath) {
+      try {
+        const proc = Bun.spawn(["git", "diff", "HEAD", "--", filePath], {
+          cwd: worktreePath,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        await proc.exited;
+        const diffOut = await new Response(proc.stdout).text();
+        if (diffOut.trim()) {
+          const hhRe = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+          const lines = diffOut.split("\n");
+          let i = 0;
+          while (i < lines.length) {
+            if (!hhRe.test(lines[i])) { i++; continue; }
+            i++;
+            const body: string[] = [];
+            while (i < lines.length && !hhRe.test(lines[i])) { body.push(lines[i]); i++; }
+            const origL = body.filter((l) => l.startsWith("-") || l.startsWith(" ")).map((l) => l.slice(1));
+            const modL = body.filter((l) => l.startsWith("+") || l.startsWith(" ")).map((l) => l.slice(1));
+            // Recompute hash to match the stored one (same algorithm as backend parser)
+            const { createHash } = await import("node:crypto");
+            const hash = createHash("sha256")
+              .update(filePath + "\0" + origL.join("\n") + "\0" + modL.join("\n"))
+              .digest("hex");
+            hunkLineMap.set(hash, { originalLines: origL, modifiedLines: modL });
+          }
+        }
+      } catch { /* ignore diff parse errors */ }
+    }
+    diffCache.set(filePath, hunkLineMap);
+  }
+
+  // Read unsent line comments grouped by file
+  type LineCommentRow = {
+    id: number;
+    file_path: string;
+    line_start: number;
+    line_end: number;
+    line_text: string;
+    context_lines: string;
+    comment: string;
+    reviewer_type: string;
+  };
+  const lineCommentRows = db
+    .query<LineCommentRow, [number]>(
+      `SELECT id, file_path, line_start, line_end, line_text, context_lines, comment, reviewer_type
+       FROM task_line_comments
+       WHERE task_id = ? AND sent = 0
+       ORDER BY file_path, line_start`,
+    )
+    .all(taskId);
+
+  // Group decisions and line comments by file and build CodeReviewPayload
+  const fileMap = new Map<string, { hunks: import("../../shared/rpc-types.ts").CodeReviewHunk[]; lineComments: import("../../shared/rpc-types.ts").LineComment[] }>();
   for (const row of decisionRows) {
-    if (!fileMap.has(row.file_path)) fileMap.set(row.file_path, []);
-    fileMap.get(row.file_path)!.push({
-      hunkIndex: 0, // not meaningful in payload — positional reference replaced by hash
-      originalRange: [row.original_start, row.original_start],
-      modifiedRange: [row.modified_start, row.modified_start],
+    if (!fileMap.has(row.file_path)) fileMap.set(row.file_path, { hunks: [], lineComments: [] });
+    const hunkLines = diffCache.get(row.file_path)?.get(row.hunk_hash) ?? { originalLines: [], modifiedLines: [] };
+    fileMap.get(row.file_path)!.hunks.push({
+      hunkIndex: 0,
+      originalRange: [row.original_start, row.original_end],
+      modifiedRange: [row.modified_start, row.modified_end],
       decision: row.decision as import("../../shared/rpc-types.ts").HunkDecision,
       comment: row.comment,
+      originalLines: hunkLines.originalLines,
+      modifiedLines: hunkLines.modifiedLines,
+    });
+  }
+  for (const row of lineCommentRows) {
+    if (!fileMap.has(row.file_path)) fileMap.set(row.file_path, { hunks: [], lineComments: [] });
+    fileMap.get(row.file_path)!.lineComments.push({
+      id: row.id,
+      filePath: row.file_path,
+      lineStart: row.line_start,
+      lineEnd: row.line_end,
+      lineText: JSON.parse(row.line_text),
+      contextLines: JSON.parse(row.context_lines),
+      comment: row.comment,
+      reviewerType: row.reviewer_type as "human" | "ai",
     });
   }
 
   const payload: import("../../shared/rpc-types.ts").CodeReviewPayload = {
     taskId,
-    files: Array.from(fileMap.entries()).map(([path, hunks]) => ({ path, hunks })),
+    files: Array.from(fileMap.entries()).map(([path, data]) => ({ path, hunks: data.hunks, lineComments: data.lineComments })),
   };
 
   const llmText = formatReviewMessageForLLM(payload);
+
+  // Mark all included decisions and line comments as sent
+  db.run(
+    `UPDATE task_hunk_decisions SET sent = 1 WHERE task_id = ? AND reviewer_id = 'user' AND sent = 0`,
+    [taskId],
+  );
+  db.run(
+    `UPDATE task_line_comments SET sent = 1 WHERE task_id = ? AND sent = 0`,
+    [taskId],
+  );
 
   // Store the structured code_review message (UI-only, excluded from LLM)
   const reviewMsgId = appendMessage(

@@ -37,10 +37,10 @@ afterEach(() => {
 
 function makeHandlers() {
   return taskHandlers(
-    () => {},
-    () => {},
-    () => {},
-    () => {},
+    () => { },
+    () => { },
+    () => { },
+    () => { },
   );
 }
 
@@ -233,10 +233,10 @@ describe("formatReviewMessageForLLM", () => {
 describe("compactMessages", () => {
   it("excludes code_review messages from LLM history", () => {
     const msgs = [
-      { id: 1, type: "user",        role: "user",      content: "Plan the task",    taskId: 1, conversationId: 1, createdAt: "" },
-      { id: 2, type: "assistant",   role: "assistant",  content: "Here is my plan", taskId: 1, conversationId: 1, createdAt: "" },
-      { id: 3, type: "code_review", role: "user",       content: '{"taskId":1,"files":[]}', taskId: 1, conversationId: 1, createdAt: "" },
-      { id: 4, type: "user",        role: "user",       content: "Looks good",      taskId: 1, conversationId: 1, createdAt: "" },
+      { id: 1, type: "user", role: "user", content: "Plan the task", taskId: 1, conversationId: 1, createdAt: "" },
+      { id: 2, type: "assistant", role: "assistant", content: "Here is my plan", taskId: 1, conversationId: 1, createdAt: "" },
+      { id: 3, type: "code_review", role: "user", content: '{"taskId":1,"files":[]}', taskId: 1, conversationId: 1, createdAt: "" },
+      { id: 4, type: "user", role: "user", content: "Looks good", taskId: 1, conversationId: 1, createdAt: "" },
     ] as any[];
 
     const result = compactMessages(msgs);
@@ -265,7 +265,9 @@ describe("tasks.setHunkDecision", () => {
       decision: "accepted",
       comment: null,
       originalStart: 1,
+      originalEnd: 3,
       modifiedStart: 1,
+      modifiedEnd: 3,
     });
 
     const row = db
@@ -284,7 +286,9 @@ describe("tasks.setHunkDecision", () => {
       decision: "change_request",
       comment: "Use const",
       originalStart: 1,
+      originalEnd: 3,
       modifiedStart: 1,
+      modifiedEnd: 3,
     });
 
     const updated = db
@@ -321,7 +325,9 @@ describe("tasks.getFileDiff hunk enrichment", () => {
       decision: "accepted",
       comment: null,
       originalStart: result.hunks[0].originalStart,
+      originalEnd: result.hunks[0].originalEnd,
       modifiedStart: result.hunks[0].modifiedStart,
+      modifiedEnd: result.hunks[0].modifiedEnd,
     });
 
     // Reload — should now show accepted

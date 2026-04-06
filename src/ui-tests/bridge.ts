@@ -101,7 +101,7 @@ export async function screenshot(label: string): Promise<string | null> {
 }
 
 /**
- * Delete all persisted hunk decisions for `taskId` from the database.
+ * Delete all persisted hunk decisions (and line comments) for `taskId` from the database.
  * Use this at the start of test suites that need a clean review state.
  */
 export async function resetDecisions(taskId: number): Promise<void> {
@@ -110,6 +110,66 @@ export async function resetDecisions(taskId: number): Promise<void> {
     const body = await res.text();
     throw new Error(`resetDecisions failed: ${body}`);
   }
+}
+
+/**
+ * Query persisted line comments from the DB for a task.
+ * Returns raw DB rows: { id, file_path, line_start, line_end, comment, sent }[]
+ */
+export async function queryLineComments(taskId: number): Promise<{ id: number; file_path: string; line_start: number; line_end: number; comment: string; sent: number }[]> {
+  const res = await fetch(`${BRIDGE_BASE}/query-line-comments?taskId=${taskId}`);
+  if (!res.ok) throw new Error(`queryLineComments failed: ${await res.text()}`);
+  return res.json() as Promise<{ id: number; file_path: string; line_start: number; line_end: number; comment: string; sent: number }[]>;
+}
+
+/**
+ * Trigger CodeReviewOverlay's onRequestLineComment function to inject a LineCommentBar zone.
+ * Uses the Vue app component tree (works in production builds where __vueParentComponent is absent).
+ * Returns true if the function was found and called, false otherwise.
+ */
+export async function triggerLineComment(lineStart: number, lineEnd: number): Promise<boolean> {
+  return webEval<boolean>(`
+    try {
+      // In production Vue 3, app._instance is null — use _container._vnode.component instead.
+      var app = document.querySelector('#app').__vue_app__;
+      var rootInst = app._container._vnode.component;
+      function search(vnode) {
+        if (!vnode) return null;
+        if (vnode.component) {
+          var inst = vnode.component;
+          if (inst.type && inst.type.__name === 'CodeReviewOverlay' &&
+              inst.exposed && typeof inst.exposed.onRequestLineComment === 'function') {
+            return inst.exposed;
+          }
+          var r = search(inst.subTree);
+          if (r) return r;
+        }
+        if (Array.isArray(vnode.children)) {
+          for (var i = 0; i < vnode.children.length; i++) {
+            var c = vnode.children[i];
+            if (c && typeof c === 'object') { var r2 = search(c); if (r2) return r2; }
+          }
+        }
+        return null;
+      }
+      var exposed = search(rootInst.subTree);
+      if (exposed && typeof exposed.onRequestLineComment === 'function') {
+        exposed.onRequestLineComment(${lineStart}, ${lineEnd});
+        return true;
+      }
+      return false;
+    } catch(e) { return false; }
+  `);
+}
+
+/**
+ * Query persisted hunk decisions from the DB for a task.
+ * Returns raw DB rows: { id, file_path, hash, decision, sent }[]
+ */
+export async function queryHunkDecisions(taskId: number): Promise<{ id: number; file_path: string; hash: string; decision: string; sent: number }[]> {
+  const res = await fetch(`${BRIDGE_BASE}/query-hunk-decisions?taskId=${taskId}`);
+  if (!res.ok) throw new Error(`queryHunkDecisions failed: ${await res.text()}`);
+  return res.json() as Promise<{ id: number; file_path: string; hash: string; decision: string; sent: number }[]>;
 }
 
 /**

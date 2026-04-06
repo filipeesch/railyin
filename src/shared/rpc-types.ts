@@ -128,17 +128,37 @@ export interface AskUserPromptContent {
 
 export type HunkDecision = "accepted" | "rejected" | "change_request" | "pending";
 
+/** A line comment posted by a reviewer on a specific line or range of lines. */
+export interface LineComment {
+  id: number;
+  filePath: string;
+  lineStart: number;
+  lineEnd: number;
+  /** The annotated lines at comment creation time. */
+  lineText: string[];
+  /** ±3 surrounding context lines captured at creation time. */
+  contextLines: string[];
+  comment: string;
+  reviewerType: "human" | "ai";
+}
+
 export interface CodeReviewHunk {
   hunkIndex: number;
   originalRange: [number, number];
   modifiedRange: [number, number];
   decision: HunkDecision;
   comment: string | null;
+  /** Actual diff content — original (minus) lines for this hunk. Populated at submit time. */
+  originalLines?: string[];
+  /** Actual diff content — modified (plus) lines for this hunk. Populated at submit time. */
+  modifiedLines?: string[];
 }
 
 export interface CodeReviewFile {
   path: string;
   hunks: CodeReviewHunk[];
+  /** Line comments on this file; populated at submit time or when loading for display. */
+  lineComments?: LineComment[];
 }
 
 export interface CodeReviewPayload {
@@ -374,8 +394,30 @@ export type RailynRPCType = {
           decision: HunkDecision;
           comment: string | null;
           originalStart: number;
+          originalEnd: number;
           modifiedStart: number;
+          modifiedEnd: number;
         };
+        response: void;
+      };
+      "tasks.addLineComment": {
+        params: {
+          taskId: number;
+          filePath: string;
+          lineStart: number;
+          lineEnd: number;
+          lineText: string[];
+          contextLines: string[];
+          comment: string;
+        };
+        response: LineComment;
+      };
+      "tasks.getLineComments": {
+        params: { taskId: number; filePath: string };
+        response: LineComment[];
+      };
+      "tasks.deleteLineComment": {
+        params: { taskId: number; commentId: number };
         response: void;
       };
 

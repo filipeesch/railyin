@@ -167,6 +167,34 @@ const migrations: Array<{ id: string; sql: string }> = [
       CREATE INDEX IF NOT EXISTS idx_pending_messages_task ON pending_messages(task_id);
     `,
   },
+  {
+    id: "007_line_comments",
+    sql: `
+      CREATE TABLE IF NOT EXISTS task_line_comments (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        file_path     TEXT    NOT NULL,
+        line_start    INTEGER NOT NULL,
+        line_end      INTEGER NOT NULL,
+        line_text     TEXT    NOT NULL DEFAULT '[]',
+        context_lines TEXT    NOT NULL DEFAULT '[]',
+        comment       TEXT    NOT NULL,
+        reviewer_id   TEXT    NOT NULL DEFAULT 'user',
+        reviewer_type TEXT    NOT NULL DEFAULT 'human',
+        sent          INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_line_comments_task_file_sent ON task_line_comments(task_id, file_path, sent);
+    `,
+  },
+  {
+    id: "008_hunk_decisions_sent",
+    sql: `
+      ALTER TABLE task_hunk_decisions ADD COLUMN sent          INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE task_hunk_decisions ADD COLUMN original_end  INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE task_hunk_decisions ADD COLUMN modified_end  INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export function runMigrations(): void {

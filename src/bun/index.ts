@@ -154,13 +154,37 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
       return new Response(JSON.stringify({ path: dest }), { headers: { "content-type": "application/json" } });
     }
 
-    // Test-only: delete all hunk decisions for a task so tests start from a clean state.
+    // Test-only: delete all hunk decisions (and line comments) for a task so tests start from a clean state.
     if (url.pathname === "/reset-decisions") {
       const taskId = url.searchParams.get("taskId");
       if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
       const db = getDb();
       db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [parseInt(taskId, 10)]);
+      db.run("DELETE FROM task_line_comments WHERE task_id = ?", [parseInt(taskId, 10)]);
       return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
+    }
+
+    // Test-only: query line comments from the DB for a task.
+    // Returns all rows from task_line_comments for the given taskId.
+    if (url.pathname === "/query-line-comments") {
+      const taskId = url.searchParams.get("taskId");
+      if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
+      const db = getDb();
+      const rows = db.query<{ id: number; file_path: string; line_start: number; line_end: number; comment: string; sent: number }, [number]>(
+        "SELECT id, file_path, line_start, line_end, comment, sent FROM task_line_comments WHERE task_id = ? ORDER BY id",
+      ).all(parseInt(taskId, 10));
+      return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
+    }
+
+    // Test-only: query hunk decisions from the DB for a task.
+    if (url.pathname === "/query-hunk-decisions") {
+      const taskId = url.searchParams.get("taskId");
+      if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
+      const db = getDb();
+      const rows = db.query<{ id: number; file_path: string; hash: string; decision: string; sent: number }, [number]>(
+        "SELECT rowid as id, file_path, hunk_hash as hash, decision, sent FROM task_hunk_decisions WHERE task_id = ? AND reviewer_id = 'user' ORDER BY rowid",
+      ).all(parseInt(taskId, 10));
+      return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
     }
 
     // Test-only: create a self-contained test task in a temp git worktree with

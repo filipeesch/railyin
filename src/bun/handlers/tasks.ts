@@ -1,6 +1,6 @@
 import { getDb } from "../db/index.ts";
 import { createHash } from "crypto";
-import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, ReviewerDecision, FileDiffContent, ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
+import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, ReviewerDecision, FileDiffContent, LineComment, ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
 import {
@@ -562,19 +562,87 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       decision: HunkDecision;
       comment: string | null;
       originalStart: number;
+      originalEnd: number;
       modifiedStart: number;
+      modifiedEnd: number;
     }): Promise<void> => {
       const db = getDb();
       db.run(
-        `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start, updated_at)
-         VALUES (?, ?, ?, 'human', 'user', ?, ?, ?, ?, datetime('now'))
+        `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, original_end, modified_start, modified_end, updated_at)
+         VALUES (?, ?, ?, 'human', 'user', ?, ?, ?, ?, ?, ?, datetime('now'))
          ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
            decision = excluded.decision,
            comment  = excluded.comment,
            file_path = excluded.file_path,
+           original_end = excluded.original_end,
+           modified_end = excluded.modified_end,
            updated_at = datetime('now')`,
-        [params.taskId, params.hunkHash, params.filePath, params.decision, params.comment, params.originalStart, params.modifiedStart],
+        [params.taskId, params.hunkHash, params.filePath, params.decision, params.comment, params.originalStart, params.originalEnd, params.modifiedStart, params.modifiedEnd],
       );
+    },
+
+    // ─── tasks.addLineComment ────────────────────────────────────────────────
+    "tasks.addLineComment": async (params: {
+      taskId: number;
+      filePath: string;
+      lineStart: number;
+      lineEnd: number;
+      lineText: string[];
+      contextLines: string[];
+      comment: string;
+    }): Promise<LineComment> => {
+      const db = getDb();
+      const result = db.run(
+        `INSERT INTO task_line_comments (task_id, file_path, line_start, line_end, line_text, context_lines, comment, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [params.taskId, params.filePath, params.lineStart, params.lineEnd, JSON.stringify(params.lineText), JSON.stringify(params.contextLines), params.comment],
+      );
+      return {
+        id: result.lastInsertRowid as number,
+        filePath: params.filePath,
+        lineStart: params.lineStart,
+        lineEnd: params.lineEnd,
+        lineText: params.lineText,
+        contextLines: params.contextLines,
+        comment: params.comment,
+        reviewerType: "human",
+      };
+    },
+
+    // ─── tasks.getLineComments ────────────────────────────────────────────────
+    "tasks.getLineComments": async (params: { taskId: number }): Promise<LineComment[]> => {
+      const db = getDb();
+      const rows = db.query(
+        `SELECT id, file_path, line_start, line_end, line_text, context_lines, comment, reviewer_type
+         FROM task_line_comments
+         WHERE task_id = ? AND sent = 0
+         ORDER BY file_path, line_start`,
+      ).all(params.taskId) as Array<{
+        id: number;
+        file_path: string;
+        line_start: number;
+        line_end: number;
+        line_text: string;
+        context_lines: string;
+        comment: string;
+        reviewer_type: string;
+      }>;
+      return rows.map((r) => ({
+        id: r.id,
+        filePath: r.file_path,
+        lineStart: r.line_start,
+        lineEnd: r.line_end,
+        lineText: JSON.parse(r.line_text),
+        contextLines: JSON.parse(r.context_lines),
+        comment: r.comment,
+        reviewerType: r.reviewer_type as "human" | "ai",
+      }));
+    },
+
+    // ─── tasks.deleteLineComment ──────────────────────────────────────────────
+    "tasks.deleteLineComment": async (params: { taskId: number; commentId: number }): Promise<void> => {
+      const db = getDb();
+      db.run(`DELETE FROM task_line_comments WHERE id = ? AND task_id = ?`, [params.commentId, params.taskId]);
     },
 
     // ─── tasks.sessionMemory ─────────────────────────────────────────────────

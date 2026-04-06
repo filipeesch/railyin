@@ -54,6 +54,38 @@
  *   Suite L — partial-change files: reject precision with multiple hunks:
  *     22. rejecting one hunk only removes bars for that hunk (not the other hunk's bars)
  *     23. after rejecting one hunk, remaining hunk still has its bars
+ *
+ *   Suite M — glyph click opens LineCommentBar:
+ *     24. glyph click injects a LineCommentBar zone in open state
+ *     25. the textarea in the open LineCommentBar is auto-focused
+ *
+ *   Suite N — cancel removes comment zone without IPC:
+ *     26. cancel removes the LineCommentBar zone from the DOM
+ *     27. cancel makes no IPC call (no row in task_line_comments)
+ *
+ *   Suite O — posting a comment persists it and switches to posted state:
+ *     28. after posting, the bar transitions to posted state (shows comment text, no textarea)
+ *     29. after posting, the comment is saved to the DB (task_line_comments row exists)
+ *     30. the persisted row has correct file_path, line_start, line_end, and comment
+ *
+ *   Suite P — delete a posted comment removes zone and DB row:
+ *     31. delete removes the LineCommentBar zone from the DOM
+ *     32. delete removes the row from task_line_comments
+ *
+ *   Suite Q — accept hunk applies green decoration:
+ *     33. accepting a hunk removes its action bar ViewZone
+ *     34. accepting a hunk applies the accepted-hunk-decoration CSS class
+ *
+ *   Suite R — review submit payload includes line comments and hunk diffs:
+ *     35. submit payload includes LINE COMMENTS section for the posted comment
+ *     36. submit payload includes mini-diff blocks for decided hunks
+ *
+ *   Suite S — sent marking: items marked sent=1 after submit:
+ *     37. hunk decisions are marked sent=1 after review submit
+ *     38. line comments are marked sent=1 after review submit
+ *
+ *   Suite T — sent comments not re-rendered after reopening overlay:
+ *     39. after submit + reopen, no prior-round comment bars are rendered
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
@@ -71,6 +103,9 @@ import {
   resetDecisions,
   setupTestEnv,
   screenshot,
+  queryLineComments,
+  queryHunkDecisions,
+  triggerLineComment,
 } from "./bridge";
 
 // ─── Global test environment ───────────────────────────────────────────────────
@@ -1273,14 +1308,10 @@ describe("Code Review Overlay — decision persistence across file switches", ()
           "Fix: ensure accepted decisions are read from DB when loading a file (buildDisplayModel must apply them).",
       );
     }
-
-    // Also verify bars still cover Monaco ILineChanges (no regressions in the remaining hunks)
-    if (barCountInFileAAfterSwitch < monacoChangesAfterSwitch) {
-      throw new Error(
-        `After switching back to ${fileA.split("/").pop()}: bars=${barCountInFileAAfterSwitch} < monacoChanges=${monacoChangesAfterSwitch}.\n` +
-          "Remaining hunks are missing bars — bar injection may have failed after file switch.",
-      );
-    }
+    // NOTE: We intentionally do NOT assert bars >= monacoChanges here.
+    // Monaco reports ILineChanges for ALL diff regions (including accepted ones) because
+    // accepting a hunk records a decision without modifying file content. After accepting
+    // all hunks in a file, bars=0 while monacoChanges>0 is correct and expected behaviour.
   });
 });
 
@@ -1609,6 +1640,783 @@ describe("Code Review Overlay — partial-change file: reject removes only targe
       throw new Error(
         `All bars removed after rejecting one hunk in ${partialFile}, but ${monacoChangesAfter} Monaco changes remain.\n` +
           "The remaining hunk lost its action bar.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite M — Glyph click opens LineCommentBar in open state (Test 11.1)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Clicking in the glyph margin of the modified editor (where the + icon appears
+// on hover) must inject a LineCommentBar ViewZone in "open" state with a focused
+// textarea below the clicked line.
+
+describe("Code Review Overlay — glyph click opens LineCommentBar", () => {
+  let barAppearedAfterClick = false;
+  let textareaFocused = false;
+  let barState = "";
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    await selectRichTestFile();
+    // Wait for Monaco to load
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    // Simulate a glyph margin click by calling the ReviewOverlay's onRequestLineComment
+    // directly (the glyph click handler calls this). We can't simulate a real Monaco
+    // glyph click from a test, but we can call the exposed handler.
+    await triggerLineComment(5, 5);
+
+    await sleep(800);
+
+    barAppearedAfterClick = await webEval<boolean>(
+      `return !!document.querySelector('.line-comment-bar')`,
+    );
+    barState = await webEval<string>(`
+      var bar = document.querySelector('.line-comment-bar');
+      if (!bar) return 'not found';
+      var textarea = bar.querySelector('.line-comment-bar__textarea');
+      return textarea ? 'open' : 'posted';
+    `);
+    textareaFocused = await webEval<boolean>(`
+      var ta = document.querySelector('.line-comment-bar__textarea');
+      if (!ta) return false;
+      return document.activeElement === ta;
+    `);
+  }, 60_000);
+
+  test("24 — glyph click injects a LineCommentBar zone in open state", () => {
+    if (!barAppearedAfterClick) {
+      throw new Error(
+        "No '.line-comment-bar' element appeared after triggering onRequestLineComment.\n" +
+          "Fix: ensure injectCommentZone() creates a ViewZone that renders LineCommentBar.\n" +
+          "Check that CodeReviewOverlay exposes onRequestLineComment and MonacoDiffEditor wires it.",
+      );
+    }
+    expect(barState).toBe("open");
+  });
+
+  test("25 — the textarea in the open LineCommentBar is auto-focused", () => {
+    if (!barAppearedAfterClick) {
+      console.warn("  ~ skipped: no LineCommentBar appeared (see test 24)");
+      return;
+    }
+    if (!textareaFocused) {
+      throw new Error(
+        "'.line-comment-bar__textarea' is not focused on mount.\n" +
+          "Fix: ensure LineCommentBar's onMounted() calls textareaEl.value.focus() when state === 'open'.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite N — Cancel removes the comment zone (Test 11.3)
+// ═══════════════════════════════════════════════════════════════════════════════
+// After a user opens a comment form with glyph click and then clicks Cancel,
+// the ViewZone must be removed entirely — no bar, no IPC call.
+
+describe("Code Review Overlay — cancel removes comment zone without IPC", () => {
+  let barCountBeforeCancel = 0;
+  let barCountAfterCancel = 0;
+  let lineCommentsInDbBeforeCancel = 0;
+  let lineCommentsInDbAfterCancel = 0;
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    // Inject a comment zone by triggering onRequestLineComment
+    await triggerLineComment(3, 3);
+    await sleep(600);
+
+    lineCommentsInDbBeforeCancel = (await queryLineComments(testTaskId)).length;
+    barCountBeforeCancel = await webEval<number>(
+      `return document.querySelectorAll('.line-comment-bar').length`,
+    );
+
+    // Click the Cancel button
+    await webEval(`
+      var btn = document.querySelector('.lcb-btn--cancel');
+      if (btn) btn.click();
+      return btn ? 'ok' : 'not found';
+    `);
+    await sleep(500);
+
+    barCountAfterCancel = await webEval<number>(
+      `return document.querySelectorAll('.line-comment-bar').length`,
+    );
+    lineCommentsInDbAfterCancel = (await queryLineComments(testTaskId)).length;
+  }, 60_000);
+
+  test("26 — cancel removes the LineCommentBar zone from the DOM", () => {
+    if (barCountBeforeCancel === 0) {
+      throw new Error(
+        "No '.line-comment-bar' appeared before cancel — cannot test cancel behaviour.\n" +
+          "This is a dependency on test 24 passing.",
+      );
+    }
+    if (barCountAfterCancel >= barCountBeforeCancel) {
+      throw new Error(
+        `Cancel did not remove the comment bar: before=${barCountBeforeCancel}, after=${barCountAfterCancel}.\n` +
+          "Fix: ensure onCancel() calls removeCommentZone(commentId).",
+      );
+    }
+  });
+
+  test("27 — cancel makes no IPC call (no row in task_line_comments)", () => {
+    // The DB must have the same count before and after — cancel must not call addLineComment.
+    if (lineCommentsInDbAfterCancel !== lineCommentsInDbBeforeCancel) {
+      throw new Error(
+        `DB line comments changed after cancel: before=${lineCommentsInDbBeforeCancel}, after=${lineCommentsInDbAfterCancel}.\n` +
+          "Cancel must not persist anything to the DB.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite O — Post a comment: zone transitions to posted state (Test 11.4)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe("Code Review Overlay — posting a comment persists it and switches to posted state", () => {
+  let postedBarVisible = false;
+  let dbRowCount = 0;
+  let dbRow: { id: number; file_path: string; line_start: number; line_end: number; comment: string; sent: number } | null = null;
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    const richFile = await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    // Inject a comment zone
+    await triggerLineComment(2, 2);
+    await sleep(800);
+
+    // Type a comment into the textarea and click Post
+    await webEval(`
+      var ta = document.querySelector('.line-comment-bar__textarea');
+      if (ta) {
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, 'This needs a fix before merge');
+        ta.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      }
+      return ta ? 'ok' : 'no textarea';
+    `);
+    await sleep(200);
+
+    await webEval(`
+      var btn = document.querySelector('.lcb-btn--post');
+      if (btn && !btn.disabled) btn.click();
+      return btn ? 'clicked' : 'no button';
+    `);
+    // Wait for async IPC (addLineComment) to complete
+    await sleep(2_000);
+
+    // Check the DOM: bar should now be in posted state (no textarea, has .line-comment-bar__comment-text)
+    postedBarVisible = await webEval<boolean>(
+      `return !!document.querySelector('.line-comment-bar__comment-text')`,
+    );
+
+    // Check the DB
+    const rows = await queryLineComments(testTaskId);
+    dbRowCount = rows.length;
+    dbRow = rows[0] ?? null;
+  }, 60_000);
+
+  test("28 — after posting, the bar transitions to posted state (shows comment text, no textarea)", () => {
+    if (!postedBarVisible) {
+      throw new Error(
+        "After clicking Post, no '.line-comment-bar__comment-text' is visible.\n" +
+          "The bar may not have re-mounted in 'posted' state after addLineComment returned.\n" +
+          "Fix: ensure injectCommentZone's onPost handler unmounts the open app and remounts a posted app.",
+      );
+    }
+  });
+
+  test("29 — after posting, the comment is saved to the DB (task_line_comments row exists)", () => {
+    if (dbRowCount === 0) {
+      throw new Error(
+        "No rows found in task_line_comments after posting a comment.\n" +
+          "Fix: ensure tasks.addLineComment IPC handler inserts into task_line_comments.",
+      );
+    }
+    expect(dbRowCount).toBeGreaterThanOrEqual(1);
+  });
+
+  test("30 — the persisted row has correct file_path, line_start, line_end, and comment", () => {
+    if (!dbRow) {
+      console.warn("  ~ skipped: no DB row found (see test 29)");
+      return;
+    }
+    // file_path must be set (not empty / null)
+    if (!dbRow.file_path) {
+      throw new Error(`task_line_comments row has empty file_path. Got: ${JSON.stringify(dbRow)}`);
+    }
+    // line numbers must be positive
+    if (dbRow.line_start < 1 || dbRow.line_end < dbRow.line_start) {
+      throw new Error(`Invalid line range in DB: line_start=${dbRow.line_start}, line_end=${dbRow.line_end}`);
+    }
+    // comment must match what we typed
+    if (!dbRow.comment.includes("fix before merge")) {
+      throw new Error(`DB comment text mismatch. Expected to contain "fix before merge", got: "${dbRow.comment}"`);
+    }
+    // sent must be 0 (not yet submitted to AI)
+    if (dbRow.sent !== 0) {
+      throw new Error(`DB row sent=${dbRow.sent} but expected 0 (comment not yet submitted to AI)`);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite P — Delete a posted comment: removes zone and DB row (Test 11.5)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe("Code Review Overlay — delete a posted comment removes zone and DB row", () => {
+  let dbRowsBeforeDelete = 0;
+  let dbRowsAfterDelete = 0;
+  let barAfterDelete = false;
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    // Inject + post a comment (same flow as Suite O)
+    await triggerLineComment(4, 4);
+    await sleep(600);
+
+    await webEval(`
+      var ta = document.querySelector('.line-comment-bar__textarea');
+      if (ta) {
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, 'A comment to delete');
+        ta.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      }
+    `);
+    await sleep(200);
+    await webEval(`
+      var btn = document.querySelector('.lcb-btn--post');
+      if (btn && !btn.disabled) btn.click();
+    `);
+    await sleep(2_000); // wait for IPC
+
+    dbRowsBeforeDelete = (await queryLineComments(testTaskId)).length;
+
+    // Click Delete
+    await webEval(`
+      var btn = document.querySelector('.lcb-btn--delete');
+      if (btn) btn.click();
+      return btn ? 'ok' : 'not found';
+    `);
+    await sleep(1_500); // wait for async IPC (deleteLineComment)
+
+    dbRowsAfterDelete = (await queryLineComments(testTaskId)).length;
+    barAfterDelete = await webEval<boolean>(
+      `return !!document.querySelector('.line-comment-bar')`,
+    );
+  }, 60_000);
+
+  test("31 — delete removes the LineCommentBar zone from the DOM", () => {
+    if (dbRowsBeforeDelete === 0) {
+      console.warn("  ~ skipped: no comment was posted (delete precondition failed)");
+      return;
+    }
+    if (barAfterDelete) {
+      throw new Error(
+        "'.line-comment-bar' is still present after clicking Delete.\n" +
+          "Fix: ensure handleDeleteComment calls removeCommentZone after deleteLineComment IPC.",
+      );
+    }
+  });
+
+  test("32 — delete removes the row from task_line_comments", () => {
+    if (dbRowsBeforeDelete === 0) {
+      console.warn("  ~ skipped: no comment was posted (delete precondition failed)");
+      return;
+    }
+    if (dbRowsAfterDelete >= dbRowsBeforeDelete) {
+      throw new Error(
+        `DB row count did not decrease after delete: before=${dbRowsBeforeDelete}, after=${dbRowsAfterDelete}.\n` +
+          "Fix: ensure tasks.deleteLineComment handler deletes the row by id.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite Q — Accept hunk shows green decoration, does not rebuild model (Test 11.9)
+// ═══════════════════════════════════════════════════════════════════════════════
+// After accepting a hunk, the modified editor must show a green-tinted decoration
+// (accepted-hunk-decoration CSS class) on the decided hunk's lines. The overall
+// Monaco diff should also shrink (accepted hunk removed), but since we no longer
+// rebuild the display model, the operation is purely decoration-based.
+
+describe("Code Review Overlay — accept hunk applies green decoration", () => {
+  let greenDecorationPresent = false;
+  let barCountBefore = 0;
+  let barCountAfter = 0;
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    barCountBefore = await webEval<number>(
+      `return document.querySelectorAll('.hunk-bar').length`,
+    );
+    if (barCountBefore === 0) return;
+
+    // Accept the first hunk
+    await webEval(`
+      var btn = document.querySelector('.hunk-btn--accept');
+      if (btn) btn.click();
+      return 'ok';
+    `);
+    await sleep(2_000);
+
+    barCountAfter = await webEval<number>(
+      `return document.querySelectorAll('.hunk-bar').length`,
+    );
+
+    // Check for the accepted-hunk-decoration class in Monaco's overlay decorations.
+    // Monaco renders decorations as elements inside .view-overlays with the class name.
+    greenDecorationPresent = await webEval<boolean>(`
+      return !!document.querySelector('.accepted-hunk-decoration');
+    `);
+  }, 60_000);
+
+  test("33 — accepting a hunk removes its action bar ViewZone", () => {
+    if (barCountBefore === 0) {
+      console.warn("  ~ skipped: no pending bars in the selected file");
+      return;
+    }
+    if (barCountAfter >= barCountBefore) {
+      throw new Error(
+        `Bar count did not decrease after accept: before=${barCountBefore}, after=${barCountAfter}.\n` +
+          "Fix: ensure onDecideHunk 'accepted' path calls removeZoneForHash(hash).",
+      );
+    }
+  });
+
+  test("34 — accepting a hunk applies the accepted-hunk-decoration CSS class", () => {
+    if (barCountBefore === 0) {
+      console.warn("  ~ skipped: no pending bars (cannot accept)");
+      return;
+    }
+    if (!greenDecorationPresent) {
+      throw new Error(
+        "No '.accepted-hunk-decoration' element found in the DOM after accepting a hunk.\n" +
+          "Fix: ensure applyDecisionDecorations() applies deltaDecorations with 'accepted-hunk-decoration' className.\n" +
+          "Also verify the CSS class is defined globally (in App.vue, not scoped).",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite R — Review submit payload includes line comments (Tests 11.6, 11.8)
+// ═══════════════════════════════════════════════════════════════════════════════
+// After posting a line comment and accepting a hunk, the LLM payload (intercepted
+// via the outgoing conversation message) must include lineComments grouped by file
+// and the mini-diff blocks for decided hunks.
+//
+// We don't fire an actual LLM call — instead, we check that the outgoing message
+// content includes the markers that formatReviewMessageForLLM emits.
+
+describe("Code Review Overlay — review submit payload includes line comments and hunk diffs", () => {
+  let submitMessageContent = "";
+  let hasLineComments = false;
+  let hasHunkDiff = false;
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    const richFile = await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    // Step 1: Accept one hunk (so there's a decided hunk in the payload)
+    const barCount = await webEval<number>(
+      `return document.querySelectorAll('.hunk-bar').length`,
+    );
+    if (barCount > 0) {
+      await webEval(`document.querySelector('.hunk-btn--accept')?.click(); return 'ok';`);
+      await sleep(1_500);
+    }
+
+    // Step 2: Post a line comment
+    await triggerLineComment(1, 1);
+    await sleep(600);
+    await webEval(`
+      var ta = document.querySelector('.line-comment-bar__textarea');
+      if (ta) {
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, 'Please address this in the next revision');
+        ta.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      }
+    `);
+    await sleep(200);
+    await webEval(`
+      var btn = document.querySelector('.lcb-btn--post');
+      if (btn && !btn.disabled) btn.click();
+    `);
+    await sleep(2_000);
+
+    // Step 3: Trigger the review submit by clicking "Submit Review" button
+    // The submit button is typically in the overlay header
+    const submitClicked = await webEval<boolean>(`
+      var btn = document.querySelector('.submit-review-btn') || document.querySelector('[class*="submit"]') || document.querySelector('button[class*="review"]');
+      if (btn) { btn.click(); return true; }
+      // Try finding by text content
+      var btns = Array.from(document.querySelectorAll('button'));
+      var submitBtn = btns.find(function(b) { return b.textContent && b.textContent.trim().toLowerCase().includes('submit'); });
+      if (submitBtn) { submitBtn.click(); return true; }
+      return false;
+    `);
+    await sleep(3_000); // wait for task execution to start and message to be stored
+
+    // Step 4: Query the last conversation message to check the payload content
+    // The user message content is stored in conversation_messages table
+    const lastMessage = await webEval<string>(`
+      return new Promise(async function(resolve) {
+        try {
+          // Query from the Pinia task store
+          var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+          var taskStore = pinia._s.get('task');
+          // Look at messages for this task
+          var messages = taskStore?.messages || [];
+          var lastUserMsg = null;
+          for (var i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'user') {
+              lastUserMsg = messages[i];
+              break;
+            }
+          }
+          resolve(lastUserMsg ? JSON.stringify(lastUserMsg.content) : 'no user message');
+        } catch(e) {
+          resolve('error: ' + String(e));
+        }
+      });
+    `);
+
+    submitMessageContent = lastMessage ?? "";
+    hasLineComments = submitMessageContent.includes("LINE COMMENT") || submitMessageContent.includes("lineComments");
+    hasHunkDiff = submitMessageContent.includes("```diff") || submitMessageContent.includes("accepted") || submitMessageContent.includes("ACCEPTED");
+  }, 120_000);
+
+  test("35 — submit payload includes LINE COMMENTS section for the posted comment", () => {
+    if (!submitMessageContent || submitMessageContent === "no user message") {
+      console.warn("  ~ skipped: no user message found in task store (submit may not have triggered)");
+      return;
+    }
+    if (!hasLineComments) {
+      throw new Error(
+        `The outgoing review message does not contain a LINE COMMENT section.\n` +
+          `Message content (first 500 chars): ${submitMessageContent.slice(0, 500)}\n` +
+          "Fix: ensure formatReviewMessageForLLM includes lineComments from the payload.",
+      );
+    }
+  });
+
+  test("36 — submit payload includes mini-diff blocks for decided hunks", () => {
+    if (!submitMessageContent || submitMessageContent === "no user message") {
+      console.warn("  ~ skipped: no user message found in task store");
+      return;
+    }
+    if (!hasHunkDiff) {
+      throw new Error(
+        `The outgoing review message does not contain a diff block or hunk decision metadata.\n` +
+          `Message content (first 500 chars): ${submitMessageContent.slice(0, 500)}\n` +
+          "Fix: ensure formatReviewMessageForLLM renders mini-diff blocks for accepted/change_request hunks.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite S — Sent marking: DB rows marked sent=1 after submit (Test 11.11)
+// ═══════════════════════════════════════════════════════════════════════════════
+// After a review is submitted (handleCodeReview runs), all included hunk decisions
+// and line comments must have their `sent` column set to 1. A subsequent query
+// of unsent items must return nothing.
+
+describe("Code Review Overlay — sent marking: items marked sent=1 after submit", () => {
+  let unsentHunksAfterSubmit = -1;
+  let unsentCommentsAfterSubmit = -1;
+  let submittedHunksBefore = 0;
+  let submittedCommentsBefore = 0;
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    // Accept one hunk
+    const barCount = await webEval<number>(
+      `return document.querySelectorAll('.hunk-bar').length`,
+    );
+    if (barCount > 0) {
+      await webEval(`document.querySelector('.hunk-btn--accept')?.click(); return 'ok';`);
+      await sleep(1_500);
+    }
+
+    // Post a line comment
+    await triggerLineComment(2, 3);
+    await sleep(600);
+    await webEval(`
+      var ta = document.querySelector('.line-comment-bar__textarea');
+      if (ta) {
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, 'Check this range');
+        ta.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      }
+    `);
+    await sleep(200);
+    await webEval(`
+      var btn = document.querySelector('.lcb-btn--post');
+      if (btn && !btn.disabled) btn.click();
+    `);
+    await sleep(2_000);
+
+    // Count unsent items before submit
+    const decisionsBefore = await queryHunkDecisions(testTaskId);
+    submittedHunksBefore = decisionsBefore.filter((d) => d.sent === 0).length;
+    const commentsBefore = await queryLineComments(testTaskId);
+    submittedCommentsBefore = commentsBefore.filter((c) => c.sent === 0).length;
+
+    // Trigger submit
+    await webEval(`
+      var btns = Array.from(document.querySelectorAll('button'));
+      var submitBtn = btns.find(function(b) { return b.textContent && b.textContent.trim().toLowerCase().includes('submit'); });
+      if (submitBtn) submitBtn.click();
+      return submitBtn ? 'ok' : 'not found';
+    `);
+    await sleep(5_000); // allow handleCodeReview to run and UPDATE statements to commit
+
+    // Count unsent items after submit
+    const decisionsAfter = await queryHunkDecisions(testTaskId);
+    unsentHunksAfterSubmit = decisionsAfter.filter((d) => d.sent === 0).length;
+    const commentsAfter = await queryLineComments(testTaskId);
+    unsentCommentsAfterSubmit = commentsAfter.filter((c) => c.sent === 0).length;
+  }, 120_000);
+
+  test("37 — hunk decisions are marked sent=1 after review submit", () => {
+    if (submittedHunksBefore === 0) {
+      console.warn("  ~ skipped: no unsent hunk decisions before submit (accept may not have worked)");
+      return;
+    }
+    if (unsentHunksAfterSubmit === -1) {
+      console.warn("  ~ skipped: could not query DB after submit");
+      return;
+    }
+    if (unsentHunksAfterSubmit > 0) {
+      throw new Error(
+        `${unsentHunksAfterSubmit} hunk decision(s) still have sent=0 after submit.\n` +
+          "Fix: ensure handleCodeReview runs UPDATE task_hunk_decisions SET sent=1 after building the payload.",
+      );
+    }
+  });
+
+  test("38 — line comments are marked sent=1 after review submit", () => {
+    if (submittedCommentsBefore === 0) {
+      console.warn("  ~ skipped: no unsent line comments before submit");
+      return;
+    }
+    if (unsentCommentsAfterSubmit === -1) {
+      console.warn("  ~ skipped: could not query DB after submit");
+      return;
+    }
+    if (unsentCommentsAfterSubmit > 0) {
+      throw new Error(
+        `${unsentCommentsAfterSubmit} line comment(s) still have sent=0 after submit.\n` +
+          "Fix: ensure handleCodeReview runs UPDATE task_line_comments SET sent=1 after building the payload.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite T — Sent items not re-rendered after reopening overlay (Test 11.7)
+// ═══════════════════════════════════════════════════════════════════════════════
+// After a review round is submitted, all items have sent=1. When the overlay is
+// reopened, getLineComments returns only sent=0 items — so no comment zones should
+// be injected for the prior round.
+
+describe("Code Review Overlay — sent comments are not re-rendered after round 2 open", () => {
+  let commentBarsAfterReopen = -1;
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    await selectRichTestFile();
+    let prev = -1;
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    // Post a line comment
+    await triggerLineComment(1, 1);
+    await sleep(600);
+    await webEval(`
+      var ta = document.querySelector('.line-comment-bar__textarea');
+      if (ta) {
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, 'Round 1 comment');
+        ta.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      }
+    `);
+    await sleep(200);
+    await webEval(`
+      var btn = document.querySelector('.lcb-btn--post');
+      if (btn && !btn.disabled) btn.click();
+    `);
+    await sleep(2_000);
+
+    // Manually mark all comments as sent=1 (simulate what submit does)
+    const comments = await queryLineComments(testTaskId);
+    if (comments.length > 0) {
+      // Use IPC via the debug server to manually mark sent (we reuse the DB endpoints)
+      // We can't call SQL directly from bridge.ts, but we can simulate a "submit complete"
+      // by calling the test send endpoint with a code review message.
+      // For now, mark via direct webEval that triggers the engine path or directly via reset+reinsert.
+      // Simpler: we have /reset-decisions which deletes everything — instead, call submit
+      await webEval(`
+        var btns = Array.from(document.querySelectorAll('button'));
+        var submitBtn = btns.find(function(b) { return b.textContent && b.textContent.trim().toLowerCase().includes('submit'); });
+        if (submitBtn) submitBtn.click();
+        return submitBtn ? 'ok' : 'not found';
+      `);
+      await sleep(5_000); // handleCodeReview marks sent=1
+    }
+
+    // Close and reopen the overlay
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').closeReview();
+      return 'ok';
+    `);
+    await sleep(600);
+
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    await selectRichTestFile();
+    // Wait for Monaco to settle and zones to be injected
+    await sleep(2_000);
+    let prev2 = -1;
+    for (let i = 0; i < 15; i++) {
+      await sleep(300);
+      const n = await webEval<number>(`return document.querySelectorAll('.line-comment-bar').length`);
+      if (Number(n) === prev2) break;
+      prev2 = Number(n);
+    }
+
+    commentBarsAfterReopen = await webEval<number>(
+      `return document.querySelectorAll('.line-comment-bar').length`,
+    );
+  }, 120_000);
+
+  test("39 — after submit + reopen, no prior-round comment bars are rendered", () => {
+    if (commentBarsAfterReopen === -1) {
+      console.warn("  ~ skipped: could not open overlay in round 2");
+      return;
+    }
+    if (commentBarsAfterReopen > 0) {
+      throw new Error(
+        `${commentBarsAfterReopen} line comment bar(s) rendered after reopening in round 2.\n` +
+          "These belong to the prior round (sent=1) and must NOT be rendered.\n" +
+          "Fix: ensure tasks.getLineComments queries WHERE sent = 0, and loadLineComments() only injects unsent comments.",
       );
     }
   });
