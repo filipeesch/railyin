@@ -29,6 +29,14 @@ providers:
 # is created without an explicit model. Column-level model always takes precedence.
 # default_model: anthropic/claude-sonnet-4-5
 
+# Slash prompt references in workflow columns
+# on_enter_prompt and stage_instructions accept a /prompt-name reference as the ENTIRE value:
+#   on_enter_prompt: /opsx-propose
+# This resolves to .github/prompts/opsx-propose.prompt.md in the task's worktree.
+# Text after the reference is passed as $input substitution inside the prompt file.
+# The slash reference must be at the beginning — inline use (e.g., "see /opsx-propose") is not resolved.
+# You can also use slash commands in the task chat: start your message with /opsx-sync.
+
 # Web search (used by the search_internet tool)
 # search:
 #   engine: tavily   # "tavily" is the only supported engine in v1

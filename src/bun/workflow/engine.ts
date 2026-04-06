@@ -14,6 +14,7 @@ import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/r
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { resolveToolsForColumn, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
 import { formatReviewMessageForLLM } from "./review.ts";
+import { resolveSlashReference } from "./slash-prompt.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -897,9 +898,34 @@ async function runExecution(
       }
     }
 
+    // Resolve slash references in prompt and stage_instructions using the worktree path.
+    // Resolution happens here (at execution time) so the worktree context is available.
+    const worktreePath = gitContext?.worktree_path ?? "";
+    let resolvedPrompt: string;
+    let resolvedStageInstructions: string | undefined;
+    try {
+      resolvedPrompt = await resolveSlashReference(prompt, worktreePath);
+      resolvedStageInstructions = stageInstructions
+        ? await resolveSlashReference(stageInstructions, worktreePath)
+        : undefined;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log("warn", `Slash reference resolution failed: ${msg}`, { taskId, executionId });
+      appendMessage(taskId, task.conversation_id ?? 0, "system", null, `Error: ${msg}`);
+      db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+      db.run(
+        "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+        [executionId],
+      );
+      executionControllers.delete(executionId);
+      const waitRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+      if (waitRow) onTaskUpdated(mapTask(waitRow));
+      return;
+    }
+
     // Task 5.3: Assemble full execution payload as messages
     const sessionNotes = readSessionMemory(taskId);
-    const messages = assembleMessages(task, stageInstructions, history, prompt, gitContext, sessionNotes);
+    const messages = assembleMessages(task, resolvedStageInstructions, history, resolvedPrompt, gitContext, sessionNotes);
 
     const config = getConfig();
     // Resolve provider from qualified model ID (e.g. "lmstudio/qwen3-8b")
@@ -942,7 +968,7 @@ async function runExecution(
       cancelExecution: (execId) => cancelExecution(execId),
     };
     const toolCtx = {
-      worktreePath: gitContext?.worktree_path ?? "",
+      worktreePath,
       searchConfig: config.workspace.search,
       taskId,
       boardId: task.board_id,

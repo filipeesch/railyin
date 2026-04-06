@@ -524,7 +524,7 @@ describe("awaiting_user on UnresolvableProviderError", () => {
     const task = db
       .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
       .get(taskId);
-    expect(task!.execution_state).toBe("awaiting_user");
+    expect(task!.execution_state).toBe("waiting_user");
 
     const sysMsg = db
       .query<{ content: string }, [number]>(
@@ -535,7 +535,7 @@ describe("awaiting_user on UnresolvableProviderError", () => {
     expect(sysMsg!.content).toMatch(/model/i);
   });
 
-  it("5.11 task with unknown provider prefix → execution_state awaiting_user", async () => {
+  it("5.11 task with unknown provider prefix → execution_state waiting_user", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan', model = 'unknownprovider/some-model' WHERE id = ?", [taskId]);
 
@@ -546,7 +546,7 @@ describe("awaiting_user on UnresolvableProviderError", () => {
     const task = db
       .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
       .get(taskId);
-    expect(task!.execution_state).toBe("awaiting_user");
+    expect(task!.execution_state).toBe("waiting_user");
   });
 });
 
