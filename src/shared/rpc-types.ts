@@ -226,6 +226,8 @@ export interface StreamToken {
   token: string;
   done: boolean;
   isReasoning?: boolean;
+  /** True for ephemeral status events from non-streaming fallback — never stored in DB. */
+  isStatus?: boolean;
 }
 
 export interface StreamError {
@@ -376,6 +378,16 @@ export type RailynRPCType = {
         };
         response: void;
       };
+
+      // Workflow
+      "workflow.getYaml": {
+        params: { templateId: string };
+        response: { yaml: string };
+      };
+      "workflow.saveYaml": {
+        params: { templateId: string; yaml: string };
+        response: { ok: true };
+      };
       "tasks.sessionMemory": {
         params: { taskId: number };
         response: { content: string | null };
@@ -391,6 +403,7 @@ export type RailynRPCType = {
       "stream.error": StreamError;
       "task.updated": Task;
       "message.new": ConversationMessage;
+      "workflow.reloaded": Record<string, never>;
       "debug.log": { level: string; args: string };
     };
   }>;

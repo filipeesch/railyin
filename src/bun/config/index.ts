@@ -73,7 +73,7 @@ let _configError: string | null = null;
 // In production builds this is undefined and the fallback to ~/.railyn/config is used.
 declare const __RAILYN_DEV_CONFIG_DIR__: string | undefined;
 
-function getConfigDir(): string {
+export function getConfigDir(): string {
   // 1. Explicit env override (used by tests and CI)
   if (process.env.RAILYN_CONFIG_DIR) return process.env.RAILYN_CONFIG_DIR;
   // 2. Dev build: absolute path baked in at bundle time by electrobun.config.ts
@@ -185,14 +185,16 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
   // Auto-create default config files if they don't exist yet
   ensureConfigExists(configDir);
 
-  const workspaceFile = join(configDir, "workspace.yaml");
+  const isTestMode = process.env.RAILYN_DB === ":memory:";
+  const workspaceFileName = isTestMode ? "workspace.test.yaml" : "workspace.yaml";
+  const workspaceFile = join(configDir, workspaceFileName);
 
   let workspace: WorkspaceYaml;
   try {
     const raw = readFileSync(workspaceFile, "utf-8");
     workspace = yaml.load(raw) as WorkspaceYaml;
   } catch (err) {
-    _configError = `Failed to parse workspace.yaml: ${err instanceof Error ? err.message : String(err)}`;
+    _configError = `Failed to parse ${workspaceFileName}: ${err instanceof Error ? err.message : String(err)}`;
     return { config: null, error: _configError };
   }
 
@@ -202,7 +204,7 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
   if (workspace.providers && workspace.providers.length > 0) {
     // New format: `providers:` takes precedence
     if (workspace.ai) {
-      console.warn("[config] Both 'providers:' and 'ai:' found in workspace.yaml — using 'providers:' and ignoring 'ai:'.");
+      console.warn(`[config] Both 'providers:' and 'ai:' found in ${workspaceFileName} — using 'providers:' and ignoring 'ai:'.`);
     }
     providers = workspace.providers;
   } else if (workspace.ai) {
@@ -216,7 +218,7 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
       context_window_tokens: ai.context_window_tokens,
     }];
   } else {
-    _configError = "workspace.yaml is missing both 'providers:' and legacy 'ai:' section.";
+    _configError = `${workspaceFileName} is missing both 'providers:' and legacy 'ai:' section.`;
     return { config: null, error: _configError };
   }
 

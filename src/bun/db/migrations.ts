@@ -193,4 +193,26 @@ export function seedDefaultWorkspace(): void {
     db.run("INSERT INTO workspaces (id, name) VALUES (1, 'My Workspace')");
     console.log("[db] Seeded default workspace");
   }
+
+  // In test mode (in-memory DB) also seed a minimal project + board so the
+  // app boots into BoardView instead of the first-time setup wizard.
+  // Tests then create their own task rows via /setup-test-env.
+  if (process.env.RAILYN_DB === ":memory:") {
+    const hasProject = db.query<{ id: number }, []>("SELECT id FROM projects LIMIT 1").get();
+    if (!hasProject) {
+      db.run(
+        "INSERT INTO projects (workspace_id, name, project_path, git_root_path, default_branch) VALUES (1, 'Test Project', '/tmp', '/tmp', 'main')",
+      );
+      console.log("[db] Seeded test project");
+    }
+    const hasBoard = db.query<{ id: number }, []>("SELECT id FROM boards LIMIT 1").get();
+    if (!hasBoard) {
+      const project = db.query<{ id: number }, []>("SELECT id FROM projects LIMIT 1").get()!;
+      db.run(
+        "INSERT INTO boards (workspace_id, name, workflow_template_id, project_ids) VALUES (1, 'Test Board', 'delivery', ?)",
+        [JSON.stringify([project.id])],
+      );
+      console.log("[db] Seeded test board");
+    }
+  }
 }

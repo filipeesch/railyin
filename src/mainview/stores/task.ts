@@ -17,6 +17,9 @@ export const useTaskStore = defineStore("task", () => {
   const streamingReasoningToken = ref("");   // live reasoning text for active round
   const isStreamingReasoning = ref(false);   // true while reasoning tokens are arriving
 
+  // Ephemeral status message during non-streaming fallback (never stored in DB)
+  const streamingStatusMessage = ref("");
+
   const loading = ref(false);
   const messagesLoading = ref(false);
 
@@ -68,9 +71,20 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Transition task ──────────────────────────────────────────────────────
 
   async function transitionTask(taskId: number, toState: string) {
-    const { task } = await electroview.rpc.request["tasks.transition"]({ taskId, toState });
-    onTaskUpdated(task);
-    return task;
+    // Optimistic update: move the card immediately so there's no visible snap-back
+    // while awaiting the RPC round-trip.
+    const prior = Object.values(tasksByBoard.value).flat().find((t) => t.id === taskId);
+    if (prior) _replaceTask({ ...prior, workflowState: toState });
+
+    try {
+      const { task } = await electroview.rpc.request["tasks.transition"]({ taskId, toState });
+      onTaskUpdated(task); // sync final state (executionState, model override, etc.)
+      return task;
+    } catch (err) {
+      // Revert optimistic move on error so the card ends up in a consistent state
+      if (prior) _replaceTask(prior);
+      throw err;
+    }
   }
 
   // ─── Retry ────────────────────────────────────────────────────────────────
@@ -150,6 +164,7 @@ export const useTaskStore = defineStore("task", () => {
       }
       streamingToken.value = "";
       streamingReasoningToken.value = "";
+      streamingStatusMessage.value = "";
       isStreamingReasoning.value = false;
       streamingTaskId.value = null;
       // Sync with DB so the real persisted message (with correct id/metadata) replaces
@@ -157,6 +172,9 @@ export const useTaskStore = defineStore("task", () => {
       if (activeTaskId.value === payload.taskId) {
         loadMessages(payload.taskId);
       }
+    } else if (payload.isStatus) {
+      // Ephemeral status event from non-streaming fallback: just update the latest message.
+      streamingStatusMessage.value = payload.token;
     } else if (payload.isReasoning) {
       // Reasoning token: if this is the start of a new round (prev round collapsed),
       // clear old content so we start a fresh live bubble.
@@ -170,6 +188,7 @@ export const useTaskStore = defineStore("task", () => {
       if (isStreamingReasoning.value) {
         isStreamingReasoning.value = false;
       }
+      streamingStatusMessage.value = ""; // clear status when real tokens arrive
       streamingToken.value += payload.token;
     }
   }
@@ -177,6 +196,7 @@ export const useTaskStore = defineStore("task", () => {
   function onStreamError(payload: StreamError) {
     if (payload.taskId !== streamingTaskId.value) return;
     streamingToken.value = "";
+    streamingStatusMessage.value = "";
     streamingTaskId.value = null;
     if (payload.taskId !== activeTaskId.value) return;
     messages.value.push({
@@ -206,6 +226,7 @@ export const useTaskStore = defineStore("task", () => {
       streamingTaskId.value = task.id;
       streamingToken.value = "";
       streamingReasoningToken.value = "";
+      streamingStatusMessage.value = "";
       isStreamingReasoning.value = false;
     }
     // Refresh context usage when the active task finishes an execution
@@ -348,7 +369,10 @@ export const useTaskStore = defineStore("task", () => {
     for (const [boardId, tasks] of Object.entries(tasksByBoard.value)) {
       const idx = tasks.findIndex((t) => t.id === updated.id);
       if (idx !== -1) {
-        tasksByBoard.value[Number(boardId)][idx] = updated;
+        // Replace the whole array so Vue detects the change reliably.
+        // In-place index assignment (arr[i] = val) can be missed when the
+        // component tracks the array reference rather than individual indices.
+        tasksByBoard.value[Number(boardId)] = tasks.map((t) => (t.id === updated.id ? updated : t));
         break;
       }
     }
@@ -362,6 +386,7 @@ export const useTaskStore = defineStore("task", () => {
     streamingToken,
     streamingReasoningToken,
     isStreamingReasoning,
+    streamingStatusMessage,
     streamingTaskId,
     loading,
     messagesLoading,

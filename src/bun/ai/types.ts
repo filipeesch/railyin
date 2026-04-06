@@ -43,7 +43,10 @@ export type StreamEvent =
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
   | { type: "tool_calls"; calls: AIToolCall[] }
-  | { type: "done" };
+  | { type: "done" }
+  // Ephemeral status messages emitted by retryStream() during non-streaming fallback.
+  // These are NOT stored in the DB — they describe transient API wait state only.
+  | { type: "status"; content: string };
 
 export interface AICallOptions {
   maxTokens?: number;

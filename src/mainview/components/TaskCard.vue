@@ -1,5 +1,5 @@
 <template>
-  <div class="task-card" :class="[`exec-${task.executionState}`]" @click="emit('click')">
+  <div class="task-card" :class="[`exec-${task.executionState}`]" :data-task-id="task.id" @click="emit('click')">
     <!-- Title -->
     <div class="task-card__title">{{ task.title }}</div>
 

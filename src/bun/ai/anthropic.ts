@@ -7,6 +7,7 @@ import type {
   AIToolDefinition,
   StreamEvent,
 } from "./types.ts";
+import { ProviderError } from "./retry.ts";
 
 // ─── Anthropic wire types ─────────────────────────────────────────────────────
 
@@ -183,7 +184,12 @@ export class AnthropicProvider implements AIProvider {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Anthropic API returned ${response.status}: ${text}`);
+      const retryAfter = response.headers.get("retry-after");
+      throw new ProviderError(
+        response.status,
+        `Anthropic API returned ${response.status}: ${text}`,
+        retryAfter ? parseInt(retryAfter, 10) : undefined,
+      );
     }
 
     const json = await response.json() as {
@@ -227,7 +233,12 @@ export class AnthropicProvider implements AIProvider {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Anthropic API returned ${response.status}: ${text}`);
+      const retryAfter = response.headers.get("retry-after");
+      throw new ProviderError(
+        response.status,
+        `Anthropic API returned ${response.status}: ${text}`,
+        retryAfter ? parseInt(retryAfter, 10) : undefined,
+      );
     }
 
     if (!response.body) throw new Error("Anthropic API returned no response body");

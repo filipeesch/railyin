@@ -78,8 +78,8 @@ The system SHALL update a task's `execution_state` based on the structured resul
 - **WHEN** an execution encounters an error or an unrecoverable condition
 - **THEN** the task's `execution_state` is set to `failed`
 
-#### Scenario: ask_user tool call transitions to waiting_user
-- **WHEN** the AI calls the `ask_user` tool during the tool loop
+#### Scenario: ask_me tool call transitions to waiting_user
+- **WHEN** the AI calls the `ask_me` tool during the tool loop
 - **THEN** the engine intercepts the call, appends an `ask_user_prompt` message to the conversation, sets `execution_state = 'waiting_user'`, and exits without streaming a response
 
 #### Scenario: User answer resumes from waiting_user
@@ -160,8 +160,8 @@ The engine SHALL maintain an in-memory `Map<executionId, AbortController>`. When
 The system SHALL filter `TOOL_DEFINITIONS` to only include tools named in the current column's `tools` configuration before building the AI request. When no `tools` key is present in the column config, the default set (`read_file`, `list_dir`, `run_command`) SHALL be used.
 
 #### Scenario: Column tools list controls what model receives
-- **WHEN** an execution runs in a column with `tools: [read_file, ask_user]`
-- **THEN** the AI request includes only `read_file` and `ask_user` definitions, regardless of what other tools are registered
+- **WHEN** an execution runs in a column with `tools: [read_file, ask_me]`
+- **THEN** the AI request includes only `read_file` and `ask_me` definitions, regardless of what other tools are registered
 
 #### Scenario: No tools key falls back to defaults
 - **WHEN** an execution runs in a column with no `tools` key and a worktree is available
@@ -185,3 +185,10 @@ The system SHALL execute all tool rounds and the final text response using a sin
 #### Scenario: Bad assistant responses never enter history
 - **WHEN** the model emits tool-call syntax (XML `<tool_call>`, JSON blobs) as plain text in its response
 - **THEN** the unified stream() call yields a `tool_calls` event via the API's structured `delta.tool_calls` field; rogue text is never stored as an assistant message
+
+### Requirement: Config singleton supports runtime reload without restart
+The system SHALL expose a `reloadConfig()` function that clears the in-memory config singleton and forces a fresh read from disk on the next access. This SHALL be callable at runtime from RPC handlers without restarting the process.
+
+#### Scenario: reloadConfig clears the in-memory singleton
+- **WHEN** `reloadConfig()` is called
+- **THEN** the internal `_config` singleton is reset to null and the next call to `getConfig()` re-reads all YAML files from disk

@@ -1,0 +1,5 @@
+name: Test Workspace
+
+providers:
+  - id: fake
+    type: fake

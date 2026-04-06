@@ -46,6 +46,14 @@
  *
  *   Suite J — accept precision:
  *     19. after accepting one hunk, remaining bars still cover all remaining Monaco ILineChanges
+ *
+ *   Suite K — partial-change files (tracked, multi-hunk):
+ *     20. bars ≥ Monaco ILineChanges for a tracked partial-change file (not just new additions)
+ *     21. every hunk in the partial file has a visible action bar
+ *
+ *   Suite L — partial-change files: reject precision with multiple hunks:
+ *     22. rejecting one hunk only removes bars for that hunk (not the other hunk's bars)
+ *     23. after rejecting one hunk, remaining hunk still has its bars
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
@@ -58,10 +66,26 @@ import {
   reviewSelectedFile,
   openReviewOverlay,
   selectRichTestFile,
+  selectPartialTestFile,
   navToFirstHunk,
   resetDecisions,
+  setupTestEnv,
   screenshot,
 } from "./bridge";
+
+// ─── Global test environment ───────────────────────────────────────────────────
+// Set up once before any suite runs. `setupTestEnv` creates an isolated temp git
+// repo with 3 known test files and a fresh task row — tests are not coupled to
+// any pre-existing app data (worktrees, boards, or real task IDs).
+
+let testTaskId = 0;
+let testFiles: string[] = [];
+
+beforeAll(async () => {
+  const env = await setupTestEnv();
+  testTaskId = env.taskId;
+  testFiles = env.files;
+}, 30_000);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Suite A — shared setup: overlay open on SetupView.vue, first hunk in viewport
@@ -73,7 +97,15 @@ describe("Code Review Overlay — ViewZone UX", () => {
     const ping = await fetch(BRIDGE_BASE + "/").catch(() => null);
     if (!ping?.ok) throw new Error("App not running — start it with: bun run dev");
 
-    await openReviewOverlay();
+    // Clear any decisions left over from previous test runs so all hunks are pending.
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
     await selectRichTestFile(); // → SetupView.vue
 
     // Navigate to the very first hunk so Monaco scrolls to it and triggers layoutZone.
@@ -326,7 +358,7 @@ describe("Code Review Overlay — per-hunk navigation (rich test file)", () => {
 
   beforeAll(async () => {
     // Clear persisted hunk decisions from DB and in-memory optimistic state
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
@@ -451,7 +483,7 @@ describe("Code Review Overlay — reject hunk regression", () => {
 
   beforeAll(async () => {
     // Clean slate: clear DB + in-memory decisions
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
@@ -555,14 +587,14 @@ describe("Code Review Overlay — all changed files have action bars", () => {
   beforeAll(async () => {
     // Clean slate — clear DB decisions and in-memory state, then open a fresh overlay
     // in review mode so we get the true current file list from git.
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
     // Open a fresh overlay so the file list reflects the actual worktree state.
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
 
     // Get all files in the review
     const files = await webEval<string[]>(`
@@ -684,13 +716,13 @@ describe("Code Review Overlay — bars match Monaco ILineChanges per file", () =
   const counts: FileChangeCount[] = [];
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
 
     const files = await webEval<string[]>(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
@@ -763,13 +795,13 @@ describe("Code Review Overlay — reject precision", () => {
   let skipped = false;
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
 
     // Use the richest available file
     await selectRichTestFile();
@@ -884,13 +916,13 @@ describe("Code Review Overlay — pending counter accuracy", () => {
   }
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
     // Select richest available file and navigate to its first hunk
     await selectRichTestFile();
     // Wait for bars to stabilise
@@ -1021,13 +1053,13 @@ describe("Code Review Overlay — Change Request validation and behaviour", () =
   let decidedBadgeVisible = false;
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
     await selectRichTestFile();
     let prev = -1;
     for (let i = 0; i < 20; i++) {
@@ -1132,13 +1164,13 @@ describe("Code Review Overlay — decision persistence across file switches", ()
   let monacoChangesAfterSwitch = 0;
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
 
     // Pick the first two files from the review's file list
     const files = await webEval<string[]>(`
@@ -1266,13 +1298,13 @@ describe("Code Review Overlay — accept precision", () => {
   let skipped = false;
 
   beforeAll(async () => {
-    await resetDecisions(1);
+    await resetDecisions(testTaskId);
     await webEval(`
       var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
       pinia._s.get('review').optimisticUpdates.clear();
       return 'cleared';
     `);
-    await openReviewOverlay();
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
     await selectRichTestFile();
     let prev = -1;
     for (let i = 0; i < 20; i++) {
@@ -1337,6 +1369,246 @@ describe("Code Review Overlay — accept precision", () => {
       throw new Error(
         `After accept: bars=${barsAfter} < monacoChanges=${monacoChangesAfter}.\n` +
           "Some remaining colored diff regions have no action bar.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite K — partial-change files: bars and Monaco ILineChanges
+// ═══════════════════════════════════════════════════════════════════════════════
+// New/untracked files each produce a single hunk (the whole file is "added").
+// Tracked files that were committed and then partially modified produce multiple
+// disjoint hunks — only the changed regions appear as diffs.
+//
+// partial-x.ts in the test worktree has two disjoint changed regions:
+//   top block:    lines 1–4 (function return types changed)
+//   bottom block: lines 10–12 (function return types changed)
+// The middle section (lines 5–9) is unchanged.
+//
+// This suite verifies the review overlay handles partial-change files correctly:
+// bars are injected for every Monaco ILineChange, and every hunk has a bar.
+
+interface PartialFileResult {
+  file: string;
+  monacoChanges: number;
+  bars: number;
+}
+
+describe("Code Review Overlay — partial-change file: bars and Monaco ILineChanges", () => {
+  let result: PartialFileResult = { file: "", monacoChanges: 0, bars: 0 };
+  let partialFile = "";
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+
+    // Select the partial-change file (partial-x.ts — two disjoint hunks).
+    partialFile = await selectPartialTestFile();
+
+    // Wait for Monaco diff to compute and bars to stabilise.
+    let prev = -1;
+    for (let i = 0; i < 30; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    const raw = await webEval<{ monacoChanges: number; bars: number }>(`
+      var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+      var changes = de[0] ? (de[0].getLineChanges() || []) : [];
+      var bars = document.querySelectorAll('.hunk-bar').length;
+      return JSON.stringify({ monacoChanges: changes.length, bars: bars });
+    `);
+    result = { file: partialFile, ...raw };
+  }, 120_000);
+
+  test("20 — bars ≥ Monaco ILineChanges for a tracked partial-change file", () => {
+    if (!partialFile) throw new Error("selectPartialTestFile() returned no file");
+    if (result.monacoChanges === 0) {
+      throw new Error(
+        `No Monaco ILineChanges found in ${partialFile}.\n` +
+          "Expected ≥2 for a tracked file with two disjoint changed regions.\n" +
+          "Check that /setup-test-env committed the base content and then modified only top+bottom sections.",
+      );
+    }
+    if (result.bars < result.monacoChanges) {
+      throw new Error(
+        `bars=${result.bars} < monacoChanges=${result.monacoChanges} in ${partialFile}.\n` +
+          "Some colored diff regions have no action bar in a tracked partial-change file.",
+      );
+    }
+    // Additional: for a file with two disjoint hunks, expect ≥2 Monaco ILineChanges.
+    if (result.monacoChanges < 2) {
+      throw new Error(
+        `Expected ≥2 Monaco ILineChanges in ${partialFile} (two disjoint changed regions) but got ${result.monacoChanges}.\n` +
+          "The file may not have the expected structure — check /setup-test-env partial file content.",
+      );
+    }
+  });
+
+  test("21 — every hunk in the partial file has a visible action bar (navigate through all hunks)", async () => {
+    if (!partialFile) throw new Error("selectPartialTestFile() returned no file");
+
+    await navToFirstHunk(20);
+    await sleep(500);
+
+    const missing: number[] = [];
+    const MAX_HUNKS = 15;
+
+    for (let h = 0; h < MAX_HUNKS; h++) {
+      const currentFile = await reviewSelectedFile();
+      if (typeof currentFile === "string" && currentFile !== partialFile) break;
+
+      const hasBar = await webEval<boolean>(`
+        var bars = Array.from(document.querySelectorAll('.hunk-bar'));
+        var diffEl = document.querySelector('.monaco-diff-editor');
+        var editorTop = diffEl ? diffEl.getBoundingClientRect().top : 0;
+        return !!bars.find(function(b) {
+          var r = b.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && r.top > editorTop;
+        });
+      `);
+
+      if (!hasBar) {
+        missing.push(h + 1);
+        await screenshot(`partial-missing-bar-h${h + 1}`);
+      }
+
+      await webClick(".nav-btn:last-of-type"); // → Next
+      await sleep(600);
+      const nextFile = await reviewSelectedFile();
+      if (typeof nextFile === "string" && nextFile !== partialFile) break;
+    }
+
+    if (missing.length > 0) {
+      throw new Error(
+        `${missing.length} hunk(s) in ${partialFile} rendered without a visible action bar: hunks ${missing.join(", ")}.\n` +
+          "Fix: ensure injectViewZones() covers all Monaco ILineChanges in partial-change (tracked) files.",
+      );
+    }
+  }, 120_000);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite L — partial-change files: reject precision with multiple hunks
+// ═══════════════════════════════════════════════════════════════════════════════
+// Reject-precision test specifically for a file with 2+ disjoint hunks.
+// When we reject hunk 1 (top block), hunk 2 (bottom block) must remain
+// untouched — it keeps its bars and Monaco ILineChanges.
+//
+// This catches the most dangerous regression: accepting/rejecting one hunk
+// silently removes the other hunk's diff from the display.
+
+describe("Code Review Overlay — partial-change file: reject removes only targeted hunk", () => {
+  let barsBefore = 0;
+  let monacoChangesBefore = 0;
+  let barsAfter = 0;
+  let monacoChangesAfter = 0;
+  let partialFile = "";
+  let skipped = false;
+
+  beforeAll(async () => {
+    await resetDecisions(testTaskId);
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      pinia._s.get('review').optimisticUpdates.clear();
+      return 'cleared';
+    `);
+    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+
+    partialFile = await selectPartialTestFile();
+
+    // Stabilise bar count
+    let prev = -1;
+    for (let i = 0; i < 30; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prev && prev >= 0) break;
+      prev = Number(n);
+    }
+
+    barsBefore = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    monacoChangesBefore = await webEval<number>(`
+      var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+      return (de[0] ? (de[0].getLineChanges() || []) : []).length;
+    `);
+
+    if (barsBefore < 2) {
+      skipped = true;
+      return;
+    }
+
+    // Reject only the first hunk bar
+    await webEval(`
+      var btns = Array.from(document.querySelectorAll('.hunk-btn--reject'));
+      if (btns.length > 0) btns[0].click();
+      return 'ok';
+    `);
+
+    // Wait for model rebuild and re-injection to stabilise
+    let prevAfter = -1;
+    for (let i = 0; i < 25; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) === prevAfter && prevAfter >= 0) break;
+      prevAfter = Number(n);
+    }
+
+    barsAfter = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    monacoChangesAfter = await webEval<number>(`
+      var de = window.monaco && window.monaco.editor && window.monaco.editor.getDiffEditors() || [];
+      return (de[0] ? (de[0].getLineChanges() || []) : []).length;
+    `);
+  }, 120_000);
+
+  test("22 — rejecting one hunk in a partial-change file only removes that hunk's bars", () => {
+    if (skipped) {
+      console.warn(`  ~ skipped: fewer than 2 bars in ${partialFile || "partial file"}`);
+      return;
+    }
+    const barsRemoved = barsBefore - barsAfter;
+    const monacoRemoved = monacoChangesBefore - monacoChangesAfter;
+
+    if (barsRemoved !== monacoRemoved) {
+      throw new Error(
+        `Reject removed ${barsRemoved} bar(s) but ${monacoRemoved} Monaco ILineChange(s) disappeared in ${partialFile}.\n` +
+          `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
+          `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
+          "Bars removed and Monaco changes removed must be equal — wrong hunk assignment in mapLineChangesToHunks().",
+      );
+    }
+    // At least one bar+change should have been removed
+    if (barsRemoved === 0) {
+      throw new Error(
+        `No bars were removed after rejecting a hunk in ${partialFile}.\n` +
+          "The reject action may not have worked, or the overlay did not rebuild.",
+      );
+    }
+  });
+
+  test("23 — after rejecting one hunk, the remaining hunk still has its bars", () => {
+    if (skipped) {
+      console.warn(`  ~ skipped: fewer than 2 bars in ${partialFile || "partial file"}`);
+      return;
+    }
+    if (barsAfter < monacoChangesAfter) {
+      throw new Error(
+        `After rejecting one hunk in ${partialFile}: bars=${barsAfter} < monacoChanges=${monacoChangesAfter}.\n` +
+          "The second hunk's action bar disappeared — rejecting one hunk removed bars for the other.\n" +
+          "Fix: ensure rejectHunk() only records a decision for the targeted git hunk hash.",
+      );
+    }
+    if (barsAfter === 0 && monacoChangesAfter > 0) {
+      throw new Error(
+        `All bars removed after rejecting one hunk in ${partialFile}, but ${monacoChangesAfter} Monaco changes remain.\n` +
+          "The remaining hunk lost its action bar.",
       );
     }
   });

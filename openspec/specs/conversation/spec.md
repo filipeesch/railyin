@@ -15,7 +15,7 @@ Each task's conversation SHALL be an ordered, append-only sequence of messages. 
 - **THEN** the system provides no mechanism to delete individual conversation messages
 
 ### Requirement: Conversation supports distinct message types
-The system SHALL support the following message types in a conversation: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `transition_event`, `artifact_event`, `ask_user_prompt`, `reasoning`. Each message stores its type, content, and creation timestamp.
+The system SHALL support the following message types in a conversation: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `transition_event`, `file_diff`, `ask_user_prompt`, `reasoning`, `compaction_summary`, `code_review`. Each message stores its type, content, and creation timestamp.
 
 #### Scenario: Transition creates a transition_event message
 - **WHEN** a task is moved from one workflow column to another
@@ -25,9 +25,9 @@ The system SHALL support the following message types in a conversation: `user`, 
 - **WHEN** the AI makes a tool call during execution
 - **THEN** a `tool_call` message is appended, and when the result arrives, a `tool_result` message is appended
 
-#### Scenario: ask_user call creates ask_user_prompt message
-- **WHEN** the AI calls the `ask_user` tool
-- **THEN** an `ask_user_prompt` message is appended with JSON content containing `question`, `selection_mode`, and `options`
+#### Scenario: ask_me call creates ask_user_prompt message
+- **WHEN** the AI calls the `ask_me` tool
+- **THEN** an `ask_user_prompt` message is appended with JSON content containing the structured `questions` array
 
 #### Scenario: Reasoning round creates a reasoning message
 - **WHEN** the AI engine receives `reasoning` stream events in a round and that round ends
@@ -35,12 +35,12 @@ The system SHALL support the following message types in a conversation: `user`, 
 
 ### Requirement: ask_user_prompt message type carries structured question data
 
-The system SHALL store `ask_user_prompt` messages with JSON content conforming to `{ question: string, selection_mode: "single" | "multi", options: string[] }`. This content drives the interactive widget rendered in the chat pane.
+The system SHALL store `ask_user_prompt` messages with JSON content conforming to `{ questions: Array<{ question: string, selection_mode: "single" | "multi", options: Array<{ label: string, description?: string, recommended?: boolean, preview?: string }> }> }`. This content drives the interactive widget rendered in the chat pane.
 
 #### Scenario: ask_user_prompt content is valid JSON
 
 - **WHEN** an `ask_user_prompt` message is retrieved from the database
-- **THEN** its `content` field parses as JSON with `question`, `selection_mode`, and `options` fields
+- **THEN** its `content` field parses as JSON with a `questions` array where each item has `question`, `selection_mode`, and `options` (array of objects with at least a `label` field)
 
 #### Scenario: ask_user_prompt content survives reload
 
