@@ -1,9 +1,9 @@
 <template>
-  <div v-if="visible" class="workflow-editor-overlay" @keydown.esc="onCancel">
-    <div class="workflow-editor-dialog" tabindex="-1" ref="dialogEl">
-      <!-- Title bar -->
-      <div class="workflow-editor-dialog__header">
-        <div class="workflow-editor-dialog__title">
+  <Teleport to="body">
+    <div v-if="visible" class="workflow-editor-overlay" @keydown.esc="onCancel">
+      <!-- Header -->
+      <div class="workflow-editor-overlay__header">
+        <div class="workflow-editor-overlay__title">
           <i class="pi pi-file-edit" />
           <span>Edit Workflow: {{ templateName }}</span>
         </div>
@@ -11,23 +11,23 @@
       </div>
 
       <!-- Note -->
-      <div class="workflow-editor-dialog__note">
+      <div class="workflow-editor-overlay__note">
         <i class="pi pi-info-circle" />
         Changes apply to all boards using this template.
       </div>
 
       <!-- Editor -->
-      <div ref="editorContainerEl" class="workflow-editor-dialog__editor" />
+      <div ref="editorContainerEl" class="workflow-editor-overlay__editor" />
 
       <!-- Footer -->
-      <div class="workflow-editor-dialog__footer">
-        <span v-if="yamlError" class="workflow-editor-dialog__yaml-error">
+      <div class="workflow-editor-overlay__footer">
+        <span v-if="yamlError" class="workflow-editor-overlay__yaml-error">
           <i class="pi pi-times-circle" /> {{ yamlError }}
         </span>
-        <span v-else class="workflow-editor-dialog__yaml-valid">
+        <span v-else class="workflow-editor-overlay__yaml-valid">
           <i class="pi pi-check-circle" /> Valid YAML
         </span>
-        <div class="workflow-editor-dialog__actions">
+        <div class="workflow-editor-overlay__actions">
           <Button label="Cancel" severity="secondary" text @click="onCancel" :disabled="saving" />
           <Button
             label="Save & Reload"
@@ -40,11 +40,11 @@
       </div>
 
       <!-- Save error -->
-      <div v-if="saveError" class="workflow-editor-dialog__save-error">
+      <div v-if="saveError" class="workflow-editor-overlay__save-error">
         <i class="pi pi-exclamation-triangle" /> {{ saveError }}
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -66,7 +66,6 @@ const emit = defineEmits<{
   saved: [];
 }>();
 
-const dialogEl = ref<HTMLElement | null>(null);
 const editorContainerEl = ref<HTMLElement | null>(null);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,7 +88,7 @@ async function initEditor() {
   editor = monacoInstance.editor.create(editorContainerEl.value, {
     value: props.initialYaml,
     language: "yaml",
-    theme: "vs-dark",
+    theme: "vs",
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
     automaticLayout: true,
@@ -165,7 +164,6 @@ watch(
       yamlError.value = null;
       await nextTick();
       await initEditor();
-      dialogEl.value?.focus();
     } else {
       disposeEditor();
     }
@@ -184,89 +182,77 @@ onBeforeUnmount(() => {
 .workflow-editor-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.workflow-editor-dialog {
+  z-index: 1200;
+  background: var(--p-surface-0, #fff);
   display: flex;
   flex-direction: column;
-  width: min(900px, 95vw);
-  height: min(700px, 90vh);
-  background: var(--p-surface-900, #1e1e1e);
-  border: 1px solid var(--p-surface-700, #333);
-  border-radius: 8px;
-  overflow: hidden;
-  outline: none;
 }
 
-.workflow-editor-dialog__header {
+.workflow-editor-overlay__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--p-surface-700, #333);
+  padding: 10px 16px;
+  background: var(--p-surface-50, #f8fafc);
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
   flex-shrink: 0;
 }
 
-.workflow-editor-dialog__title {
+.workflow-editor-overlay__title {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: 1rem;
 }
 
-.workflow-editor-dialog__note {
+.workflow-editor-overlay__note {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   padding: 0.4rem 1rem;
   font-size: 0.8rem;
-  color: var(--p-text-muted-color, #888);
-  background: var(--p-surface-800, #252525);
-  border-bottom: 1px solid var(--p-surface-700, #333);
+  color: var(--p-text-muted-color, #64748b);
+  background: var(--p-surface-50, #f8fafc);
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
   flex-shrink: 0;
 }
 
-.workflow-editor-dialog__editor {
+.workflow-editor-overlay__editor {
   flex: 1;
   min-height: 0;
 }
 
-.workflow-editor-dialog__footer {
+.workflow-editor-overlay__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0.6rem 1rem;
-  border-top: 1px solid var(--p-surface-700, #333);
+  border-top: 1px solid var(--p-surface-200, #e2e8f0);
   flex-shrink: 0;
   gap: 1rem;
 }
 
-.workflow-editor-dialog__actions {
+.workflow-editor-overlay__actions {
   display: flex;
   gap: 0.5rem;
   flex-shrink: 0;
 }
 
-.workflow-editor-dialog__yaml-valid {
+.workflow-editor-overlay__yaml-valid {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   font-size: 0.8rem;
-  color: var(--p-green-400, #4ade80);
+  color: var(--p-green-600, #16a34a);
 }
 
-.workflow-editor-dialog__yaml-error {
+.workflow-editor-overlay__yaml-error {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   font-size: 0.8rem;
-  color: var(--p-red-400, #f87171);
+  color: var(--p-red-500, #ef4444);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -274,12 +260,12 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.workflow-editor-dialog__save-error {
+.workflow-editor-overlay__save-error {
   padding: 0.4rem 1rem;
   font-size: 0.8rem;
-  color: var(--p-red-400, #f87171);
-  border-top: 1px solid var(--p-surface-700, #333);
-  background: rgba(220, 38, 38, 0.1);
+  color: var(--p-red-600, #dc2626);
+  border-top: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-red-50, #fef2f2);
   flex-shrink: 0;
   display: flex;
   align-items: center;
