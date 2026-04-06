@@ -2,11 +2,16 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 /**
- * Pattern: /prompt-name optionally followed by whitespace and argument text.
+ * Pattern: /prompt-name optionally followed by same-line argument text,
+ * then optionally a newline and additional content to append after resolution.
  * Matches the filename stem of a .github/prompts/*.prompt.md file.
  * e.g. /opsx-apply, /opsx-propose my-feature, /run-ui-tests
+ *
+ * A newline does NOT extend the argument — only same-line text after the stem
+ * is treated as $input (matching how Copilot interprets slash commands).
+ * Any content after the first newline is appended to the resolved prompt body.
  */
-const SLASH_PATTERN = /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/;
+const SLASH_PATTERN = /^\/([a-zA-Z0-9_-]+)(?:[ \t]+([^\n\r]*))?(?:[\n\r]+([\s\S]*))?$/;
 
 /**
  * Strips YAML frontmatter from a prompt file body.
@@ -32,7 +37,7 @@ export async function resolveSlashReference(value: string, worktreePath: string)
   const match = SLASH_PATTERN.exec(value.trim());
   if (!match) return value;
 
-  const [, stem, input = ""] = match;
+  const [, stem, input = "", appendContent = ""] = match;
   const fileName = `${stem}.prompt.md`;
   const filePath = join(worktreePath, ".github", "prompts", fileName);
 
@@ -49,5 +54,6 @@ export async function resolveSlashReference(value: string, worktreePath: string)
 
   const raw = readFileSync(filePath, "utf-8");
   const body = stripFrontmatter(raw);
-  return body.replaceAll("$input", input.trim());
+  const resolved = body.replaceAll("$input", input.trim());
+  return appendContent.trim() ? `${resolved}\n\n${appendContent.trim()}` : resolved;
 }

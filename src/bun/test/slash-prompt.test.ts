@@ -76,4 +76,22 @@ describe("resolveSlashReference", () => {
   it("includes the missing file path in the error", async () => {
     expect(resolveSlashReference("/ns-cmd", tmpDir)).rejects.toThrow(".github/prompts/ns-cmd.prompt.md");
   });
+
+  it("does not treat newline content as $input argument", async () => {
+    writePromptFile("opsx-apply", "Resolved: $input");
+    const result = await resolveSlashReference("/opsx-apply\nExtra content here", tmpDir);
+    expect(result).toBe("Resolved: \n\nExtra content here");
+  });
+
+  it("appends post-newline content to resolved body", async () => {
+    writePromptFile("opsx-apply", "Prompt body.");
+    const result = await resolveSlashReference("/opsx-apply\nLine 1\nLine 2", tmpDir);
+    expect(result).toBe("Prompt body.\n\nLine 1\nLine 2");
+  });
+
+  it("same-line argument still works alongside post-newline content", async () => {
+    writePromptFile("opsx-propose", "Feature: $input");
+    const result = await resolveSlashReference("/opsx-propose my-feature\nExtra steps here", tmpDir);
+    expect(result).toBe("Feature: my-feature\n\nExtra steps here");
+  });
 });

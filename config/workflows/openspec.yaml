@@ -1,0 +1,61 @@
+id: openspec
+name: OpenSpec Flow
+columns:
+  - id: backlog
+    label: Backlog
+    description: Ideas and requests waiting to be explored
+
+  - id: explore
+    label: Explore
+    description: Think through the problem, investigate options, clarify requirements
+    on_enter_prompt: /opsx-explore
+    stage_instructions: /opsx-explore
+    tools:
+      - read
+      - search
+      - web
+      - interactions
+      - agents
+
+  - id: propose
+    label: Propose
+    description: Create a change proposal with design, specs, and tasks
+    on_enter_prompt: /opsx-propose
+    tools:
+      - read
+      - write
+      - search
+      - shell
+      - interactions
+      - agents
+
+  - id: apply
+    label: Apply
+    description: Implement the tasks from the change proposal
+    on_enter_prompt: |
+      /opsx-apply
+      In the end:
+        1 - build the app and execute tests
+        2 - Optimize the implementation
+        3 - Remove any dead code
+        4 - Execute the tests
+        5 - Go back to step 2 two times
+    tools:
+      - read
+      - write
+      - search
+      - web
+      - shell
+      - interactions
+      - agents
+
+  - id: done
+    label: Done
+    description: Change implemented and archived
+    on_enter_prompt: /opsx-archive
+    tools:
+      - read
+      - write
+      - shell
+      - interactions
+      - agents

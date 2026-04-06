@@ -26,7 +26,6 @@ export class OpenAICompatibleProvider implements AIProvider {
       model: this.model,
       messages: messages.map(toWireMessage),
       stream: false,
-      enable_thinking: false,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
     };
 
@@ -78,8 +77,6 @@ export class OpenAICompatibleProvider implements AIProvider {
       model: this.model,
       messages: messages.map(toWireMessage),
       stream: true,
-      // Suppress <think> preamble on models that support it (e.g. Qwen3)
-      enable_thinking: false,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
     };
 
