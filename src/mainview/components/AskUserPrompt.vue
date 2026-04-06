@@ -104,10 +104,11 @@
         </div>
       </div>
 
-      <!-- Preview pane: only rendered when options have preview content -->
+      <!-- Preview pane: reserved fixed area, always present but conditionally visible -->
       <div
-        v-if="questionHasPreview(q) && previewFor(q, qi)"
+        v-if="questionHasPreview(q)"
         class="ask-prompt__preview"
+        :class="{ 'ask-prompt__preview--visible': previewFor(q, qi) }"
       >
         <div class="ask-prompt__preview-label">Preview</div>
         <div class="ask-prompt__preview-content prose" v-html="renderMd(previewFor(q, qi)!)" />
@@ -303,6 +304,18 @@ function submit() {
   border-left: 2px solid var(--p-surface-200, #e2e8f0);
   padding-left: 14px;
   min-width: 0;
+  overflow: hidden;
+  transition: max-height 0.15s ease, opacity 0.15s ease;
+}
+
+.ask-prompt__preview--visible {
+  opacity: 1;
+  max-height: none;
+}
+
+.ask-prompt__preview:not(.ask-prompt__preview--visible) {
+  opacity: 0;
+  max-height: 0;
 }
 
 .ask-prompt__preview-label {
