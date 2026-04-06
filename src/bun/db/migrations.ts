@@ -155,6 +155,18 @@ const migrations: Array<{ id: string; sql: string }> = [
       CREATE INDEX IF NOT EXISTS idx_hunk_decisions_task ON task_hunk_decisions(task_id);
     `,
   },
+  {
+    id: "006_pending_messages",
+    sql: `
+      CREATE TABLE IF NOT EXISTS pending_messages (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        content    TEXT    NOT NULL,
+        created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_pending_messages_task ON pending_messages(task_id);
+    `,
+  },
 ];
 
 export function runMigrations(): void {

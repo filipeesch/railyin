@@ -736,8 +736,8 @@ function parseGitDiffHunks(diffOutput: string, filePath: string): ParsedHunk[] {
 
     const origStart = parseInt(m[1], 10);
     const origCount = m[2] !== undefined ? parseInt(m[2], 10) : 1;
-    const modStart  = parseInt(m[3], 10);
-    const modCount  = m[4] !== undefined ? parseInt(m[4], 10) : 1;
+    const modStart = parseInt(m[3], 10);
+    const modCount = m[4] !== undefined ? parseInt(m[4], 10) : 1;
 
     // Collect lines of this hunk (until next @@ or end)
     const hunkBodyLines: string[] = [];

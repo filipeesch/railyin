@@ -197,4 +197,4 @@ describe("engine session notes injection", () => {
   });
 });
 
-function noop() {}
+function noop() { }

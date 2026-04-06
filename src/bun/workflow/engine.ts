@@ -12,7 +12,7 @@ import {
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
-import { resolveToolsForColumn, executeTool, type WriteResult } from "./tools.ts";
+import { resolveToolsForColumn, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
 import { formatReviewMessageForLLM } from "./review.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -734,7 +734,7 @@ export async function handleTransition(
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
   const resolvedModel = updatedRow.model ?? "";
   runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
-    () => {},
+    () => { },
   );
 
   return { task: mapTask(updatedRow), executionId };
@@ -921,12 +921,31 @@ async function runExecution(
 
     // ── Tool-call loop ────────────────────────────────────────────────────────
     const MAX_TOOL_ROUNDS = 10;
-    const toolCtx = gitContext?.worktree_path
-      ? { worktreePath: gitContext.worktree_path, searchConfig: config.workspace.search }
-      : null;
+    // Build fire-and-forget wrappers so task tools can trigger transitions /
+    // human turns without importing engine.ts (which would be circular).
+    const taskCallbacks: TaskToolCallbacks = {
+      handleTransition: (tId, toState) => {
+        handleTransition(tId, toState, onToken, onError, onTaskUpdated, onNewMessage).catch(
+          (err) => log("error", `task-tool handleTransition failed: ${err}`, { taskId, executionId }),
+        );
+      },
+      handleHumanTurn: (tId, message) => {
+        handleHumanTurn(tId, message, onToken, onError, onTaskUpdated, onNewMessage).catch(
+          (err) => log("error", `task-tool handleHumanTurn failed: ${err}`, { taskId, executionId }),
+        );
+      },
+      cancelExecution: (execId) => cancelExecution(execId),
+    };
+    const toolCtx = {
+      worktreePath: gitContext?.worktree_path ?? "",
+      searchConfig: config.workspace.search,
+      taskId,
+      boardId: task.board_id,
+      taskCallbacks,
+    };
 
-    let tools = toolCtx ? resolveToolsForColumn(column?.tools) : [];
-    log("debug", `Tools resolved: ${tools.length} tools`, { taskId, executionId, data: { tools: tools.map(t => t.name), worktreePath: toolCtx?.worktreePath ?? null } });
+    let tools = resolveToolsForColumn(column?.tools);
+    log("debug", `Tools resolved: ${tools.length} tools`, { taskId, executionId, data: { tools: tools.map(t => t.name), worktreePath: toolCtx.worktreePath } });
     const liveMessages: AIMessage[] = [...messages];
 
     // ── Unified streaming loop ────────────────────────────────────────────────
@@ -1149,10 +1168,10 @@ async function runExecution(
                 selection_mode: q.selection_mode ?? "single",
                 options: Array.isArray(q.options)
                   ? q.options.map((o: unknown) =>
-                      typeof o === "string"
-                        ? { label: o }
-                        : { label: (o as Record<string, unknown>).label ?? String(o), ...(o as Record<string, unknown>) },
-                    )
+                    typeof o === "string"
+                      ? { label: o }
+                      : { label: (o as Record<string, unknown>).label ?? String(o), ...(o as Record<string, unknown>) },
+                  )
                   : [],
               })),
             };
@@ -1224,7 +1243,7 @@ async function runExecution(
 
       // Intercept spawn_agent
       const spawnCall = sanitizedRoundCalls.find((c) => c.function.name === "spawn_agent");
-      if (spawnCall && toolCtx) {
+      if (spawnCall) {
         let spawnArgs: { children: Array<{ instructions: string; tools: string[]; scope?: string }> };
         try {
           spawnArgs = JSON.parse(spawnCall.function.arguments);
@@ -1290,7 +1309,20 @@ async function runExecution(
           createdAt: new Date().toISOString(),
         });
 
-        const result = await executeTool(fnName, fnArgs, toolCtx!);
+        const result = await executeTool(fnName, fnArgs, toolCtx);
+
+        // Self-delete guard: if this task itself was just deleted, stop the loop
+        // gracefully rather than continuing to act on behalf of a non-existent task.
+        if (fnName === "delete_task") {
+          const stillExists = db
+            .query<{ id: number }, [number]>("SELECT id FROM tasks WHERE id = ?")
+            .get(taskId);
+          if (!stillExists) {
+            // Task is gone — clean up and exit without changing any DB row
+            executionControllers.delete(executionId);
+            return;
+          }
+        }
 
         // Write tools return { content, diff }; read/search tools return a plain string
         const isWriteResult = typeof result === "object" && result !== null && "content" in result;
@@ -1437,6 +1469,20 @@ async function runExecution(
     );
     const completedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (completedRow) onTaskUpdated(mapTask(completedRow));
+
+    // Flush one pending message queued while this task was running.
+    // Only one message is flushed per execution to avoid rapid-fire re-triggering.
+    const pendingMsg = db
+      .query<{ id: number; content: string }, [number]>(
+        "SELECT id, content FROM pending_messages WHERE task_id = ? ORDER BY id ASC LIMIT 1",
+      )
+      .get(taskId);
+    if (pendingMsg) {
+      db.run("DELETE FROM pending_messages WHERE id = ?", [pendingMsg.id]);
+      handleHumanTurn(taskId, pendingMsg.content, onToken, onError, onTaskUpdated, onNewMessage).catch(
+        (err) => log("error", `pending_message flush failed: ${err}`, { taskId, executionId }),
+      );
+    }
   } catch (err) {
     // Top-level abort catch
     if (err instanceof Error && err.name === "AbortError") {
@@ -1540,7 +1586,7 @@ export async function handleHumanTurn(
 
   // Run async
   runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
-    () => {},
+    () => { },
   );
 
   return { message: mapConversationMessage(msgRow), executionId };
@@ -1607,7 +1653,7 @@ export async function handleRetry(
     onError,
     onTaskUpdated,
     onNewMessage,
-  ).catch(() => {});
+  ).catch(() => { });
 
   return { task: mapTask(updatedRow), executionId };
 }
@@ -1724,8 +1770,7 @@ export async function handleCodeReview(
     onError,
     onTaskUpdated,
     onNewMessage,
-  ).catch(() => {});
+  ).catch(() => { });
 
   return { message: mapConversationMessage(reviewMsgRow), executionId };
 }
-

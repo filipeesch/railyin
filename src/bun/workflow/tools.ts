@@ -4,6 +4,11 @@ import { spawnSync } from "child_process";
 import { lookup as dnsLookup } from "dns/promises";
 import type { AIToolDefinition } from "../ai/types.ts";
 import type { FileDiffPayload, Hunk, HunkLine } from "../../shared/rpc-types.ts";
+import { getDb } from "../db/index.ts";
+import { getConfig } from "../config/index.ts";
+import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
+import { mapTask, mapConversationMessage } from "../db/mappers.ts";
+import { removeWorktree } from "../git/worktree.ts";
 
 // ─── Myers diff algorithm ─────────────────────────────────────────────────────
 
@@ -198,7 +203,7 @@ function patchDiff(
       lines.push({ type: "context", old_line: i + 1, new_line: i + 1, content: fileLines[i] });
     }
     for (const c of removedLines) lines.push({ type: "removed", old_line: anchorLineIdx + 1, content: c });
-    for (const c of addedLines)   lines.push({ type: "added",   new_line: anchorLineIdx + 1, content: c });
+    for (const c of addedLines) lines.push({ type: "added", new_line: anchorLineIdx + 1, content: c });
     for (let i = anchorLineIdx + removedLines.length; i <= ctxEnd; i++) {
       lines.push({ type: "context", old_line: i + 1, new_line: i + 1 - removed + added, content: fileLines[i] });
     }
@@ -540,18 +545,198 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["query"],
     },
   },
+  // ── tasks_read group ───────────────────────────────────────────────────────
+  {
+    name: "get_task",
+    description:
+      "Fetch metadata for a specific task. Returns title, description, workflow_state, execution_state, model, branch, and execution count. Optionally include the last N conversation messages.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "The id of the task to fetch.",
+        },
+        include_messages: {
+          type: "number",
+          description: "If provided, include the last N conversation messages in chronological order.",
+        },
+      },
+      required: ["task_id"],
+    },
+  },
+  {
+    name: "get_board_summary",
+    description:
+      "Return a summary of task distribution across all columns of a board. Shows total task count and breakdown by execution_state per column. Omit board_id to use the current task's board.",
+    parameters: {
+      type: "object",
+      properties: {
+        board_id: {
+          type: "number",
+          description: "The board to summarise. Defaults to the current task's board when omitted.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_tasks",
+    description:
+      "List tasks on a board with optional filters. Use 'query' for a case-insensitive text search across title and description. Omit board_id to search the current task's board.",
+    parameters: {
+      type: "object",
+      properties: {
+        board_id: {
+          type: "number",
+          description: "Board to list tasks from. Defaults to the current task's board.",
+        },
+        workflow_state: {
+          type: "string",
+          description: "Filter by exact workflow column id (e.g. 'backlog', 'in-progress').",
+        },
+        execution_state: {
+          type: "string",
+          description: "Filter by execution state (e.g. 'idle', 'running', 'failed').",
+        },
+        project_id: {
+          type: "number",
+          description: "Filter tasks belonging to a specific project.",
+        },
+        query: {
+          type: "string",
+          description: "Case-insensitive substring search across title and description.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results to return (default 50, max 200).",
+        },
+      },
+      required: [],
+    },
+  },
+  // ── tasks_write group ──────────────────────────────────────────────────────
+  {
+    name: "create_task",
+    description:
+      "Create a new task in the backlog column of a board. Omit board_id to create on the current task's board.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: {
+          type: "number",
+          description: "The project this task belongs to.",
+        },
+        title: {
+          type: "string",
+          description: "The task title.",
+        },
+        description: {
+          type: "string",
+          description: "The task description.",
+        },
+        board_id: {
+          type: "number",
+          description: "Board to create the task on. Defaults to the current task's board.",
+        },
+        model: {
+          type: "string",
+          description: "Optional model override for this task (e.g. 'lmstudio/qwen3-8b').",
+        },
+      },
+      required: ["project_id", "title", "description"],
+    },
+  },
+  {
+    name: "edit_task",
+    description:
+      "Update the title and/or description of a task. Only allowed before a worktree/branch has been created for the task.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "The id of the task to edit.",
+        },
+        title: {
+          type: "string",
+          description: "New title for the task.",
+        },
+        description: {
+          type: "string",
+          description: "New description for the task.",
+        },
+      },
+      required: ["task_id"],
+    },
+  },
+  {
+    name: "delete_task",
+    description:
+      "Fully delete a task and all its data (conversation, executions, worktree directory). The git branch is kept. If the task is currently running, the execution is cancelled first.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "The id of the task to delete.",
+        },
+      },
+      required: ["task_id"],
+    },
+  },
+  {
+    name: "move_task",
+    description:
+      "Move a task to a different workflow column. The task's workflow_state is updated immediately and the column's on_enter_prompt (if any) is triggered asynchronously. Returns immediately without waiting for execution.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "The id of the task to move.",
+        },
+        workflow_state: {
+          type: "string",
+          description: "The target column id (e.g. 'backlog', 'in-progress', 'done').",
+        },
+      },
+      required: ["task_id", "workflow_state"],
+    },
+  },
+  {
+    name: "message_task",
+    description:
+      "Append a message to another task's conversation and trigger its AI model. Returns 'delivered' if the task is idle/waiting, or 'queued' if the task is currently running (message will be delivered when it finishes).",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "The id of the task to message.",
+        },
+        message: {
+          type: "string",
+          description: "The message content to send.",
+        },
+      },
+      required: ["task_id", "message"],
+    },
+  },
 ];
 
 /** Built-in tool groups. A column's `tools` array may use group names, individual
  * tool names, or a mix. Groups are expanded by resolveToolsForColumn. */
 export const TOOL_GROUPS: Map<string, string[]> = new Map([
-  ["read",         ["read_file", "list_dir"]],
-  ["write",        ["write_file", "patch_file", "delete_file", "rename_file"]],
-  ["search",       ["search_text", "find_files"]],
-  ["shell",        ["run_command"]],
+  ["read", ["read_file", "list_dir"]],
+  ["write", ["write_file", "patch_file", "delete_file", "rename_file"]],
+  ["search", ["search_text", "find_files"]],
+  ["shell", ["run_command"]],
   ["interactions", ["ask_me"]],
-  ["agents",       ["spawn_agent"]],
-  ["web",          ["fetch_url", "search_internet"]],
+  ["agents", ["spawn_agent"]],
+  ["web", ["fetch_url", "search_internet"]],
+  ["tasks_read", ["get_task", "get_board_summary", "list_tasks"]],
+  ["tasks_write", ["create_task", "edit_task", "delete_task", "move_task", "message_task"]],
 ]);
 
 /** Default tool names used when a column has no explicit 'tools' config. */
@@ -612,9 +797,24 @@ function safePath(worktreePath: string, userPath: string): string | null {
 
 // ─── Tool executor ────────────────────────────────────────────────────────────
 
+// Callbacks injected by the engine to avoid circular imports.
+// The engine passes these when building ToolContext so task tools can trigger
+// transitions and human turns without importing engine.ts directly.
+export type TaskToolCallbacks = {
+  /** Fire-and-forget: update workflow_state and trigger on_enter_prompt if present. */
+  handleTransition: (taskId: number, toState: string) => void;
+  /** Fire-and-forget: append a human message and resume execution. */
+  handleHumanTurn: (taskId: number, message: string) => void;
+  /** Abort the in-flight execution (safe to call if already stopped). */
+  cancelExecution: (executionId: number) => void;
+};
+
 export interface ToolContext {
   worktreePath: string; // absolute path to the git worktree
   searchConfig?: { engine: string; api_key: string }; // from workspace.yaml search block
+  taskId?: number; // id of the currently executing task (for board-scoped tools)
+  boardId?: number; // board the executing task belongs to
+  taskCallbacks?: TaskToolCallbacks; // engine callbacks for move_task / message_task
 }
 
 export async function executeTool(
@@ -1015,6 +1215,248 @@ export async function executeTool(
       } catch (e) {
         return `Error querying search API: ${e instanceof Error ? e.message : String(e)}`;
       }
+    }
+
+    // ── tasks_read group ──────────────────────────────────────────────────────
+
+    case "get_task": {
+      const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+      if (!taskId || isNaN(taskId)) return "Error: task_id is required";
+      const db = getDb();
+      const row = db
+        .query<TaskRow, [number]>(
+          `SELECT t.*,
+                  gc.worktree_status, gc.branch_name, gc.worktree_path,
+                  (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
+           FROM tasks t
+           LEFT JOIN task_git_context gc ON gc.task_id = t.id
+           WHERE t.id = ?`,
+        )
+        .get(taskId);
+      if (!row) return `Error: task ${taskId} not found`;
+      const task = mapTask(row);
+      const includeN = args.include_messages ? parseInt(args.include_messages, 10) : 0;
+      if (includeN > 0) {
+        const msgs = db
+          .query<ConversationMessageRow, [number, number]>(
+            `SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at DESC LIMIT ?`,
+          )
+          .all(taskId, includeN)
+          .reverse()
+          .map(mapConversationMessage);
+        return JSON.stringify({ task, messages: msgs });
+      }
+      return JSON.stringify(task);
+    }
+
+    case "get_board_summary": {
+      const db = getDb();
+      const boardId = args.board_id ? parseInt(args.board_id, 10) : (ctx.boardId ?? 0);
+      if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
+      // Check board exists
+      const boardRow = db.query<{ id: number }, [number]>("SELECT id FROM boards WHERE id = ?").get(boardId);
+      if (!boardRow) return `Error: board ${boardId} not found`;
+      // Query tasks grouped by workflow_state and execution_state
+      const rows = db
+        .query<{ workflow_state: string; execution_state: string; count: number }, [number]>(
+          `SELECT workflow_state, execution_state, COUNT(*) as count
+           FROM tasks WHERE board_id = ?
+           GROUP BY workflow_state, execution_state`,
+        )
+        .all(boardId);
+      // Build per-column summary
+      const columns: Record<string, { total: number; by_state: Record<string, number> }> = {};
+      for (const r of rows) {
+        if (!columns[r.workflow_state]) columns[r.workflow_state] = { total: 0, by_state: {} };
+        columns[r.workflow_state].total += r.count;
+        columns[r.workflow_state].by_state[r.execution_state] = (columns[r.workflow_state].by_state[r.execution_state] ?? 0) + r.count;
+      }
+      return JSON.stringify({ board_id: boardId, columns });
+    }
+
+    case "list_tasks": {
+      const db = getDb();
+      const boardId = args.board_id ? parseInt(args.board_id, 10) : (ctx.boardId ?? 0);
+      if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
+      const limitRaw = args.limit ? parseInt(args.limit, 10) : 50;
+      const limit = Math.min(Math.max(1, limitRaw), 200);
+      const conditions: string[] = ["t.board_id = ?"];
+      const params: (string | number)[] = [boardId];
+      if (args.workflow_state) { conditions.push("t.workflow_state = ?"); params.push(args.workflow_state); }
+      if (args.execution_state) { conditions.push("t.execution_state = ?"); params.push(args.execution_state); }
+      if (args.project_id) { conditions.push("t.project_id = ?"); params.push(parseInt(args.project_id, 10)); }
+      if (args.query) {
+        conditions.push("(t.title LIKE ? OR t.description LIKE ?)");
+        const q = `%${args.query}%`;
+        params.push(q, q);
+      }
+      params.push(limit);
+      const sql = `SELECT t.*,
+                          gc.worktree_status, gc.branch_name, gc.worktree_path,
+                          (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
+                   FROM tasks t
+                   LEFT JOIN task_git_context gc ON gc.task_id = t.id
+                   WHERE ${conditions.join(" AND ")}
+                   ORDER BY t.created_at ASC LIMIT ?`;
+      const rows = db.query<TaskRow, typeof params>(sql).all(...params);
+      return JSON.stringify(rows.map(mapTask));
+    }
+
+    // ── tasks_write group ────────────────────────────────────────────────────
+
+    case "create_task": {
+      const projectId = args.project_id ? parseInt(args.project_id, 10) : NaN;
+      if (!projectId || isNaN(projectId)) return "Error: project_id is required";
+      const title = (args.title ?? "").trim();
+      if (!title) return "Error: title is required";
+      const description = (args.description ?? "").trim();
+      const boardId = args.board_id ? parseInt(args.board_id, 10) : (ctx.boardId ?? 0);
+      if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
+      const db = getDb();
+      // Validate board exists
+      const boardRow = db.query<{ id: number }, [number]>("SELECT id FROM boards WHERE id = ?").get(boardId);
+      if (!boardRow) return `Error: board ${boardId} not found`;
+      // Validate project exists
+      const projRow = db.query<{ id: number }, [number]>("SELECT id FROM projects WHERE id = ?").get(projectId);
+      if (!projRow) return `Error: project ${projectId} not found`;
+      // Create conversation first
+      const convRes = db.run("INSERT INTO conversations (task_id) VALUES (0)");
+      const convId = convRes.lastInsertRowid as number;
+      const taskRes = db.run(
+        `INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, conversation_id${args.model ? ", model" : ""})
+         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?${args.model ? ", ?" : ""})`,
+        args.model
+          ? [boardId, projectId, title, description, convId, args.model]
+          : [boardId, projectId, title, description, convId],
+      );
+      const newTaskId = taskRes.lastInsertRowid as number;
+      db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [newTaskId, convId]);
+      const newRow = db
+        .query<TaskRow, [number]>(
+          `SELECT t.*,
+                  gc.worktree_status, gc.branch_name, gc.worktree_path,
+                  (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
+           FROM tasks t
+           LEFT JOIN task_git_context gc ON gc.task_id = t.id
+           WHERE t.id = ?`,
+        )
+        .get(newTaskId)!;
+      return JSON.stringify(mapTask(newRow));
+    }
+
+    case "edit_task": {
+      const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+      if (!taskId || isNaN(taskId)) return "Error: task_id is required";
+      const db = getDb();
+      const existing = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+      if (!existing) return `Error: task ${taskId} not found`;
+      // Check worktree lock
+      const gitRow = db
+        .query<{ worktree_status: string | null }, [number]>(
+          "SELECT worktree_status FROM task_git_context WHERE task_id = ?",
+        )
+        .get(taskId);
+      if (gitRow?.worktree_status && gitRow.worktree_status !== "not_created") {
+        return "Error: cannot edit task once a branch has been created";
+      }
+      const newTitle = (args.title ?? "").trim() || existing.title;
+      const newDesc = args.description !== undefined ? args.description.trim() : existing.description;
+      db.run("UPDATE tasks SET title = ?, description = ? WHERE id = ?", [newTitle, newDesc, taskId]);
+      const updated = db
+        .query<TaskRow, [number]>(
+          `SELECT t.*,
+                  gc.worktree_status, gc.branch_name, gc.worktree_path,
+                  (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
+           FROM tasks t
+           LEFT JOIN task_git_context gc ON gc.task_id = t.id
+           WHERE t.id = ?`,
+        )
+        .get(taskId)!;
+      return JSON.stringify(mapTask(updated));
+    }
+
+    case "delete_task": {
+      const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+      if (!taskId || isNaN(taskId)) return "Error: task_id is required";
+      const db = getDb();
+      const row = db
+        .query<{ current_execution_id: number | null; conversation_id: number }, [number]>(
+          "SELECT current_execution_id, conversation_id FROM tasks WHERE id = ?",
+        )
+        .get(taskId);
+      if (!row) return `Error: task ${taskId} not found`;
+      if (row.current_execution_id != null && ctx.taskCallbacks) {
+        ctx.taskCallbacks.cancelExecution(row.current_execution_id);
+      }
+      try {
+        await removeWorktree(taskId);
+      } catch { /* log only; deletion continues */ }
+      db.run("DELETE FROM conversation_messages WHERE task_id = ?", [taskId]);
+      db.run("DELETE FROM executions WHERE task_id = ?", [taskId]);
+      db.run("DELETE FROM task_git_context WHERE task_id = ?", [taskId]);
+      db.run("DELETE FROM pending_messages WHERE task_id = ?", [taskId]);
+      db.run("DELETE FROM tasks WHERE id = ?", [taskId]);
+      if (row.conversation_id) {
+        db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
+      }
+      return JSON.stringify({ success: true, deleted_task_id: taskId });
+    }
+
+    case "move_task": {
+      const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+      if (!taskId || isNaN(taskId)) return "Error: task_id is required";
+      const targetState = (args.workflow_state ?? "").trim();
+      if (!targetState) return "Error: workflow_state is required";
+      const db = getDb();
+      const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+      if (!taskRow) return `Error: task ${taskId} not found`;
+      // Validate target column exists in board's workflow template
+      const boardRow = db
+        .query<{ workflow_template_id: string }, [number]>(
+          "SELECT workflow_template_id FROM boards WHERE id = ?",
+        )
+        .get(taskRow.board_id);
+      const config = getConfig();
+      const template = config.workflows.find((w) => w.id === boardRow?.workflow_template_id);
+      const validColumn = template?.columns.find((c) => c.id === targetState);
+      if (!validColumn) {
+        const valid = template?.columns.map((c) => c.id).join(", ") ?? "(unknown)";
+        return `Error: workflow_state "${targetState}" not found in board template. Valid columns: ${valid}`;
+      }
+      // Update workflow_state immediately
+      db.run("UPDATE tasks SET workflow_state = ? WHERE id = ?", [targetState, taskId]);
+      // Fire-and-forget transition (triggers on_enter_prompt asynchronously)
+      if (ctx.taskCallbacks) {
+        ctx.taskCallbacks.handleTransition(taskId, targetState);
+      }
+      return JSON.stringify({ success: true, task_id: taskId, workflow_state: targetState });
+    }
+
+    case "message_task": {
+      const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+      if (!taskId || isNaN(taskId)) return "Error: task_id is required";
+      const message = (args.message ?? "").trim();
+      if (!message) return "Error: message is required";
+      const db = getDb();
+      const taskRow = db
+        .query<{ execution_state: string }, [number]>(
+          "SELECT execution_state FROM tasks WHERE id = ?",
+        )
+        .get(taskId);
+      if (!taskRow) return `Error: task ${taskId} not found`;
+      if (taskRow.execution_state === "running") {
+        // Queue message
+        db.run(
+          "INSERT INTO pending_messages (task_id, content) VALUES (?, ?)",
+          [taskId, message],
+        );
+        return JSON.stringify({ status: "queued", task_id: taskId });
+      }
+      // Deliver immediately (fire-and-forget)
+      if (ctx.taskCallbacks) {
+        ctx.taskCallbacks.handleHumanTurn(taskId, message);
+      }
+      return JSON.stringify({ status: "delivered", task_id: taskId });
     }
 
     default:

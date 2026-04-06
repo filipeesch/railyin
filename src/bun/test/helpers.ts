@@ -116,6 +116,12 @@ export function initDb(): Database {
       qualified_model_id  TEXT    NOT NULL,
       PRIMARY KEY (workspace_id, qualified_model_id)
     );
+    CREATE TABLE IF NOT EXISTS pending_messages (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      content    TEXT    NOT NULL,
+      created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
   `);
   db.run("INSERT INTO workspaces (id, name) VALUES (1, 'test-workspace')");
   return db;
@@ -162,7 +168,7 @@ export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: (
   const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
 
   writeFileSync(
-    join(configDir, "workspace.yaml"),
+    join(configDir, "workspace.test.yaml"),
     [
       "name: test",
       "providers:",
