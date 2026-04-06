@@ -9,9 +9,18 @@
       No providers configured.
     </div>
 
-    <div v-else class="model-tree__providers">
+    <div v-else>
+      <div class="model-tree__search">
+        <InputText
+          v-model="searchQuery"
+          placeholder="Search models…"
+          size="small"
+          class="w-full"
+        />
+      </div>
+      <div class="model-tree__providers">
       <div
-        v-for="provider in providers"
+        v-for="provider in filteredProviders"
         :key="provider.id"
         class="provider-section"
       >
@@ -53,7 +62,7 @@
           class="model-list"
         >
           <label
-            v-for="model in provider.models"
+            v-for="model in provider.filteredModels"
             :key="model.id"
             class="model-row"
           >
@@ -70,6 +79,7 @@
         </div>
       </div>
     </div>
+    </div>
   </div>
 </template>
 
@@ -79,6 +89,7 @@ import Button from "primevue/button";
 import Tag from "primevue/tag";
 import Checkbox from "primevue/checkbox";
 import ProgressSpinner from "primevue/progressspinner";
+import InputText from "primevue/inputtext";
 import { useTaskStore } from "../stores/task";
 
 const taskStore = useTaskStore();
@@ -86,8 +97,23 @@ const taskStore = useTaskStore();
 const loading = ref(false);
 const collapsed = ref(new Set<string>());
 const refreshing = ref(new Set<string>());
+const searchQuery = ref("");
 
 const providers = computed(() => taskStore.allProviderModels);
+
+const filteredProviders = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  return [...providers.value]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((provider) => {
+      const sortedModels = [...provider.models].sort((a, b) => a.id.localeCompare(b.id));
+      const filteredModels = q
+        ? sortedModels.filter((m) => m.id.toLowerCase().includes(q))
+        : sortedModels;
+      return { ...provider, models: sortedModels, filteredModels };
+    })
+    .filter((provider) => !q || provider.filteredModels.length > 0);
+});
 
 onMounted(async () => {
   loading.value = true;
@@ -137,6 +163,16 @@ function formatCtx(tokens: number): string {
   display: flex;
   flex-direction: column;
   gap: 0;
+}
+
+.model-tree__search {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--p-content-border-color);
+}
+
+.model-tree__providers {
+  max-height: 360px;
+  overflow-y: auto;
 }
 
 .model-tree__loading {

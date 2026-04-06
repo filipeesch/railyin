@@ -501,8 +501,8 @@ function onHide() {
 
 function handleOutsideClick(e: MouseEvent) {
   if (!open.value) return;
-  // Skip if any PrimeVue overlay is open
-  if (document.body.classList.contains('p-overlay-open')) return;
+  // Skip if the click is inside any PrimeVue anchored overlay (Select panel, etc.)
+  if ((e.target as Element)?.closest?.('.p-anchored-overlay')) return;
   // Skip if our own dialogs are open
   if (editDialogVisible.value || deleteDialogVisible.value) return;
   // PrimeVue Drawer teleports its panel to document.body, so $el is a comment
