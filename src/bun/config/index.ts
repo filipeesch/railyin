@@ -185,7 +185,7 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
   // Auto-create default config files if they don't exist yet
   ensureConfigExists(configDir);
 
-  const isTestMode = process.env.RAILYN_DEBUG === "1" || process.env.RAILYN_DB === ":memory:";
+  const isTestMode = process.env.RAILYN_DB === ":memory:";
   const workspaceFileName = isTestMode ? "workspace.test.yaml" : "workspace.yaml";
   const workspaceFile = join(configDir, workspaceFileName);
 

@@ -1,4 +1,4 @@
-import { BrowserWindow, BrowserView } from "electrobun/bun";
+import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
 import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
 import { loadConfig } from "./config/index.ts";
@@ -8,7 +8,7 @@ import { projectHandlers } from "./handlers/projects.ts";
 import { taskHandlers } from "./handlers/tasks.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
-import { handleHumanTurn, cancelExecution, compactConversation } from "./workflow/engine.ts";
+import { handleHumanTurn, cancelExecution, compactConversation, handleTransition } from "./workflow/engine.ts";
 import { mapTask, mapConversationMessage } from "./db/mappers.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
 import type { RailynRPCType } from "../shared/rpc-types.ts";
@@ -75,6 +75,22 @@ win = new BrowserWindow({
   title: "Railyn",
   frame: { width: 1400, height: 900 },
   rpc: mainWebviewRPC,
+});
+
+// When the window is closed, kill the entire process group so the
+// 'electrobun dev --watch' node watcher also terminates.
+// forceExit() only kills this bun subprocess; the watcher parent stays
+// alive (and would restart the app) otherwise.
+Electrobun.events.on("before-quit", () => {
+  try {
+    const result = Bun.spawnSync(["bash", "-c", `ps -o pgid= -p ${process.pid}`]);
+    const pgid = parseInt(result.stdout.toString().trim(), 10);
+    if (pgid > 1) {
+      process.kill(-pgid, "SIGTERM");
+    }
+  } catch {
+    try { process.kill(process.ppid, "SIGTERM"); } catch { /* ignore */ }
+  }
 });
 
 // ─── Debug HTTP server (dev only, RAILYN_DEBUG=1) ──────────────────────────────
@@ -417,7 +433,27 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
       }
     }
 
-    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=", { status: 200 });
+    // Test-only: transition a task to a new workflow state, running any on_enter_prompt.
+    // Returns { task, executionId } immediately; execution runs asynchronously via IPC.
+    if (url.pathname === "/test-transition") {
+      const taskId = Number(url.searchParams.get("taskId"));
+      const toState = url.searchParams.get("toState") ?? "";
+      if (!taskId || !toState) {
+        return new Response(JSON.stringify({ __error: "taskId and toState required" }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      try {
+        const result = await handleTransition(taskId, toState, onToken, onError, notifyTaskUpdated, notifyNewMessage);
+        // Push the updated task to the Vue store so the board re-renders the card
+        // in the new column (analogous to how the RPC tasks.transition response
+        // triggers store.onTaskUpdated in the Vue transitionTask() method).
+        notifyTaskUpdated(result.task);
+        return new Response(JSON.stringify(result), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
+      }
+    }
+
+    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=", { status: 200 });
   },
 });
 if (process.env.RAILYN_DEBUG) console.log("[Debug] HTTP server listening on http://localhost:9229");

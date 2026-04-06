@@ -71,9 +71,20 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Transition task ──────────────────────────────────────────────────────
 
   async function transitionTask(taskId: number, toState: string) {
-    const { task } = await electroview.rpc.request["tasks.transition"]({ taskId, toState });
-    onTaskUpdated(task);
-    return task;
+    // Optimistic update: move the card immediately so there's no visible snap-back
+    // while awaiting the RPC round-trip.
+    const prior = Object.values(tasksByBoard.value).flat().find((t) => t.id === taskId);
+    if (prior) _replaceTask({ ...prior, workflowState: toState });
+
+    try {
+      const { task } = await electroview.rpc.request["tasks.transition"]({ taskId, toState });
+      onTaskUpdated(task); // sync final state (executionState, model override, etc.)
+      return task;
+    } catch (err) {
+      // Revert optimistic move on error so the card ends up in a consistent state
+      if (prior) _replaceTask(prior);
+      throw err;
+    }
   }
 
   // ─── Retry ────────────────────────────────────────────────────────────────
@@ -358,7 +369,10 @@ export const useTaskStore = defineStore("task", () => {
     for (const [boardId, tasks] of Object.entries(tasksByBoard.value)) {
       const idx = tasks.findIndex((t) => t.id === updated.id);
       if (idx !== -1) {
-        tasksByBoard.value[Number(boardId)][idx] = updated;
+        // Replace the whole array so Vue detects the change reliably.
+        // In-place index assignment (arr[i] = val) can be missed when the
+        // component tracks the array reference rather than individual indices.
+        tasksByBoard.value[Number(boardId)] = tasks.map((t) => (t.id === updated.id ? updated : t));
         break;
       }
     }

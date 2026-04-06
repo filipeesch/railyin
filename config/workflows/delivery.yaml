@@ -51,3 +51,4 @@ columns:
   - id: done
     label: Done
     description: Task complete
+    on_enter_prompt: merge the current branch to main branch, solve possible conflicts. use ask_me tool if the conflicts resolution is not clear.

@@ -561,3 +561,150 @@ export async function getContextUsageFraction(): Promise<number | null> {
     return usage ? usage.fraction : null;
   `);
 }
+
+// ─── Board helpers ────────────────────────────────────────────────────────────
+
+/** Navigate the app to /board and wait for the board view to render. */
+export async function navigateToBoardView(): Promise<void> {
+  await webEval(`
+    var app = document.querySelector('#app').__vue_app__;
+    app.config.globalProperties['$router'].push('/board');
+    return 'ok';
+  `);
+  const ready = await waitFor('.board-view', 6_000);
+  if (!ready) throw new Error('Board view did not appear after navigation');
+  await sleep(300);
+}
+
+/**
+ * Fire-and-forget loadTasks for the active board so the Vue store is populated.
+ * Waits 1.2s for the async fetch to complete.
+ */
+export async function reloadBoardTasks(): Promise<void> {
+  await webEval(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var boardStore = pinia._s.get('board');
+    var taskStore  = pinia._s.get('task');
+    var boardId = boardStore.activeBoardId;
+    if (boardId != null) taskStore.loadTasks(boardId);
+    return 'ok';
+  `);
+  await sleep(1_200);
+}
+
+/** Poll until .board-columns is present. */
+export async function waitForBoardReady(timeoutMs = 8_000): Promise<boolean> {
+  return waitFor('.board-columns', timeoutMs);
+}
+
+/** Return all [data-column-id] attribute values in DOM order. */
+export async function getBoardColumnIds(): Promise<string[]> {
+  return webEval<string[]>(`
+    return JSON.stringify(
+      Array.from(document.querySelectorAll('[data-column-id]'))
+        .map(function(el) { return el.getAttribute('data-column-id'); })
+    );
+  `);
+}
+
+/** Return all .board-column__name text contents in DOM order. */
+export async function getColumnLabels(): Promise<string[]> {
+  return webEval<string[]>(`
+    return JSON.stringify(
+      Array.from(document.querySelectorAll('.board-column__name'))
+        .map(function(el) { return el.textContent.trim(); })
+    );
+  `);
+}
+
+/** True if the task card for taskId is inside the column with the given columnId. */
+export async function isTaskInColumn(taskId: number, columnId: string): Promise<boolean> {
+  return webEval<boolean>(`
+    var card = document.querySelector('[data-task-id="' + ${taskId} + '"]');
+    if (!card) return false;
+    var col = card.closest('[data-column-id]');
+    return col ? col.getAttribute('data-column-id') === ${JSON.stringify(columnId)} : false;
+  `);
+}
+
+/** Return the classList array of the task card for taskId. */
+export async function getTaskCardClasses(taskId: number): Promise<string[]> {
+  return webEval<string[]>(`
+    var card = document.querySelector('[data-task-id="' + ${taskId} + '"]');
+    if (!card) return JSON.stringify([]);
+    return JSON.stringify(Array.from(card.classList));
+  `);
+}
+
+/** Return the text of the PrimeVue Tag (execution badge) inside a task card. */
+export async function getTaskBadgeText(taskId: number): Promise<string> {
+  return webEval<string>(`
+    var card = document.querySelector('[data-task-id="' + ${taskId} + '"]');
+    if (!card) return '';
+    var tag = card.querySelector('.p-tag');
+    return tag ? tag.textContent.trim() : '';
+  `);
+}
+
+/**
+ * Transition a task to a new workflow state via the /test-transition HTTP endpoint.
+ * The backend updates the DB, pushes task.updated via IPC, and (if the target
+ * column has on_enter_prompt) starts an async execution.
+ */
+export async function transitionTaskTo(taskId: number, toState: string): Promise<void> {
+  const res = await fetch(
+    `${BRIDGE_BASE}/test-transition?taskId=${taskId}&toState=${encodeURIComponent(toState)}`,
+  );
+  const data = await res.json() as { task?: unknown; executionId?: unknown; __error?: string };
+  if (data.__error) throw new Error(`transitionTaskTo failed: ${data.__error}`);
+  await sleep(300); // give IPC push time to reach Vue store
+}
+
+/**
+ * Poll the DOM until the task card for taskId appears under columnId.
+ * Returns true when found, false on timeout.
+ */
+export async function waitForTaskInColumn(
+  taskId: number,
+  columnId: string,
+  timeoutMs = 6_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isTaskInColumn(taskId, columnId)) return true;
+    await sleep(200);
+  }
+  return false;
+}
+
+/**
+ * Poll the DOM until the task card for taskId has the given CSS class.
+ * Returns true when found, false on timeout.
+ */
+export async function waitForTaskCardClass(
+  taskId: number,
+  className: string,
+  timeoutMs = 10_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const classes = await getTaskCardClasses(taskId);
+    if (classes.includes(className)) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
+/**
+ * Read a task's executionState directly from the Pinia board/task store,
+ * without needing the task drawer to be open.
+ */
+export async function getTaskExecutionStateFromStore(taskId: number): Promise<string | null> {
+  return webEval<string | null>(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var taskStore = pinia._s.get('task');
+    var allTasks = Object.values(taskStore.tasksByBoard).flat();
+    var task = allTasks.find(function(t) { return t.id === ${taskId}; });
+    return task ? task.executionState : null;
+  `);
+}

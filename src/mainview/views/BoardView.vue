@@ -271,18 +271,22 @@ async function onPointerUp(event: PointerEvent) {
   if (!activeDrag) return;
   if (activeDrag.active) {
     lastDragEndTime = Date.now();
-    if (dragOverColumnId.value) {
-      const task = Object.values(taskStore.tasksByBoard).flat().find((t) => t.id === activeDrag!.taskId);
-      if (task && task.workflowState !== dragOverColumnId.value) {
-        await taskStore.transitionTask(activeDrag.taskId, dragOverColumnId.value);
+    const dragSnapshot = activeDrag;
+    try {
+      if (dragOverColumnId.value) {
+        const task = Object.values(taskStore.tasksByBoard).flat().find((t) => t.id === dragSnapshot.taskId);
+        if (task && task.workflowState !== dragOverColumnId.value) {
+          await taskStore.transitionTask(dragSnapshot.taskId, dragOverColumnId.value);
+        }
       }
+    } finally {
+      if (dragSnapshot.ghostEl) document.body.removeChild(dragSnapshot.ghostEl);
+      if (dragSnapshot.sourceEl) dragSnapshot.sourceEl.style.opacity = '';
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.documentElement.style.userSelect = '';
+      dragOverColumnId.value = null;
     }
-    if (activeDrag.ghostEl) document.body.removeChild(activeDrag.ghostEl);
-    if (activeDrag.sourceEl) activeDrag.sourceEl.style.opacity = '';
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    document.documentElement.style.userSelect = '';
-    dragOverColumnId.value = null;
   }
   activeDrag = null;
 }
