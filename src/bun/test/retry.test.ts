@@ -30,6 +30,7 @@ function makeFakeProvider(
   let streamCalls = 0;
   let turnCalls = 0;
   return {
+    cooldownUntil: 0,
     get streamCalls() { return streamCalls; },
     get turnCalls() { return turnCalls; },
     stream(_messages: AIMessage[], _options?: AICallOptions) {
@@ -597,5 +598,277 @@ describe("ProviderError (8.5)", () => {
   it("retryAfter is undefined when not provided", () => {
     const err = new ProviderError(429, "rate limit");
     expect(err.retryAfter).toBeUndefined();
+  });
+});
+
+// ─── 8.6: Shared provider cooldown ───────────────────────────────────────────
+
+describe("Shared provider cooldown (8.6)", () => {
+  it("no overhead when cooldownUntil is 0 (past)", async () => {
+    const provider = makeFakeProvider(() => okStream(), noTurn);
+    provider.cooldownUntil = 0; // no cooldown active
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
+    expect(provider.streamCalls).toBe(1);
+  });
+
+  it("waits for active cooldown before attempting a stream call", async () => {
+    const provider = makeFakeProvider(() => okStream(), noTurn);
+    // Set a very short cooldown (50ms from now)
+    provider.cooldownUntil = Date.now() + 50;
+    const start = Date.now();
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(40); // waited at least ~50ms
+    expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
+  });
+
+  it("retryStream sets cooldownUntil on 429 with retryAfter", async () => {
+    let capturedCooldownValue = -1;
+    const base = makeFakeProvider((n) => {
+      if (n === 1) return throwingGen(new ProviderError(429, "rate limit", 0.001));
+      return okStream();
+    }, noTurn) as AIProvider & { streamCalls: number; turnCalls: number };
+    const provider = new Proxy(base, {
+      set(target, prop, value) {
+        if (prop === "cooldownUntil") capturedCooldownValue = value as number;
+        (target as Record<string, unknown>)[prop as string] = 0;
+        return true;
+      },
+    });
+    const before = Date.now();
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    expect(base.streamCalls).toBe(2);
+    expect(capturedCooldownValue).toBeGreaterThanOrEqual(before);
+    expect(capturedCooldownValue).toBeLessThan(before + 5_000);
+    expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
+  });
+
+  it("cooldown expires naturally and caller proceeds", async () => {
+    const provider = makeFakeProvider(() => okStream(), noTurn);
+    // Cooldown already expired (in the past)
+    provider.cooldownUntil = Date.now() - 1000;
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    expect(provider.streamCalls).toBe(1);
+    expect(events.some((e) => e.type === "token")).toBe(true);
+  });
+
+  it("retryTurn waits for active cooldown before attempting", async () => {
+    const provider = makeFakeProvider(() => okStream(), okTurn);
+    provider.cooldownUntil = Date.now() + 50;
+    const start = Date.now();
+    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(40);
+    expect(result.type).toBe("text");
+  });
+
+  it("retryTurn sets cooldownUntil on 429 with retryAfter", async () => {
+    // Use retryAfter=0.001 (1ms) so the sleep is trivial but the code path still executes
+    let capturedCooldownValue = -1;
+    const base = makeFakeProvider(() => okStream(), (n) => {
+      if (n === 1) return Promise.reject(new ProviderError(429, "rate limit", 0.001));
+      return okTurn();
+    }) as AIProvider & { streamCalls: number; turnCalls: number };
+    // Intercept writes to cooldownUntil to capture the value without blocking on it
+    const provider = new Proxy(base, {
+      set(target, prop, value) {
+        if (prop === "cooldownUntil") capturedCooldownValue = value as number;
+        (target as Record<string, unknown>)[prop as string] = 0; // immediately expire so no real wait
+        return true;
+      },
+    });
+    const before = Date.now();
+    await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+    expect(base.turnCalls).toBe(2); // retried after 429
+    // setCooldown was called with retryAfter=0.001, so cooldownUntil ≈ before + 1ms
+    expect(capturedCooldownValue).toBeGreaterThanOrEqual(before);
+    expect(capturedCooldownValue).toBeLessThan(before + 5_000);
+  });
+
+  it("concurrent callers both see cooldown set by the first 429 recipient", async () => {
+    // Simulate two concurrent callers sharing a provider
+    const provider = makeFakeProvider(() => okStream(), noTurn);
+    provider.cooldownUntil = Date.now() + 60;
+
+    const start = Date.now();
+    // Both start immediately — both should wait for cooldown
+    const [e1, e2] = await Promise.all([
+      collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 })),
+      collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 })),
+    ]);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(50);
+    expect(e1.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
+    expect(e2.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
+  });
+});
+
+// ─── 8.7: Source-based retry priority ────────────────────────────────────────
+
+describe("Source-based retry priority (8.7)", () => {
+  it("foreground source retries on 429 normally", async () => {
+    const provider = makeFakeProvider((n) => {
+      if (n === 1) return throwingGen(new ProviderError(429, "rate limit", 0));
+      return okStream();
+    }, noTurn);
+    const events = await collect(
+      retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "foreground"),
+    );
+    expect(provider.streamCalls).toBe(2);
+    expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
+  });
+
+  it("background source bails immediately on 429 in retryStream", async () => {
+    const provider = makeFakeProvider(
+      () => throwingGen(new ProviderError(429, "rate limit", 30)),
+      noTurn,
+    );
+    let err: unknown;
+    try {
+      await collect(
+        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "background"),
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ProviderError);
+    expect((err as ProviderError).status).toBe(429);
+    expect(provider.streamCalls).toBe(1); // no retry
+  });
+
+  it("background source sets cooldown before bailing on retryStream 429", async () => {
+    const provider = makeFakeProvider(
+      () => throwingGen(new ProviderError(429, "rate limit", 30)),
+      noTurn,
+    );
+    const before = Date.now();
+    try {
+      await collect(
+        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "background"),
+      );
+    } catch { /* expected */ }
+    expect(provider.cooldownUntil).toBeGreaterThanOrEqual(before + 30_000 - 100);
+    expect(provider.cooldownUntil).toBeLessThanOrEqual(before + 30_000 + 500);
+  });
+
+  it("background source retries other retryable statuses (500, 529, 502) normally", async () => {
+    for (const status of [500, 502, 503, 504] as const) {
+      const provider = makeFakeProvider((n) => {
+        if (n === 1) return throwingGen(new ProviderError(status, `error ${status}`));
+        return okStream();
+      }, noTurn);
+      const events = await collect(
+        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "background"),
+      );
+      expect(provider.streamCalls).toBe(2); // Expected 2 calls for background source on non-429 retryable status
+      expect(events.some((e) => e.type === "token")).toBe(true);
+    }
+  });
+
+  it("background source bails immediately on 429 in retryTurn", async () => {
+    const provider = makeFakeProvider(() => okStream(), (n) => {
+      if (n === 1) return Promise.reject(new ProviderError(429, "rate limit", 30));
+      return okTurn();
+    });
+    let err: unknown;
+    try {
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "background");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ProviderError);
+    expect((err as ProviderError).status).toBe(429);
+    expect(provider.turnCalls).toBe(1);
+  });
+
+  it("background source sets cooldown before bailing on retryTurn 429", async () => {
+    const provider = makeFakeProvider(() => okStream(), () => {
+      return Promise.reject(new ProviderError(429, "rate limit", 60));
+    });
+    const before = Date.now();
+    try {
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "background");
+    } catch { /* expected */ }
+    expect(provider.cooldownUntil).toBeGreaterThanOrEqual(before + 60_000 - 100);
+  });
+
+  it("foreground source retries on 429 in retryTurn", async () => {
+    const provider = makeFakeProvider(() => okStream(), (n) => {
+      if (n === 1) return Promise.reject(new ProviderError(429, "rate limit", 0));
+      return okTurn();
+    });
+    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "foreground");
+    expect(result.type).toBe("text");
+    expect(provider.turnCalls).toBe(2);
+  });
+});
+
+// ─── 8.8: Jitter fix — spreads retries when retryAfter dominates ──────────────
+
+describe("computeBackoffMs jitter fix (8.8)", () => {
+  it("without retryAfter, jitter is added to exponential backoff", async () => {
+    const origRandom = Math.random;
+    Math.random = () => 1; // max jitter
+    try {
+      const provider = makeFakeProvider(() => okStream(), (n) => {
+        if (n === 1) return Promise.reject(new ProviderError(500, "err"));
+        return okTurn();
+      });
+      const start = Date.now();
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1 }); // attempt 0: delay = 1 + 1000 = ~1001ms
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(900); // at least 1s with full jitter
+    } finally {
+      Math.random = origRandom;
+    }
+  });
+
+  it("jitter is applied AFTER max(exp, retryAfter*1000) — not absorbed by large retryAfter", async () => {
+    // Intercept setTimeout to capture delay values without real sleeps
+    const origSetTimeout = globalThis.setTimeout;
+    const capturedDelays: number[] = [];
+    // @ts-ignore — override for test
+    globalThis.setTimeout = (fn: (() => void) | string, ms?: number, ...args: unknown[]) => {
+      if (typeof fn === "function") capturedDelays.push(ms ?? 0);
+      // Run immediately so test doesn't stall
+      if (typeof fn === "function") fn();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    };
+    const origRandom = Math.random;
+    Math.random = () => 0.999; // max jitter ≈ 999ms
+    try {
+      const provider = makeFakeProvider(() => okStream(), (n) => {
+        if (n === 1) return Promise.reject(new ProviderError(429, "err", 2)); // retryAfter=2s
+        return okTurn();
+      });
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1 });
+      // With new code: max(1, 2000) + 999 = 2999ms
+      // With old code: max(1 + 999, 2000) = 2000ms (jitter absorbed)
+      const backoffDelay = capturedDelays.find((d) => d > 100);
+      expect(backoffDelay).toBeDefined();
+      expect(backoffDelay!).toBeGreaterThan(2000); // jitter was added on top of retryAfter*1000
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+      Math.random = origRandom;
+    }
+  });
+
+  it("with retryAfter=0 (falsy), jitter still applied normally", async () => {
+    const origRandom = Math.random;
+    Math.random = () => 1; // max jitter
+    try {
+      const provider = makeFakeProvider(() => okStream(), (n) => {
+        if (n === 1) return Promise.reject(new ProviderError(429, "rate limit")); // no retryAfter
+        return okTurn();
+      });
+      const start = Date.now();
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1 });
+      const elapsed = Date.now() - start;
+      // delay = max(1, undefined) = 1 + 999 = 1000ms
+      expect(elapsed).toBeGreaterThanOrEqual(900);
+    } finally {
+      Math.random = origRandom;
+    }
   });
 });

@@ -277,6 +277,13 @@ async function* _retryStreamFallback(
     if (turnError !== null) {
       if (options.signal?.aborted) throw turnError;
       if (turnError instanceof ProviderError && isRetryableStatus(turnError.status)) {
+        if (turnError.status === 429) {
+          if (turnError.retryAfter) setCooldown(provider, turnError.retryAfter);
+          if (source === "background") {
+            log("warn", `Non-streaming fallback 429 on background source — bailing immediately`, {});
+            throw turnError;
+          }
+        }
         if (turnError.status === 529) {
           consecutive529++;
           if (consecutive529 >= MAX_529_RETRIES) throw turnError;
@@ -321,6 +328,7 @@ export async function retryTurn(
   options: AICallOptions = {},
   maxRetries = DEFAULT_MAX_TURN_RETRIES,
   _tc: _RetryTimingConfig = {},
+  source: "foreground" | "background" = "foreground",
 ): Promise<AITurnResult> {
   const baseBackoffMs = _tc.baseBackoffMs ?? BASE_BACKOFF_MS;
   let attempt = 0;
@@ -328,10 +336,19 @@ export async function retryTurn(
 
   while (true) {
     try {
+      await waitForCooldown(provider);
       return await provider.turn(messages, options);
     } catch (err) {
       if (options.signal?.aborted) throw err;
       if (!(err instanceof ProviderError) || !isRetryableStatus(err.status)) throw err;
+
+      if (err.status === 429) {
+        if (err.retryAfter) setCooldown(provider, err.retryAfter);
+        if (source === "background") {
+          log("warn", `retryTurn 429 on background source — bailing immediately`, {});
+          throw err;
+        }
+      }
 
       if (err.status === 529) {
         consecutive529++;

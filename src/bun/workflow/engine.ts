@@ -641,7 +641,7 @@ export async function compactConversation(taskId: number): Promise<ConversationM
     const { callMessages, totalWords, truncated } = buildMessages(maxWords);
     log("info", `compaction: attempt ${attempt}`, { taskId, data: { model: resolvedModel, contextWindow, maxWords, words: totalWords, truncated } });
     try {
-      const result = await retryTurn(provider, callMessages, {});
+      const result = await retryTurn(provider, callMessages, {}, 10, {}, "background");
       const rawSummary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
       // Strip the <analysis> scratchpad block — only the <summary> block is stored.
       const summary = extractSummaryBlock(rawSummary);
