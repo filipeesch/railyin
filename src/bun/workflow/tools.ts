@@ -594,10 +594,13 @@ export function resolveToolsForColumn(columnTools: string[] | undefined): AITool
 
 // ─── Safety: block writes & destructive ops ───────────────────────────────────
 
-// Shell write redirections (> >> and piped tee) are blocked so that file writes
-// go through the explicit write_file / replace_in_file tools where path-safety
-// is enforced. Other destructive ops remain blocked as before.
-const BLOCKED_COMMANDS = /\b(rm|rmdir|mv|cp|mkdir|chmod|chown|dd|mkfs|curl|wget|ssh|scp|git\s+(push|reset|clean|checkout\s+-f)|tee)\b|(>>?)/i;
+// Shell write redirections (> >>) are blocked so that file writes go through
+// the explicit write_file / replace_in_file tools where path-safety is enforced.
+// We only block file-write redirections, not fd redirections like 2>&1 or >&2:
+//   (?<![0-9&]) — not preceded by a digit (e.g. 2>) or & (e.g. &>targeting fd)
+//   >>?          — literal > or >>
+//   (?!&|\()     — not followed by & (fd redirect) or ( (process substitution)
+const BLOCKED_COMMANDS = /\b(rm|rmdir|mv|cp|mkdir|chmod|chown|dd|mkfs|curl|wget|ssh|scp|git\s+(push|reset|clean|checkout\s+-f)|tee)\b|(?<![0-9&])(>>?)(?!&|\()/i;
 
 // ─── Path safety: keep within worktree root ───────────────────────────────────
 
