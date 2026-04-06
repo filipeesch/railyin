@@ -2,6 +2,7 @@ import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, St
 import { ProviderError } from "./retry.ts";
 
 export class OpenAICompatibleProvider implements AIProvider {
+  cooldownUntil = 0;
   private baseUrl: string;
   private apiKey: string;
   private model: string;

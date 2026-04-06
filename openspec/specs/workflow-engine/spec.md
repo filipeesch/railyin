@@ -35,7 +35,7 @@ The system SHALL load workflow column definitions from YAML files. Each column d
 - **THEN** the engine resolves the reference and injects the resolved body as the system message for every AI call in that column
 
 ### Requirement: Entering a column triggers on_enter_prompt execution
-The system SHALL automatically execute a column's `on_enter_prompt` when a task enters that column, if the prompt is configured. Before starting the execution, the engine SHALL update the task's `model` field to the column's configured `model`, or the workspace default if the column has none.
+The system SHALL automatically execute a column's `on_enter_prompt` when a task enters that column, if the prompt is configured. Before starting the execution, the engine SHALL update the task's `model` field to the column's configured `model`, or the workspace default if the column has none. The engine SHALL resolve the `on_enter_prompt` slash reference and persist the resolved content as a `user` message with `sender = 'prompt'` to `conversation_messages` before calling `runExecution`.
 
 #### Scenario: Prompt runs on column entry
 - **WHEN** a task is moved to a column with a configured `on_enter_prompt`
@@ -52,6 +52,10 @@ The system SHALL automatically execute a column's `on_enter_prompt` when a task 
 #### Scenario: Task model reset to workspace default when column has no model
 - **WHEN** a task enters a column with no `model` field
 - **THEN** `task.model` is set to the workspace `ai.model` value
+
+#### Scenario: Resolved prompt is persisted before execution
+- **WHEN** `handleTransition` fires for a column with `on_enter_prompt`
+- **THEN** the engine resolves the slash reference, persists the resolved content as a `user` message with `sender = 'prompt'`, and then calls `runExecution`
 
 ### Requirement: Stage instructions are injected into every AI call in a column
 The system SHALL inject a column's `stage_instructions` as a system message into every AI call made while a task is in that column. This applies to both `on_enter_prompt` executions and subsequent human turn messages.
@@ -227,3 +231,18 @@ The system SHALL expose a `reloadConfig()` function that clears the in-memory co
 #### Scenario: reloadConfig clears the in-memory singleton
 - **WHEN** `reloadConfig()` is called
 - **THEN** the internal `_config` singleton is reset to null and the next call to `getConfig()` re-reads all YAML files from disk
+
+### Requirement: Worktree context tool descriptions are scoped to column tools
+The system SHALL generate the tool description block in the worktree context system message dynamically based on the column's configured `tools` array. Only tools available to the current column SHALL appear in the natural-language description block. When a tool group is not in the column's config, its description lines SHALL be omitted entirely.
+
+#### Scenario: Read-only column omits write tool descriptions
+- **WHEN** a column defines `tools: [read, search, web, interactions, agents]`
+- **THEN** the worktree context system message includes descriptions for read, search, web, interaction, and agent tools, but does NOT include write tool descriptions (write_file, patch_file, delete_file, rename_file)
+
+#### Scenario: Column with all groups includes all descriptions
+- **WHEN** a column defines `tools: [read, write, search, web, shell, interactions, agents]`
+- **THEN** the worktree context system message includes descriptions for all tool groups
+
+#### Scenario: Column with no tools key uses default set descriptions
+- **WHEN** a column has no `tools` key configured
+- **THEN** the worktree context system message includes descriptions only for the default tools (read_file, list_dir, run_command)

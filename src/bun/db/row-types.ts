@@ -97,3 +97,14 @@ export interface PendingMessageRow {
   content: string;
   created_at: string;
 }
+
+export interface TaskTodoRow {
+  id: number;
+  task_id: number;
+  title: string;
+  status: string; // 'not-started' | 'in-progress' | 'completed'
+  context: string | null;
+  result: string | null;
+  created_at: string;
+  updated_at: string;
+}

@@ -56,6 +56,13 @@ export interface AICallOptions {
 
 export interface AIProvider {
   /**
+   * Shared timestamp (epoch ms) until which the provider is rate-limited.
+   * Set by the retry wrapper when a 429 response includes a `retry-after` header.
+   * All concurrent callers sharing this provider instance will wait until this time
+   * before making a new API request.
+   */
+  cooldownUntil: number;
+  /**
    * Unified streaming method — handles both text tokens and structured tool
    * calls in the same SSE stream. Tools are always passed so the model is
    * never switched out of tool-aware mode between rounds.

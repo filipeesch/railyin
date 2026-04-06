@@ -58,6 +58,7 @@ const FAKE_TOKENS = [
 ];
 
 export class FakeAIProvider implements AIProvider {
+  cooldownUntil = 0;
   private delayMs: number;
 
   constructor(delayMs = 30) {

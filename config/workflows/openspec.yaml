@@ -29,6 +29,7 @@ columns:
       - shell
       - interactions
       - agents
+      - todos
 
   - id: apply
     label: Apply
@@ -49,6 +50,7 @@ columns:
       - shell
       - interactions
       - agents
+      - todos
 
   - id: done
     label: Done
@@ -65,3 +67,4 @@ columns:
       - shell
       - interactions
       - agents
+      - todos

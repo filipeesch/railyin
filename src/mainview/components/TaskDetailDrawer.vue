@@ -218,6 +218,11 @@
       </div>
 
       <!-- Chat input (9.4) -->
+      <TodoPanel
+        v-if="task"
+        :task-id="task.id"
+        :refresh-trigger="todoRefreshTrigger"
+      />
       <div class="task-detail__input">
         <div class="task-detail__input-row">
           <Textarea
@@ -388,6 +393,7 @@ import ToolCallGroup, { type ToolEntry } from "./ToolCallGroup.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
+import TodoPanel from "./TodoPanel.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
 import { useToast } from "primevue/usetoast";
@@ -566,6 +572,9 @@ const cancelling = ref(false);
 const scrollEl = ref<HTMLElement | null>(null);
 const contextWarning = ref<string | null>(null);
 const compacting = ref(false);
+
+// Incremented whenever the model completes a turn, to trigger a todo refresh.
+const todoRefreshTrigger = ref(0);
 
 // Git diff stat (fetched on drawer open when worktree is ready)
 const gitStat = ref<string | null>(null);
@@ -788,6 +797,16 @@ watch(
     } catch { /* non-fatal */ }
   },
   { immediate: true },
+);
+
+// Refresh todos when the model finishes a turn (executionState leaves 'running').
+watch(
+  () => task.value?.executionState,
+  (state, prev) => {
+    if (prev === "running" && state !== "running") {
+      todoRefreshTrigger.value++;
+    }
+  },
 );
 </script>
 

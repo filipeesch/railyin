@@ -12,9 +12,10 @@ import {
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
-import { resolveToolsForColumn, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
+import { resolveToolsForColumn, getToolDescriptionBlock, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
 import { formatReviewMessageForLLM } from "./review.ts";
 import { resolveSlashReference } from "./slash-prompt.ts";
+import { listTodos } from "../db/todos.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -297,6 +298,8 @@ function assembleMessages(
   newMessage: string,
   gitContext?: GitContext,
   sessionNotes?: string | null,
+  taskId?: number,
+  columnTools?: string[],
 ): AIMessage[] {
   const messages: AIMessage[] = [];
 
@@ -320,38 +323,7 @@ function assembleMessages(
       `- git_root_path: ${gitContext.git_root_path}`,
       `- project_path:  ${gitContext.project_path}`,
       "",
-      "You have access to the following tools to work with the project files:",
-      "",
-      "**Read tools:**",
-      "- list_dir(path): list files/directories relative to the worktree root",
-      "- read_file(path, start_line?, end_line?): read a file; use start_line/end_line (1-based) for partial reads of large files",
-      "",
-      "**Write tools:**",
-      "- write_file(path, content): create or fully overwrite a file",
-      "- patch_file(path, content, position, anchor?): targeted edit — position is start/end/before/after/replace; anchor required for before/after/replace and must appear exactly once",
-      "- delete_file(path): delete a file",
-      "- rename_file(from_path, to_path): move or rename a file",
-      "",
-      "**Search tools:**",
-      "- search_text(pattern, glob?, context_lines?): grep for a text/regex pattern; context_lines shows N lines around each match",
-      "- find_files(glob): find files matching a glob pattern",
-      "",
-      "**Web tools:**",
-      "- fetch_url(url): fetch a public URL and return its text content",
-      "- search_internet(query): search the web (requires search config in workspace.yaml)",
-      "",
-      "**Shell tool:**",
-      "- run_command(command): run a shell command (grep, git log, git diff, bun test, etc.) — unapproved command binaries require user confirmation before running",
-      "",
-      "**Interaction tool:**",
-      "- ask_me(questions): pause and ask one or more questions with structured options (label, description?, recommended?, preview?)",
-      "",
-      "**Agent tool:**",
-      "- spawn_agent(children): run parallel sub-agents in this worktree; each child gets its own instructions and tools",
-      "",
-      "Always read before you write. Use patch_file for targeted edits to existing files.",
-      "",
-      "CRITICAL: Always invoke tools using the API tool_call mechanism. NEVER write tool calls as XML (`<tool_call>`), JSON, or any other text format in your response — those formats are silently ignored and the tool will not run.",
+      getToolDescriptionBlock(columnTools),
     ];
     messages.push({ role: "system", content: lines.join("\n") });
   }
@@ -360,6 +332,25 @@ function assembleMessages(
   // so the model can reference them throughout the conversation.
   if (sessionNotes) {
     messages.push({ role: "system", content: formatSessionNotesBlock(sessionNotes) });
+  }
+
+  // Active todos — inject as a system block so the list survives compaction.
+  // Only id/title/status are injected; context and result are on demand via get_todo.
+  if (taskId) {
+    const todos = listTodos(taskId);
+    if (todos.length > 0) {
+      const STATUS_ICON: Record<string, string> = {
+        "completed": "✓",
+        "in-progress": "●",
+        "not-started": "○",
+      };
+      const lines = ["## Active Todos", ""];
+      for (const t of todos) {
+        const icon = STATUS_ICON[t.status] ?? "○";
+        lines.push(`[${t.id}] ${icon}  ${t.title}`);
+      }
+      messages.push({ role: "system", content: lines.join("\n") });
+    }
   }
 
   // Compacted conversation history
@@ -493,7 +484,7 @@ Your <summary> must include the following sections:
 4. Errors and Fixes: List all errors encountered and how they were fixed. Include any specific user feedback received.
 5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
 6. All User Messages: List ALL user messages verbatim (not paraphrased). These are critical for understanding user feedback and intent.
-7. Pending Tasks: Outline any pending tasks explicitly requested.
+7. Pending Tasks: If an "## Active Todos" system block was injected into this conversation, do NOT re-enumerate those items here — they are persisted separately and will be re-injected fresh on the next call. Simply write: "Managed via todo system (see Active Todos block)." Only record pending items in prose here if no todo system block was present.
 8. Current Work: Describe in detail precisely what was being worked on immediately before this summary, paying special attention to the most recent messages. Include file names and code snippets.
 9. Optional Next Step: List the next step directly in line with the most recent work. IMPORTANT: only list a next step if it is explicitly in line with the user's most recent request. Include direct quotes from the most recent conversation showing exactly what task was being worked on.
 
@@ -767,14 +758,38 @@ export async function handleTransition(
     `Running prompt: ${column.id}`,
   );
 
-  // 8. Register AbortController for cancellation (D3)
+  // 8. Resolve and persist the on_enter_prompt so its content survives in
+  // conversation history across subsequent human turns and compaction.
+  // Resolution happens here so the worktree context is available.
+  const transitionGitRow = db
+    .query<{ worktree_path: string | null; worktree_status: string }, [number]>(
+      "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+    )
+    .get(taskId);
+  const transitionWorktreePath =
+    transitionGitRow?.worktree_status === "ready" ? (transitionGitRow.worktree_path ?? "") : "";
+  let resolvedOnEnterPrompt = column.on_enter_prompt;
+  try {
+    resolvedOnEnterPrompt = await resolveSlashReference(column.on_enter_prompt, transitionWorktreePath);
+  } catch {
+    // If resolution fails, fall back to raw slug — runExecution will surface the error
+  }
+  appendMessage(
+    taskId,
+    task.conversation_id!,
+    "user",
+    "prompt",
+    resolvedOnEnterPrompt,
+  );
+
+  // 9. Register AbortController for cancellation (D3)
   const controller = new AbortController();
   executionControllers.set(executionId, controller);
 
   // 9. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
   const resolvedModel = updatedRow.model ?? "";
-  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
+  runExecution(taskId, executionId, resolvedOnEnterPrompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
     () => { },
   );
 
@@ -882,7 +897,7 @@ async function runExecution(
   onToken: OnToken,
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
-  onNewMessage: OnNewMessage,
+  onNewMessage: OnNewMessage = () => {},
 ): Promise<void> {
   const db = getDb();
 
@@ -960,7 +975,10 @@ async function runExecution(
 
     // Task 5.3: Assemble full execution payload as messages
     const sessionNotes = readSessionMemory(taskId);
-    const messages = assembleMessages(task, resolvedStageInstructions, history, resolvedPrompt, gitContext, sessionNotes);
+    const messages = assembleMessages(task, resolvedStageInstructions, history, resolvedPrompt, gitContext, sessionNotes, taskId, column?.tools);
+
+    // Log the full message payload for debugging (stored in DB only, not printed to stdout).
+    log("debug", "Messages assembled for AI call", { taskId, executionId, data: { messageCount: messages.length, messages } });
 
     const config = getConfig();
     // Resolve provider from qualified model ID (e.g. "lmstudio/qwen3-8b")
@@ -1094,7 +1112,7 @@ async function runExecution(
       hadReasoning = false;
 
       try {
-        log("debug", `Stream round ${toolRounds + 1} started`, { taskId, executionId, data: { toolCount: tools.length } });
+        log("debug", `Stream round ${toolRounds + 1} started`, { taskId, executionId, data: { toolCount: tools.length, messageCount: liveMessages.length, messages: liveMessages } });
         for await (const event of retryStream(provider, liveMessages, { tools, signal })) {
           if (event.type === "token") {
             fullResponse += event.content;
@@ -1360,6 +1378,22 @@ async function runExecution(
         } catch {
           spawnArgs = { children: [] };
         }
+
+        // Record tool_call message before executing children, matching the pattern
+        // used by all other tools in the loop.
+        const spawnCallContent = JSON.stringify({ name: "spawn_agent", arguments: spawnCall.function.arguments });
+        const spawnCallId = appendMessage(
+          taskId,
+          task.conversation_id ?? 0,
+          "tool_call",
+          null,
+          spawnCallContent,
+        );
+        onNewMessage({
+          id: spawnCallId, taskId, conversationId: task.conversation_id ?? 0,
+          type: "tool_call", role: null, content: spawnCallContent, metadata: null,
+          createdAt: new Date().toISOString(),
+        });
 
         const childResults = await Promise.all(
           (spawnArgs.children ?? []).map(async (child, idx) => {

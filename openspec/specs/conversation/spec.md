@@ -21,9 +21,9 @@ The system SHALL support the following message types in a conversation: `user`, 
 - **WHEN** a task is moved from one workflow column to another
 - **THEN** a `transition_event` message is appended to the conversation recording the from-state and to-state
 
-#### Scenario: Tool calls and results are recorded
-- **WHEN** the AI makes a tool call during execution
-- **THEN** a `tool_call` message is appended, and when the result arrives, a `tool_result` message is appended
+#### Scenario: Tool calls and results are recorded for all tools including intercepted tools
+- **WHEN** the AI makes a tool call during execution, including intercepted tools like `spawn_agent` and `ask_me`
+- **THEN** a `tool_call` message is appended before execution, and when the result arrives, a `tool_result` message is appended
 
 #### Scenario: ask_me call creates ask_user_prompt message
 - **WHEN** the AI calls the `ask_me` tool

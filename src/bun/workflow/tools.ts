@@ -9,6 +9,13 @@ import { getConfig } from "../config/index.ts";
 import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { removeWorktree } from "../git/worktree.ts";
+import {
+  createTodo,
+  getTodoById,
+  updateTodo as dbUpdateTodo,
+  deleteTodo as dbDeleteTodo,
+  listTodos,
+} from "../db/todos.ts";
 
 // ─── Myers diff algorithm ─────────────────────────────────────────────────────
 
@@ -723,6 +730,97 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["task_id", "message"],
     },
   },
+  // ── todos group ────────────────────────────────────────────────────────────
+  {
+    name: "create_todo",
+    description:
+      "Create a new todo item scoped to the current task. Returns the stable integer id of the created item. Use the context field to record what the agent will need to know when working on this item later (findings so far, relevant files, constraints).",
+    parameters: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "Short label for the todo item.",
+        },
+        context: {
+          type: "string",
+          description: "Optional — background context for this item. Written once at creation for future reference or sub-agent handoff.",
+        },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "get_todo",
+    description:
+      "Retrieve the full record for a todo item by id, including context and result fields. Call this before acting on a todo or before delegating it to a sub-agent.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: {
+          type: "number",
+          description: "The todo item id (from create_todo or list_todos).",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "update_todo",
+    description:
+      "Update one or more fields of a todo item by id. Use status 'in-progress' when starting work, 'completed' when done. Use result to record a summary of what was accomplished.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: {
+          type: "number",
+          description: "The todo item id.",
+        },
+        title: {
+          type: "string",
+          description: "New title for the todo.",
+        },
+        status: {
+          type: "string",
+          description: "New status: 'not-started', 'in-progress', or 'completed'.",
+        },
+        context: {
+          type: "string",
+          description: "Updated context field.",
+        },
+        result: {
+          type: "string",
+          description: "Outcome summary — written when completing the item so the parent agent can read it after compaction.",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "delete_todo",
+    description:
+      "Permanently remove a todo item by id. Use when a todo is no longer relevant.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: {
+          type: "number",
+          description: "The todo item id to delete.",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "list_todos",
+    description:
+      "List all todos for the current task. Returns id, title, and status only. Call get_todo(id) to retrieve context or result for a specific item.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 /** Built-in tool groups. A column's `tools` array may use group names, individual
@@ -737,10 +835,109 @@ export const TOOL_GROUPS: Map<string, string[]> = new Map([
   ["web", ["fetch_url", "search_internet"]],
   ["tasks_read", ["get_task", "get_board_summary", "list_tasks"]],
   ["tasks_write", ["create_task", "edit_task", "delete_task", "move_task", "message_task"]],
+  ["todos", ["create_todo", "get_todo", "update_todo", "delete_todo", "list_todos"]],
 ]);
 
 /** Default tool names used when a column has no explicit 'tools' config. */
 const DEFAULT_TOOL_NAMES = ["read_file", "list_dir", "run_command"];
+
+/** One-line natural-language description for each tool, used in the worktree context block. */
+const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
+  // read
+  ["list_dir", "list_dir(path): list files/directories relative to the worktree root"],
+  ["read_file", "read_file(path, start_line?, end_line?): read a file; use start_line/end_line (1-based) for partial reads of large files"],
+  // write
+  ["write_file", "write_file(path, content): create or fully overwrite a file"],
+  ["patch_file", "patch_file(path, content, position, anchor?): targeted edit — position is start/end/before/after/replace; anchor required for before/after/replace and must appear exactly once"],
+  ["delete_file", "delete_file(path): delete a file"],
+  ["rename_file", "rename_file(from_path, to_path): move or rename a file"],
+  // search
+  ["search_text", "search_text(pattern, glob?, context_lines?): grep for a text/regex pattern; context_lines shows N lines around each match"],
+  ["find_files", "find_files(glob): find files matching a glob pattern"],
+  // shell
+  ["run_command", "run_command(command): run a shell command (grep, git log, git diff, bun test, etc.) — unapproved command binaries require user confirmation before running"],
+  // interactions
+  ["ask_me", "ask_me(questions): pause and ask one or more questions with structured options (label, description?, recommended?, preview?)"],
+  // agents
+  ["spawn_agent", "spawn_agent(children): run parallel sub-agents in this worktree; each child gets its own instructions and tools"],
+  // web
+  ["fetch_url", "fetch_url(url): fetch a public URL and return its text content"],
+  ["search_internet", "search_internet(query): search the web (requires search config in workspace.yaml)"],
+  // tasks_read
+  ["get_task", "get_task(task_id): get details of a specific task"],
+  ["get_board_summary", "get_board_summary(board_id?): get a summary of all tasks on the board"],
+  ["list_tasks", "list_tasks(board_id?, state?): list tasks filtered by board and/or workflow state"],
+  // tasks_write
+  ["create_task", "create_task(title, description?, board_id?, state?): create a new task"],
+  ["edit_task", "edit_task(task_id, title?, description?): update a task's title or description"],
+  ["delete_task", "delete_task(task_id): delete a task permanently"],
+  ["move_task", "move_task(task_id, to_state): move a task to a different workflow column"],
+  ["message_task", "message_task(task_id, message): send a chat message to another task's conversation"],
+  // todos
+  ["create_todo", "create_todo(title, context?): create a new todo item with optional context notes"],
+  ["get_todo", "get_todo(id): get full details of a todo including context and result"],
+  ["update_todo", "update_todo(id, status?, title?, result?): update a todo's status, title, or result"],
+  ["delete_todo", "delete_todo(id): delete a todo"],
+  ["list_todos", "list_todos(): list all todos for this task (id, title, status only)"],
+]);
+
+/** Ordered group definitions for the worktree context tool description block. */
+const TOOL_GROUP_LABELS: Array<[groupName: string, label: string]> = [
+  ["read", "Read tools"],
+  ["write", "Write tools"],
+  ["search", "Search tools"],
+  ["web", "Web tools"],
+  ["shell", "Shell tool"],
+  ["interactions", "Interaction tool"],
+  ["agents", "Agent tool"],
+  ["tasks_read", "Task read tools"],
+  ["tasks_write", "Task write tools"],
+  ["todos", "Todo tools"],
+];
+
+/**
+ * Build the natural-language tool description block for the worktree context system message.
+ * Only includes tools present in `columnTools` (expanded from group names).
+ * Returns an empty string if no tools are available or no worktree context is needed.
+ */
+export function getToolDescriptionBlock(columnTools: string[] | undefined): string {
+  const names = columnTools ?? DEFAULT_TOOL_NAMES;
+
+  // Expand group names to individual tool names
+  const expanded = new Set<string>();
+  for (const entry of names) {
+    const groupMembers = TOOL_GROUPS.get(entry);
+    if (groupMembers) {
+      for (const t of groupMembers) expanded.add(t);
+    } else {
+      expanded.add(entry);
+    }
+  }
+
+  const hasWrite = TOOL_GROUPS.get("write")?.some((t) => expanded.has(t)) ?? false;
+  const lines: string[] = ["You have access to the following tools to work with the project files:", ""];
+
+  for (const [groupName, label] of TOOL_GROUP_LABELS) {
+    const groupTools = TOOL_GROUPS.get(groupName)?.filter((t) => expanded.has(t)) ?? [];
+    if (groupTools.length === 0) continue;
+    lines.push(`**${label}:**`);
+    for (const t of groupTools) {
+      const desc = TOOL_DESCRIPTIONS.get(t);
+      if (desc) lines.push(`- ${desc}`);
+    }
+    lines.push("");
+  }
+
+  if (hasWrite) {
+    lines.push("Always read before you write. Use patch_file for targeted edits to existing files.", "");
+  }
+
+  lines.push(
+    "CRITICAL: Always invoke tools using the API tool_call mechanism. NEVER write tool calls as XML (`<tool_call>`), JSON, or any other text format in your response — those formats are silently ignored and the tool will not run.",
+  );
+
+  return lines.join("\n");
+}
 
 /**
  * Resolve the tool definitions to offer for a given column.
@@ -1488,6 +1685,60 @@ export async function executeTool(
         ctx.taskCallbacks.handleHumanTurn(taskId, message);
       }
       return JSON.stringify({ status: "delivered", task_id: taskId });
+    }
+
+    // ── todos group ───────────────────────────────────────────────────────────
+
+    case "create_todo": {
+      const taskId = ctx.taskId;
+      if (!taskId) return "Error: create_todo is only available within a task execution";
+      const title = (args.title ?? "").trim();
+      if (!title) return "Error: title is required";
+      const context = args.context ? String(args.context).trim() : undefined;
+      const id = createTodo(taskId, title, context);
+      return JSON.stringify({ id });
+    }
+
+    case "get_todo": {
+      const taskId = ctx.taskId;
+      if (!taskId) return "Error: get_todo is only available within a task execution";
+      const id = args.id ? parseInt(args.id, 10) : NaN;
+      if (!id || isNaN(id)) return "Error: id is required";
+      const row = getTodoById(taskId, id);
+      if (!row) return `Error: todo ${id} not found`;
+      return JSON.stringify({ id: row.id, title: row.title, status: row.status, context: row.context, result: row.result });
+    }
+
+    case "update_todo": {
+      const taskId = ctx.taskId;
+      if (!taskId) return "Error: update_todo is only available within a task execution";
+      const id = args.id ? parseInt(args.id, 10) : NaN;
+      if (!id || isNaN(id)) return "Error: id is required";
+      const update: { title?: string; status?: string; context?: string; result?: string } = {};
+      if (args.title !== undefined) update.title = String(args.title).trim();
+      if (args.status !== undefined) update.status = String(args.status);
+      if (args.context !== undefined) update.context = String(args.context);
+      if (args.result !== undefined) update.result = String(args.result);
+      const ok = dbUpdateTodo(taskId, id, update);
+      if (!ok) return `Error: todo ${id} not found`;
+      return JSON.stringify({ success: true, id });
+    }
+
+    case "delete_todo": {
+      const taskId = ctx.taskId;
+      if (!taskId) return "Error: delete_todo is only available within a task execution";
+      const id = args.id ? parseInt(args.id, 10) : NaN;
+      if (!id || isNaN(id)) return "Error: id is required";
+      const ok = dbDeleteTodo(taskId, id);
+      if (!ok) return `Error: todo ${id} not found`;
+      return JSON.stringify({ success: true, id });
+    }
+
+    case "list_todos": {
+      const taskId = ctx.taskId;
+      if (!taskId) return "Error: list_todos is only available within a task execution";
+      const todos = listTodos(taskId);
+      return JSON.stringify(todos);
     }
 
     default:

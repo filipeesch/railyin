@@ -174,6 +174,22 @@ const migrations: Array<{ id: string; sql: string }> = [
       CREATE INDEX IF NOT EXISTS idx_pending_messages_task ON pending_messages(task_id);
     `,
   },
+  {
+    id: "008_task_todos",
+    sql: `
+      CREATE TABLE IF NOT EXISTS task_todos (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        title      TEXT    NOT NULL,
+        status     TEXT    NOT NULL DEFAULT 'not-started',
+        context    TEXT,
+        result     TEXT,
+        created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
+    `,
+  },
 ];
 
 export function runMigrations(): void {

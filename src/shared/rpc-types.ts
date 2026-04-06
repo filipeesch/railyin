@@ -195,6 +195,12 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+export interface TodoItem {
+  id: number;
+  title: string;
+  status: string; // 'not-started' | 'in-progress' | 'completed'
+}
+
 export interface WorkspaceConfig {
   id: number;
   name: string;
@@ -401,6 +407,10 @@ export type RailynRPCType = {
       "tasks.setShellAutoApprove": {
         params: { taskId: number; enabled: boolean };
         response: Task;
+      };
+      "todos.list": {
+        params: { taskId: number };
+        response: TodoItem[];
       };
     };
     messages: Record<string, never>;

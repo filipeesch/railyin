@@ -598,6 +598,12 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       onTaskUpdated(updated);
       return updated;
     },
+
+    // ─── todos.list ───────────────────────────────────────────────────────────
+    "todos.list": async (params: { taskId: number }) => {
+      const { listTodos } = await import("../db/todos.ts");
+      return listTodos(params.taskId);
+    },
   };
 }
 

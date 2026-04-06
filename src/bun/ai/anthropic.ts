@@ -143,6 +143,7 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const ANTHROPIC_BETA_THINKING = "interleaved-thinking-2025-05-14";
 
 export class AnthropicProvider implements AIProvider {
+  cooldownUntil = 0;
   private readonly apiKey: string;
   private readonly model: string;
   private readonly baseUrl: string;
