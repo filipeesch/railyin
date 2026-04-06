@@ -88,3 +88,10 @@ export interface ConversationMessageRow {
   metadata: string | null; // JSON-serialized Record<string, unknown>
   created_at: string;
 }
+
+export interface PendingMessageRow {
+  id: number;
+  task_id: number;
+  content: string;
+  created_at: string;
+}

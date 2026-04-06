@@ -42,7 +42,7 @@ afterEach(() => {
   resetFakeAI();
 });
 
-function noop() {}
+function noop() { }
 
 // ─── handleHumanTurn ─────────────────────────────────────────────────────────
 
