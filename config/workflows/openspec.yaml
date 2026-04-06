@@ -9,7 +9,7 @@ columns:
     label: Explore
     description: Think through the problem, investigate options, clarify requirements
     on_enter_prompt: /opsx-explore
-    stage_instructions: /opsx-explore
+    stage_instructions: (Don't propose yet)
     tools:
       - read
       - search
@@ -21,6 +21,7 @@ columns:
     label: Propose
     description: Create a change proposal with design, specs, and tasks
     on_enter_prompt: /opsx-propose
+    stage_instructions: (Don't apply yet)
     tools:
       - read
       - write
