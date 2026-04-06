@@ -20,6 +20,11 @@ providers:
   #   type: openrouter
   #   base_url: https://openrouter.ai/api/v1
   #   api_key: sk-or-YOUR_KEY_HERE
+  #   # Optional: forwarded verbatim as the `provider` key in every request body.
+  #   # Useful for controlling OpenRouter routing (ignore/only/order/sort/etc).
+  #   # Example: avoid Azure/Vertex for Claude models to prevent 400 prefill errors.
+  #   # provider_args:
+  #   #   ignore: [google-vertex, azure]
 
 # Where to store Git worktrees. Defaults to ~/.railyn/worktrees
 # worktree_base_path: /path/to/worktrees

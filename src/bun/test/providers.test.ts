@@ -8,6 +8,7 @@
 import { describe, it, expect, afterEach, beforeEach } from "bun:test";
 import { adaptMessages, adaptTools, AnthropicProvider } from "../ai/anthropic.ts";
 import { resolveProvider, UnresolvableProviderError, clearProviderCache, listOpenAICompatibleModels } from "../ai/index.ts";
+import { OpenAICompatibleProvider } from "../ai/openai-compatible.ts";
 import type { ProviderConfig } from "../config/index.ts";
 import type { AIMessage, AIToolDefinition } from "../ai/types.ts";
 
@@ -397,5 +398,129 @@ describe("listOpenAICompatibleModels (5.9)", () => {
 
     const models = await listOpenAICompatibleModels(config);
     expect(models.some((m) => m.id === "fallback-model")).toBe(true);
+  });
+});
+
+// ─── OpenAICompatibleProvider — provider_args passthrough ─────────────────────
+
+/** Minimal SSE "done" response for OpenAI-compatible streaming endpoints. */
+function openaiDoneStream(): Response {
+  const body = "data: [DONE]\n\n";
+  return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+}
+
+/** Minimal JSON response for non-streaming OpenAI-compatible endpoints. */
+function openaiTurnResponse(content = "hello"): Response {
+  return Response.json({
+    id: "chatcmpl-test",
+    object: "chat.completion",
+    choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  });
+}
+
+describe("OpenAICompatibleProvider — provider_args passthrough", () => {
+  let server: ReturnType<typeof Bun.serve> | null = null;
+  afterEach(() => { server?.stop(true); server = null; });
+
+  it("forwards provider_args as body.provider in stream()", async () => {
+    let capturedBody: Record<string, unknown> | null = null;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBody = await req.json() as Record<string, unknown>;
+        return openaiDoneStream();
+      },
+    });
+
+    const providerArgs = { ignore: ["google-vertex", "azure"] };
+    const provider = new OpenAICompatibleProvider(
+      `http://localhost:${server.port}`,
+      "test-key",
+      "test-model",
+      providerArgs,
+    );
+
+    const messages: AIMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    // drain the stream
+    for await (const _ of provider.stream(messages)) { /* noop */ }
+
+    expect(capturedBody?.provider).toEqual(providerArgs);
+  });
+
+  it("forwards provider_args as body.provider in turn()", async () => {
+    let capturedBody: Record<string, unknown> | null = null;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBody = await req.json() as Record<string, unknown>;
+        return openaiTurnResponse();
+      },
+    });
+
+    const providerArgs = { only: ["anthropic"] };
+    const provider = new OpenAICompatibleProvider(
+      `http://localhost:${server.port}`,
+      "test-key",
+      "test-model",
+      providerArgs,
+    );
+
+    const messages: AIMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    await provider.turn(messages);
+
+    expect(capturedBody?.provider).toEqual(providerArgs);
+  });
+
+  it("omits body.provider when provider_args is not set in stream()", async () => {
+    let capturedBody: Record<string, unknown> | null = null;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBody = await req.json() as Record<string, unknown>;
+        return openaiDoneStream();
+      },
+    });
+
+    const provider = new OpenAICompatibleProvider(
+      `http://localhost:${server.port}`,
+      "test-key",
+      "test-model",
+      // no provider_args
+    );
+
+    const messages: AIMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    for await (const _ of provider.stream(messages)) { /* noop */ }
+
+    expect(capturedBody).not.toBeNull();
+    expect(Object.keys(capturedBody!)).not.toContain("provider");
+  });
+
+  it("omits body.provider when provider_args is not set in turn()", async () => {
+    let capturedBody: Record<string, unknown> | null = null;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBody = await req.json() as Record<string, unknown>;
+        return openaiTurnResponse();
+      },
+    });
+
+    const provider = new OpenAICompatibleProvider(
+      `http://localhost:${server.port}`,
+      "test-key",
+      "test-model",
+      // no provider_args
+    );
+
+    const messages: AIMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    await provider.turn(messages);
+
+    expect(capturedBody).not.toBeNull();
+    expect(Object.keys(capturedBody!)).not.toContain("provider");
   });
 });

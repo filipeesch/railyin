@@ -84,6 +84,21 @@ The system SHALL continue accumulating stream tokens even when the task detail d
 - **WHEN** the model finishes streaming
 - **THEN** the complete response is written to the database before the done signal is sent to the frontend, preventing race conditions on re-open
 
+### Requirement: Final assistant message is delivered via real-time push
+The engine SHALL call `onNewMessage` for the final assistant message immediately after persisting it with `appendMessage`, consistent with how all other message types (tool_call, tool_result, reasoning, file_diff, etc.) are delivered. The frontend SHALL NOT rely on a `loadMessages` DB refetch triggered by the `done` streaming signal to receive the final assistant message.
+
+#### Scenario: Assistant message arrives without DB refetch
+- **WHEN** the model finishes generating a response and the task drawer is open
+- **THEN** the final assistant message appears in the conversation timeline immediately via `onNewMessage`, with no round-trip DB reload after the done signal
+
+#### Scenario: Streaming bubble replaced by persisted message on done
+- **WHEN** the engine sends `onNewMessage` for the final assistant message
+- **THEN** the frontend clears the streaming bubble and inserts the persisted message in its place, with no visual gap between stream end and message appearance
+
+#### Scenario: Message is available on drawer reopen when delivery was missed
+- **WHEN** the task drawer is closed while the model is streaming and reopened after the execution ends
+- **THEN** the final assistant message is loaded from the database via `loadMessages`, providing a consistent fallback regardless of whether the live `onNewMessage` push was received
+
 ### Requirement: Engine flushes one pending message after execution ends
 After each execution for a task ends and the task's `execution_state` transitions to `waiting_user` or `idle`, the engine SHALL check the `pending_messages` table for that task. If a pending message exists, the engine SHALL delete the oldest one and call `handleHumanTurn` for that task asynchronously (fire-and-forget). Only one pending message SHALL be flushed per execution end.
 

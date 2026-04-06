@@ -28,6 +28,8 @@ export function mapTask(row: TaskRow): Task {
     createdFromTaskId: row.created_from_task_id,
     createdFromExecutionId: row.created_from_execution_id,
     model: row.model ?? null,
+    shellAutoApprove: row.shell_auto_approve === 1,
+    approvedCommands: (() => { try { return JSON.parse(row.approved_commands ?? "[]"); } catch { return []; } })(),
     worktreeStatus: row.worktree_status ?? null,
     branchName: row.branch_name ?? null,
     worktreePath: row.worktree_path ?? null,

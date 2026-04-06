@@ -156,6 +156,13 @@ const migrations: Array<{ id: string; sql: string }> = [
     `,
   },
   {
+    id: "007_shell_command_approval",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN shell_auto_approve INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN approved_commands TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
+  {
     id: "006_pending_messages",
     sql: `
       CREATE TABLE IF NOT EXISTS pending_messages (

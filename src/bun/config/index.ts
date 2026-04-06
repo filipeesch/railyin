@@ -11,6 +11,7 @@ export interface ProviderConfig {
   base_url?: string;
   api_key?: string;
   context_window_tokens?: number; // manual override; auto-detected from provider when absent
+  provider_args?: Record<string, unknown>; // forwarded verbatim as the `provider` key in every OpenAI-compat request body
 }
 
 /**
@@ -108,6 +109,9 @@ providers:
   #   type: openrouter
   #   base_url: https://openrouter.ai/api/v1
   #   api_key: sk-or-YOUR_KEY_HERE
+  #   # provider_args: forwarded as the "provider" key in every request body (OpenRouter routing preferences)
+  #   # provider_args:
+  #   #   ignore: [google-vertex, azure]
 
   # LM Studio (local models)
   # - id: lmstudio

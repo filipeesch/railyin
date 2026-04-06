@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { executeTool, resolveToolsForColumn, TOOL_GROUPS, myersDiff } from "../workflow/tools.ts";
+import { executeTool, resolveToolsForColumn, TOOL_GROUPS, myersDiff, extractCommandBinaries } from "../workflow/tools.ts";
 import type { FileDiffPayload } from "../../shared/rpc-types.ts";
 
 /** Cast helper: write tools return { content, diff } on success, a string on error. */
@@ -155,19 +155,19 @@ describe("executeTool / run_command", () => {
     expect(result).toBe("hello");
   });
 
-  it("blocks rm command", async () => {
-    const result = await executeTool("run_command", JSON.stringify({ command: "rm -rf ." }), ctx());
-    expect(result).toMatch(/blocked/i);
+  it("runs rm without approval gate when no taskCallbacks provided", async () => {
+    // With no taskCallbacks, the approval gate is bypassed entirely — the command runs
+    const result = await executeTool("run_command", JSON.stringify({ command: "echo ran" }), ctx());
+    expect(result).toBe("ran");
   });
 
-  it("blocks git push", async () => {
-    const result = await executeTool("run_command", JSON.stringify({ command: "git push origin main" }), ctx());
-    expect(result).toMatch(/blocked/i);
-  });
-
-  it("blocks curl", async () => {
-    const result = await executeTool("run_command", JSON.stringify({ command: "curl https://evil.com" }), ctx());
-    expect(result).toMatch(/blocked/i);
+  it("skips approval gate when shellAutoApprove is true", async () => {
+    const result = await executeTool(
+      "run_command",
+      JSON.stringify({ command: "echo approved" }),
+      { ...ctx(), shellAutoApprove: true, approvedCommands: [] },
+    );
+    expect(result).toBe("approved");
   });
 
   it("captures stderr", async () => {
@@ -326,20 +326,98 @@ describe("executeTool / find_files", () => {
 
 // ─── run_command block-list extensions ───────────────────────────────────────
 
-describe("executeTool / run_command — write redirection block-list", () => {
-  it("blocks > redirection", async () => {
-    const result = await executeTool("run_command", JSON.stringify({ command: "echo x > /tmp/out.txt" }), ctx());
-    expect(result).toMatch(/blocked/i);
+describe("executeTool / run_command — approval gate", () => {
+  it("runs command when no taskCallbacks provided (no gate)", async () => {
+    const result = await executeTool("run_command", JSON.stringify({ command: "echo x" }), ctx());
+    expect(result).toBe("x");
   });
 
-  it("blocks >> append redirection", async () => {
-    const result = await executeTool("run_command", JSON.stringify({ command: "echo x >> /tmp/out.txt" }), ctx());
-    expect(result).toMatch(/blocked/i);
+  it("calls requestShellApproval for unapproved binaries", async () => {
+    let capturedBinaries: string[] = [];
+    const result = await executeTool("run_command", JSON.stringify({ command: "curl https://example.com" }), {
+      ...ctx(),
+      shellAutoApprove: false,
+      approvedCommands: [],
+      taskId: 999,
+      taskCallbacks: {
+        handleTransition: () => {},
+        handleHumanTurn: () => {},
+        cancelExecution: () => {},
+        appendApprovedCommands: () => {},
+        requestShellApproval: async (_tid, _cmd, binaries) => {
+          capturedBinaries = binaries;
+          return "deny";
+        },
+      },
+    });
+    expect(capturedBinaries).toContain("curl");
+    expect(result).toMatch(/denied/i);
   });
 
-  it("blocks tee", async () => {
-    const result = await executeTool("run_command", JSON.stringify({ command: "echo x | tee /tmp/out.txt" }), ctx());
-    expect(result).toMatch(/blocked/i);
+  it("skips gate when shellAutoApprove is true", async () => {
+    let gateCalled = false;
+    const result = await executeTool("run_command", JSON.stringify({ command: "echo approved" }), {
+      ...ctx(),
+      shellAutoApprove: true,
+      approvedCommands: [],
+      taskId: 999,
+      taskCallbacks: {
+        handleTransition: () => {},
+        handleHumanTurn: () => {},
+        cancelExecution: () => {},
+        appendApprovedCommands: () => {},
+        requestShellApproval: async () => { gateCalled = true; return "deny"; },
+      },
+    });
+    expect(gateCalled).toBe(false);
+    expect(result).toBe("approved");
+  });
+
+  it("skips gate when binary is already approved", async () => {
+    let gateCalled = false;
+    const result = await executeTool("run_command", JSON.stringify({ command: "echo test" }), {
+      ...ctx(),
+      shellAutoApprove: false,
+      approvedCommands: ["echo"],
+      taskId: 999,
+      taskCallbacks: {
+        handleTransition: () => {},
+        handleHumanTurn: () => {},
+        cancelExecution: () => {},
+        appendApprovedCommands: () => {},
+        requestShellApproval: async () => { gateCalled = true; return "deny"; },
+      },
+    });
+    expect(gateCalled).toBe(false);
+    expect(result).toBe("test");
+  });
+});
+
+// ─── extractCommandBinaries ───────────────────────────────────────────────────
+
+describe("extractCommandBinaries", () => {
+  it("extracts single binary", () => {
+    expect(extractCommandBinaries("git status")).toEqual(["git"]);
+  });
+
+  it("extracts binaries from compound command with &&", () => {
+    expect(extractCommandBinaries("cd src && bun test && git diff")).toEqual(["cd", "bun", "git"]);
+  });
+
+  it("deduplicates repeated binaries", () => {
+    expect(extractCommandBinaries("git add . && git commit -m 'msg'")).toEqual(["git"]);
+  });
+
+  it("handles pipe operator", () => {
+    expect(extractCommandBinaries("ls -la | grep ts")).toEqual(["ls", "grep"]);
+  });
+
+  it("handles || operator", () => {
+    expect(extractCommandBinaries("mkdir dist || true")).toEqual(["mkdir", "true"]);
+  });
+
+  it("handles semicolon separator", () => {
+    expect(extractCommandBinaries("echo a; echo b")).toEqual(["echo"]);
   });
 });
 

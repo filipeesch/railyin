@@ -777,15 +777,23 @@ export function resolveToolsForColumn(columnTools: string[] | undefined): AITool
   });
 }
 
-// ─── Safety: block writes & destructive ops ───────────────────────────────────
+// ─── Shell command binary extraction ─────────────────────────────────────────
 
-// Shell write redirections (> >>) are blocked so that file writes go through
-// the explicit write_file / replace_in_file tools where path-safety is enforced.
-// We only block file-write redirections, not fd redirections like 2>&1 or >&2:
-//   (?<![0-9&]) — not preceded by a digit (e.g. 2>) or & (e.g. &>targeting fd)
-//   >>?          — literal > or >>
-//   (?!&|\()     — not followed by & (fd redirect) or ( (process substitution)
-const BLOCKED_COMMANDS = /\b(rm|rmdir|mv|cp|mkdir|chmod|chown|dd|mkfs|curl|wget|ssh|scp|git\s+(push|reset|clean|checkout\s+-f)|tee)\b|(?<![0-9&])(>>?)(?!&|\()/i;
+// Splits a compound shell command on meta-characters (&&, ||, |, ;) and
+// extracts the first token (binary name) of each segment. Deduplicates the result.
+export function extractCommandBinaries(command: string): string[] {
+  const segments = command.split(/&&|\|\||[|;]/);
+  const binaries: string[] = [];
+  for (const seg of segments) {
+    const trimmed = seg.trim();
+    if (!trimmed) continue;
+    const token = trimmed.split(/\s+/)[0];
+    if (token && !binaries.includes(token)) {
+      binaries.push(token);
+    }
+  }
+  return binaries;
+}
 
 // ─── Path safety: keep within worktree root ───────────────────────────────────
 
@@ -800,6 +808,8 @@ function safePath(worktreePath: string, userPath: string): string | null {
 // Callbacks injected by the engine to avoid circular imports.
 // The engine passes these when building ToolContext so task tools can trigger
 // transitions and human turns without importing engine.ts directly.
+export type ShellApprovalDecision = "approve_once" | "approve_all" | "deny";
+
 export type TaskToolCallbacks = {
   /** Fire-and-forget: update workflow_state and trigger on_enter_prompt if present. */
   handleTransition: (taskId: number, toState: string) => void;
@@ -807,6 +817,10 @@ export type TaskToolCallbacks = {
   handleHumanTurn: (taskId: number, message: string) => void;
   /** Abort the in-flight execution (safe to call if already stopped). */
   cancelExecution: (executionId: number) => void;
+  /** Pause execution and ask the user to approve a shell command. Returns the decision. */
+  requestShellApproval: (taskId: number, command: string, unapprovedBinaries: string[]) => Promise<ShellApprovalDecision>;
+  /** Persist newly approved binaries to the tasks.approved_commands column. */
+  appendApprovedCommands: (taskId: number, binaries: string[]) => void;
 };
 
 export interface ToolContext {
@@ -815,6 +829,8 @@ export interface ToolContext {
   taskId?: number; // id of the currently executing task (for board-scoped tools)
   boardId?: number; // board the executing task belongs to
   taskCallbacks?: TaskToolCallbacks; // engine callbacks for move_task / message_task
+  shellAutoApprove?: boolean; // pre-fetched at execution start from tasks.shell_auto_approve
+  approvedCommands?: string[]; // in-memory approved set, updated on approve_all
 }
 
 export async function executeTool(
@@ -875,8 +891,22 @@ export async function executeTool(
 
     case "run_command": {
       const cmd = args.command ?? "";
-      if (BLOCKED_COMMANDS.test(cmd)) {
-        return `Error: command blocked for safety. Only read-only commands are permitted.`;
+      // ── Shell approval gate ─────────────────────────────────────────────────
+      if (!ctx.shellAutoApprove && ctx.taskCallbacks?.requestShellApproval && ctx.taskId != null) {
+        const binaries = extractCommandBinaries(cmd);
+        const approved = ctx.approvedCommands ?? [];
+        const unapproved = binaries.filter((b) => !approved.includes(b));
+        if (unapproved.length > 0) {
+          const decision = await ctx.taskCallbacks.requestShellApproval(ctx.taskId, cmd, unapproved);
+          if (decision === "deny") {
+            return `Error: Command denied by user: ${cmd}`;
+          }
+          if (decision === "approve_all") {
+            ctx.taskCallbacks.appendApprovedCommands(ctx.taskId, unapproved);
+            if (ctx.approvedCommands) ctx.approvedCommands.push(...unapproved);
+          }
+          // approve_once: proceed without persisting
+        }
       }
       try {
         const result = spawnSync("sh", ["-c", cmd], {

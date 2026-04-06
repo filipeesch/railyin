@@ -55,6 +55,41 @@ export function cancelExecution(executionId: number): void {
   if (controller) controller.abort();
 }
 
+// ─── Shell approval pending map ───────────────────────────────────────────────
+// Keyed by taskId. Holds the resolver for in-flight approval prompts.
+
+type ShellApprovalDecision = "approve_once" | "approve_all" | "deny";
+const pendingShellApprovals = new Map<number, (decision: ShellApprovalDecision) => void>();
+
+export function getApprovedCommands(taskId: number): string[] {
+  const db = getDb();
+  const row = db.query<{ approved_commands: string }, [number]>(
+    "SELECT approved_commands FROM tasks WHERE id = ?",
+  ).get(taskId);
+  try { return JSON.parse(row?.approved_commands ?? "[]"); } catch { return []; }
+}
+
+export function appendApprovedCommands(taskId: number, binaries: string[]): void {
+  const current = getApprovedCommands(taskId);
+  const updated = [...new Set([...current, ...binaries])];
+  const db = getDb();
+  db.run("UPDATE tasks SET approved_commands = ? WHERE id = ?", [JSON.stringify(updated), taskId]);
+}
+
+export function resolveShellApproval(taskId: number, decision: ShellApprovalDecision, onTaskUpdated: OnTaskUpdated): boolean {
+  const resolve = pendingShellApprovals.get(taskId);
+  if (!resolve) return false;
+  pendingShellApprovals.delete(taskId);
+  // Flip execution_state back to running before the promise resolves so the
+  // frontend reflects the resumed state before tool output arrives.
+  const db = getDb();
+  db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+  const runRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+  if (runRow) onTaskUpdated(mapTask(runRow));
+  resolve(decision);
+  return true;
+}
+
 // ─── Helper: get column config ────────────────────────────────────────────────
 
 function getColumnConfig(templateId: string, columnId: string) {
@@ -306,7 +341,7 @@ function assembleMessages(
       "- search_internet(query): search the web (requires search config in workspace.yaml)",
       "",
       "**Shell tool:**",
-      "- run_command(command): run a read-only shell command (grep, git log, git diff, etc.) — write redirections are blocked",
+      "- run_command(command): run a shell command (grep, git log, git diff, bun test, etc.) — unapproved command binaries require user confirmation before running",
       "",
       "**Interaction tool:**",
       "- ask_me(questions): pause and ask one or more questions with structured options (label, description?, recommended?, preview?)",
@@ -954,6 +989,11 @@ async function runExecution(
     const MAX_TOOL_ROUNDS = 10;
     // Build fire-and-forget wrappers so task tools can trigger transitions /
     // human turns without importing engine.ts (which would be circular).
+
+    // Pre-fetch shell approval state for this execution
+    const shellAutoApprove = task.shell_auto_approve === 1;
+    const approvedCommandsSet: string[] = getApprovedCommands(taskId);
+
     const taskCallbacks: TaskToolCallbacks = {
       handleTransition: (tId, toState) => {
         handleTransition(tId, toState, onToken, onError, onTaskUpdated, onNewMessage).catch(
@@ -966,6 +1006,41 @@ async function runExecution(
         );
       },
       cancelExecution: (execId) => cancelExecution(execId),
+      requestShellApproval: (tId, command, unapprovedBinaries) => {
+        return new Promise<ShellApprovalDecision>((resolve) => {
+          // Write approval prompt to conversation
+          const payload = JSON.stringify({ subtype: "shell_approval", command, unapprovedBinaries });
+          const approvalMsgId = appendMessage(
+            tId,
+            task.conversation_id ?? 0,
+            "ask_user_prompt" as MessageType,
+            null,
+            payload,
+          );
+          onNewMessage({
+            id: approvalMsgId,
+            taskId: tId,
+            conversationId: task.conversation_id ?? 0,
+            type: "ask_user_prompt" as MessageType,
+            role: null,
+            content: payload,
+            metadata: null,
+            createdAt: new Date().toISOString(),
+          });
+          onToken(tId, executionId, "", true);
+          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [tId]);
+          db.run(
+            "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+            [executionId],
+          );
+          const waitingRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(tId);
+          if (waitingRow) onTaskUpdated(mapTask(waitingRow));
+          pendingShellApprovals.set(tId, resolve);
+        });
+      },
+      appendApprovedCommands: (tId, binaries) => {
+        appendApprovedCommands(tId, binaries);
+      },
     };
     const toolCtx = {
       worktreePath,
@@ -973,6 +1048,8 @@ async function runExecution(
       taskId,
       boardId: task.board_id,
       taskCallbacks,
+      shellAutoApprove,
+      approvedCommands: approvedCommandsSet,
     };
 
     let tools = resolveToolsForColumn(column?.tools);
@@ -1042,7 +1119,8 @@ async function runExecution(
           if (fullResponse) {
             const { clean } = stripXmlToolCalls(fullResponse);
             if (clean && !isBadAssistantResponse(clean)) {
-              appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+              const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+              onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: clean, metadata: null, createdAt: new Date().toISOString() });
             }
           }
           handleCancelled(task);
@@ -1051,7 +1129,8 @@ async function runExecution(
         if (fullResponse) {
           const { clean } = stripXmlToolCalls(fullResponse);
           if (clean && !isBadAssistantResponse(clean)) {
-            appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+            const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+            onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: clean, metadata: null, createdAt: new Date().toISOString() });
           }
         }
         const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
@@ -1419,7 +1498,8 @@ async function runExecution(
       if (fullResponse) {
         const { clean } = stripXmlToolCalls(fullResponse);
         if (clean && !isBadAssistantResponse(clean)) {
-          appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+          const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+          onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: clean, metadata: null, createdAt: new Date().toISOString() });
         }
       }
       handleCancelled(task);
@@ -1446,7 +1526,8 @@ async function runExecution(
     }
 
     if (!isBadAssistantResponse(cleanResponse)) {
-      appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", cleanResponse);
+      const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", cleanResponse);
+      onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: cleanResponse, metadata: null, createdAt: new Date().toISOString() });
 
       // Trigger background session memory extraction every N completed AI turns.
       // Count only persisted assistant messages so the interval is stable.

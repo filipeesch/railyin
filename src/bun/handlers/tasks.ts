@@ -14,6 +14,7 @@ import {
   compactConversation,
   resolveModelContextWindow,
   cancelExecution,
+  resolveShellApproval,
 } from "../workflow/engine.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
@@ -580,6 +581,22 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
     // ─── tasks.sessionMemory ─────────────────────────────────────────────────
     "tasks.sessionMemory": async (params: { taskId: number }): Promise<{ content: string | null }> => {
       return { content: readSessionMemory(params.taskId) };
+    },
+
+    // ─── tasks.respondShellApproval ──────────────────────────────────────────
+    "tasks.respondShellApproval": async (params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" }): Promise<{ ok: boolean }> => {
+      const ok = resolveShellApproval(params.taskId, params.decision, onTaskUpdated);
+      return { ok };
+    },
+
+    // ─── tasks.setShellAutoApprove ────────────────────────────────────────────
+    "tasks.setShellAutoApprove": async (params: { taskId: number; enabled: boolean }): Promise<Task> => {
+      const db = getDb();
+      db.run("UPDATE tasks SET shell_auto_approve = ? WHERE id = ?", [params.enabled ? 1 : 0, params.taskId]);
+      const updated = fetchTaskWithDetail(db, params.taskId);
+      if (!updated) throw new Error(`Task ${params.taskId} not found`);
+      onTaskUpdated(updated);
+      return updated;
     },
   };
 }

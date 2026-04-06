@@ -23,7 +23,15 @@
   </div>
 
   <div v-else-if="chunk.type === 'ask_user_prompt'" class="msg msg--ask-prompt">
+    <ShellApprovalPrompt
+      v-if="shellApprovalPayload"
+      :command="shellApprovalPayload.command"
+      :unapproved-binaries="shellApprovalPayload.unapprovedBinaries"
+      :answered="answeredText"
+      @respond="onShellApprovalRespond"
+    />
     <AskUserPrompt
+      v-else
       :questions="askPayload.questions"
       :answered-text="answeredText"
       @submit="onAskSubmit"
@@ -55,7 +63,9 @@ import { marked } from "marked";
 import type { ConversationMessage, AskUserPromptContent } from "@shared/rpc-types";
 import AskUserPrompt from "./AskUserPrompt.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
+import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
 import { useTaskStore } from "../stores/task";
+import { electroview } from "../rpc";
 
 const props = defineProps<{
   chunk: ConversationMessage;
@@ -131,6 +141,31 @@ async function onAskSubmit(answer: string) {
   const taskId = taskStore.activeTaskId;
   if (taskId === null) return;
   await taskStore.sendMessage(taskId, answer);
+}
+
+// ─── Shell approval support ───────────────────────────────────────────────────
+
+type ShellApprovalPayload = { subtype: "shell_approval"; command: string; unapprovedBinaries: string[] };
+
+const shellApprovalPayload = computed<ShellApprovalPayload | null>(() => {
+  if (props.chunk.type !== "ask_user_prompt") return null;
+  try {
+    const raw = JSON.parse(props.chunk.content) as Record<string, unknown>;
+    if (raw.subtype === "shell_approval") {
+      return {
+        subtype: "shell_approval",
+        command: String(raw.command ?? ""),
+        unapprovedBinaries: Array.isArray(raw.unapprovedBinaries) ? raw.unapprovedBinaries as string[] : [],
+      };
+    }
+  } catch { /* not a shell_approval message */ }
+  return null;
+});
+
+async function onShellApprovalRespond(decision: "approve_once" | "approve_all" | "deny") {
+  const taskId = taskStore.activeTaskId;
+  if (taskId === null) return;
+  await electroview.rpc!.request["tasks.respondShellApproval"]({ taskId, decision });
 }
 </script>
 

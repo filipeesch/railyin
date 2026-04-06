@@ -314,6 +314,15 @@
             :loading="compacting"
             @click="compactConversation"
           />
+          <!-- Shell auto-approve toggle -->
+          <div class="shell-autoapprove-toggle" :title="task.shellAutoApprove ? 'Shell auto-approve ON — commands run without prompting' : 'Shell auto-approve OFF — commands require approval'">
+            <ToggleSwitch
+              :model-value="task.shellAutoApprove"
+              size="small"
+              @update:model-value="toggleShellAutoApprove"
+            />
+            <span class="shell-autoapprove-label">Auto-approve shell</span>
+          </div>
         </div>
       </div>
     </div>
@@ -373,6 +382,7 @@ import Textarea from "primevue/textarea";
 import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import ProgressSpinner from "primevue/progressspinner";
+import ToggleSwitch from "primevue/toggleswitch";
 import MessageBubble from "./MessageBubble.vue";
 import ToolCallGroup, { type ToolEntry } from "./ToolCallGroup.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
@@ -693,6 +703,12 @@ async function onModelChange(model: string) {
   await taskStore.setModel(task.value.id, model);
 }
 
+async function toggleShellAutoApprove() {
+  if (!task.value) return;
+  const newValue = !task.value.shellAutoApprove;
+  await electroview.rpc!.request["tasks.setShellAutoApprove"]({ taskId: task.value.id, enabled: newValue });
+}
+
 async function compactConversation() {
   if (!task.value) return;
   compacting.value = true;
@@ -913,6 +929,20 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shell-autoapprove-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.shell-autoapprove-label {
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color);
+  white-space: nowrap;
 }
 
 .input-model-select {

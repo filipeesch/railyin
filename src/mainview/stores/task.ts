@@ -148,30 +148,13 @@ export const useTaskStore = defineStore("task", () => {
     // We track the streaming task separately from the active (visible) task.
     if (payload.taskId !== streamingTaskId.value) return;
     if (payload.done) {
-      // Flush the streaming bubble to the messages list immediately so there's
-      // no visible gap while loadMessages fetches from DB.
-      if (streamingToken.value) {
-        messages.value.push({
-          id: Date.now(),
-          taskId: payload.taskId,
-          conversationId: 0,
-          type: "assistant",
-          role: "assistant",
-          content: streamingToken.value,
-          metadata: null,
-          createdAt: new Date().toISOString(),
-        });
-      }
+      // The assistant message was already delivered and the bubble cleared via onNewMessage.
+      // Just clean up remaining streaming state — no DB refetch needed.
       streamingToken.value = "";
       streamingReasoningToken.value = "";
       streamingStatusMessage.value = "";
       isStreamingReasoning.value = false;
       streamingTaskId.value = null;
-      // Sync with DB so the real persisted message (with correct id/metadata) replaces
-      // the optimistic in-memory copy above. Fire-and-forget; task must be active.
-      if (activeTaskId.value === payload.taskId) {
-        loadMessages(payload.taskId);
-      }
     } else if (payload.isStatus) {
       // Ephemeral status event from non-streaming fallback: just update the latest message.
       streamingStatusMessage.value = payload.token;
@@ -253,6 +236,12 @@ export const useTaskStore = defineStore("task", () => {
     if (message.type === "reasoning") {
       streamingReasoningToken.value = "";
       isStreamingReasoning.value = false;
+    }
+    // When the persisted assistant message arrives, clear the streaming bubble — the
+    // real message replaces it instantly with no gap. streamingTaskId is left for the
+    // subsequent onStreamToken(done) to clear so its guard still fires.
+    if (message.type === "assistant" && message.taskId === streamingTaskId.value) {
+      streamingToken.value = "";
     }
     messages.value.push(message);
   }

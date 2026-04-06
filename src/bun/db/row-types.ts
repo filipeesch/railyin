@@ -48,6 +48,8 @@ export interface TaskRow {
   created_from_execution_id: number | null;
   created_at: string;
   model: string | null;
+  shell_auto_approve: number;
+  approved_commands: string;
   // Fields from LEFT JOIN task_git_context (populated by extended queries)
   worktree_status?: string | null;
   branch_name?: string | null;

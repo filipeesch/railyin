@@ -53,7 +53,12 @@ columns:
   - id: done
     label: Done
     description: Change implemented and archived
-    on_enter_prompt: /opsx-archive
+    on_enter_prompt: |
+      /opsx-archive
+      merge the current branch to main branch
+      solve possible conflicts.
+      Use ask_me tool if the conflicts resolution is not clear.
+      Remove the task worktree.
     tools:
       - read
       - write

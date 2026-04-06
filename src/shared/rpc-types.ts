@@ -46,6 +46,8 @@ export interface Task {
   createdFromTaskId: number | null;
   createdFromExecutionId: number | null;
   model: string | null;
+  shellAutoApprove: boolean;
+  approvedCommands: string[];
   worktreeStatus: string | null;
   branchName: string | null;
   worktreePath: string | null;
@@ -391,6 +393,14 @@ export type RailynRPCType = {
       "tasks.sessionMemory": {
         params: { taskId: number };
         response: { content: string | null };
+      };
+      "tasks.respondShellApproval": {
+        params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" };
+        response: { ok: boolean };
+      };
+      "tasks.setShellAutoApprove": {
+        params: { taskId: number; enabled: boolean };
+        response: Task;
       };
     };
     messages: Record<string, never>;

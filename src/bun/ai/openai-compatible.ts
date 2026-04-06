@@ -5,12 +5,14 @@ export class OpenAICompatibleProvider implements AIProvider {
   private baseUrl: string;
   private apiKey: string;
   private model: string;
+  private providerArgs?: Record<string, unknown>;
 
-  constructor(baseUrl: string, apiKey: string, model: string) {
+  constructor(baseUrl: string, apiKey: string, model: string, providerArgs?: Record<string, unknown>) {
     // Normalise: strip trailing slash, also strip a trailing /v1 so we can add it ourselves
     this.baseUrl = baseUrl.replace(/\/$/, "").replace(/\/v1$/, "");
     this.apiKey = apiKey;
     this.model = model;
+    this.providerArgs = providerArgs;
   }
 
   private headers(): Record<string, string> {
@@ -27,6 +29,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       messages: messages.map(toWireMessage),
       stream: false,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+      ...(this.providerArgs ? { provider: this.providerArgs } : {}),
     };
 
     if (options.tools?.length) {
@@ -78,6 +81,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       messages: messages.map(toWireMessage),
       stream: true,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+      ...(this.providerArgs ? { provider: this.providerArgs } : {}),
     };
 
     if (options.tools?.length) {

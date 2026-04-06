@@ -30,7 +30,7 @@ function instantiateProvider(config: ProviderConfig, modelId: string): AIProvide
   if (config.type === "fake") return new FakeAIProvider();
   if (config.type === "anthropic") return new AnthropicProvider(config.api_key ?? "", modelId);
   // openai-compatible / openrouter / lmstudio / ollama all use OpenAICompatibleProvider
-  return new OpenAICompatibleProvider(config.base_url ?? "", config.api_key ?? "", modelId);
+  return new OpenAICompatibleProvider(config.base_url ?? "", config.api_key ?? "", modelId, config.provider_args);
 }
 
 // ─── resolveProvider ─────────────────────────────────────────────────────────
