@@ -1,9 +1,22 @@
-import { readdirSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync, unlinkSync, renameSync } from "fs";
+import { readdirSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join, resolve, relative, dirname } from "path";
+import { pathToFileURL } from "url";
 import { spawnSync } from "child_process";
 import { lookup as dnsLookup } from "dns/promises";
 import type { AIToolDefinition } from "../ai/types.ts";
 import type { FileDiffPayload, Hunk, HunkLine } from "../../shared/rpc-types.ts";
+import type { LSPServerManager } from "../lsp/manager.ts";
+import type { CallHierarchyItem } from "../lsp/types.ts";
+import {
+  formatDefinition,
+  formatReferences,
+  formatHover,
+  formatDocumentSymbols,
+  formatWorkspaceSymbols,
+  formatCallHierarchyItems,
+  formatIncomingCalls,
+  formatOutgoingCalls,
+} from "../lsp/formatters.ts";
 import { getDb } from "../db/index.ts";
 import { getConfig } from "../config/index.ts";
 import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
@@ -11,7 +24,6 @@ import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { removeWorktree } from "../git/worktree.ts";
 import {
   createTodo,
-  getTodoById,
   updateTodo as dbUpdateTodo,
   deleteTodo as dbDeleteTodo,
   listTodos,
@@ -185,22 +197,20 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
-/** Build a FileDiffPayload for patch_file using pre-known anchor/content info. */
-function patchDiff(
-  operation: "patch_file",
+/** Build a FileDiffPayload for edit_file using old_string/new_string replacement info. */
+function editDiff(
   path: string,
   fileLines: string[],
-  anchorLineIdx: number | null, // 0-based index in file; null for start/end
+  anchorLineIdx: number | null, // 0-based index where old_string starts; null for new-file creation
   removedText: string,
   addedText: string,
-  position: string,
 ): FileDiffPayload {
   const removedLines = splitLines(removedText);
   const addedLines = splitLines(addedText);
   const removed = removedLines.length;
   const added = addedLines.length;
 
-  // Build a single hunk with context for anchor-based modes
+  // Build a single hunk with context for anchor-based replacement
   let hunks: Hunk[] | undefined;
   if (anchorLineIdx !== null) {
     const ctxStart = Math.max(0, anchorLineIdx - CONTEXT_LINES);
@@ -215,27 +225,15 @@ function patchDiff(
       lines.push({ type: "context", old_line: i + 1, new_line: i + 1 - removed + added, content: fileLines[i] });
     }
     hunks = [{ old_start: ctxStart + 1, new_start: ctxStart + 1, lines }];
-  } else if (position === "start") {
-    // Added lines prepended before file — show them followed by first CONTEXT_LINES as context
-    const lines: HunkLine[] = [];
-    addedLines.forEach((c, j) => lines.push({ type: "added", new_line: j + 1, content: c }));
-    const ctxEnd = Math.min(fileLines.length - 1, CONTEXT_LINES - 1);
-    for (let i = 0; i <= ctxEnd; i++) {
-      lines.push({ type: "context", old_line: i + 1, new_line: added + i + 1, content: fileLines[i] });
-    }
-    hunks = [{ old_start: 1, new_start: 1, lines }];
-  } else if (position === "end") {
-    // Added lines appended after file — show last CONTEXT_LINES as context then the added lines
-    const ctxStart = Math.max(0, fileLines.length - CONTEXT_LINES);
-    const lines: HunkLine[] = [];
-    for (let i = ctxStart; i < fileLines.length; i++) {
-      lines.push({ type: "context", old_line: i + 1, new_line: i + 1, content: fileLines[i] });
-    }
-    addedLines.forEach((c, j) => lines.push({ type: "added", new_line: fileLines.length + j + 1, content: c }));
-    hunks = [{ old_start: ctxStart + 1, new_start: ctxStart + 1, lines }];
+  } else {
+    // New file creation — all lines are added
+    hunks = [{
+      old_start: 1, new_start: 1,
+      lines: addedLines.map((c, j) => ({ type: "added" as const, new_line: j + 1, content: c })),
+    }];
   }
 
-  return { operation, path, added, removed, hunks };
+  return { operation: "edit_file", path, added, removed, hunks };
 }
 
 /** Successful write result type — distinguishes from plain error strings. */
@@ -246,7 +244,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "read_file",
     description:
-      "Read the contents of a file in the project worktree. Use relative paths from the worktree root. Optionally specify start_line and/or end_line (1-based) to read only part of a large file.",
+      "Read a file from the project worktree. Returns content with line numbers (`     1→line`) and a metadata header `[file: path, lines: total, showing: start-end]`. Use start_line/end_line (1-based) for partial reads.",
     parameters: {
       type: "object",
       properties: {
@@ -261,22 +259,6 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         end_line: {
           type: "number",
           description: "Last line to read (1-based, inclusive). Omit to read to the end of the file.",
-        },
-      },
-      required: ["path"],
-    },
-  },
-  {
-    name: "list_dir",
-    description:
-      "List files and directories at a path in the project worktree. Use relative paths from the worktree root.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description:
-            "Relative path to the directory from the worktree root. Use '.' for root.",
         },
       },
       required: ["path"],
@@ -300,49 +282,34 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "ask_me",
     description:
-      "Ask one or more questions and present structured options to choose from. Use this when you need clarification or a decision before proceeding. Execution will pause until I respond. " +
-      "For each option you may set: 'description' (one-line explanation of the option), 'recommended: true' (highlight the suggested default), 'preview' (markdown string shown as a comparison pane when the option is focused). " +
-      "You MUST always provide a non-empty 'options' array for every question.",
+      "Pause execution and ask one or more questions with structured options. Use when you need clarification before proceeding. " +
+      "Each question requires: question text, selection_mode ('single' or 'multi'), and a non-empty options array. " +
+      "Options support: label (required), description, recommended (bool), preview (markdown).",
     parameters: {
       type: "object",
       properties: {
         questions: {
           type: "array",
-          description: "One or more questions to ask. Batch related decisions into the same call to reduce round-trips.",
+          description: "One or more questions to ask. Batch related decisions into the same call.",
           items: {
             type: "object",
             properties: {
-              question: {
-                type: "string",
-                description: "The question text. Must be non-empty.",
-              },
+              question: { type: "string", description: "The question text." },
               selection_mode: {
                 type: "string",
                 enum: ["single", "multi"],
-                description: "Whether the user can select one option ('single') or multiple ('multi').",
+                description: "'single' for one selection, 'multi' for multiple.",
               },
               options: {
                 type: "array",
-                description: "The list of options to present. Must contain at least one option.",
+                description: "Options to present. Must contain at least one.",
                 items: {
                   type: "object",
                   properties: {
-                    label: {
-                      type: "string",
-                      description: "The option text shown to the user.",
-                    },
-                    description: {
-                      type: "string",
-                      description: "Optional secondary text explaining what this option means.",
-                    },
-                    recommended: {
-                      type: "boolean",
-                      description: "Set to true to highlight this option as the recommended default.",
-                    },
-                    preview: {
-                      type: "string",
-                      description: "Optional markdown string shown as a preview pane when this option is focused.",
-                    },
+                    label: { type: "string", description: "Option text." },
+                    description: { type: "string", description: "Secondary explanation." },
+                    recommended: { type: "boolean", description: "Highlight as default." },
+                    preview: { type: "string", description: "Markdown preview pane content." },
                   },
                   required: ["label"],
                 },
@@ -359,7 +326,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "write_file",
     description:
-      "Create a new file or fully overwrite an existing one in the project worktree. Use patch_file for targeted edits to existing files. Use relative paths from the worktree root.",
+      "Create a new file or fully overwrite an existing one in the project worktree. Use edit_file for targeted edits to existing files. Use relative paths from the worktree root.",
     parameters: {
       type: "object",
       properties: {
@@ -376,53 +343,12 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
     },
   },
   {
-    name: "delete_file",
+    name: "edit_file",
     description:
-      "Delete a file from the project worktree. Use relative paths from the worktree root.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Relative path to the file to delete.",
-        },
-      },
-      required: ["path"],
-    },
-  },
-  {
-    name: "rename_file",
-    description:
-      "Move or rename a file within the project worktree. Both paths must be inside the worktree root.",
-    parameters: {
-      type: "object",
-      properties: {
-        from_path: {
-          type: "string",
-          description: "Relative path of the existing file.",
-        },
-        to_path: {
-          type: "string",
-          description: "Relative destination path (new name/location).",
-        },
-      },
-      required: ["from_path", "to_path"],
-    },
-  },
-  {
-    name: "patch_file",
-    description:
-      "Make a targeted edit to an existing file. Choose a position mode:\n" +
-      "- \"start\": prepend content before the first line\n" +
-      "- \"end\": append content after the last line\n" +
-      "- \"before\": insert content immediately before the anchor string\n" +
-      "- \"after\": insert content immediately after the anchor string\n" +
-      "- \"replace\": replace the anchor string with content (use content=\"\" to DELETE the anchor)\n\n" +
-      "ANCHOR RULES (before/after/replace):\n" +
-      "- The anchor must appear EXACTLY ONCE in the file. If it appears multiple times, the call will fail.\n" +
-      "- Use a long, distinctive anchor (full line or multiple lines) — never use short repeated patterns like '---', '#', or empty lines as anchors.\n" +
-      "- To delete a section, use position=\"replace\" with the full section text as anchor and content=\"\".\n" +
-      "- Prefer write_file when making large structural changes; use patch_file for small targeted edits.",
+      "Make a targeted edit to a file by replacing an exact string. You MUST read the file first. " +
+      "Set old_string to the exact text to find (must be unique in the file). Set new_string to the replacement. " +
+      "Set replace_all=true to replace every occurrence. " +
+      "To create a new file, set old_string to empty string and provide new_string as file content.",
     parameters: {
       type: "object",
       properties: {
@@ -430,28 +356,27 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
           type: "string",
           description: "Relative path to the file from the worktree root.",
         },
-        content: {
+        old_string: {
           type: "string",
-          description: "The text to insert or replace with.",
+          description: "Exact string to find and replace. Must appear exactly once unless replace_all is true. Use empty string to create a new file.",
         },
-        position: {
+        new_string: {
           type: "string",
-          enum: ["start", "end", "before", "after", "replace"],
-          description: "Where to apply the edit relative to the file or anchor.",
+          description: "Replacement string.",
         },
-        anchor: {
-          type: "string",
-          description: "Required for before/after/replace modes. Must be a unique string that appears exactly once in the file. Use full lines or multiple lines for uniqueness — avoid short or repeated patterns.",
+        replace_all: {
+          type: "boolean",
+          description: "If true, replace every occurrence of old_string. Default false.",
         },
       },
-      required: ["path", "content", "position"],
+      required: ["path", "old_string", "new_string"],
     },
   },
   // ── search group ───────────────────────────────────────────────────────────
   {
     name: "search_text",
     description:
-      "Search for a text pattern (plain string or regex) across files in the project worktree. Returns matching lines with file paths and line numbers. Optionally restrict to files matching a glob pattern and include surrounding context lines.",
+      "Search for a text pattern across files using ripgrep. output_mode: 'content' (default, matching lines), 'files_with_matches' (paths only), 'count' (match count per file). Use limit/offset for pagination.",
     parameters: {
       type: "object",
       properties: {
@@ -466,6 +391,19 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         context_lines: {
           type: "number",
           description: "Number of lines to show before and after each match (like grep -C). Default 0.",
+        },
+        output_mode: {
+          type: "string",
+          enum: ["content", "files_with_matches", "count"],
+          description: "Output format. Default 'content'.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of result lines to return. Default 250.",
+        },
+        offset: {
+          type: "number",
+          description: "Number of result lines to skip (for pagination). Default 0.",
         },
       },
       required: ["pattern"],
@@ -490,7 +428,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "spawn_agent",
     description:
-      "Spawn one or more sub-agents that run in parallel in the same worktree. Each child receives its own instructions and tool set. Use to break a task into independent parallel workstreams. Returns a JSON array of result strings (one per child).",
+      "Spawn parallel sub-agents in the same worktree. Each child gets its own instructions and tools. Returns a JSON array of result strings.",
     parameters: {
       type: "object",
       properties: {
@@ -502,16 +440,16 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
             properties: {
               instructions: {
                 type: "string",
-                description: "Complete, self-contained task description for this sub-agent. Include all context it needs: relevant file paths, task background, constraints, and the concrete action to perform. The sub-agent starts with no conversation history — everything it needs must be in this field.",
+                description: "Complete self-contained task description. Include all context — file paths, background, constraints, action. Sub-agent has no conversation history.",
               },
               tools: {
                 type: "array",
                 items: { type: "string" },
-                description: "Tool group names or individual tool names available to this sub-agent.",
+                description: "Tool group names or individual tool names for this sub-agent.",
               },
               scope: {
                 type: "string",
-                description: "Optional hint about which paths this agent should touch (not enforced, aids the model).",
+                description: "Optional hint about which paths this agent should touch.",
               },
             },
             required: ["instructions", "tools"],
@@ -525,7 +463,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "fetch_url",
     description:
-      "Fetch the content of a public URL and return it as plain text (HTML tags stripped). Always available — no API key required. Useful for reading documentation, release notes, or any public web page.",
+      "Fetch a public URL and return its text content (HTML stripped). No API key required.",
     parameters: {
       type: "object",
       properties: {
@@ -540,7 +478,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "search_internet",
     description:
-      "Search the web and return ranked results (title, URL, snippet). Requires search.engine and search.api_key in workspace.yaml. Returns a configuration error if not set up.",
+      "Search the web and return ranked results (title, URL, snippet). Requires search.engine and search.api_key in workspace.yaml.",
     parameters: {
       type: "object",
       properties: {
@@ -734,7 +672,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "create_todo",
     description:
-      "Create a new todo item scoped to the current task. Returns the stable integer id of the created item. Use the context field to record what the agent will need to know when working on this item later (findings so far, relevant files, constraints).",
+      "Create a new todo item scoped to the current task. Returns the stable integer id of the created item.",
     parameters: {
       type: "object",
       properties: {
@@ -742,27 +680,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
           type: "string",
           description: "Short label for the todo item.",
         },
-        context: {
-          type: "string",
-          description: "Optional — background context for this item. Written once at creation for future reference or sub-agent handoff.",
-        },
       },
       required: ["title"],
-    },
-  },
-  {
-    name: "get_todo",
-    description:
-      "Retrieve the full record for a todo item by id, including context and result fields. Call this before acting on a todo or before delegating it to a sub-agent.",
-    parameters: {
-      type: "object",
-      properties: {
-        id: {
-          type: "number",
-          description: "The todo item id (from create_todo or list_todos).",
-        },
-      },
-      required: ["id"],
     },
   },
   {
@@ -783,10 +702,6 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         status: {
           type: "string",
           description: "New status: 'not-started', 'in-progress', or 'completed'.",
-        },
-        context: {
-          type: "string",
-          description: "Updated context field.",
         },
         result: {
           type: "string",
@@ -814,11 +729,55 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "list_todos",
     description:
-      "List all todos for the current task. Returns id, title, and status only. Call get_todo(id) to retrieve context or result for a specific item.",
+      "List all todos for the current task. Returns id, title, and status only.",
     parameters: {
       type: "object",
       properties: {},
       required: [],
+    },
+  },
+
+  // ── lsp group ───────────────────────────────────────────────────────────────
+  {
+    name: "lsp",
+    description:
+      "Query a language server for code intelligence. Operations: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Requires lsp.servers configured in workspace.yaml.",
+    parameters: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: [
+            "goToDefinition",
+            "findReferences",
+            "hover",
+            "documentSymbol",
+            "workspaceSymbol",
+            "goToImplementation",
+            "prepareCallHierarchy",
+            "incomingCalls",
+            "outgoingCalls",
+          ],
+          description: "The LSP operation to perform.",
+        },
+        file_path: {
+          type: "string",
+          description: "Relative path to the file from the worktree root.",
+        },
+        line: {
+          type: "number",
+          description: "1-based line number. Required for operations that need a cursor position.",
+        },
+        character: {
+          type: "number",
+          description: "1-based character offset. Required for position-based operations.",
+        },
+        query: {
+          type: "string",
+          description: "Symbol name query string. Required for workspaceSymbol.",
+        },
+      },
+      required: ["operation", "file_path"],
     },
   },
 ];
@@ -826,8 +785,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
 /** Built-in tool groups. A column's `tools` array may use group names, individual
  * tool names, or a mix. Groups are expanded by resolveToolsForColumn. */
 export const TOOL_GROUPS: Map<string, string[]> = new Map([
-  ["read", ["read_file", "list_dir"]],
-  ["write", ["write_file", "patch_file", "delete_file", "rename_file"]],
+  ["read", ["read_file"]],
+  ["write", ["write_file", "edit_file"]],
   ["search", ["search_text", "find_files"]],
   ["shell", ["run_command"]],
   ["interactions", ["ask_me"]],
@@ -835,31 +794,29 @@ export const TOOL_GROUPS: Map<string, string[]> = new Map([
   ["web", ["fetch_url", "search_internet"]],
   ["tasks_read", ["get_task", "get_board_summary", "list_tasks"]],
   ["tasks_write", ["create_task", "edit_task", "delete_task", "move_task", "message_task"]],
-  ["todos", ["create_todo", "get_todo", "update_todo", "delete_todo", "list_todos"]],
+  ["todos", ["create_todo", "update_todo", "delete_todo", "list_todos"]],
+  ["lsp", ["lsp"]],
 ]);
 
 /** Default tool names used when a column has no explicit 'tools' config. */
-const DEFAULT_TOOL_NAMES = ["read_file", "list_dir", "run_command"];
+const DEFAULT_TOOL_NAMES = ["read_file", "run_command"];
 
 /** One-line natural-language description for each tool, used in the worktree context block. */
 const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   // read
-  ["list_dir", "list_dir(path): list files/directories relative to the worktree root"],
-  ["read_file", "read_file(path, start_line?, end_line?): read a file; use start_line/end_line (1-based) for partial reads of large files"],
+  ["read_file", "read_file(path, start_line?, end_line?): read file with line numbers and metadata header; use start_line/end_line (1-based) for partial reads"],
   // write
   ["write_file", "write_file(path, content): create or fully overwrite a file"],
-  ["patch_file", "patch_file(path, content, position, anchor?): targeted edit — position is start/end/before/after/replace; anchor required for before/after/replace and must appear exactly once"],
-  ["delete_file", "delete_file(path): delete a file"],
-  ["rename_file", "rename_file(from_path, to_path): move or rename a file"],
+  ["edit_file", "edit_file(path, old_string, new_string, replace_all?): targeted edit — replace exact text; read the file first; set old_string='' to create a new file"],
   // search
-  ["search_text", "search_text(pattern, glob?, context_lines?): grep for a text/regex pattern; context_lines shows N lines around each match"],
-  ["find_files", "find_files(glob): find files matching a glob pattern"],
+  ["search_text", "search_text(pattern, glob?, context_lines?, output_mode?, limit?, offset?): search with ripgrep; output_mode: content/files_with_matches/count; limit/offset for pagination"],
+  ["find_files", "find_files(glob): find files matching a glob pattern (sorted by most recently modified)"],
   // shell
   ["run_command", "run_command(command): run a shell command (grep, git log, git diff, bun test, etc.) — unapproved command binaries require user confirmation before running"],
   // interactions
-  ["ask_me", "ask_me(questions): pause and ask one or more questions with structured options (label, description?, recommended?, preview?)"],
+  ["ask_me", "ask_me(questions): pause and ask questions with options (label, description?, recommended?, preview?)"],
   // agents
-  ["spawn_agent", "spawn_agent(children): run parallel sub-agents in this worktree; each child gets its own instructions and tools"],
+  ["spawn_agent", "spawn_agent(children): run parallel sub-agents; each child needs instructions and tools array"],
   // web
   ["fetch_url", "fetch_url(url): fetch a public URL and return its text content"],
   ["search_internet", "search_internet(query): search the web (requires search config in workspace.yaml)"],
@@ -874,11 +831,12 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["move_task", "move_task(task_id, to_state): move a task to a different workflow column"],
   ["message_task", "message_task(task_id, message): send a chat message to another task's conversation"],
   // todos
-  ["create_todo", "create_todo(title, context?): create a new todo item with optional context notes"],
-  ["get_todo", "get_todo(id): get full details of a todo including context and result"],
+  ["create_todo", "create_todo(title): create a new todo item"],
   ["update_todo", "update_todo(id, status?, title?, result?): update a todo's status, title, or result"],
   ["delete_todo", "delete_todo(id): delete a todo"],
   ["list_todos", "list_todos(): list all todos for this task (id, title, status only)"],
+  // lsp
+  ["lsp", "lsp(operation, file_path, line?, character?, query?): code intelligence — goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls"],
 ]);
 
 /** Ordered group definitions for the worktree context tool description block. */
@@ -893,6 +851,7 @@ const TOOL_GROUP_LABELS: Array<[groupName: string, label: string]> = [
   ["tasks_read", "Task read tools"],
   ["tasks_write", "Task write tools"],
   ["todos", "Todo tools"],
+  ["lsp", "LSP tool"],
 ];
 
 /**
@@ -929,7 +888,7 @@ export function getToolDescriptionBlock(columnTools: string[] | undefined): stri
   }
 
   if (hasWrite) {
-    lines.push("Always read before you write. Use patch_file for targeted edits to existing files.", "");
+    lines.push("Always read before you write. Use edit_file for targeted edits to existing files.", "");
   }
 
   lines.push(
@@ -1028,6 +987,11 @@ export interface ToolContext {
   taskCallbacks?: TaskToolCallbacks; // engine callbacks for move_task / message_task
   shellAutoApprove?: boolean; // pre-fetched at execution start from tasks.shell_auto_approve
   approvedCommands?: string[]; // in-memory approved set, updated on approve_all
+  /** Per-execution mtime cache for read-before-write enforcement and deduplication.
+   *  Key: absolute file path. Value: mtimeMs at last read. */
+  mtimeCache?: Map<string, number>;
+  /** LSP server manager for code intelligence operations. */
+  lspManager?: LSPServerManager;
 }
 
 export async function executeTool(
@@ -1051,38 +1015,57 @@ export async function executeTool(
         const stat = statSync(abs);
         if (!stat.isFile()) return `Error: ${args.path} is not a file.`;
         if (stat.size > 500_000) return `Error: file too large (${stat.size} bytes). Use run_command with grep/head to inspect it.`;
-        const raw = readFileSync(abs, "utf-8");
         const startLine = args.start_line ? parseInt(args.start_line, 10) : undefined;
         const endLine = args.end_line ? parseInt(args.end_line, 10) : undefined;
-        if (startLine !== undefined || endLine !== undefined) {
-          const lines = raw.split("\n");
-          const from = (startLine ?? 1) - 1; // convert 1-based → 0-based
-          const to = endLine !== undefined ? endLine : lines.length; // end_line is inclusive
-          return lines.slice(Math.max(0, from), to).join("\n");
+        const isPartialRead = startLine !== undefined || endLine !== undefined;
+
+        // Mtime-based deduplication for full reads (partial reads always bypass)
+        if (!isPartialRead && ctx.mtimeCache) {
+          const cachedMtime = ctx.mtimeCache.get(abs);
+          if (cachedMtime !== undefined && cachedMtime === stat.mtimeMs) {
+            return "File unchanged since last read — refer to the earlier tool result.";
+          }
+          ctx.mtimeCache.set(abs, stat.mtimeMs);
+        } else if (ctx.mtimeCache) {
+          // For partial reads, still track mtime for write enforcement but no dedup
+          ctx.mtimeCache.set(abs, stat.mtimeMs);
         }
-        return raw;
+
+        const raw = readFileSync(abs, "utf-8");
+
+        if (raw.length === 0) {
+          return "Warning: the file exists but the contents are empty.";
+        }
+
+        const allLines = raw.split("\n");
+        const totalLines = allLines.length;
+
+        // Determine actual range to display (1-based inclusive)
+        let from1 = startLine ?? 1;
+        let to1 = endLine ?? totalLines;
+
+        // Clamp to valid range
+        from1 = Math.max(1, from1);
+        to1 = Math.min(totalLines, to1);
+
+        // Offset-past-EOF check
+        if (startLine !== undefined && startLine > totalLines) {
+          return `Warning: start_line ${startLine} exceeds file length (${totalLines} lines). The file has ${totalLines} line${totalLines === 1 ? "" : "s"}.`;
+        }
+
+        const slicedLines = allLines.slice(from1 - 1, to1);
+
+        // Format: line number padded to 6 chars + arrow
+        const numbered = slicedLines.map((line, idx) => {
+          const lineNum = from1 + idx;
+          const padded = String(lineNum).padStart(6, " ");
+          return `${padded}→${line}`;
+        });
+
+        const header = `[file: ${args.path}, lines: ${totalLines}, showing: ${from1}-${to1}]`;
+        return [header, ...numbered].join("\n");
       } catch (e) {
         return `Error reading file: ${e instanceof Error ? e.message : String(e)}`;
-      }
-    }
-
-    case "list_dir": {
-      const abs = safePath(ctx.worktreePath, args.path ?? ".");
-      if (!abs) return "Error: path traversal detected — path must be inside the worktree.";
-      if (!existsSync(abs)) return `Error: directory not found: ${args.path}`;
-      try {
-        const stat = statSync(abs);
-        if (!stat.isDirectory()) return `Error: ${args.path} is not a directory.`;
-        const entries = readdirSync(abs, { withFileTypes: true });
-        return entries
-          .map((e) => {
-            const rel = relative(ctx.worktreePath, join(abs, e.name));
-            return e.isDirectory() ? `${rel}/` : rel;
-          })
-          .sort()
-          .join("\n");
-      } catch (e) {
-        return `Error listing directory: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
@@ -1174,115 +1157,83 @@ export async function executeTool(
       }
     }
 
-    case "delete_file": {
+    case "edit_file": {
       const abs = safePath(ctx.worktreePath, args.path ?? "");
       if (!abs) return "Error: path traversal detected — path must be inside the worktree.";
-      if (!existsSync(abs)) return `Error: file not found: ${args.path}`;
+
+      const oldString = args.old_string ?? "";
+      const newString = args.new_string ?? "";
+      const replaceAll = String(args.replace_all ?? "false").toLowerCase() === "true";
+
       try {
+        // File creation mode: empty old_string + file doesn't exist → create
+        if (oldString === "" && !existsSync(abs)) {
+          mkdirSync(dirname(abs), { recursive: true });
+          writeFileSync(abs, newString, "utf-8");
+          const addedLines = splitLines(newString);
+          const diff = editDiff(args.path, [], null, "", newString);
+          return { content: `The file ${args.path} has been created successfully.`, diff } as WriteResult;
+        }
+
+        if (!existsSync(abs)) return `Error: file not found: ${args.path}`;
         const stat = statSync(abs);
         if (!stat.isFile()) return `Error: ${args.path} is not a file.`;
-        const deletedLines = splitLines(readFileSync(abs, "utf-8"));
-        unlinkSync(abs);
-        const diff: FileDiffPayload = {
-          operation: "delete_file",
-          path: args.path,
-          added: 0,
-          removed: deletedLines.length,
-          hunks: [{
-            old_start: 1, new_start: 1,
-            lines: deletedLines.map((c, i) => ({ type: "removed" as const, old_line: i + 1, content: c })),
-          }],
-        };
-        return { content: `OK: deleted ${args.path} (${deletedLines.length} lines)`, diff } as WriteResult;
-      } catch (e) {
-        return `Error deleting file: ${e instanceof Error ? e.message : String(e)}`;
-      }
-    }
 
-    case "rename_file": {
-      const absFrom = safePath(ctx.worktreePath, args.from_path ?? "");
-      if (!absFrom) return "Error: path traversal detected in from_path — must be inside the worktree.";
-      const absTo = safePath(ctx.worktreePath, args.to_path ?? "");
-      if (!absTo) return "Error: path traversal detected in to_path — must be inside the worktree.";
-      if (!existsSync(absFrom)) return `Error: source not found: ${args.from_path}`;
-      try {
-        mkdirSync(dirname(absTo), { recursive: true });
-        renameSync(absFrom, absTo);
-        const diff: FileDiffPayload = {
-          operation: "rename_file",
-          path: args.from_path,
-          to_path: args.to_path,
-          added: 0,
-          removed: 0,
-        };
-        return { content: `OK: renamed ${args.from_path} → ${args.to_path}`, diff } as WriteResult;
-      } catch (e) {
-        return `Error renaming file: ${e instanceof Error ? e.message : String(e)}`;
-      }
-    }
+        // Read-before-write enforcement
+        if (ctx.mtimeCache) {
+          const cached = ctx.mtimeCache.get(abs);
+          if (cached === undefined) {
+            return `Error: you must read ${args.path} before editing it.`;
+          }
+          if (cached !== stat.mtimeMs) {
+            return `Error: ${args.path} has been modified since you last read it. Read it again before editing.`;
+          }
+        }
 
-    case "patch_file": {
-      const abs = safePath(ctx.worktreePath, args.path ?? "");
-      if (!abs) return "Error: path traversal detected — path must be inside the worktree.";
-      if (!existsSync(abs)) return `Error: file not found: ${args.path}`;
-      try {
-        const stat = statSync(abs);
-        if (!stat.isFile()) return `Error: ${args.path} is not a file.`;
         const content = readFileSync(abs, "utf-8");
+
+        if (oldString === "") {
+          // old_string empty but file exists — prepend/truncate not supported, require explicit old_string
+          return "Error: old_string is empty but the file already exists. Provide the text to replace, or use write_file to fully overwrite.";
+        }
+
+        const occurrences = content.split(oldString).length - 1;
+
+        if (occurrences === 0) {
+          return `Error: old_string not found in ${args.path}. Make sure the text matches exactly (including whitespace and indentation).`;
+        }
+
+        if (occurrences > 1 && !replaceAll) {
+          return `Error: old_string found ${occurrences} times in ${args.path}. Use a longer, more unique string or set replace_all=true.`;
+        }
+
         const fileLines = content.split("\n");
-        const insertion = args.content ?? "";
-        const position = args.position ?? "";
-        const anchor = args.anchor as string | undefined;
-
-        if (position === "start") {
-          writeFileSync(abs, insertion + content, "utf-8");
-          const added = splitLines(insertion).length;
-          const diff = patchDiff("patch_file", args.path, fileLines, null, "", insertion, position);
-          return { content: `OK: patched ${args.path} (+${added} lines, prepended)`, diff } as WriteResult;
-        }
-        if (position === "end") {
-          writeFileSync(abs, content + insertion, "utf-8");
-          const added = splitLines(insertion).length;
-          const diff = patchDiff("patch_file", args.path, fileLines, null, "", insertion, position);
-          return { content: `OK: patched ${args.path} (+${added} lines, appended)`, diff } as WriteResult;
-        }
-        // Anchor-based positions
-        if (!anchor) return `Error: anchor is required for position "${position}"`;
-        const occurrences = content.split(anchor).length - 1;
-        if (occurrences === 0) return `Error: anchor not found in ${args.path}`;
-        if (occurrences > 1) {
-          return `Error: anchor appears ${occurrences} times in ${args.path} — must be unique. Add more context to make it unambiguous.`;
-        }
-
-        // Find anchor line index (0-based)
-        const anchorLineIdx = fileLines.findIndex((_, i) => fileLines.slice(i).join("\n").startsWith(anchor));
-
         let newContent: string;
-        let removedText = "";
-        let addedText = insertion;
-        if (position === "before") {
-          newContent = content.replace(anchor, insertion + anchor);
-        } else if (position === "after") {
-          newContent = content.replace(anchor, anchor + insertion);
-        } else if (position === "replace") {
-          newContent = content.replace(anchor, insertion);
-          removedText = anchor;
-        } else {
-          return `Error: unknown position "${position}". Use start, end, before, after, or replace.`;
-        }
-        if (newContent === content) {
-          return `Error: this patch would not modify the file. For deletion use position="replace" with content="" and anchor set to the exact text to remove. For insertion ensure content is non-empty.`;
-        }
-        writeFileSync(abs, newContent, "utf-8");
+        let replacedCount: number;
 
-        const added = splitLines(addedText).length;
-        const removed = splitLines(removedText).length;
-        const lineNum = anchorLineIdx >= 0 ? anchorLineIdx + 1 : "?";
-        const countStr = position === "replace" ? `(+${added} -${removed} at line ${lineNum})` : `(+${added} at line ${lineNum})`;
-        const diff = patchDiff("patch_file", args.path, fileLines, anchorLineIdx >= 0 ? anchorLineIdx : null, removedText, addedText, position);
-        return { content: `OK: patched ${args.path} ${countStr}`, diff } as WriteResult;
+        if (replaceAll) {
+          newContent = content.split(oldString).join(newString);
+          replacedCount = occurrences;
+        } else {
+          newContent = content.replace(oldString, newString);
+          replacedCount = 1;
+        }
+
+        writeFileSync(abs, newContent, "utf-8");
+        // Update mtime cache after write
+        if (ctx.mtimeCache) {
+          const newStat = statSync(abs);
+          ctx.mtimeCache.set(abs, newStat.mtimeMs);
+        }
+
+        // Find anchor line index (0-based) for the diff
+        const anchorLineIdx = fileLines.findIndex((_, i) => fileLines.slice(i).join("\n").startsWith(oldString));
+        const diff = editDiff(args.path, fileLines, anchorLineIdx >= 0 ? anchorLineIdx : null, oldString, newString);
+
+        const suffix = replaceAll && replacedCount > 1 ? ` (${replacedCount} replacements)` : "";
+        return { content: `The file ${args.path} has been updated successfully.${suffix}`, diff } as WriteResult;
       } catch (e) {
-        return `Error patching file: ${e instanceof Error ? e.message : String(e)}`;
+        return `Error editing file: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
@@ -1292,59 +1243,135 @@ export async function executeTool(
       const pattern = args.pattern ?? "";
       const globPat = args.glob ?? "";
       const contextLines = args.context_lines ? parseInt(String(args.context_lines), 10) : 0;
+      const outputMode = (args.output_mode as string | undefined) ?? "content";
+      const limit = args.limit ? Math.max(1, parseInt(String(args.limit), 10)) : 250;
+      const offset = args.offset ? Math.max(0, parseInt(String(args.offset), 10)) : 0;
+      const MAX_OUTPUT = 20_000;
+
       try {
-        let regex: RegExp;
-        try {
-          regex = new RegExp(pattern, "i");
-        } catch {
-          return `Error: invalid regex pattern: ${pattern}`;
-        }
+        // Check if ripgrep is available
+        const rgCheck = spawnSync("which", ["rg"], { encoding: "utf-8" });
+        const hasRg = rgCheck.status === 0 && (rgCheck.stdout ?? "").trim().length > 0;
 
-        // Convert a glob pattern to a RegExp for relative path matching.
-        const globRe = globToRegex(globPat, /* caseInsensitive */ true);
-        const IGNORE_DIRS = new Set([".git", "node_modules", "dist", ".cache"]);
-        const MAX_OUTPUT = 8_000;
-        const matches: string[] = [];
-
-        const walkAndSearch = (dir: string): void => {
-          if (matches.join("\n").length >= MAX_OUTPUT) return;
-          let entries: string[];
-          try { entries = readdirSync(dir); } catch { return; }
-          for (const entry of entries) {
-            if (IGNORE_DIRS.has(entry)) continue;
-            const fullPath = join(dir, entry);
-            let stat;
-            try { stat = statSync(fullPath); } catch { continue; }
-            if (stat.isDirectory()) {
-              walkAndSearch(fullPath);
-            } else if (stat.isFile()) {
-              const relPath = relative(ctx.worktreePath, fullPath);
-              if (globRe && !globRe.test(relPath)) continue;
-              let content: string;
-              try { content = readFileSync(fullPath, "utf-8"); } catch { continue; }
-              const lines = content.split("\n");
-              for (let i = 0; i < lines.length; i++) {
-                if (!regex.test(lines[i])) continue;
-                // Collect context window around the match
-                const from = Math.max(0, i - contextLines);
-                const to = Math.min(lines.length - 1, i + contextLines);
-                for (let j = from; j <= to; j++) {
-                  const prefix = j === i ? `${relPath}:${j + 1}:` : `${relPath}-${j + 1}-`;
-                  matches.push(`${prefix}${lines[j]}`);
+        if (!hasRg) {
+          // Fall back to hand-rolled walker with a one-time warning prefix
+          const fallbackWarning = "Warning: ripgrep (rg) not found, using slower fallback search.\n\n";
+          let regex: RegExp;
+          try { regex = new RegExp(pattern, "i"); } catch {
+            return `Error: invalid regex pattern: ${pattern}`;
+          }
+          const globRe = globToRegex(globPat, true);
+          const IGNORE_DIRS = new Set([".git", "node_modules", "dist", ".cache"]);
+          const matches: string[] = [];
+          const walkAndSearch = (dir: string): void => {
+            if (matches.length >= limit + offset) return;
+            let entries: string[];
+            try { entries = readdirSync(dir); } catch { return; }
+            for (const entry of entries) {
+              if (IGNORE_DIRS.has(entry)) continue;
+              const fullPath = join(dir, entry);
+              let fstat; try { fstat = statSync(fullPath); } catch { continue; }
+              if (fstat.isDirectory()) { walkAndSearch(fullPath); }
+              else if (fstat.isFile()) {
+                const relPath = relative(ctx.worktreePath, fullPath);
+                if (globRe && !globRe.test(relPath)) continue;
+                let content: string; try { content = readFileSync(fullPath, "utf-8"); } catch { continue; }
+                const lines = content.split("\n");
+                for (let i = 0; i < lines.length && matches.length < limit + offset; i++) {
+                  if (!regex.test(lines[i])) continue;
+                  const from = Math.max(0, i - contextLines);
+                  const to = Math.min(lines.length - 1, i + contextLines);
+                  for (let j = from; j <= to; j++) {
+                    const prefix = j === i ? `${relPath}:${j + 1}:` : `${relPath}-${j + 1}-`;
+                    matches.push(`${prefix}${lines[j]}`);
+                  }
+                  if (contextLines > 0 && i + contextLines < lines.length - 1) matches.push("--");
                 }
-                if (contextLines > 0 && i + contextLines < lines.length - 1) {
-                  matches.push("--");
-                }
-                if (matches.join("\n").length >= MAX_OUTPUT) return;
               }
             }
-          }
-        };
+          };
+          walkAndSearch(ctx.worktreePath);
+          const paged = matches.slice(offset, offset + limit);
+          if (paged.length === 0) return "(no matches found)";
+          const out = paged.join("\n");
+          const truncated = matches.length > offset + limit;
+          return fallbackWarning + (out.length > MAX_OUTPUT ? out.slice(0, MAX_OUTPUT) + "\n[truncated]" : out)
+            + (truncated ? `\n\n[Showing ${offset + 1}–${offset + paged.length} of ${matches.length}+ results. Use offset=${offset + limit} for next page.]` : "");
+        }
 
-        walkAndSearch(ctx.worktreePath);
-        if (matches.length === 0) return "(no matches found)";
-        const out = matches.join("\n");
-        return out.length > MAX_OUTPUT ? out.slice(0, MAX_OUTPUT) + "\n[truncated]" : out;
+        // Build ripgrep arguments
+        const rgArgs: string[] = [
+          "--hidden",
+          "--glob=!.git",
+          "--glob=!node_modules",
+          "--glob=!dist",
+          "--glob=!.cache",
+          "--max-columns=500",
+        ];
+
+        if (outputMode === "files_with_matches") {
+          rgArgs.push("-l");
+        } else if (outputMode === "count") {
+          rgArgs.push("-c");
+        } else {
+          // content mode
+          rgArgs.push("-n", "--no-heading");
+          if (contextLines > 0) rgArgs.push(`-C${contextLines}`);
+        }
+
+        if (globPat) rgArgs.push(`--glob=${globPat}`);
+        rgArgs.push("--", pattern);
+
+        const rgResult = spawnSync("rg", rgArgs, {
+          cwd: ctx.worktreePath,
+          encoding: "utf-8",
+          maxBuffer: 2_000_000,
+        });
+
+        // rg exits 1 when no matches found (not an error)
+        if (rgResult.status !== 0 && rgResult.status !== 1) {
+          const errMsg = (rgResult.stderr ?? "").trim();
+          return `Error: ripgrep failed: ${errMsg || "unknown error"}`;
+        }
+
+        const rawOutput = (rgResult.stdout ?? "").trimEnd();
+        if (!rawOutput) return "(no matches found)";
+
+        if (outputMode === "files_with_matches") {
+          // Sort by mtime (most recently modified first)
+          const filePaths = rawOutput.split("\n").filter(Boolean);
+          const withMtime = filePaths.map((fp) => {
+            const abs = join(ctx.worktreePath, fp);
+            let mtime = 0;
+            try { mtime = statSync(abs).mtimeMs; } catch { /* keep 0 */ }
+            return { fp, mtime };
+          });
+          withMtime.sort((a, b) => b.mtime - a.mtime);
+          const paged = withMtime.slice(offset, offset + limit);
+          const result = paged.map(({ fp }) => fp).join("\n");
+          const truncated = withMtime.length > offset + limit;
+          return result + (truncated ? `\n\n[Showing ${offset + 1}–${offset + paged.length} of ${withMtime.length}+ results. Use offset=${offset + limit} for next page.]` : "");
+        }
+
+        if (outputMode === "count") {
+          const lines = rawOutput.split("\n").filter(Boolean);
+          const paged = lines.slice(offset, offset + limit);
+          const total = lines.reduce((sum, l) => {
+            const m = l.match(/:(\d+)$/);
+            return sum + (m ? parseInt(m[1], 10) : 0);
+          }, 0);
+          const truncated = lines.length > offset + limit;
+          return paged.join("\n") + `\n\nTotal matches: ${total}`
+            + (truncated ? `\n[Showing ${offset + 1}–${offset + paged.length} of ${lines.length} files. Use offset=${offset + limit} for next page.]` : "");
+        }
+
+        // content mode: apply limit/offset per line
+        const lines = rawOutput.split("\n");
+        const paged = lines.slice(offset, offset + limit);
+        const out = paged.join("\n");
+        const truncated = lines.length > offset + limit;
+        const capped = out.length > MAX_OUTPUT ? out.slice(0, MAX_OUTPUT) + "\n[truncated]" : out;
+        return capped + (truncated ? `\n\n[Showing lines ${offset + 1}–${offset + paged.length} of ${lines.length}. Use offset=${offset + limit} for next page.]` : "");
       } catch (e) {
         return `Error: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -1355,7 +1382,7 @@ export async function executeTool(
       try {
         const re = globToRegex(globPat, process.platform === "win32") ?? /(?:)/;
         const IGNORE_DIRS = new Set([".git", "node_modules", "dist", ".cache"]);
-        const found: string[] = [];
+        const found: Array<{ relPath: string; mtime: number }> = [];
 
         const walk = (dir: string): void => {
           if (found.length >= 500) return;
@@ -1364,21 +1391,25 @@ export async function executeTool(
           for (const entry of entries) {
             if (IGNORE_DIRS.has(entry)) continue;
             const fullPath = join(dir, entry);
-            let stat;
-            try { stat = statSync(fullPath); } catch { continue; }
+            let fstat;
+            try { fstat = statSync(fullPath); } catch { continue; }
             const relPath = relative(ctx.worktreePath, fullPath);
-            if (stat.isDirectory()) {
+            if (fstat.isDirectory()) {
               walk(fullPath);
-            } else if (stat.isFile() && re.test(relPath)) {
-              found.push(relPath);
+            } else if (fstat.isFile() && re.test(relPath)) {
+              found.push({ relPath, mtime: fstat.mtimeMs });
             }
           }
         };
 
         walk(ctx.worktreePath);
-        found.sort();
         if (found.length === 0) return "(no files found)";
-        return found.join("\n");
+
+        // Sort by mtime descending (most recently modified first)
+        found.sort((a, b) => b.mtime - a.mtime);
+        const truncated = found.length >= 500;
+        const output = found.map(({ relPath }) => relPath).join("\n");
+        return truncated ? output + "\n\n(Results truncated. Consider a more specific pattern.)" : output;
       } catch (e) {
         return `Error: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -1701,19 +1732,8 @@ export async function executeTool(
       if (!taskId) return "Error: create_todo is only available within a task execution";
       const title = (args.title ?? "").trim();
       if (!title) return "Error: title is required";
-      const context = args.context ? String(args.context).trim() : undefined;
-      const id = createTodo(taskId, title, context);
+      const id = createTodo(taskId, title);
       return JSON.stringify({ id });
-    }
-
-    case "get_todo": {
-      const taskId = ctx.taskId;
-      if (!taskId) return "Error: get_todo is only available within a task execution";
-      const id = args.id ? parseInt(args.id, 10) : NaN;
-      if (!id || isNaN(id)) return "Error: id is required";
-      const row = getTodoById(taskId, id);
-      if (!row) return `Error: todo ${id} not found`;
-      return JSON.stringify({ id: row.id, title: row.title, status: row.status, context: row.context, result: row.result });
     }
 
     case "update_todo": {
@@ -1721,10 +1741,9 @@ export async function executeTool(
       if (!taskId) return "Error: update_todo is only available within a task execution";
       const id = args.id ? parseInt(args.id, 10) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const update: { title?: string; status?: string; context?: string; result?: string } = {};
+      const update: { title?: string; status?: string; result?: string } = {};
       if (args.title !== undefined) update.title = String(args.title).trim();
       if (args.status !== undefined) update.status = String(args.status);
-      if (args.context !== undefined) update.context = String(args.context);
       if (args.result !== undefined) update.result = String(args.result);
       const ok = dbUpdateTodo(taskId, id, update);
       if (!ok) return `Error: todo ${id} not found`;
@@ -1746,6 +1765,90 @@ export async function executeTool(
       if (!taskId) return "Error: list_todos is only available within a task execution";
       const todos = listTodos(taskId);
       return JSON.stringify(todos);
+    }
+
+    case "lsp": {
+      if (!ctx.lspManager) {
+        return "Error: LSP is not configured. Add lsp.servers to workspace.yaml.";
+      }
+      const abs = safePath(ctx.worktreePath, args.file_path ?? "");
+      if (!abs) return "Error: file_path is outside the worktree";
+
+      const op = args.operation ?? "";
+      const line0 = args.line !== undefined ? Number(args.line) - 1 : 0;
+      const char0 = args.character !== undefined ? Number(args.character) - 1 : 0;
+      const docUri = pathToFileURL(abs).toString();
+      const pos = { line: line0, character: char0 };
+
+      switch (op) {
+        case "goToDefinition": {
+          const result = await ctx.lspManager.request(abs, "textDocument/definition", {
+            textDocument: { uri: docUri },
+            position: pos,
+          });
+          return formatDefinition(result, ctx.worktreePath);
+        }
+        case "findReferences": {
+          const result = await ctx.lspManager.request(abs, "textDocument/references", {
+            textDocument: { uri: docUri },
+            position: pos,
+            context: { includeDeclaration: true },
+          });
+          return formatReferences(result, ctx.worktreePath);
+        }
+        case "hover": {
+          const result = await ctx.lspManager.request(abs, "textDocument/hover", {
+            textDocument: { uri: docUri },
+            position: pos,
+          });
+          return formatHover(result);
+        }
+        case "documentSymbol": {
+          const result = await ctx.lspManager.request(abs, "textDocument/documentSymbol", {
+            textDocument: { uri: docUri },
+          });
+          return formatDocumentSymbols(result, ctx.worktreePath);
+        }
+        case "workspaceSymbol": {
+          const query = args.query ?? "";
+          const result = await ctx.lspManager.request(abs, "workspace/symbol", { query });
+          return formatWorkspaceSymbols(result, ctx.worktreePath);
+        }
+        case "goToImplementation": {
+          const result = await ctx.lspManager.request(abs, "textDocument/implementation", {
+            textDocument: { uri: docUri },
+            position: pos,
+          });
+          return formatDefinition(result, ctx.worktreePath, "Implemented");
+        }
+        case "prepareCallHierarchy": {
+          const result = await ctx.lspManager.request(abs, "textDocument/prepareCallHierarchy", {
+            textDocument: { uri: docUri },
+            position: pos,
+          });
+          return formatCallHierarchyItems(result as CallHierarchyItem[] | null, ctx.worktreePath);
+        }
+        case "incomingCalls": {
+          const items = (await ctx.lspManager.request(abs, "textDocument/prepareCallHierarchy", {
+            textDocument: { uri: docUri },
+            position: pos,
+          })) as CallHierarchyItem[] | null;
+          if (!items || items.length === 0) return "No call hierarchy item found at that position";
+          const result = await ctx.lspManager.request(abs, "callHierarchy/incomingCalls", { item: items[0] });
+          return formatIncomingCalls(result, ctx.worktreePath);
+        }
+        case "outgoingCalls": {
+          const items = (await ctx.lspManager.request(abs, "textDocument/prepareCallHierarchy", {
+            textDocument: { uri: docUri },
+            position: pos,
+          })) as CallHierarchyItem[] | null;
+          if (!items || items.length === 0) return "No call hierarchy item found at that position";
+          const result = await ctx.lspManager.request(abs, "callHierarchy/outgoingCalls", { item: items[0] });
+          return formatOutgoingCalls(result, ctx.worktreePath);
+        }
+        default:
+          return `Error: unknown lsp operation "${op}"`;
+      }
     }
 
     default:

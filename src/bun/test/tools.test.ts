@@ -25,6 +25,7 @@ afterEach(() => {
 });
 
 const ctx = () => ({ worktreePath: worktreeDir });
+const ctxWithCache = () => ({ worktreePath: worktreeDir, mtimeCache: new Map<string, number>() });
 
 // ─── myersDiff ────────────────────────────────────────────────────────────────
 
@@ -116,37 +117,6 @@ describe("executeTool / read_file", () => {
   });
 });
 
-// ─── list_dir ─────────────────────────────────────────────────────────────────
-
-describe("executeTool / list_dir", () => {
-  it("lists root directory", async () => {
-    const result = await executeTool("list_dir", JSON.stringify({ path: "." }), ctx());
-    expect(result).toContain("hello.ts");
-    expect(result).toContain("README.md");
-    expect(result).toContain("src/");
-  });
-
-  it("lists subdirectory", async () => {
-    const result = await executeTool("list_dir", JSON.stringify({ path: "src" }), ctx());
-    expect(result).toContain("src/index.ts");
-  });
-
-  it("returns error for missing directory", async () => {
-    const result = await executeTool("list_dir", JSON.stringify({ path: "nowhere" }), ctx());
-    expect(result).toMatch(/Error.*not found/i);
-  });
-
-  it("blocks path traversal", async () => {
-    const result = await executeTool("list_dir", JSON.stringify({ path: "../../../" }), ctx());
-    expect(result).toMatch(/path traversal/i);
-  });
-
-  it("returns error when path is a file not a dir", async () => {
-    const result = await executeTool("list_dir", JSON.stringify({ path: "hello.ts" }), ctx());
-    expect(result).toMatch(/not a directory/i);
-  });
-});
-
 // ─── run_command ──────────────────────────────────────────────────────────────
 
 describe("executeTool / run_command", () => {
@@ -233,57 +203,55 @@ describe("executeTool / write_file", () => {
   });
 });
 
-// ─── delete_file ──────────────────────────────────────────────────────────────
+// ─── edit_file ────────────────────────────────────────────────────────────────
 
-describe("executeTool / delete_file", () => {
-  it("deletes file and returns FileDiffPayload with removed hunks", async () => {
-    // README.md fixture: '# Test project\n' → 1 line
-    const r = asWrite(await executeTool("delete_file", JSON.stringify({ path: "README.md" }), ctx()));
-    expect(r.content).toMatch(/OK: deleted/i);
-    expect(r.content).toMatch(/\d+ lines?/);
-    expect(existsSync(join(worktreeDir, "README.md"))).toBe(false);
-    expect(r.diff.operation).toBe("delete_file");
-    expect(r.diff.removed).toBeGreaterThan(0);
-    expect(r.diff.added).toBe(0);
-    expect(r.diff.hunks).toBeDefined();
-    expect(r.diff.hunks!.length).toBeGreaterThan(0);
-    expect(r.diff.hunks![0].lines.every(l => l.type === "removed")).toBe(true);
+describe("executeTool / edit_file", () => {
+  it("creates file when old_string is empty and file does not exist", async () => {
+    const r = asWrite(await executeTool("edit_file", JSON.stringify({ path: "created.ts", old_string: "", new_string: "const x = 1;\n" }), ctx()));
+    expect(r.content).toMatch(/created successfully/i);
+    expect(existsSync(join(worktreeDir, "created.ts"))).toBe(true);
+    expect(readFileSync(join(worktreeDir, "created.ts"), "utf-8")).toBe("const x = 1;\n");
+    expect(r.diff.operation).toBe("edit_file");
   });
 
-  it("returns error string for non-existent file", async () => {
-    const result = await executeTool("delete_file", JSON.stringify({ path: "ghost.ts" }), ctx()) as string;
-    expect(result).toMatch(/Error.*not found/i);
+  it("replaces a unique occurrence of old_string", async () => {
+    const r = asWrite(await executeTool("edit_file", JSON.stringify({ path: "hello.ts", old_string: "x = 1", new_string: "x = 42" }), ctx()));
+    expect(r.content).toMatch(/updated successfully/i);
+    expect(readFileSync(join(worktreeDir, "hello.ts"), "utf-8")).toContain("x = 42");
+    expect(readFileSync(join(worktreeDir, "hello.ts"), "utf-8")).not.toContain("x = 1");
+    expect(r.diff.operation).toBe("edit_file");
+  });
+
+  it("returns error when old_string is not found", async () => {
+    const result = await executeTool("edit_file", JSON.stringify({ path: "hello.ts", old_string: "not_in_file", new_string: "x" }), ctx()) as string;
+    expect(result).toMatch(/not found/i);
+  });
+
+  it("returns error when old_string appears multiple times without replace_all", async () => {
+    writeFileSync(join(worktreeDir, "dup.ts"), "dup\ndup\n");
+    const result = await executeTool("edit_file", JSON.stringify({ path: "dup.ts", old_string: "dup", new_string: "x" }), ctx()) as string;
+    expect(result).toMatch(/2 times|multiple/i);
+  });
+
+  it("replaces all occurrences when replace_all=true", async () => {
+    writeFileSync(join(worktreeDir, "dup.ts"), "dup\ndup\n");
+    const r = asWrite(await executeTool("edit_file", JSON.stringify({ path: "dup.ts", old_string: "dup", new_string: "rep", replace_all: "true" }), ctx()));
+    expect(r.content).toMatch(/updated successfully/i);
+    expect(readFileSync(join(worktreeDir, "dup.ts"), "utf-8")).toBe("rep\nrep\n");
+  });
+
+  it("returns error when old_string is empty but file exists", async () => {
+    const result = await executeTool("edit_file", JSON.stringify({ path: "hello.ts", old_string: "", new_string: "x" }), ctx()) as string;
+    expect(result).toMatch(/already exists|write_file/i);
+  });
+
+  it("returns error for non-existent file with non-empty old_string", async () => {
+    const result = await executeTool("edit_file", JSON.stringify({ path: "ghost.ts", old_string: "x", new_string: "y" }), ctx()) as string;
+    expect(result).toMatch(/not found/i);
   });
 
   it("blocks path traversal", async () => {
-    const result = await executeTool("delete_file", JSON.stringify({ path: "../../important" }), ctx()) as string;
-    expect(result).toMatch(/path traversal/i);
-  });
-});
-
-// ─── rename_file ──────────────────────────────────────────────────────────────
-
-describe("executeTool / rename_file", () => {
-  it("renames file and returns FileDiffPayload with to_path", async () => {
-    const r = asWrite(await executeTool("rename_file", JSON.stringify({ from_path: "README.md", to_path: "NOTES.md" }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    expect(existsSync(join(worktreeDir, "NOTES.md"))).toBe(true);
-    expect(existsSync(join(worktreeDir, "README.md"))).toBe(false);
-    expect(r.diff.operation).toBe("rename_file");
-    expect(r.diff.path).toBe("README.md");
-    expect(r.diff.to_path).toBe("NOTES.md");
-    expect(r.diff.added).toBe(0);
-    expect(r.diff.removed).toBe(0);
-    expect(r.diff.hunks).toBeUndefined();
-  });
-
-  it("returns error string when source does not exist", async () => {
-    const result = await executeTool("rename_file", JSON.stringify({ from_path: "ghost.ts", to_path: "newname.ts" }), ctx()) as string;
-    expect(result).toMatch(/Error.*not found/i);
-  });
-
-  it("blocks path traversal in to_path", async () => {
-    const result = await executeTool("rename_file", JSON.stringify({ from_path: "hello.ts", to_path: "../../evil.ts" }), ctx()) as string;
+    const result = await executeTool("edit_file", JSON.stringify({ path: "../../evil.ts", old_string: "", new_string: "x" }), ctx()) as string;
     expect(result).toMatch(/path traversal/i);
   });
 });
@@ -428,16 +396,17 @@ describe("resolveToolsForColumn", () => {
     const result = resolveToolsForColumn(["write"]);
     const names = result.map((t) => t.name);
     expect(names).toContain("write_file");
-    expect(names).toContain("patch_file");
-    expect(names).toContain("delete_file");
-    expect(names).toContain("rename_file");
+    expect(names).toContain("edit_file");
+    expect(names).not.toContain("patch_file");
+    expect(names).not.toContain("delete_file");
+    expect(names).not.toContain("rename_file");
   });
 
   it("handles individual tool names alongside group names", () => {
     const result = resolveToolsForColumn(["read", "ask_me"]);
     const names = result.map((t) => t.name);
     expect(names).toContain("read_file");
-    expect(names).toContain("list_dir");
+    expect(names).not.toContain("list_dir");
     expect(names).toContain("ask_me");
   });
 
@@ -460,8 +429,8 @@ describe("resolveToolsForColumn", () => {
     const result = resolveToolsForColumn(undefined);
     const names = result.map((t) => t.name);
     expect(names).toContain("read_file");
-    expect(names).toContain("list_dir");
     expect(names).toContain("run_command");
+    expect(names).not.toContain("list_dir");
   });
 
   it("expands web group to fetch_url and search_internet", () => {
@@ -499,194 +468,6 @@ describe("executeTool / read_file partial reads", () => {
     expect(result).toContain("line3");
     expect(result).toContain("line5");
     expect(result).not.toContain("line1");
-  });
-});
-
-// ─── patch_file ───────────────────────────────────────────────────────────────
-
-describe("executeTool / patch_file", () => {
-  beforeEach(() => {
-    writeFileSync(join(worktreeDir, "target.ts"), "const a = 1;\nconst b = 2;\n");
-  });
-
-  it("prepends content (position=start) and returns added-only diff", async () => {
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "// header\n", position: "start",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    expect(r.content).toMatch(/\+\d+/);
-    expect(readFileSync(join(worktreeDir, "target.ts"), "utf-8")).toMatch(/^\/\/ header/);
-    expect(r.diff.operation).toBe("patch_file");
-    expect(r.diff.added).toBeGreaterThan(0);
-    expect(r.diff.removed).toBe(0);
-  });
-
-  it("appends content (position=end) and returns added-only diff", async () => {
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "// footer\n", position: "end",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    expect(r.content).toMatch(/\+\d+/);
-    expect(readFileSync(join(worktreeDir, "target.ts"), "utf-8")).toMatch(/\/\/ footer\n$/);
-    expect(r.diff.added).toBeGreaterThan(0);
-    expect(r.diff.removed).toBe(0);
-  });
-
-  it("inserts before anchor (position=before) and includes line number in LLM string", async () => {
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "// inserted\n", position: "before", anchor: "const b = 2;",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    expect(r.content).toMatch(/at line \d+/i);
-    const content = readFileSync(join(worktreeDir, "target.ts"), "utf-8");
-    expect(content).toContain("// inserted\nconst b = 2;");
-    expect(r.diff.added).toBeGreaterThan(0);
-    expect(r.diff.removed).toBe(0);
-  });
-
-  it("inserts after anchor (position=after) and includes line number in LLM string", async () => {
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "\n// after", position: "after", anchor: "const a = 1;",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    expect(r.content).toMatch(/at line \d+/i);
-    const content = readFileSync(join(worktreeDir, "target.ts"), "utf-8");
-    expect(content).toContain("const a = 1;\n// after");
-    expect(r.diff.added).toBeGreaterThan(0);
-    expect(r.diff.removed).toBe(0);
-  });
-
-  it("replaces anchor (position=replace) and returns removed+added diff with hunks", async () => {
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "const a = 42;", position: "replace", anchor: "const a = 1;",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    expect(r.content).toMatch(/\+\d+ -\d+/);
-    expect(r.content).toMatch(/at line \d+/i);
-    const content = readFileSync(join(worktreeDir, "target.ts"), "utf-8");
-    expect(content).toContain("const a = 42;");
-    expect(content).not.toContain("const a = 1;");
-    expect(r.diff.removed).toBeGreaterThan(0);
-    expect(r.diff.added).toBeGreaterThan(0);
-    expect(r.diff.hunks).toBeDefined();
-    const allLines = r.diff.hunks!.flatMap(h => h.lines);
-    expect(allLines.some(l => l.type === "removed" && l.content === "const a = 1;")).toBe(true);
-    expect(allLines.some(l => l.type === "added" && l.content === "const a = 42;")).toBe(true);
-  });
-
-  it("deletes content via position=replace with content='' (deleted line shows as removed)", async () => {
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "", position: "replace", anchor: "const a = 1;\n",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    const fileContent = readFileSync(join(worktreeDir, "target.ts"), "utf-8");
-    expect(fileContent).not.toContain("const a = 1;");
-    expect(r.diff.removed).toBe(1);
-    expect(r.diff.added).toBe(0);
-    // LLM message must NOT claim lines were added
-    expect(r.content).not.toMatch(/\+[1-9]/);
-    const allLines = r.diff.hunks!.flatMap(h => h.lines);
-    expect(allLines.some(l => l.type === "removed")).toBe(true);
-    expect(allLines.some(l => l.type === "added")).toBe(false);
-  });
-
-  it("deletes a multi-line block via position=replace with content=''", async () => {
-    writeFileSync(join(worktreeDir, "block.ts"), "// header\nline1\nline2\n// footer\n");
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "block.ts", content: "", position: "replace", anchor: "line1\nline2\n",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    const fileContent = readFileSync(join(worktreeDir, "block.ts"), "utf-8");
-    expect(fileContent).not.toContain("line1");
-    expect(fileContent).not.toContain("line2");
-    expect(fileContent).toContain("// header");
-    expect(fileContent).toContain("// footer");
-    expect(r.diff.removed).toBe(2);
-    expect(r.diff.added).toBe(0);
-  });
-
-  it("replaces multi-line anchor with new content and counts correctly", async () => {
-    writeFileSync(join(worktreeDir, "multi.ts"), "start\nold line 1\nold line 2\nend\n");
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "multi.ts", content: "new line\n", position: "replace", anchor: "old line 1\nold line 2\n",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    const fileContent = readFileSync(join(worktreeDir, "multi.ts"), "utf-8");
-    expect(fileContent).toContain("new line");
-    expect(fileContent).not.toContain("old line 1");
-    expect(r.diff.removed).toBe(2);
-    expect(r.diff.added).toBe(1);
-    // Confirmation string counts must match diff counts exactly
-    expect(r.content).toContain("+1");
-    expect(r.content).toContain("-2");
-  });
-
-  it("exact count: start prepend of 2 lines reports added=2 in both diff and message", async () => {
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "line1\nline2\n", position: "start",
-    }), ctx()));
-    expect(r.diff.added).toBe(2);
-    expect(r.diff.removed).toBe(0);
-    expect(r.content).toContain("+2");
-  });
-
-  it("empty content before anchor returns no-op error", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "", position: "before", anchor: "const b = 2;",
-    }), ctx()) as string;
-    expect(result).toMatch(/would not modify the file/i);
-  });
-
-  it("returns error when file does not exist", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
-      path: "nonexistent.ts", content: "x", position: "end",
-    }), ctx()) as string;
-    expect(result).toMatch(/file not found|not found/i);
-  });
-
-  it("rejects ambiguous anchor", async () => {
-    writeFileSync(join(worktreeDir, "dup.ts"), "dup\ndup\n");
-    const result = await executeTool("patch_file", JSON.stringify({
-      path: "dup.ts", content: "x", position: "replace", anchor: "dup",
-    }), ctx()) as string;
-    expect(result).toMatch(/appears.*times|ambiguous/i);
-  });
-
-  it("empty content insertion (position=after) returns no-op error", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "", position: "after", anchor: "const a = 1;",
-    }), ctx()) as string;
-    expect(result).toMatch(/would not modify the file/i);
-  });
-
-  it("single blank-line insertion reports 1 added", async () => {
-    const r = asWrite(await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "\n", position: "after", anchor: "const a = 1;",
-    }), ctx()));
-    expect(r.content).toMatch(/OK/);
-    expect(r.diff.added).toBe(1);
-    expect(r.diff.removed).toBe(0);
-  });
-
-  it("rejects anchor not found", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "x", position: "replace", anchor: "notexist",
-    }), ctx()) as string;
-    expect(result).toMatch(/anchor not found/i);
-  });
-
-  it("rejects missing anchor param for anchor-based positions", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
-      path: "target.ts", content: "x", position: "before",
-    }), ctx()) as string;
-    expect(result).toMatch(/anchor is required/i);
-  });
-
-  it("blocks path traversal", async () => {
-    const result = await executeTool("patch_file", JSON.stringify({
-      path: "../../evil.ts", content: "x", position: "end",
-    }), ctx()) as string;
-    expect(result).toMatch(/path traversal/i);
   });
 });
 
@@ -749,5 +530,105 @@ describe("executeTool / search_internet", () => {
     const ctxWithSearch = { ...ctx(), searchConfig: { engine: "bing", api_key: "key123" } };
     const result = await executeTool("search_internet", JSON.stringify({ query: "test" }), ctxWithSearch);
     expect(result).toMatch(/unsupported.*engine/i);
+  });
+});
+
+// ─── read_file line numbers and metadata header (Group 12) ───────────────────
+
+describe("executeTool / read_file — line numbers and header", () => {
+  it("includes metadata header with file path, total lines, and range", async () => {
+    const result = await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), ctx());
+    expect(result).toMatch(/\[file: hello\.ts, lines: \d+, showing: \d+-\d+\]/);
+  });
+
+  it("prefixes each line with padded line number and arrow", async () => {
+    const result = await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), ctx());
+    // First line must be formatted as "     1→content"
+    const lines = result.split("\n");
+    const firstContentLine = lines[1]; // lines[0] is the header
+    expect(firstContentLine).toMatch(/^\s+1→/);
+  });
+
+  it("partial read header shows correct range", async () => {
+    writeFileSync(join(worktreeDir, "five.txt"), "a\nb\nc\nd\ne\n");
+    const result = await executeTool("read_file", JSON.stringify({ path: "five.txt", start_line: 2, end_line: 3 }), ctx());
+    expect(result).toMatch(/showing: 2-3/);
+    expect(result).toContain("b");
+    expect(result).toContain("c");
+    expect(result).not.toContain("a\n"); // "a" only appears as part of "da" or not at all
+  });
+
+  it("warns for empty file", async () => {
+    writeFileSync(join(worktreeDir, "empty.ts"), "");
+    const result = await executeTool("read_file", JSON.stringify({ path: "empty.ts" }), ctx());
+    expect(result).toMatch(/empty/i);
+  });
+
+  it("warns when start_line exceeds file length", async () => {
+    writeFileSync(join(worktreeDir, "short.ts"), "one line\n");
+    const result = await executeTool("read_file", JSON.stringify({ path: "short.ts", start_line: 99 }), ctx());
+    expect(result).toMatch(/exceeds|start_line/i);
+  });
+});
+
+// ─── read_file mtime dedup (Group 12) ────────────────────────────────────────
+
+describe("executeTool / read_file — mtime dedup", () => {
+  it("returns stub on second full read of unchanged file when mtimeCache provided", async () => {
+    const c = ctxWithCache();
+    const first = await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), c);
+    expect(first).toContain("export const x = 1");
+    const second = await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), c);
+    expect(second).toMatch(/unchanged since last read/i);
+  });
+
+  it("returns fresh content after file changes between reads", async () => {
+    const c = ctxWithCache();
+    await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), c);
+    writeFileSync(join(worktreeDir, "hello.ts"), "const updated = true;\n");
+    const result = await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), c);
+    expect(result).toContain("updated");
+  });
+
+  it("partial reads always bypass dedup", async () => {
+    const c = ctxWithCache();
+    await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), c);
+    const partial = await executeTool("read_file", JSON.stringify({ path: "hello.ts", start_line: 1, end_line: 1 }), c);
+    // Must return actual content, not the stub
+    expect(partial).not.toMatch(/unchanged since last read/i);
+    expect(partial).toContain("export const x = 1");
+  });
+});
+
+// ─── edit_file read-before-write enforcement (Group 12) ──────────────────────
+
+describe("executeTool / edit_file — read-before-write", () => {
+  it("rejects edit when file has not been read when mtimeCache is provided", async () => {
+    const c = ctxWithCache();
+    const result = await executeTool("edit_file", JSON.stringify({ path: "hello.ts", old_string: "x = 1", new_string: "x = 99" }), c) as string;
+    expect(result).toMatch(/must read|before editing/i);
+  });
+
+  it("allows edit after reading the file", async () => {
+    const c = ctxWithCache();
+    await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), c);
+    const r = asWrite(await executeTool("edit_file", JSON.stringify({ path: "hello.ts", old_string: "x = 1", new_string: "x = 99" }), c));
+    expect(r.content).toMatch(/updated successfully/i);
+  });
+
+  it("rejects edit when file is modified after reading", async () => {
+    const c = ctxWithCache();
+    await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), c);
+    // Simulate external modification by forcing a different mtime in cache
+    const abs = join(worktreeDir, "hello.ts");
+    c.mtimeCache!.set(abs, 0); // stale mtime
+    const result = await executeTool("edit_file", JSON.stringify({ path: "hello.ts", old_string: "x = 1", new_string: "x = 99" }), c) as string;
+    expect(result).toMatch(/modified since|read it again/i);
+  });
+
+  it("skips read-before-write enforcement when no mtimeCache in ctx", async () => {
+    // Without mtimeCache, edits are always allowed (backward compat)
+    const r = asWrite(await executeTool("edit_file", JSON.stringify({ path: "hello.ts", old_string: "x = 1", new_string: "x = 99" }), ctx()));
+    expect(r.content).toMatch(/updated successfully/i);
   });
 });

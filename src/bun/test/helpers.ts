@@ -78,7 +78,11 @@ export function initDb(): Database {
       finished_at TEXT,
       summary     TEXT,
       details     TEXT,
-      cost_estimate REAL
+      cost_estimate REAL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_creation_input_tokens INTEGER,
+      cache_read_input_tokens INTEGER
     );
     CREATE TABLE IF NOT EXISTS conversation_messages (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,

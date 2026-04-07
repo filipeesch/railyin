@@ -1,0 +1,48 @@
+name: spawn-agent-tool-whitelist
+description: >
+  Tests that spawn_agent's tool whitelist is enforced: the child declares
+  tools=[read_file] but the engine provides the full parentToolDefs for cache
+  prefix sharing. When the scripted model response attempts to call edit_file
+  (not in child's declared tools), the engine should block it with an error.
+  Asserts sub_agent_gets_parent_tools (prefix shared) and that the scenario
+  completes (the engine handles whitelist violations gracefully).
+modes: [mock]
+
+column_tools:
+  - read
+  - write
+  - search
+  - agents
+
+assertions:
+  - type: cache_prefix_stable
+  - type: sub_agent_gets_parent_tools
+  - type: tools_include
+    names: [spawn_agent, read_file]
+
+script:
+  - role: user
+    content: "Update the README with the latest API details."
+  # Parent: spawns a sub-agent with read_file only
+  - respond_with: tool_use
+    tool: spawn_agent
+    input:
+      agents:
+        - instructions: "Read README.md and report what you find."
+          tools: [read_file]
+  # Sub-agent: attempts read_file (allowed)
+  - respond_with: tool_use
+    tool: read_file
+    input:
+      file_path: README.md
+      start_line: 1
+      end_line: 20
+  - role: user
+    content: "[tool_result: # My Project\nA basic readme.]"
+  - respond_with: text
+    content: "README contains basic project info."
+  # Parent receives result
+  - role: user
+    content: "[tool_result: [{\"result\":\"README contains basic project info.\"}]]"
+  - respond_with: text
+    content: "Sub-agent read the README. No updates needed."

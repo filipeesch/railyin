@@ -13,6 +13,7 @@ import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-ty
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { resolveToolsForColumn, getToolDescriptionBlock, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
+import { LSPServerManager } from "../lsp/manager.ts";
 import { formatReviewMessageForLLM } from "./review.ts";
 import { resolveSlashReference } from "./slash-prompt.ts";
 import { listTodos } from "../db/todos.ts";
@@ -20,7 +21,20 @@ import { listTodos } from "../db/todos.ts";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // Task 5.5: Tool results larger than this (in chars, ~1 token ≈ 4 chars) are truncated
-const TOOL_RESULT_MAX_CHARS = 8_000; // ~2,000 tokens
+const TOOL_RESULT_MAX_CHARS = 8_000; // default for tools not in TOOL_RESULT_LIMITS
+
+/** Per-tool result size limits in chars. Tools not listed fall back to TOOL_RESULT_MAX_CHARS. */
+const TOOL_RESULT_LIMITS = new Map<string, number>([
+  ["read_file", 100_000],       // ~25,000 tokens — large files need full content
+  ["search_text", 20_000],      // ripgrep output
+  ["find_files", 10_000],       // file listing
+  ["run_command", 30_000],      // command output (matches Free Code's bash limit)
+  ["fetch_url", 100_000],       // web page content
+  ["spawn_agent", 100_000],     // sub-agent results can be large
+  ["edit_file", 2_000],         // just a confirmation message
+  ["write_file", 2_000],        // just a confirmation message
+  ["lsp", 100_000],             // LSP results (definition, references, symbols)
+]);
 
 // Task 5.6: Warn when assembled context exceeds this fraction of the context window
 const CONTEXT_WARN_FRACTION = 0.8;
@@ -36,7 +50,8 @@ export const MICRO_COMPACT_CLEARABLE_TOOLS = new Set([
   "search_text",
   "find_files",
   "fetch_url",
-  "patch_file",
+  "edit_file",
+  "patch_file", // backward compat: clear old patch_file results in stored conversations
 ]);
 
 // ─── Streaming callback type ──────────────────────────────────────────────────
@@ -151,7 +166,7 @@ function stripXmlToolCalls(text: string): { clean: string; hadToolCalls: boolean
 
 
 
-export function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
+export function compactMessages(messages: ConversationMessageRow[], opts?: { quiet?: boolean }): AIMessage[] {
   // If a compaction_summary exists, use the most recent one as the history baseline:
   // inject it as a system message and only process messages that came after it.
   const lastSummaryIdx = messages.map((m) => m.type).lastIndexOf("compaction_summary");
@@ -262,8 +277,9 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
         const shouldClear =
           MICRO_COMPACT_CLEARABLE_TOOLS.has(toolName) &&
           turnDistance > MICRO_COMPACT_TURN_WINDOW;
-        const rawContent = toProcess[i].content.length > TOOL_RESULT_MAX_CHARS
-          ? toProcess[i].content.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+        const toolLimit = TOOL_RESULT_LIMITS.get(toolName) ?? TOOL_RESULT_MAX_CHARS;
+        const rawContent = toProcess[i].content.length > toolLimit
+          ? toProcess[i].content.slice(0, toolLimit) + "\n\n[truncated]"
           : toProcess[i].content;
         result.push({
           role: "tool",
@@ -286,7 +302,7 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
     i++;
   }
 
-  if (orphanedMsgIds.length > 0) {
+  if (orphanedMsgIds.length > 0 && !opts?.quiet) {
     log("warn", `compactMessages: skipped ${orphanedMsgIds.length} orphaned tool_call(s) with no following tool_result (msg ids: ${orphanedMsgIds.join(", ")})`, {});
   }
 
@@ -354,14 +370,8 @@ function assembleMessages(
     messages.push({ role: "system", content: lines.join("\n") });
   }
 
-  // Session notes — inject as a system message after the worktree context block
-  // so the model can reference them throughout the conversation.
-  if (sessionNotes) {
-    messages.push({ role: "system", content: formatSessionNotesBlock(sessionNotes) });
-  }
-
   // Active todos — inject as a system block so the list survives compaction.
-  // Only id/title/status are injected; context and result are on demand via get_todo.
+  // Only id/title/status are injected.
   if (taskId) {
     const todos = listTodos(taskId);
     if (todos.length > 0) {
@@ -412,6 +422,16 @@ function assembleMessages(
     messages.push({ role: "user", content: newMessage });
   }
 
+  // Session notes — appended to the final user message as a <session_context> block.
+  // Keeping variable content OUT of the stable system prefix prevents cache invalidation
+  // when extractSessionMemory() updates notes every SESSION_MEMORY_EXTRACTION_INTERVAL turns.
+  if (sessionNotes) {
+    const finalMsg = messages[messages.length - 1];
+    if (finalMsg?.role === "user") {
+      finalMsg.content = (finalMsg.content as string) + formatSessionNotesBlock(sessionNotes);
+    }
+  }
+
   return messages;
 }
 
@@ -426,6 +446,23 @@ export function estimateContextUsage(
   maxTokens: number,
 ): { usedTokens: number; maxTokens: number; fraction: number } {
   const db = getDb();
+
+  // Use actual input_tokens from the most recent completed execution when available.
+  // Only completed executions are used to avoid reading partial values from an
+  // in-flight stream (which may have outputTokens=0 from the early message_start event).
+  const recentExec = db
+    .query<{ input_tokens: number | null }, [number]>(
+      "SELECT input_tokens FROM executions WHERE task_id = ? AND status = 'completed' AND input_tokens IS NOT NULL ORDER BY id DESC LIMIT 1",
+    )
+    .get(taskId);
+
+  if (recentExec?.input_tokens != null) {
+    const usedTokens = recentExec.input_tokens;
+    const fraction = maxTokens > 0 ? Math.min(usedTokens / maxTokens, 1) : 0;
+    return { usedTokens, maxTokens, fraction };
+  }
+
+  // Fallback: character-count estimation when no actual usage is recorded yet.
   const messages = db
     .query<ConversationMessageRow, [number]>(
       "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
@@ -434,7 +471,8 @@ export function estimateContextUsage(
 
   // Use compactMessages() so the estimate reflects post-decay content sizes
   // (micro-compact clears old tool results, reducing the effective token count).
-  const compacted = compactMessages(messages);
+  // quiet=true to suppress orphan warnings — context gauge polls frequently.
+  const compacted = compactMessages(messages, { quiet: true });
   const totalChars = compacted.reduce((sum, m) => {
     if (typeof m.content === "string") return sum + m.content.length;
     return sum + JSON.stringify(m.content ?? "").length;
@@ -845,6 +883,8 @@ async function runSubExecution({
   qualifiedModel,
   signal,
   agentLabel,
+  parentContext,
+  parentToolDefs,
 }: {
   worktreePath: string;
   instructions: string;
@@ -852,6 +892,13 @@ async function runSubExecution({
   qualifiedModel: string;
   signal: AbortSignal;
   agentLabel?: string;
+  /** When provided, use the parent's assembled message context as the base conversation.
+   *  The child's instructions are appended as a final user message. This enables
+   *  cache-prefix sharing with the parent, yielding near-100% cache hit on the first call. */
+  parentContext?: AIMessage[];
+  /** When provided, use these tool definitions for the API call (matching parent's cache prefix).
+   *  The child's resolved tool names are used only as an execution whitelist. */
+  parentToolDefs?: import("../ai/types.ts").AIToolDefinition[];
 }): Promise<string> {
   const config = getConfig();
   let provider;
@@ -876,8 +923,16 @@ async function runSubExecution({
     }
   }
 
-  const toolCtx = { worktreePath, searchConfig: config.workspace.search };
-  const toolDefs = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+  const subLspManager = new LSPServerManager(
+    config.workspace.lsp?.servers ?? [],
+    worktreePath,
+  );
+  const toolCtx = { worktreePath, searchConfig: config.workspace.search, mtimeCache: new Map<string, number>(), lspManager: subLspManager };
+  // Child's own tool names — used as execution whitelist
+  const childToolDefs = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+  const childToolNames = new Set(childToolDefs.map((t) => t.name));
+  // API tool definitions: use parent's (for cache prefix sharing) if provided, else child's own
+  const apiToolDefs = parentToolDefs ?? childToolDefs;
 
   const systemContent = [
     "You are a focused sub-agent in an orchestrator-workers pipeline. Complete the task described in the user message.",
@@ -886,18 +941,45 @@ async function runSubExecution({
     `- worktree_path: ${worktreePath}`,
   ].join("\n");
 
-  const liveMessages: AIMessage[] = [
-    { role: "system", content: systemContent },
-    { role: "user", content: instructions },
-  ];
+  // When a parent context is provided, inherit it and append instructions as the
+  // final user message. This shares the parent's cache prefix so the first API call
+  // achieves a cache hit instead of a cold write.
+  // When no parent context is provided (workflow triggers, tests), use the minimal
+  // [system, user] pair construction.
+  // When a parent context is provided, append instructions as a new user turn.
+  // The parent's messages always end with a user message (the triggering prompt),
+  // so we merge instructions into that final user message instead of pushing a
+  // separate one — Anthropic's API requires strictly alternating user/assistant turns.
+  const liveMessages: AIMessage[] = (() => {
+    if (!parentContext) {
+      return [
+        { role: "system", content: systemContent },
+        { role: "user", content: instructions },
+      ];
+    }
+    const base = [...parentContext];
+    const last = base[base.length - 1];
+    if (last?.role === "user") {
+      // Merge sub-agent instructions into the existing final user message to avoid
+      // consecutive user turns (would cause a 422 from the Anthropic API).
+      base[base.length - 1] = {
+        ...last,
+        content: `${last.content as string}\n\n---\n\n${instructions}`,
+      };
+      return base;
+    }
+    // Context ends with a non-user message (unlikely with current caller): append normally.
+    return [...base, { role: "user", content: instructions }];
+  })();
 
   const MAX_SUB_ROUNDS = 10;
   let toolRounds = 0;
 
   while (toolRounds < MAX_SUB_ROUNDS) {
-    const turn = await retryTurn(provider, liveMessages, { tools: toolDefs, effort: "low", signal, agentLabel }, undefined, {}, "foreground", fallbackProvider);
+    const turn = await retryTurn(provider, liveMessages, { tools: apiToolDefs, effort: "low", signal, agentLabel, maxTokens: 16384 }, undefined, {}, "foreground", fallbackProvider);
 
     if (turn.type === "text") {
+      subLspManager.shutdown();
       return (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
     }
 
@@ -921,12 +1003,23 @@ async function runSubExecution({
         });
         continue;
       }
+      // Tool execution whitelist: only allow tools in the child's tool list
+      if (parentToolDefs && !childToolNames.has(fnName)) {
+        liveMessages.push({
+          role: "tool",
+          content: `Error: tool "${fnName}" is not available to this sub-agent. Available tools: ${[...childToolNames].join(", ")}.`,
+          tool_call_id: call.id,
+          name: fnName,
+        });
+        continue;
+      }
       const result = await executeTool(fnName, call.function.arguments, toolCtx);
       const llmStr = typeof result === "object" && result !== null && "content" in result
         ? (result as WriteResult).content
         : result as string;
-      const stored = llmStr.length > TOOL_RESULT_MAX_CHARS
-        ? llmStr.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+      const toolLimit = TOOL_RESULT_LIMITS.get(fnName) ?? TOOL_RESULT_MAX_CHARS;
+      const stored = llmStr.length > toolLimit
+        ? llmStr.slice(0, toolLimit) + "\n\n[truncated]"
         : llmStr;
       liveMessages.push({
         role: "tool",
@@ -945,6 +1038,7 @@ async function runSubExecution({
     liveMessages.push({ role: "user", content: "You have reached the tool call limit. Please summarise your work so far." });
   }
   const final = await retryTurn(provider, liveMessages, { tools: [], signal, agentLabel }, undefined, {}, "foreground", fallbackProvider);
+  subLspManager.shutdown();
   return final.type === "text" ? (final.content ?? "(no response)") : "(sub-agent hit tool limit)";
 }
 
@@ -977,6 +1071,7 @@ async function runExecution(
     if (cancelledRow) onTaskUpdated(mapTask(cancelledRow));
   }
 
+  let lspManager: LSPServerManager | undefined;
   try {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
 
@@ -990,6 +1085,24 @@ async function runExecution(
     );
     if (staleCancelled.changes > 0) {
       log("info", `Auto-cancelled ${staleCancelled.changes} stale running execution(s)`, { taskId, executionId });
+    }
+
+    // Auto-clean orphaned tool_call rows: a tool_call with no immediately following
+    // tool_result can never be completed. These accumulate from crashed/cancelled
+    // executions and cause repeated warnings from compactMessages(). Delete them so
+    // subsequent calls are clean.
+    const orphans = db.query<{ id: number }, [number]>(
+      `SELECT cm1.id FROM conversation_messages cm1
+       WHERE cm1.task_id = ? AND cm1.type = 'tool_call'
+         AND NOT EXISTS (
+           SELECT 1 FROM conversation_messages cm2
+           WHERE cm2.id = cm1.id + 1 AND cm2.type = 'tool_result'
+         )`,
+    ).all(taskId);
+    if (orphans.length > 0) {
+      const ids = orphans.map((o) => o.id);
+      db.run(`DELETE FROM conversation_messages WHERE id IN (${ids.join(",")})`, []);
+      log("info", `Auto-cleaned ${orphans.length} orphaned tool_call(s) (msg ids: ${ids.join(", ")})`, { taskId, executionId });
     }
 
     log("info", "Execution started", { taskId, executionId, data: { model, column: task.workflow_state } });
@@ -1151,6 +1264,10 @@ async function runExecution(
         appendApprovedCommands(tId, binaries);
       },
     };
+    lspManager = new LSPServerManager(
+      config.workspace.lsp?.servers ?? [],
+      worktreePath,
+    );
     const toolCtx = {
       worktreePath,
       searchConfig: config.workspace.search,
@@ -1159,6 +1276,8 @@ async function runExecution(
       taskCallbacks,
       shellAutoApprove,
       approvedCommands: approvedCommandsSet,
+      mtimeCache: new Map<string, number>(),
+      lspManager,
     };
 
     let tools = resolveToolsForColumn(column?.tools);
@@ -1225,6 +1344,12 @@ async function runExecution(
             stopReasonEvent = event.reason;
           } else if (event.type === "usage") {
             totalCostEst += event.costEst;
+            // Persist token usage to the executions row so estimateContextUsage()
+            // can use actual counts instead of character-based estimates.
+            db.run(
+              "UPDATE executions SET input_tokens = ?, output_tokens = ?, cache_creation_input_tokens = ?, cache_read_input_tokens = ? WHERE id = ?",
+              [event.usage.inputTokens, event.usage.outputTokens, event.usage.cacheCreationInputTokens ?? null, event.usage.cacheReadInputTokens ?? null, executionId],
+            );
           } else if (event.type === "done") {
             break;
           }
@@ -1544,6 +1669,13 @@ async function runExecution(
                 qualifiedModel: model,
                 signal,
                 agentLabel: `Agent ${idx + 1}/${totalChildren}`,
+                // Pass the assembled parent context so the sub-agent starts from the
+                // same cache prefix. The `messages` variable is the context assembled
+                // for this round (already micro-compacted via compactMessages).
+                parentContext: messages,
+                // Pass the parent's full sorted tool definitions so the sub-agent
+                // uses the same [system, tools] prefix → cache hit on first call.
+                parentToolDefs: tools,
               });
               return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
             } catch (e) {
@@ -1553,8 +1685,9 @@ async function runExecution(
         );
 
         const spawnResultStr = JSON.stringify(childResults);
-        const stored = spawnResultStr.length > TOOL_RESULT_MAX_CHARS
-          ? spawnResultStr.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+        const spawnLimit = TOOL_RESULT_LIMITS.get("spawn_agent") ?? TOOL_RESULT_MAX_CHARS;
+        const stored = spawnResultStr.length > spawnLimit
+          ? spawnResultStr.slice(0, spawnLimit) + "\n\n[truncated]"
           : spawnResultStr;
 
         appendMessage(
@@ -1614,8 +1747,9 @@ async function runExecution(
         const llmContent = isWriteResult ? (result as WriteResult).content : result as string;
         const diff = isWriteResult ? (result as WriteResult).diff : undefined;
 
-        const storedResult = llmContent.length > TOOL_RESULT_MAX_CHARS
-          ? llmContent.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+        const toolLimit = TOOL_RESULT_LIMITS.get(fnName) ?? TOOL_RESULT_MAX_CHARS;
+        const storedResult = llmContent.length > toolLimit
+          ? llmContent.slice(0, toolLimit) + "\n\n[truncated]"
           : llmContent;
 
         const resultMeta = { tool_call_id: call.id, name: fnName };
@@ -1796,6 +1930,8 @@ async function runExecution(
     onError(taskId, executionId, errMsg);
     const outerFailedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (outerFailedRow) onTaskUpdated(mapTask(outerFailedRow));
+  } finally {
+    lspManager?.shutdown();
   }
 }
 // ─── Task 5.7: Human turn ─────────────────────────────────────────────────────

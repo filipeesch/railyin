@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { extractSummaryBlock, compactMessages, MICRO_COMPACT_TURN_WINDOW, MICRO_COMPACT_SENTINEL } from "../workflow/engine.ts";
+import { extractSummaryBlock, compactMessages, MICRO_COMPACT_TURN_WINDOW, MICRO_COMPACT_SENTINEL, estimateContextUsage } from "../workflow/engine.ts";
 import { cancelExecution } from "../workflow/engine.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -299,8 +299,8 @@ describe("resolveToolsForColumn", () => {
     const tools = resolveToolsForColumn(undefined);
     const names = tools.map((t) => t.name);
     expect(names).toContain("read_file");
-    expect(names).toContain("list_dir");
     expect(names).toContain("run_command");
+    expect(names).not.toContain("list_dir");
   });
 });
 
@@ -381,7 +381,7 @@ describe("spawn_agent tool interception", () => {
 // ─── Sub-agent cache sharing (2.1–2.3) ───────────────────────────────────────
 
 describe("sub-agent cache sharing", () => {
-  it("2.1 runSubExecution places system message at index 0, user instructions at index 1", async () => {
+  it("2.1 runSubExecution inherits parent system blocks and merges instructions into final user message", async () => {
     // Spawn one sub-agent; it should immediately return text (no tool calls)
     queueTurnResponse({ type: "text", content: "Done." });
     queueStreamStep({
@@ -417,9 +417,69 @@ describe("sub-agent cache sharing", () => {
     const turnMessages = getCapturedTurnMessages();
     expect(turnMessages.length).toBeGreaterThan(0);
     const subAgentMessages = turnMessages[0];
+
+    // Sub-agent now starts with parent's system blocks (cache sharing).
+    // The first message should be a system message (from parent's assembled context).
     expect(subAgentMessages[0].role).toBe("system");
-    expect(subAgentMessages[1].role).toBe("user");
-    expect(subAgentMessages[1].content).toBe("Do something.");
+
+    // The last message should be a user message containing the sub-agent's instructions,
+    // merged into the parent's final user message to avoid consecutive-user-message issues.
+    const lastMsg = subAgentMessages[subAgentMessages.length - 1];
+    expect(lastMsg.role).toBe("user");
+    expect(lastMsg.content as string).toContain("Do something.");
+  }, 15_000);
+
+  it("7.4 sub-agent's first turn message array contains parent's system blocks (cache inheritance)", async () => {
+    queueTurnResponse({ type: "text", content: "Sub-agent result." });
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [
+        {
+          id: "call_sa2",
+          type: "function",
+          function: {
+            name: "spawn_agent",
+            arguments: JSON.stringify({
+              children: [{ instructions: "Run a specific sub-task.", tools: [] }],
+            }),
+          },
+        },
+      ],
+    });
+    queueStreamStep({ type: "text", tokens: ["Parent done."] });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET title = 'My Task Title', workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    // Also capture the parent's stream messages so we can compare system blocks
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+    await handleHumanTurn(taskId, "Start.", (_, __, _t, isDone) => { if (isDone) resolveDone(); }, noop, noop, noop);
+    await donePromise;
+
+    const parentStreamMessages = getCapturedStreamMessages();
+    const subAgentTurnMessages = getCapturedTurnMessages();
+
+    expect(parentStreamMessages.length).toBeGreaterThan(0);
+    expect(subAgentTurnMessages.length).toBeGreaterThan(0);
+
+    const parentSystemTexts = parentStreamMessages[0]
+      .filter((m) => m.role === "system")
+      .map((m) => m.content as string);
+    const subAgentSystemTexts = subAgentTurnMessages[0]
+      .filter((m) => m.role === "system")
+      .map((m) => m.content as string);
+
+    // Sub-agent must start with the SAME system blocks as the parent (enables cache hit)
+    expect(subAgentSystemTexts.length).toBeGreaterThan(0);
+    expect(subAgentSystemTexts).toEqual(parentSystemTexts);
+
+    // The task title should appear in the sub-agent system blocks (inherited from parent)
+    expect(subAgentSystemTexts.some((s) => s.includes("My Task Title"))).toBe(true);
   }, 15_000);
 
   it("2.2 tool definitions are sorted by name", () => {
@@ -1155,4 +1215,116 @@ describe("compactMessages micro-compact", () => {
       expect(dbRows[i].content).toBe(`original content turn ${i + 1}`);
     }
   }, 15_000);
+
+  it("6.3 forked sub-agent context has oldest clearable tool results replaced with sentinel", async () => {
+    // Seed MICRO_COMPACT_TURN_WINDOW + 2 = 10 clearable tool rounds (read_file)
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    const turnsToSeed = MICRO_COMPACT_TURN_WINDOW + 2;
+    for (let i = 0; i < turnsToSeed; i++) {
+      db.run(
+        "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'tool_call', 'assistant', ?)",
+        [taskId, conversationId, JSON.stringify({ name: "read_file", arguments: "{}" })],
+      );
+      const { id: callId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+      db.run(
+        "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content, metadata) VALUES (?, ?, 'tool_result', 'tool', ?, ?)",
+        [
+          taskId,
+          conversationId,
+          `sub-agent turn content ${i + 1}`,
+          JSON.stringify({ tool_call_id: `call_${callId}`, name: "read_file" }),
+        ],
+      );
+      db.run(
+        "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'assistant', 'assistant', 'thinking')",
+        [taskId, conversationId],
+      );
+    }
+
+    // Sub-agent returns immediately
+    queueTurnResponse({ type: "text", content: "Sub done." });
+    // Parent spawns sub-agent then completes
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [{
+        id: "spawn_c6",
+        type: "function",
+        function: { name: "spawn_agent", arguments: JSON.stringify({ children: [{ instructions: "Do X.", tools: [] }] }) },
+      }],
+    });
+    queueStreamStep({ type: "text", tokens: ["Done."] });
+
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+    await handleHumanTurn(taskId, "Go.", (_, __, _t, isDone) => { if (isDone) resolveDone(); }, noop, noop, noop);
+    await donePromise;
+
+    // The sub-agent's turn messages should be the compacted parentContext
+    const subAgentTurnMessages = getCapturedTurnMessages();
+    const toolMsgs = subAgentTurnMessages[0].filter((m) => m.role === "tool");
+
+    // With turnsToSeed turns and MICRO_COMPACT_TURN_WINDOW=8:
+    // distance of turn 1 = turnsToSeed - 1 = 9 > 8 → cleared
+    expect(toolMsgs.length).toBeGreaterThan(0);
+    expect(toolMsgs[0].content).toBe(MICRO_COMPACT_SENTINEL);
+    // Most recent turn within window → preserved
+    expect(toolMsgs[toolMsgs.length - 1].content).toContain(`sub-agent turn content ${turnsToSeed}`);
+  }, 15_000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6.2 — estimateContextUsage: actual-token path and fallback path
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("estimateContextUsage (6.2)", () => {
+  it("falls back to character-based estimate when no completed executions exist", () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    // Seed some conversation messages (~400 chars)
+    const msg = "a".repeat(400);
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', ?)",
+      [taskId, conversationId, msg],
+    );
+    const { usedTokens, fraction } = estimateContextUsage(taskId, 128_000);
+    // 400 chars / 4 = 100 tokens + 400 overhead = 500; fraction = 500 / 128000 ≈ 0.0039
+    expect(usedTokens).toBe(500);
+    expect(fraction).toBeGreaterThan(0);
+    expect(fraction).toBeLessThan(0.01);
+  });
+
+  it("uses actual input_tokens from most recent completed execution when available", () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    // Insert a completed execution with real token counts
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt, input_tokens, output_tokens) VALUES (?, 'plan', 'plan', 'human-turn', 'completed', 1, 65000, 500)",
+      [taskId],
+    );
+    const { usedTokens, maxTokens, fraction } = estimateContextUsage(taskId, 128_000);
+    expect(usedTokens).toBe(65000);
+    expect(maxTokens).toBe(128_000);
+    expect(fraction).toBeCloseTo(65000 / 128_000, 4);
+  });
+
+  it("ignores non-completed executions (uses character fallback instead)", () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    // Insert a running execution with input_tokens — should be ignored
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt, input_tokens) VALUES (?, 'plan', 'plan', 'human-turn', 'running', 1, 99000)",
+      [taskId],
+    );
+    // Seed minimal messages for fallback
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', ?)",
+      [taskId, conversationId, "x".repeat(100)],
+    );
+    const { usedTokens } = estimateContextUsage(taskId, 128_000);
+    // Should NOT use 99000 — should use character estimate (~425 with overhead)
+    expect(usedTokens).toBeLessThan(1000);
+  });
 });

@@ -51,6 +51,7 @@ columns:
       - interactions
       - agents
       - todos
+      - lsp
 
   - id: done
     label: Done

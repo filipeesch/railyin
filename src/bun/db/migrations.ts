@@ -196,6 +196,28 @@ const migrations: Array<{ id: string; sql: string }> = [
       ALTER TABLE executions ADD COLUMN cost_estimate REAL;
     `,
   },
+  {
+    id: "010_drop_todo_context",
+    sql: `
+      ALTER TABLE task_todos DROP COLUMN context;
+    `,
+  },
+  {
+    id: "011_execution_input_tokens",
+    sql: `ALTER TABLE executions ADD COLUMN input_tokens INTEGER;`,
+  },
+  {
+    id: "012_execution_output_tokens",
+    sql: `ALTER TABLE executions ADD COLUMN output_tokens INTEGER;`,
+  },
+  {
+    id: "013_execution_cache_creation_tokens",
+    sql: `ALTER TABLE executions ADD COLUMN cache_creation_input_tokens INTEGER;`,
+  },
+  {
+    id: "014_execution_cache_read_tokens",
+    sql: `ALTER TABLE executions ADD COLUMN cache_read_input_tokens INTEGER;`,
+  },
 ];
 
 export function runMigrations(): void {

@@ -1,0 +1,51 @@
+name: single-agent-multi-turn
+description: >
+  3-turn read→edit→verify flow with a real tool set (read + write + search).
+  Validates that the cache prefix is stable across all turns (tools_hash never
+  changes), the expected tools are present in the schema, and cost is reasonable.
+modes: [mock, local, live]
+
+column_tools:
+  - read
+  - write
+  - search
+
+assertions:
+  - type: cache_prefix_stable
+  - type: tools_hash_stable
+  - type: tools_include
+    names: [read_file, edit_file, search_text]
+  - type: max_tokens_initial
+    value: 8192
+  - type: cost_under
+    value: 0.10
+
+script:
+  - role: user
+    content: "Change the greeting in src/main.ts from 'Hello' to 'Hi'."
+  - respond_with: tool_use
+    tool: read_file
+    input:
+      file_path: src/main.ts
+      start_line: 1
+      end_line: 50
+  - role: user
+    content: "[tool_result: const greeting = 'Hello';\n// rest of file...]"
+  - respond_with: tool_use
+    tool: edit_file
+    input:
+      file_path: src/main.ts
+      old_string: "'Hello'"
+      new_string: "'Hi'"
+  - role: user
+    content: "[tool_result: ok]"
+  - respond_with: tool_use
+    tool: read_file
+    input:
+      file_path: src/main.ts
+      start_line: 1
+      end_line: 10
+  - role: user
+    content: "[tool_result: const greeting = 'Hi';\n// confirmed]"
+  - respond_with: text
+    content: "Done. Changed greeting from 'Hello' to 'Hi' in src/main.ts."

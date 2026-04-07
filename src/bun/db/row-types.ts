@@ -78,6 +78,11 @@ export interface ExecutionRow {
   finished_at: string | null;
   summary: string | null;
   details: string | null;
+  cost_estimate: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  cache_read_input_tokens: number | null;
 }
 
 export interface ConversationMessageRow {
@@ -103,7 +108,6 @@ export interface TaskTodoRow {
   task_id: number;
   title: string;
   status: string; // 'not-started' | 'in-progress' | 'completed'
-  context: string | null;
   result: string | null;
   created_at: string;
   updated_at: string;

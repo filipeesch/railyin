@@ -343,8 +343,8 @@ describe("compactMessages — tool history reconstruction", () => {
       taskId, conversationId, "tool_call", null,
       JSON.stringify({ name: "read_file", arguments: '{"path":"big.txt"}' }),
     );
-    // Content larger than TOOL_RESULT_MAX_CHARS (20_000)
-    const hugContent = "x".repeat(25_000);
+    // Content larger than the per-tool limit for read_file (100_000)
+    const hugContent = "x".repeat(110_000);
     appendMessage(taskId, conversationId, "tool_result", null, hugContent, {
       tool_call_id: "call_big",
       name: "read_file",
@@ -354,7 +354,7 @@ describe("compactMessages — tool history reconstruction", () => {
 
     const toolMsg = msgs.find((m) => m.role === "tool");
     expect(toolMsg).not.toBeUndefined();
-    expect((toolMsg!.content as string).length).toBeLessThan(25_000);
+    expect((toolMsg!.content as string).length).toBeLessThan(110_000);
     expect(toolMsg!.content as string).toContain("[truncated]");
   });
 });

@@ -5,8 +5,8 @@
   "description": "AI-assisted delivery orchestration for software teams",
   "scripts": {
     "dev": "vite build && electrobun dev --watch",
-    "dev:debug": "vite build && RAILYN_DEBUG=1 electrobun dev --watch",
-    "dev:test": "vite build && RAILYN_DEBUG=1 RAILYN_DB=:memory: electrobun dev --watch",
+    "dev:debug": "vite build && electrobun dev --watch -- --debug",
+    "dev:test": "vite build && electrobun dev --watch -- --debug --memory-db",
     "dev:kill": "pkill -f 'Railyn-dev' || true; pkill -f 'electrobun' || true",
     "dev:watch": "concurrently -n vite,electrobun -c cyan,magenta \"vite build --watch\" \"electrobun dev --watch\"",
     "build:canary": "vite build && electrobun build --env=canary",
@@ -16,9 +16,13 @@
     "test:ui:chat": "bun test src/ui-tests/chat.test.ts --timeout 120000",
     "test:ui:chat-ext": "bun test src/ui-tests/extended-chat.test.ts --timeout 120000",
     "test:ui:board": "bun test src/ui-tests/board.test.ts --timeout 120000",
+    "refine:mock": "bun refinement/runner.ts --mode mock",
+    "refine:local": "bun refinement/runner.ts --mode local",
+    "refine:live": "bun refinement/runner.ts --mode live",
     "test:ui:run": "./scripts/run-ui-tests.sh"
   },
   "dependencies": {
+    "@iconify/vue": "^5.0.0",
     "@monaco-editor/loader": "^1.4.0",
     "electrobun": "latest",
     "js-yaml": "^4.1.0",

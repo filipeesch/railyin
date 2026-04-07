@@ -94,10 +94,16 @@ describe("writeSessionMemory", () => {
 // ─── 6.3: formatSessionNotesBlock wraps content correctly ────────────────────
 
 describe("formatSessionNotesBlock", () => {
-  it("6.3 wraps notes in the expected section header", () => {
+  it("6.3 wraps notes in <session_context> XML tags", () => {
     const block = formatSessionNotesBlock("Some notes content.");
-    expect(block).toContain("## Session Notes");
+    expect(block).toContain("<session_context>");
+    expect(block).toContain("</session_context>");
     expect(block).toContain("Some notes content.");
+  });
+
+  it("6.3c does NOT use the old ## Session Notes heading", () => {
+    const block = formatSessionNotesBlock("x");
+    expect(block).not.toContain("## Session Notes");
   });
 
   it("6.3b block starts with a newline to separate from preceding content", () => {
@@ -157,14 +163,22 @@ describe("engine session notes injection", () => {
     const allCaptured = getCapturedStreamMessages();
     expect(allCaptured.length).toBeGreaterThan(0);
     const firstCallMessages = allCaptured[0];
-    const systemMessages = firstCallMessages.filter(
-      (m) => m.role === "system" && typeof m.content === "string",
+    // Session notes are now injected into the final user message as <session_context>,
+    // NOT as a separate system block.  Verify the user message contains the XML wrapper.
+    const userMessages = firstCallMessages.filter(
+      (m) => m.role === "user" && typeof m.content === "string",
     );
-    const notesMsg = systemMessages.find(
-      (m) => (m.content as string).includes("Session Notes"),
+    const notesMsg = userMessages.find(
+      (m) => (m.content as string).includes("<session_context>"),
     );
     expect(notesMsg).toBeDefined();
     expect((notesMsg!.content as string)).toContain("Open Decisions");
+    // Verify notes do NOT appear in any system block
+    const systemMessages = firstCallMessages.filter((m) => m.role === "system");
+    const leakedToSystem = systemMessages.some(
+      (m) => (m.content as string)?.includes("session_context") || (m.content as string)?.includes("Open Decisions"),
+    );
+    expect(leakedToSystem).toBe(false);
   });
 
   it("6.5b no session notes system message when notes file absent", async () => {
@@ -187,13 +201,50 @@ describe("engine session notes injection", () => {
     const allCaptured = getCapturedStreamMessages();
     expect(allCaptured.length).toBeGreaterThan(0);
     const firstCallMessages = allCaptured[0];
+    // No session_context XML should appear anywhere in the messages
     const notesMsg = firstCallMessages.find(
       (m) =>
-        m.role === "system" &&
         typeof m.content === "string" &&
-        (m.content as string).includes("Session Notes"),
+        (m.content as string).includes("<session_context>"),
     );
     expect(notesMsg).toBeUndefined();
+  });
+});
+
+// ─── 1.4: System blocks stable when session notes change ─────────────────────
+
+describe("assembleMessages — system stability with session notes", () => {
+  it("1.4 system messages are identical across two runs when only session notes differ", async () => {
+    const { taskId } = seedProjectAndTask(db, tmpDir);
+
+    // Helper to run one turn and capture its first AI call messages
+    async function runTurn(message: string): Promise<typeof import("../ai/types.ts").AIMessage[]> {
+      let resolveExec!: () => void;
+      const execDone = new Promise<void>((r) => { resolveExec = r; });
+      const onTaskUpdated = (task: { executionState: string }) => {
+        if (task.executionState === "completed" || task.executionState === "failed") resolveExec();
+      };
+      queueStreamStep({ type: "text", tokens: ["Done."] });
+      await handleHumanTurn(taskId, message, noop, noop, onTaskUpdated as never, noop);
+      await execDone;
+      const captured = getCapturedStreamMessages();
+      const msgs = captured[captured.length - 1] ?? [];
+      resetFakeAI();
+      return msgs;
+    }
+
+    // First run: no session notes
+    rmSync(getSessionMemoryPath(taskId), { force: true });
+    const run1Messages = await runTurn("first message");
+
+    // Second run: with session notes written
+    writeSessionMemory(taskId, "## Notes\n\nImportant context.");
+    const run2Messages = await runTurn("second message");
+
+    // System messages should be byte-identical between runs
+    const extractSystem = (msgs: typeof run1Messages) =>
+      msgs.filter((m) => m.role === "system").map((m) => m.content as string).join("\0");
+    expect(extractSystem(run1Messages)).toBe(extractSystem(run2Messages));
   });
 });
 

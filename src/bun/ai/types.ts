@@ -33,10 +33,18 @@ export interface AIToolCall {
   };
 }
 
+// Token usage stats returned by providers. Reflects actual API-reported counts.
+export interface UsageStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+}
+
 // Returned by turn() — either the final text or a list of tool calls
 export type AITurnResult =
-  | { type: "text"; content: string; stopReason?: string }
-  | { type: "tool_calls"; calls: AIToolCall[] };
+  | { type: "text"; content: string; stopReason?: string; usage?: UsageStats }
+  | { type: "tool_calls"; calls: AIToolCall[]; usage?: UsageStats };
 
 // Yielded by stream() — unified streaming events covering tokens and tool calls
 export type StreamEvent =
@@ -48,8 +56,10 @@ export type StreamEvent =
   // Ephemeral status messages emitted by retryStream() during non-streaming fallback.
   // These are NOT stored in the DB — they describe transient API wait state only.
   | { type: "status"; content: string }
-  // Usage/cost summary emitted once per stream response at message_stop.
-  | { type: "usage"; costEst: number };
+  // Usage stats emitted per stream round. For Anthropic: emitted twice — once at
+  // message_start (outputTokens=0, costEst=0) and once at message_stop (final values).
+  // For OpenAI-compatible: emitted once at stream end. costEst is 0 for non-Anthropic.
+  | { type: "usage"; usage: UsageStats; costEst: number };
 
 export interface AICallOptions {
   maxTokens?: number;
@@ -61,6 +71,9 @@ export interface AICallOptions {
   effort?: "low" | "medium" | "high" | "max";
   /** Optional label to prefix usage log lines (e.g. "Agent 2/3" for sub-agents). */
   agentLabel?: string;
+  /** Execution ID propagated to the provider for per-execution state tracking
+   * (e.g. cache break detection across rounds). Not sent to the API. */
+  executionId?: number;
 }
 
 export interface AIProvider {

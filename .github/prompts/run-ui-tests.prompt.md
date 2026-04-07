@@ -18,10 +18,10 @@ sleep 1
 
 ## Step 2 — Start the app in test mode
 
-Use `RAILYN_DB=:memory:` so tests run against an isolated in-memory database — they never touch `~/.railyn/railyn.db`.
+Use `--memory-db` so tests run against an isolated in-memory database — they never touch `~/.railyn/railyn.db`.
 
 ```bash
-RAILYN_DB=:memory: bun run dev > /tmp/railyin-dev.log 2>&1 &
+bun run dev:test > /tmp/railyin-dev.log 2>&1 &
 ```
 
 Save the PID if you need to kill it later.
@@ -85,7 +85,7 @@ bun run test:ui:run
 - **Bridge base**: `http://localhost:9229`
 - **Test file**: `src/ui-tests/review-overlay.test.ts`
 - **Bridge helpers**: `src/ui-tests/bridge.ts`
-- **Debug bridge**: only available when `RAILYN_DEBUG=1` is set (port 9229)
-- **Test DB**: in-memory SQLite (`RAILYN_DB=:memory:`), seeded by `/setup-test-env`
+- **Debug bridge**: only available when `--debug` flag is passed (port 9229)
+- **Test DB**: in-memory SQLite (`--memory-db`), seeded by `/setup-test-env`
 - **Worktree fixture**: `/tmp/railyn-test-worktree-<ts>/` — 2 tracked partial-change files (`partial-x.ts`, `partial-y.ts`) + 3 new untracked files (`feature-a.ts`, `feature-b.vue`, `feature-c.md`)
 - **Suites**: A–L (23 tests total)

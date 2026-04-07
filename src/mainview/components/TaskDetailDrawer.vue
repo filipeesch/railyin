@@ -75,11 +75,21 @@
     </template>
 
     <div v-if="task" class="task-detail">
+      <!-- Launch controls bar: outside scroll, just below header -->
+      <div v-if="launchConfig" class="launch-bar">
+        <LaunchButtons
+          :profiles="launchConfig.profiles"
+          :tools="launchConfig.tools"
+          @run="runLaunch"
+        />
+      </div>
+
       <!-- Two-column layout: conversation + side panel -->
       <div class="task-detail__body">
 
         <!-- Conversation timeline -->
         <div class="task-detail__conversation" ref="scrollEl" @scroll.passive="onScroll">
+
           <div class="conversation-inner">
             <template v-for="item in displayItems" :key="item.key">
               <ToolCallGroup
@@ -394,17 +404,30 @@ import ReasoningBubble from "./ReasoningBubble.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
 import TodoPanel from "./TodoPanel.vue";
+import LaunchButtons from "./LaunchButtons.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
 import { useToast } from "primevue/usetoast";
 import { useReviewStore } from "../stores/review";
+import { useLaunchStore } from "../stores/launch";
 import { electroview } from "../rpc";
-import type { ConversationMessage, ExecutionState } from "@shared/rpc-types";
+import type { ConversationMessage, ExecutionState, LaunchConfig } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
 const toast = useToast();
 const reviewStore = useReviewStore();
+const launchStore = useLaunchStore();
+
+const launchConfig = ref<LaunchConfig | null>(null);
+
+async function runLaunch(command: string, mode: "terminal" | "app") {
+  if (!task.value) return;
+  const result = await launchStore.run(task.value.id, command, mode);
+  if (!result.ok) {
+    toast.add({ severity: "error", summary: "Launch failed", detail: result.error, life: 5000 });
+  }
+}
 
 const manageModelsOpen = ref(false);
 
@@ -784,6 +807,7 @@ watch(
   async (id) => {
     gitStat.value = null;
     sessionMemoryContent.value = null;
+    launchConfig.value = null;
     if (!id) return;
     taskStore.loadEnabledModels();
     const t = taskStore.activeTask;
@@ -795,6 +819,10 @@ watch(
       const { content } = await electroview.rpc!.request["tasks.sessionMemory"]({ taskId: id });
       sessionMemoryContent.value = content;
     } catch { /* non-fatal */ }
+    // Load launch config (deduped in store by projectId)
+    if (t) {
+      launchConfig.value = await launchStore.getConfig(id, t.projectId);
+    }
   },
   { immediate: true },
 );
@@ -879,6 +907,16 @@ watch(
   flex: 1;
   overflow-y: auto;
   padding: 8px 4px 8px 0;
+}
+
+.launch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 0;
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  margin-bottom: 8px;
 }
 
 .conversation-inner {

@@ -6,7 +6,7 @@
  * Suite U: Execution state visuals — task card CSS class and badge update live
  *
  * Requires the app to be running in test mode:
- *   bun run dev:test   (RAILYN_DEBUG=1 RAILYN_DB=:memory:)
+ *   bun run dev:test   (--debug --memory-db)
  */
 
 import { describe, it, expect, beforeAll } from "bun:test";

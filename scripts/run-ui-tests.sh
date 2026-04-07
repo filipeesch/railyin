@@ -3,7 +3,7 @@
 #
 # Orchestrates:
 #   1. Kill any existing app instance (Railyn-dev + electrobun)
-#   2. Build + start the app in test mode (RAILYN_DEBUG=1 RAILYN_DB=:memory: — debug bridge + isolated in-memory DB)
+#   2. Build + start the app in test mode (bun run dev:test — debug bridge + isolated in-memory DB)
 #   3. Wait for the debug bridge on localhost:9229 to be ready
 #   4. Run the full UI test suite via bun test
 #   5. Kill the app and report the result
@@ -37,9 +37,9 @@ sleep 1
 
 # ─── 2. Build + start in test mode ───────────────────────────────────────────
 
-echo "→ Starting app in test mode (RAILYN_DEBUG=1 RAILYN_DB=:memory:)..."
+echo "→ Starting app in test mode (bun run dev:test)..."
 cd "$PROJECT_DIR"
-RAILYN_DEBUG=1 RAILYN_DB=:memory: bun run dev > "$LOG_FILE" 2>&1 &
+bun run dev:test > "$LOG_FILE" 2>&1 &
 APP_PID=$!
 echo "  App PID: $APP_PID  Log: $LOG_FILE"
 

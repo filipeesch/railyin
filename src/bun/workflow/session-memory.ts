@@ -48,14 +48,15 @@ export function writeSessionMemory(taskId: number, content: string): void {
 
 // ─── Injection helper ─────────────────────────────────────────────────────────
 
-/** Format session notes for injection into the system prompt.
+/** Format session notes for injection into the final user message as a variable context block.
+ *  Uses an XML wrapper so it is clearly delimited and does NOT live in the stable system prefix.
  *  If notes exceed SESSION_MEMORY_MAX_CHARS, truncate from the top (oldest). */
 export function formatSessionNotesBlock(notes: string): string {
   const truncated =
     notes.length > SESSION_MEMORY_MAX_CHARS
       ? notes.slice(notes.length - SESSION_MEMORY_MAX_CHARS)
       : notes;
-  return `\n\n## Session Notes\n\n${truncated}`;
+  return `\n\n<session_context>\n${truncated}\n</session_context>`;
 }
 
 // ─── Extraction prompt ────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import type {
   AIToolCall,
   AIToolDefinition,
   StreamEvent,
+  UsageStats,
 } from "./types.ts";
 import { ProviderError } from "./retry.ts";
 import { log } from "../logger.ts";
@@ -22,10 +23,10 @@ function logUsage(
 ): number {
   const total = inputTokens + cacheReadTokens + cacheWriteTokens;
   const hitPct = total > 0 ? Math.round((cacheReadTokens / total) * 100) : 0;
-  // Estimate cost ($/ MTok): cache_write=1.25×base, cache_read=0.1×base, out=5×base.
-  // For Sonnet 4.6: base=$3/MTok, out=$15/MTok. Approximate for all models.
+  // Estimate cost ($/ MTok) for Sonnet 4.6: base=$3, out=$15, cache_read=0.1×=$0.30.
+  // All breakpoints use 1h TTL → cache_write is 2× base = $6/MTok.
   const costEst = (
-    (inputTokens * 3 + cacheWriteTokens * 3.75 + cacheReadTokens * 0.3 + outputTokens * 15) / 1_000_000
+    (inputTokens * 3 + cacheWriteTokens * 6 + cacheReadTokens * 0.3 + outputTokens * 15) / 1_000_000
   ).toFixed(4);
   const prefix = agentLabel ? `[${agentLabel}] ` : "";
   log("debug", `${prefix}Anthropic usage [${model}]: in=${inputTokens} cache_read=${cacheReadTokens} cache_write=${cacheWriteTokens} out=${outputTokens} | hit=${hitPct}% of ${total} input | ~$${costEst}`, {});
@@ -262,6 +263,55 @@ const ANTHROPIC_VERSION = "2023-06-01";
 // ({ type: "adaptive" }) automatically enables interleaved thinking on Claude 4.6
 // models without any beta header. The header is deprecated per the migration guide.
 
+// ─── Context edit strategy (server-side tool-result clearing) ────────────────
+
+/** Server-side context edit strategy sent with every request when enabled.
+ *  Instructs Anthropic to clear old tool results once input tokens exceed 80K,
+ *  keeping the cache prefix valid while reducing effective context size. */
+export const CONTEXT_EDIT_STRATEGY = {
+  type: "clear_tool_uses_20250919",
+  trigger: { type: "input_tokens", value: 80000 },
+  keep: { type: "tool_uses", value: 20000 },
+  clear_at_least: { type: "input_tokens", value: 20000 },
+} as const;
+
+// ─── Cache break detection ────────────────────────────────────────────────────
+
+/** Per-execution hash state for cache break detection. Keyed by execution ID. */
+const _execHashes = new Map<number, { system: string; tools: string }>();
+
+/** Compute a short (8-char) SHA-256 hex digest of a string using Bun's crypto API. */
+function hashShort(text: string): string {
+  return new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 8);
+}
+
+/** Compare system and tools hashes against the stored values for this execution.
+ *  Emits console.warn when a hash changes (cache miss cause). Updates stored hashes. */
+export function checkAndUpdateCacheBreak(
+  executionId: number | undefined,
+  systemText: string | undefined,
+  toolsJson: string,
+): void {
+  if (!executionId) return;
+  const sysHash = hashShort(systemText ?? "");
+  const toolsHash = hashShort(toolsJson);
+  const prev = _execHashes.get(executionId);
+  if (prev) {
+    if (prev.system !== sysHash) {
+      console.warn(`[cache] system hash changed: ${prev.system} → ${sysHash}`);
+    }
+    if (prev.tools !== toolsHash) {
+      console.warn(`[cache] tools hash changed: ${prev.tools} → ${toolsHash}`);
+    }
+  }
+  _execHashes.set(executionId, { system: sysHash, tools: toolsHash });
+}
+
+/** Clear stored hash state for an execution (call on completion to free memory). */
+export function clearExecHashes(executionId: number): void {
+  _execHashes.delete(executionId);
+}
+
 export class AnthropicProvider implements AIProvider {
   cooldownUntil = 0;
   private readonly apiKey: string;
@@ -270,14 +320,26 @@ export class AnthropicProvider implements AIProvider {
   private readonly cacheTtl: "5m" | "1h" | undefined;
   private readonly enableThinking: boolean;
   private readonly defaultEffort: "low" | "medium" | "high" | "max" | undefined;
+  /** When true, include the context-editing-2025-10-01 beta header and
+   *  `context_edit_strategy` body param on every request. */
+  readonly contextEditEnabled: boolean;
 
-  constructor(apiKey: string, model: string, baseUrl = ANTHROPIC_BASE_URL, cacheTtl?: "5m" | "1h", enableThinking = false, defaultEffort?: "low" | "medium" | "high" | "max") {
+  constructor(
+    apiKey: string,
+    model: string,
+    baseUrl = ANTHROPIC_BASE_URL,
+    cacheTtl?: "5m" | "1h",
+    enableThinking = false,
+    defaultEffort?: "low" | "medium" | "high" | "max",
+    contextEditEnabled = false,
+  ) {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = baseUrl;
     this.cacheTtl = cacheTtl;
     this.enableThinking = enableThinking;
     this.defaultEffort = defaultEffort;
+    this.contextEditEnabled = contextEditEnabled;
   }
 
   /**
@@ -303,35 +365,46 @@ export class AnthropicProvider implements AIProvider {
     }
   }
 
-  private headers(): Record<string, string> {
-    return {
+  private headers(agentLabel?: string): Record<string, string> {
+    const h: Record<string, string> = {
       "Content-Type": "application/json",
       "x-api-key": this.apiKey,
       "anthropic-version": ANTHROPIC_VERSION,
     };
+    if (agentLabel) h["x-agent-label"] = agentLabel;
+    return h;
   }
 
   // ─── Non-streaming turn ─────────────────────────────────────────────────────
 
   async turn(messages: AIMessage[], options: AICallOptions = {}): Promise<AITurnResult> {
     const { system: systemBlocks, messages: adaptedMessages } = adaptMessages(messages, this.cacheTtl);
+    const adaptedTools = options.tools?.length ? adaptTools(options.tools, this.cacheTtl) : undefined;
+
+    // Cache break detection: warn when system or tools hash changes across rounds.
+    checkAndUpdateCacheBreak(
+      options.executionId,
+      systemBlocks?.[0]?.text,
+      JSON.stringify(adaptedTools ?? []),
+    );
 
     const body: Record<string, unknown> = {
       model: this.model,
       max_tokens: options.maxTokens ?? 8192,
       messages: adaptedMessages,
       // Top-level cache_control enables automatic conversation caching (same as stream).
-      cache_control: this.cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" },
+      // Always 1h TTL to match system+tools breakpoints.
+      cache_control: { type: "ephemeral", ttl: "1h" },
     };
     if (systemBlocks) body.system = systemBlocks;
-    if (options.tools?.length) body.tools = adaptTools(options.tools, this.cacheTtl);
+    if (adaptedTools) body.tools = adaptedTools;
     if (this.enableThinking) body.thinking = { type: "adaptive" };
     const turnEffort = options.effort ?? this.defaultEffort;
     if (turnEffort) body.output_config = { effort: turnEffort };
 
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
-      headers: this.headers(),
+      headers: this.headers(options.agentLabel),
       body: JSON.stringify(body),
       signal: options.signal,
     });
@@ -371,6 +444,21 @@ export class AnthropicProvider implements AIProvider {
       );
     }
 
+    // Max-tokens escalation: if the call was truncated at the initial limit, retry
+    // once with 64K. This eliminates the sub-agent truncation retry spiral.
+    const initialMaxTokens = options.maxTokens ?? 8192;
+    if (json.stop_reason === "max_tokens" && initialMaxTokens <= 16384) {
+      log("info", `[anthropic] max_tokens hit at ${initialMaxTokens}, retrying with 64000`, {});
+      return this.turn(messages, { ...options, maxTokens: 64000 });
+    }
+
+    const turnUsage: UsageStats | undefined = json.usage ? {
+      inputTokens: json.usage.input_tokens ?? 0,
+      outputTokens: json.usage.output_tokens ?? 0,
+      ...(json.usage.cache_creation_input_tokens ? { cacheCreationInputTokens: json.usage.cache_creation_input_tokens } : {}),
+      ...(json.usage.cache_read_input_tokens ? { cacheReadInputTokens: json.usage.cache_read_input_tokens } : {}),
+    } : undefined;
+
     const toolUseBlocks = (json.content ?? []).filter((b): b is AnthropicToolUseBlock => b.type === "tool_use");
     if (toolUseBlocks.length > 0) {
       const calls: AIToolCall[] = toolUseBlocks.map((b) => ({
@@ -378,19 +466,27 @@ export class AnthropicProvider implements AIProvider {
         type: "function",
         function: { name: b.name, arguments: JSON.stringify(b.input) },
       }));
-      return { type: "tool_calls", calls };
+      return { type: "tool_calls", calls, ...(turnUsage ? { usage: turnUsage } : {}) };
     }
 
     const textBlock = (json.content ?? []).find((b): b is AnthropicTextBlock => b.type === "text");
     const standardStopReasons = new Set(["end_turn", "tool_use", "max_tokens"]);
     const stopReason = json.stop_reason && !standardStopReasons.has(json.stop_reason) ? json.stop_reason : undefined;
-    return { type: "text", content: textBlock?.text ?? "", ...(stopReason ? { stopReason } : {}) };
+    return { type: "text", content: textBlock?.text ?? "", ...(stopReason ? { stopReason } : {}), ...(turnUsage ? { usage: turnUsage } : {}) };
   }
 
   // ─── Streaming ──────────────────────────────────────────────────────────────
 
   async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
     const { system: systemBlocks, messages: adaptedMessages } = adaptMessages(messages, this.cacheTtl);
+    const adaptedTools = options.tools?.length ? adaptTools(options.tools, this.cacheTtl) : undefined;
+
+    // Cache break detection: warn when system or tools hash changes across rounds.
+    checkAndUpdateCacheBreak(
+      options.executionId,
+      systemBlocks?.[0]?.text,
+      JSON.stringify(adaptedTools ?? []),
+    );
 
     const body: Record<string, unknown> = {
       model: this.model,
@@ -400,18 +496,20 @@ export class AnthropicProvider implements AIProvider {
       // Top-level cache_control enables Anthropic's automatic conversation caching:
       // the API places a breakpoint on the last cacheable message block and moves it
       // forward each turn, avoiding the 20-block lookback limit that manual breakpoints
-      // hit with long tool-call chains. The TTL follows the workspace config.
-      cache_control: this.cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" },
+      // hit with long tool-call chains. Always use 1h TTL to match system+tools
+      // breakpoints — a 5m TTL can expire during long sub-agent execution gaps,
+      // causing full cache misses even though the system+tools prefix hasn't changed.
+      cache_control: { type: "ephemeral", ttl: "1h" },
     };
     if (systemBlocks) body.system = systemBlocks;
-    if (options.tools?.length) body.tools = adaptTools(options.tools, this.cacheTtl);
+    if (adaptedTools) body.tools = adaptedTools;
     if (this.enableThinking) body.thinking = { type: "adaptive" };
     const streamEffort = options.effort ?? this.defaultEffort;
     if (streamEffort) body.output_config = { effort: streamEffort };
 
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
-      headers: this.headers(),
+      headers: this.headers(options.agentLabel),
       body: JSON.stringify(body),
       signal: options.signal,
     });
@@ -498,6 +596,14 @@ export class AnthropicProvider implements AIProvider {
               usageInputTokens = msg.usage.input_tokens ?? 0;
               usageCacheReadTokens = msg.usage.cache_read_input_tokens ?? 0;
               usageCacheWriteTokens = msg.usage.cache_creation_input_tokens ?? 0;
+              // Emit early usage event so input_tokens are persisted immediately.
+              const earlyUsage: UsageStats = {
+                inputTokens: usageInputTokens,
+                outputTokens: 0,
+                ...(usageCacheWriteTokens ? { cacheCreationInputTokens: usageCacheWriteTokens } : {}),
+                ...(usageCacheReadTokens ? { cacheReadInputTokens: usageCacheReadTokens } : {}),
+              };
+              yield { type: "usage", usage: earlyUsage, costEst: 0 };
             }
             continue;
           }
@@ -507,6 +613,12 @@ export class AnthropicProvider implements AIProvider {
             if (deltaUsage?.output_tokens) usageOutputTokens = deltaUsage.output_tokens;
             const stopReason = (parsed.delta as { stop_reason?: string } | undefined)?.stop_reason;
             const standardStopReasons = new Set(["end_turn", "tool_use", "max_tokens"]);
+            if (stopReason === "max_tokens") {
+              const streamMaxTokens = options.maxTokens ?? 8192;
+              // Log the truncation; streaming escalation not available because tokens
+              // are already yielded live. Sub-agents use turn() which does escalate.
+              log("warn", `[anthropic] stream hit max_tokens at ${streamMaxTokens} — use turn() for automatic escalation`, {});
+            }
             if (stopReason && !standardStopReasons.has(stopReason)) {
               yield { type: "stop_reason", reason: stopReason };
             }
@@ -528,7 +640,13 @@ export class AnthropicProvider implements AIProvider {
             }
             if (eventType === "message_stop") {
               const costEst = logUsage(this.model, usageInputTokens, usageCacheReadTokens, usageCacheWriteTokens, usageOutputTokens, options.agentLabel);
-              yield { type: "usage", costEst };
+              const finalUsage: UsageStats = {
+                inputTokens: usageInputTokens,
+                outputTokens: usageOutputTokens,
+                ...(usageCacheWriteTokens ? { cacheCreationInputTokens: usageCacheWriteTokens } : {}),
+                ...(usageCacheReadTokens ? { cacheReadInputTokens: usageCacheReadTokens } : {}),
+              };
+              yield { type: "usage", usage: finalUsage, costEst };
               yield { type: "done" };
             }
             continue;

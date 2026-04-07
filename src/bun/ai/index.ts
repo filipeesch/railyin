@@ -38,7 +38,10 @@ function instantiateProvider(config: ProviderConfig, modelId: string): AIProvide
       enableThinking = getConfig().workspace.anthropic?.enable_thinking ?? false;
       effort = getConfig().workspace.anthropic?.effort;
     } catch { /* config not loaded */ }
-    return new AnthropicProvider(config.api_key ?? "", modelId, undefined, cacheTtl, enableThinking, effort);
+    const contextEditEnabled = (() => {
+      try { return getConfig().workspace.anthropic?.context_edit_strategy?.enabled !== false; } catch { return true; }
+    })();
+    return new AnthropicProvider(config.api_key ?? "", modelId, config.base_url, cacheTtl, enableThinking, effort, contextEditEnabled);
   }
   // openai-compatible / openrouter / lmstudio / ollama all use OpenAICompatibleProvider
   return new OpenAICompatibleProvider(config.base_url ?? "", config.api_key ?? "", modelId, config.provider_args);

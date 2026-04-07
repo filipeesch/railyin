@@ -2,12 +2,21 @@ import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
 import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
 import { loadConfig } from "./config/index.ts";
+
+// ─── CLI flags (must run before any module reads process.env) ─────────────────
+// --debug      → enables the debug HTTP server on :9229 (same as RAILYN_DEBUG=1)
+// --memory-db  → uses an in-memory SQLite database (same as RAILYN_DB=:memory:)
+const argv = process.argv.slice(2);
+if (argv.includes("--debug")) process.env.RAILYN_DEBUG = "1";
+if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 import { workspaceHandlers } from "./handlers/workspace.ts";
 import { boardHandlers } from "./handlers/boards.ts";
 import { projectHandlers } from "./handlers/projects.ts";
 import { taskHandlers } from "./handlers/tasks.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
+import { launchHandlers } from "./handlers/launch.ts";
+import { lspHandlers } from "./handlers/lsp.ts";
 import { handleHumanTurn, cancelExecution, compactConversation, handleTransition } from "./workflow/engine.ts";
 import { mapTask, mapConversationMessage } from "./db/mappers.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
@@ -58,6 +67,8 @@ const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
       ...taskHandlers(onToken, onError, notifyTaskUpdated, notifyNewMessage),
       ...conversationHandlers(),
       ...workflowHandlers(notifyWorkflowReloaded),
+      ...launchHandlers(),
+      ...lspHandlers(),
     },
     messages: {
       "debug.log": ({ level, args }) => {
@@ -93,8 +104,8 @@ Electrobun.events.on("before-quit", () => {
   }
 });
 
-// ─── Debug HTTP server (dev only, RAILYN_DEBUG=1) ──────────────────────────────
-// Enable with: RAILYN_DEBUG=1 bun run dev
+// ─── Debug HTTP server (dev only, --debug flag) ──────────────────────────────
+// Enable with: bun run dev:debug
 // curl "http://localhost:9229/inspect?script=return+JSON.stringify(document.querySelector('.hunk-btn--accept')?.getBoundingClientRect())"
 // curl "http://localhost:9229/click?selector=.hunk-btn--accept"
 

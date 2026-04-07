@@ -32,3 +32,6 @@ Thumbs.db
 # User workspace config (contains local paths and API keys)
 # Copy config/workspace.yaml.sample to config/workspace.yaml to get started
 config/workspace.yaml
+
+# Refinement harness reports (machine-specific)
+refinement/reports/

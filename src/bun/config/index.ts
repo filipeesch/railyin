@@ -51,6 +51,21 @@ export interface WorkspaceYaml {
     /** Thinking effort for the parent agent. Defaults to "high" on Sonnet 4.6.
      *  Use "medium" for a good balance of quality and token cost. Sub-agents always use "low". */
     effort?: "low" | "medium" | "high" | "max";
+    /** Server-side context edit strategy (Anthropic beta). Instructs the server to clear old
+     *  tool results internally once input tokens exceed a threshold, keeping the cache prefix
+     *  intact while reducing effective context size. Default: true. */
+    context_edit_strategy?: {
+      enabled?: boolean;
+    };
+  };
+  /** Language server definitions for code intelligence via the `lsp` tool. */
+  lsp?: {
+    servers?: Array<{
+      name: string;
+      command: string;
+      args: string[];
+      extensions: string[];
+    }>;
   };
 }
 

@@ -86,11 +86,20 @@
             <Message v-if="projError" severity="error" :closable="false">{{ projError }}</Message>
 
             <Button
+              v-if="!showLspPrompt"
               label="Register project"
               icon="pi pi-plus"
               :loading="projSaving"
               :disabled="!proj.name || !proj.projectPath || !proj.gitRootPath"
               @click="registerProject"
+            />
+
+            <!-- LSP Setup Prompt (shown after a project is registered) -->
+            <LspSetupPrompt
+              v-if="showLspPrompt"
+              :detected-languages="lspLanguages"
+              :project-path="lastRegisteredPath"
+              @done="showLspPrompt = false; if (!boardStore.boards.length) activeTab = 2;"
             />
 
             <!-- Project list -->
@@ -172,10 +181,13 @@ import TabPanel from "primevue/tabpanel";
 import InputText from "primevue/inputtext";
 import Button from "primevue/button";
 import Message from "primevue/message";
+import { electroview } from "../rpc";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useBoardStore } from "../stores/board";
 import { useProjectStore } from "../stores/project";
 import ModelTreeView from "../components/ModelTreeView.vue";
+import LspSetupPrompt from "../components/LspSetupPrompt.vue";
+import type { LspDetectedLanguage } from "../../shared/rpc-types";
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
@@ -193,6 +205,9 @@ const proj = reactive({
 });
 const projSaving = ref(false);
 const projError = ref<string | null>(null);
+const lspLanguages = ref<LspDetectedLanguage[]>([]);
+const lastRegisteredPath = ref("");
+const showLspPrompt = ref(false);
 
 // Board form
 const boardName = ref("");
@@ -213,16 +228,31 @@ async function registerProject() {
   projError.value = null;
   projSaving.value = true;
   try {
+    const registeredPath = proj.projectPath.trim();
     await projectStore.registerProject({
       name: proj.name.trim(),
-      projectPath: proj.projectPath.trim(),
-      gitRootPath: proj.gitRootPath.trim() || proj.projectPath.trim(),
+      projectPath: registeredPath,
+      gitRootPath: proj.gitRootPath.trim() || registeredPath,
       defaultBranch: proj.defaultBranch.trim() || "main",
     });
     proj.name = "";
     proj.projectPath = "";
     proj.gitRootPath = "";
     proj.defaultBranch = "main";
+
+    // Detect languages and offer LSP setup if any were found
+    try {
+      const detected = await electroview.rpc.request["lsp.detectLanguages"]({ projectPath: registeredPath });
+      if (detected.length > 0) {
+        lastRegisteredPath.value = registeredPath;
+        lspLanguages.value = detected;
+        showLspPrompt.value = true;
+        return; // LSP prompt takes over — skip nudging to boards tab
+      }
+    } catch {
+      // LSP detection failure is non-fatal; proceed normally
+    }
+
     // If we have projects now, nudge to boards tab
     if (!boardStore.boards.length) activeTab.value = 2;
   } catch (e) {

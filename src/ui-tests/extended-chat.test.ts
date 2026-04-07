@@ -5,7 +5,7 @@
  * Transport:   HTTP bridge to Electrobun debug server on localhost:9229
  *
  * Run: bun test src/ui-tests/extended-chat.test.ts --timeout 120000
- * Requires the app to be running with RAILYN_DEBUG=1 RAILYN_DB=:memory:
+ * Requires the app to be running with: bun run dev:test  (--debug --memory-db)
  *
  * Scenarios covered:
  *   Suite P — Execution cancellation:

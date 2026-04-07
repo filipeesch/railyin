@@ -36,7 +36,6 @@ This kills any existing app, starts it in test mode with the debug bridge enable
 **1. Start the app in debug + test mode:**
 ```bash
 bun run dev:test
-# equivalent: RAILYN_DEBUG=1 RAILYN_DB=:memory: bun run dev
 ```
 
 **2. In a separate terminal, run the UI tests:**
@@ -45,15 +44,15 @@ bun run dev:test
 bun run test:ui
 ```
 
-> `RAILYN_DEBUG=1` opens the debug bridge on `localhost:9229`. Without it the bridge is not available and UI tests cannot run. `RAILYN_DB=:memory:` uses an isolated in-memory database so tests never touch your real data. They reset their own DB state at the start of each suite — no manual cleanup needed.
+> `--debug` opens the debug bridge on `localhost:9229`. Without it the bridge is not available and UI tests cannot run. `--memory-db` uses an isolated in-memory database so tests never touch your real data. They reset their own DB state at the start of each suite — no manual cleanup needed.
 
 ### Debug HTTP bridge
 
-The debug bridge (`localhost:9229`) is only started when `RAILYN_DEBUG=1` is set. It is never open in a normal `bun run dev` session.
+The debug bridge (`localhost:9229`) is only started when the `--debug` flag is passed. It is never open in a normal `bun run dev` session.
 
 ```bash
 # Start with debug bridge enabled:
-RAILYN_DEBUG=1 bun run dev
+bun run dev:debug
 
 # Useful endpoints:
 # POST /inspect          — evaluate JS in the WebView and return the result

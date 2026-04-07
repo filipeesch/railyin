@@ -100,7 +100,7 @@ export interface Hunk {
 }
 
 export interface FileDiffPayload {
-  operation: "write_file" | "patch_file" | "delete_file" | "rename_file";
+  operation: "write_file" | "edit_file" | "patch_file" | "delete_file" | "rename_file";
   path: string;
   to_path?: string;
   is_new?: boolean;
@@ -203,6 +203,19 @@ export interface TodoItem {
   status: string; // 'not-started' | 'in-progress' | 'completed'
 }
 
+// ─── Launch types ─────────────────────────────────────────────────────────────
+
+export interface LaunchEntry {
+  label?: string;
+  icon: string;
+  command: string;
+}
+
+export interface LaunchConfig {
+  profiles: LaunchEntry[];
+  tools: LaunchEntry[];
+}
+
 export interface WorkspaceConfig {
   id: number;
   name: string;
@@ -228,6 +241,28 @@ export interface WorkflowTemplate {
   id: string;
   name: string;
   columns: WorkflowColumn[];
+}
+
+// ─── LSP setup types ─────────────────────────────────────────────────────────
+
+export interface LspInstallOption {
+  label: string;
+  command: string;
+  platforms: string[];
+}
+
+export interface LspLanguageEntry {
+  name: string;
+  detectionGlobs: string[];
+  serverName: string;
+  extensions: string[];
+  installOptions: LspInstallOption[];
+}
+
+export interface LspDetectedLanguage {
+  entry: LspLanguageEntry;
+  alreadyInstalled: boolean;
+  installOptions: LspInstallOption[];
 }
 
 // ─── IPC streaming token event ───────────────────────────────────────────────
@@ -419,6 +454,30 @@ export type RailynRPCType = {
       "todos.list": {
         params: { taskId: number };
         response: TodoItem[];
+      };
+
+      // Launch
+      "launch.getConfig": {
+        params: { taskId: number };
+        response: LaunchConfig | null;
+      };
+      "launch.run": {
+        params: { taskId: number; command: string; mode: "terminal" | "app" };
+        response: { ok: true } | { ok: false; error: string };
+      };
+
+      // LSP setup
+      "lsp.detectLanguages": {
+        params: { projectPath: string };
+        response: LspDetectedLanguage[];
+      };
+      "lsp.addToConfig": {
+        params: { projectPath: string; languageServerName: string };
+        response: { ok: boolean };
+      };
+      "lsp.runInstall": {
+        params: { command: string; projectPath: string };
+        response: { success: boolean; output: string };
       };
     };
     messages: Record<string, never>;
