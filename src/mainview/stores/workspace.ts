@@ -20,8 +20,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
+  async function setThinking(enabled: boolean) {
+    await electroview.rpc.request["workspace.setThinking"]({ enabled });
+    // Optimistically update local state so the toggle feels instant
+    if (config.value) config.value = { ...config.value, enableThinking: enabled };
+  }
+
   /** Derived: first workflow template from the workspace config (from boards store) */
   const isConfigured = () => !!config.value;
 
-  return { config, loading, error, load, isConfigured };
+  return { config, loading, error, load, isConfigured, setThinking };
 });

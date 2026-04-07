@@ -8,6 +8,21 @@ import type {
   StreamEvent,
 } from "./types.ts";
 import { ProviderError } from "./retry.ts";
+import { log } from "../logger.ts";
+
+// ─── Usage logging helper ─────────────────────────────────────────────────────
+
+function logUsage(
+  model: string,
+  inputTokens: number,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+  outputTokens: number,
+): void {
+  const total = inputTokens + cacheReadTokens + cacheWriteTokens;
+  const hitPct = total > 0 ? Math.round((cacheReadTokens / total) * 100) : 0;
+  log("debug", `Anthropic usage [${model}]: in=${inputTokens} cache_read=${cacheReadTokens} cache_write=${cacheWriteTokens} out=${outputTokens} | hit=${hitPct}% of ${total} input tokens`, {});
+}
 
 // ─── Anthropic wire types ─────────────────────────────────────────────────────
 
@@ -25,9 +40,19 @@ interface AnthropicToolUseBlock {
 
 type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock;
 
+export interface AnthropicSystemBlock {
+  type: "text";
+  text: string;
+  cache_control?: { type: "ephemeral"; ttl?: "1h" };
+}
+
+type AnthropicUserContentBlock =
+  | { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } }
+  | { type: "tool_result"; tool_use_id: string; content: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } };
+
 interface AnthropicUserMessage {
   role: "user";
-  content: string | Array<{ type: "text"; text: string } | { type: "tool_result"; tool_use_id: string; content: string }>;
+  content: string | AnthropicUserContentBlock[];
 }
 
 interface AnthropicAssistantMessage {
@@ -40,29 +65,60 @@ type AnthropicMessage = AnthropicUserMessage | AnthropicAssistantMessage;
 interface AnthropicTool {
   name: string;
   description: string;
+  strict: true;
   input_schema: {
     type: "object";
     properties: Record<string, { type: string; description: string }>;
     required?: string[];
+    additionalProperties: false;
   };
+  cache_control?: { type: "ephemeral"; ttl?: "1h" };
 }
 
 // ─── Message adaptation ───────────────────────────────────────────────────────
 
 /**
+ * Returns true when an assistant message has no meaningful content — no text
+ * and no tool calls. These arise when streaming is interrupted after reasoning
+ * tokens arrive but before any text or tool_use is emitted. Sending such a
+ * message to the Anthropic API causes an HTTP 400 ("assistant turn must contain
+ * at least one content block of type text or tool_use").
+ */
+export function isEmptyAssistantMessage(m: AIMessage): boolean {
+  return (
+    m.role === "assistant" &&
+    (!m.content || (typeof m.content === "string" && !m.content.trim())) &&
+    (!m.tool_calls || m.tool_calls.length === 0)
+  );
+}
+
+/**
  * Adapt internal AIMessage[] to Anthropic's wire format:
- * - system messages extracted into top-level `system` field
+ * - system messages extracted into top-level `system` field (as AnthropicSystemBlock[] with cache_control)
  * - `role: "tool"` → `role: "user"` with tool_result content block
  * - `role: "assistant"` with tool_calls → `role: "assistant"` with tool_use content blocks
+ * - conversation history cache breakpoint placed at the 5th-from-last user message
  */
-export function adaptMessages(messages: AIMessage[]): {
-  system: string | undefined;
+export function adaptMessages(messages: AIMessage[], cacheTtl?: "5m" | "1h"): {
+  system?: AnthropicSystemBlock[];
   messages: AnthropicMessage[];
 } {
   const systemParts: string[] = [];
   const adapted: AnthropicMessage[] = [];
 
-  for (const msg of messages) {
+  // Pre-flight orphan filter: remove empty-content assistant messages that have
+  // no text and no tool calls. These occur when an execution is interrupted during
+  // the reasoning phase before any output was produced. If sent to Anthropic they
+  // cause an HTTP 400; filtering them here lets the next retry succeed cleanly.
+  const filtered = messages.filter((m, idx) => {
+    if (isEmptyAssistantMessage(m)) {
+      console.warn(`[anthropic] adaptMessages: dropping orphaned empty assistant message at index ${idx}`);
+      return false;
+    }
+    return true;
+  });
+
+  for (const msg of filtered) {
     if (msg.role === "system") {
       if (msg.content) systemParts.push(msg.content as string);
       continue;
@@ -71,7 +127,7 @@ export function adaptMessages(messages: AIMessage[]): {
     if (msg.role === "tool") {
       // Merge consecutive tool results into a single user message with multiple blocks
       // if the last adapted message is already a tool-result user message, append.
-      const block = {
+      const block: AnthropicUserContentBlock = {
         type: "tool_result" as const,
         tool_use_id: msg.tool_call_id ?? "",
         content: msg.content ?? "",
@@ -83,7 +139,7 @@ export function adaptMessages(messages: AIMessage[]): {
         Array.isArray(last.content) &&
         last.content.some((b) => b.type === "tool_result")
       ) {
-        (last.content as Array<{ type: "tool_result"; tool_use_id: string; content: string }>).push(block);
+        (last.content as AnthropicUserContentBlock[]).push(block);
       } else {
         adapted.push({ role: "user", content: [block] });
       }
@@ -117,41 +173,146 @@ export function adaptMessages(messages: AIMessage[]): {
     }
   }
 
-  return {
-    system: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
-    messages: adapted,
-  };
+  // Build systemBlocks with cache_control on the last block
+  let system: AnthropicSystemBlock[] | undefined;
+  if (systemParts.length > 0) {
+    const joined = systemParts.join("\n\n");
+    const cc: AnthropicSystemBlock["cache_control"] = cacheTtl === "1h"
+      ? { type: "ephemeral", ttl: "1h" }
+      : { type: "ephemeral" };
+    system = [{ type: "text", text: joined, cache_control: cc }];
+  }
+
+  // Conversation history cache breakpoint: 5th-from-last user message
+  const userIndices: number[] = [];
+  for (let i = 0; i < adapted.length; i++) {
+    if (adapted[i].role === "user") userIndices.push(i);
+  }
+  if (userIndices.length > 0) {
+    const targetUserIdx = Math.max(0, userIndices.length - 5);
+    const targetMsgIdx = userIndices[targetUserIdx];
+    const targetMsg = adapted[targetMsgIdx] as AnthropicUserMessage;
+    // Upgrade string content to block form and set cache_control unconditionally.
+    // Anthropic silently ignores cache_control if accumulated tokens are below the
+    // minimum cacheable threshold (1024–4096 tokens depending on model) — no error,
+    // no extra cost. Removing the old > 100 char guard ensures sub-agents with short
+    // messages still get a breakpoint that pays off once the conversation grows.
+    if (typeof targetMsg.content === "string") {
+      targetMsg.content = [{ type: "text", text: targetMsg.content }];
+    }
+    // Append cache_control to the last content block
+    const blocks = targetMsg.content as AnthropicUserContentBlock[];
+    blocks[blocks.length - 1].cache_control = cacheTtl === "1h"
+      ? { type: "ephemeral", ttl: "1h" }
+      : { type: "ephemeral" };
+  }
+
+  return { system, messages: adapted };
 }
 
-/** Map AIToolDefinition[] to Anthropic's tool format (parameters → input_schema) */
-export function adaptTools(tools: AIToolDefinition[]): AnthropicTool[] {
-  return tools.map((t) => ({
-    name: t.name,
-    description: t.description,
-    input_schema: {
-      type: "object",
-      properties: t.parameters.properties,
-      required: t.parameters.required,
-    },
-  }));
+/**
+ * Map AIToolDefinition[] to Anthropic's tool format (parameters → input_schema).
+ * When cacheTtl is set, marks the last tool with cache_control so the entire
+ * tools prefix is cached independently of system + messages. This is the
+ * highest-leverage cache breakpoint for sub-agents, which use the same sorted
+ * tool set across all parallel children but have unique instructions every call.
+ */
+/**
+ * Recursively inject `additionalProperties: false` into every sub-schema that
+ * has `type: "object"`. Anthropic strict mode requires this on ALL nested
+ * objects, not just the top-level `input_schema`.
+ */
+function injectAdditionalProperties(schema: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...schema };
+  if (result.type === "object") {
+    result.additionalProperties = false;
+    if (result.properties && typeof result.properties === "object") {
+      const props: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(result.properties as Record<string, unknown>)) {
+        props[key] = typeof val === "object" && val !== null
+          ? injectAdditionalProperties(val as Record<string, unknown>)
+          : val;
+      }
+      result.properties = props;
+    }
+  }
+  // Always recurse into array items regardless of parent type — arrays can
+  // contain objects that also need additionalProperties: false.
+  if (result.items && typeof result.items === "object" && result.items !== null) {
+    result.items = injectAdditionalProperties(result.items as Record<string, unknown>);
+  }
+  return result;
+}
+
+export function adaptTools(tools: AIToolDefinition[], cacheTtl?: "5m" | "1h"): AnthropicTool[] {
+  return tools.map((t, i) => {
+    const adapted: AnthropicTool = {
+      name: t.name,
+      description: t.description,
+      strict: true,
+      input_schema: injectAdditionalProperties({
+        type: "object",
+        properties: t.parameters.properties,
+        required: t.parameters.required,
+      }) as AnthropicTool["input_schema"],
+    };
+    // Mark last tool with cache_control — Anthropic caches the tools prefix
+    // independently of system/messages, so repeated calls with the same tool
+    // set (even with different instructions) get a cache read on the tools.
+    if (cacheTtl && i === tools.length - 1) {
+      adapted.cache_control = cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
+    }
+    return adapted;
+  });
 }
 
 // ─── AnthropicProvider ────────────────────────────────────────────────────────
 
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const ANTHROPIC_VERSION = "2023-06-01";
-const ANTHROPIC_BETA_THINKING = "interleaved-thinking-2025-05-14";
+// interleaved-thinking-2025-05-14 beta header removed: adaptive thinking
+// ({ type: "adaptive" }) automatically enables interleaved thinking on Claude 4.6
+// models without any beta header. The header is deprecated per the migration guide.
 
 export class AnthropicProvider implements AIProvider {
   cooldownUntil = 0;
   private readonly apiKey: string;
   private readonly model: string;
   private readonly baseUrl: string;
+  private readonly cacheTtl: "5m" | "1h" | undefined;
+  private readonly enableThinking: boolean;
+  private readonly defaultEffort: "low" | "medium" | "high" | "max" | undefined;
 
-  constructor(apiKey: string, model: string, baseUrl = ANTHROPIC_BASE_URL) {
+  constructor(apiKey: string, model: string, baseUrl = ANTHROPIC_BASE_URL, cacheTtl?: "5m" | "1h", enableThinking = false, defaultEffort?: "low" | "medium" | "high" | "max") {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = baseUrl;
+    this.cacheTtl = cacheTtl;
+    this.enableThinking = enableThinking;
+    this.defaultEffort = defaultEffort;
+  }
+
+  /**
+   * After a successful response, check rate-limit headers and proactively set
+   * cooldownUntil when any bucket (requests, tokens) is fully exhausted.
+   * This lets concurrent callers (e.g. parallel sub-agents) wait before their
+   * next attempt rather than racing to a 429.
+   */
+  private updateCooldownFromHeaders(responseHeaders: Headers): void {
+    const pairs: Array<[string, string]> = [
+      ["anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-requests-reset"],
+      ["anthropic-ratelimit-tokens-remaining",   "anthropic-ratelimit-tokens-reset"],
+      ["anthropic-ratelimit-input-tokens-remaining", "anthropic-ratelimit-input-tokens-reset"],
+      ["anthropic-ratelimit-output-tokens-remaining", "anthropic-ratelimit-output-tokens-reset"],
+    ];
+    for (const [remainingKey, resetKey] of pairs) {
+      const remaining = responseHeaders.get(remainingKey);
+      const reset = responseHeaders.get(resetKey);
+      if (remaining !== null && reset && parseInt(remaining, 10) === 0) {
+        const resetMs = new Date(reset).getTime();
+        if (resetMs > this.cooldownUntil) this.cooldownUntil = resetMs;
+      }
+    }
   }
 
   private headers(): Record<string, string> {
@@ -159,22 +320,24 @@ export class AnthropicProvider implements AIProvider {
       "Content-Type": "application/json",
       "x-api-key": this.apiKey,
       "anthropic-version": ANTHROPIC_VERSION,
-      "anthropic-beta": ANTHROPIC_BETA_THINKING,
     };
   }
 
   // ─── Non-streaming turn ─────────────────────────────────────────────────────
 
   async turn(messages: AIMessage[], options: AICallOptions = {}): Promise<AITurnResult> {
-    const { system, messages: adaptedMessages } = adaptMessages(messages);
+    const { system: systemBlocks, messages: adaptedMessages } = adaptMessages(messages, this.cacheTtl);
 
     const body: Record<string, unknown> = {
       model: this.model,
       max_tokens: options.maxTokens ?? 8192,
       messages: adaptedMessages,
     };
-    if (system) body.system = system;
-    if (options.tools?.length) body.tools = adaptTools(options.tools);
+    if (systemBlocks) body.system = systemBlocks;
+    if (options.tools?.length) body.tools = adaptTools(options.tools, this.cacheTtl);
+    if (this.enableThinking) body.thinking = { type: "adaptive" };
+    const turnEffort = options.effort ?? this.defaultEffort;
+    if (turnEffort) body.output_config = { effort: turnEffort };
 
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
@@ -193,9 +356,29 @@ export class AnthropicProvider implements AIProvider {
       );
     }
 
+    this.updateCooldownFromHeaders(response.headers);
+
     const json = await response.json() as {
       content?: AnthropicContentBlock[];
+      stop_reason?: string;
+      usage?: {
+        input_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+        output_tokens?: number;
+      };
     };
+
+    if (json.usage) {
+      const u = json.usage;
+      logUsage(
+        this.model,
+        u.input_tokens ?? 0,
+        u.cache_read_input_tokens ?? 0,
+        u.cache_creation_input_tokens ?? 0,
+        u.output_tokens ?? 0,
+      );
+    }
 
     const toolUseBlocks = (json.content ?? []).filter((b): b is AnthropicToolUseBlock => b.type === "tool_use");
     if (toolUseBlocks.length > 0) {
@@ -208,13 +391,15 @@ export class AnthropicProvider implements AIProvider {
     }
 
     const textBlock = (json.content ?? []).find((b): b is AnthropicTextBlock => b.type === "text");
-    return { type: "text", content: textBlock?.text ?? "" };
+    const standardStopReasons = new Set(["end_turn", "tool_use", "max_tokens"]);
+    const stopReason = json.stop_reason && !standardStopReasons.has(json.stop_reason) ? json.stop_reason : undefined;
+    return { type: "text", content: textBlock?.text ?? "", ...(stopReason ? { stopReason } : {}) };
   }
 
   // ─── Streaming ──────────────────────────────────────────────────────────────
 
   async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
-    const { system, messages: adaptedMessages } = adaptMessages(messages);
+    const { system: systemBlocks, messages: adaptedMessages } = adaptMessages(messages, this.cacheTtl);
 
     const body: Record<string, unknown> = {
       model: this.model,
@@ -222,8 +407,11 @@ export class AnthropicProvider implements AIProvider {
       messages: adaptedMessages,
       stream: true,
     };
-    if (system) body.system = system;
-    if (options.tools?.length) body.tools = adaptTools(options.tools);
+    if (systemBlocks) body.system = systemBlocks;
+    if (options.tools?.length) body.tools = adaptTools(options.tools, this.cacheTtl);
+    if (this.enableThinking) body.thinking = { type: "adaptive" };
+    const streamEffort = options.effort ?? this.defaultEffort;
+    if (streamEffort) body.output_config = { effort: streamEffort };
 
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
@@ -242,6 +430,8 @@ export class AnthropicProvider implements AIProvider {
       );
     }
 
+    this.updateCooldownFromHeaders(response.headers);
+
     if (!response.body) throw new Error("Anthropic API returned no response body");
 
     const decoder = new TextDecoder();
@@ -252,6 +442,11 @@ export class AnthropicProvider implements AIProvider {
     let hasToolUse = false;
     // Track current content block index → type
     const blockTypes = new Map<number, string>();
+    // Usage accumulators (populated from message_start / message_delta events)
+    let usageInputTokens = 0;
+    let usageCacheReadTokens = 0;
+    let usageCacheWriteTokens = 0;
+    let usageOutputTokens = 0;
 
     try {
       while (true) {
@@ -301,6 +496,26 @@ export class AnthropicProvider implements AIProvider {
             continue;
           }
 
+          if (eventType === "message_start") {
+            const msg = parsed.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | undefined;
+            if (msg?.usage) {
+              usageInputTokens = msg.usage.input_tokens ?? 0;
+              usageCacheReadTokens = msg.usage.cache_read_input_tokens ?? 0;
+              usageCacheWriteTokens = msg.usage.cache_creation_input_tokens ?? 0;
+            }
+            continue;
+          }
+
+          if (eventType === "message_delta") {
+            const deltaUsage = (parsed.usage as { output_tokens?: number } | undefined);
+            if (deltaUsage?.output_tokens) usageOutputTokens = deltaUsage.output_tokens;
+            const stopReason = (parsed.delta as { stop_reason?: string } | undefined)?.stop_reason;
+            const standardStopReasons = new Set(["end_turn", "tool_use", "max_tokens"]);
+            if (stopReason && !standardStopReasons.has(stopReason)) {
+              yield { type: "stop_reason", reason: stopReason };
+            }
+          }
+
           if (eventType === "message_stop" || eventType === "message_delta") {
             if (eventType === "message_stop" && hasToolUse) {
               const calls: AIToolCall[] = Array.from(toolAccum.values()).map((entry) => ({
@@ -316,6 +531,7 @@ export class AnthropicProvider implements AIProvider {
               toolAccum.clear();
             }
             if (eventType === "message_stop") {
+              logUsage(this.model, usageInputTokens, usageCacheReadTokens, usageCacheWriteTokens, usageOutputTokens);
               yield { type: "done" };
             }
             continue;

@@ -872,3 +872,73 @@ describe("computeBackoffMs jitter fix (8.8)", () => {
     }
   });
 });
+
+// ─── 4.1–4.4: Model fallback on 529 exhaustion ───────────────────────────────
+
+describe("model fallback on 529 exhaustion (4.1–4.4)", () => {
+  it("4.1 retryTurn attempts fallback provider after 3 consecutive 529s", async () => {
+    const primary = makeFakeProvider(
+      () => okStream(),
+      () => Promise.reject(new ProviderError(529, "overloaded")),
+    );
+    const fallback = makeFakeProvider(() => okStream(), okTurn);
+    const result = await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "foreground", fallback);
+    expect(result).toEqual({ type: "text", content: "hello" });
+    expect(primary.turnCalls).toBe(3);
+    expect(fallback.turnCalls).toBe(1);
+  });
+
+  it("4.2 retryTurn throws original error if fallback also fails", async () => {
+    const primary529 = new ProviderError(529, "primary overloaded");
+    const primary = makeFakeProvider(
+      () => okStream(),
+      () => Promise.reject(primary529),
+    );
+    const fallback = makeFakeProvider(
+      () => okStream(),
+      () => Promise.reject(new ProviderError(529, "fallback overloaded")),
+    );
+    let err: unknown;
+    try {
+      await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "foreground", fallback);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBe(primary529);
+    expect(primary.turnCalls).toBe(3);
+    expect(fallback.turnCalls).toBe(1);
+  });
+
+  it("4.3 retryTurn does not attempt fallback when fallbackProvider is null", async () => {
+    const primary = makeFakeProvider(
+      () => okStream(),
+      () => Promise.reject(new ProviderError(529, "overloaded")),
+    );
+    let err: unknown;
+    try {
+      await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "foreground", null);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ProviderError);
+    expect((err as ProviderError).status).toBe(529);
+    expect(primary.turnCalls).toBe(3);
+  });
+
+  it("4.4 retryStream yields events from fallback provider after 529 exhaustion", async () => {
+    const primary = makeFakeProvider(
+      () => throwingGen(new ProviderError(529, "overloaded")),
+      noTurn,
+    );
+    const fallback = makeFakeProvider(
+      () => eventsGen([{ type: "token", content: "fallback-ok" }, { type: "done" }]),
+      noTurn,
+    );
+    const events = await collect(
+      retryStream(primary, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "foreground", fallback),
+    );
+    expect(primary.streamCalls).toBe(3);
+    expect(fallback.streamCalls).toBe(1);
+    expect(events.some((e) => e.type === "token" && (e as { content?: string }).content === "fallback-ok")).toBe(true);
+  });
+});

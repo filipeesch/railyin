@@ -16,6 +16,11 @@ const _capturedStreamMessages: AIMessage[][] = [];
 // Keep turn-related state for sub-agent use (runSubExecution still calls turn())
 const _scriptedTurnResponses: AITurnResult[] = [];
 const _capturedTurnOptions: AICallOptions[] = [];
+const _capturedTurnMessages: AIMessage[][] = [];
+
+// Hanging turn: blocks until the caller's AbortSignal fires (or 5 s timeout).
+let _hangingTurn = false;
+let _hangingTurnStarted: (() => void) | null = null;
 
 /** Queue a scripted stream step to be yielded by the next `stream()` call (FIFO). */
 export function queueStreamStep(step: FakeStep): void {
@@ -42,6 +47,24 @@ export function getCapturedTurnOptions(): AICallOptions[] {
   return [..._capturedTurnOptions];
 }
 
+/** Return a copy of all message arrays passed to `turn()` calls (one entry per call). */
+export function getCapturedTurnMessages(): AIMessage[][] {
+  return [..._capturedTurnMessages];
+}
+
+/**
+ * Queue a "hanging" turn response: the next `turn()` call will block until
+ * the caller's AbortSignal fires (simulating a slow API cancelled by the user).
+ * Returns a promise that resolves the moment the hanging turn starts, so tests
+ * can synchronise: `await queueHangingTurn()` → then cancel.
+ */
+export function queueHangingTurn(): Promise<void> {
+  _hangingTurn = true;
+  return new Promise<void>((resolve) => {
+    _hangingTurnStarted = resolve;
+  });
+}
+
 /** Reset all scripted responses and captured calls. Call in `afterEach`. */
 export function resetFakeAI(): void {
   _scriptedSteps.length = 0;
@@ -49,6 +72,9 @@ export function resetFakeAI(): void {
   _capturedStreamMessages.length = 0;
   _scriptedTurnResponses.length = 0;
   _capturedTurnOptions.length = 0;
+  _capturedTurnMessages.length = 0;
+  _hangingTurn = false;
+  _hangingTurnStarted = null;
 }
 
 const FAKE_TOKENS = [
@@ -66,6 +92,10 @@ export class FakeAIProvider implements AIProvider {
   }
 
   async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
+    // Mirror real fetch behaviour: throw immediately if signal is already aborted.
+    if (options.signal?.aborted) {
+      throw new DOMException("The user aborted a request.", "AbortError");
+    }
     _capturedStreamOptions.push(options);
     _capturedStreamMessages.push([...messages]);
 
@@ -94,7 +124,30 @@ export class FakeAIProvider implements AIProvider {
   }
 
   async turn(messages: AIMessage[], options: AICallOptions = {}): Promise<AITurnResult> {
+    // Mirror real fetch behaviour: throw immediately if signal is already aborted.
+    if (options.signal?.aborted) {
+      throw new DOMException("The user aborted a request.", "AbortError");
+    }
     _capturedTurnOptions.push(options);
+    _capturedTurnMessages.push([...messages]);
+    // Hanging turn: block until the AbortSignal fires or 5 s guard fires.
+    if (_hangingTurn) {
+      _hangingTurn = false;
+      _hangingTurnStarted?.();
+      _hangingTurnStarted = null;
+      await new Promise<void>((_, reject) => {
+        if (options.signal?.aborted) {
+          reject(new DOMException("The user aborted a request.", "AbortError"));
+          return;
+        }
+        const onAbort = () => reject(new DOMException("The user aborted a request.", "AbortError"));
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+        setTimeout(() => {
+          options.signal?.removeEventListener("abort", onAbort);
+          reject(new Error("queueHangingTurn: timed out after 5 s without cancellation"));
+        }, 5_000);
+      });
+    }
     if (_scriptedTurnResponses.length > 0) {
       return _scriptedTurnResponses.shift()!;
     }

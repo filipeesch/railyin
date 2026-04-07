@@ -126,6 +126,7 @@ export async function* retryStream(
   maxTurnRetries = DEFAULT_MAX_TURN_RETRIES,
   _tc: _RetryTimingConfig = {},
   source: "foreground" | "background" = "foreground",
+  fallbackProvider: AIProvider | null = null,
 ): AsyncGenerator<StreamEvent> {
   const idleTimeoutMs = _tc.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const stallWarnMs = _tc.stallWarnMs ?? DEFAULT_STALL_WARN_MS;
@@ -199,6 +200,17 @@ export async function* retryStream(
           consecutive529++;
           if (consecutive529 >= MAX_529_RETRIES) {
             log("error", `Stream hit ${MAX_529_RETRIES} consecutive 529s, giving up`, {});
+            if (fallbackProvider) {
+              log("warn", `Attempting stream fallback provider after 529 exhaustion`, {});
+              try {
+                for await (const event of fallbackProvider.stream(messages, options)) {
+                  yield event;
+                }
+                return;
+              } catch {
+                // fallback failed — throw the original error
+              }
+            }
             throw err;
           }
         } else {
@@ -329,6 +341,7 @@ export async function retryTurn(
   maxRetries = DEFAULT_MAX_TURN_RETRIES,
   _tc: _RetryTimingConfig = {},
   source: "foreground" | "background" = "foreground",
+  fallbackProvider: AIProvider | null = null,
 ): Promise<AITurnResult> {
   const baseBackoffMs = _tc.baseBackoffMs ?? BASE_BACKOFF_MS;
   let attempt = 0;
@@ -352,7 +365,17 @@ export async function retryTurn(
 
       if (err.status === 529) {
         consecutive529++;
-        if (consecutive529 >= MAX_529_RETRIES) throw err;
+        if (consecutive529 >= MAX_529_RETRIES) {
+          if (fallbackProvider) {
+            log("warn", `retryTurn attempting fallback provider after ${MAX_529_RETRIES} consecutive 529s`, {});
+            try {
+              return await fallbackProvider.turn(messages, options);
+            } catch {
+              // fallback failed — throw the original error
+            }
+          }
+          throw err;
+        }
       } else {
         consecutive529 = 0;
       }

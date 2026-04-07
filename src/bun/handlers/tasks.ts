@@ -130,6 +130,14 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         .get(params.taskId);
 
       if (taskRow) {
+        // Ensure conversation exists — tasks created before conversations were required may have null conversation_id.
+        let convId = (taskRow.conversation_id as number | null);
+        if (convId == null) {
+          const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [params.taskId]);
+          convId = convResult.lastInsertRowid as number;
+          db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [convId, params.taskId]);
+        }
+
         // Backfill git context for tasks created before this was wired up
         const project = db
           .query<Pick<ProjectRow, "git_root_path">, [number]>(
@@ -141,7 +149,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         }
 
         const postStatus = (msg: string) => {
-          appendMessage(params.taskId, taskRow.conversation_id, "system", null, msg);
+          appendMessage(params.taskId, convId!, "system", null, msg);
           const updated = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
           if (updated) onTaskUpdated(mapTask(updated));
         };
@@ -154,7 +162,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
           appendMessage(
             params.taskId,
-            taskRow.conversation_id,
+            convId!,
             "system",
             null,
             `Worktree setup failed: ${errMsg}`,
@@ -200,6 +208,14 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         .get(params.taskId);
 
       if (taskRow) {
+        // Ensure conversation exists — tasks created before conversations were required may have null conversation_id.
+        let retryConvId = (taskRow.conversation_id as number | null);
+        if (retryConvId == null) {
+          const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [params.taskId]);
+          retryConvId = convResult.lastInsertRowid as number;
+          db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [retryConvId, params.taskId]);
+        }
+
         const project = db
           .query<Pick<ProjectRow, "git_root_path">, [number]>(
             "SELECT git_root_path FROM projects WHERE id = ?",
@@ -210,7 +226,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         }
 
         const postStatus = (msg: string) => {
-          appendMessage(params.taskId, taskRow.conversation_id, "system", null, msg);
+          appendMessage(params.taskId, retryConvId!, "system", null, msg);
           const updated = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
           if (updated) onTaskUpdated(mapTask(updated));
         };
@@ -220,7 +236,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(params.taskId, taskRow.conversation_id, "system", null, `Worktree setup failed: ${errMsg}`);
+          appendMessage(params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
           const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId)!;
           onTaskUpdated(mapTask(failedRow));
           // Return a fake execution id of -1 since we can't proceed — caller won't use it
@@ -252,7 +268,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
           }
 
           try {
-            let rawModels: Array<{ id: string; contextWindow: number | null }>;
+            let rawModels: Array<{ id: string; contextWindow: number | null; supportsAdaptiveThinking?: boolean }>;
 
             if (provConfig.type === "anthropic") {
               const baseUrl = provConfig.base_url ?? "https://api.anthropic.com";
@@ -263,10 +279,24 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
                 },
               });
               if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              const json = await res.json() as { data?: Array<{ id: string; context_window?: number }> };
+              const json = await res.json() as {
+                data?: Array<{
+                  id: string;
+                  context_window?: number;
+                  capabilities?: {
+                    thinking?: {
+                      supported?: boolean;
+                      types?: {
+                        adaptive?: { supported?: boolean };
+                      };
+                    };
+                  };
+                }>;
+              };
               rawModels = (json.data ?? []).map((m) => ({
                 id: m.id,
                 contextWindow: m.context_window ?? null,
+                supportsAdaptiveThinking: m.capabilities?.thinking?.types?.adaptive?.supported === true,
               }));
             } else {
               rawModels = await listOpenAICompatibleModels(provConfig);
@@ -278,6 +308,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
                 id: `${provConfig.id}/${m.id}`,
                 contextWindow: m.contextWindow,
                 enabled: enabledSet.has(`${provConfig.id}/${m.id}`),
+                ...(m.supportsAdaptiveThinking ? { supportsAdaptiveThinking: true } : {}),
               })),
             };
           } catch (err) {

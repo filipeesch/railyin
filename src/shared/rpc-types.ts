@@ -78,6 +78,8 @@ export interface ProviderModelList {
     id: string;
     contextWindow: number | null;
     enabled: boolean;
+    /** True when the model supports adaptive thinking (Anthropic claude-3-7+ and claude-4+). */
+    supportsAdaptiveThinking?: boolean;
   }>;
   error?: string;
 }
@@ -212,6 +214,8 @@ export interface WorkspaceConfig {
     contextWindowTokens?: number;
   };
   worktreeBasePath: string;
+  /** Whether adaptive thinking is enabled for supported Anthropic models. */
+  enableThinking: boolean;
 }
 
 export interface WorkflowColumn {
@@ -253,6 +257,10 @@ export type RailynRPCType = {
       "workspace.getConfig": {
         params: Record<string, never>;
         response: WorkspaceConfig;
+      };
+      "workspace.setThinking": {
+        params: { enabled: boolean };
+        response: Record<string, never>;
       };
 
       // Boards

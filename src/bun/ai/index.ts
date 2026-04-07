@@ -3,6 +3,7 @@ import { OpenAICompatibleProvider } from "./openai-compatible.ts";
 import { AnthropicProvider } from "./anthropic.ts";
 import { FakeAIProvider } from "./fake.ts";
 import type { ProviderConfig } from "../config/index.ts";
+import { getConfig } from "../config/index.ts";
 // Keep legacy import for tests/callers that haven't migrated yet
 import type { AIProviderConfig } from "../config/index.ts";
 
@@ -28,7 +29,17 @@ export function clearProviderCache(): void {
 
 function instantiateProvider(config: ProviderConfig, modelId: string): AIProvider {
   if (config.type === "fake") return new FakeAIProvider();
-  if (config.type === "anthropic") return new AnthropicProvider(config.api_key ?? "", modelId);
+  if (config.type === "anthropic") {
+    let cacheTtl: "5m" | "1h" | undefined;
+    let enableThinking = false;
+    let effort: "low" | "medium" | "high" | "max" | undefined;
+    try {
+      cacheTtl = getConfig().workspace.anthropic?.cache_ttl;
+      enableThinking = getConfig().workspace.anthropic?.enable_thinking ?? false;
+      effort = getConfig().workspace.anthropic?.effort;
+    } catch { /* config not loaded */ }
+    return new AnthropicProvider(config.api_key ?? "", modelId, undefined, cacheTtl, enableThinking, effort);
+  }
   // openai-compatible / openrouter / lmstudio / ollama all use OpenAICompatibleProvider
   return new OpenAICompatibleProvider(config.base_url ?? "", config.api_key ?? "", modelId, config.provider_args);
 }

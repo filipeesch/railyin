@@ -502,7 +502,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
             properties: {
               instructions: {
                 type: "string",
-                description: "What this sub-agent should do.",
+                description: "Complete, self-contained task description for this sub-agent. Include all context it needs: relevant file paths, task background, constraints, and the concrete action to perform. The sub-agent starts with no conversation history — everything it needs must be in this field.",
               },
               tools: {
                 type: "array",
@@ -1089,7 +1089,14 @@ export async function executeTool(
     case "run_command": {
       const cmd = args.command ?? "";
       // ── Shell approval gate ─────────────────────────────────────────────────
-      if (!ctx.shellAutoApprove && ctx.taskCallbacks?.requestShellApproval && ctx.taskId != null) {
+      // Read shell_auto_approve live from DB so mid-execution toggles take effect
+      // immediately. Falls back to ctx.shellAutoApprove when the task isn't in DB
+      // (sub-agent context or test with synthetic taskId).
+      const dbRow = ctx.taskId != null
+        ? getDb().query<{ shell_auto_approve: number }, [number]>("SELECT shell_auto_approve FROM tasks WHERE id = ?").get(ctx.taskId)
+        : null;
+      const shellAutoApprove = dbRow != null ? dbRow.shell_auto_approve === 1 : (ctx.shellAutoApprove ?? false);
+      if (!shellAutoApprove && ctx.taskCallbacks?.requestShellApproval && ctx.taskId != null) {
         const binaries = extractCommandBinaries(cmd);
         const approved = ctx.approvedCommands ?? [];
         const unapproved = binaries.filter((b) => !approved.includes(b));

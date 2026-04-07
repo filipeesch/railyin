@@ -53,7 +53,19 @@ const executionControllers = new Map<number, AbortController>();
 
 export function cancelExecution(executionId: number): void {
   const controller = executionControllers.get(executionId);
-  if (controller) controller.abort();
+  if (controller) {
+    controller.abort();
+    return;
+  }
+  // No live controller — zombie cleanup: mark orphaned execution failed and unblock the task.
+  const db = getDb();
+  const execRow = db.query<{ task_id: number; status: string; finished_at: string | null }, [number]>(
+    "SELECT task_id, status, finished_at FROM executions WHERE id = ?",
+  ).get(executionId);
+  if (execRow && execRow.status === "running" && execRow.finished_at == null) {
+    db.run("UPDATE executions SET status = 'failed', finished_at = datetime('now') WHERE id = ?", [executionId]);
+    db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [execRow.task_id]);
+  }
 }
 
 // ─── Shell approval pending map ───────────────────────────────────────────────
@@ -197,6 +209,15 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
     // tool_call rows: reconstruct as an OpenAI-format assistant message with
     // tool_calls array, then consume the paired tool_result(s).
     if (m.type === "tool_call") {
+      // Orphaned tool_call: no following tool_result (execution was interrupted after
+      // the tool_call row was written but before the result was stored). Emitting an
+      // assistant+tool_calls message with no matching tool message causes an Anthropic
+      // 400 on every retry, permanently sticking the task. Skip silently and warn.
+      if (i + 1 >= toProcess.length || toProcess[i + 1].type !== "tool_result") {
+        log("warn", "compactMessages: orphaned tool_call with no following tool_result — skipping", { msgId: m.id });
+        i++;
+        continue;
+      }
       // Collect all consecutive tool_call messages in this round (they may be
       // stored interleaved with their results when roundCalls has multiple calls).
       // Strategy: gather all consecutive tool_call + tool_result pairs as
@@ -703,13 +724,22 @@ export async function handleTransition(
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
+  // Ensure the task has a conversation — tasks created before conversations were
+  // required may have conversation_id = null. Create one on demand and persist it.
+  let conversationId = task.conversation_id;
+  if (conversationId == null) {
+    const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [taskId]);
+    conversationId = convResult.lastInsertRowid as number;
+    db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [conversationId, taskId]);
+  }
+
   const fromState = task.workflow_state;
 
   // 1. Update workflow_state immediately (design D6)
   db.run("UPDATE tasks SET workflow_state = ? WHERE id = ?", [toState, taskId]);
 
   // 2. Append transition event to conversation
-  appendMessage(task.conversation_id!, task.conversation_id!, "transition_event", null, "", {
+  appendMessage(taskId, conversationId, "transition_event", null, "", {
     from: fromState,
     to: toState,
   });
@@ -752,7 +782,7 @@ export async function handleTransition(
   // 7. Append system message
   appendMessage(
     taskId,
-    task.conversation_id!,
+    conversationId,
     "system",
     null,
     `Running prompt: ${column.id}`,
@@ -776,7 +806,7 @@ export async function handleTransition(
   }
   appendMessage(
     taskId,
-    task.conversation_id!,
+    conversationId,
     "user",
     "prompt",
     resolvedOnEnterPrompt,
@@ -808,11 +838,13 @@ async function runSubExecution({
   instructions,
   tools,
   qualifiedModel,
+  signal,
 }: {
   worktreePath: string;
   instructions: string;
   tools: string[];
   qualifiedModel: string;
+  signal: AbortSignal;
 }): Promise<string> {
   const config = getConfig();
   let provider;
@@ -821,10 +853,34 @@ async function runSubExecution({
   } catch {
     return "(sub-agent skipped: no provider configured for this model)";
   }
+
+  // Resolve fallback provider for 529 exhaustion
+  let fallbackProvider: import("../ai/types.ts").AIProvider | null = null;
+  {
+    const slashIdx = qualifiedModel.indexOf("/");
+    const providerId = slashIdx >= 0 ? qualifiedModel.slice(0, slashIdx) : "";
+    const activeProviderConfig = config.providers.find((p) => p.id === providerId);
+    if (activeProviderConfig?.fallback_model) {
+      try {
+        ({ provider: fallbackProvider } = resolveProvider(activeProviderConfig.fallback_model, config.providers));
+      } catch {
+        fallbackProvider = null;
+      }
+    }
+  }
+
   const toolCtx = { worktreePath, searchConfig: config.workspace.search };
-  const toolDefs = resolveToolsForColumn(tools);
+  const toolDefs = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+
+  const systemContent = [
+    "You are a focused sub-agent in an orchestrator-workers pipeline. Complete the task described in the user message.",
+    "",
+    "## Environment",
+    `- worktree_path: ${worktreePath}`,
+  ].join("\n");
 
   const liveMessages: AIMessage[] = [
+    { role: "system", content: systemContent },
     { role: "user", content: instructions },
   ];
 
@@ -832,7 +888,7 @@ async function runSubExecution({
   let toolRounds = 0;
 
   while (toolRounds < MAX_SUB_ROUNDS) {
-    const turn = await retryTurn(provider, liveMessages, { tools: toolDefs });
+    const turn = await retryTurn(provider, liveMessages, { tools: toolDefs, effort: "low", signal }, undefined, {}, "foreground", fallbackProvider);
 
     if (turn.type === "text") {
       return (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
@@ -881,7 +937,7 @@ async function runSubExecution({
   } else {
     liveMessages.push({ role: "user", content: "You have reached the tool call limit. Please summarise your work so far." });
   }
-  const final = await retryTurn(provider, liveMessages, { tools: [] });
+  const final = await retryTurn(provider, liveMessages, { tools: [], signal }, undefined, {}, "foreground", fallbackProvider);
   return final.type === "text" ? (final.content ?? "(no response)") : "(sub-agent hit tool limit)";
 }
 
@@ -1003,6 +1059,21 @@ async function runExecution(
       throw err;
     }
 
+    // Resolve fallback provider for 529 exhaustion (task 3.1)
+    let fallbackProvider: import("../ai/types.ts").AIProvider | null = null;
+    {
+      const slashIdx = model.indexOf("/");
+      const providerId = slashIdx >= 0 ? model.slice(0, slashIdx) : "";
+      const activeProviderConfig = config.providers.find((p) => p.id === providerId);
+      if (activeProviderConfig?.fallback_model) {
+        try {
+          ({ provider: fallbackProvider } = resolveProvider(activeProviderConfig.fallback_model, config.providers));
+        } catch {
+          fallbackProvider = null;
+        }
+      }
+    }
+
     // ── Tool-call loop ────────────────────────────────────────────────────────
     const MAX_TOOL_ROUNDS = 10;
     // Build fire-and-forget wrappers so task tools can trigger transitions /
@@ -1110,10 +1181,11 @@ async function runExecution(
       // Reset per-round reasoning state
       reasoningAccum = "";
       hadReasoning = false;
+      let stopReasonEvent: string | null = null;
 
       try {
         log("debug", `Stream round ${toolRounds + 1} started`, { taskId, executionId, data: { toolCount: tools.length, messageCount: liveMessages.length, messages: liveMessages } });
-        for await (const event of retryStream(provider, liveMessages, { tools, signal })) {
+        for await (const event of retryStream(provider, liveMessages, { tools, signal }, undefined, undefined, {}, "foreground", fallbackProvider)) {
           if (event.type === "token") {
             fullResponse += event.content;
             onToken(taskId, executionId, event.content, false);
@@ -1127,6 +1199,8 @@ async function runExecution(
           } else if (event.type === "tool_calls") {
             log("debug", `Tool calls received: ${event.calls.map(c => c.function.name).join(", ")}`, { taskId, executionId });
             roundCalls = event.calls;
+          } else if (event.type === "stop_reason") {
+            stopReasonEvent = event.reason;
           } else if (event.type === "done") {
             break;
           }
@@ -1164,6 +1238,45 @@ async function runExecution(
         const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
         if (failedRow) onTaskUpdated(mapTask(failedRow));
         return;
+      }
+
+      // Handle non-standard stop reasons from the model
+      if (stopReasonEvent) {
+        if (stopReasonEvent === "refusal") {
+          log("warn", `Model refused to respond (stop_reason: refusal)`, { taskId, executionId });
+          const refusalMsg = "The model refused to generate a response for this request.";
+          appendMessage(taskId, task.conversation_id ?? 0, "system", null, refusalMsg);
+          executionControllers.delete(executionId);
+          db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+          db.run(
+            "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
+            [refusalMsg, executionId],
+          );
+          onError(taskId, executionId, refusalMsg);
+          const refusalRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+          if (refusalRow) onTaskUpdated(mapTask(refusalRow));
+          return;
+        } else if (stopReasonEvent === "model_context_window_exceeded") {
+          log("warn", `Context window exceeded — triggering compaction`, { taskId, executionId });
+          appendMessage(taskId, task.conversation_id ?? 0, "system", null, "Compacting conversation…");
+          try {
+            await compactConversation(taskId);
+          } catch (compactErr) {
+            const errMsg = compactErr instanceof Error ? compactErr.message : String(compactErr);
+            log("error", `Compaction failed after context_window_exceeded: ${errMsg}`, { taskId, executionId });
+          }
+          // Reload messages and retry the round
+          const freshRows = db.query<ConversationMessageRow, [number]>(
+            "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+          ).all(taskId);
+          const freshMessages = compactMessages(freshRows);
+          liveMessages.length = 0;
+          liveMessages.push(...freshMessages);
+          fullResponse = "";
+          continue;
+        } else {
+          log("warn", `Unrecognized stop_reason: ${stopReasonEvent} — continuing`, { taskId, executionId });
+        }
       }
 
       // If no tool calls — the stream was the final response; exit
@@ -1403,6 +1516,7 @@ async function runExecution(
                 instructions: child.instructions,
                 tools: child.tools,
                 qualifiedModel: model,
+                signal,
               });
               return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
             } catch (e) {

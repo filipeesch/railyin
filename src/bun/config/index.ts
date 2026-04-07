@@ -12,6 +12,8 @@ export interface ProviderConfig {
   api_key?: string;
   context_window_tokens?: number; // manual override; auto-detected from provider when absent
   provider_args?: Record<string, unknown>; // forwarded verbatim as the `provider` key in every OpenAI-compat request body
+  /** Fully-qualified model ID to fall back to when this provider returns 529 (overloaded) 3 consecutive times. */
+  fallback_model?: string;
 }
 
 /**
@@ -39,6 +41,16 @@ export interface WorkspaceYaml {
   search?: {
     engine: string; // "tavily" | "brave" | "none"
     api_key: string;
+  };
+  /** Anthropic-specific settings */
+  anthropic?: {
+    /** Cache TTL for prompt caching. "5m" (default) or "1h" (2× write cost, survives long pauses). */
+    cache_ttl?: "5m" | "1h";
+    /** When true, send thinking: { type: "adaptive" } for models that support adaptive thinking. */
+    enable_thinking?: boolean;
+    /** Thinking effort for the parent agent. Defaults to "high" on Sonnet 4.6.
+     *  Use "medium" for a good balance of quality and token cost. Sub-agents always use "low". */
+    effort?: "low" | "medium" | "high" | "max";
   };
 }
 
@@ -285,6 +297,34 @@ export function getConfig(): LoadedConfig {
 export function resetConfig(): void {
   _config = null;
   _configError = null;
+}
+
+/**
+ * Persist a partial update to the workspace.yaml file by merging the given
+ * fields into the existing parsed document and writing it back.
+ * This does not preserve comments in the yaml file.
+ */
+export function patchWorkspaceYaml(patch: Partial<WorkspaceYaml>): void {
+  const configDir = getConfigDir();
+  const isTestMode = process.env.RAILYN_DB === ":memory:";
+  const workspaceFileName = isTestMode ? "workspace.test.yaml" : "workspace.yaml";
+  const workspaceFile = join(configDir, workspaceFileName);
+
+  let current: WorkspaceYaml = {};
+  try {
+    const raw = readFileSync(workspaceFile, "utf-8");
+    current = yaml.load(raw) as WorkspaceYaml ?? {};
+  } catch { /* file may not exist yet */ }
+
+  const merged = { ...current, ...patch };
+  // Deep-merge nested objects (anthropic)
+  if (patch.anthropic && current.anthropic) {
+    merged.anthropic = { ...current.anthropic, ...patch.anthropic };
+  }
+
+  writeFileSync(workspaceFile, yaml.dump(merged), "utf-8");
+  // Invalidate the in-memory config so the next getConfig() call re-reads it
+  resetConfig();
 }
 
 // ─── Bundled default workflow template ───────────────────────────────────────

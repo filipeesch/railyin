@@ -35,7 +35,7 @@ export interface AIToolCall {
 
 // Returned by turn() — either the final text or a list of tool calls
 export type AITurnResult =
-  | { type: "text"; content: string }
+  | { type: "text"; content: string; stopReason?: string }
   | { type: "tool_calls"; calls: AIToolCall[] };
 
 // Yielded by stream() — unified streaming events covering tokens and tool calls
@@ -44,6 +44,7 @@ export type StreamEvent =
   | { type: "reasoning"; content: string }
   | { type: "tool_calls"; calls: AIToolCall[] }
   | { type: "done" }
+  | { type: "stop_reason"; reason: string }
   // Ephemeral status messages emitted by retryStream() during non-streaming fallback.
   // These are NOT stored in the DB — they describe transient API wait state only.
   | { type: "status"; content: string };
@@ -52,6 +53,10 @@ export interface AICallOptions {
   maxTokens?: number;
   tools?: AIToolDefinition[];
   signal?: AbortSignal;
+  /** Anthropic effort level (GA, no beta header required). Controls token spend
+   * and thinking depth. Defaults to "high" on Sonnet 4.6 / Opus 4.6.
+   * Use "low" for sub-agents and simple tasks; "medium" for balanced agentic work. */
+  effort?: "low" | "medium" | "high" | "max";
 }
 
 export interface AIProvider {

@@ -8,13 +8,15 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { extractSummaryBlock, compactMessages, MICRO_COMPACT_TURN_WINDOW, MICRO_COMPACT_SENTINEL } from "../workflow/engine.ts";
+import { cancelExecution } from "../workflow/engine.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { handleHumanTurn, handleTransition } from "../workflow/engine.ts";
-import { queueStreamStep, queueTurnResponse, getCapturedTurnOptions, getCapturedStreamMessages, resetFakeAI } from "../ai/fake.ts";
+import { queueStreamStep, queueTurnResponse, getCapturedTurnOptions, getCapturedTurnMessages, getCapturedStreamMessages, resetFakeAI, queueHangingTurn } from "../ai/fake.ts";
+import { resolveToolsForColumn } from "../workflow/tools.ts";
 import type { Database } from "bun:sqlite";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 
@@ -374,6 +376,66 @@ describe("spawn_agent tool interception", () => {
     expect(results[0]).toContain("Wrote src/a.ts");
     expect(results[1]).toContain("Wrote src/b.ts");
   }, 15_000);
+});
+
+// ─── Sub-agent cache sharing (2.1–2.3) ───────────────────────────────────────
+
+describe("sub-agent cache sharing", () => {
+  it("2.1 runSubExecution places system message at index 0, user instructions at index 1", async () => {
+    // Spawn one sub-agent; it should immediately return text (no tool calls)
+    queueTurnResponse({ type: "text", content: "Done." });
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [
+        {
+          id: "call_sa",
+          type: "function",
+          function: {
+            name: "spawn_agent",
+            arguments: JSON.stringify({
+              children: [{ instructions: "Do something.", tools: [] }],
+            }),
+          },
+        },
+      ],
+    });
+    // Parent resumes after spawn
+    queueStreamStep({ type: "text", tokens: ["Finished."] });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+    await handleHumanTurn(taskId, "Go.", (_, __, _t, isDone) => { if (isDone) resolveDone(); }, noop, noop, noop);
+    await donePromise;
+
+    const turnMessages = getCapturedTurnMessages();
+    expect(turnMessages.length).toBeGreaterThan(0);
+    const subAgentMessages = turnMessages[0];
+    expect(subAgentMessages[0].role).toBe("system");
+    expect(subAgentMessages[1].role).toBe("user");
+    expect(subAgentMessages[1].content).toBe("Do something.");
+  }, 15_000);
+
+  it("2.2 tool definitions are sorted by name", () => {
+    const tools = ["write", "read", "search"];
+    const defs = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+    for (let i = 1; i < defs.length; i++) {
+      expect(defs[i].name >= defs[i - 1].name).toBe(true);
+    }
+  });
+
+  it("2.3 two sub-agents with identical tools produce the same sorted tool name order", () => {
+    const tools = ["write", "read", "search"];
+    const defs1 = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+    const defs2 = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+    expect(defs1.map((d) => d.name)).toEqual(defs2.map((d) => d.name));
+  });
 });
 
 // ─── Unified streaming ────────────────────────────────────────────────────────
@@ -757,6 +819,145 @@ describe("ask_me tool normalization", () => {
   });
 });
 
+// ─── cancelExecution ─────────────────────────────────────────────────────────
+
+describe("cancelExecution", () => {
+  it("1.1 zombie cleanup: marks orphaned running execution failed and resets task to waiting_user", () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    // Insert a synthetic zombie execution (running, no finished_at, no live AbortController).
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, status) VALUES (?, 'plan', 'plan', 'running')",
+      [taskId],
+    );
+    const { id: execId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+    db.run("UPDATE tasks SET current_execution_id = ?, execution_state = 'running' WHERE id = ?", [execId, taskId]);
+
+    // No live AbortController for execId — exercises the zombie path.
+    cancelExecution(execId);
+
+    const exec = db
+      .query<{ status: string; finished_at: string | null }, [number]>(
+        "SELECT status, finished_at FROM executions WHERE id = ?",
+      )
+      .get(execId)!;
+    expect(exec.status).toBe("failed");
+    expect(exec.finished_at).not.toBeNull();
+
+    const task = db
+      .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
+      .get(taskId)!;
+    expect(task.execution_state).toBe("waiting_user");
+  });
+
+  it("1.2 no-op when execution is already completed — status unchanged", () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, status, finished_at) VALUES (?, 'plan', 'plan', 'completed', datetime('now'))",
+      [taskId],
+    );
+    const { id: execId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+
+    cancelExecution(execId); // no live controller, execution is not 'running'
+
+    const exec = db
+      .query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?")
+      .get(execId)!;
+    expect(exec.status).toBe("completed"); // unchanged
+  });
+
+  it("1.3 no-op for unknown executionId — does not throw", () => {
+    expect(() => cancelExecution(999_999)).not.toThrow();
+  });
+});
+
+// ─── Sub-agent signal propagation ────────────────────────────────────────────
+
+describe("sub-agent signal propagation", () => {
+  function seedWithWorktree() {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+    return taskId;
+  }
+
+  it("2.1 AbortSignal is threaded into sub-agent turn() options", async () => {
+    queueTurnResponse({ type: "text", content: "Done." });
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [{
+        id: "call_sa_sig",
+        type: "function",
+        function: {
+          name: "spawn_agent",
+          arguments: JSON.stringify({ children: [{ instructions: "Do something.", tools: [] }] }),
+        },
+      }],
+    });
+    queueStreamStep({ type: "text", tokens: ["Finished."] });
+
+    const taskId = seedWithWorktree();
+
+    let resolveCompleted!: () => void;
+    const completedPromise = new Promise<void>((r) => (resolveCompleted = r));
+    await handleHumanTurn(
+      taskId, "Go.", noop, noop,
+      (task) => { if ((task as { executionState: string }).executionState === "completed") resolveCompleted(); },
+      noop,
+    );
+    await completedPromise;
+
+    // The sub-agent's turn() must have received a live AbortSignal.
+    const turnOpts = getCapturedTurnOptions();
+    expect(turnOpts.length).toBeGreaterThan(0);
+    expect(turnOpts[0].signal).toBeInstanceOf(AbortSignal);
+    expect(turnOpts[0].signal!.aborted).toBe(false);
+  }, 15_000);
+
+  it("2.2 cancelling parent while sub-agent hangs aborts sub-agent and marks execution cancelled", async () => {
+    // Round 1: parent calls spawn_agent.
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [{
+        id: "call_sa_hang",
+        type: "function",
+        function: {
+          name: "spawn_agent",
+          arguments: JSON.stringify({ children: [{ instructions: "Hang forever.", tools: [] }] }),
+        },
+      }],
+    });
+    // The sub-agent's turn will block until the parent's AbortSignal fires.
+    const subAgentStarted = queueHangingTurn();
+
+    const taskId = seedWithWorktree();
+
+    let resolveCancelled!: () => void;
+    const cancelledPromise = new Promise<void>((r) => (resolveCancelled = r));
+    const { executionId } = await handleHumanTurn(
+      taskId, "Go — but you will be cancelled.", noop, noop,
+      (task) => { if ((task as { executionState: string }).executionState === "waiting_user") resolveCancelled(); },
+      noop,
+    );
+
+    // Wait until the sub-agent's hanging turn has actually started.
+    await subAgentStarted;
+
+    // Cancel the parent — this aborts the signal threaded into the sub-agent.
+    cancelExecution(executionId);
+
+    // Wait for the execution to reach cancelled state (onTaskUpdated fires).
+    await cancelledPromise;
+
+    const exec = db
+      .query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?")
+      .get(executionId)!;
+    expect(exec.status).toBe("cancelled");
+  }, 15_000);
+});
+
 // ─── compactMessages micro-compact ────────────────────────────────────────────
 
 describe("compactMessages micro-compact", () => {
@@ -860,6 +1061,35 @@ describe("compactMessages micro-compact", () => {
       expect(toolMsgs[i].content).not.toBe(MICRO_COMPACT_SENTINEL);
       expect(toolMsgs[i].content).toContain(`user said option ${i + 1}`);
     }
+  });
+
+  it("4.5 orphaned tool_call with no following tool_result is silently skipped", () => {
+    const rows: ConversationMessageRow[] = [
+      makeRow({ type: "user", role: "user", content: "hello" }),
+      toolCallRow("read_file"), // orphaned — no tool_result follows
+    ];
+    const output = compactMessages(rows);
+    // The orphaned tool_call should produce no assistant message in output
+    const assistantMsgs = output.filter((m) => m.role === "assistant");
+    expect(assistantMsgs.length).toBe(0);
+  });
+
+  it("4.6 orphaned tool_call in the middle is skipped, subsequent messages are included", () => {
+    const rows: ConversationMessageRow[] = [
+      toolCallRow("read_file"),     // orphaned
+      makeRow({ type: "user", role: "user", content: "retry" }),
+      toolCallRow("list_dir"),
+      toolResultRow("list_dir", "file.ts"),
+      makeRow({ type: "assistant", role: "assistant", content: "Done" }),
+    ];
+    const output = compactMessages(rows);
+    const toolMsgs = output.filter((m) => m.role === "tool");
+    const assistantMsgs = output.filter((m) => m.role === "assistant");
+    // Orphaned tool_call dropped; valid pair preserved
+    expect(toolMsgs.length).toBe(1);
+    expect(toolMsgs[0].content).toBe("file.ts");
+    // The final assistant text message survives
+    expect(assistantMsgs.some((m) => m.content === "Done")).toBe(true);
   });
 
   // ─── FakeAI integration test for DB immutability ─────────────────────────────

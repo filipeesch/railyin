@@ -69,3 +69,33 @@ The system SHALL implement `provider.listModels()` by calling `GET https://api.a
 #### Scenario: Empty array returned on API failure
 - **WHEN** the `/v1/models` request returns an error or non-JSON response
 - **THEN** `listModels()` returns an empty array without throwing
+
+### Requirement: Anthropic provider supports configurable cache TTL
+The system SHALL support an optional `ttl` field in `cache_control` blocks sent to the Anthropic API. When the workspace config sets `anthropic.cache_ttl` to `"1h"`, all `cache_control` blocks SHALL include `ttl: "1h"`. When set to `"5m"` or omitted, no `ttl` field is included (Anthropic defaults to 5 minutes).
+
+#### Scenario: Default 5-minute TTL (no config or explicit "5m")
+- **WHEN** `anthropic.cache_ttl` is absent or `"5m"` in workspace config
+- **THEN** `cache_control` blocks are `{ type: "ephemeral" }` with no `ttl` field
+
+#### Scenario: Extended 1-hour TTL
+- **WHEN** `anthropic.cache_ttl` is `"1h"` in workspace config
+- **THEN** `cache_control` blocks are `{ type: "ephemeral", ttl: "1h" }`
+
+#### Scenario: Non-Anthropic providers unaffected
+- **WHEN** the active provider is not Anthropic
+- **THEN** no `cache_control` field is included in any request body
+
+### Requirement: stream() uses configured effort as default for parent agent calls
+The system SHALL apply `anthropic.effort` from workspace config to `stream()` calls when no explicit `effort` is provided in `AICallOptions`. When `AICallOptions.effort` is explicitly set (e.g. sub-agents passing `"low"`), it SHALL take precedence over the config value.
+
+#### Scenario: Config effort applied when no explicit effort given
+- **WHEN** `anthropic.effort` is `"medium"` in workspace config AND `stream()` is called without an `effort` field in `AICallOptions`
+- **THEN** the Anthropic request body includes `output_config: { effort: "medium" }`
+
+#### Scenario: Explicit AICallOptions effort overrides config
+- **WHEN** `anthropic.effort` is `"medium"` in workspace config AND `stream()` is called with `effort: "low"` in `AICallOptions`
+- **THEN** the Anthropic request body includes `output_config: { effort: "low" }`
+
+#### Scenario: No effort in config and no explicit effort — omit output_config
+- **WHEN** `anthropic.effort` is absent from workspace config AND `stream()` is called without `effort` in `AICallOptions`
+- **THEN** the Anthropic request body does NOT include an `output_config` field
