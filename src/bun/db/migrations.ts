@@ -190,6 +190,12 @@ const migrations: Array<{ id: string; sql: string }> = [
       CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
     `,
   },
+  {
+    id: "009_execution_cost",
+    sql: `
+      ALTER TABLE executions ADD COLUMN cost_estimate REAL;
+    `,
+  },
 ];
 
 export function runMigrations(): void {

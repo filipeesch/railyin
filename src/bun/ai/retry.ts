@@ -139,11 +139,15 @@ export async function* retryStream(
     const watchdogController = new AbortController();
     let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
     let stallWarnTimer: ReturnType<typeof setTimeout> | null = null;
+    let stallCount = 0;
+    let totalStallMs = 0;
 
     const resetWatchdog = () => {
       if (watchdogTimer) clearTimeout(watchdogTimer);
       if (stallWarnTimer) clearTimeout(stallWarnTimer);
       stallWarnTimer = setTimeout(() => {
+        stallCount++;
+        totalStallMs += stallWarnMs;
         log("warn", `Stream stalled for ${stallWarnMs / 1_000}s with no events`, {});
       }, stallWarnMs);
       watchdogTimer = setTimeout(() => {
@@ -171,6 +175,9 @@ export async function* retryStream(
         yield event;
       }
       clearWatchdog();
+      if (stallCount > 0) {
+        log("info", `Stream round completed with ${stallCount} stall(s) (~${Math.round(totalStallMs / 1_000)}s total stalled)`, {});
+      }
       return; // stream completed successfully
     } catch (err) {
       clearWatchdog();

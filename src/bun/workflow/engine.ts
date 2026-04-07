@@ -189,6 +189,7 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
   const maxMicroTurn = microTurn;
 
   const result: AIMessage[] = [];
+  const orphanedMsgIds: number[] = [];
   let i = 0;
   while (i < toProcess.length) {
     const m = toProcess[i];
@@ -214,7 +215,7 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
       // assistant+tool_calls message with no matching tool message causes an Anthropic
       // 400 on every retry, permanently sticking the task. Skip silently and warn.
       if (i + 1 >= toProcess.length || toProcess[i + 1].type !== "tool_result") {
-        log("warn", "compactMessages: orphaned tool_call with no following tool_result — skipping", { msgId: m.id });
+        orphanedMsgIds.push(m.id);
         i++;
         continue;
       }
@@ -283,6 +284,10 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
 
     // file_diff, code_review, ask_user_prompt, transition_event, artifact_event, reasoning — excluded
     i++;
+  }
+
+  if (orphanedMsgIds.length > 0) {
+    log("warn", `compactMessages: skipped ${orphanedMsgIds.length} orphaned tool_call(s) with no following tool_result (msg ids: ${orphanedMsgIds.join(", ")})`, {});
   }
 
   // Collapse consecutive user messages — caused by failed retries where the
@@ -839,12 +844,14 @@ async function runSubExecution({
   tools,
   qualifiedModel,
   signal,
+  agentLabel,
 }: {
   worktreePath: string;
   instructions: string;
   tools: string[];
   qualifiedModel: string;
   signal: AbortSignal;
+  agentLabel?: string;
 }): Promise<string> {
   const config = getConfig();
   let provider;
@@ -888,7 +895,7 @@ async function runSubExecution({
   let toolRounds = 0;
 
   while (toolRounds < MAX_SUB_ROUNDS) {
-    const turn = await retryTurn(provider, liveMessages, { tools: toolDefs, effort: "low", signal }, undefined, {}, "foreground", fallbackProvider);
+    const turn = await retryTurn(provider, liveMessages, { tools: toolDefs, effort: "low", signal, agentLabel }, undefined, {}, "foreground", fallbackProvider);
 
     if (turn.type === "text") {
       return (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
@@ -937,7 +944,7 @@ async function runSubExecution({
   } else {
     liveMessages.push({ role: "user", content: "You have reached the tool call limit. Please summarise your work so far." });
   }
-  const final = await retryTurn(provider, liveMessages, { tools: [], signal }, undefined, {}, "foreground", fallbackProvider);
+  const final = await retryTurn(provider, liveMessages, { tools: [], signal, agentLabel }, undefined, {}, "foreground", fallbackProvider);
   return final.type === "text" ? (final.content ?? "(no response)") : "(sub-agent hit tool limit)";
 }
 
@@ -972,6 +979,19 @@ async function runExecution(
 
   try {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+
+    // Auto-cancel any stale 'running' executions for this task. These arise when
+    // a previous execution was interrupted (user transition, API error, app restart)
+    // without being finalized. Leaving them in 'running' causes compactMessages()
+    // to find orphaned tool_calls every time and log repeated warnings.
+    const staleCancelled = db.run(
+      "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE task_id = ? AND status = 'running' AND id != ?",
+      [taskId, executionId],
+    );
+    if (staleCancelled.changes > 0) {
+      log("info", `Auto-cancelled ${staleCancelled.changes} stale running execution(s)`, { taskId, executionId });
+    }
+
     log("info", "Execution started", { taskId, executionId, data: { model, column: task.workflow_state } });
     const templateId = getBoardTemplateId(task.board_id);
     const column = getColumnConfig(templateId, task.workflow_state);
@@ -1154,6 +1174,7 @@ async function runExecution(
     let toolRounds = 0;
     let emptyResponseNudges = 0;
     let totalNudges = 0;
+    let totalCostEst = 0;
     const MAX_NUDGES = 5;
     // Per-round reasoning accumulator — reset at start of each round
     let reasoningAccum = "";
@@ -1185,6 +1206,7 @@ async function runExecution(
 
       try {
         log("debug", `Stream round ${toolRounds + 1} started`, { taskId, executionId, data: { toolCount: tools.length, messageCount: liveMessages.length, messages: liveMessages } });
+        const roundStartMs = Date.now();
         for await (const event of retryStream(provider, liveMessages, { tools, signal }, undefined, undefined, {}, "foreground", fallbackProvider)) {
           if (event.type === "token") {
             fullResponse += event.content;
@@ -1201,10 +1223,13 @@ async function runExecution(
             roundCalls = event.calls;
           } else if (event.type === "stop_reason") {
             stopReasonEvent = event.reason;
+          } else if (event.type === "usage") {
+            totalCostEst += event.costEst;
           } else if (event.type === "done") {
             break;
           }
         }
+        log("debug", `Stream round ${toolRounds + 1} done in ${((Date.now() - roundStartMs) / 1_000).toFixed(1)}s`, { taskId, executionId });
       } catch (streamErr) {
         // Distinguish abort from real stream errors
         if (streamErr instanceof Error && streamErr.name === "AbortError") {
@@ -1511,12 +1536,14 @@ async function runExecution(
         const childResults = await Promise.all(
           (spawnArgs.children ?? []).map(async (child, idx) => {
             try {
+              const totalChildren = (spawnArgs.children ?? []).length;
               const result = await runSubExecution({
                 worktreePath: toolCtx.worktreePath,
                 instructions: child.instructions,
                 tools: child.tools,
                 qualifiedModel: model,
                 signal,
+                agentLabel: `Agent ${idx + 1}/${totalChildren}`,
               });
               return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
             } catch (e) {
@@ -1720,12 +1747,12 @@ async function runExecution(
       return;
     }
 
-    log("info", "Execution completed", { taskId, executionId });
+    log("info", `Execution completed (${toolRounds} round${toolRounds !== 1 ? "s" : ""}, ~$${totalCostEst.toFixed(4)})`, { taskId, executionId });
     onToken(taskId, executionId, "", true);
     db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
     db.run(
-      "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ? WHERE id = ?",
-      [cleanResponse.slice(0, 500), executionId],
+      "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ?, cost_estimate = ? WHERE id = ?",
+      [cleanResponse.slice(0, 500), totalCostEst, executionId],
     );
     const completedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (completedRow) onTaskUpdated(mapTask(completedRow));

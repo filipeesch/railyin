@@ -214,7 +214,8 @@ describe("adaptTools", () => {
     }
   });
 
-  it("3.3 last tool gets cache_control when cacheTtl is set", () => {
+  it("3.3 last tool always gets 1h cache_control regardless of cacheTtl", () => {
+    // Tools are stable across rounds and executions — always cache 1h.
     const tools: AIToolDefinition[] = [
       {
         name: "tool_a",
@@ -227,24 +228,42 @@ describe("adaptTools", () => {
         parameters: { type: "object", properties: { y: { type: "string", description: "y" } }, required: ["y"] },
       },
     ];
-    const adapted5m = adaptTools(tools, "5m");
-    expect(adapted5m[0].cache_control).toBeUndefined();
-    expect(adapted5m[1].cache_control).toEqual({ type: "ephemeral" });
+    // No cacheTtl
+    const adaptedNone = adaptTools(tools);
+    expect(adaptedNone[0].cache_control).toBeUndefined(); // only last tool
+    expect(adaptedNone[1].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
 
+    // cacheTtl = "5m" — tools still get 1h
+    const adapted5m = adaptTools(tools, "5m");
+    expect(adapted5m[1].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+
+    // cacheTtl = "1h" — same result
     const adapted1h = adaptTools(tools, "1h");
     expect(adapted1h[1].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 
-  it("3.4 no cache_control on any tool when cacheTtl is absent", () => {
+  it("3.4 only the last tool gets cache_control; earlier tools do not", () => {
     const tools: AIToolDefinition[] = [
       {
         name: "tool_a",
         description: "A",
         parameters: { type: "object", properties: { x: { type: "string", description: "x" } }, required: ["x"] },
       },
+      {
+        name: "tool_b",
+        description: "B",
+        parameters: { type: "object", properties: { y: { type: "string", description: "y" } }, required: ["y"] },
+      },
+      {
+        name: "tool_c",
+        description: "C",
+        parameters: { type: "object", properties: { z: { type: "string", description: "z" } }, required: ["z"] },
+      },
     ];
     const adapted = adaptTools(tools);
     expect(adapted[0].cache_control).toBeUndefined();
+    expect(adapted[1].cache_control).toBeUndefined();
+    expect(adapted[2].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 
   it("3.5 injects additionalProperties: false on nested object properties", () => {
@@ -304,7 +323,7 @@ describe("adaptTools", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("adaptMessages — prompt caching (4.1–4.3)", () => {
-  it("4.1 system is an array and the last block carries cache_control", () => {
+  it("4.1 system is an array and the last block always carries 1h cache_control", () => {
     const messages: AIMessage[] = [
       { role: "system", content: "You are a helpful assistant with many capabilities." },
       { role: "user", content: "Hello" },
@@ -313,54 +332,28 @@ describe("adaptMessages — prompt caching (4.1–4.3)", () => {
     expect(Array.isArray(system)).toBe(true);
     expect(system!.length).toBeGreaterThan(0);
     const lastBlock = system![system!.length - 1];
-    expect(lastBlock.cache_control).toEqual({ type: "ephemeral" });
+    // System is always cached with 1h TTL to survive long executions and rate-limit
+    // retries without a cold-write every round.
+    expect(lastBlock.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 
-  it("4.2 conversation breakpoint on 5th-from-last user message", () => {
-    // Build 8 user messages (tool-loop style)
-    const longContent = "a".repeat(200);
+  it("4.2 no manual cache_control breakpoints are injected into conversation messages", () => {
+    // Conversation caching is now handled by a top-level cache_control on the request
+    // body (Anthropic automatic caching). adaptMessages() no longer injects breakpoints
+    // into the message list.
     const messages: AIMessage[] = [];
     for (let i = 0; i < 8; i++) {
-      messages.push({ role: "user", content: longContent });
+      messages.push({ role: "user", content: "a".repeat(200) });
       messages.push({ role: "assistant", content: `reply ${i}` });
     }
     const { messages: adapted } = adaptMessages(messages);
-    const userMsgs = adapted.filter((m) => m.role === "user");
-    // 5th-from-last user message index in userMsgs = 8 - 5 = 3
-    const targetIdx = Math.max(0, userMsgs.length - 5);
-    const targetMsg = userMsgs[targetIdx];
-    expect(Array.isArray(targetMsg.content)).toBe(true);
-    const blocks = targetMsg.content as Array<{ type: string; cache_control?: { type: string } }>;
-    const lastBlock = blocks[blocks.length - 1];
-    expect(lastBlock.cache_control).toEqual({ type: "ephemeral" });
-  });
-
-  it("4.2 conversation breakpoint falls back to earliest user message for short conversations", () => {
-    const longContent = "a".repeat(200);
-    const messages: AIMessage[] = [
-      { role: "user", content: longContent },
-      { role: "assistant", content: "reply" },
-      { role: "user", content: longContent },
-    ];
-    const { messages: adapted } = adaptMessages(messages);
-    const firstUser = adapted[0];
-    expect(Array.isArray(firstUser.content)).toBe(true);
-    const blocks = firstUser.content as Array<{ type: string; cache_control?: { type: string } }>;
-    expect(blocks[blocks.length - 1].cache_control).toEqual({ type: "ephemeral" });
-  });
-
-  it("4.2 conversation breakpoint is set even for short user messages (sub-agent case)", () => {
-    // Short content (< 100 chars) should still get cache_control — Anthropic silently
-    // ignores it if below minimum cacheable tokens, but there is no penalty.
-    const messages: AIMessage[] = [
-      { role: "user", content: "short" },
-      { role: "assistant", content: "reply" },
-    ];
-    const { messages: adapted } = adaptMessages(messages);
-    const firstUser = adapted[0];
-    expect(Array.isArray(firstUser.content)).toBe(true);
-    const blocks = firstUser.content as Array<{ type: string; cache_control?: unknown }>;
-    expect(blocks[blocks.length - 1].cache_control).toEqual({ type: "ephemeral" });
+    for (const msg of adapted) {
+      if (typeof msg.content === "string") continue;
+      const blocks = msg.content as Array<{ cache_control?: unknown }>;
+      for (const block of blocks) {
+        expect(block.cache_control).toBeUndefined();
+      }
+    }
   });
 
   it("4.3 no system messages produces undefined system", () => {
@@ -369,7 +362,7 @@ describe("adaptMessages — prompt caching (4.1–4.3)", () => {
     expect(system).toBeUndefined();
   });
 
-  it("4.3 system with content produces a single-block array with cache_control", () => {
+  it("4.3 system with content produces a single-block array with 1h cache_control", () => {
     const messages: AIMessage[] = [
       { role: "system", content: "Be concise." },
       { role: "user", content: "Go." },
@@ -377,7 +370,7 @@ describe("adaptMessages — prompt caching (4.1–4.3)", () => {
     const { system } = adaptMessages(messages);
     expect(Array.isArray(system)).toBe(true);
     expect(system!.length).toBe(1);
-    expect(system![0].cache_control).toEqual({ type: "ephemeral" });
+    expect(system![0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 });
 
@@ -385,46 +378,33 @@ describe("adaptMessages — prompt caching (4.1–4.3)", () => {
 // 3.1–3.2 — Extended cache TTL: adaptMessages() respects cacheTtl param
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("adaptMessages — extended cache TTL (3.1–3.2)", () => {
-  it("3.1 cache_control has no ttl field when cacheTtl is absent", () => {
+describe("adaptMessages — system cache TTL (3.1–3.2)", () => {
+  it("3.1 system always gets 1h cache_control even when cacheTtl is absent", () => {
+    // System prompt is stable across all rounds and executions — always cache 1h.
     const messages: AIMessage[] = [
       { role: "system", content: "You are helpful." },
       { role: "user", content: "Hello" },
     ];
     const { system } = adaptMessages(messages);
-    expect(system![0].cache_control).toEqual({ type: "ephemeral" });
-    expect(system![0].cache_control!.ttl).toBeUndefined();
+    expect(system![0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 
-  it("3.1 cache_control has no ttl field when cacheTtl is '5m'", () => {
+  it("3.1 system always gets 1h cache_control even when cacheTtl is '5m'", () => {
     const messages: AIMessage[] = [
       { role: "system", content: "You are helpful." },
       { role: "user", content: "Hello" },
     ];
     const { system } = adaptMessages(messages, "5m");
-    expect(system![0].cache_control).toEqual({ type: "ephemeral" });
-    expect(system![0].cache_control!.ttl).toBeUndefined();
+    expect(system![0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 
-  it("3.2 cache_control includes ttl: '1h' when cacheTtl is '1h'", () => {
+  it("3.2 system still has 1h cache_control when cacheTtl is '1h'", () => {
     const messages: AIMessage[] = [
       { role: "system", content: "You are helpful." },
       { role: "user", content: "Hello" },
     ];
     const { system } = adaptMessages(messages, "1h");
     expect(system![0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
-  });
-
-  it("3.2 conversation breakpoint also gets ttl: '1h' when cacheTtl is '1h'", () => {
-    const longContent = "a".repeat(200);
-    const messages: AIMessage[] = [
-      { role: "user", content: longContent },
-      { role: "assistant", content: "reply" },
-    ];
-    const { messages: adapted } = adaptMessages(messages, "1h");
-    const firstUser = adapted[0];
-    const blocks = firstUser.content as Array<{ type: string; cache_control?: { type: string; ttl?: string } }>;
-    expect(blocks[blocks.length - 1].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 });
 
@@ -1078,5 +1058,89 @@ describe("AnthropicProvider — effort config", () => {
     for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
     expect(capturedBody).not.toBeNull();
     expect(capturedBody!.output_config).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AnthropicProvider: automatic conversation caching (top-level cache_control)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("AnthropicProvider — automatic conversation caching", () => {
+  let server: ReturnType<typeof Bun.serve>;
+  let capturedBody: Record<string, unknown> | null = null;
+
+  afterEach(() => { server?.stop(true); capturedBody = null; });
+
+  function simpleSse(): string {
+    return anthropicSse([
+      { type: "message_start", data: { message: { id: "m1", type: "message" } } },
+      { type: "content_block_start", data: { index: 0, content_block: { type: "text" } } },
+      { type: "content_block_delta", data: { index: 0, delta: { type: "text_delta", text: "hi" } } },
+      { type: "content_block_stop", data: { index: 0 } },
+      { type: "message_stop", data: {} },
+    ]);
+  }
+
+  it("stream() always sends top-level cache_control with 5m TTL when cacheTtl is absent", async () => {
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBody = await req.json() as Record<string, unknown>;
+        return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`);
+    for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
+    expect(capturedBody).not.toBeNull();
+    expect(capturedBody!.cache_control).toEqual({ type: "ephemeral" });
+    expect((capturedBody!.cache_control as Record<string, unknown>).ttl).toBeUndefined();
+  });
+
+  it("stream() sends top-level cache_control with ttl: '1h' when cacheTtl is '1h'", async () => {
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBody = await req.json() as Record<string, unknown>;
+        return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, "1h");
+    for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
+    expect(capturedBody).not.toBeNull();
+    expect(capturedBody!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+  });
+
+  it("turn() always sends top-level cache_control with 5m TTL when cacheTtl is absent", async () => {
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBody = await req.json() as Record<string, unknown>;
+        return Response.json({
+          id: "msg_1", type: "message", role: "assistant",
+          content: [{ type: "text", text: "ok" }], stop_reason: "end_turn",
+        });
+      },
+    });
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`);
+    await provider.turn([{ role: "user", content: "hi" }]);
+    expect(capturedBody).not.toBeNull();
+    expect(capturedBody!.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("turn() sends top-level cache_control with ttl: '1h' when cacheTtl is '1h'", async () => {
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        capturedBody = await req.json() as Record<string, unknown>;
+        return Response.json({
+          id: "msg_1", type: "message", role: "assistant",
+          content: [{ type: "text", text: "ok" }], stop_reason: "end_turn",
+        });
+      },
+    });
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, "1h");
+    await provider.turn([{ role: "user", content: "hi" }]);
+    expect(capturedBody).not.toBeNull();
+    expect(capturedBody!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 });

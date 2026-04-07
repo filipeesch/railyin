@@ -77,7 +77,8 @@ export function initDb(): Database {
       started_at  TEXT NOT NULL DEFAULT (datetime('now')),
       finished_at TEXT,
       summary     TEXT,
-      details     TEXT
+      details     TEXT,
+      cost_estimate REAL
     );
     CREATE TABLE IF NOT EXISTS conversation_messages (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,

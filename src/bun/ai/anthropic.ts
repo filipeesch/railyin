@@ -18,10 +18,18 @@ function logUsage(
   cacheReadTokens: number,
   cacheWriteTokens: number,
   outputTokens: number,
-): void {
+  agentLabel?: string,
+): number {
   const total = inputTokens + cacheReadTokens + cacheWriteTokens;
   const hitPct = total > 0 ? Math.round((cacheReadTokens / total) * 100) : 0;
-  log("debug", `Anthropic usage [${model}]: in=${inputTokens} cache_read=${cacheReadTokens} cache_write=${cacheWriteTokens} out=${outputTokens} | hit=${hitPct}% of ${total} input tokens`, {});
+  // Estimate cost ($/ MTok): cache_write=1.25×base, cache_read=0.1×base, out=5×base.
+  // For Sonnet 4.6: base=$3/MTok, out=$15/MTok. Approximate for all models.
+  const costEst = (
+    (inputTokens * 3 + cacheWriteTokens * 3.75 + cacheReadTokens * 0.3 + outputTokens * 15) / 1_000_000
+  ).toFixed(4);
+  const prefix = agentLabel ? `[${agentLabel}] ` : "";
+  log("debug", `${prefix}Anthropic usage [${model}]: in=${inputTokens} cache_read=${cacheReadTokens} cache_write=${cacheWriteTokens} out=${outputTokens} | hit=${hitPct}% of ${total} input | ~$${costEst}`, {});
+  return parseFloat(costEst);
 }
 
 // ─── Anthropic wire types ─────────────────────────────────────────────────────
@@ -173,39 +181,20 @@ export function adaptMessages(messages: AIMessage[], cacheTtl?: "5m" | "1h"): {
     }
   }
 
-  // Build systemBlocks with cache_control on the last block
+  // Build systemBlocks with cache_control on the last block.
+  // System prompt + tools are stable across all rounds of an execution and across
+  // executions, so they always use the 1-hour TTL to survive multi-minute stalls
+  // and rate-limit retries without paying a cold-write cost each time.
   let system: AnthropicSystemBlock[] | undefined;
   if (systemParts.length > 0) {
     const joined = systemParts.join("\n\n");
-    const cc: AnthropicSystemBlock["cache_control"] = cacheTtl === "1h"
-      ? { type: "ephemeral", ttl: "1h" }
-      : { type: "ephemeral" };
-    system = [{ type: "text", text: joined, cache_control: cc }];
+    system = [{ type: "text", text: joined, cache_control: { type: "ephemeral", ttl: "1h" } }];
   }
 
-  // Conversation history cache breakpoint: 5th-from-last user message
-  const userIndices: number[] = [];
-  for (let i = 0; i < adapted.length; i++) {
-    if (adapted[i].role === "user") userIndices.push(i);
-  }
-  if (userIndices.length > 0) {
-    const targetUserIdx = Math.max(0, userIndices.length - 5);
-    const targetMsgIdx = userIndices[targetUserIdx];
-    const targetMsg = adapted[targetMsgIdx] as AnthropicUserMessage;
-    // Upgrade string content to block form and set cache_control unconditionally.
-    // Anthropic silently ignores cache_control if accumulated tokens are below the
-    // minimum cacheable threshold (1024–4096 tokens depending on model) — no error,
-    // no extra cost. Removing the old > 100 char guard ensures sub-agents with short
-    // messages still get a breakpoint that pays off once the conversation grows.
-    if (typeof targetMsg.content === "string") {
-      targetMsg.content = [{ type: "text", text: targetMsg.content }];
-    }
-    // Append cache_control to the last content block
-    const blocks = targetMsg.content as AnthropicUserContentBlock[];
-    blocks[blocks.length - 1].cache_control = cacheTtl === "1h"
-      ? { type: "ephemeral", ttl: "1h" }
-      : { type: "ephemeral" };
-  }
+  // Conversation breakpoints are no longer injected here. Instead, a top-level
+  // `cache_control` on each request body enables Anthropic's automatic caching,
+  // which moves the breakpoint to the last cacheable block on every turn and never
+  // falls outside the 20-block lookback window.
 
   return { system, messages: adapted };
 }
@@ -256,11 +245,10 @@ export function adaptTools(tools: AIToolDefinition[], cacheTtl?: "5m" | "1h"): A
         required: t.parameters.required,
       }) as AnthropicTool["input_schema"],
     };
-    // Mark last tool with cache_control — Anthropic caches the tools prefix
-    // independently of system/messages, so repeated calls with the same tool
-    // set (even with different instructions) get a cache read on the tools.
-    if (cacheTtl && i === tools.length - 1) {
-      adapted.cache_control = cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
+    // Mark last tool with 1h cache_control — tools are identical across all rounds
+    // and executions, so a 1-hour cache survives long stalls and retries.
+    if (i === tools.length - 1) {
+      adapted.cache_control = { type: "ephemeral", ttl: "1h" };
     }
     return adapted;
   });
@@ -332,6 +320,8 @@ export class AnthropicProvider implements AIProvider {
       model: this.model,
       max_tokens: options.maxTokens ?? 8192,
       messages: adaptedMessages,
+      // Top-level cache_control enables automatic conversation caching (same as stream).
+      cache_control: this.cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" },
     };
     if (systemBlocks) body.system = systemBlocks;
     if (options.tools?.length) body.tools = adaptTools(options.tools, this.cacheTtl);
@@ -377,6 +367,7 @@ export class AnthropicProvider implements AIProvider {
         u.cache_read_input_tokens ?? 0,
         u.cache_creation_input_tokens ?? 0,
         u.output_tokens ?? 0,
+        options.agentLabel,
       );
     }
 
@@ -406,6 +397,11 @@ export class AnthropicProvider implements AIProvider {
       max_tokens: options.maxTokens ?? 8192,
       messages: adaptedMessages,
       stream: true,
+      // Top-level cache_control enables Anthropic's automatic conversation caching:
+      // the API places a breakpoint on the last cacheable message block and moves it
+      // forward each turn, avoiding the 20-block lookback limit that manual breakpoints
+      // hit with long tool-call chains. The TTL follows the workspace config.
+      cache_control: this.cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" },
     };
     if (systemBlocks) body.system = systemBlocks;
     if (options.tools?.length) body.tools = adaptTools(options.tools, this.cacheTtl);
@@ -531,7 +527,8 @@ export class AnthropicProvider implements AIProvider {
               toolAccum.clear();
             }
             if (eventType === "message_stop") {
-              logUsage(this.model, usageInputTokens, usageCacheReadTokens, usageCacheWriteTokens, usageOutputTokens);
+              const costEst = logUsage(this.model, usageInputTokens, usageCacheReadTokens, usageCacheWriteTokens, usageOutputTokens, options.agentLabel);
+              yield { type: "usage", costEst };
               yield { type: "done" };
             }
             continue;

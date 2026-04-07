@@ -47,7 +47,9 @@ export type StreamEvent =
   | { type: "stop_reason"; reason: string }
   // Ephemeral status messages emitted by retryStream() during non-streaming fallback.
   // These are NOT stored in the DB — they describe transient API wait state only.
-  | { type: "status"; content: string };
+  | { type: "status"; content: string }
+  // Usage/cost summary emitted once per stream response at message_stop.
+  | { type: "usage"; costEst: number };
 
 export interface AICallOptions {
   maxTokens?: number;
@@ -57,6 +59,8 @@ export interface AICallOptions {
    * and thinking depth. Defaults to "high" on Sonnet 4.6 / Opus 4.6.
    * Use "low" for sub-agents and simple tasks; "medium" for balanced agentic work. */
   effort?: "low" | "medium" | "high" | "max";
+  /** Optional label to prefix usage log lines (e.g. "Agent 2/3" for sub-agents). */
+  agentLabel?: string;
 }
 
 export interface AIProvider {
