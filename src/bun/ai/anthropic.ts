@@ -278,11 +278,25 @@ export const CONTEXT_EDIT_STRATEGY = {
 // ─── Cache break detection ────────────────────────────────────────────────────
 
 /** Per-execution hash state for cache break detection. Keyed by execution ID. */
-const _execHashes = new Map<number, { system: string; tools: string }>();
+const _execHashes = new Map<number, { system: string; tools: string; toolHashes: Map<string, string>; round: number }>();
 
 /** Compute a short (8-char) SHA-256 hex digest of a string using Bun's crypto API. */
 function hashShort(text: string): string {
   return new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 8);
+}
+
+/** Build a name→hash map from a serialized tools array. */
+function buildToolHashes(toolsJson: string): Map<string, string> {
+  const hashes = new Map<string, string>();
+  try {
+    const tools = JSON.parse(toolsJson) as Array<{ name?: string }>;
+    for (const tool of tools) {
+      if (tool.name) hashes.set(tool.name, hashShort(JSON.stringify(tool)));
+    }
+  } catch {
+    // malformed JSON — leave empty
+  }
+  return hashes;
 }
 
 /** Compare system and tools hashes against the stored values for this execution.
@@ -295,16 +309,45 @@ export function checkAndUpdateCacheBreak(
   if (!executionId) return;
   const sysHash = hashShort(systemText ?? "");
   const toolsHash = hashShort(toolsJson);
+  const newToolHashes = buildToolHashes(toolsJson);
   const prev = _execHashes.get(executionId);
   if (prev) {
     if (prev.system !== sysHash) {
       console.warn(`[cache] system hash changed: ${prev.system} → ${sysHash}`);
     }
     if (prev.tools !== toolsHash) {
-      console.warn(`[cache] tools hash changed: ${prev.tools} → ${toolsHash}`);
+      const changed: string[] = [];
+      const added: string[] = [];
+      const removed: string[] = [];
+      for (const [name, hash] of newToolHashes) {
+        if (!prev.toolHashes.has(name)) added.push(name);
+        else if (prev.toolHashes.get(name) !== hash) changed.push(name);
+      }
+      for (const name of prev.toolHashes.keys()) {
+        if (!newToolHashes.has(name)) removed.push(name);
+      }
+      const parts: string[] = [];
+      if (changed.length) parts.push(`changed: ${changed.join(", ")}`);
+      if (added.length) parts.push(`added: ${added.join(", ")}`);
+      if (removed.length) parts.push(`removed: ${removed.join(", ")}`);
+      console.warn(`[cache] tools hash changed: ${prev.tools} → ${toolsHash}${parts.length ? ` (${parts.join("; ")})` : ""}`);
     }
   }
-  _execHashes.set(executionId, { system: sysHash, tools: toolsHash });
+  _execHashes.set(executionId, { system: sysHash, tools: toolsHash, toolHashes: newToolHashes, round: (prev?.round ?? 0) + 1 });
+}
+
+/** After receiving a response, warn if cache_read_input_tokens is 0 on a non-first round.
+ *  A zero read on round ≥ 2 means the cache was busted unexpectedly (TTL expiry, provider issue, etc.). */
+export function checkCacheReadOnResponse(
+  executionId: number | undefined,
+  cacheReadTokens: number,
+): void {
+  if (!executionId) return;
+  const state = _execHashes.get(executionId);
+  if (!state || state.round <= 1) return;
+  if (cacheReadTokens === 0) {
+    console.warn(`[cache] unexpected miss on round ${state.round}: cache_read_input_tokens=0`);
+  }
 }
 
 /** Clear stored hash state for an execution (call on completion to free memory). */
@@ -434,6 +477,7 @@ export class AnthropicProvider implements AIProvider {
 
     if (json.usage) {
       const u = json.usage;
+      checkCacheReadOnResponse(options.executionId, u.cache_read_input_tokens ?? 0);
       logUsage(
         this.model,
         u.input_tokens ?? 0,
@@ -596,6 +640,7 @@ export class AnthropicProvider implements AIProvider {
               usageInputTokens = msg.usage.input_tokens ?? 0;
               usageCacheReadTokens = msg.usage.cache_read_input_tokens ?? 0;
               usageCacheWriteTokens = msg.usage.cache_creation_input_tokens ?? 0;
+              checkCacheReadOnResponse(options.executionId, usageCacheReadTokens);
               // Emit early usage event so input_tokens are persisted immediately.
               const earlyUsage: UsageStats = {
                 inputTokens: usageInputTokens,

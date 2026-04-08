@@ -61,7 +61,12 @@ export type ContentBlock =
 export interface ResponseCapture {
   stop_reason: string;
   content_blocks: ContentBlock[];
-  usage: { output_tokens: number };
+  usage: {
+    output_tokens: number;
+    input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
   model: string;
 }
 

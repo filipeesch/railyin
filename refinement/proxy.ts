@@ -188,6 +188,9 @@ export function parseSseResponse(accumulated: string): ResponseCapture {
 
     let stop_reason = "unknown";
     let output_tokens = 0;
+    let input_tokens = 0;
+    let cache_creation_input_tokens = 0;
+    let cache_read_input_tokens = 0;
     let model = "unknown";
     const content_blocks: ContentBlock[] = [];
 
@@ -198,6 +201,11 @@ export function parseSseResponse(accumulated: string): ResponseCapture {
       if (event.type === "message_start") {
         const msg = (event.data.message ?? {}) as Record<string, unknown>;
         model = (msg.model as string) ?? "unknown";
+        // Extract real usage from message_start (Anthropic includes cache tokens here)
+        const usage = (msg.usage ?? {}) as Record<string, unknown>;
+        input_tokens = (usage.input_tokens as number) ?? 0;
+        cache_creation_input_tokens = (usage.cache_creation_input_tokens as number) ?? 0;
+        cache_read_input_tokens = (usage.cache_read_input_tokens as number) ?? 0;
       } else if (event.type === "content_block_start") {
         const idx = (event.data.index as number) ?? 0;
         const cb = (event.data.content_block ?? {}) as Record<string, unknown>;
@@ -235,7 +243,7 @@ export function parseSseResponse(accumulated: string): ResponseCapture {
       }
     }
 
-    return { stop_reason, content_blocks, usage: { output_tokens }, model };
+    return { stop_reason, content_blocks, usage: { output_tokens, input_tokens, cache_creation_input_tokens, cache_read_input_tokens }, model };
   } catch {
     return { stop_reason: "unknown", content_blocks: [], usage: { output_tokens: 0 }, model: "unknown" };
   }
@@ -409,6 +417,15 @@ async function handleRequest(
       forwardHeaders.set(k, v);
     }
   }
+  // Override x-api-key with the real key from provider config (the engine sends
+  // a fake "refinement-harness" key — the real one lives in providers.yaml).
+  if (provider.type === "anthropic" && provider.api_key) {
+    forwardHeaders.set("x-api-key", provider.api_key);
+  }
+  // Disable compression: Anthropic may return gzip-encoded SSE. The proxy
+  // streams bytes verbatim back to the engine, which would then try to
+  // decompress an already-decompressed (or doubly-encoded) stream → ZlibError.
+  forwardHeaders.set("accept-encoding", "identity");
 
   const backendResp = await fetch(`${backendUrl}/v1/messages`, {
     method: "POST",
@@ -432,7 +449,6 @@ async function handleRequest(
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
     const chunks: string[] = [];
-    let injected = false;
     let first_byte_at = 0;
 
     (async () => {
@@ -442,7 +458,7 @@ async function handleRequest(
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          let chunk = decoder.decode(value, { stream: true });
+          const chunk = decoder.decode(value, { stream: true });
 
           // Record timing of first byte
           if (first_byte_at === 0) {
@@ -452,17 +468,8 @@ async function handleRequest(
           // Accumulate for response parsing
           chunks.push(chunk);
 
-          // Inject synthetic cache usage into the first message_start event
-          if (!injected && chunk.includes('"message_start"')) {
-            injected = true;
-            try {
-              chunk = chunk.replace(
-                /"usage":\s*\{[^}]*\}/,
-                `"usage":{"input_tokens":${syntheticUsage.input_tokens},"output_tokens":0,"cache_creation_input_tokens":${syntheticUsage.cache_creation_input_tokens},"cache_read_input_tokens":${syntheticUsage.cache_read_input_tokens}}`,
-              );
-            } catch { /* leave chunk as-is */ }
-          }
-
+          // Pass through real API response unmodified — real Anthropic cache
+          // tokens are preserved for accurate cost tracking.
           await writer.write(encoder.encode(chunk));
         }
       } finally {
@@ -480,12 +487,37 @@ async function handleRequest(
         const accumulated = chunks.join("");
         const responseCapture = parseSseResponse(accumulated);
 
-        // Patch output_tokens and recalculate cost with real value
-        const realOutputTokens = responseCapture.usage.output_tokens;
-        if (realOutputTokens > 0) {
+        // Use real API usage when available (non-mock providers report real
+        // cache_read/cache_creation/input tokens from Anthropic's response).
+        const realUsage = responseCapture.usage;
+        const hasRealUsage = (realUsage.input_tokens ?? 0) > 0
+          || (realUsage.cache_creation_input_tokens ?? 0) > 0
+          || (realUsage.cache_read_input_tokens ?? 0) > 0;
+
+        if (hasRealUsage) {
+          // Recalculate cost from real Anthropic usage numbers
+          const rates = provider.pricing ?? PRICING;
+          const realInput = realUsage.input_tokens ?? 0;
+          const realCacheWrite = realUsage.cache_creation_input_tokens ?? 0;
+          const realCacheRead = realUsage.cache_read_input_tokens ?? 0;
+          const realOutput = realUsage.output_tokens;
+
+          record.cost.messages_tokens = realInput;
+          record.cost.output_tokens = realOutput;
+          record.cost.input_cost = (realInput / 1_000_000) * rates.input;
+          record.cost.cache_write_cost = (realCacheWrite / 1_000_000) * rates.cache_write;
+          record.cost.cache_read_cost = (realCacheRead / 1_000_000) * rates.cache_read;
+          record.cost.output_cost = (realOutput / 1_000_000) * rates.output;
+          record.cost.total_cost =
+            record.cost.input_cost +
+            record.cost.cache_write_cost +
+            record.cost.cache_read_cost +
+            record.cost.output_cost;
+        } else if (realUsage.output_tokens > 0) {
+          // Fallback: at least patch output tokens (mock or incomplete response)
           const outputRate = provider.pricing?.output ?? PRICING.output;
-          record.cost.output_tokens = realOutputTokens;
-          record.cost.output_cost = (realOutputTokens / 1_000_000) * outputRate;
+          record.cost.output_tokens = realUsage.output_tokens;
+          record.cost.output_cost = (realUsage.output_tokens / 1_000_000) * outputRate;
           record.cost.total_cost =
             record.cost.input_cost +
             record.cost.cache_write_cost +
@@ -554,6 +586,7 @@ export function createProxy(options: ProxyOptions): {
 
   const server = Bun.serve({
     port,
+    idleTimeout: 255, // max allowed by Bun — LLM responses can be slow
     fetch(req) {
       return handleRequest(req, provider, state);
     },

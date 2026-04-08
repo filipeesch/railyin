@@ -8,25 +8,24 @@ description: >
 codebase: railyin
 
 prompt: |
-  I want to add a new tool called "count_lines" to Railyin's tool system.
-  This tool should count the number of lines in a file and return the count.
-  
-  Please explore the codebase to understand:
-  1. How existing tools like read_file or search_text are defined (tool schema, handler)
-  2. How tools are registered and made available to the workflow engine
-  3. How tool handlers receive their arguments and return results
-  
-  Then implement the count_lines tool:
-  - Tool name: count_lines
-  - Input parameter: file_path (string, required)
-  - Output: number of lines in the file, or an error if the file doesn't exist
-  - Register it in the appropriate tool group
-  
-  Write the actual implementation code.
+  Add a new tool called "count_lines" to Railyin's tool system.
+
+  First, use search_text and find_files to locate:
+  - Where tool schemas are defined (look for existing tools like read_file or search_text)
+  - Where tool handlers are implemented
+  - Where tools are registered into tool groups
+
+  Then write the implementation using write_file or edit_file:
+  1. Add the count_lines handler (input: file_path string, output: line count integer or error string)
+  2. Register it in the appropriate tool group so it appears when "read" or "search" tools are loaded
+
+  Do not stop after exploring. You must write the actual code files before finishing.
 
 expected_behavior:
-  max_rounds: 15
+  max_rounds: 12
   must_complete: true
+  must_call:
+    - edit_file
 
 column_tools:
   - read

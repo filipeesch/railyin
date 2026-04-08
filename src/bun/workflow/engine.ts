@@ -1030,16 +1030,20 @@ async function runSubExecution({
     }
   }
 
-  // Hit round limit — ask for a summary
-  const lastSubMsg = liveMessages[liveMessages.length - 1];
-  if (lastSubMsg?.role === "user") {
-    lastSubMsg.content = (lastSubMsg.content as string) + "\n\nYou have reached the tool call limit. Please summarise your work so far.";
-  } else {
-    liveMessages.push({ role: "user", content: "You have reached the tool call limit. Please summarise your work so far." });
+  // Hit round limit — synthesize a return string without an extra API call.
+  // Collecting the last round's tool names gives the parent enough context.
+  const lastActions: string[] = [];
+  for (const msg of liveMessages) {
+    if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+      lastActions.length = 0; // keep only the last assistant turn's actions
+      for (const call of msg.tool_calls) {
+        lastActions.push(call.function.name);
+      }
+    }
   }
-  const final = await retryTurn(provider, liveMessages, { tools: [], signal, agentLabel }, undefined, {}, "foreground", fallbackProvider);
+  const actionSummary = lastActions.length > 0 ? `last actions: ${lastActions.join(", ")}` : "no tool calls recorded";
   subLspManager.shutdown();
-  return final.type === "text" ? (final.content ?? "(no response)") : "(sub-agent hit tool limit)";
+  return `(sub-agent reached tool limit after ${MAX_SUB_ROUNDS} rounds — ${actionSummary})`;
 }
 
 // ─── Task 5.2 + 5.3: Execute prompt ──────────────────────────────────────────
@@ -1795,10 +1799,12 @@ async function runExecution(
       if (toolRounds >= MAX_TOOL_ROUNDS) {
         liveMessages.push({
           role: "user",
-          content: "You have reached the tool call limit. Please summarise your findings and respond now.",
+          content: "You have reached the tool call limit. Please summarise your findings and respond now. Do not call any more tools.",
         });
-        // Remove tools so the model is forced to respond with text
-        tools = [];
+        // Keep tools in the request to preserve the cache prefix (tools → system → messages).
+        // Dropping tools changes the tools hash and invalidates the entire cache, causing an
+        // expensive cold write on content that is never read again. The "do not call any more
+        // tools" instruction is sufficient to prevent further tool use.
       }
     }
 

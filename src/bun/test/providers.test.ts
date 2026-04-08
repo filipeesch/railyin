@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, afterEach, beforeEach } from "bun:test";
-import { adaptMessages, adaptTools, AnthropicProvider, isEmptyAssistantMessage, checkAndUpdateCacheBreak, clearExecHashes, CONTEXT_EDIT_STRATEGY } from "../ai/anthropic.ts";
+import { adaptMessages, adaptTools, AnthropicProvider, isEmptyAssistantMessage, checkAndUpdateCacheBreak, checkCacheReadOnResponse, clearExecHashes, CONTEXT_EDIT_STRATEGY } from "../ai/anthropic.ts";
 import { resolveProvider, UnresolvableProviderError, clearProviderCache, listOpenAICompatibleModels } from "../ai/index.ts";
 import { OpenAICompatibleProvider } from "../ai/openai-compatible.ts";
 import type { ProviderConfig } from "../config/index.ts";
@@ -1398,6 +1398,102 @@ describe("checkAndUpdateCacheBreak (3.5)", () => {
     try {
       checkAndUpdateCacheBreak(undefined, "system", "[]");
       checkAndUpdateCacheBreak(undefined, "different system", "[]");
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(warnings.filter((w) => w.includes("[cache]"))).toHaveLength(0);
+  });
+
+  it("includes per-tool name in tools hash changed warning", () => {
+    checkAndUpdateCacheBreak(EX_ID, "sys", '[{"name":"tool_a","description":"old"}]');
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+    try {
+      checkAndUpdateCacheBreak(EX_ID, "sys", '[{"name":"tool_a","description":"new"}]');
+    } finally {
+      console.warn = origWarn;
+    }
+    const w = warnings.find((w) => w.includes("[cache] tools hash changed"));
+    expect(w).toBeDefined();
+    expect(w).toContain("changed: tool_a");
+  });
+
+  it("reports added and removed tools in tools hash changed warning", () => {
+    checkAndUpdateCacheBreak(EX_ID, "sys", '[{"name":"tool_a"}]');
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+    try {
+      checkAndUpdateCacheBreak(EX_ID, "sys", '[{"name":"tool_b"}]');
+    } finally {
+      console.warn = origWarn;
+    }
+    const w = warnings.find((w) => w.includes("[cache] tools hash changed"));
+    expect(w).toBeDefined();
+    expect(w).toContain("added: tool_b");
+    expect(w).toContain("removed: tool_a");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3.6 — Cache break detection: checkCacheReadOnResponse
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("checkCacheReadOnResponse (3.6)", () => {
+  const EX_ID = 99997;
+
+  afterEach(() => { clearExecHashes(EX_ID); });
+
+  it("emits no warning on first round (round=1) even with 0 read tokens", () => {
+    checkAndUpdateCacheBreak(EX_ID, "sys", "[]"); // round → 1
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+    try {
+      checkCacheReadOnResponse(EX_ID, 0);
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(warnings.filter((w) => w.includes("[cache]"))).toHaveLength(0);
+  });
+
+  it("emits no warning on round ≥ 2 when cache_read_input_tokens > 0", () => {
+    checkAndUpdateCacheBreak(EX_ID, "sys", "[]"); // round → 1
+    checkAndUpdateCacheBreak(EX_ID, "sys", "[]"); // round → 2
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+    try {
+      checkCacheReadOnResponse(EX_ID, 5000);
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(warnings.filter((w) => w.includes("[cache]"))).toHaveLength(0);
+  });
+
+  it("warns on round ≥ 2 when cache_read_input_tokens is 0 (unexpected miss)", () => {
+    checkAndUpdateCacheBreak(EX_ID, "sys", "[]"); // round → 1
+    checkAndUpdateCacheBreak(EX_ID, "sys", "[]"); // round → 2
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+    try {
+      checkCacheReadOnResponse(EX_ID, 0);
+    } finally {
+      console.warn = origWarn;
+    }
+    const w = warnings.find((w) => w.includes("[cache] unexpected miss"));
+    expect(w).toBeDefined();
+    expect(w).toContain("round 2");
+  });
+
+  it("does nothing when executionId is undefined", () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+    try {
+      checkCacheReadOnResponse(undefined, 0);
     } finally {
       console.warn = origWarn;
     }

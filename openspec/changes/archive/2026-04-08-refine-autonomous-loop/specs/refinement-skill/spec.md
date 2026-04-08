@@ -1,7 +1,4 @@
-## Purpose
-The refinement skill is a Copilot skill that automates the autonomous engine improvement loop: baseline → generate findings → apply/verify → behavioral gate. It operates on the current codebase independently, without requiring a change name or task list.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Copilot skill orchestrates the refinement loop
 The system SHALL provide a Copilot skill at `.github/skills/refine/SKILL.md` and a prompt at `.github/prompts/refine.prompt.md` that automate the autonomous engine improvement loop. The skill SHALL accept `--providers` (comma-separated provider IDs), `--scenarios` (optional filter), and `--max-rounds N` (optional iteration cap). The skill SHALL NOT require a change name or task list — it operates on the current codebase independently.
@@ -53,3 +50,21 @@ After all findings are processed, the skill SHALL run `--phase behavioral` to ve
 #### Scenario: Behavioral gate fails
 - **WHEN** `--phase behavioral` exits non-zero
 - **THEN** the skill reports which scenarios regressed and sets `behavioral_gate: "failed"`
+
+## REMOVED Requirements
+
+### Requirement: Skill implements task groups with checkpoints
+**Reason**: The task-group / checkpoint workflow belongs to the `openspec-apply-change` skill, not the refinement skill. The refinement skill is now an autonomous engine improvement loop only.
+**Migration**: Use `/opsx:apply` to run change task groups with checkpoints.
+
+### Requirement: Skill stops on regression
+**Reason**: Replaced by per-finding rollback in the apply/evaluate loop. The runner handles rollback automatically (exit code 2).
+**Migration**: N/A — behavior is preserved at the runner level, not the skill level.
+
+### Requirement: Skill supports layer promotion
+**Reason**: Layer promotion (mock → local → live) is replaced by direct `--providers` selection. Users specify which providers to test against rather than promoting through fixed layers.
+**Migration**: Use `--providers <id>` to target any provider directly.
+
+### Requirement: Skill manages LM Studio lifecycle for local mode
+**Reason**: LM Studio lifecycle management is the user's responsibility, not the skill's. The skill focuses on running phases against already-configured providers.
+**Migration**: Start LM Studio manually before invoking `/refine` with a local provider.

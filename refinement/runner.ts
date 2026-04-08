@@ -618,9 +618,9 @@ function printCrossProviderComparison(
 
 /**
  * Autonomous refinement loop. Driven by phases:
- *  - baseline: run mock, write capture-summary.json and baseline-report.json, exit
+ *  - baseline: run providers, write capture-summary.json and baseline-report.json, exit
  *  - backup:   backup source files for a finding before the AI applies it
- *  - evaluate: re-run mock, evaluate metric contract, confirm or rollback finding
+ *  - evaluate: re-run providers, evaluate metric contract, confirm or rollback finding
  *  - behavioral: run local mode gate, update findings report
  */
 async function runAutoLoop(args: string[]): Promise<void> {
@@ -681,14 +681,25 @@ async function runAutoLoop(args: string[]): Promise<void> {
         process.exit(1);
       }
       const providers = selectProviders(config, providersFlag);
-      console.log(`[auto] baseline phase — providers: ${providers.map((p) => p.id).join(", ")}, scenarios: ${scenarios.length}`);
+
+      // Apply --scenarios filter when provided
+      const scenariosFlag2 = get("--scenarios");
+      const filteredScenarios = scenariosFlag2
+        ? scenarios.filter((s) => scenariosFlag2.split(",").map((n) => n.trim()).includes(s.name))
+        : scenarios;
+      if (filteredScenarios.length === 0) {
+        console.error(`[auto] No scenarios matched for --scenarios ${scenariosFlag2}`);
+        process.exit(1);
+      }
+
+      console.log(`[auto] baseline phase — providers: ${providers.map((p) => p.id).join(", ")}, scenarios: ${filteredScenarios.length}`);
 
       const allReports: Array<{ provider: ProviderConfig; report: RunReport }> = [];
       for (const provider of providers) {
         console.log(`\n[auto] provider: ${provider.id} (${provider.type})`);
         const providerDir = join(runDir, provider.id);
         try {
-          const report = await runScenariosForProvider(provider, config, scenarios, port, providerDir);
+          const report = await runScenariosForProvider(provider, config, filteredScenarios, port, providerDir);
           allReports.push({ provider, report });
           writeCaptureSummary(providerDir, report);
         } catch (err) {
@@ -697,16 +708,24 @@ async function runAutoLoop(args: string[]): Promise<void> {
       }
 
       const mockEntry = allReports.find((r) => r.provider.type === "mock");
-      if (!mockEntry) {
-        console.error("[auto] No mock provider ran successfully — add a mock provider to providers.yaml");
-        process.exit(1);
-      }
-      if (!mockEntry.report.pass) {
-        console.error("[auto] Baseline mock has failing assertions — fix before continuing");
-        process.exit(1);
+      const BEHAVIORAL_ASSERTIONS = new Set(["must_call", "must_complete"]);
+      if (mockEntry) {
+        const hasMockStructuralFailures = mockEntry.report.scenarios.some((s) =>
+          s.assertions.some((a) => !a.pass && !BEHAVIORAL_ASSERTIONS.has(a.type)),
+        );
+        if (hasMockStructuralFailures) {
+          console.error("[auto] Baseline mock has failing structural assertions — fix before continuing");
+          process.exit(1);
+        }
       }
 
-      writeFileSync(join(runDir, "baseline-report.json"), JSON.stringify(mockEntry.report, null, 2));
+      // baseline-report.json: use mock if present, otherwise the first provider report
+      const primaryEntry = mockEntry ?? allReports[0];
+      if (!primaryEntry) {
+        console.error("[auto] No providers ran successfully");
+        process.exit(1);
+      }
+      writeFileSync(join(runDir, "baseline-report.json"), JSON.stringify(primaryEntry.report, null, 2));
       const analysis = generateAnalysis(runDir);
       printCrossProviderComparison(allReports);
 
@@ -719,6 +738,9 @@ async function runAutoLoop(args: string[]): Promise<void> {
         console.log(`  live/mock cost ratio: ${analysis.summary.live_vs_mock_cost_ratio}x`);
       }
       console.log(`\n[auto] Next: generate findings and write them to ${join(runDir, "findings.json")}`);
+      const providersHint = ` --providers ${providersFlag}`;
+      const scenariosHint = scenariosFlag2 ? ` --scenarios ${scenariosFlag2}` : "";
+      console.log(`  Then run: bun refinement/runner.ts --mode auto --phase evaluate --finding-id <id> --findings ${join(runDir, "findings.json")} --report-dir ${runDir}${providersHint}${scenariosHint}`);
       return;
     }
 
@@ -728,8 +750,12 @@ async function runAutoLoop(args: string[]): Promise<void> {
     console.log("\n[auto] mode: mock");
     const mockDir = join(runDir, "mock");
     const mockReport = await runScenarios(scenarios, "mock", port, backendUrl, mockDir, mockModel, 1);
-    if (!mockReport.pass) {
-      console.error("[auto] Baseline mock has failing assertions — fix before continuing");
+    const BEHAVIORAL_ASSERTIONS_2 = new Set(["must_call", "must_complete"]);
+    const hasMockStructuralFailures2 = mockReport.scenarios.some((s) =>
+      s.assertions.some((a) => !a.pass && !BEHAVIORAL_ASSERTIONS_2.has(a.type)),
+    );
+    if (hasMockStructuralFailures2) {
+      console.error("[auto] Baseline mock has failing structural assertions — fix before continuing");
       process.exit(1);
     }
     writeCaptureSummary(mockDir, mockReport);
@@ -835,36 +861,13 @@ async function runAutoLoop(args: string[]): Promise<void> {
       : undefined;
 
     const evalDir = join(reportDir, `eval-${findingId}`);
-    const scenarios = loadAllScenarios();
+    const allScenariosEval = loadAllScenarios();
+    const scenariosFlagEval = get("--scenarios");
+    const filteredScenariosEval = scenariosFlagEval
+      ? allScenariosEval.filter((s) => scenariosFlagEval.split(",").map((n) => n.trim()).includes(s.name))
+      : allScenariosEval;
 
-    // ── Mock eval (always) ─────────────────────────────────────────────────
-    console.log(`[auto] evaluate phase for ${findingId} — mock`);
-    const evalReport = await runScenarios(scenarios, "mock", port, backendUrl, evalDir, mockModel, 1);
-
-    // ── Local eval (if baseline exists and model available) ────────────────
-    const localModel = localModelArg ?? detectLocalModel();
-    let localEvalReport: RunReport | undefined;
-    if (localBaselineReport && localModel) {
-      console.log(`[auto] evaluate phase for ${findingId} — local (${localModel})`);
-      try {
-        localEvalReport = await runScenarios(scenarios, "local", port, backendUrl, join(evalDir, "local"), localModel, 2);
-      } catch (err) {
-        console.warn(`[auto] local eval failed: ${err} — skipping`);
-      }
-    }
-
-    // ── Live eval (if baseline exists and not --skip-live) ─────────────────
-    let liveEvalReport: RunReport | undefined;
-    if (liveBaselineReport && !skipLive) {
-      console.log(`[auto] evaluate phase for ${findingId} — live (${liveModel})`);
-      try {
-        liveEvalReport = await runScenarios(scenarios, "live", port, backendUrl, join(evalDir, "live"), liveModel, 2);
-      } catch (err) {
-        console.warn(`[auto] live eval failed: ${err} — skipping`);
-      }
-    }
-
-    // ── Check assertion regressions across all modes ───────────────────────
+    // ── Shared regression checker ──────────────────────────────────────────
     function checkRegressions(baseline: RunReport, eval_: RunReport, label: string): boolean {
       let found = false;
       for (const baseSc of baseline.scenarios) {
@@ -880,6 +883,141 @@ async function runAutoLoop(args: string[]): Promise<void> {
         }
       }
       return found;
+    }
+
+    // ── Provider-based evaluate (--providers flag) ─────────────────────────
+    if (providersFlag !== undefined) {
+      let config: ProvidersYaml;
+      try {
+        config = loadProviders();
+      } catch (err) {
+        console.error(`[auto] Failed to load providers.yaml: ${err}`);
+        process.exit(1);
+      }
+      const evalProviders = selectProviders(config, providersFlag);
+
+      let assertionRegression = false;
+      let primaryEvalReport: RunReport | undefined;
+
+      for (const provider of evalProviders) {
+        const providerBaselinePath = join(reportDir, provider.id, "report.json");
+        if (!existsSync(providerBaselinePath)) {
+          console.warn(`[auto] no baseline found for ${provider.id} at ${providerBaselinePath} — skipping`);
+          continue;
+        }
+        const providerBaseline: RunReport = JSON.parse(readFileSync(providerBaselinePath, "utf-8"));
+
+        console.log(`[auto] evaluate phase for ${findingId} — ${provider.id} (${provider.type})`);
+        const providerEvalDir = join(evalDir, provider.id);
+        const evalReport = await runScenariosForProvider(provider, config, filteredScenariosEval, port, providerEvalDir);
+        writeCaptureSummary(providerEvalDir, evalReport);
+
+        if (checkRegressions(providerBaseline, evalReport, provider.id)) {
+          assertionRegression = true;
+        }
+        if (provider.type !== "mock") {
+          primaryEvalReport = evalReport;
+        }
+      }
+
+      if (!primaryEvalReport) {
+        console.error("[auto] No provider eval report produced — check --providers flag and baselines");
+        process.exit(1);
+      }
+
+      let outcome: "confirmed" | "rolled_back" | "ineffective";
+      if (assertionRegression) {
+        outcome = "rolled_back";
+        console.log(`[auto] ${findingId} → rolled_back (assertion regression in one or more providers)`);
+      } else {
+        outcome = evaluateMetricContract(finding, primaryEvalReport);
+        console.log(`[auto] ${findingId} → ${outcome} (metric: ${finding.metric_contract.metric} before: ${finding.metric_contract.before.toFixed(4)} → after: ${primaryEvalReport.total_cost.toFixed(4)})`);
+      }
+
+      if (outcome === "rolled_back") {
+        restoreFiles(reportDir, findingId);
+        console.log(`[auto] restored files for ${findingId}`);
+      }
+
+      finding.status = outcome;
+
+      // Load or create findings report
+      const findingsReportPath2 = join(reportDir, "findings-report.json");
+      let findingsReport2: FindingsReport;
+      if (existsSync(findingsReportPath2)) {
+        findingsReport2 = JSON.parse(readFileSync(findingsReportPath2, "utf-8"));
+      } else {
+        const baselineCost2 = baselineReport.total_cost;
+        findingsReport2 = {
+          run_id: baselineReport.timestamp,
+          timestamp: new Date().toISOString(),
+          mode: "auto",
+          rounds: [],
+          findings: findings,
+          summary: {
+            confirmed: 0,
+            rolled_back: 0,
+            ineffective: 0,
+            total_cost_before: baselineCost2,
+            total_cost_after: baselineCost2,
+            improvement_pct: 0,
+          },
+        };
+      }
+      findingsReport2.findings = findings;
+      const confirmed2 = findings.filter((f) => f.status === "confirmed").length;
+      const rolledBack2 = findings.filter((f) => f.status === "rolled_back").length;
+      const ineffective2 = findings.filter((f) => f.status === "ineffective").length;
+      const costAfter2 = primaryEvalReport.total_cost;
+      const costBefore2 = findingsReport2.summary.total_cost_before;
+      const improvementPct2 = costBefore2 > 0 ? ((costBefore2 - costAfter2) / costBefore2) * 100 : 0;
+      const roundNum2 = findingsReport2.rounds.length + 1;
+      findingsReport2.rounds.push({ round: roundNum2, findings_attempted: 1, findings_confirmed: outcome === "confirmed" ? 1 : 0, total_cost: costAfter2 });
+      findingsReport2.summary = { ...findingsReport2.summary, confirmed: confirmed2, rolled_back: rolledBack2, ineffective: ineffective2, total_cost_after: costAfter2, improvement_pct: improvementPct2 };
+      findingsReport2.timestamp = new Date().toISOString();
+      writeFindingsReport(reportDir, findingsReport2);
+      writeFileSync(findingsFile, JSON.stringify(findings, null, 2));
+
+      if (hasPlateaued(findingsReport2.rounds)) {
+        console.log(`[auto] plateau detected — last 3 rounds each < 1% improvement. Stopping.`);
+        process.exit(0);
+      }
+      if (findingsReport2.rounds.length >= maxRounds) {
+        console.log(`[auto] max-rounds (${maxRounds}) reached. Stopping.`);
+        process.exit(0);
+      }
+      if (outcome === "rolled_back") {
+        process.exit(2);
+      }
+      return;
+    }
+
+    // ── Legacy mock/local/live evaluate path ───────────────────────────────
+    // Mock eval (always)
+    console.log(`[auto] evaluate phase for ${findingId} — mock`);
+    const evalReport = await runScenarios(filteredScenariosEval, "mock", port, backendUrl, evalDir, mockModel, 1);
+
+    // ── Local eval (if baseline exists and model available) ────────────────
+    const localModel = localModelArg ?? detectLocalModel();
+    let localEvalReport: RunReport | undefined;
+    if (localBaselineReport && localModel) {
+      console.log(`[auto] evaluate phase for ${findingId} — local (${localModel})`);
+      try {
+        localEvalReport = await runScenarios(filteredScenariosEval, "local", port, backendUrl, join(evalDir, "local"), localModel, 2);
+      } catch (err) {
+        console.warn(`[auto] local eval failed: ${err} — skipping`);
+      }
+    }
+
+    // ── Live eval (if baseline exists and not --skip-live) ─────────────────
+    let liveEvalReport: RunReport | undefined;
+    if (liveBaselineReport && !skipLive) {
+      console.log(`[auto] evaluate phase for ${findingId} — live (${liveModel})`);
+      try {
+        liveEvalReport = await runScenarios(filteredScenariosEval, "live", port, backendUrl, join(evalDir, "live"), liveModel, 2);
+      } catch (err) {
+        console.warn(`[auto] live eval failed: ${err} — skipping`);
+      }
     }
 
     let assertionRegression = checkRegressions(baselineReport, evalReport, "mock");

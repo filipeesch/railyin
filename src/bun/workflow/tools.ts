@@ -244,21 +244,25 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "read_file",
     description:
-      "Read a file from the project worktree. Returns content with line numbers (`     1→line`) and a metadata header `[file: path, lines: total, showing: start-end]`. Use start_line/end_line (1-based) for partial reads.",
+      "Read a file from the project worktree. Returns content with line numbers and a metadata header (size, total lines). " +
+      "Use start_line and end_line (1-based, inclusive) to read a specific range — prefer partial reads for large files. " +
+      "When omitted, the entire file is returned. If the file exceeds the output limit it will be truncated; use start_line/end_line to read the remainder. " +
+      "Binary files are detected and rejected with an error message. " +
+      "IMPORTANT: Always read a file before editing it to get the exact text for edit_file's old_string parameter.",
     parameters: {
       type: "object",
       properties: {
         path: {
           type: "string",
-          description: "Relative path to the file from the worktree root.",
+          description: "Relative path from worktree root (e.g. 'src/index.ts', 'README.md').",
         },
         start_line: {
           type: "number",
-          description: "First line to read (1-based, inclusive). Omit to read from the beginning.",
+          description: "First line to read (1-based, inclusive). Omit to start from the beginning.",
         },
         end_line: {
           type: "number",
-          description: "Last line to read (1-based, inclusive). Omit to read to the end of the file.",
+          description: "Last line to read (1-based, inclusive). Omit to read to the end.",
         },
       },
       required: ["path"],
@@ -267,7 +271,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "run_command",
     description:
-      "Run a shell command in the project worktree directory (read-only commands only — e.g. grep, find, git log, git diff, cat). Do NOT use commands that modify files.",
+      "Run a shell command in the project worktree directory. Use for commands like grep, find, git log, git diff, git status, cat, wc, bun test, etc. " +
+      "Commands that modify files (rm, mv, sed -i, git checkout, etc.) require explicit user approval before execution — unapproved binaries trigger a confirmation prompt. " +
+      "The command runs with the worktree root as cwd. Output is captured and returned as text. " +
+      "Long-running commands have a timeout; prefer targeted commands over broad searches. " +
+      "IMPORTANT: Use search_text instead of grep for project-wide text search — it has better output formatting and pagination.",
     parameters: {
       type: "object",
       properties: {
@@ -282,9 +290,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "ask_me",
     description:
-      "Pause execution and ask one or more questions with structured options. Use when you need clarification before proceeding. " +
+      "Pause execution and ask one or more questions with structured options. Use when you need clarification, confirmation, or a decision from the user before proceeding. " +
       "Each question requires: question text, selection_mode ('single' or 'multi'), and a non-empty options array. " +
-      "Options support: label (required), description, recommended (bool), preview (markdown).",
+      "Options support: label (required), description (secondary text), recommended (highlight as default), preview (markdown rendered in a side pane). " +
+      "Batch related decisions into the same call to minimise interruptions. " +
+      "IMPORTANT: Only use this when you genuinely need user input — do not ask for confirmation on routine operations.",
     parameters: {
       type: "object",
       properties: {
@@ -326,17 +336,20 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "write_file",
     description:
-      "Create a new file or fully overwrite an existing one in the project worktree. Use edit_file for targeted edits to existing files. Use relative paths from the worktree root.",
+      "Create a new file or fully overwrite an existing file with the provided content. The parent directory is created automatically if it does not exist. " +
+      "Use this for creating new files or when the entire content needs to be replaced. " +
+      "IMPORTANT: For targeted edits to existing files (changing a function, fixing a bug, updating a value), use edit_file instead — it's safer because it validates the old text exists. " +
+      "write_file will silently overwrite the entire file, so only use it when you intend to replace all content.",
     parameters: {
       type: "object",
       properties: {
         path: {
           type: "string",
-          description: "Relative path to the file from the worktree root.",
+          description: "Relative path from worktree root.",
         },
         content: {
           type: "string",
-          description: "Full content to write to the file.",
+          description: "Full file content.",
         },
       },
       required: ["path", "content"],
@@ -345,19 +358,21 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "edit_file",
     description:
-      "Make a targeted edit to a file by replacing an exact string. You MUST read the file first. " +
-      "Prefer this over write_file for partial changes to preserve surrounding content. " +
-      "Fails if old_string appears zero or more than once — make it unique with more surrounding context.",
+      "Make a targeted edit to a file by replacing an exact string match. You MUST read the file first to get the exact text for old_string — " +
+      "the match must be unique (appear exactly once) unless replace_all is set. Include enough surrounding context in old_string to ensure uniqueness. " +
+      "Set old_string to an empty string to create a new file (equivalent to write_file but makes intent explicit). " +
+      "The edit fails with an error if old_string is not found or matches multiple locations (unless replace_all=true). " +
+      "IMPORTANT: Always use this instead of write_file when modifying existing files — it prevents accidental overwrites and validates the file hasn't changed unexpectedly.",
     parameters: {
       type: "object",
       properties: {
         path: {
           type: "string",
-          description: "Relative path to the file from the worktree root.",
+          description: "Relative path from worktree root.",
         },
         old_string: {
           type: "string",
-          description: "Exact string to find and replace. Must appear exactly once unless replace_all is true. Use empty string to create a new file.",
+          description: "Exact string to replace (must appear once unless replace_all). Empty string creates a new file.",
         },
         new_string: {
           type: "string",
@@ -365,7 +380,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         },
         replace_all: {
           type: "boolean",
-          description: "If true, replace every occurrence of old_string. Default false.",
+          description: "Replace all occurrences. Default false.",
         },
       },
       required: ["path", "old_string", "new_string"],
@@ -375,21 +390,25 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "search_text",
     description:
-      "Search for a text pattern across files using ripgrep. output_mode: 'content' (default, matching lines), 'files_with_matches' (paths only), 'count' (match count per file). Use limit/offset for pagination.",
+      "Search for a text or regex pattern across project files using ripgrep. Returns matching lines with file paths and line numbers. " +
+      "output_mode controls the format: 'content' (default) shows matching lines with context, 'files_with_matches' lists only file paths, 'count' shows match counts per file. " +
+      "Use the glob parameter to restrict the search to specific file types or directories (e.g. 'src/**/*.ts'). " +
+      "Results are paginated — use limit (default 250) and offset to page through large result sets. " +
+      "IMPORTANT: Prefer this over run_command with grep — it has better formatting, respects .gitignore, and supports pagination.",
     parameters: {
       type: "object",
       properties: {
         pattern: {
           type: "string",
-          description: "Text or regex pattern to search for.",
+          description: "Text or regex pattern.",
         },
         glob: {
           type: "string",
-          description: "Optional glob pattern to restrict which files are searched (e.g. 'src/**/*.ts').",
+          description: "Glob to restrict files (e.g. 'src/**/*.ts').",
         },
         context_lines: {
           type: "number",
-          description: "Number of lines to show before and after each match (like grep -C). Default 0.",
+          description: "Lines before/after each match. Default 0.",
         },
         output_mode: {
           type: "string",
@@ -398,11 +417,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         },
         limit: {
           type: "number",
-          description: "Maximum number of result lines to return. Default 250.",
+          description: "Max result lines. Default 250.",
         },
         offset: {
           type: "number",
-          description: "Number of result lines to skip (for pagination). Default 0.",
+          description: "Lines to skip (pagination). Default 0.",
         },
       },
       required: ["pattern"],
@@ -411,13 +430,16 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "find_files",
     description:
-      "Find files in the project worktree whose paths match a glob pattern. Returns relative paths from the worktree root.",
+      "Find files in the project worktree whose paths match a glob pattern. Returns relative paths sorted by most recently modified. " +
+      "Respects .gitignore and common ignore patterns (node_modules, .git, build artifacts). " +
+      "Use standard glob syntax: '**/*.ts' for all TypeScript files, 'src/**/test*' for test files under src, '*.{js,ts}' for JS or TS files. " +
+      "IMPORTANT: Use this to discover file structure before reading — it's faster than run_command with find and respects project ignore rules.",
     parameters: {
       type: "object",
       properties: {
         glob: {
           type: "string",
-          description: "Glob pattern to match against file paths (e.g. '**/*.test.ts').",
+          description: "Glob pattern (e.g. '**/*.test.ts').",
         },
       },
       required: ["glob"],
@@ -427,7 +449,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "spawn_agent",
     description:
-      "Spawn parallel sub-agents in the same worktree. Each child gets its own instructions and tools. Returns a JSON array of result strings.",
+      "Spawn one or more parallel sub-agents that execute independently in the same worktree. Each child gets its own instructions, tools, and isolated conversation — it has NO access to the parent's conversation history. " +
+      "Provide complete, self-contained instructions for each child including all file paths, context, and constraints. " +
+      "Returns a JSON array of result strings (one per child) in the same order as the input array. " +
+      "Use for parallelising independent tasks (e.g. reviewing multiple files, running searches in different areas, implementing unrelated changes). " +
+      "IMPORTANT: Each child's instructions must be fully self-contained — it cannot see anything from the parent conversation.",
     parameters: {
       type: "object",
       properties: {
@@ -462,7 +488,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "fetch_url",
     description:
-      "Fetch a public URL and return its text content (HTML stripped). No API key required.",
+      "Fetch a public URL and return its text content. HTML pages are stripped to readable text. " +
+      "Use for reading documentation, API references, web pages, and raw file URLs. " +
+      "No authentication is supported — only publicly accessible URLs work. " +
+      "Large responses may be truncated. For API documentation, prefer fetching the specific page rather than a table of contents.",
     parameters: {
       type: "object",
       properties: {
@@ -477,7 +506,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "search_internet",
     description:
-      "Search the web and return ranked results (title, URL, snippet). Requires search.engine and search.api_key in workspace.yaml.",
+      "Search the web and return ranked results with title, URL, and snippet for each match. " +
+      "Requires search.engine and search.api_key configured in workspace.yaml. " +
+      "Use for finding documentation, researching APIs, looking up error messages, or discovering relevant resources. " +
+      "Returns up to 10 results. Follow up with fetch_url to read the full content of promising results.",
     parameters: {
       type: "object",
       properties: {
@@ -493,7 +525,9 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "get_task",
     description:
-      "Fetch metadata for a specific task. Returns title, description, workflow_state, execution_state, model, branch, and execution count. Optionally include the last N conversation messages.",
+      "Fetch metadata for a specific task by ID. Returns title, description, workflow_state, execution_state, model, branch, worktree path, and execution count. " +
+      "Use include_messages to also retrieve the last N conversation messages in chronological order — useful for understanding what a task has done so far. " +
+      "IMPORTANT: This returns metadata only, not file contents. Use read_file to inspect files in the task's worktree.",
     parameters: {
       type: "object",
       properties: {
@@ -512,7 +546,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "get_board_summary",
     description:
-      "Return a summary of task distribution across all columns of a board. Shows total task count and breakdown by execution_state per column. Omit board_id to use the current task's board.",
+      "Return a high-level summary of task distribution across all columns of a board. Shows total task count and breakdown by execution_state (idle, running, completed, failed) per column. " +
+      "Omit board_id to summarise the current task's board. Use this to get an overview before listing individual tasks.",
     parameters: {
       type: "object",
       properties: {
@@ -527,7 +562,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "list_tasks",
     description:
-      "List tasks on a board with optional filters. Use 'query' for a case-insensitive text search across title and description. Omit board_id to search the current task's board.",
+      "List tasks on a board with optional filters. Supports filtering by workflow_state (column), execution_state, and project_id. " +
+      "Use 'query' for a case-insensitive text search across title and description. " +
+      "Omit board_id to search the current task's board. Results are limited to 50 by default (max 200). " +
+      "Returns task ID, title, workflow_state, and execution_state for each match.",
     parameters: {
       type: "object",
       properties: {
@@ -563,7 +601,9 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "create_task",
     description:
-      "Create a new task in the backlog column of a board. Omit board_id to create on the current task's board.",
+      "Create a new task in the backlog column of a board. The task starts in 'idle' execution state. " +
+      "Omit board_id to create on the current task's board. Use the model parameter to override the default model for this task. " +
+      "Returns the created task's ID. Use move_task to start the task by moving it to an active column.",
     parameters: {
       type: "object",
       properties: {
@@ -594,7 +634,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "edit_task",
     description:
-      "Update the title and/or description of a task. Only allowed before a worktree/branch has been created for the task.",
+      "Update the title and/or description of a task. Only allowed before a worktree/branch has been created for the task. " +
+      "Use this to refine task requirements before execution begins. At least one of title or description must be provided.",
     parameters: {
       type: "object",
       properties: {
@@ -617,7 +658,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "delete_task",
     description:
-      "Fully delete a task and all its data (conversation, executions, worktree directory). The git branch is kept. If the task is currently running, the execution is cancelled first.",
+      "Fully delete a task and all its data including conversation history, executions, and worktree directory. The git branch is preserved. " +
+      "If the task is currently running, the execution is cancelled first. This action is permanent and cannot be undone.",
     parameters: {
       type: "object",
       properties: {
@@ -632,7 +674,9 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "move_task",
     description:
-      "Move a task to a different workflow column. The task's workflow_state is updated immediately and the column's on_enter_prompt (if any) is triggered asynchronously. Returns immediately without waiting for execution.",
+      "Move a task to a different workflow column. The task's workflow_state is updated immediately. " +
+      "If the target column has an on_enter_prompt configured, it is triggered asynchronously after the move. " +
+      "Returns immediately without waiting for any triggered execution to complete.",
     parameters: {
       type: "object",
       properties: {
@@ -651,7 +695,9 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "message_task",
     description:
-      "Append a message to another task's conversation and trigger its AI model. Returns 'delivered' if the task is idle/waiting, or 'queued' if the task is currently running (message will be delivered when it finishes).",
+      "Append a message to another task's conversation and trigger its AI model to process it. " +
+      "Returns 'delivered' if the task is idle or waiting, or 'queued' if the task is currently running (message will be delivered when the current execution finishes). " +
+      "Use this for inter-task communication — e.g. sending results from one task to another, or requesting another task to take action.",
     parameters: {
       type: "object",
       properties: {
@@ -671,7 +717,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "create_todo",
     description:
-      "Create a new todo item scoped to the current task. Returns the stable integer id of the created item.",
+      "Create a new todo item scoped to the current task. Returns the stable integer ID of the created item. " +
+      "Use todos to track multi-step work within an execution — update status as you progress through each step.",
     parameters: {
       type: "object",
       properties: {
@@ -686,7 +733,9 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "update_todo",
     description:
-      "Update one or more fields of a todo item by id. Use status 'in-progress' when starting work, 'completed' when done. Use result to record a summary of what was accomplished.",
+      "Update one or more fields of a todo item by ID. Set status to 'in-progress' when starting work, 'completed' when done. " +
+      "Use the result field to record a summary of what was accomplished — this persists across conversation compactions so the parent agent can read it later. " +
+      "At least one of title, status, or result must be provided.",
     parameters: {
       type: "object",
       properties: {
@@ -713,7 +762,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "delete_todo",
     description:
-      "Permanently remove a todo item by id. Use when a todo is no longer relevant.",
+      "Permanently remove a todo item by ID. Use when a todo is no longer relevant or was created in error. This action cannot be undone.",
     parameters: {
       type: "object",
       properties: {
@@ -728,7 +777,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "list_todos",
     description:
-      "List all todos for the current task. Returns id, title, and status only.",
+      "List all todo items for the current task. Returns ID, title, and status for each item. " +
+      "Use at the start of execution to check what work has been planned, and after compaction to review progress.",
     parameters: {
       type: "object",
       properties: {},
@@ -740,7 +790,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "lsp",
     description:
-      "Query a language server for code intelligence. Operations: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Requires lsp.servers configured in workspace.yaml.",
+      "Query a language server for code intelligence. Supports: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. " +
+      "Requires lsp.servers configured in workspace.yaml with language-specific server commands. " +
+      "Use goToDefinition/findReferences for navigating code, hover for type info, documentSymbol for file structure, workspaceSymbol for project-wide symbol search. " +
+      "Position-based operations (goToDefinition, findReferences, hover, goToImplementation) require file_path, line, and character. " +
+      "IMPORTANT: line and character are 1-based. Use documentSymbol to find symbol positions before calling position-based operations.",
     parameters: {
       type: "object",
       properties: {
@@ -803,39 +857,39 @@ const DEFAULT_TOOL_NAMES = ["read_file", "run_command"];
 /** One-line natural-language description for each tool, used in the worktree context block. */
 const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   // read
-  ["read_file", "read_file(path, start_line?, end_line?): read file with line numbers and metadata header; use start_line/end_line (1-based) for partial reads"],
+  ["read_file", "read_file(path, start_line?, end_line?): read a file with line numbers and metadata header. Use start_line/end_line (1-based) for partial reads of large files. Always read before editing to get exact text for edit_file."],
   // write
-  ["write_file", "write_file(path, content): create or fully overwrite a file"],
-  ["edit_file", "edit_file(path, old_string, new_string, replace_all?): targeted edit — replace exact text; read the file first; set old_string='' to create a new file"],
+  ["write_file", "write_file(path, content): create a new file or fully overwrite an existing one. Parent directories are created automatically. Use edit_file instead for targeted edits to existing files."],
+  ["edit_file", "edit_file(path, old_string, new_string, replace_all?): targeted edit — replace exact text in a file. Must read the file first to get exact text. Fails if old_string doesn't match exactly once (unless replace_all). Set old_string='' to create a new file."],
   // search
-  ["search_text", "search_text(pattern, glob?, context_lines?, output_mode?, limit?, offset?): search with ripgrep; output_mode: content/files_with_matches/count; limit/offset for pagination"],
-  ["find_files", "find_files(glob): find files matching a glob pattern (sorted by most recently modified)"],
+  ["search_text", "search_text(pattern, glob?, context_lines?, output_mode?, limit?, offset?): search project files with ripgrep. output_mode: 'content' (matching lines), 'files_with_matches' (file paths only), 'count' (match counts). Use limit/offset for pagination. Respects .gitignore."],
+  ["find_files", "find_files(glob): find files matching a glob pattern, sorted by most recently modified. Respects .gitignore. Use to discover file structure before reading."],
   // shell
-  ["run_command", "run_command(command): run a shell command (grep, git log, git diff, bun test, etc.) — unapproved command binaries require user confirmation before running"],
+  ["run_command", "run_command(command): run a shell command in the worktree (grep, git log, git diff, bun test, etc.). Unapproved command binaries require user confirmation. Prefer search_text over grep for project-wide search."],
   // interactions
-  ["ask_me", "ask_me(questions): pause and ask questions with options (label, description?, recommended?, preview?)"],
+  ["ask_me", "ask_me(questions): pause and ask questions with structured options (label, description?, recommended?, preview?). Batch related decisions into one call."],
   // agents
-  ["spawn_agent", "spawn_agent(children): run parallel sub-agents; each child needs instructions and tools array"],
+  ["spawn_agent", "spawn_agent(children): run parallel sub-agents. Each child needs self-contained instructions and tools array — no access to parent conversation. Returns JSON array of results."],
   // web
-  ["fetch_url", "fetch_url(url): fetch a public URL and return its text content"],
-  ["search_internet", "search_internet(query): search the web (requires search config in workspace.yaml)"],
+  ["fetch_url", "fetch_url(url): fetch a public URL and return its text content (HTML stripped to readable text). Use for documentation, API references, web pages."],
+  ["search_internet", "search_internet(query): search the web for ranked results (title, URL, snippet). Requires search config in workspace.yaml. Follow up with fetch_url for full content."],
   // tasks_read
-  ["get_task", "get_task(task_id): get details of a specific task"],
-  ["get_board_summary", "get_board_summary(board_id?): get a summary of all tasks on the board"],
-  ["list_tasks", "list_tasks(board_id?, state?): list tasks filtered by board and/or workflow state"],
+  ["get_task", "get_task(task_id, include_messages?): get task metadata (title, description, state, model, branch). Use include_messages=N for last N conversation messages."],
+  ["get_board_summary", "get_board_summary(board_id?): overview of task distribution across board columns with execution_state breakdown. Omit board_id for current board."],
+  ["list_tasks", "list_tasks(board_id?, state?, query?, limit?): list tasks with filters. Use query for case-insensitive text search across title and description."],
   // tasks_write
-  ["create_task", "create_task(title, description?, board_id?, state?): create a new task"],
-  ["edit_task", "edit_task(task_id, title?, description?): update a task's title or description"],
-  ["delete_task", "delete_task(task_id): delete a task permanently"],
-  ["move_task", "move_task(task_id, to_state): move a task to a different workflow column"],
-  ["message_task", "message_task(task_id, message): send a chat message to another task's conversation"],
+  ["create_task", "create_task(title, description?, board_id?, state?): create a new task in backlog. Use move_task to start it."],
+  ["edit_task", "edit_task(task_id, title?, description?): update task title or description (only before worktree creation)."],
+  ["delete_task", "delete_task(task_id): permanently delete a task and all its data. Git branch is preserved."],
+  ["move_task", "move_task(task_id, to_state): move a task to a different workflow column. Triggers on_enter_prompt if configured."],
+  ["message_task", "message_task(task_id, message): send a message to another task's conversation and trigger its AI model."],
   // todos
-  ["create_todo", "create_todo(title): create a new todo item"],
-  ["update_todo", "update_todo(id, status?, title?, result?): update a todo's status, title, or result"],
-  ["delete_todo", "delete_todo(id): delete a todo"],
-  ["list_todos", "list_todos(): list all todos for this task (id, title, status only)"],
+  ["create_todo", "create_todo(title): create a new todo item for the current task. Returns stable integer ID."],
+  ["update_todo", "update_todo(id, status?, title?, result?): update todo status ('in-progress'/'completed'), title, or result summary."],
+  ["delete_todo", "delete_todo(id): permanently remove a todo item."],
+  ["list_todos", "list_todos(): list all todos for this task (id, title, status)."],
   // lsp
-  ["lsp", "lsp(operation, file_path, line?, character?, query?): code intelligence — goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls"],
+  ["lsp", "lsp(operation, file_path, line?, character?, query?): code intelligence — goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Requires lsp.servers in workspace.yaml."],
 ]);
 
 /** Ordered group definitions for the worktree context tool description block. */
