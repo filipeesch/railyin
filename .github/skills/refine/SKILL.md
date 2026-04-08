@@ -123,25 +123,14 @@ The runner writes `findings-report.json` immediately after each finding resolves
 - Last 3 rounds each show < 1% improvement in `total_cost`
 - `--max-rounds N` limit is reached (add flag to evaluate calls)
 
-### Phase 4 — Behavioral gate
-
-After the loop completes:
-```bash
-bun refinement/runner.ts --mode auto --phase behavioral \
-  --findings <report-dir>/findings.json --report-dir <report-dir>
-```
-
-Runs all scenarios and checks for assertion regressions. Updates `findings-report.json` with `behavioral_gate: "passed" | "failed" | "skipped"`.
-
 ### Reading the findings report
 
 `<report-dir>/findings-report.json` contains:
 - `findings[]` — all findings with final status (`confirmed` / `rolled_back` / `ineffective`)
 - `rounds[]` — per-round cost progression
 - `summary.improvement_pct` — total cost reduction from baseline
-- `summary.behavioral_gate` — gate result or `"skipped"`
 
-A confirmed finding with `behavioral_validated: true` is safe to keep.
+A confirmed finding is safe to keep.
 
 ## Quality Assessment
 

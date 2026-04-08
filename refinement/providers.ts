@@ -91,9 +91,6 @@ export function loadProviders(configPath: string = CONFIG_PATH): ProvidersYaml {
     default_providers: Array.isArray(raw["default_providers"])
       ? (raw["default_providers"] as string[])
       : undefined,
-    behavioral_provider: typeof raw["behavioral_provider"] === "string"
-      ? raw["behavioral_provider"]
-      : undefined,
     providers,
   };
 }

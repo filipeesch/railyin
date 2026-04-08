@@ -244,11 +244,13 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "read_file",
     description:
-      "Read a file from the project worktree. Returns content with line numbers and a metadata header (size, total lines). " +
-      "Use start_line and end_line (1-based, inclusive) to read a specific range — prefer partial reads for large files. " +
-      "When omitted, the entire file is returned. If the file exceeds the output limit it will be truncated; use start_line/end_line to read the remainder. " +
-      "Binary files are detected and rejected with an error message. " +
-      "IMPORTANT: Always read a file before editing it to get the exact text for edit_file's old_string parameter.",
+      "Read a file from the project worktree.\n\n" +
+      "Usage:\n" +
+      "- Returns content with line numbers and a metadata header (size, total lines)\n" +
+      "- Use start_line/end_line (1-based, inclusive) to read a specific range — prefer partial reads for large files\n" +
+      "- If the file exceeds the output limit it will be truncated; use start_line/end_line to read the remainder\n" +
+      "- ALWAYS read a file before editing it to get the exact text for edit_file's old_string parameter\n" +
+      "- NEVER use this to inspect binary files — they are detected and rejected with an error",
     parameters: {
       type: "object",
       properties: {
@@ -271,11 +273,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "run_command",
     description:
-      "Run a shell command in the project worktree directory. Use for commands like grep, find, git log, git diff, git status, cat, wc, bun test, etc. " +
-      "Commands that modify files (rm, mv, sed -i, git checkout, etc.) require explicit user approval before execution — unapproved binaries trigger a confirmation prompt. " +
-      "The command runs with the worktree root as cwd. Output is captured and returned as text. " +
-      "Long-running commands have a timeout; prefer targeted commands over broad searches. " +
-      "IMPORTANT: Use search_text instead of grep for project-wide text search — it has better output formatting and pagination.",
+      "Run a shell command in the project worktree directory.\n\n" +
+      "Usage:\n" +
+      "- Output is captured and returned as text; has a timeout for long-running commands\n" +
+      "- ALWAYS use search_text instead of grep for project-wide text search",
     parameters: {
       type: "object",
       properties: {
@@ -290,11 +291,12 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "ask_me",
     description:
-      "Pause execution and ask one or more questions with structured options. Use when you need clarification, confirmation, or a decision from the user before proceeding. " +
-      "Each question requires: question text, selection_mode ('single' or 'multi'), and a non-empty options array. " +
-      "Options support: label (required), description (secondary text), recommended (highlight as default), preview (markdown rendered in a side pane). " +
-      "Batch related decisions into the same call to minimise interruptions. " +
-      "IMPORTANT: Only use this when you genuinely need user input — do not ask for confirmation on routine operations.",
+      "Pause execution and ask one or more questions with structured options.\n\n" +
+      "Usage:\n" +
+      "- Each question needs: question text, selection_mode ('single'/'multi'), and options array\n" +
+      "- Options support: label (required), description, recommended, preview (markdown)\n" +
+      "- ALWAYS batch related decisions into the same call to minimize interruptions\n" +
+      "- NEVER use for confirmation on routine operations",
     parameters: {
       type: "object",
       properties: {
@@ -336,10 +338,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "write_file",
     description:
-      "Create a new file or fully overwrite an existing file with the provided content. The parent directory is created automatically if it does not exist. " +
-      "Use this for creating new files or when the entire content needs to be replaced. " +
-      "IMPORTANT: For targeted edits to existing files (changing a function, fixing a bug, updating a value), use edit_file instead — it's safer because it validates the old text exists. " +
-      "write_file will silently overwrite the entire file, so only use it when you intend to replace all content.",
+      "Create a new file or fully overwrite an existing file with provided content.\n\n" +
+      "Usage:\n" +
+      "- Parent directory is created automatically if it does not exist\n" +
+      "- ALWAYS use edit_file instead when modifying an existing file — write_file replaces all content silently\n" +
+      "- Use only for new files or when the entire content must be replaced",
     parameters: {
       type: "object",
       properties: {
@@ -358,11 +361,13 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "edit_file",
     description:
-      "Make a targeted edit to a file by replacing an exact string match. You MUST read the file first to get the exact text for old_string — " +
-      "the match must be unique (appear exactly once) unless replace_all is set. Include enough surrounding context in old_string to ensure uniqueness. " +
-      "Set old_string to an empty string to create a new file (equivalent to write_file but makes intent explicit). " +
-      "The edit fails with an error if old_string is not found or matches multiple locations (unless replace_all=true). " +
-      "IMPORTANT: Always use this instead of write_file when modifying existing files — it prevents accidental overwrites and validates the file hasn't changed unexpectedly.",
+      "Make a targeted edit to a file by replacing an exact string match.\n\n" +
+      "Usage:\n" +
+      "- ALWAYS read the file first to get the exact text for old_string\n" +
+      "- Include enough surrounding context in old_string to make the match unique\n" +
+      "- Set old_string to empty string to create a new file\n" +
+      "- NEVER re-read the file after a successful edit to verify the change — a success response confirms the edit was applied\n" +
+      "- NEVER use this if old_string matches multiple locations unless replace_all is set",
     parameters: {
       type: "object",
       properties: {
@@ -390,11 +395,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "search_text",
     description:
-      "Search for a text or regex pattern across project files using ripgrep. Returns matching lines with file paths and line numbers. " +
-      "output_mode controls the format: 'content' (default) shows matching lines with context, 'files_with_matches' lists only file paths, 'count' shows match counts per file. " +
-      "Use the glob parameter to restrict the search to specific file types or directories (e.g. 'src/**/*.ts'). " +
-      "Results are paginated — use limit (default 250) and offset to page through large result sets. " +
-      "IMPORTANT: Prefer this over run_command with grep — it has better formatting, respects .gitignore, and supports pagination.",
+      "Search for a text or regex pattern across project files using ripgrep.\n\n" +
+      "Usage:\n" +
+      "- output_mode: 'content' (default, matching lines), 'files_with_matches' (paths only), 'count' (match counts per file)\n" +
+      "- Use glob to restrict to file types or directories (e.g. 'src/**/*.ts')\n" +
+      "- Use limit and offset to paginate large result sets",
     parameters: {
       type: "object",
       properties: {
@@ -430,10 +435,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "find_files",
     description:
-      "Find files in the project worktree whose paths match a glob pattern. Returns relative paths sorted by most recently modified. " +
-      "Respects .gitignore and common ignore patterns (node_modules, .git, build artifacts). " +
-      "Use standard glob syntax: '**/*.ts' for all TypeScript files, 'src/**/test*' for test files under src, '*.{js,ts}' for JS or TS files. " +
-      "IMPORTANT: Use this to discover file structure before reading — it's faster than run_command with find and respects project ignore rules.",
+      "Find files matching a glob pattern in the project worktree.\n\n" +
+      "Usage:\n" +
+      "- Returns relative paths sorted by most recently modified\n" +
+      "- Respects .gitignore and common ignore patterns (node_modules, .git, build artifacts)\n" +
+      "- Use before reading to discover file structure",
     parameters: {
       type: "object",
       properties: {
@@ -449,11 +455,12 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "spawn_agent",
     description:
-      "Spawn one or more parallel sub-agents that execute independently in the same worktree. Each child gets its own instructions, tools, and isolated conversation — it has NO access to the parent's conversation history. " +
-      "Provide complete, self-contained instructions for each child including all file paths, context, and constraints. " +
-      "Returns a JSON array of result strings (one per child) in the same order as the input array. " +
-      "Use for parallelising independent tasks (e.g. reviewing multiple files, running searches in different areas, implementing unrelated changes). " +
-      "IMPORTANT: Each child's instructions must be fully self-contained — it cannot see anything from the parent conversation.",
+      "Spawn one or more parallel sub-agents that execute independently in the same worktree.\n\n" +
+      "Usage:\n" +
+      "- Each child gets its own instructions, tools, and conversation with full parent context\n" +
+      "- Returns a JSON array of result strings (one per child) in input order\n" +
+      "- Use for parallelising independent tasks (reviewing files, searching, implementing unrelated changes)\n" +
+      "- Provide complete instructions for each child including file paths, context, and constraints",
     parameters: {
       type: "object",
       properties: {
@@ -488,10 +495,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "fetch_url",
     description:
-      "Fetch a public URL and return its text content. HTML pages are stripped to readable text. " +
-      "Use for reading documentation, API references, web pages, and raw file URLs. " +
-      "No authentication is supported — only publicly accessible URLs work. " +
-      "Large responses may be truncated. For API documentation, prefer fetching the specific page rather than a table of contents.",
+      "Fetch a public URL and return its text content.\n\n" +
+      "Usage:\n" +
+      "- HTML pages are stripped to readable text\n" +
+      "- No authentication — only publicly accessible URLs work\n" +
+      "- Large responses may be truncated; prefer specific pages over tables of contents",
     parameters: {
       type: "object",
       properties: {
@@ -506,10 +514,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "search_internet",
     description:
-      "Search the web and return ranked results with title, URL, and snippet for each match. " +
-      "Requires search.engine and search.api_key configured in workspace.yaml. " +
-      "Use for finding documentation, researching APIs, looking up error messages, or discovering relevant resources. " +
-      "Returns up to 10 results. Follow up with fetch_url to read the full content of promising results.",
+      "Search the web and return ranked results with title, URL, and snippet.\n\n" +
+      "Usage:\n" +
+      "- Returns up to 10 results; follow up with fetch_url for full content\n" +
+      "- Use for finding documentation, researching APIs, looking up error messages",
     parameters: {
       type: "object",
       properties: {
@@ -525,9 +533,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "get_task",
     description:
-      "Fetch metadata for a specific task by ID. Returns title, description, workflow_state, execution_state, model, branch, worktree path, and execution count. " +
-      "Use include_messages to also retrieve the last N conversation messages in chronological order — useful for understanding what a task has done so far. " +
-      "IMPORTANT: This returns metadata only, not file contents. Use read_file to inspect files in the task's worktree.",
+      "Fetch metadata for a specific task by ID.\n\n" +
+      "Usage:\n" +
+      "- Returns title, description, workflow_state, execution_state, model, branch, worktree path, execution count\n" +
+      "- Use include_messages=N for the last N conversation messages in chronological order\n" +
+      "- Returns metadata only — use read_file to inspect files in the task's worktree",
     parameters: {
       type: "object",
       properties: {
@@ -546,8 +556,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "get_board_summary",
     description:
-      "Return a high-level summary of task distribution across all columns of a board. Shows total task count and breakdown by execution_state (idle, running, completed, failed) per column. " +
-      "Omit board_id to summarise the current task's board. Use this to get an overview before listing individual tasks.",
+      "Return a high-level summary of task distribution across board columns.\n\n" +
+      "Usage:\n" +
+      "- Shows total count and breakdown by execution_state (idle, running, completed, failed) per column\n" +
+      "- Omit board_id to summarise the current task's board\n" +
+      "- Use to get an overview before listing individual tasks",
     parameters: {
       type: "object",
       properties: {
@@ -562,10 +575,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "list_tasks",
     description:
-      "List tasks on a board with optional filters. Supports filtering by workflow_state (column), execution_state, and project_id. " +
-      "Use 'query' for a case-insensitive text search across title and description. " +
-      "Omit board_id to search the current task's board. Results are limited to 50 by default (max 200). " +
-      "Returns task ID, title, workflow_state, and execution_state for each match.",
+      "List tasks on a board with optional filters.\n\n" +
+      "Usage:\n" +
+      "- Filter by workflow_state, execution_state, project_id\n" +
+      "- Use query for case-insensitive text search across title and description\n" +
+      "- Omit board_id to search the current task's board; default limit 50 (max 200)",
     parameters: {
       type: "object",
       properties: {
@@ -601,9 +615,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "create_task",
     description:
-      "Create a new task in the backlog column of a board. The task starts in 'idle' execution state. " +
-      "Omit board_id to create on the current task's board. Use the model parameter to override the default model for this task. " +
-      "Returns the created task's ID. Use move_task to start the task by moving it to an active column.",
+      "Create a new task in the backlog column of a board.\n\n" +
+      "Usage:\n" +
+      "- Starts in 'idle' execution state; use move_task to start it\n" +
+      "- Omit board_id to create on the current task's board\n" +
+      "- Use model parameter to override the default model for this task",
     parameters: {
       type: "object",
       properties: {
@@ -634,8 +650,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "edit_task",
     description:
-      "Update the title and/or description of a task. Only allowed before a worktree/branch has been created for the task. " +
-      "Use this to refine task requirements before execution begins. At least one of title or description must be provided.",
+      "Update the title and/or description of a task.\n\n" +
+      "Usage:\n" +
+      "- Only allowed before a worktree/branch has been created\n" +
+      "- At least one of title or description must be provided",
     parameters: {
       type: "object",
       properties: {
@@ -658,8 +676,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "delete_task",
     description:
-      "Fully delete a task and all its data including conversation history, executions, and worktree directory. The git branch is preserved. " +
-      "If the task is currently running, the execution is cancelled first. This action is permanent and cannot be undone.",
+      "Fully delete a task and all its data including conversation history, executions, and worktree.\n\n" +
+      "Usage:\n" +
+      "- Git branch is preserved; only task data is removed\n" +
+      "- Running tasks are cancelled first; this action is permanent and cannot be undone",
     parameters: {
       type: "object",
       properties: {
@@ -674,9 +694,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "move_task",
     description:
-      "Move a task to a different workflow column. The task's workflow_state is updated immediately. " +
-      "If the target column has an on_enter_prompt configured, it is triggered asynchronously after the move. " +
-      "Returns immediately without waiting for any triggered execution to complete.",
+      "Move a task to a different workflow column.\n\n" +
+      "Usage:\n" +
+      "- workflow_state is updated immediately\n" +
+      "- If the target column has an on_enter_prompt, it is triggered asynchronously\n" +
+      "- Returns immediately without waiting for triggered execution to complete",
     parameters: {
       type: "object",
       properties: {
@@ -695,9 +717,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "message_task",
     description:
-      "Append a message to another task's conversation and trigger its AI model to process it. " +
-      "Returns 'delivered' if the task is idle or waiting, or 'queued' if the task is currently running (message will be delivered when the current execution finishes). " +
-      "Use this for inter-task communication — e.g. sending results from one task to another, or requesting another task to take action.",
+      "Append a message to another task's conversation and trigger its AI model.\n\n" +
+      "Usage:\n" +
+      "- Returns 'delivered' (idle/waiting) or 'queued' (running — delivered when execution finishes)\n" +
+      "- Use for inter-task communication: sending results, requesting actions",
     parameters: {
       type: "object",
       properties: {
@@ -717,8 +740,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "create_todo",
     description:
-      "Create a new todo item scoped to the current task. Returns the stable integer ID of the created item. " +
-      "Use todos to track multi-step work within an execution — update status as you progress through each step.",
+      "Create a new todo item scoped to the current task.\n\n" +
+      "Usage:\n" +
+      "- Returns the stable integer ID of the created item\n" +
+      "- Use todos to track multi-step work — update status as you progress",
     parameters: {
       type: "object",
       properties: {
@@ -733,9 +758,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "update_todo",
     description:
-      "Update one or more fields of a todo item by ID. Set status to 'in-progress' when starting work, 'completed' when done. " +
-      "Use the result field to record a summary of what was accomplished — this persists across conversation compactions so the parent agent can read it later. " +
-      "At least one of title, status, or result must be provided.",
+      "Update one or more fields of a todo item by ID.\n\n" +
+      "Usage:\n" +
+      "- Set status to 'in-progress' when starting, 'completed' when done\n" +
+      "- Use result field to record outcome — persists across compactions for parent agent\n" +
+      "- At least one of title, status, or result must be provided",
     parameters: {
       type: "object",
       properties: {
@@ -762,7 +789,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "delete_todo",
     description:
-      "Permanently remove a todo item by ID. Use when a todo is no longer relevant or was created in error. This action cannot be undone.",
+      "Permanently remove a todo item by ID. Use when no longer relevant or created in error.",
     parameters: {
       type: "object",
       properties: {
@@ -777,8 +804,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "list_todos",
     description:
-      "List all todo items for the current task. Returns ID, title, and status for each item. " +
-      "Use at the start of execution to check what work has been planned, and after compaction to review progress.",
+      "List all todo items for the current task. Returns ID, title, and status for each item.",
     parameters: {
       type: "object",
       properties: {},
@@ -790,11 +816,12 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "lsp",
     description:
-      "Query a language server for code intelligence. Supports: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. " +
-      "Requires lsp.servers configured in workspace.yaml with language-specific server commands. " +
-      "Use goToDefinition/findReferences for navigating code, hover for type info, documentSymbol for file structure, workspaceSymbol for project-wide symbol search. " +
-      "Position-based operations (goToDefinition, findReferences, hover, goToImplementation) require file_path, line, and character. " +
-      "IMPORTANT: line and character are 1-based. Use documentSymbol to find symbol positions before calling position-based operations.",
+      "Query a language server for code intelligence.\n\n" +
+      "Usage:\n" +
+      "- Operations: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls\n" +
+      "- Position-based operations require file_path, line, and character (all 1-based)\n" +
+      "- Use documentSymbol to find symbol positions before calling position-based operations\n" +
+      "- Use hover for type info, workspaceSymbol for project-wide symbol search",
     parameters: {
       type: "object",
       properties: {

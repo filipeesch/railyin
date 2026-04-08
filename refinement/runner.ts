@@ -621,7 +621,6 @@ function printCrossProviderComparison(
  *  - baseline: run providers, write capture-summary.json and baseline-report.json, exit
  *  - backup:   backup source files for a finding before the AI applies it
  *  - evaluate: re-run providers, evaluate metric contract, confirm or rollback finding
- *  - behavioral: run local mode gate, update findings report
  */
 async function runAutoLoop(args: string[]): Promise<void> {
   const get = (flag: string) => {
@@ -1119,124 +1118,8 @@ async function runAutoLoop(args: string[]): Promise<void> {
     return;
   }
 
-  if (phase === "behavioral") {
-    if (!findingsFile || !reportDir) {
-      console.error("[auto] --phase behavioral requires --findings, --report-dir");
-      process.exit(1);
-    }
-
-    await runBehavioralGate(findingsFile, reportDir, port, backendUrl, localModelArg);
-    return;
-  }
-
-  console.error(`[auto] Unknown phase: ${phase}. Use: baseline | backup | evaluate | behavioral`);
+  console.error(`[auto] Unknown phase: ${phase}. Use: baseline | backup | evaluate`);
   process.exit(1);
-}
-
-/**
- * Behavioral gate: run scenarios in local mode and check for assertion regressions.
- * Updates findings report with behavioral_gate status.
- */
-async function runBehavioralGate(
-  findingsFile: string,
-  reportDir: string,
-  port: number,
-  backendUrl: string | undefined,
-  localModelOverride?: string,
-): Promise<void> {
-  const findingsReportPath = join(reportDir, "findings-report.json");
-  if (!existsSync(findingsReportPath)) {
-    console.error("[auto] findings-report.json not found — run baseline + evaluate phases first");
-    process.exit(1);
-  }
-  const findingsReport: FindingsReport = JSON.parse(readFileSync(findingsReportPath, "utf-8"));
-  const baselineReport: RunReport = JSON.parse(
-    readFileSync(join(reportDir, "baseline-report.json"), "utf-8"),
-  );
-
-  // Try providers.yaml behavioral_provider first (task 8.3)
-  let providersConfig: ProvidersYaml | undefined;
-  try {
-    providersConfig = loadProviders();
-  } catch { /* providers.yaml not configured — fall back to legacy */ }
-
-  let behavioralProvider: ProviderConfig | undefined;
-  if (providersConfig) {
-    const behavId = providersConfig.behavioral_provider;
-    behavioralProvider = behavId
-      ? providersConfig.providers.find((p) => p.id === behavId)
-      : providersConfig.providers.find((p) => p.type === "lmstudio");
-  }
-
-  const scenarios = loadAllScenarios();
-  const evalDir = join(reportDir, "behavioral-gate");
-  let localReport: RunReport;
-
-  if (behavioralProvider && providersConfig) {
-    console.log(`[auto] behavioral gate: using provider ${behavioralProvider.id} (${behavioralProvider.type})`);
-    try {
-      localReport = await runScenariosForProvider(behavioralProvider, providersConfig, scenarios, port, evalDir);
-    } catch (err) {
-      console.warn(`[auto] behavioral gate: provider ${behavioralProvider.id} failed: ${err} — skipping`);
-      findingsReport.summary.behavioral_gate = "skipped";
-      writeFindingsReport(reportDir, findingsReport);
-      return;
-    }
-  } else {
-    // Legacy: detect local model via lms ps or --local-model flag
-    let localModelId: string | undefined = localModelOverride;
-    if (!localModelId) {
-      try {
-        const lmsCheck = spawnSync("lms", ["ps"], { encoding: "utf-8", timeout: 5000 });
-        if (lmsCheck.status === 0 && lmsCheck.stdout.trim().length > 0) {
-          localModelId = "lmstudio/default";
-        }
-      } catch { /* ignore */ }
-    }
-
-    if (!localModelId) {
-      console.log("[auto] behavioral gate: no local model available — skipping (use --local-model <id>)");
-      findingsReport.summary.behavioral_gate = "skipped";
-      writeFindingsReport(reportDir, findingsReport);
-      return;
-    }
-
-    console.log(`[auto] behavioral gate: running local mode scenarios (model: ${localModelId})`);
-    localReport = await runScenarios(scenarios, "local", port, backendUrl, evalDir, localModelId, 2);
-  }
-
-  // Check for regressions (task 6.2)
-  let hasRegressions = false;
-  for (const baseSc of baselineReport.scenarios) {
-    const localSc = localReport.scenarios.find((s) => s.name === baseSc.name);
-    if (!localSc) continue;
-    for (const baseA of baseSc.assertions) {
-      if (!baseA.pass) continue;
-      const localA = localSc.assertions.find((a) => a.type === baseA.type);
-      if (localA && !localA.pass) {
-        console.log(`  ⚠️  behavioral regression: ${baseA.type} in '${baseSc.name}'`);
-        hasRegressions = true;
-      }
-    }
-  }
-
-  if (hasRegressions) {
-    // task 6.3
-    findingsReport.summary.behavioral_gate = "failed";
-    findingsReport.findings = findingsReport.findings.map((f) =>
-      f.status === "confirmed" ? { ...f, behavioral_validated: false } : f,
-    );
-    console.log("[auto] behavioral gate: FAILED — confirmed findings marked as unvalidated");
-  } else {
-    // task 6.4
-    findingsReport.summary.behavioral_gate = "passed";
-    findingsReport.findings = findingsReport.findings.map((f) =>
-      f.status === "confirmed" ? { ...f, behavioral_validated: true } : f,
-    );
-    console.log("[auto] behavioral gate: PASSED — all confirmed findings validated");
-  }
-
-  writeFindingsReport(reportDir, findingsReport);
 }
 
 // ─── Main run ─────────────────────────────────────────────────────────────────

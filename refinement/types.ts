@@ -46,8 +46,6 @@ export interface ProvidersYaml {
   runs_per_scenario?: number;
   /** Provider IDs to use when --providers flag is omitted. */
   default_providers?: string[];
-  /** Provider to use for behavioral gate validation. If absent, first lmstudio provider is used. */
-  behavioral_provider?: string;
   providers: ProviderConfig[];
 }
 
@@ -120,7 +118,6 @@ export interface Finding {
   };
   change: { type: string; description: string };
   status: FindingStatus;
-  behavioral_validated?: boolean;
 }
 
 export interface RoundSummary {
@@ -143,7 +140,6 @@ export interface FindingsReport {
     total_cost_before: number;
     total_cost_after: number;
     improvement_pct: number;
-    behavioral_gate?: "passed" | "failed" | "skipped";
   };
 }
 
