@@ -1,0 +1,38 @@
+name: new-tool
+description: >
+  Explore+plan scenario: implement a new "count_lines" tool in Railyin's tool system.
+  The model explores how existing tools are defined, registered, and executed,
+  then implements the new tool end-to-end. Tests understanding of the tool
+  architecture across tools.ts, handlers, and workflow config.
+
+codebase: railyin
+
+prompt: |
+  I want to add a new tool called "count_lines" to Railyin's tool system.
+  This tool should count the number of lines in a file and return the count.
+  
+  Please explore the codebase to understand:
+  1. How existing tools like read_file or search_text are defined (tool schema, handler)
+  2. How tools are registered and made available to the workflow engine
+  3. How tool handlers receive their arguments and return results
+  
+  Then implement the count_lines tool:
+  - Tool name: count_lines
+  - Input parameter: file_path (string, required)
+  - Output: number of lines in the file, or an error if the file doesn't exist
+  - Register it in the appropriate tool group
+  
+  Write the actual implementation code.
+
+expected_behavior:
+  max_rounds: 15
+  must_complete: true
+
+column_tools:
+  - read
+  - write
+  - search
+
+assertions:
+  - type: cost_under
+    value: 2.00

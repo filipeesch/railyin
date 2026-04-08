@@ -31,6 +31,21 @@ function validate(raw: unknown, filePath: string): Scenario {
   if (!Array.isArray(r["assertions"])) {
     throw new Error(`Scenario ${filePath}: missing required field 'assertions' (must be an array)`);
   }
+  // Validate codebase + fixtures mutual exclusion
+  if (r["codebase"] !== undefined && r["fixtures"] !== undefined) {
+    throw new Error(`Scenario ${filePath}: cannot have both 'codebase' and 'fixtures' fields`);
+  }
+  if (r["codebase"] !== undefined && r["codebase"] !== "railyin") {
+    throw new Error(`Scenario ${filePath}: 'codebase' must be "railyin" if set`);
+  }
+  // Warn about cache assertions on real-codebase scenarios
+  if (r["codebase"] === "railyin" && Array.isArray(r["assertions"])) {
+    for (const assertion of r["assertions"] as Array<{ type?: string }>) {
+      if (assertion.type === "cache_prefix_stable" || assertion.type === "tools_hash_stable") {
+        console.warn(`[scenarios] '${r["name"]}': ${assertion.type} assertion is not meaningful for real-codebase scenarios`);
+      }
+    }
+  }
   if (r["column_tools"] !== undefined) {
     if (!Array.isArray(r["column_tools"])) {
       throw new Error(`Scenario ${filePath}: 'column_tools' must be an array`);
@@ -63,11 +78,7 @@ export function loadAllScenarios(mode?: ProxyMode): Scenario[] {
   for (const f of files) {
     try {
       const scenario = loadScenario(f);
-      if (!mode || !scenario.modes || scenario.modes.includes(mode)) {
-        scenarios.push(scenario);
-      } else {
-        console.log(`[runner] skipping '${scenario.name}' (mode filter: ${scenario.modes.join(",")})`);
-      }
+      scenarios.push(scenario);
     } catch (e) {
       console.error(`[runner] failed to load ${basename(f)}: ${(e as Error).message}`);
     }

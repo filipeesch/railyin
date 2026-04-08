@@ -346,9 +346,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
     name: "edit_file",
     description:
       "Make a targeted edit to a file by replacing an exact string. You MUST read the file first. " +
-      "Set old_string to the exact text to find (must be unique in the file). Set new_string to the replacement. " +
-      "Set replace_all=true to replace every occurrence. " +
-      "To create a new file, set old_string to empty string and provide new_string as file content.",
+      "Prefer this over write_file for partial changes to preserve surrounding content. " +
+      "Fails if old_string appears zero or more than once — make it unique with more surrounding context.",
     parameters: {
       type: "object",
       properties: {

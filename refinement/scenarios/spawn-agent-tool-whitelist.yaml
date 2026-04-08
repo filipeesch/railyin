@@ -6,7 +6,13 @@ description: >
   (not in child's declared tools), the engine should block it with an error.
   Asserts sub_agent_gets_parent_tools (prefix shared) and that the scenario
   completes (the engine handles whitelist violations gracefully).
-modes: [mock]
+prompt: "Update the README with the latest API details."
+fixtures: basic-typescript
+expected_behavior:
+  must_call: [spawn_agent]
+  must_complete: true
+  max_rounds: 8
+  ideal_rounds: 3
 
 column_tools:
   - read

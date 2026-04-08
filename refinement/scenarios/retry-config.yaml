@@ -1,0 +1,38 @@
+name: retry-config
+description: >
+  Explore+plan scenario: add configurable retry settings to Railyin's AI provider.
+  The model explores how the Anthropic provider handles errors and retries,
+  then adds a configurable retry count and backoff to the workspace config.
+  Tests understanding of the config system and AI provider architecture.
+
+codebase: railyin
+
+prompt: |
+  I want to add configurable retry settings to Railyin's AI provider.
+  Currently when an API call fails, we want to be able to configure how many
+  times to retry and with what backoff strategy.
+  
+  Please explore the codebase to understand:
+  1. How the Anthropic provider makes API calls and handles errors
+  2. How workspace configuration is structured and loaded
+  3. How provider configuration is defined in workspace.yaml
+  
+  Then implement the feature:
+  - Add optional retry config to the provider schema in workspace.yaml: max_retries (default: 3) and backoff_ms (default: 1000)
+  - Implement the retry logic in the Anthropic provider with exponential backoff
+  - Handle rate limit errors (429) separately with a longer backoff
+  
+  Write the actual implementation code.
+
+expected_behavior:
+  max_rounds: 15
+  must_complete: true
+
+column_tools:
+  - read
+  - write
+  - search
+
+assertions:
+  - type: cost_under
+    value: 2.00

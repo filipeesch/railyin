@@ -33,5 +33,9 @@ Thumbs.db
 # Copy config/workspace.yaml.sample to config/workspace.yaml to get started
 config/workspace.yaml
 
+# Provider config (contains local paths and API keys)
+# Copy config/providers.yaml.sample to config/providers.yaml to get started
+config/providers.yaml
+
 # Refinement harness reports (machine-specific)
 refinement/reports/

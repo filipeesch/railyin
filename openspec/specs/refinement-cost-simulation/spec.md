@@ -14,16 +14,16 @@ The proxy SHALL estimate token counts for each component of a proxied request bo
 - **WHEN** the proxy receives a request with `tools: []` or no tools field
 - **THEN** the proxy sets `tools_tokens = 0`
 
-### Requirement: Cost calculation using Anthropic Sonnet pricing
-The proxy SHALL calculate cost estimates using Sonnet pricing per million tokens: input=$3.00, cache_write=$6.00, cache_read=$0.30, output=$15.00.
+### Requirement: Cost calculation using provider-specific pricing
+The proxy SHALL calculate cost estimates using per-provider pricing when available. Each provider config MAY include a `pricing` object with `input`, `cache_write`, `cache_read`, and `output` rates (per million tokens). If a provider does not specify pricing, the proxy SHALL fall back to Anthropic Sonnet pricing: input=$3.00, cache_write=$6.00, cache_read=$0.30, output=$15.00.
 
-#### Scenario: Cost for a cache miss request
-- **WHEN** the prefixKey (tools_hash + system_hash) is not in the prefixMap (cache MISS)
-- **THEN** the cost estimate classifies prefix tokens (tools + system) as cache_write at $6.00/MTok, message tokens as input at $3.00/MTok, and output tokens at $15.00/MTok
+#### Scenario: Cost calculation with custom provider pricing
+- **WHEN** the active provider has `pricing: { input: 1.00, cache_write: 2.00, cache_read: 0.10, output: 5.00 }`
+- **THEN** the cost estimate uses those rates instead of default Sonnet pricing
 
-#### Scenario: Cost for a cache hit request
-- **WHEN** the prefixKey is already in the prefixMap (cache HIT)
-- **THEN** the cost estimate classifies prefix tokens (tools + system) as cache_read at $0.30/MTok, message tokens as input at $3.00/MTok, and output tokens at $15.00/MTok
+#### Scenario: Cost calculation falls back to Sonnet pricing
+- **WHEN** the active provider has no `pricing` field
+- **THEN** the cost estimate uses Sonnet rates: input=$3.00, cache_write=$6.00, cache_read=$0.30, output=$15.00
 
 ### Requirement: Per-request cost breakdown in inspection record
 Each InspectionRecord SHALL include a `cost` field containing: tools_tokens, system_tokens, messages_tokens, output_tokens, input_cost, cache_write_cost, cache_read_cost, output_cost, and total_cost.
@@ -33,7 +33,15 @@ Each InspectionRecord SHALL include a `cost` field containing: tools_tokens, sys
 - **THEN** the record contains a `cost` object with all token counts and cost breakdowns
 
 ### Requirement: Scenario cost aggregation in reports
-The runner SHALL aggregate cost estimates across all requests in a scenario and include per-scenario totals in the report. The report SHALL also compute an all-cold baseline (every request as cache MISS) and show cache savings as a dollar amount and percentage.
+The runner SHALL aggregate cost estimates across all requests in a scenario and include per-scenario totals in the report. The report SHALL also compute an all-cold baseline and show cache savings. Cost aggregations SHALL be grouped by provider, with cross-provider cost comparison included as an informational table.
+
+#### Scenario: Report shows per-provider cost summary
+- **WHEN** scenarios complete for providers `lmstudio-qwen` and `anthropic-sonnet`
+- **THEN** the report includes separate cost summaries for each provider, each with `total_cost`, `all_cold_cost`, and `cache_savings`
+
+#### Scenario: Cross-provider cost comparison table
+- **WHEN** the same scenario runs for 2 providers
+- **THEN** the report includes a comparison showing each provider's total_cost, tokens, and cost-per-token side-by-side
 
 #### Scenario: Report shows scenario cost summary
 - **WHEN** a scenario completes with 5 requests (1 miss + 4 hits)

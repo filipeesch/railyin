@@ -13,7 +13,7 @@
  */
 
 import { createHash, randomUUID } from "crypto";
-import type { CostEstimate, InspectionRecord, ProxyMode, Scenario, ScriptEntry } from "./types.ts";
+import type { CostEstimate, ContentBlock, InspectionRecord, ProxyMode, ProviderConfig, ProviderPricing, RequestTiming, ResponseCapture, Scenario, ScriptEntry } from "./types.ts";
 
 // ─── SHA256 helpers ───────────────────────────────────────────────────────────
 
@@ -46,7 +46,7 @@ function estimateTokens(body: AnthropicRequestBody): TokenBreakdown {
   };
 }
 
-// Anthropic Sonnet pricing per million tokens
+// Anthropic Sonnet pricing per million tokens (default)
 const PRICING = {
   input: 3.0,
   cache_write: 6.0,
@@ -54,16 +54,17 @@ const PRICING = {
   output: 15.0,
 } as const;
 
-function estimateCost(tokens: TokenBreakdown, cacheHit: boolean, outputTokens: number): CostEstimate {
+function estimateCost(tokens: TokenBreakdown, cacheHit: boolean, outputTokens: number, pricing?: ProviderPricing): CostEstimate {
+  const rates = pricing ?? PRICING;
   const prefixTokens = tokens.tools_tokens + tokens.system_tokens;
   const deltaTokens = tokens.messages_tokens;
   const cacheWriteTokens = cacheHit ? 0 : prefixTokens;
   const cacheReadTokens = cacheHit ? prefixTokens : 0;
 
-  const input_cost = (deltaTokens / 1_000_000) * PRICING.input;
-  const cache_write_cost = (cacheWriteTokens / 1_000_000) * PRICING.cache_write;
-  const cache_read_cost = (cacheReadTokens / 1_000_000) * PRICING.cache_read;
-  const output_cost = (outputTokens / 1_000_000) * PRICING.output;
+  const input_cost = (deltaTokens / 1_000_000) * rates.input;
+  const cache_write_cost = (cacheWriteTokens / 1_000_000) * rates.cache_write;
+  const cache_read_cost = (cacheReadTokens / 1_000_000) * rates.cache_read;
+  const output_cost = (outputTokens / 1_000_000) * rates.output;
   return {
     tools_tokens: tokens.tools_tokens,
     system_tokens: tokens.system_tokens,
@@ -165,6 +166,99 @@ function fallbackMockSse(): string {
   return generateMockSse({ respond_with: "text", content: "No script loaded." }, {});
 }
 
+// ─── SSE response parser ──────────────────────────────────────────────────────
+
+/**
+ * Parse accumulated SSE text into a ResponseCapture.
+ * Handles multi-chunk streaming by joining all accumulated text first.
+ */
+export function parseSseResponse(accumulated: string): ResponseCapture {
+  try {
+    const lines = accumulated.split("\n");
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.type) events.push({ type: data.type, data });
+        } catch { /* skip malformed */ }
+      }
+    }
+
+    let stop_reason = "unknown";
+    let output_tokens = 0;
+    let model = "unknown";
+    const content_blocks: ContentBlock[] = [];
+
+    // Track per-block state for streaming reconstruction
+    const blockAccumulators: Record<number, { type: string; id?: string; name?: string; text?: string; json?: string; thinking?: string }> = {};
+
+    for (const event of events) {
+      if (event.type === "message_start") {
+        const msg = (event.data.message ?? {}) as Record<string, unknown>;
+        model = (msg.model as string) ?? "unknown";
+      } else if (event.type === "content_block_start") {
+        const idx = (event.data.index as number) ?? 0;
+        const cb = (event.data.content_block ?? {}) as Record<string, unknown>;
+        blockAccumulators[idx] = { type: (cb.type as string) ?? "text", id: cb.id as string, name: cb.name as string };
+      } else if (event.type === "content_block_delta") {
+        const idx = (event.data.index as number) ?? 0;
+        const delta = (event.data.delta ?? {}) as Record<string, unknown>;
+        const acc = blockAccumulators[idx];
+        if (!acc) continue;
+        if (delta.type === "text_delta") {
+          acc.text = (acc.text ?? "") + ((delta.text as string) ?? "");
+        } else if (delta.type === "input_json_delta") {
+          acc.json = (acc.json ?? "") + ((delta.partial_json as string) ?? "");
+        } else if (delta.type === "thinking_delta") {
+          acc.thinking = (acc.thinking ?? "") + ((delta.thinking as string) ?? "");
+        }
+      } else if (event.type === "content_block_stop") {
+        const idx = (event.data.index as number) ?? 0;
+        const acc = blockAccumulators[idx];
+        if (!acc) continue;
+        if (acc.type === "text") {
+          content_blocks.push({ type: "text", text: acc.text ?? "" });
+        } else if (acc.type === "tool_use") {
+          let input: unknown = {};
+          try { if (acc.json) input = JSON.parse(acc.json); } catch { /* keep empty */ }
+          content_blocks.push({ type: "tool_use", id: acc.id ?? "", name: acc.name ?? "", input });
+        } else if (acc.type === "thinking") {
+          content_blocks.push({ type: "thinking", thinking: acc.thinking ?? "" });
+        }
+      } else if (event.type === "message_delta") {
+        const delta = (event.data.delta ?? {}) as Record<string, unknown>;
+        stop_reason = (delta.stop_reason as string) ?? stop_reason;
+        const usage = (event.data.usage ?? {}) as Record<string, unknown>;
+        output_tokens = (usage.output_tokens as number) ?? 0;
+      }
+    }
+
+    return { stop_reason, content_blocks, usage: { output_tokens }, model };
+  } catch {
+    return { stop_reason: "unknown", content_blocks: [], usage: { output_tokens: 0 }, model: "unknown" };
+  }
+}
+
+/** Synthesize a ResponseCapture from a mock script entry (for uniform capture format). */
+function synthesizeResponseCapture(entry: ScriptEntry, outputTokens: number): ResponseCapture {
+  if (entry.respond_with === "tool_use" && entry.tool) {
+    return {
+      stop_reason: "tool_use",
+      content_blocks: [{ type: "tool_use", id: `toolu_mock`, name: entry.tool, input: entry.input ?? {} }],
+      usage: { output_tokens: outputTokens },
+      model: "mock",
+    };
+  }
+  return {
+    stop_reason: "end_turn",
+    content_blocks: [{ type: "text", text: entry.content ?? "Done." }],
+    usage: { output_tokens: outputTokens },
+    model: "mock",
+  };
+}
+
 // ─── Proxy state ──────────────────────────────────────────────────────────────
 
 export interface ProxyState {
@@ -175,12 +269,12 @@ export interface ProxyState {
   scenario: Scenario | null;
   /** Which script entry is next (mock mode) */
   turnCounter: number;
-  /** Full parsed request bodies for per-request analysis. */
-  rawRequests: Array<{ request_id: number; body: unknown }>;
+  /** Full parsed request bodies + captured responses for per-request analysis. */
+  rawExchanges: Array<{ request_id: number; body: unknown; response?: ResponseCapture }>;
 }
 
 export function createState(): ProxyState {
-  return { records: [], requestCounter: 0, prefixMap: new Map(), scenario: null, turnCounter: 0, rawRequests: [] };
+  return { records: [], requestCounter: 0, prefixMap: new Map(), scenario: null, turnCounter: 0, rawExchanges: [] };
 }
 
 // ─── Core request handler ─────────────────────────────────────────────────────
@@ -196,13 +290,15 @@ interface AnthropicRequestBody {
 
 async function handleRequest(
   req: Request,
-  mode: ProxyMode,
-  backendUrl: string,
+  provider: ProviderConfig,
   state: ProxyState,
 ): Promise<Response> {
   if (req.method !== "POST" || new URL(req.url).pathname !== "/v1/messages") {
     return new Response("Not found", { status: 404 });
   }
+
+  // ── Timing: request received ──
+  const request_received_at = Date.now();
 
   // Clone body for inspection before forwarding
   const rawBody = await req.text();
@@ -238,16 +334,18 @@ async function handleRequest(
     ? { cache_read_input_tokens: prefixTokens, cache_creation_input_tokens: 0, input_tokens: deltaTokens }
     : { cache_read_input_tokens: 0, cache_creation_input_tokens: prefixTokens, input_tokens: deltaTokens };
 
+  const isMock = provider.type === "mock";
+
   // ── Mock mode: get script entry to estimate output tokens ──
   let mockEntry: ScriptEntry | null = null;
-  if (mode === "mock") {
+  if (isMock) {
     const script = state.scenario?.script?.filter((e) => !e.role || e.role !== "user") ?? [];
     mockEntry = script[state.turnCounter] ?? { respond_with: "text", content: "Script exhausted." };
     state.turnCounter += 1;
   }
 
   const outputTokens = mockEntry ? estimateOutputTokens(mockEntry) : 0;
-  const cost = estimateCost(tokens, cacheHit, outputTokens);
+  const cost = estimateCost(tokens, cacheHit, outputTokens, provider.pricing);
 
   const record: InspectionRecord = {
     request_id: reqId,
@@ -265,15 +363,26 @@ async function handleRequest(
     cost,
   };
   state.records.push(record);
-  state.rawRequests.push({ request_id: reqId, body });
 
-  console.log(JSON.stringify({ ...record, mode }));
+  console.log(JSON.stringify({ ...record, provider_id: provider.id }));
 
   // ── Mock mode: return scripted response ──
-  if (mode === "mock") {
+  if (isMock) {
     const sseBody = mockEntry!.respond_with
       ? generateMockSse(mockEntry!, syntheticUsage)
       : fallbackMockSse();
+
+    // Synthesize response capture and timing for uniform format
+    const responseCapture = synthesizeResponseCapture(mockEntry!, outputTokens);
+    record.response = responseCapture;
+    record.timing = {
+      request_received_at,
+      first_byte_at: request_received_at,
+      last_byte_at: request_received_at,
+      ttfb_ms: 0,
+      duration_ms: 0,
+    };
+    state.rawExchanges.push({ request_id: reqId, body, response: responseCapture });
 
     return new Response(sseBody, {
       headers: {
@@ -285,29 +394,46 @@ async function handleRequest(
   }
 
   // ── Local / live mode: forward to backend ──
-  const forwardHeaders: Record<string, string> = { "Content-Type": "application/json" };
+  const backendUrl = provider.backendUrl ?? "";
+  // Restore explicit Content-Length so Bun uses identity framing (not chunked).
+  const bodyBytes = new TextEncoder().encode(rawBody);
+  // Hop-by-hop headers must not be forwarded by a proxy (RFC 7230 §6.1).
+  // Use a Headers instance for proper case-insensitive deduplication.
+  const HOP_BY_HOP = new Set(["host", "content-length", "connection", "keep-alive",
+    "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"]);
+  const forwardHeaders = new Headers();
+  forwardHeaders.set("content-type", "application/json");
+  forwardHeaders.set("content-length", bodyBytes.length.toString());
   for (const [k, v] of req.headers.entries()) {
-    if (k.toLowerCase() !== "host" && k.toLowerCase() !== "content-length") {
-      forwardHeaders[k] = v;
+    if (!HOP_BY_HOP.has(k.toLowerCase()) && k.toLowerCase() !== "content-type") {
+      forwardHeaders.set(k, v);
     }
   }
 
   const backendResp = await fetch(`${backendUrl}/v1/messages`, {
     method: "POST",
     headers: forwardHeaders,
-    body: rawBody,
+    body: bodyBytes,
   });
+
+  if (!backendResp.ok) {
+    const errText = await backendResp.text();
+    console.error(`[proxy] backend error ${backendResp.status}: ${errText.slice(0, 200)}`);
+    return new Response(errText, { status: backendResp.status, headers: { "Content-Type": "application/json" } });
+  }
 
   if (!backendResp.body) {
     return new Response("No response from backend", { status: 502 });
   }
 
-  // SSE passthrough — inject synthetic usage into message_start for local mode
-  if (mode === "local" && backendResp.headers.get("content-type")?.includes("text/event-stream")) {
+  // SSE passthrough with chunk accumulation for response capture + timing
+  if (backendResp.headers.get("content-type")?.includes("text/event-stream")) {
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
+    const chunks: string[] = [];
     let injected = false;
+    let first_byte_at = 0;
 
     (async () => {
       const reader = backendResp.body!.getReader();
@@ -317,7 +443,16 @@ async function handleRequest(
           const { done, value } = await reader.read();
           if (done) break;
           let chunk = decoder.decode(value, { stream: true });
-          // Inject cache usage stats into the first message_start event
+
+          // Record timing of first byte
+          if (first_byte_at === 0) {
+            first_byte_at = Date.now();
+          }
+
+          // Accumulate for response parsing
+          chunks.push(chunk);
+
+          // Inject synthetic cache usage into the first message_start event
           if (!injected && chunk.includes('"message_start"')) {
             injected = true;
             try {
@@ -327,9 +462,41 @@ async function handleRequest(
               );
             } catch { /* leave chunk as-is */ }
           }
+
           await writer.write(encoder.encode(chunk));
         }
       } finally {
+        // ── Stream ended: capture response, timing, patch cost ──
+        const last_byte_at = Date.now();
+        const resolved_first_byte = first_byte_at || last_byte_at;
+        const timing: RequestTiming = {
+          request_received_at,
+          first_byte_at: resolved_first_byte,
+          last_byte_at,
+          ttfb_ms: resolved_first_byte - request_received_at,
+          duration_ms: last_byte_at - request_received_at,
+        };
+
+        const accumulated = chunks.join("");
+        const responseCapture = parseSseResponse(accumulated);
+
+        // Patch output_tokens and recalculate cost with real value
+        const realOutputTokens = responseCapture.usage.output_tokens;
+        if (realOutputTokens > 0) {
+          const outputRate = provider.pricing?.output ?? PRICING.output;
+          record.cost.output_tokens = realOutputTokens;
+          record.cost.output_cost = (realOutputTokens / 1_000_000) * outputRate;
+          record.cost.total_cost =
+            record.cost.input_cost +
+            record.cost.cache_write_cost +
+            record.cost.cache_read_cost +
+            record.cost.output_cost;
+        }
+
+        record.response = responseCapture;
+        record.timing = timing;
+        state.rawExchanges.push({ request_id: reqId, body, response: responseCapture });
+
         writer.close().catch(() => {});
       }
     })();
@@ -338,7 +505,8 @@ async function handleRequest(
     return new Response(readable, { status: backendResp.status, headers: respHeaders });
   }
 
-  // Live mode or non-SSE: pure passthrough
+  // Non-SSE: pure passthrough (no response capture for non-streaming)
+  state.rawExchanges.push({ request_id: reqId, body });
   return new Response(backendResp.body, {
     status: backendResp.status,
     headers: backendResp.headers,
@@ -347,14 +515,17 @@ async function handleRequest(
 
 // ─── createProxy ──────────────────────────────────────────────────────────────
 
-const DEFAULT_BACKENDS: Record<ProxyMode, string> = {
+const DEFAULT_BACKENDS: Record<string, string> = {
   mock: "",
   local: "http://localhost:1234",
   live: "https://api.anthropic.com",
 };
 
 export interface ProxyOptions {
-  mode: ProxyMode;
+  /** Full provider config — preferred. Determines type, backendUrl, and pricing. */
+  provider?: ProviderConfig;
+  /** Legacy mode string (mock/local/live). Used when provider is not set. */
+  mode?: ProxyMode;
   port?: number;
   backendUrl?: string;
 }
@@ -365,16 +536,32 @@ export function createProxy(options: ProxyOptions): {
   loadScenario(scenario: Scenario): void;
   resetState(): void;
 } {
-  const { mode, port = 8999, backendUrl } = options;
-  const resolvedBackend = backendUrl ?? DEFAULT_BACKENDS[mode];
+  const { port = 8999, backendUrl } = options;
+
+  // Resolve provider config — if not provided, synthesize from legacy mode/backendUrl
+  const provider: ProviderConfig = options.provider ?? (() => {
+    const legacyMode = options.mode ?? "mock";
+    const resolvedBackend = backendUrl ?? DEFAULT_BACKENDS[legacyMode] ?? "";
+    // Map legacy mode to provider type
+    const type = legacyMode === "mock" ? "mock"
+      : legacyMode === "local" ? "lmstudio"
+      : "anthropic";
+    return { id: `legacy-${legacyMode}`, type, backendUrl: resolvedBackend };
+  })();
+
+  const resolvedBackend = provider.backendUrl ?? "";
   const state = createState();
 
   const server = Bun.serve({
     port,
     fetch(req) {
-      return handleRequest(req, mode, resolvedBackend, state);
+      return handleRequest(req, provider, state);
     },
   });
+
+  // Forward backend to the forwarding section — need it in handleRequest
+  // The provider.backendUrl is used inside handleRequest directly
+  void resolvedBackend; // suppress unused warning
 
   return {
     server,
@@ -385,7 +572,7 @@ export function createProxy(options: ProxyOptions): {
     },
     resetState() {
       state.records = [];
-      state.rawRequests = [];
+      state.rawExchanges = [];
       state.prefixMap = new Map();
       state.scenario = null;
       state.turnCounter = 0;
@@ -407,5 +594,6 @@ if (import.meta.main) {
   const backendUrl = get("--backend");
 
   const { server } = createProxy({ mode, port, backendUrl });
-  console.log(`[proxy] listening on http://localhost:${server.port} mode=${mode} backend=${backendUrl ?? (DEFAULT_BACKENDS[mode] || "(none)")}`);
+  const resolvedBackend = backendUrl ?? DEFAULT_BACKENDS[mode] ?? "(none)";
+  console.log(`[proxy] listening on http://localhost:${server.port} mode=${mode} backend=${resolvedBackend}`);
 }

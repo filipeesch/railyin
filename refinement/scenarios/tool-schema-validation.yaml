@@ -4,7 +4,11 @@ description: >
   interactions + agents + lsp) contains the expected core tools and does NOT
   contain deprecated/removed tools (list_dir, delete_file, rename_file).
   Also checks that the tools array is non-trivially large (all groups loaded).
-modes: [mock, local, live]
+prompt: "What tools do you have access to? List them all."
+expected_behavior:
+  must_complete: true
+  max_rounds: 1
+  ideal_rounds: 1
 
 column_tools:
   - read

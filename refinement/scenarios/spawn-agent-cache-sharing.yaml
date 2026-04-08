@@ -5,7 +5,15 @@ description: >
   share the same tools_hash, meaning cache reads on turns 2 & 3. Without the
   fix, sub-agents would get a different (smaller) tool set and break the prefix.
   Asserts sub_agent_gets_parent_tools to verify the sharing works.
-modes: [mock]
+prompt: >
+  Implement the dark-mode feature: read styles.css to understand the current
+  CSS variables, then add dark mode CSS variables. Use parallel sub-agents.
+fixtures: basic-typescript
+expected_behavior:
+  must_call: [spawn_agent]
+  must_complete: true
+  max_rounds: 12
+  ideal_rounds: 5
 
 column_tools:
   - read

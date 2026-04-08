@@ -1,0 +1,34 @@
+name: cost-tracking-ui
+description: >
+  Explore+plan scenario: add per-message cost display to Railyin's conversation view.
+  The model explores how cost data flows from executions through to the UI, then
+  implements a cost indicator on each message. Tests real multi-file exploration
+  across bun/db, RPC types, and Vue components.
+
+codebase: railyin
+
+prompt: |
+  I want to add a cost tracking display to Railyin's conversation view.
+  Each assistant message should show how many tokens it used and what it cost.
+  
+  Please explore the codebase to understand:
+  1. How execution cost data is stored in the database (look at the executions table)
+  2. How conversation messages are fetched and displayed in the UI
+  3. How the RPC layer passes data from bun to the Vue frontend
+  
+  Then implement the feature: Show a small cost indicator below each assistant message
+  in the conversation view, displaying input tokens, output tokens, and estimated cost.
+  Write the actual implementation code.
+
+expected_behavior:
+  max_rounds: 15
+  must_complete: true
+
+column_tools:
+  - read
+  - write
+  - search
+
+assertions:
+  - type: cost_under
+    value: 2.00

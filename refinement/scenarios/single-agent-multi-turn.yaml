@@ -3,7 +3,13 @@ description: >
   3-turn read→edit→verify flow with a real tool set (read + write + search).
   Validates that the cache prefix is stable across all turns (tools_hash never
   changes), the expected tools are present in the schema, and cost is reasonable.
-modes: [mock, local, live]
+prompt: "Change the greeting in src/main.ts from 'Hello' to 'Hi'."
+fixtures: basic-typescript
+expected_behavior:
+  must_call: [read_file, edit_file]
+  must_complete: true
+  max_rounds: 6
+  ideal_rounds: 3
 
 column_tools:
   - read

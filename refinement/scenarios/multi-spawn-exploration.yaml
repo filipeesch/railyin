@@ -4,7 +4,15 @@ description: >
   exec-96 $1.12 pattern. Tests progressive cache warming: the second spawn
   should show cache hits (lower cost) relative to the first. Asserts
   cache_prefix_stable across all agents and sub_agent_gets_parent_tools.
-modes: [mock]
+prompt: >
+  Explore the codebase: first find all TypeScript files with a 'Config' class,
+  then read each one and summarize their purpose.
+fixtures: multi-module
+expected_behavior:
+  must_call: [spawn_agent]
+  must_complete: true
+  max_rounds: 10
+  ideal_rounds: 4
 
 column_tools:
   - read

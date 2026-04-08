@@ -14,13 +14,177 @@ Read this skill in full before starting. Do not truncate.
 
 ### Input
 
-Accepts: `/refine --change <name> --mode <mock|local|live>`
+Accepts: `/refine --change <name> --mode <mock|local|live|auto>` (legacy) or `/refine --change <name> --providers <ids>`
 
 - `--change` — the OpenSpec change name (required; infer from conversation if unambiguous)
-- `--mode` — testing layer (default: `mock`)
+- `--mode` — testing layer (default: `mock`; legacy; prefer `--providers` when providers.yaml is configured)
   - `mock` — scripted scenarios, $0, no model needed
   - `local` — LM Studio with Qwen 3.5, $0, requires local GPU
   - `live` — real Anthropic API, ~$0.80 per before/after pair
+  - `auto` — autonomous finding → apply → verify loop
+- `--providers` — comma-separated provider IDs from `config/providers.yaml` (e.g. `mock-default` or `lmstudio-qwen,anthropic-sonnet`)
+- `--scenarios` — comma-separated scenario names to run (default: all)
+- `--max-rounds N` — (auto mode only) stop after N finding iterations (default: unlimited)
+
+### Autonomous Loop Mode (--mode auto / --providers)
+
+Use `--mode auto` (or `--providers` with a mock provider) when you want to optimize AI call efficiency without manual round-trips.
+
+**Provider-based invocation** (preferred when `config/providers.yaml` is configured):
+```bash
+# Run all default providers
+bun refinement/runner.ts --providers mock-default
+
+# Run specific providers + scenarios
+bun refinement/runner.ts --providers lmstudio-qwen,anthropic-sonnet --scenarios export-markdown,new-tool
+
+# Provider-based auto loop
+bun refinement/runner.ts --mode auto --providers lmstudio-qwen
+```
+
+**Legacy mode invocation** (fallback when no providers.yaml):
+```bash
+bun refinement/runner.ts --mode mock
+bun refinement/runner.ts --mode local --local-model lmstudio/qwen2.5-coder
+```
+
+The behavioral gate uses the `behavioral_provider` from providers.yaml (first lmstudio provider if not set), or falls back to `lms ps` detection.
+
+#### Phase 1 — Baseline (structural)
+
+```bash
+# Provider-based (preferred):
+bun refinement/runner.ts --mode auto --phase baseline --providers lmstudio-qwen
+
+# Legacy mock ($0):
+bun refinement/runner.ts --mode auto --phase baseline
+
+# Legacy local (LM Studio, $0, real model):
+bun refinement/runner.ts --mode auto --phase baseline --local-model lmstudio/qwen2.5-coder
+
+# Legacy live (Anthropic API, ~$0.10 for 2 scenarios):
+bun refinement/runner.ts --mode auto --phase baseline --live-model anthropic/claude-3-5-sonnet-20241022
+```
+
+This writes:
+- `reports/<timestamp>-auto/baseline-report.json` — run result
+- `reports/<timestamp>-auto/capture-summary.json` — per-scenario token averages + capture paths
+- Prints `report-dir:` and next steps
+
+Report dir suffix: `<ts>-auto` for mock, `<ts>-auto-local` for local, `<ts>-auto-live` for live.
+
+Save the printed `report-dir` path — all subsequent commands use it.
+
+#### Phase 2 — Finding generation
+
+Read `capture-summary.json` from the report dir. For each `scenario.capture_paths`, read individual `NNN.json` files to inspect:
+- `inspection.cost.tools_tokens` — token cost of the tools array
+- `inspection.cost.system_tokens` — token cost of system blocks
+- `body.tools` — full tool definitions with descriptions and input schemas
+- `inspection.cache_hit` — whether prefix cache was hit
+- `inspection.tools_hash` — hash of the tools array (stable = good)
+
+For each finding, perform a targeted doc search:
+```
+search_internet("anthropic docs <topic>")
+fetch_url(<most relevant result>)
+```
+
+Then emit a `findings.json` file at `<report-dir>/findings.json` with `Finding[]`:
+
+```json
+[
+  {
+    "id": "F001",
+    "category": "token_waste",
+    "source": { "file": "src/bun/ai/anthropic.ts", "line": 42, "symbol": "buildTools" },
+    "evidence": {
+      "current_tokens": 2840,
+      "estimated_after": 1900,
+      "savings_per_request": 940,
+      "doc_reference": "https://docs.anthropic.com/en/docs/build-with-claude/tool-use/implement-tool-use",
+      "doc_quote": "Descriptions should be concise but complete..."
+    },
+    "metric_contract": {
+      "metric": "total_cost",
+      "before": 0.0124,
+      "expected_after": 0.0095
+    },
+    "change": {
+      "type": "edit",
+      "description": "Trim verbose parameter descriptions in read_file tool to < 60 chars each"
+    },
+    "status": "pending"
+  }
+]
+```
+
+Rules:
+- `doc_reference` is required — skip findings without a valid docs.anthropic.com URL
+- `metric_contract.expected_after` must be strictly better than `before`
+- One finding = one targeted change; don't bundle multiple files in one finding
+- Supported metrics: `total_cost`, `tools_tokens`, `cache_hit_ratio`, `cache_savings_pct`
+- Finding categories: `token_waste`, `cache_break`, `schema_gap`, `behavioral`
+
+#### Phase 3 — Apply/verify loop (one finding at a time)
+
+For each finding in `findings.json` with `status: "pending"`:
+
+**3a. Backup + mark applied:**
+```bash
+bun refinement/runner.ts --mode auto --phase backup \
+  --finding-id F001 --findings <report-dir>/findings.json --report-dir <report-dir>
+```
+This saves the original file to `backups/F001/` and sets `status: "applied"` in findings.json.
+
+**3b. Apply the code change** — edit the source file per `change.description`.
+
+**3c. Evaluate:**
+```bash
+# mock (default):
+bun refinement/runner.ts --mode auto --phase evaluate \
+  --finding-id F001 --findings <report-dir>/findings.json --report-dir <report-dir>
+
+# local — add --local-model matching the baseline:
+bun refinement/runner.ts --mode auto --phase evaluate \
+  --finding-id F001 --findings <report-dir>/findings.json --report-dir <report-dir> \
+  --local-model lmstudio/qwen2.5-coder
+
+# live:
+bun refinement/runner.ts --mode auto --phase evaluate \
+  --finding-id F001 --findings <report-dir>/findings.json --report-dir <report-dir> \
+  --live-model anthropic/claude-3-5-sonnet-20241022
+```
+Exits with:
+- `0` — finding confirmed or ineffective; continue to next
+- `2` — finding rolled back (metric didn't improve or assertion regressed); files restored
+
+The runner writes `findings-report.json` immediately after each finding resolves.
+
+**Stopping conditions** (runner handles these automatically):
+- All findings are processed (no more pending)
+- Last 3 rounds each show < 1% improvement in `total_cost`
+- `--max-rounds N` limit is reached (add flag to evaluate calls)
+
+#### Phase 4 — Behavioral gate (optional)
+
+After the loop completes, if LM Studio is available:
+```bash
+bun refinement/runner.ts --mode auto --phase behavioral \
+  --findings <report-dir>/findings.json --report-dir <report-dir>
+```
+
+This runs all scenarios in local mode and checks for assertion regressions. Updates `findings-report.json` with `behavioral_gate: "passed" | "failed" | "skipped"`. Skipped automatically if no local model is loaded.
+
+#### Reading the findings report
+
+`<report-dir>/findings-report.json` contains:
+- `findings[]` — all findings with final status (confirmed/rolled_back/ineffective)
+- `rounds[]` — per-round cost progression
+- `summary.improvement_pct` — total cost reduction from baseline
+- `summary.behavioral_gate` — gate result or "skipped"
+
+A confirmed finding with `behavioral_validated: true` is safe to keep. `behavioral_validated: false` means the structural improvement exists but behavioral validation failed — consider reviewing that finding manually.
 
 ### Workflow
 
@@ -144,9 +308,13 @@ Every run now produces per-request JSON captures alongside the report:
 refinement/reports/<timestamp>-mock/
   report.json                          ← summary with cost fields
   requests/
-    <scenario-name>/
-      001.json                         ← full request body + inspection + cost
-      002.json
+    <provider-id>/                     ← present when --providers flag was used
+      <scenario-name>/
+        001.json                       ← full request body + inspection + cost
+        002.json
+        ...
+    <scenario-name>/                   ← legacy path (--mode flag, no provider nesting)
+      001.json
       ...
 ```
 

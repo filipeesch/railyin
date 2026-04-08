@@ -5,7 +5,7 @@
  * Each assertion returns { pass, message }.
  */
 
-import type { AssertionDef, AssertionResult, InspectionRecord } from "./types.ts";
+import type { AssertionDef, AssertionResult, InspectionRecord, Scenario } from "./types.ts";
 
 export function evaluateAssertion(
   assertion: AssertionDef,
@@ -183,5 +183,92 @@ export function evaluateAssertions(
     }
     return evaluateAssertion(a, records);
   });
+}
+
+/**
+ * Evaluate behavioral assertions from scenario.expected_behavior.
+ * Used for local/live mode runs where the engine actually executes.
+ *
+ * @param scenario   — the scenario whose expected_behavior to evaluate
+ * @param records    — proxy inspection records for this run
+ * @param extras     — data captured from the engine (tool names, completion flag)
+ */
+export function evaluateBehavioralAssertions(
+  scenario: Scenario,
+  records: InspectionRecord[],
+  extras: {
+    toolNames?: string[];
+    completed?: boolean;
+  },
+): AssertionResult[] {
+  const results: AssertionResult[] = [];
+  const eb = scenario.expected_behavior;
+  if (!eb) return results;
+
+  // must_call — ALL listed tools must appear in the observed tool names
+  if (eb.must_call && eb.must_call.length > 0) {
+    const observed = new Set(extras.toolNames ?? []);
+    const missing = eb.must_call.filter((t) => !observed.has(t));
+    if (missing.length === 0) {
+      results.push({ type: "must_call", pass: true, message: `All required tools called: ${eb.must_call.join(", ")}` });
+    } else {
+      results.push({
+        type: "must_call",
+        pass: false,
+        message: `must_call: tools not observed: ${missing.join(", ")} (observed: ${[...observed].join(", ") || "none"})`,
+      });
+    }
+  }
+
+  // must_not_call — NONE of the listed tools may appear
+  if (eb.must_not_call && eb.must_not_call.length > 0) {
+    const observed = new Set(extras.toolNames ?? []);
+    const found = eb.must_not_call.filter((t) => observed.has(t));
+    if (found.length === 0) {
+      results.push({ type: "must_not_call", pass: true, message: `None of the forbidden tools were called: ${eb.must_not_call.join(", ")}` });
+    } else {
+      results.push({
+        type: "must_not_call",
+        pass: false,
+        message: `must_not_call: forbidden tools observed: ${found.join(", ")}`,
+      });
+    }
+  }
+
+  // max_rounds — total proxy request count must not exceed this value
+  if (eb.max_rounds !== undefined) {
+    const rounds = records.length;
+    if (rounds <= eb.max_rounds) {
+      results.push({ type: "max_rounds", pass: true, message: `Round count ${rounds} ≤ max ${eb.max_rounds}` });
+    } else {
+      results.push({
+        type: "max_rounds",
+        pass: false,
+        message: `max_rounds: expected ≤ ${eb.max_rounds}, got ${rounds}`,
+      });
+    }
+  }
+
+  // must_complete — the engine run must have ended with executionState=completed
+  if (eb.must_complete === true) {
+    const completed = extras.completed ?? false;
+    if (completed) {
+      results.push({ type: "must_complete", pass: true, message: "Engine run completed successfully" });
+    } else {
+      results.push({ type: "must_complete", pass: false, message: "must_complete: engine run did not complete (failed, timed out, or still running)" });
+    }
+  }
+
+  // ideal_rounds — soft metric, never fails; recorded as informational pass
+  if (eb.ideal_rounds !== undefined) {
+    const rounds = records.length;
+    results.push({
+      type: "ideal_rounds",
+      pass: true,
+      message: `ideal_rounds: actual=${rounds}, ideal=${eb.ideal_rounds} (soft metric — informational only)`,
+    });
+  }
+
+  return results;
 }
 

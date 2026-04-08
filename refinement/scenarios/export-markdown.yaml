@@ -1,0 +1,33 @@
+name: export-markdown
+description: >
+  Explore+plan scenario: add a "Export board as Markdown" feature to Railyin's board view.
+  The model explores the codebase, understands the board/task structure, and creates an
+  implementation plan with code changes. Tests real multi-file exploration on the actual
+  Railyin source tree.
+
+codebase: railyin
+
+prompt: |
+  I want to add an "Export board as Markdown" feature to Railyin's board view.
+  
+  Please explore the codebase to understand:
+  1. How the board view is structured (look at the Vue components and stores)
+  2. How tasks and their data are represented
+  3. How the RPC layer works for fetching board data
+  
+  Then implement the export feature: Add a button to the board view that exports
+  all visible tasks to a Markdown file, with task titles, descriptions, and their
+  current workflow state. Write the actual implementation code.
+
+expected_behavior:
+  max_rounds: 15
+  must_complete: true
+
+column_tools:
+  - read
+  - write
+  - search
+
+assertions:
+  - type: cost_under
+    value: 2.00

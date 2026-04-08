@@ -8,7 +8,7 @@
  * Tasks 10.1–10.4.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, cpSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
@@ -18,7 +18,9 @@ import { Database } from "bun:sqlite";
 import { handleHumanTurn } from "../src/bun/workflow/engine.ts";
 import { getDb, _resetForTests as resetDbSingleton } from "../src/bun/db/index.ts";
 import { resetConfig, loadConfig } from "../src/bun/config/index.ts";
-import type { Scenario } from "./types.ts";
+import type { ProxyMode, Scenario } from "./types.ts";
+
+const FIXTURES_DIR = join(import.meta.dir, "fixtures");
 
 // ─── Minimal DB schema (mirrors src/bun/test/helpers.ts) ─────────────────────
 
@@ -114,7 +116,7 @@ function seedTask(db: Database, gitRootPath: string, modelId: string): number {
   const { id: taskId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
   db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
   db.run(
-    "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'not_created')",
+    "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
     [taskId, gitRootPath, gitRootPath],
   );
   return taskId;
@@ -175,17 +177,52 @@ export interface EngineRunResult {
   toolResults: Array<{ tool: string; result: string }>;
   /** Final assistant text response */
   finalText: string;
+  /** Whether the run completed (stop_reason=end_turn on the last request). */
+  completed: boolean;
 }
 
-// Tasks 10.3 & 10.4: run scenario through engine, collect observable data
+/** Aggregate result across multiple runs (for local/live two-run mode). */
+export interface MultiRunResult {
+  runs: Array<EngineRunResult & { run: number; rounds: number }>;
+  avg_rounds: number;
+  min_rounds: number;
+  max_rounds: number;
+  rounds_variance: number;
+  completion_rate: number;
+  all_tool_names: string[];
+}
+
+/** Copy a fixture directory into the temp git working tree. */
+function copyFixtures(fixtureName: string, gitDir: string): void {
+  const srcDir = join(FIXTURES_DIR, fixtureName);
+  if (!existsSync(srcDir)) {
+    console.warn(`[engine-runner] fixture '${fixtureName}' not found at ${srcDir} — skipping`);
+    return;
+  }
+  cpSync(srcDir, gitDir, { recursive: true });
+}
+
+/** Determine user prompt messages for a scenario run (mode-aware). */
+function getUserMessages(scenario: Scenario, mode: ProxyMode): Array<{ content: string }> {
+  // local/live/real-codebase: prefer scenario.prompt (single real task prompt)
+  if (mode !== "mock" && scenario.prompt) {
+    return [{ content: scenario.prompt.trim() }];
+  }
+  // mock: use script user entries
+  return (scenario.script ?? []).filter((e) => e.role === "user").map((e) => ({ content: e.content ?? "" }));
+}
+
+/** Run a scenario through the engine once. Returns EngineRunResult. */
 export async function runScenarioThroughEngine(
   scenario: Scenario,
   proxyUrl: string,
   modelId: string = "anthropic/claude-3-5-sonnet-20241022",
+  mode: ProxyMode = "mock",
+  worktreePath?: string,
 ): Promise<EngineRunResult> {
-  const userMessages = (scenario.script ?? []).filter((e) => e.role === "user");
+  const userMessages = getUserMessages(scenario, mode);
   if (userMessages.length === 0) {
-    return { toolNames: [], toolResults: [], finalText: "" };
+    return { toolNames: [], toolResults: [], finalText: "", completed: false };
   }
 
   const columnTools = scenario.column_tools ?? ["read", "write", "search", "shell", "interactions", "agents"];
@@ -194,27 +231,45 @@ export async function runScenarioThroughEngine(
   process.env.RAILYN_DB = ":memory:";
 
   const configDir = mkdtempSync(join(tmpdir(), "railyn-refine-cfg-"));
-  const gitDir = mkdtempSync(join(tmpdir(), "railyn-refine-git-"));
+
+  // Use worktreePath if provided (real-codebase scenarios), otherwise create a temp git repo
+  let gitDir: string;
+  let cleanupGitDir: (() => void) | null = null;
+
+  if (worktreePath) {
+    gitDir = worktreePath;
+  } else {
+    gitDir = mkdtempSync(join(tmpdir(), "railyn-refine-git-"));
+    cleanupGitDir = () => rmSync(gitDir, { recursive: true, force: true });
+  }
 
   const cleanup = () => {
     rmSync(configDir, { recursive: true, force: true });
-    rmSync(gitDir, { recursive: true, force: true });
+    cleanupGitDir?.();
     delete process.env.RAILYN_DB;
     resetDbSingleton();
     resetConfig();
   };
 
-  execSync("git init", { cwd: gitDir });
-  execSync('git config user.email "refine@test.com"', { cwd: gitDir });
-  execSync('git config user.name "Refinement"', { cwd: gitDir });
-  writeFileSync(join(gitDir, "README.md"), "# Refinement test repo\n");
-  execSync("git add . && git commit -m init", { cwd: gitDir });
+  if (!worktreePath) {
+    execSync("git init", { cwd: gitDir });
+    execSync('git config user.email "refine@test.com"', { cwd: gitDir });
+    execSync('git config user.name "Refinement"', { cwd: gitDir });
+    writeFileSync(join(gitDir, "README.md"), "# Refinement test repo\n");
+
+    // Copy fixtures for local/live mode (task 5.4)
+    if (mode !== "mock" && scenario.fixtures) {
+      copyFixtures(scenario.fixtures, gitDir);
+    }
+
+    execSync("git add -A && git commit -m init", { cwd: gitDir });
+  }
 
   const configCleanup = setupEngineConfig(proxyUrl, modelId, configDir, columnTools);
   const db = initMinimalDb();
   const taskId = seedTask(db, gitDir, modelId);
 
-  const result: EngineRunResult = { toolNames: [], toolResults: [], finalText: "" };
+  const result: EngineRunResult = { toolNames: [], toolResults: [], finalText: "", completed: false };
   const tokens: string[] = [];
 
   try {
@@ -225,17 +280,17 @@ export async function runScenarioThroughEngine(
 
       await handleHumanTurn(
         taskId,
-        msg.content ?? "",
+        msg.content,
         (_taskId, _execId, token, done) => { if (!done) tokens.push(token); },
         (_, __, err) => { console.error(`[engine] error: ${err}`); resolveExec(); },
         (task: { executionState: string }) => {
           if (task.executionState === "completed" || task.executionState === "failed" || task.executionState === "idle" || task.executionState === "waiting_user") {
+            result.completed = task.executionState === "completed";
             resolveExec();
           }
         },
         (message) => {
-          // Collect tool names and results from conversation messages (task 10.4)
-          if (message.type === "tool_use" && message.role === "assistant") {
+          if (message.type === "tool_call") {
             result.toolNames.push((message as { content?: string }).content?.match(/"name":"([^"]+)"/)?.at(1) ?? "unknown");
           }
           if (message.type === "tool_result") {
@@ -255,4 +310,44 @@ export async function runScenarioThroughEngine(
   }
 
   return result;
+}
+
+/**
+ * Run a scenario twice (for local/live mode) and aggregate results.
+ * The proxy state (request counts) is managed externally — this just
+ * calls runScenarioThroughEngine twice with reset between runs.
+ */
+export async function runScenarioTwice(
+  scenario: Scenario,
+  proxyUrl: string,
+  modelId: string,
+  mode: ProxyMode,
+  onRun: (run: number) => void,
+): Promise<MultiRunResult> {
+  const runResults: Array<EngineRunResult & { run: number; rounds: number }> = [];
+
+  for (let i = 1; i <= 2; i++) {
+    onRun(i);
+    const r = await runScenarioThroughEngine(scenario, proxyUrl, modelId, mode);
+    // rounds = tool names length + 1 (final text response) — approximate
+    // The accurate round count is from proxy records, captured externally
+    runResults.push({ ...r, run: i, rounds: 0 /* populated by caller from proxy */ });
+  }
+
+  const completedCount = runResults.filter((r) => r.completed).length;
+  const roundCounts = runResults.map((r) => r.rounds);
+  const avgRounds = roundCounts.reduce((s, v) => s + v, 0) / runResults.length;
+  const minRounds = Math.min(...roundCounts);
+  const maxRounds = Math.max(...roundCounts);
+  const variance = roundCounts.reduce((s, v) => s + Math.pow(v - avgRounds, 2), 0) / runResults.length;
+
+  return {
+    runs: runResults,
+    avg_rounds: avgRounds,
+    min_rounds: minRounds,
+    max_rounds: maxRounds,
+    rounds_variance: Math.sqrt(variance),
+    completion_rate: completedCount / runResults.length,
+    all_tool_names: [...new Set(runResults.flatMap((r) => r.toolNames))],
+  };
 }

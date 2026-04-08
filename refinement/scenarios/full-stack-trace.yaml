@@ -1,0 +1,53 @@
+name: full-stack-trace
+description: >
+  Deep multi-system exploration scenario: trace a complete end-to-end request flow
+  from a user message arriving through the API, through the workflow engine, AI provider,
+  database, and back to the Vue frontend. Forces the model to read deeply across all
+  subsystems (handlers, engine, ai/, db/, stores, components). Designed to stress the
+  context window and exercise the compaction algorithm on real source files.
+
+codebase: railyin
+
+prompt: |
+  I want to deeply understand how a single user message gets processed end-to-end in Railyin.
+  
+  Please trace the COMPLETE flow from start to finish by reading every relevant file:
+  
+  1. **Entry point**: Where does a "send message" action originate in the Vue frontend?
+     Explore src/mainview/stores/task.ts, src/mainview/views/, and src/mainview/rpc.ts
+     to find where the user's message is dispatched.
+  
+  2. **RPC bridge**: Read src/shared/rpc-types.ts and src/bun/handlers/tasks.ts in full
+     to understand how the message crosses from frontend to backend.
+  
+  3. **Workflow engine**: Read src/bun/workflow/engine.ts in full. Explain:
+     - How `runExecution()` builds the message list
+     - How `compactMessages()` works and when it truncates history
+     - When and how `compactConversation()` is triggered (the AI-powered full compaction)
+     - How the context window estimate is calculated
+  
+  4. **AI provider layer**: Read src/bun/ai/anthropic.ts and src/bun/ai/retry.ts in full.
+     Explain how requests are sent, how streaming works, and how errors are retried.
+  
+  5. **Database layer**: Read src/bun/db/row-types.ts and src/bun/db/mappers.ts.
+     Explain how execution results and conversation messages are persisted.
+  
+  6. **Response back to UI**: Read src/mainview/stores/task.ts and src/mainview/components/MessageBubble.vue.
+     Explain how the streamed response is displayed to the user.
+  
+  After reading all files, write a detailed technical summary (at least 400 words) that:
+  - Describes each hop in the pipeline with the actual function names involved
+  - Identifies the three most complex parts of the flow
+  - Notes any potential failure points or race conditions you observed
+
+expected_behavior:
+  max_rounds: 30
+  must_complete: true
+
+column_tools:
+  - read
+  - search
+
+assertions:
+  - type: cost_under
+    value: 5.00
