@@ -91,15 +91,44 @@ export function healthCheck(modelKey: string): boolean {
 }
 
 /**
+ * Unload a specific model from a remote LM Studio instance via REST API.
+ * Uses POST /api/v1/models/unload (LM Studio 0.4+ management API).
+ */
+export async function unloadNetworkModel(backendUrl: string, modelKey: string): Promise<void> {
+  console.log(`[lmstudio] unloading remote model: ${modelKey}`);
+  try {
+    const resp = await fetch(`${backendUrl}/api/v1/models/unload`, {
+      method: "POST",
+      headers: new Headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ instance_id: modelKey }),
+    });
+    if (resp.status === 404) {
+      console.log(`[lmstudio] remote model already unloaded: ${modelKey}`);
+    } else if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      console.warn(`[lmstudio] remote unload warning (${resp.status}): ${body}`);
+    } else {
+      console.log(`[lmstudio] remote model unloaded: ${modelKey}`);
+    }
+  } catch (err) {
+    console.warn(`[lmstudio] remote unload failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Perform the full LM Studio setup for a provider before running scenarios.
- * Skips load/unload for network providers (link_device set).
+ * For network providers (link_device set), registers a teardown that unloads the model via REST.
  * Returns a teardown function.
  */
-export function setupProvider(provider: ProviderConfig): { teardown: () => void } {
+export function setupProvider(provider: ProviderConfig): { teardown: () => Promise<void> } {
   if (provider.link_device) {
-    // Network provider — model is managed on the remote device
+    // Network provider — model is managed on the remote device; unload via REST on teardown
     console.log(`[lmstudio] network provider ${provider.id} via link_device: ${provider.link_device} — skipping local lms load`);
-    return { teardown: () => {} };
+    const backendUrl = provider.backendUrl ?? `http://${provider.host ?? "localhost"}:${provider.port ?? 1234}`;
+    const modelKey = provider.model_key!;
+    return {
+      teardown: () => unloadNetworkModel(backendUrl, modelKey),
+    };
   }
 
   const modelKey = provider.model_key!;
@@ -116,7 +145,7 @@ export function setupProvider(provider: ProviderConfig): { teardown: () => void 
   console.log(`[lmstudio] model ${modelKey} is ready`);
 
   return {
-    teardown: () => {
+    teardown: async () => {
       unloadModels();
     },
   };

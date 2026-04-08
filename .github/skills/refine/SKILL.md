@@ -14,17 +14,34 @@ Read this skill in full before starting. Do not truncate.
 
 ### Input
 
-Accepts: `/refine --change <name> --mode <mock|local|live|auto>` (legacy) or `/refine --change <name> --providers <ids>`
+Accepts: `/refine --mode <mock|local|live|auto>` (legacy) or `/refine --providers <ids>`
 
-- `--change` — the OpenSpec change name (required; infer from conversation if unambiguous)
+Always operates on the **current git branch** — no change name needed.
+
 - `--mode` — testing layer (default: `mock`; legacy; prefer `--providers` when providers.yaml is configured)
   - `mock` — scripted scenarios, $0, no model needed
   - `local` — LM Studio with Qwen 3.5, $0, requires local GPU
   - `live` — real Anthropic API, ~$0.80 per before/after pair
   - `auto` — autonomous finding → apply → verify loop
 - `--providers` — comma-separated provider IDs from `config/providers.yaml` (e.g. `mock-default` or `lmstudio-qwen,anthropic-sonnet`)
-- `--scenarios` — comma-separated scenario names to run (default: all)
+- `--scenarios` — comma-separated scenario names to run (default: all). Use this to focus on a single scenario when iterating on its prompt or assertions.
 - `--max-rounds N` — (auto mode only) stop after N finding iterations (default: unlimited)
+
+**Refining a specific scenario** is the primary inner loop of the skill. When a scenario scores low in the quality assessment, focus on it alone:
+
+```bash
+# Run one scenario across all providers to isolate the problem
+bun refinement/runner.ts --providers lmstudio-qwen35-9b,lmstudio-qwen35-35b,lmstudio-gemma4-26b --scenarios new-tool
+
+# After updating the scenario YAML (prompt, assertions, must_call), re-run to verify
+bun refinement/runner.ts --providers lmstudio-qwen35-9b --scenarios new-tool
+```
+
+Scenario files live in `refinement/scenarios/<name>.yaml`. When iterating:
+- Tighten the `prompt:` when models plan but don't execute
+- Add `must_call: [write_file]` (or other tools) when the desired tool usage isn't happening
+- Lower `max_rounds` to force earlier commitment if models over-explore
+- Create a new scenario file for a narrower sub-task rather than over-complicating an existing one
 
 ### Autonomous Loop Mode (--mode auto / --providers)
 
@@ -41,6 +58,8 @@ bun refinement/runner.ts --providers lmstudio-qwen,anthropic-sonnet --scenarios 
 # Provider-based auto loop
 bun refinement/runner.ts --mode auto --providers lmstudio-qwen
 ```
+
+**Providers always run in series, never in parallel.** The runner iterates through the comma-separated list sequentially — each provider completes all its scenarios before the next one starts. This is intentional: local GPU models require exclusive VRAM access, and loading a new model evicts the previous one. Never run two provider invocations concurrently from separate terminals.
 
 **Legacy mode invocation** (fallback when no providers.yaml):
 ```bash
@@ -192,10 +211,10 @@ A confirmed finding with `behavioral_validated: true` is safe to keep. `behavior
 
 Print:
 ```
-## Refinement: <change> | mode: <mode>
+## Refinement: <branch> | mode: <mode>
 ```
 
-Check `openspec status --change <name> --json`. If tasks are not present, abort with a message.
+Detect the current branch with `git branch --show-current`. Use it as the refinement context label.
 
 #### Step 1 — Baseline measurement
 
@@ -248,7 +267,51 @@ Options:
 
 Then wait for user direction.
 
-#### Step 3 — Layer promotion
+#### Step 3 — Scenario Quality Assessment
+
+After each run (baseline, checkpoint, or behavioral gate), perform a qualitative review of **what the model actually did** and score it 0–10. This is independent of structural assertions — a scenario can be green and still score low.
+
+**What to assess:**
+
+1. **Task completion** — Does the worktree diff (or model output) match what the prompt asked for? Run `git diff` on the worktree path from the runner output to inspect actual file changes.
+2. **Code quality** — If files were written or edited: are the changes correct, idiomatic, and complete? Or did the model produce a skeleton, pseudo-code, or write to the wrong location?
+3. **Tool efficiency** — Did the model reach the goal with reasonable tool call sequences? Excessive `find_files`/`search_text`/`read_file` loops without ever writing indicate the model treats the task as exploration rather than implementation.
+
+**Scoring rubric:**
+
+| Score | Meaning |
+|-------|---------|
+| 9–10 | Task fully completed, correct implementation, efficient tool use |
+| 7–8 | Task completed, minor issues (e.g. missing edge case, one wrong file path) |
+| 5–6 | Partial completion — core logic present but significant gaps |
+| 3–4 | Token-level attempt but major structural failures (wrong files, wrong pattern) |
+| 0–2 | Model explored and gave up, or produced no actionable output |
+
+**What to do with the score:**
+
+- **≥ 7** — Scenario is a valid benchmark signal. Keep it.
+- **5–6** — Document what was missing. If it's a consistent gap across providers, tighten the prompt.
+- **< 5** — Scenario is not measuring what you intended. Choose one:
+  1. **Tighten the prompt** — be more explicit about what files to change and what the result should look like
+  2. **Add assertions** — e.g. `must_call: [write_file]` or `must_call: [edit_file]` to make the behavioral gap a hard failure
+  3. **Create a focused sub-scenario** — break a complex task into a smaller, unambiguous unit that the model can succeed at
+  4. **Research tool design** — if no prompt phrasing fixes it, the underlying tool interface may need redesign (different name, description, or parameters) to elicit the right behavior
+
+**Print a quality block after each run:**
+
+```
+### Quality Assessment — <scenario> / <provider>
+Score: 7/10
+Task completion: Model explored correctly and implemented count_lines handler but missed registration in tools index.
+Code quality: Implementation is idiomatic, correct parameter validation, matches existing patterns.
+Tool efficiency: 6 read rounds before first write — acceptable for a new file scenario.
+Gaps: Missing export in src/bun/handlers/index.ts
+Next: Add must_call: [edit_file] assertion and re-run to surface the gap explicitly.
+```
+
+**Tracking scores over time:** Record the score in the relevant scenario YAML under a `quality_notes` comment, or in the findings report if running in auto mode. A rising average score across providers signals the refinement is working.
+
+#### Step 4 — Layer promotion
 
 After all groups pass on current mode:
 
@@ -257,7 +320,7 @@ After all groups pass on current mode:
 Ready to promote to local mode?
 - Requires LM Studio with Qwen 3.5 loaded
 - Runs behavioral validation, not just structural
-Type /refine --change <name> --mode local to promote
+Type /refine --mode local to promote
 ```
 
 If `--mode local` is confirmed:

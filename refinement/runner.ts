@@ -553,7 +553,7 @@ async function runScenariosForProvider(
     : "local";
 
   // LM Studio setup
-  let teardown: (() => void) | undefined;
+  let teardown: (() => Promise<void>) | undefined;
   if (provider.type === "lmstudio") {
     const lmsAvailable = checkLmsCli();
     if (!lmsAvailable) {
@@ -592,7 +592,7 @@ async function runScenariosForProvider(
       removeWorktree(worktreePath);
     }
     if (teardown) {
-      teardown();
+      await teardown();
     }
   }
 }
