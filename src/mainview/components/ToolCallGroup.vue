@@ -154,8 +154,8 @@ const diffPayload = computed<FileDiffPayload | null>(() => {
   display: flex;
   align-items: center;
   gap: 3px;
-  background: #e0f2fe;
-  color: #0369a1;
+  background: var(--p-blue-100, #e0f2fe);
+  color: var(--p-blue-700, #0369a1);
   border-radius: 10px;
   padding: 1px 7px;
   font-size: 0.67rem;
@@ -177,13 +177,13 @@ const diffPayload = computed<FileDiffPayload | null>(() => {
 }
 
 .tcg__stat--added {
-  background: #dcfce7;
-  color: #16a34a;
+  background: var(--p-green-100, #dcfce7);
+  color: var(--p-green-700, #15803d);
 }
 
 .tcg__stat--removed {
-  background: #fee2e2;
-  color: #dc2626;
+  background: var(--p-red-100, #fee2e2);
+  color: var(--p-red-700, #b91c1c);
 }
 
 /* ── Expanded body ────────────────────────────────────────────────── */
@@ -208,5 +208,20 @@ const diffPayload = computed<FileDiffPayload | null>(() => {
   overflow-y: auto;
   color: var(--p-text-color, #1e293b);
   line-height: 1.5;
+}
+</style>
+
+<style>
+html.dark-mode .tcg__stat--added {
+  background: color-mix(in srgb, var(--p-green-500) 20%, transparent);
+  color: var(--p-green-400);
+}
+html.dark-mode .tcg__stat--removed {
+  background: color-mix(in srgb, var(--p-red-500) 20%, transparent);
+  color: var(--p-red-400);
+}
+html.dark-mode .tcg__badge {
+  background: color-mix(in srgb, var(--p-blue-500) 20%, transparent);
+  color: var(--p-blue-300);
 }
 </style>
