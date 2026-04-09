@@ -632,3 +632,120 @@ describe("executeTool / edit_file — read-before-write", () => {
     expect(r.content).toMatch(/updated successfully/i);
   });
 });
+
+// ─── multi_replace ────────────────────────────────────────────────────────────
+
+describe("executeTool / multi_replace", () => {
+  const asMultiWrite = (r: unknown) => r as { content: string; diffs: FileDiffPayload[] };
+
+  it("applies a single replacement and reports lines changed", async () => {
+    const r = asMultiWrite(await executeTool("multi_replace", JSON.stringify({
+      replacements: [{ path: "hello.ts", old_string: "x = 1", new_string: "x = 42" }],
+    }), ctx()));
+    expect(r.content).toMatch(/Applied 1\/1/);
+    expect(r.content).toContain("hello.ts");
+    expect(readFileSync(join(worktreeDir, "hello.ts"), "utf-8")).toContain("x = 42");
+    expect(r.diffs).toHaveLength(1);
+    expect(r.diffs[0].operation).toBe("edit_file");
+  });
+
+  it("applies multiple replacements to the same file sequentially", async () => {
+    writeFileSync(join(worktreeDir, "multi.ts"), "const a = 1;\nconst b = 2;\nconst c = 3;\n");
+    const r = asMultiWrite(await executeTool("multi_replace", JSON.stringify({
+      replacements: [
+        { path: "multi.ts", old_string: "a = 1", new_string: "a = 10" },
+        { path: "multi.ts", old_string: "b = 2", new_string: "b = 20" },
+        { path: "multi.ts", old_string: "c = 3", new_string: "c = 30" },
+      ],
+    }), ctx()));
+    expect(r.content).toMatch(/Applied 3\/3/);
+    const contents = readFileSync(join(worktreeDir, "multi.ts"), "utf-8");
+    expect(contents).toContain("a = 10");
+    expect(contents).toContain("b = 20");
+    expect(contents).toContain("c = 30");
+    expect(r.diffs).toHaveLength(3);
+  });
+
+  it("applies replacements across different files", async () => {
+    const r = asMultiWrite(await executeTool("multi_replace", JSON.stringify({
+      replacements: [
+        { path: "hello.ts", old_string: "x = 1", new_string: "x = 99" },
+        { path: "README.md", old_string: "Test project", new_string: "Updated project" },
+      ],
+    }), ctx()));
+    expect(r.content).toMatch(/Applied 2\/2/);
+    expect(readFileSync(join(worktreeDir, "hello.ts"), "utf-8")).toContain("x = 99");
+    expect(readFileSync(join(worktreeDir, "README.md"), "utf-8")).toContain("Updated project");
+    expect(r.diffs).toHaveLength(2);
+  });
+
+  it("reports lines_added and lines_removed per operation", async () => {
+    // Replace 1 line with 2 lines
+    writeFileSync(join(worktreeDir, "counts.ts"), "const x = 1;\n");
+    const r = asMultiWrite(await executeTool("multi_replace", JSON.stringify({
+      replacements: [{ path: "counts.ts", old_string: "const x = 1;", new_string: "const x = 1;\nconst y = 2;" }],
+    }), ctx()));
+    expect(r.content).toContain("+2/-1");
+  });
+
+  it("continues applying remaining replacements after a failed one", async () => {
+    const r = asMultiWrite(await executeTool("multi_replace", JSON.stringify({
+      replacements: [
+        { path: "hello.ts", old_string: "NOT_IN_FILE", new_string: "x" },
+        { path: "README.md", old_string: "Test project", new_string: "Changed project" },
+      ],
+    }), ctx()));
+    expect(r.content).toMatch(/Applied 1\/2/);
+    expect(r.content).toMatch(/\[0\].*ERROR/);
+    expect(r.content).toMatch(/\[1\].*README\.md/);
+    expect(readFileSync(join(worktreeDir, "README.md"), "utf-8")).toContain("Changed project");
+    expect(r.diffs).toHaveLength(1);
+  });
+
+  it("returns error string for missing replacements key", async () => {
+    const result = await executeTool("multi_replace", JSON.stringify({}), ctx()) as string;
+    expect(result).toMatch(/non-empty array/i);
+  });
+
+  it("returns error string for empty replacements array", async () => {
+    const result = await executeTool("multi_replace", JSON.stringify({ replacements: [] }), ctx()) as string;
+    expect(result).toMatch(/non-empty array/i);
+  });
+
+  it("blocks path traversal in a replacement entry", async () => {
+    const r = asMultiWrite(await executeTool("multi_replace", JSON.stringify({
+      replacements: [
+        { path: "../../evil.ts", old_string: "x", new_string: "y" },
+        { path: "README.md", old_string: "Test project", new_string: "Safe" },
+      ],
+    }), ctx()));
+    expect(r.content).toMatch(/Applied 1\/2/);
+    expect(r.content).toMatch(/\[0\].*ERROR.*path traversal/i);
+  });
+
+  it("enforces read-before-write when mtimeCache is provided", async () => {
+    const c = ctxWithCache();
+    const r = asMultiWrite(await executeTool("multi_replace", JSON.stringify({
+      replacements: [{ path: "hello.ts", old_string: "x = 1", new_string: "x = 99" }],
+    }), c));
+    // Should fail the first op since hello.ts hasn't been read
+    expect(r.content).toMatch(/Applied 0\/1/);
+    expect(r.content).toMatch(/must read|before editing/i);
+  });
+
+  it("allows edit after reading when mtimeCache is provided", async () => {
+    const c = ctxWithCache();
+    await executeTool("read_file", JSON.stringify({ path: "hello.ts" }), c);
+    const r = asMultiWrite(await executeTool("multi_replace", JSON.stringify({
+      replacements: [{ path: "hello.ts", old_string: "x = 1", new_string: "x = 99" }],
+    }), c));
+    expect(r.content).toMatch(/Applied 1\/1/);
+    expect(readFileSync(join(worktreeDir, "hello.ts"), "utf-8")).toContain("x = 99");
+  });
+
+  it("is included in the write group", () => {
+    const result = resolveToolsForColumn(["write"]);
+    const names = result.map((t) => t.name);
+    expect(names).toContain("multi_replace");
+  });
+});

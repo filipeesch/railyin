@@ -4,7 +4,7 @@ export type ProxyMode = "mock" | "local" | "live" | "auto";
 
 // ─── Provider types ───────────────────────────────────────────────────────────
 
-export type ProviderType = "mock" | "lmstudio" | "anthropic";
+export type ProviderType = "mock" | "lmstudio" | "anthropic" | "openai";
 
 /** Pricing rates per million tokens. */
 export interface ProviderPricing {

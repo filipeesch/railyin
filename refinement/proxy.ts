@@ -221,6 +221,8 @@ export function parseSseResponse(accumulated: string): ResponseCapture {
           acc.json = (acc.json ?? "") + ((delta.partial_json as string) ?? "");
         } else if (delta.type === "thinking_delta") {
           acc.thinking = (acc.thinking ?? "") + ((delta.thinking as string) ?? "");
+        } else {
+          console.log(`[proxy:delta] unknown delta type: ${delta.type} — data: ${JSON.stringify(delta).slice(0, 200)}`);
         }
       } else if (event.type === "content_block_stop") {
         const idx = (event.data.index as number) ?? 0;
@@ -233,14 +235,29 @@ export function parseSseResponse(accumulated: string): ResponseCapture {
           try { if (acc.json) input = JSON.parse(acc.json); } catch { /* keep empty */ }
           content_blocks.push({ type: "tool_use", id: acc.id ?? "", name: acc.name ?? "", input });
         } else if (acc.type === "thinking") {
-          content_blocks.push({ type: "thinking", thinking: acc.thinking ?? "" });
+          const thinkingText = acc.thinking ?? "";
+          content_blocks.push({ type: "thinking", thinking: thinkingText });
+          if (thinkingText) {
+            const preview = thinkingText.length > 500 ? thinkingText.slice(0, 500) + " …" : thinkingText;
+            console.log(`[thinking] block ${idx} (${thinkingText.length} chars):\n${preview}`);
+          } else {
+            console.log(`[thinking] block ${idx} — empty thinking text (acc: ${JSON.stringify(acc).slice(0, 200)})`);
+          }
+        } else {
+          console.log(`[proxy:block] unknown block type: ${acc.type} — acc: ${JSON.stringify(acc).slice(0, 200)}`);
         }
       } else if (event.type === "message_delta") {
         const delta = (event.data.delta ?? {}) as Record<string, unknown>;
         stop_reason = (delta.stop_reason as string) ?? stop_reason;
         const usage = (event.data.usage ?? {}) as Record<string, unknown>;
         output_tokens = (usage.output_tokens as number) ?? 0;
+      } else if (![ "message_start", "message_stop", "ping", "content_block_start", "content_block_delta", "content_block_stop", "message_delta" ].includes(event.type)) {
+        console.log(`[proxy:event] unknown event type: ${event.type} — data: ${JSON.stringify(event.data).slice(0, 200)}`);
       }
+    }
+
+    if (output_tokens > 0 && content_blocks.length === 0) {
+      console.log(`[proxy:empty] ${output_tokens} output tokens but 0 content blocks — stop_reason: ${stop_reason}, accumulators: ${JSON.stringify(blockAccumulators).slice(0, 400)}`);
     }
 
     return { stop_reason, content_blocks, usage: { output_tokens, input_tokens, cache_creation_input_tokens, cache_read_input_tokens }, model };
@@ -294,6 +311,387 @@ interface AnthropicRequestBody {
   messages?: unknown[];
   max_tokens?: number;
   stream?: boolean;
+}
+
+// ─── OpenAI-compat translation ────────────────────────────────────────────────
+
+/** Strip cache_control fields recursively (not supported by OpenAI). */
+function stripCacheControl(v: unknown): unknown {
+  if (!v || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.map(stripCacheControl);
+  const out: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (k !== "cache_control") out[k] = stripCacheControl(val);
+  }
+  return out;
+}
+
+function contentToText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return (content as Array<Record<string, unknown>>)
+      .filter((b) => b.type === "text")
+      .map((b) => b.text as string ?? "")
+      .join("");
+  }
+  return "";
+}
+
+interface OAIMessage {
+  role: string;
+  content: string | null;
+  tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
+  tool_call_id?: string;
+}
+
+function anthropicMessagesToOpenAI(body: AnthropicRequestBody): { messages: OAIMessage[]; tools: unknown[] } {
+  const messages: OAIMessage[] = [];
+
+  // System prompt
+  const systemText = contentToText(body.system);
+  if (systemText) messages.push({ role: "system", content: systemText });
+
+  for (const rawMsg of body.messages ?? []) {
+    const msg = rawMsg as Record<string, unknown>;
+    const role = msg.role as string;
+    const content = msg.content;
+
+    if (role === "user") {
+      if (Array.isArray(content)) {
+        const toolResults = (content as Array<Record<string, unknown>>).filter((b) => b.type === "tool_result");
+        const textBlocks = (content as Array<Record<string, unknown>>).filter((b) => b.type === "text");
+        for (const tr of toolResults) {
+          messages.push({
+            role: "tool",
+            content: typeof tr.content === "string" ? tr.content : contentToText(tr.content),
+            tool_call_id: tr.tool_use_id as string,
+          });
+        }
+        const text = textBlocks.map((b) => b.text as string ?? "").join("");
+        if (text) messages.push({ role: "user", content: text });
+      } else {
+        messages.push({ role: "user", content: contentToText(content) });
+      }
+    } else if (role === "assistant") {
+      if (Array.isArray(content)) {
+        const textBlocks = (content as Array<Record<string, unknown>>).filter((b) => b.type === "text");
+        const toolUse = (content as Array<Record<string, unknown>>).filter((b) => b.type === "tool_use");
+        const text = textBlocks.map((b) => b.text as string ?? "").join("") || null;
+        const tool_calls = toolUse.map((b) => ({
+          id: b.id as string,
+          type: "function" as const,
+          function: { name: b.name as string, arguments: JSON.stringify(b.input ?? {}) },
+        }));
+        messages.push({ role: "assistant", content: text, tool_calls: tool_calls.length > 0 ? tool_calls : undefined });
+      } else {
+        messages.push({ role: "assistant", content: contentToText(content) });
+      }
+    }
+  }
+
+  const tools = (body.tools ?? []).map((t) => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: (t as Record<string, unknown>).description,
+      parameters: (t as Record<string, unknown>).input_schema ?? {},
+    },
+  }));
+
+  return { messages, tools };
+}
+
+function oaiSseEvent(type: string, data: Record<string, unknown>): Uint8Array {
+  const line = `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+  return new TextEncoder().encode(line);
+}
+
+/** Translate OpenAI streaming response into Anthropic SSE and pipe to writer.
+ *  Returns the ResponseCapture equivalent for logging. */
+async function translateOpenAIStream(
+  oaiBody: ReadableStream<Uint8Array>,
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  msgId: string,
+  model: string,
+): Promise<{ responseCapture: ResponseCapture; first_byte_at: number; last_byte_at: number }> {
+  const decoder = new TextDecoder();
+  const contentBlocks: ContentBlock[] = [];
+
+  // Block state
+  let thinkingIdx = -1;
+  let textIdx = -1;
+  // OpenAI tool_calls index → Anthropic block index
+  const toolCallIdxMap = new Map<number, { anthropicIdx: number; id: string; name: string; args: string }>();
+  let nextBlockIdx = 0;
+
+  let stopReason = "end_turn";
+  let outputTokens = 0;
+  let inputTokens = 0;
+  let first_byte_at = 0;
+  let buffer = "";
+
+  // Emit message_start
+  writer.write(oaiSseEvent("message_start", {
+    message: {
+      id: msgId, type: "message", role: "assistant", content: [],
+      model, stop_reason: null, stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  }));
+  writer.write(oaiSseEvent("ping", {}));
+
+  const reader = oaiBody.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (first_byte_at === 0) first_byte_at = Date.now();
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data: ")) continue;
+        const jsonStr = trimmed.slice(6);
+        if (jsonStr === "[DONE]") continue;
+        let chunk: Record<string, unknown>;
+        try { chunk = JSON.parse(jsonStr); } catch { continue; }
+
+        const choice = (chunk.choices as Array<Record<string, unknown>>)?.[0];
+        const delta = (choice?.delta ?? {}) as Record<string, unknown>;
+        const finishReason = choice?.finish_reason as string | null;
+        const usage = chunk.usage as Record<string, unknown> | undefined;
+
+        // reasoning_content → thinking block
+        if (delta.reasoning_content) {
+          if (thinkingIdx === -1) {
+            thinkingIdx = nextBlockIdx++;
+            writer.write(oaiSseEvent("content_block_start", {
+              index: thinkingIdx, content_block: { type: "thinking", thinking: "" },
+            }));
+          }
+          writer.write(oaiSseEvent("content_block_delta", {
+            index: thinkingIdx, delta: { type: "thinking_delta", thinking: delta.reasoning_content },
+          }));
+        }
+
+        // content → text block
+        if (delta.content) {
+          // Close thinking block if open (reasoning ended, text starting)
+          if (thinkingIdx !== -1 && textIdx === -1) {
+            writer.write(oaiSseEvent("content_block_stop", { index: thinkingIdx }));
+          }
+          if (textIdx === -1) {
+            textIdx = nextBlockIdx++;
+            writer.write(oaiSseEvent("content_block_start", {
+              index: textIdx, content_block: { type: "text", text: "" },
+            }));
+          }
+          writer.write(oaiSseEvent("content_block_delta", {
+            index: textIdx, delta: { type: "text_delta", text: delta.content },
+          }));
+        }
+
+        // tool_calls → tool_use blocks
+        if (delta.tool_calls) {
+          // Close thinking if open
+          if (thinkingIdx !== -1 && textIdx === -1 && toolCallIdxMap.size === 0) {
+            writer.write(oaiSseEvent("content_block_stop", { index: thinkingIdx }));
+          }
+          // Close text if open
+          if (textIdx !== -1) {
+            writer.write(oaiSseEvent("content_block_stop", { index: textIdx }));
+          }
+          for (const tc of delta.tool_calls as Array<Record<string, unknown>>) {
+            const oaiIdx = tc.index as number;
+            const fn = (tc.function ?? {}) as Record<string, unknown>;
+            if (!toolCallIdxMap.has(oaiIdx)) {
+              const aIdx = nextBlockIdx++;
+              const id = (tc.id as string) ?? `toolu_${oaiIdx}`;
+              const name = (fn.name as string) ?? "";
+              toolCallIdxMap.set(oaiIdx, { anthropicIdx: aIdx, id, name, args: "" });
+              writer.write(oaiSseEvent("content_block_start", {
+                index: aIdx, content_block: { type: "tool_use", id, name, input: {} },
+              }));
+            }
+            if (fn.arguments) {
+              const entry = toolCallIdxMap.get(oaiIdx)!;
+              entry.args += fn.arguments as string;
+              writer.write(oaiSseEvent("content_block_delta", {
+                index: entry.anthropicIdx, delta: { type: "input_json_delta", partial_json: fn.arguments },
+              }));
+            }
+          }
+        }
+
+        if (finishReason) {
+          stopReason = finishReason === "tool_calls" ? "tool_use" : "end_turn";
+        }
+        if (usage) {
+          inputTokens = (usage.prompt_tokens as number) ?? 0;
+          outputTokens = (usage.completion_tokens as number) ?? 0;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const last_byte_at = Date.now();
+
+  // Close all open blocks
+  if (thinkingIdx !== -1 && textIdx === -1 && toolCallIdxMap.size === 0) {
+    writer.write(oaiSseEvent("content_block_stop", { index: thinkingIdx }));
+  }
+  if (textIdx !== -1) {
+    writer.write(oaiSseEvent("content_block_stop", { index: textIdx }));
+  }
+  for (const [, entry] of toolCallIdxMap) {
+    writer.write(oaiSseEvent("content_block_stop", { index: entry.anthropicIdx }));
+  }
+
+  writer.write(oaiSseEvent("message_delta", {
+    delta: { stop_reason: stopReason, stop_sequence: null },
+    usage: { output_tokens: outputTokens },
+  }));
+  writer.write(oaiSseEvent("message_stop", {}));
+  writer.close().catch(() => {});
+
+  // Build content blocks array for capture
+  if (thinkingIdx !== -1) contentBlocks.push({ type: "thinking", thinking: "[streamed]" });
+  if (textIdx !== -1) contentBlocks.push({ type: "text", text: "[streamed]" });
+  for (const [, entry] of toolCallIdxMap) {
+    let input: unknown = {};
+    try { if (entry.args) input = JSON.parse(entry.args); } catch { /* keep empty */ }
+    contentBlocks.push({ type: "tool_use", id: entry.id, name: entry.name, input });
+  }
+
+  const responseCapture: ResponseCapture = {
+    stop_reason: stopReason,
+    content_blocks: contentBlocks,
+    usage: { output_tokens: outputTokens, input_tokens: inputTokens },
+    model,
+  };
+
+  return { responseCapture, first_byte_at: first_byte_at || last_byte_at, last_byte_at };
+}
+
+async function handleOpenAICompatRequest(
+  _req: Request,
+  provider: ProviderConfig,
+  body: AnthropicRequestBody,
+  record: InspectionRecord,
+  state: ProxyState,
+  reqId: number,
+  request_received_at: number,
+): Promise<Response> {
+  const backendUrl = provider.backendUrl ?? "";
+  const { messages, tools } = anthropicMessagesToOpenAI(body);
+  const strippedMessages = stripCacheControl(messages) as OAIMessage[];
+
+  // Use model_key (e.g. "qwen/qwen3.5-35b-a3b") as the actual backend model ID.
+  // body.model is the qualified engine model (e.g. "openai-qwen35-35b/qwen3.5-35b-a3b").
+  const backendModel = provider.model_key ?? (body.model?.includes("/") ? body.model.split("/").slice(1).join("/") : body.model) ?? "default";
+
+  // Cap max_tokens so input + output fits within context_length (if configured).
+  let maxTokens = body.max_tokens ?? 8192;
+  if (provider.context_length) {
+    // Rough token count: sum of message string lengths / 4
+    const inputEst = JSON.stringify(strippedMessages).length >> 2;
+    const available = provider.context_length - inputEst - 256; // 256 safety margin
+    if (available < maxTokens) maxTokens = Math.max(512, available);
+  }
+
+  const oaiBody: Record<string, unknown> = {
+    model: backendModel,
+    messages: strippedMessages,
+    tools: tools.length > 0 ? tools : undefined,
+    max_tokens: maxTokens,
+    stream: true,
+  };
+  // Pass context length override to LM Studio (overrides loaded model context window).
+  if (provider.context_length) oaiBody.num_ctx = provider.context_length;
+
+  const oaiBodyStr = JSON.stringify(oaiBody);
+  const oaiBodyBytes = new TextEncoder().encode(oaiBodyStr);
+
+  const headers = new Headers({
+    "content-type": "application/json",
+    "content-length": oaiBodyBytes.length.toString(),
+    "accept-encoding": "identity",
+  });
+  if (provider.api_key) headers.set("authorization", `Bearer ${provider.api_key}`);
+
+  const backendResp = await fetch(`${backendUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers,
+    body: oaiBodyBytes,
+  });
+
+  if (!backendResp.ok || !backendResp.body) {
+    const errText = await backendResp.text().catch(() => "no body");
+    console.error(`[proxy:openai] backend error ${backendResp.status}: ${errText.slice(0, 200)}`);
+    return new Response(errText, { status: backendResp.status, headers: { "Content-Type": "application/json" } });
+  }
+
+  const msgId = `msg_oai_${reqId}`;
+  const model = body.model ?? "unknown";
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+
+  (async () => {
+    const { responseCapture, first_byte_at, last_byte_at } = await translateOpenAIStream(
+      backendResp.body!, writer, msgId, model,
+    );
+
+    const timing: RequestTiming = {
+      request_received_at,
+      first_byte_at,
+      last_byte_at,
+      ttfb_ms: first_byte_at - request_received_at,
+      duration_ms: last_byte_at - request_received_at,
+    };
+
+    // Patch record cost with actual output tokens
+    if (responseCapture.usage.output_tokens > 0) {
+      const rates = provider.pricing ?? PRICING;
+      record.cost.output_tokens = responseCapture.usage.output_tokens;
+      record.cost.output_cost = (responseCapture.usage.output_tokens / 1_000_000) * rates.output;
+      record.cost.total_cost = record.cost.input_cost + record.cost.cache_write_cost +
+        record.cost.cache_read_cost + record.cost.output_cost;
+    }
+    if (responseCapture.usage.input_tokens) {
+      const rates = provider.pricing ?? PRICING;
+      record.cost.messages_tokens = responseCapture.usage.input_tokens;
+      record.cost.input_cost = (responseCapture.usage.input_tokens / 1_000_000) * rates.input;
+    }
+
+    record.response = responseCapture;
+    record.timing = timing;
+    state.rawExchanges.push({ request_id: reqId, body, response: responseCapture });
+
+    // Log thinking summary
+    const thinkingBlock = responseCapture.content_blocks.find((b) => b.type === "thinking");
+    if (thinkingBlock) {
+      console.log(`[openai:thinking] block present — ${responseCapture.content_blocks.length} total blocks`);
+    }
+    if (responseCapture.usage.output_tokens > 0 && responseCapture.content_blocks.length === 0) {
+      console.log(`[proxy:empty] ${responseCapture.usage.output_tokens} output tokens but 0 content blocks (openai mode)`);
+    }
+  })().catch((e) => {
+    console.error("[proxy:openai] stream translation error:", e);
+    writer.close().catch(() => {});
+  });
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
 }
 
 async function handleRequest(
@@ -399,6 +797,11 @@ async function handleRequest(
         "Connection": "keep-alive",
       },
     });
+  }
+
+  // ── OpenAI-compat mode: translate Anthropic → OpenAI → Anthropic ──
+  if (provider.type === "openai") {
+    return handleOpenAICompatRequest(req, provider, body, record, state, reqId, request_received_at);
   }
 
   // ── Local / live mode: forward to backend ──

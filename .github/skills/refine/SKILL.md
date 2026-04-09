@@ -106,6 +106,15 @@ This saves the original file to `backups/F001/` and sets `status: "applied"` in 
 
 **3b. Apply the code change** — edit the source file per `change.description`.
 
+If you discover a bug while applying or evaluating a finding, fix it properly:
+
+1. Identify the root cause — not the symptom.
+2. Edit the source file with a correct, complete fix.
+3. Run the relevant tests to confirm the fix holds.
+4. Only then continue to the next finding.
+
+No workarounds. No `// TODO`. No deferring to a future finding. No masking the symptom. A bug that is found must be fixed, not remediated.
+
 **3c. Evaluate:**
 ```bash
 bun refinement/runner.ts --mode auto --phase evaluate \

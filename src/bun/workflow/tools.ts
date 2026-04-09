@@ -237,7 +237,41 @@ function editDiff(
 }
 
 /** Successful write result type — distinguishes from plain error strings. */
-export type WriteResult = { content: string; diff: FileDiffPayload };
+export type WriteResult = { content: string; diff?: FileDiffPayload; diffs?: FileDiffPayload[] };
+
+type ReplacementResult = { ok: true; diff: FileDiffPayload } | { ok: false; error: string };
+
+/** Apply a single old_string → new_string replacement to a file. Used by both edit_file and multi_replace. */
+function applyOneReplacement(
+  abs: string,
+  relPath: string,
+  oldString: string,
+  newString: string,
+  mtimeCache: Map<string, number> | undefined,
+): ReplacementResult {
+  if (!existsSync(abs)) return { ok: false, error: `file not found: ${relPath}` };
+  const stat = statSync(abs);
+  if (!stat.isFile()) return { ok: false, error: `${relPath} is not a file` };
+  if (mtimeCache) {
+    const cached = mtimeCache.get(abs);
+    if (cached !== undefined && cached !== stat.mtimeMs) return { ok: false, error: `${relPath} has been modified since you last read it` };
+  }
+  const content = readFileSync(abs, "utf-8");
+  if (oldString === "") return { ok: false, error: "old_string is empty — provide text to replace or use write_file" };
+  const occurrences = content.split(oldString).length - 1;
+  if (occurrences === 0) return { ok: false, error: `old_string not found in ${relPath}` };
+  if (occurrences > 1) return { ok: false, error: `old_string found ${occurrences} times in ${relPath} — use a longer, unique string` };
+  const fileLines = content.split("\n");
+  const newContent = content.replace(oldString, newString);
+  writeFileSync(abs, newContent, "utf-8");
+  if (mtimeCache) {
+    const newStat = statSync(abs);
+    mtimeCache.set(abs, newStat.mtimeMs);
+  }
+  const anchorLineIdx = fileLines.findIndex((_, i) => fileLines.slice(i).join("\n").startsWith(oldString));
+  const diff = editDiff(relPath, fileLines, anchorLineIdx >= 0 ? anchorLineIdx : null, oldString, newString);
+  return { ok: true, diff };
+}
 
 
 export const TOOL_DEFINITIONS: AIToolDefinition[] = [
@@ -367,7 +401,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       "- Include enough surrounding context in old_string to make the match unique\n" +
       "- Set old_string to empty string to create a new file\n" +
       "- NEVER re-read the file after a successful edit to verify the change — a success response confirms the edit was applied\n" +
-      "- NEVER use this if old_string matches multiple locations unless replace_all is set",
+      "- NEVER use this if old_string matches multiple locations unless replace_all is set\n" +
+      "- When making multiple independent edits, use multi_replace instead to apply them all in a single call",
     parameters: {
       type: "object",
       properties: {
@@ -389,6 +424,44 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         },
       },
       required: ["path", "old_string", "new_string"],
+    },
+  },
+  {
+    name: "multi_replace",
+    description:
+      "Apply multiple string replacements across one or more files in a single call.\n\n" +
+      "Usage:\n" +
+      "- ALWAYS read all files first to get exact text for each old_string\n" +
+      "- **NEVER re-read files after a replace operation** — the response reports lines changed per operation\n" +
+      "- Replacements are applied sequentially — later ones see the result of earlier ones\n" +
+      "- Use instead of multiple edit_file calls when making independent edits",
+    parameters: {
+      type: "object",
+      properties: {
+        replacements: {
+          type: "array",
+          description: "List of replacements to apply in order.",
+          items: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+                description: "Relative path from worktree root.",
+              },
+              old_string: {
+                type: "string",
+                description: "Exact string to replace (must appear exactly once).",
+              },
+              new_string: {
+                type: "string",
+                description: "Replacement string.",
+              },
+            },
+            required: ["path", "old_string", "new_string"],
+          },
+        },
+      },
+      required: ["replacements"],
     },
   },
   // ── search group ───────────────────────────────────────────────────────────
@@ -866,7 +939,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
  * tool names, or a mix. Groups are expanded by resolveToolsForColumn. */
 export const TOOL_GROUPS: Map<string, string[]> = new Map([
   ["read", ["read_file"]],
-  ["write", ["write_file", "edit_file"]],
+  ["write", ["write_file", /* "edit_file", */ "multi_replace"]],
   ["search", ["search_text", "find_files"]],
   ["shell", ["run_command"]],
   ["interactions", ["ask_me"]],
@@ -888,6 +961,7 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   // write
   ["write_file", "write_file(path, content): create a new file or fully overwrite an existing one. Parent directories are created automatically. Use edit_file instead for targeted edits to existing files."],
   ["edit_file", "edit_file(path, old_string, new_string, replace_all?): targeted edit — replace exact text in a file. Must read the file first to get exact text. Fails if old_string doesn't match exactly once (unless replace_all). Set old_string='' to create a new file."],
+  ["multi_replace", "multi_replace(replacements): apply multiple {path, old_string, new_string} replacements in a single call, applied sequentially. Returns lines changed per operation. Prefer over repeated edit_file calls."],
   // search
   ["search_text", "search_text(pattern, glob?, context_lines?, output_mode?, limit?, offset?): search project files with ripgrep. output_mode: 'content' (matching lines), 'files_with_matches' (file paths only), 'count' (match counts). Use limit/offset for pagination. Respects .gitignore."],
   ["find_files", "find_files(glob): find files matching a glob pattern, sorted by most recently modified. Respects .gitignore. Use to discover file structure before reading."],
@@ -1262,10 +1336,7 @@ export async function executeTool(
         // Read-before-write enforcement
         if (ctx.mtimeCache) {
           const cached = ctx.mtimeCache.get(abs);
-          if (cached === undefined) {
-            return `Error: you must read ${args.path} before editing it.`;
-          }
-          if (cached !== stat.mtimeMs) {
+          if (cached !== undefined && cached !== stat.mtimeMs) {
             return `Error: ${args.path} has been modified since you last read it. Read it again before editing.`;
           }
         }
@@ -1315,6 +1386,44 @@ export async function executeTool(
       } catch (e) {
         return `Error editing file: ${e instanceof Error ? e.message : String(e)}`;
       }
+    }
+
+    case "multi_replace": {
+      const rawReplacements = (args as unknown as { replacements?: unknown }).replacements;
+      if (!Array.isArray(rawReplacements) || rawReplacements.length === 0)
+        return "Error: replacements must be a non-empty array.";
+
+      type RepInput = { path?: string; old_string?: string; new_string?: string };
+      const reps = rawReplacements as RepInput[];
+
+      const results: Array<{ index: number; path: string; lines_removed?: number; lines_added?: number; error?: string }> = [];
+      const diffs: FileDiffPayload[] = [];
+
+      for (let i = 0; i < reps.length; i++) {
+        const rep = reps[i];
+        const relPath = rep.path ?? "";
+        const abs = safePath(ctx.worktreePath, relPath);
+        if (!abs) {
+          results.push({ index: i, path: relPath, error: "path traversal detected" });
+          continue;
+        }
+        const r = applyOneReplacement(abs, relPath, rep.old_string ?? "", rep.new_string ?? "", ctx.mtimeCache);
+        if (!r.ok) {
+          results.push({ index: i, path: relPath, error: r.error });
+        } else {
+          results.push({ index: i, path: relPath, lines_removed: r.diff.removed, lines_added: r.diff.added });
+          diffs.push(r.diff);
+        }
+      }
+
+      const successCount = results.filter(r => !r.error).length;
+      const summary = results.map(r =>
+        r.error
+          ? `[${r.index}] ${r.path}: ERROR — ${r.error}`
+          : `[${r.index}] ${r.path}: +${r.lines_added}/-${r.lines_removed} lines`
+      ).join("\n");
+      const content = `Applied ${successCount}/${results.length} replacements:\n${summary}`;
+      return { content, diffs } as WriteResult;
     }
 
     // ── search group ───────────────────────────────────────────────────────────

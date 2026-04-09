@@ -23,7 +23,7 @@ const CONFIG_PATH = join(import.meta.dir, "..", "config", "providers.yaml");
 function resolveBackendUrl(provider: ProviderConfig): string {
   if (provider.type === "mock") return "";
   if (provider.type === "anthropic") return "https://api.anthropic.com";
-  // lmstudio
+  // openai or lmstudio
   const host = provider.host ?? "localhost";
   const port = provider.port ?? 1234;
   return `http://${host}:${port}`;
@@ -34,8 +34,8 @@ function validateProvider(p: Record<string, unknown>, filePath: string): Provide
     throw new Error(`${filePath}: provider missing required field 'id'`);
   }
   const type = p["type"];
-  if (type !== "mock" && type !== "lmstudio" && type !== "anthropic") {
-    throw new Error(`${filePath}: provider '${p["id"]}' has invalid type '${type}'. Must be mock, lmstudio, or anthropic.`);
+  if (type !== "mock" && type !== "lmstudio" && type !== "anthropic" && type !== "openai") {
+    throw new Error(`${filePath}: provider '${p["id"]}' has invalid type '${type}'. Must be mock, lmstudio, openai, or anthropic.`);
   }
   if (type === "lmstudio" && !p["model_key"]) {
     throw new Error(`${filePath}: lmstudio provider '${p["id"]}' requires 'model_key'`);
@@ -131,6 +131,13 @@ export function selectProviders(
  * Uses provider.model if set, otherwise synthesizes from type and model_key.
  */
 export function getModelId(provider: ProviderConfig): string {
+  if (provider.type === "openai") {
+    // For openai type, derive a qualified model ID using the provider id as prefix
+    // so the engine's resolveProvider can parse it. The actual model sent to the
+    // backend is resolved separately (model_key or model stripped of prefix).
+    const key = provider.model_key ?? provider.model ?? "model";
+    return `${provider.id}/${key}`;
+  }
   if (provider.model) return provider.model;
   if (provider.type === "lmstudio" && provider.model_key) {
     return `lmstudio/${provider.model_key}`;

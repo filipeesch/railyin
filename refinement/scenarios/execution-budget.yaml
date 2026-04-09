@@ -1,0 +1,82 @@
+name: execution-budget
+description: >
+  Multi-spawn explore+implement scenario: add a per-task execution cost budget
+  to Railyin. When a running execution exceeds max_cost_usd, it is stopped
+  cleanly after the current round. The feature spans four subsystems that can
+  be explored in parallel: DB schema, engine cost tracking, RPC types, and
+  handler. After exploration, the model must write all four file changes.
+  Tests parallel sub-agent exploration followed by coordinated multi-file
+  implementation on the real Railyin codebase.
+
+codebase: railyin
+
+prompt: |
+  Add a per-task execution cost budget to Railyin.
+
+  Each task should support an optional `max_cost_usd` field (REAL, nullable).
+  When an execution's accumulated cost estimate exceeds this value, the engine
+  stops the execution cleanly after the current round completes (do not kill
+  it mid-stream — check after each round's cost is added).
+
+  Use spawn_agent to explore the four subsystems in parallel first:
+
+  Sub-agent 1 — DB schema:
+    Read src/bun/db/migrations.ts in full. Find how ALTER TABLE migrations are
+    added for the tasks table (e.g. the shell_auto_approve column). Understand
+    the migration version numbering pattern.
+
+  Sub-agent 2 — Engine cost tracking:
+    Read src/bun/workflow/engine.ts and find: (a) where totalCostEst is
+    declared and accumulated per round, (b) where the round loop condition is
+    checked between rounds, (c) where the execution is marked 'completed' vs
+    other terminal states. Return the relevant line numbers and code snippets.
+
+  Sub-agent 3 — RPC types:
+    Read src/shared/rpc-types.ts. Find the Task type definition and the
+    tasks.update RPC handler. Understand how new fields are added to both the
+    Task type and the RPC params. Return the relevant sections.
+
+  Sub-agent 4 — Tasks handler:
+    Read src/bun/handlers/tasks.ts. Find where tasks.update is handled and
+    how it updates the DB. Understand the pattern for adding a new optional
+    numeric field to task updates.
+
+  Once you have the results from all four sub-agents, implement the feature
+  across these files:
+
+  1. src/bun/db/migrations.ts — add a new migration step:
+       ALTER TABLE tasks ADD COLUMN max_cost_usd REAL;
+
+  2. src/shared/rpc-types.ts — add max_cost_usd?: number | null to the Task
+     type, and add it as an optional param to tasks.update.
+
+  3. src/bun/handlers/tasks.ts — update the tasks.update handler to persist
+     max_cost_usd when provided (use the existing pattern for optional fields).
+
+  4. src/bun/workflow/engine.ts — after each round's cost is added to
+     totalCostEst, check if the task's max_cost_usd is set and exceeded;
+     if so, log a warning and break out of the round loop with a
+     "budget_exceeded" stop reason. The DB query to fetch max_cost_usd
+     should use getDb() and the taskId already in scope.
+
+  Read every file fully before editing it. Do not stop after the first edit —
+  all four changes must be written before you finish.
+
+expected_behavior:
+  max_rounds: 28
+  must_complete: true
+  must_call:
+    - spawn_agent
+    - read_file
+    - edit_file
+
+column_tools:
+  - read
+  - write
+  - search
+  - agents
+  - todos
+
+assertions:
+  - type: cost_under
+    value: 5.00

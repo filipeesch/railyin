@@ -210,7 +210,12 @@ export function compactMessages(messages: ConversationMessageRow[], opts?: { qui
     const m = toProcess[i];
 
     if (m.type === "user" || m.type === "assistant") {
-      result.push({ role: m.role as "user" | "assistant", content: m.content });
+      // role='prompt' is a slash-command injection — skip it entirely.
+      // Anthropic's adaptMessages() was already silently dropping these (only
+      // pushes role=user|assistant). OpenAI-compat rejects role='prompt' with 400.
+      if (m.role !== "prompt") {
+        result.push({ role: m.role as "user" | "assistant", content: m.content });
+      }
       i++;
       continue;
     }
@@ -1746,10 +1751,11 @@ async function runExecution(
           }
         }
 
-        // Write tools return { content, diff }; read/search tools return a plain string
+        // Write tools return { content, diff } or { content, diffs }; read/search tools return a plain string
         const isWriteResult = typeof result === "object" && result !== null && "content" in result;
         const llmContent = isWriteResult ? (result as WriteResult).content : result as string;
         const diff = isWriteResult ? (result as WriteResult).diff : undefined;
+        const diffs = isWriteResult ? (result as WriteResult).diffs : undefined;
 
         const toolLimit = TOOL_RESULT_LIMITS.get(fnName) ?? TOOL_RESULT_MAX_CHARS;
         const storedResult = llmContent.length > toolLimit
@@ -1772,8 +1778,9 @@ async function runExecution(
         });
 
         // Emit UI-only file_diff message (never forwarded to LLM)
-        if (diff) {
-          const diffContent = JSON.stringify(diff);
+        const diffsToEmit = diffs ?? (diff ? [diff] : []);
+        for (const d of diffsToEmit) {
+          const diffContent = JSON.stringify(d);
           const diffId = appendMessage(
             taskId,
             task.conversation_id ?? 0,

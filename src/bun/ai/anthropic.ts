@@ -367,6 +367,10 @@ export class AnthropicProvider implements AIProvider {
    *  `context_edit_strategy` body param on every request. */
   readonly contextEditEnabled: boolean;
 
+  /** Resolved to true when the model's capabilities endpoint confirms effort support. */
+  private supportsEffort = false;
+  private capabilitiesReady: Promise<void> | undefined;
+
   constructor(
     apiKey: string,
     model: string,
@@ -383,6 +387,27 @@ export class AnthropicProvider implements AIProvider {
     this.enableThinking = enableThinking;
     this.defaultEffort = defaultEffort;
     this.contextEditEnabled = contextEditEnabled;
+  }
+
+  private getCapabilities(): Promise<void> {
+    if (!this.capabilitiesReady) this.capabilitiesReady = this.fetchCapabilities();
+    return this.capabilitiesReady;
+  }
+
+  private async fetchCapabilities(): Promise<void> {
+    try {
+      const response = await fetch(`${this.baseUrl}/v1/models/${encodeURIComponent(this.model)}`, {
+        headers: {
+          "x-api-key": this.apiKey,
+          "anthropic-version": ANTHROPIC_VERSION,
+        },
+      });
+      if (!response.ok) return;
+      const data = await response.json() as { capabilities?: { effort?: { supported?: boolean } } };
+      this.supportsEffort = data.capabilities?.effort?.supported === true;
+    } catch {
+      // Network error or mock server without /v1/models/ route: stay false (safe default).
+    }
   }
 
   /**
@@ -443,7 +468,8 @@ export class AnthropicProvider implements AIProvider {
     if (adaptedTools) body.tools = adaptedTools;
     if (this.enableThinking) body.thinking = { type: "adaptive" };
     const turnEffort = options.effort ?? this.defaultEffort;
-    if (turnEffort) body.output_config = { effort: turnEffort };
+    await this.getCapabilities();
+    if (turnEffort && this.supportsEffort) body.output_config = { effort: turnEffort };
 
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
@@ -549,7 +575,8 @@ export class AnthropicProvider implements AIProvider {
     if (adaptedTools) body.tools = adaptedTools;
     if (this.enableThinking) body.thinking = { type: "adaptive" };
     const streamEffort = options.effort ?? this.defaultEffort;
-    if (streamEffort) body.output_config = { effort: streamEffort };
+    await this.getCapabilities();
+    if (streamEffort && this.supportsEffort) body.output_config = { effort: streamEffort };
 
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",

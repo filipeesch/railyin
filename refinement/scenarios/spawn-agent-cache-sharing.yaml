@@ -10,7 +10,8 @@ prompt: >
   CSS variables, then add dark mode CSS variables. Use parallel sub-agents.
 fixtures: basic-typescript
 expected_behavior:
-  must_call: [spawn_agent]
+  must_call:
+    - spawn_agent
   must_complete: true
   max_rounds: 12
   ideal_rounds: 5

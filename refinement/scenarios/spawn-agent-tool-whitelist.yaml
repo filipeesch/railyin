@@ -9,7 +9,8 @@ description: >
 prompt: "Update the README with the latest API details."
 fixtures: basic-typescript
 expected_behavior:
-  must_call: [spawn_agent]
+  must_call:
+    - spawn_agent
   must_complete: true
   max_rounds: 8
   ideal_rounds: 3

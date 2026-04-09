@@ -9,7 +9,8 @@ prompt: >
   then read each one and summarize their purpose.
 fixtures: multi-module
 expected_behavior:
-  must_call: [spawn_agent]
+  must_call:
+    - spawn_agent
   must_complete: true
   max_rounds: 10
   ideal_rounds: 4

@@ -25,7 +25,7 @@ expected_behavior:
   max_rounds: 12
   must_complete: true
   must_call:
-    - edit_file
+    - multi_replace
 
 column_tools:
   - read

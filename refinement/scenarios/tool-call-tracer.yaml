@@ -1,0 +1,70 @@
+name: tool-call-tracer
+description: >
+  Deep multi-system implementation scenario: add per-execution tool call tracing
+  to Railyin. Every tool invocation during an execution is recorded in a new
+  `tool_call_logs` DB table (execution_id, round, tool_name, args_summary,
+  result_size, duration_ms). A new RPC handler exposes the log so the UI can
+  show a tool timeline. Forces exploration across DB migrations, the workflow
+  engine's executeTool call site, RPC types, and bun handlers — then four
+  coordinated file edits across separate subsystems.
+
+codebase: railyin
+
+prompt: |
+  Add a tool-call tracer to Railyin's execution system.
+
+  Every time a tool is invoked during a task execution, record an entry in a new
+  `tool_call_logs` table with these columns:
+    - id (INTEGER PRIMARY KEY)
+    - execution_id (INTEGER, foreign key to executions)
+    - round (INTEGER — which LLM round triggered this call)
+    - tool_name (TEXT)
+    - args_summary (TEXT — first 200 chars of the raw JSON args string)
+    - result_size (INTEGER — byte length of the result string)
+    - duration_ms (INTEGER — wall-clock ms the tool took to run)
+    - created_at (TEXT, default datetime('now'))
+
+  First, use search_text and read_file to understand the codebase:
+  1. Find where DB tables are created and migrations are applied
+     — search for "CREATE TABLE" in src/bun/db/ and read migrations.ts in full
+  2. Find where executeTool is called in src/bun/workflow/engine.ts
+     — read the surrounding context (how round number is tracked, how execution_id
+     is available in scope, how results flow back into the message list)
+  3. Understand the RPC handler pattern — read src/shared/rpc-types.ts (the bun:
+     section) and one existing handler file in src/bun/handlers/ to see how a
+     new typed RPC call is defined end-to-end
+  4. Find where the execution record is created in src/bun/db/ or engine.ts
+     to confirm what execution_id is available at tool-call time
+
+  Then implement the feature across four files:
+  1. src/bun/db/migrations.ts — add the CREATE TABLE for tool_call_logs as a
+     new migration step (look at how existing migrations are structured)
+  2. src/bun/workflow/engine.ts — wrap BOTH executeTool call sites with a timer
+     (Date.now() before/after), then insert into tool_call_logs using getDb()
+     after each call; use the round counter already present in scope
+  3. src/shared/rpc-types.ts — add a new RPC function type
+     `getToolCallLogs(executionId: number): ToolCallLogRow[]` to the bun: schema,
+     and define the ToolCallLogRow type near the other row types
+  4. src/bun/handlers/tasks.ts (or the most appropriate handler file) — implement
+     the getToolCallLogs handler that queries the DB and returns the rows sorted
+     by round ASC, id ASC
+
+  Do not stop after exploring. You must write all four file changes before finishing.
+  Each edit should be a targeted edit_file call — read any file fully before editing it.
+
+expected_behavior:
+  max_rounds: 22
+  must_complete: true
+  must_call:
+    - search_text
+    - read_file
+    - edit_file
+
+column_tools:
+  - read
+  - write
+  - search
+
+assertions:
+  - type: cost_under
+    value: 4.00

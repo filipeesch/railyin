@@ -27,6 +27,8 @@ prompt: |
 expected_behavior:
   max_rounds: 15
   must_complete: true
+  must_call:
+    - edit_file
 
 column_tools:
   - read

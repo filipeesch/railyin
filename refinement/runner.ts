@@ -548,7 +548,7 @@ async function runScenariosForProvider(
   const runsPerScenario = config.runs_per_scenario ?? (isMock ? 1 : 2);
   const mode: "mock" | "local" | "live" = isMock
     ? "mock"
-    : provider.type === "anthropic"
+    : provider.type === "anthropic" || provider.type === "openai"
     ? "live"
     : "local";
 

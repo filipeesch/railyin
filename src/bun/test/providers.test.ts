@@ -972,6 +972,7 @@ describe("AnthropicProvider — thinking body field", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
@@ -986,6 +987,7 @@ describe("AnthropicProvider — thinking body field", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
@@ -1021,6 +1023,9 @@ describe("AnthropicProvider — effort config", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.url.includes("/v1/models/")) {
+          return Response.json({ capabilities: { effort: { supported: true } } });
+        }
         capturedBody = await req.json() as Record<string, unknown>;
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
@@ -1036,6 +1041,9 @@ describe("AnthropicProvider — effort config", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.url.includes("/v1/models/")) {
+          return Response.json({ capabilities: { effort: { supported: true } } });
+        }
         capturedBody = await req.json() as Record<string, unknown>;
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
@@ -1050,6 +1058,7 @@ describe("AnthropicProvider — effort config", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
@@ -1085,6 +1094,7 @@ describe("AnthropicProvider — automatic conversation caching", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
@@ -1099,6 +1109,7 @@ describe("AnthropicProvider — automatic conversation caching", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
@@ -1113,6 +1124,7 @@ describe("AnthropicProvider — automatic conversation caching", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         return Response.json({
           id: "msg_1", type: "message", role: "assistant",
@@ -1130,6 +1142,7 @@ describe("AnthropicProvider — automatic conversation caching", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         return Response.json({
           id: "msg_1", type: "message", role: "assistant",
@@ -1160,6 +1173,7 @@ describe("AnthropicProvider — max-tokens escalation (4.5)", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         const body = await req.json() as Record<string, unknown>;
         callCount++;
         capturedMaxTokens.push(body.max_tokens as number);
@@ -1199,7 +1213,8 @@ describe("AnthropicProvider — max-tokens escalation (4.5)", () => {
 
     server = Bun.serve({
       port: 0,
-      async fetch() {
+      async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         callCount++;
         return Response.json({
           id: "msg_1", type: "message", role: "assistant",
@@ -1221,7 +1236,8 @@ describe("AnthropicProvider — max-tokens escalation (4.5)", () => {
 
     server = Bun.serve({
       port: 0,
-      async fetch() {
+      async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         callCount++;
         return Response.json({
           id: "msg_1", type: "message", role: "assistant",
@@ -1271,6 +1287,7 @@ describe("AnthropicProvider — context edit strategy (5.4)", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         capturedHeaders = Object.fromEntries(req.headers.entries());
         return simpleTurnResponse();
@@ -1286,6 +1303,7 @@ describe("AnthropicProvider — context edit strategy (5.4)", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         capturedHeaders = Object.fromEntries(req.headers.entries());
         return simpleTurnResponse();
@@ -1302,6 +1320,7 @@ describe("AnthropicProvider — context edit strategy (5.4)", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         capturedHeaders = Object.fromEntries(req.headers.entries());
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
@@ -1317,6 +1336,7 @@ describe("AnthropicProvider — context edit strategy (5.4)", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
+        if (req.method === "GET") return new Response(null, { status: 404 });
         capturedBody = await req.json() as Record<string, unknown>;
         capturedHeaders = Object.fromEntries(req.headers.entries());
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });

@@ -6,7 +6,9 @@ description: >
 prompt: "Change the greeting in src/main.ts from 'Hello' to 'Hi'."
 fixtures: basic-typescript
 expected_behavior:
-  must_call: [read_file, edit_file]
+  must_call:
+    - read_file
+    - edit_file
   must_complete: true
   max_rounds: 6
   ideal_rounds: 3
