@@ -46,8 +46,8 @@ watch(() => props.refreshTrigger, fetchTodos);
 
 <style scoped>
 .todo-panel {
-  border-top: 1px solid var(--p-surface-200, #e5e7eb);
-  background: var(--p-surface-50, #f9fafb);
+  border-top: 1px solid var(--p-content-border-color);
+  background: var(--p-content-background);
 }
 
 .todo-panel__header {
@@ -65,7 +65,7 @@ watch(() => props.refreshTrigger, fetchTodos);
 }
 
 .todo-panel__header:hover {
-  background: var(--p-surface-100, #f3f4f6);
+  background: var(--p-content-hover-background);
 }
 
 .todo-panel__toggle {
