@@ -95,6 +95,7 @@ function stateIcon(state: HunkDecision | "pending"): string {
   font-weight: 500;
 }
 
+
 .review-file-list__icon {
   font-size: 0.85rem;
   flex-shrink: 0;
@@ -116,5 +117,11 @@ function stateIcon(state: HunkDecision | "pending"): string {
   text-overflow: ellipsis;
   max-width: 80px;
   text-align: right;
+}
+</style>
+
+<style>
+html.dark-mode .review-file-list__item.active {
+  background: color-mix(in srgb, var(--p-primary-color) 20%, transparent);
 }
 </style>

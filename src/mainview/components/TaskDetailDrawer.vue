@@ -1194,3 +1194,21 @@ watch(
   margin-top: 10px;
 }
 </style>
+
+<style>
+html.dark-mode .drawer-header__changed-badge {
+  background: color-mix(in srgb, var(--p-primary-color) 20%, transparent);
+  border-color: color-mix(in srgb, var(--p-primary-color) 40%, transparent);
+  color: var(--p-primary-300, #a5b4fc);
+}
+
+html.dark-mode .drawer-header__changed-badge:hover {
+  background: color-mix(in srgb, var(--p-primary-color) 30%, transparent);
+}
+
+html.dark-mode .dialog-warning {
+  color: var(--p-orange-400);
+  background: color-mix(in srgb, var(--p-orange-500) 15%, transparent);
+  border-color: color-mix(in srgb, var(--p-orange-500) 35%, transparent);
+}
+</style>

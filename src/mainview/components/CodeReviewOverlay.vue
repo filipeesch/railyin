@@ -876,9 +876,7 @@ function guessLanguage(path: string | null): string {
 .review-overlay__mode-badge--review {
   background: var(--p-blue-100, #dbeafe);
   color: var(--p-blue-700, #1d4ed8);
-}
-
-.review-overlay__filter {
+}.review-overlay__filter {
   min-width: 130px;
 }
 
@@ -976,6 +974,13 @@ function guessLanguage(path: string | null): string {
   padding: 10px 16px;
   border-top: 1px solid var(--p-surface-200, #e2e8f0);
   background: var(--p-surface-50, #f8fafc);
+}
+</style>
+
+<style>
+html.dark-mode .review-overlay__mode-badge--review {
+  background: color-mix(in srgb, var(--p-blue-500) 20%, transparent);
+  color: var(--p-blue-300);
 }
 </style>
 
