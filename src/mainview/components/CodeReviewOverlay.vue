@@ -78,6 +78,7 @@
             :modified="displayModified"
             :language="guessLanguage(reviewStore.selectedFile)"
             :side-by-side="sideBySide"
+            :theme="isDark ? 'vs-dark' : 'vs'"
             @hunks-ready="onHunksReady"
           />
         </div>
@@ -108,6 +109,7 @@ import Select from "primevue/select";
 import { useReviewStore } from "../stores/review";
 import { useTaskStore } from "../stores/task";
 import { electroview } from "../rpc";
+import { useDarkMode } from "../composables/useDarkMode";
 import ReviewFileList from "./ReviewFileList.vue";
 import MonacoDiffEditor from "./MonacoDiffEditor.vue";
 import HunkActionBar from "./HunkActionBar.vue";
@@ -116,6 +118,7 @@ import type { ILineChange } from "./MonacoDiffEditor.vue";
 
 const reviewStore = useReviewStore();
 const taskStore = useTaskStore();
+const { isDark } = useDarkMode();
 
 // ——— State ———————————————————————————————————————————————————————————————
 
@@ -841,7 +844,7 @@ function guessLanguage(path: string | null): string {
   position: fixed;
   inset: 0;
   z-index: 1200;
-  background: var(--p-surface-0, #fff);
+  background: var(--p-content-background, #fff);
   display: flex;
   flex-direction: column;
 }
@@ -851,8 +854,8 @@ function guessLanguage(path: string | null): string {
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
-  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
-  background: var(--p-surface-50, #f8fafc);
+  border-bottom: 1px solid var(--p-content-border-color, #e2e8f0);
+  background: var(--p-content-background, #f8fafc);
 }
 
 .review-overlay__title {
@@ -865,7 +868,7 @@ function guessLanguage(path: string | null): string {
   font-weight: 500;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-hover-background, #e2e8f0);
   color: var(--p-text-muted-color, #64748b);
   margin-right: auto;
 }
@@ -873,9 +876,7 @@ function guessLanguage(path: string | null): string {
 .review-overlay__mode-badge--review {
   background: var(--p-blue-100, #dbeafe);
   color: var(--p-blue-700, #1d4ed8);
-}
-
-.review-overlay__filter {
+}.review-overlay__filter {
   min-width: 130px;
 }
 
@@ -939,8 +940,8 @@ function guessLanguage(path: string | null): string {
   align-items: center;
   padding: 3px 10px;
   border-radius: 6px;
-  border: 1px solid var(--p-surface-300, #cbd5e1);
-  background: var(--p-surface-0, #fff);
+  border: 1px solid var(--p-content-border-color, #cbd5e1);
+  background: var(--p-content-background, #fff);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -949,7 +950,7 @@ function guessLanguage(path: string | null): string {
 }
 
 .nav-btn:hover:not(:disabled) {
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background, #f1f5f9);
 }
 
 .nav-btn:disabled {
@@ -971,8 +972,15 @@ function guessLanguage(path: string | null): string {
   justify-content: flex-end;
   gap: 10px;
   padding: 10px 16px;
-  border-top: 1px solid var(--p-surface-200, #e2e8f0);
-  background: var(--p-surface-50, #f8fafc);
+  border-top: 1px solid var(--p-content-border-color, #e2e8f0);
+  background: var(--p-content-background, #f8fafc);
+}
+</style>
+
+<style>
+html.dark-mode .review-overlay__mode-badge--review {
+  background: color-mix(in srgb, var(--p-blue-500) 20%, transparent);
+  color: var(--p-blue-300);
 }
 </style>
 

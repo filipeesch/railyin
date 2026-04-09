@@ -20,10 +20,12 @@ const props = withDefaults(
     modified: string;
     language?: string;
     sideBySide?: boolean;
+    theme?: string;
   }>(),
   {
     language: "plaintext",
     sideBySide: false,
+    theme: "vs",
   },
 );
 
@@ -56,7 +58,7 @@ async function initEditor() {
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
     automaticLayout: true,
-    theme: "vs",
+    theme: props.theme,
   });
 
   applyModels();
@@ -98,6 +100,13 @@ watch(
   () => props.sideBySide,
   (val) => {
     if (editor) editor.updateOptions({ renderSideBySide: val });
+  },
+);
+
+watch(
+  () => props.theme,
+  (val) => {
+    if (monacoInstance) monacoInstance.editor.setTheme(val ?? "vs");
   },
 );
 

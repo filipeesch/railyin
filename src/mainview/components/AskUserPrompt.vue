@@ -370,3 +370,25 @@ function submit() {
   color: var(--p-primary-color, #6366f1);
 }
 </style>
+
+<style>
+html.dark-mode .ask-prompt {
+  background: var(--p-surface-800, #1e293b);
+  border-color: color-mix(in srgb, var(--p-primary-color) 40%, transparent);
+}
+html.dark-mode .ask-prompt__answered-text {
+  border-left-color: var(--p-surface-700, #334155);
+  background: var(--p-surface-900, #0f172a);
+}
+html.dark-mode .ask-prompt__question {
+  color: var(--p-surface-100, #f1f5f9);
+}
+html.dark-mode .ask-prompt__option {
+  color: var(--p-surface-200, #e2e8f0);
+}
+html.dark-mode .ask-prompt__other-input {
+  background: var(--p-surface-900, #0f172a);
+  border-color: var(--p-surface-600, #475569);
+  color: var(--p-surface-100, #f1f5f9);
+}
+</style>

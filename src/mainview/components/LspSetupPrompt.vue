@@ -305,3 +305,10 @@ async function addToConfig(lang: LspDetectedLanguage) {
   margin-top: 8px;
 }
 </style>
+
+<style>
+html.dark-mode .lsp-lang-card {
+  background: var(--p-surface-800, #1e293b);
+  border-color: var(--p-surface-700, #334155);
+}
+</style>
