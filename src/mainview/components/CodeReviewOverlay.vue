@@ -78,6 +78,7 @@
             :modified="displayModified"
             :language="guessLanguage(reviewStore.selectedFile)"
             :side-by-side="sideBySide"
+            :theme="isDark ? 'vs-dark' : 'vs'"
             @hunks-ready="onHunksReady"
           />
         </div>
@@ -108,6 +109,7 @@ import Select from "primevue/select";
 import { useReviewStore } from "../stores/review";
 import { useTaskStore } from "../stores/task";
 import { electroview } from "../rpc";
+import { useDarkMode } from "../composables/useDarkMode";
 import ReviewFileList from "./ReviewFileList.vue";
 import MonacoDiffEditor from "./MonacoDiffEditor.vue";
 import HunkActionBar from "./HunkActionBar.vue";
@@ -116,6 +118,7 @@ import type { ILineChange } from "./MonacoDiffEditor.vue";
 
 const reviewStore = useReviewStore();
 const taskStore = useTaskStore();
+const { isDark } = useDarkMode();
 
 // ——— State ———————————————————————————————————————————————————————————————
 
