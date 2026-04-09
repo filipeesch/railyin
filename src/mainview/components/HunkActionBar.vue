@@ -310,9 +310,13 @@ function onInput() {
   font-style: italic;
 }
 
-/* ─── Dark mode ─────────────────────────────────────────────────────────── */
 
-:global(html.dark-mode) .hunk-bar {
+</style>
+
+<!-- Dark mode rules in a non-scoped block so they apply to elements mounted
+     via createApp() into Monaco ViewZones (which live outside the main app tree). -->
+<style>
+html.dark-mode .hunk-bar {
   background: #1e293b;
   border-top-color: #334155;
 }
@@ -322,111 +326,111 @@ function onInput() {
   100% { background: #1e293b; }
 }
 
-:global(html.dark-mode) .hunk-bar--highlight {
+html.dark-mode .hunk-bar--highlight {
   animation: zone-highlight-dark 0.6s ease-out;
 }
 
-:global(html.dark-mode) .hunk-btn {
+html.dark-mode .hunk-btn {
   background: #1e293b;
   border-color: #475569;
   color: #cbd5e1;
 }
 
-:global(html.dark-mode) .hunk-btn:hover {
+html.dark-mode .hunk-btn:hover {
   background: #334155;
 }
 
-:global(html.dark-mode) .hunk-btn--accept {
+html.dark-mode .hunk-btn--accept {
   background: #14532d;
   border-color: #166534;
   color: #86efac;
 }
 
-:global(html.dark-mode) .hunk-btn--accept:hover {
+html.dark-mode .hunk-btn--accept:hover {
   background: #166534;
   border-color: #15803d;
 }
 
-:global(html.dark-mode) .hunk-btn--accept.hunk-btn--active {
+html.dark-mode .hunk-btn--accept.hunk-btn--active {
   background: #15803d;
   border-color: #16a34a;
   color: #fff;
 }
 
-:global(html.dark-mode) .hunk-btn--reject {
+html.dark-mode .hunk-btn--reject {
   background: #450a0a;
   border-color: #7f1d1d;
   color: #fca5a5;
 }
 
-:global(html.dark-mode) .hunk-btn--reject:hover {
+html.dark-mode .hunk-btn--reject:hover {
   background: #7f1d1d;
   border-color: #991b1b;
 }
 
-:global(html.dark-mode) .hunk-btn--reject.hunk-btn--active {
+html.dark-mode .hunk-btn--reject.hunk-btn--active {
   background: #dc2626;
   border-color: #b91c1c;
   color: #fff;
 }
 
-:global(html.dark-mode) .hunk-btn--cr.hunk-btn--active {
+html.dark-mode .hunk-btn--cr.hunk-btn--active {
   background: #431407;
   border-color: #c2410c;
   color: #fdba74;
 }
 
-:global(html.dark-mode) .hunk-btn--save {
+html.dark-mode .hunk-btn--save {
   background: #2563eb;
   border-color: #1d4ed8;
   color: #fff;
 }
 
-:global(html.dark-mode) .hunk-btn--save:hover {
+html.dark-mode .hunk-btn--save:hover {
   background: #1d4ed8;
   border-color: #1e40af;
 }
 
-:global(html.dark-mode) .hunk-bar__textarea {
+html.dark-mode .hunk-bar__textarea {
   background: #0f172a;
   border-color: #475569;
   color: #e2e8f0;
 }
 
-:global(html.dark-mode) .hunk-bar__textarea:focus {
+html.dark-mode .hunk-bar__textarea:focus {
   border-color: #3b82f6;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
 }
 
-:global(html.dark-mode) .hunk-bar__textarea--error {
+html.dark-mode .hunk-bar__textarea--error {
   border-color: #ef4444;
 }
 
-:global(html.dark-mode) .hunk-bar__error-msg {
+html.dark-mode .hunk-bar__error-msg {
   color: #f87171;
 }
 
-:global(html.dark-mode) .decision-badge--pending {
+html.dark-mode .decision-badge--pending {
   background: #334155;
   color: #94a3b8;
 }
 
-:global(html.dark-mode) .decision-badge--accepted {
+html.dark-mode .decision-badge--accepted {
   background: #14532d;
   color: #86efac;
 }
 
-:global(html.dark-mode) .decision-badge--rejected {
+html.dark-mode .decision-badge--rejected {
   background: #450a0a;
   color: #fca5a5;
 }
 
-:global(html.dark-mode) .decision-badge--change_request {
+html.dark-mode .decision-badge--change_request {
   background: #431407;
   color: #fdba74;
 }
 
-:global(html.dark-mode) .hunk-bar__comment-text {
+html.dark-mode .hunk-bar__comment-text {
   color: #94a3b8;
 }
 </style>
