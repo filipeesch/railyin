@@ -278,3 +278,24 @@ onBeforeUnmount(() => {
   gap: 0.4rem;
 }
 </style>
+
+<style>
+html.dark-mode .workflow-editor-overlay {
+  background: var(--p-surface-900, #0f172a);
+}
+html.dark-mode .workflow-editor-overlay__header {
+  background: var(--p-surface-800, #1e293b);
+  border-bottom-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .workflow-editor-overlay__note {
+  background: var(--p-surface-800, #1e293b);
+  border-bottom-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .workflow-editor-overlay__footer {
+  border-top-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .workflow-editor-overlay__save-error {
+  border-top-color: var(--p-surface-700, #334155);
+  background: color-mix(in srgb, var(--p-red-500) 15%, transparent);
+}
+</style>

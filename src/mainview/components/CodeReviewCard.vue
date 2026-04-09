@@ -179,4 +179,16 @@ html.dark-mode .hunk--change_request {
 html.dark-mode .hunk--accepted {
   background: color-mix(in srgb, var(--p-green-500) 15%, transparent);
 }
+html.dark-mode .code-review-card__header {
+  background: var(--p-surface-800, #1e293b);
+}
+html.dark-mode .code-review-card__header:hover {
+  background: var(--p-surface-700, #334155);
+}
+html.dark-mode .badge--pending {
+  background: var(--p-surface-700, #334155);
+}
+html.dark-mode .hunk--pending {
+  background: var(--p-surface-800, #1e293b);
+}
 </style>

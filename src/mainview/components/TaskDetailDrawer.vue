@@ -1201,4 +1201,16 @@ html.dark-mode .dialog-warning {
   background: color-mix(in srgb, var(--p-orange-500) 15%, transparent);
   border-color: color-mix(in srgb, var(--p-orange-500) 35%, transparent);
 }
+html.dark-mode .launch-bar {
+  border-bottom-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .task-detail__side {
+  border-left-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .task-detail__input {
+  border-top-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .context-gauge {
+  background: var(--p-surface-700, #334155);
+}
 </style>
