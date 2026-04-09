@@ -95,8 +95,8 @@ const execSeverity = computed(() => {
 
 <style scoped>
 .task-card {
-  background: var(--p-surface-0, #fff);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-background);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 8px;
   padding: 12px;
   cursor: default;
@@ -143,9 +143,9 @@ const execSeverity = computed(() => {
 .task-card__changed-badge {
   font-size: 0.72rem;
   font-weight: 600;
-  color: var(--p-primary-color, #6366f1);
-  background: var(--p-primary-50, #eef2ff);
-  border: 1px solid var(--p-primary-200, #c7d2fe);
+  color: var(--p-primary-color);
+  background: var(--p-highlight-background);
+  border: 1px solid color-mix(in srgb, var(--p-primary-color) 30%, transparent);
   border-radius: 10px;
   padding: 1px 7px;
   cursor: pointer;
@@ -154,7 +154,7 @@ const execSeverity = computed(() => {
 }
 
 .task-card__changed-badge:hover {
-  background: var(--p-primary-100, #e0e7ff);
+  background: var(--p-highlight-focus-background);
 }
 
 

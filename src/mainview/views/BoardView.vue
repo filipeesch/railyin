@@ -330,8 +330,8 @@ async function onTaskCreated() {
   align-items: center;
   justify-content: space-between;
   padding: 12px 20px;
-  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
-  background: var(--p-surface-0, #fff);
+  border-bottom: 1px solid var(--p-content-border-color);
+  background: var(--p-content-background);
   gap: 12px;
   flex-shrink: 0;
 }
@@ -361,7 +361,7 @@ async function onTaskCreated() {
   flex: 0 0 260px;
   display: flex;
   flex-direction: column;
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background);
   border-radius: 10px;
   padding: 12px;
   max-height: 100%;
