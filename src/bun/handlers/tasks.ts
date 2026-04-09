@@ -13,7 +13,7 @@ import {
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
 import type { ProjectRow } from "../db/row-types.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
-import type { Orchestrator } from "../engine/orchestrator.ts";
+import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
@@ -32,7 +32,7 @@ function fetchTaskWithDetail(db: ReturnType<typeof getDb>, taskId: number): Task
   return row ? mapTask(row) : null;
 }
 
-export function taskHandlers(orchestrator: Orchestrator | null, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) {
+export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) {
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
       const db = getDb();

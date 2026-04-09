@@ -1,23 +1,74 @@
-/**
- * Copilot session lifecycle management (Task 7.3).
- *
- * Manages a singleton CopilotClient (one per process) and creates per-execution
- * CopilotSessions via the @github/copilot-sdk.
- */
+export interface CopilotSdkSessionConfig {
+  sessionId?: string;
+  model?: string;
+  tools?: unknown[];
+  systemMessage?: { mode: "append"; content: string };
+  onPermissionRequest?: (request: unknown, invocation: unknown) => unknown;
+  workingDirectory: string;
+}
 
-import { CopilotClient } from "@github/copilot-sdk";
-import type { CopilotSession, SessionConfig, ResumeSessionConfig } from "@github/copilot-sdk";
+export type CopilotSdkResumeSessionConfig = Omit<CopilotSdkSessionConfig, "sessionId">;
 
-export type { CopilotSession };
+export type CopilotSdkEvent =
+  | { type: "assistant.message_delta"; data: { deltaContent: string } }
+  | { type: "assistant.message"; data: { content?: string } }
+  | { type: "assistant.reasoning_delta"; data: { deltaContent: string } }
+  | { type: "assistant.reasoning"; data: { content?: string } }
+  | { type: "session.ask_user"; data: { payload: string } }
+  | { type: "tool.execution_start"; data: { toolCallId: string; toolName: string; arguments?: unknown } }
+  | { type: "tool.execution_complete"; data: { toolCallId: string; success: boolean; result?: { content?: string } } }
+  | { type: "assistant.usage"; data: { inputTokens?: number; outputTokens?: number } }
+  | { type: "session.task_complete" }
+  | { type: "session.idle" }
+  | { type: "session.error"; data: { message: string } }
+  | { type: string; data?: unknown };
+
+export interface CopilotSdkModelInfo {
+  id: string;
+  name?: string;
+  capabilities: {
+    limits: { max_context_window_tokens: number };
+    supports: { reasoningEffort?: boolean };
+  };
+}
+
+export interface CopilotSdkSession {
+  send(input: { prompt: string }): Promise<unknown>;
+  on(listener: (event: CopilotSdkEvent) => void): () => void;
+  abort(): Promise<void>;
+  disconnect(): Promise<void>;
+}
+
+export interface CopilotSdkAdapter {
+  createSession(config: CopilotSdkSessionConfig & { sessionId: string }): Promise<CopilotSdkSession>;
+  resumeSession(sessionId: string, config: CopilotSdkResumeSessionConfig): Promise<CopilotSdkSession>;
+  abortSession(session: CopilotSdkSession): Promise<void>;
+  disconnectSession(session: CopilotSdkSession): Promise<void>;
+  listModels(): Promise<CopilotSdkModelInfo[]>;
+}
+
+type LoadedCopilotClient = {
+  start(): Promise<void>;
+  listModels(): Promise<unknown[]>;
+  createSession(config: CopilotSdkSessionConfig & { sessionId: string }): Promise<LoadedCopilotSession>;
+  resumeSession(sessionId: string, config: CopilotSdkResumeSessionConfig): Promise<LoadedCopilotSession>;
+};
+
+type LoadedCopilotSession = {
+  send(input: { prompt: string }): Promise<unknown>;
+  on(listener: (event: unknown) => void): () => void;
+  abort(): Promise<void>;
+  disconnect(): Promise<void>;
+};
 
 // Singleton client — lazily initialised, shared across all executions.
-let _client: CopilotClient | undefined;
+let _clientPromise: Promise<LoadedCopilotClient> | undefined;
 
-export function getClient(): CopilotClient {
-  if (!_client) {
-    _client = new CopilotClient({ autoStart: true });
+async function getClient(): Promise<LoadedCopilotClient> {
+  if (!_clientPromise) {
+    _clientPromise = import("@github/copilot-sdk").then((mod) => new mod.CopilotClient({ autoStart: true }) as LoadedCopilotClient);
   }
-  return _client;
+  return _clientPromise;
 }
 
 /**
@@ -32,41 +83,54 @@ export function copilotSessionIdForTask(taskId: number): string {
   return `railyin-task-${taskId}`;
 }
 
-/**
- * Create a new Copilot session for the given execution.
- * The caller is responsible for calling disconnectCopilotSession when done.
- */
-export async function createCopilotSession(config: SessionConfig): Promise<CopilotSession> {
-  const client = getClient();
-  return client.createSession(config);
+class DefaultCopilotSdkSession implements CopilotSdkSession {
+  constructor(private readonly session: LoadedCopilotSession) { }
+
+  send(input: { prompt: string }): Promise<unknown> {
+    return this.session.send(input);
+  }
+
+  on(listener: (event: CopilotSdkEvent) => void): () => void {
+    return this.session.on((event: unknown) => listener(event as CopilotSdkEvent));
+  }
+
+  abort(): Promise<void> {
+    return this.session.abort();
+  }
+
+  disconnect(): Promise<void> {
+    return this.session.disconnect();
+  }
 }
 
-/**
- * Resume an existing Copilot session by ID.
- * The session's context (history, infinite-session state) is restored from disk.
- * The caller is responsible for calling disconnectCopilotSession when done.
- */
-export async function resumeCopilotSession(
-  sessionId: string,
-  config: ResumeSessionConfig,
-): Promise<CopilotSession> {
-  const client = getClient();
-  return client.resumeSession(sessionId, config);
+class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
+  async createSession(config: CopilotSdkSessionConfig & { sessionId: string }): Promise<CopilotSdkSession> {
+    const client = await getClient();
+    const session = await client.createSession(config);
+    return new DefaultCopilotSdkSession(session);
+  }
+
+  async resumeSession(sessionId: string, config: CopilotSdkResumeSessionConfig): Promise<CopilotSdkSession> {
+    const client = await getClient();
+    const session = await client.resumeSession(sessionId, config);
+    return new DefaultCopilotSdkSession(session);
+  }
+
+  abortSession(session: CopilotSdkSession): Promise<void> {
+    return session.abort();
+  }
+
+  disconnectSession(session: CopilotSdkSession): Promise<void> {
+    return session.disconnect();
+  }
+
+  async listModels(): Promise<CopilotSdkModelInfo[]> {
+    const client = await getClient();
+    await client.start();
+    return (await client.listModels()) as CopilotSdkModelInfo[];
+  }
 }
 
-/**
- * Abort the currently processing message in this session.
- * Call this before disconnect() on user-initiated cancellation so the model
- * stops cleanly and the session state remains consistent for future resumption.
- */
-export async function abortCopilotSession(session: CopilotSession): Promise<void> {
-  await session.abort();
-}
-
-/**
- * Disconnect a Copilot session and release its resources.
- * Session data on disk is preserved — the session can be resumed later.
- */
-export async function disconnectCopilotSession(session: CopilotSession): Promise<void> {
-  await session.disconnect();
+export function createDefaultCopilotSdkAdapter(): CopilotSdkAdapter {
+  return new DefaultCopilotSdkAdapter();
 }

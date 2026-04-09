@@ -10,7 +10,7 @@
  *   session.error            → { type: "error", fatal: true }
  */
 
-import type { CopilotSession, SessionEvent } from "@github/copilot-sdk";
+import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
 import type { EngineEvent } from "../types.ts";
 
 /**
@@ -21,7 +21,7 @@ import type { EngineEvent } from "../types.ts";
  * before or immediately after this generator is iterated.
  */
 export async function* translateCopilotStream(
-  session: CopilotSession,
+  session: CopilotSdkSession,
   signal?: AbortSignal,
   sendPromise?: Promise<unknown>,
 ): AsyncGenerator<EngineEvent> {
@@ -67,11 +67,12 @@ export async function* translateCopilotStream(
     wake();
   });
 
-  const unsubscribe: () => void = session.on((event: SessionEvent) => {
+  const unsubscribe: () => void = session.on((event: CopilotSdkEvent) => {
     if (event.type === "assistant.message_delta") receivedTokenDelta = true;
     if (event.type === "assistant.reasoning_delta") receivedReasoningDelta = true;
     if (event.type === "tool.execution_start") {
-      toolNameByCallId.set(event.data.toolCallId, event.data.toolName);
+      const data = event.data as { toolCallId: string; toolName: string };
+      toolNameByCallId.set(data.toolCallId, data.toolName);
     }
 
     const engineEvent = translateEvent(event, receivedTokenDelta, receivedReasoningDelta, toolNameByCallId);
@@ -132,57 +133,78 @@ export async function* translateCopilotStream(
 }
 
 function translateEvent(
-  event: SessionEvent,
+  event: CopilotSdkEvent,
   receivedTokenDelta: boolean,
   receivedReasoningDelta: boolean,
   toolNameByCallId: Map<string, string>,
 ): EngineEvent | null {
   switch (event.type) {
     // Streaming delta (incremental) — preferred when streaming is active
-    case "assistant.message_delta":
-      return { type: "token", content: event.data.deltaContent };
+    case "assistant.message_delta": {
+      const data = event.data as { deltaContent: string };
+      return { type: "token", content: data.deltaContent };
+    }
 
     // Complete message (non-streaming fallback) — only emit if no deltas
     // were received for this turn, to avoid doubling content
-    case "assistant.message":
-      if (receivedTokenDelta || !event.data.content) return null;
-      return { type: "token", content: event.data.content };
+    case "assistant.message": {
+      const data = event.data as { content?: string };
+      if (receivedTokenDelta || !data.content) return null;
+      return { type: "token", content: data.content };
+    }
 
     // Streaming reasoning delta (incremental)
-    case "assistant.reasoning_delta":
-      return { type: "reasoning", content: event.data.deltaContent };
+    case "assistant.reasoning_delta": {
+      const data = event.data as { deltaContent: string };
+      return { type: "reasoning", content: data.deltaContent };
+    }
 
     // Complete reasoning block (non-streaming fallback)
-    case "assistant.reasoning":
-      if (receivedReasoningDelta || !event.data.content) return null;
-      return { type: "reasoning", content: event.data.content };
+    case "assistant.reasoning": {
+      const data = event.data as { content?: string };
+      if (receivedReasoningDelta || !data.content) return null;
+      return { type: "reasoning", content: data.content };
+    }
 
-    case "tool.execution_start":
+    case "tool.execution_start": {
+      const data = event.data as { toolName: string; arguments?: unknown; toolCallId: string };
       return {
         type: "tool_start",
-        name: event.data.toolName,
-        arguments: JSON.stringify(event.data.arguments ?? {}),
-        callId: event.data.toolCallId,
-      };
-
-    case "tool.execution_complete": {
-      const name = toolNameByCallId.get(event.data.toolCallId) ?? "unknown";
-      toolNameByCallId.delete(event.data.toolCallId);
-      return {
-        type: "tool_result",
-        name,
-        result: event.data.result?.content ?? "",
-        callId: event.data.toolCallId,
-        isError: !event.data.success,
+        name: data.toolName,
+        arguments: JSON.stringify(data.arguments ?? {}),
+        callId: data.toolCallId,
       };
     }
 
-    case "assistant.usage":
+    case "tool.execution_complete": {
+      const data = event.data as { toolCallId: string; success: boolean; result?: { content?: string } };
+      const name = toolNameByCallId.get(data.toolCallId) ?? "unknown";
+      toolNameByCallId.delete(data.toolCallId);
+      return {
+        type: "tool_result",
+        name,
+        result: data.result?.content ?? "",
+        callId: data.toolCallId,
+        isError: !data.success,
+      };
+    }
+
+    case "assistant.usage": {
+      const data = event.data as { inputTokens?: number; outputTokens?: number };
       return {
         type: "usage",
-        inputTokens: event.data.inputTokens ?? 0,
-        outputTokens: event.data.outputTokens ?? 0,
+        inputTokens: data.inputTokens ?? 0,
+        outputTokens: data.outputTokens ?? 0,
       };
+    }
+
+    case "session.ask_user": {
+      const data = event.data as { payload: string };
+      return {
+        type: "ask_user",
+        payload: data.payload,
+      };
+    }
 
     case "session.task_complete":
       return { type: "done" };
@@ -190,12 +212,14 @@ function translateEvent(
     case "session.idle":
       return { type: "done" };
 
-    case "session.error":
+    case "session.error": {
+      const data = event.data as { message: string };
       return {
         type: "error",
-        message: event.data.message,
+        message: data.message,
         fatal: true,
       };
+    }
 
     default:
       return null;

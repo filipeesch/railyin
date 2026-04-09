@@ -11,27 +11,26 @@
 
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo } from "../types.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
-import type { CopilotSession } from "./session.ts";
-import { createCopilotSession, disconnectCopilotSession, abortCopilotSession, resumeCopilotSession, copilotSessionIdForTask, getClient } from "./session.ts";
-import { translateCopilotStream } from "./events.ts";
-import { buildCopilotTools } from "./tools.ts";
+import type { CopilotSdkAdapter, CopilotSdkSession } from "./session";
+import { copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
+import { translateCopilotStream } from "./events";
+import { buildCopilotTools } from "./tools";
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
-  private readonly onTaskUpdated: OnTaskUpdated;
-  private readonly onNewMessage: OnNewMessage;
+  private readonly sdkAdapter: CopilotSdkAdapter;
 
   /** Active sessions keyed by executionId. */
-  private readonly sessions = new Map<number, CopilotSession>();
+  private readonly sessions = new Map<number, CopilotSdkSession>();
 
   constructor(
     defaultModel: string | undefined,
-    onTaskUpdated: OnTaskUpdated,
-    onNewMessage: OnNewMessage,
+    _onTaskUpdated: OnTaskUpdated,
+    _onNewMessage: OnNewMessage,
+    sdkAdapter: CopilotSdkAdapter = createDefaultCopilotSdkAdapter(),
   ) {
     this.defaultModel = defaultModel;
-    this.onTaskUpdated = onTaskUpdated;
-    this.onNewMessage = onNewMessage;
+    this.sdkAdapter = sdkAdapter;
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -84,14 +83,14 @@ export class CopilotEngine implements ExecutionEngine {
     // process restarts without needing any DB or in-memory state.
     const sdkSessionId = copilotSessionIdForTask(taskId);
 
-    let session: CopilotSession | undefined;
+    let session: CopilotSdkSession | undefined;
     try {
       try {
-        session = await resumeCopilotSession(sdkSessionId, sessionConfig);
+        session = await this.sdkAdapter.resumeSession(sdkSessionId, sessionConfig);
       } catch {
         // Session data doesn't exist on disk yet (first run) or was deleted.
         // Create with the same deterministic ID so future runs can always resume it.
-        session = await createCopilotSession({ sessionId: sdkSessionId, ...sessionConfig });
+        session = await this.sdkAdapter.createSession({ sessionId: sdkSessionId, ...sessionConfig });
       }
 
       this.sessions.set(executionId, session);
@@ -115,7 +114,7 @@ export class CopilotEngine implements ExecutionEngine {
     } finally {
       this.sessions.delete(executionId);
       if (session) {
-        await disconnectCopilotSession(session).catch(() => {});
+        await this.sdkAdapter.disconnectSession(session).catch(() => { });
       }
     }
   }
@@ -125,17 +124,15 @@ export class CopilotEngine implements ExecutionEngine {
     if (session) {
       // Abort the in-progress turn first so the model stops cleanly and the
       // session state on disk stays consistent for future resumption.
-      abortCopilotSession(session)
-        .catch(() => {})
-        .finally(() => disconnectCopilotSession(session).catch(() => {}));
+      this.sdkAdapter.abortSession(session)
+        .catch(() => { })
+        .finally(() => this.sdkAdapter.disconnectSession(session).catch(() => { }));
     }
     this.sessions.delete(executionId);
   }
 
   async listModels(): Promise<EngineModelInfo[]> {
-    const client = getClient();
-    await client.start(); // listModels() does not auto-start unlike createSession()
-    const sdkModels = await client.listModels();
+    const sdkModels = await this.sdkAdapter.listModels();
     return sdkModels.map((m) => ({
       qualifiedId: `copilot/${m.id}`,
       displayName: m.name ?? m.id,

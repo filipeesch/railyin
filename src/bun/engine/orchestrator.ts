@@ -11,6 +11,7 @@
 
 import type { ExecutionEngine, EngineEvent, ExecutionParams } from "./types.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
+import type { ExecutionCoordinator } from "./coordinator.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import {
   handleTransition,
@@ -27,7 +28,7 @@ import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/r
 import { getConfig } from "../config/index.ts";
 import { resolveSlashReference } from "../workflow/slash-prompt.ts";
 
-export class Orchestrator {
+export class Orchestrator implements ExecutionCoordinator {
   private readonly engine: ExecutionEngine;
   private readonly onToken: OnToken;
   private readonly onError: OnError;
@@ -415,11 +416,12 @@ export class Orchestrator {
       for await (const event of stream) {
         // Check for cancellation (Task 5.3)
         if (abortController.signal.aborted) {
-          db.run("UPDATE tasks SET execution_state = 'cancelled' WHERE id = ?", [taskId]);
+          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
           db.run(
             "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
             [executionId],
           );
+          this.onToken(taskId, executionId, "", true);
           return;
         }
 
@@ -608,7 +610,7 @@ export class Orchestrator {
       // the generator was aborted (done=true set by the AbortSignal listener in
       // translateCopilotStream). In the abort case no state was written yet.
       if (abortController.signal.aborted) {
-        db.run("UPDATE tasks SET execution_state = 'cancelled' WHERE id = ?", [taskId]);
+        db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
         db.run(
           "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
           [executionId],
