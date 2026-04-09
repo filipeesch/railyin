@@ -22,6 +22,7 @@
     "test:ui:run": "./scripts/run-ui-tests.sh"
   },
   "dependencies": {
+    "@github/copilot-sdk": "^0.2.1",
     "@iconify/vue": "^5.0.0",
     "@monaco-editor/loader": "^1.4.0",
     "electrobun": "latest",

@@ -33,17 +33,15 @@ afterEach(() => {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function makeHandlers() {
-  const tokens: Array<{ taskId: number; token: string; done: boolean }> = [];
-  const errors: Array<{ taskId: number; error: string }> = [];
   const updates: Task[] = [];
 
   const handlers = taskHandlers(
-    (taskId, _eid, token, done) => tokens.push({ taskId, token, done }),
-    (taskId, _eid, error) => errors.push({ taskId, error }),
+    null,
     (task) => updates.push(task),
+    () => {},
   );
 
-  return { handlers, tokens, errors, updates };
+  return { handlers, updates };
 }
 
 // ─── tasks.create ─────────────────────────────────────────────────────────────

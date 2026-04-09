@@ -16,6 +16,47 @@ export interface ProviderConfig {
   fallback_model?: string;
 }
 
+// ─── Engine config types ─────────────────────────────────────────────────────
+
+/** Config block for Anthropic-specific settings (shared between WorkspaceYaml and NativeEngineConfig). */
+export interface AnthropicConfig {
+  cache_ttl?: "5m" | "1h";
+  enable_thinking?: boolean;
+  effort?: "low" | "medium" | "high" | "max";
+  context_edit_strategy?: { enabled?: boolean };
+}
+
+/** Config block for web search (shared between WorkspaceYaml and NativeEngineConfig). */
+export interface SearchConfig {
+  engine: string;
+  api_key: string;
+}
+
+/** Config block for LSP servers (shared between WorkspaceYaml and NativeEngineConfig). */
+export interface LspConfig {
+  servers?: Array<{ name: string; command: string; args: string[]; extensions: string[] }>;
+}
+
+/** Native engine config — same provider-based setup as today. */
+export interface NativeEngineConfig {
+  type: "native";
+  providers?: ProviderConfig[];
+  default_model?: string;
+  search?: SearchConfig;
+  anthropic?: AnthropicConfig;
+  lsp?: LspConfig;
+  worktree_base_path?: string;
+}
+
+/** Copilot engine config — uses the GitHub Copilot SDK. */
+export interface CopilotEngineConfig {
+  type: "copilot";
+  /** Copilot model ID (e.g. "gpt-4.1"). Leave unset for the Copilot default. */
+  model?: string;
+}
+
+export type EngineConfig = NativeEngineConfig | CopilotEngineConfig;
+
 /**
  * @deprecated Use `ProviderConfig` and `WorkspaceYaml.providers` instead.
  * Kept for backward-compat auto-migration of old `ai:` blocks.
@@ -30,43 +71,28 @@ export interface AIProviderConfig {
 
 export interface WorkspaceYaml {
   name?: string;
-  /** New multi-provider format. Takes precedence over `ai` when present. */
+  /**
+   * New engine block. Discriminated by `type`:
+   *   - `native`  (default): built-in provider-based loop
+   *   - `copilot`: GitHub Copilot SDK
+   * When absent, legacy top-level fields are auto-migrated to `engine.type:native` in memory.
+   */
+  engine?: EngineConfig;
+  /** @deprecated Top-level providers list. Use `engine.type:native.providers` instead.
+   *  Still supported — auto-migrated to `engine.type:native` on load. */
   providers?: ProviderConfig[];
-  /** @deprecated Single-provider legacy format. Auto-migrated to `providers` on load. */
+  /** @deprecated Single-provider legacy format. Auto-migrated on load. */
   ai?: AIProviderConfig;
   worktree_base_path?: string;
   git_path?: string; // absolute path to git binary, e.g. /usr/bin/git
-  /** Workspace-level default model (fully-qualified: providerId/modelId). Used as fallback when a column has no model configured. */
+  /** @deprecated Use engine.type:native.default_model. Still supported for legacy configs. */
   default_model?: string;
-  search?: {
-    engine: string; // "tavily" | "brave" | "none"
-    api_key: string;
-  };
-  /** Anthropic-specific settings */
-  anthropic?: {
-    /** Cache TTL for prompt caching. "5m" (default) or "1h" (2× write cost, survives long pauses). */
-    cache_ttl?: "5m" | "1h";
-    /** When true, send thinking: { type: "adaptive" } for models that support adaptive thinking. */
-    enable_thinking?: boolean;
-    /** Thinking effort for the parent agent. Defaults to "high" on Sonnet 4.6.
-     *  Use "medium" for a good balance of quality and token cost. Sub-agents always use "low". */
-    effort?: "low" | "medium" | "high" | "max";
-    /** Server-side context edit strategy (Anthropic beta). Instructs the server to clear old
-     *  tool results internally once input tokens exceed a threshold, keeping the cache prefix
-     *  intact while reducing effective context size. Default: true. */
-    context_edit_strategy?: {
-      enabled?: boolean;
-    };
-  };
-  /** Language server definitions for code intelligence via the `lsp` tool. */
-  lsp?: {
-    servers?: Array<{
-      name: string;
-      command: string;
-      args: string[];
-      extensions: string[];
-    }>;
-  };
+  /** @deprecated Use engine.type:native.search. Still supported for legacy configs. */
+  search?: SearchConfig;
+  /** @deprecated Use engine.type:native.anthropic. Still supported for legacy configs. */
+  anthropic?: AnthropicConfig;
+  /** @deprecated Use engine.type:native.lsp. Still supported for legacy configs. */
+  lsp?: LspConfig;
 }
 
 export interface WorkflowColumnConfig {
@@ -89,9 +115,11 @@ export interface WorkflowTemplateConfig {
 
 export interface LoadedConfig {
   workspace: WorkspaceYaml;
-  /** Normalized, de-duplicated provider list — always populated after load */
+  /** Normalized, de-duplicated provider list — always populated after load (native engine only) */
   providers: ProviderConfig[];
   workflows: WorkflowTemplateConfig[];
+  /** Resolved engine config — always present after load */
+  engine: EngineConfig;
 }
 
 // ─── Config singleton ─────────────────────────────────────────────────────────
@@ -231,17 +259,58 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
     return { config: null, error: _configError };
   }
 
-  // Validate required fields — support both new `providers:` and legacy `ai:` block
+  // ── Resolve engine config ──────────────────────────────────────────────────
+  //
+  // Priority:
+  //   1. New `engine:` block (discriminated by type)
+  //   2. Legacy top-level `providers:` list → auto-migrate to native engine in memory
+  //   3. Legacy top-level `ai:` block → auto-migrate to native engine in memory
+  //
+  // For the native engine, workspace.anthropic / search / lsp are also promoted
+  // from engine.* into workspace.* so all existing consumers continue to work.
+
+  let engine: EngineConfig;
   let providers: ProviderConfig[];
 
-  if (workspace.providers && workspace.providers.length > 0) {
-    // New format: `providers:` takes precedence
+  if (workspace.engine) {
+    engine = workspace.engine;
+    if (engine.type === "copilot") {
+      // Copilot engine — no local providers needed
+      providers = [];
+    } else {
+      // Native engine block
+      const nativeCfg = engine as NativeEngineConfig;
+      if (!nativeCfg.providers || nativeCfg.providers.length === 0) {
+        _configError = `${workspaceFileName}: engine.type:native requires at least one entry in engine.providers.`;
+        return { config: null, error: _configError };
+      }
+      providers = nativeCfg.providers;
+      // Promote engine-nested fields into workspace.* so all existing consumers work
+      if (nativeCfg.anthropic && !workspace.anthropic) workspace.anthropic = nativeCfg.anthropic;
+      if (nativeCfg.search && !workspace.search) workspace.search = nativeCfg.search;
+      if (nativeCfg.lsp && !workspace.lsp) workspace.lsp = nativeCfg.lsp;
+      if (nativeCfg.default_model && !workspace.default_model) workspace.default_model = nativeCfg.default_model;
+      if (nativeCfg.worktree_base_path && !workspace.worktree_base_path) workspace.worktree_base_path = nativeCfg.worktree_base_path;
+    }
+  } else if (workspace.providers && workspace.providers.length > 0) {
+    // Legacy top-level providers: auto-migrate to native engine in memory
     if (workspace.ai) {
       console.warn(`[config] Both 'providers:' and 'ai:' found in ${workspaceFileName} — using 'providers:' and ignoring 'ai:'.`);
     }
     providers = workspace.providers;
+    engine = {
+      type: "native",
+      providers,
+      default_model: workspace.default_model,
+      search: workspace.search,
+      anthropic: workspace.anthropic,
+      lsp: workspace.lsp,
+      worktree_base_path: workspace.worktree_base_path,
+    };
+    // Attach so consumers can read config.engine
+    workspace.engine = engine;
   } else if (workspace.ai) {
-    // Legacy format: auto-migrate `ai:` block to a single-entry providers list
+    // Oldest legacy format: single `ai:` block
     const ai = workspace.ai;
     providers = [{
       id: "default",
@@ -250,8 +319,18 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
       api_key: ai.api_key || undefined,
       context_window_tokens: ai.context_window_tokens,
     }];
+    engine = {
+      type: "native",
+      providers,
+      default_model: workspace.default_model,
+      search: workspace.search,
+      anthropic: workspace.anthropic,
+      lsp: workspace.lsp,
+      worktree_base_path: workspace.worktree_base_path,
+    };
+    workspace.engine = engine;
   } else {
-    _configError = `${workspaceFileName} is missing both 'providers:' and legacy 'ai:' section.`;
+    _configError = `${workspaceFileName} is missing 'engine:', 'providers:', or legacy 'ai:' section.`;
     return { config: null, error: _configError };
   }
 
@@ -297,7 +376,7 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
     workflows.push(defaultTemplate);
   }
 
-  _config = { workspace, providers: deduped, workflows };
+  _config = { workspace, providers: deduped, workflows, engine };
   _configError = null;
   return { config: _config, error: null };
 }

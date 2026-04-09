@@ -215,6 +215,7 @@ export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: (
   );
 
   process.env.RAILYN_CONFIG_DIR = configDir;
+  process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");
   resetConfig();
   loadConfig();
 
@@ -223,6 +224,7 @@ export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: (
     cleanup: () => {
       rmSync(configDir, { recursive: true, force: true });
       delete process.env.RAILYN_CONFIG_DIR;
+      delete process.env.RAILYN_SESSION_MEMORY_DIR;
       resetConfig();
     },
   };

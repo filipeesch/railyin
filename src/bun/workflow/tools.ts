@@ -254,7 +254,8 @@ function applyOneReplacement(
   if (!stat.isFile()) return { ok: false, error: `${relPath} is not a file` };
   if (mtimeCache) {
     const cached = mtimeCache.get(abs);
-    if (cached !== undefined && cached !== stat.mtimeMs) return { ok: false, error: `${relPath} has been modified since you last read it` };
+    if (cached === undefined) return { ok: false, error: `you must read ${relPath} before editing it` };
+    if (cached !== stat.mtimeMs) return { ok: false, error: `${relPath} has been modified since you last read it` };
   }
   const content = readFileSync(abs, "utf-8");
   if (oldString === "") return { ok: false, error: "old_string is empty — provide text to replace or use write_file" };
@@ -939,7 +940,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
  * tool names, or a mix. Groups are expanded by resolveToolsForColumn. */
 export const TOOL_GROUPS: Map<string, string[]> = new Map([
   ["read", ["read_file"]],
-  ["write", ["write_file", /* "edit_file", */ "multi_replace"]],
+  ["write", ["write_file", "edit_file", "multi_replace"]],
   ["search", ["search_text", "find_files"]],
   ["shell", ["run_command"]],
   ["interactions", ["ask_me"]],
@@ -1336,7 +1337,10 @@ export async function executeTool(
         // Read-before-write enforcement
         if (ctx.mtimeCache) {
           const cached = ctx.mtimeCache.get(abs);
-          if (cached !== undefined && cached !== stat.mtimeMs) {
+          if (cached === undefined) {
+            return `Error: you must read ${args.path} before editing it.`;
+          }
+          if (cached !== stat.mtimeMs) {
             return `Error: ${args.path} has been modified since you last read it. Read it again before editing.`;
           }
         }

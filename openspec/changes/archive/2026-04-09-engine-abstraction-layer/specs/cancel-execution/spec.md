@@ -1,7 +1,4 @@
-## Purpose
-Allows the user to abort an in-progress AI execution. Partial work and conversation history are kept; the task returns to `waiting_user` so the user can continue.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: A running execution can be cancelled by the user
 The system SHALL allow the user to cancel an in-progress AI execution. On cancellation, the orchestrator calls `engine.cancel(executionId)`, the execution is marked `cancelled`, partial conversation messages are retained, worktree file changes are kept, and the task returns to `waiting_user`. Cancellation works identically regardless of which engine is active.
@@ -31,7 +28,7 @@ The system SHALL allow the user to cancel an in-progress AI execution. On cancel
 - **THEN** all conversation messages produced before cancellation (tool calls, tool results, partial assistant text) remain visible in the conversation timeline
 
 #### Scenario: Worktree changes retained after cancel
-- **WHEN** an execution is cancelled and the AI had already written files to the worktree
+- **WHEN** an execution is cancelled and the engine had already written files to the worktree
 - **THEN** those file changes remain on disk; they are not reverted
 
 #### Scenario: User can continue by sending a new message after cancel

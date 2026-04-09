@@ -4,24 +4,16 @@ import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, Review
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
 import {
-  handleTransition,
-  handleHumanTurn,
-  handleCodeReview,
-  handleRetry,
   appendMessage,
   estimateContextWarning,
   estimateContextUsage,
   compactConversation,
   resolveModelContextWindow,
-  cancelExecution,
-  resolveShellApproval,
 } from "../workflow/engine.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
-import { readSessionMemory } from "../workflow/session-memory.ts";
 import type { ProjectRow } from "../db/row-types.ts";
-import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
-import { getConfig } from "../config/index.ts";
-import { listOpenAICompatibleModels } from "../ai/index.ts";
+import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
+import type { Orchestrator } from "../engine/orchestrator.ts";
 
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
@@ -40,7 +32,7 @@ function fetchTaskWithDetail(db: ReturnType<typeof getDb>, taskId: number): Task
   return row ? mapTask(row) : null;
 }
 
-export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) {
+export function taskHandlers(orchestrator: Orchestrator | null, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) {
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
       const db = getDb();
@@ -173,7 +165,8 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         }
       }
 
-      return handleTransition(params.taskId, params.toState, onToken, onError, onTaskUpdated, onNewMessage);
+      if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
+      return orchestrator.executeTransition(params.taskId, params.toState);
     },
 
     "tasks.sendMessage": async (params: {
@@ -184,7 +177,8 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       try {
         const parsed = JSON.parse(params.content) as { _type?: string };
         if (parsed._type === "code_review") {
-          return handleCodeReview(params.taskId, onToken, onError, onTaskUpdated, onNewMessage);
+          if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
+          return orchestrator.executeCodeReview(params.taskId);
         }
       } catch { /* not JSON — treat as plain text */ }
 
@@ -192,7 +186,8 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       if (warning) {
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
-      return handleHumanTurn(params.taskId, params.content, onToken, onError, onTaskUpdated, onNewMessage);
+      if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
+      return orchestrator.executeHumanTurn(params.taskId, params.content);
     },
 
     "tasks.retry": async (params: {
@@ -244,13 +239,15 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         }
       }
 
-      return handleRetry(params.taskId, onToken, onError, onTaskUpdated, onNewMessage);
+      if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
+      return orchestrator.executeRetry(params.taskId);
     },
 
     // ─── models.list ─────────────────────────────────────────────────────────
     "models.list": async (): Promise<ProviderModelList[]> => {
       const db = getDb();
-      const config = getConfig();
+
+      if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
 
       const enabledSet = new Set(
         db
@@ -261,69 +258,35 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
           .map((r) => r.qualified_model_id),
       );
 
-      const results = await Promise.allSettled(
-        config.providers.map(async (provConfig): Promise<ProviderModelList> => {
-          if (provConfig.type === "fake") {
-            return { id: provConfig.id, models: [] };
-          }
+      try {
+        const engineModels = await orchestrator.listModels();
+        // Group models by provider (first part of the qualified ID before slash)
+        const byProvider = new Map<string, typeof engineModels>();
+        for (const model of engineModels) {
+          const [providerId] = model.qualifiedId.split("/");
+          if (!byProvider.has(providerId)) byProvider.set(providerId, []);
+          byProvider.get(providerId)!.push(model);
+        }
 
-          try {
-            let rawModels: Array<{ id: string; contextWindow: number | null; supportsAdaptiveThinking?: boolean }>;
-
-            if (provConfig.type === "anthropic") {
-              const baseUrl = provConfig.base_url ?? "https://api.anthropic.com";
-              const res = await fetch(`${baseUrl}/v1/models`, {
-                headers: {
-                  "x-api-key": provConfig.api_key ?? "",
-                  "anthropic-version": "2023-06-01",
-                },
-              });
-              if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              const json = await res.json() as {
-                data?: Array<{
-                  id: string;
-                  context_window?: number;
-                  capabilities?: {
-                    thinking?: {
-                      supported?: boolean;
-                      types?: {
-                        adaptive?: { supported?: boolean };
-                      };
-                    };
-                  };
-                }>;
-              };
-              rawModels = (json.data ?? []).map((m) => ({
-                id: m.id,
-                contextWindow: m.context_window ?? null,
-                supportsAdaptiveThinking: m.capabilities?.thinking?.types?.adaptive?.supported === true,
-              }));
-            } else {
-              rawModels = await listOpenAICompatibleModels(provConfig);
-            }
-
-            return {
-              id: provConfig.id,
-              models: rawModels.map((m) => ({
-                id: `${provConfig.id}/${m.id}`,
-                contextWindow: m.contextWindow,
-                enabled: enabledSet.has(`${provConfig.id}/${m.id}`),
-                ...(m.supportsAdaptiveThinking ? { supportsAdaptiveThinking: true } : {}),
-              })),
-            };
-          } catch (err) {
-            return {
-              id: provConfig.id,
-              models: [],
-              error: err instanceof Error ? err.message : String(err),
-            };
-          }
-        }),
-      );
-
-      return results.map((r) =>
-        r.status === "fulfilled" ? r.value : { id: "unknown", models: [], error: String(r.reason) },
-      );
+        return Array.from(byProvider.entries()).map(([providerId, models]) => ({
+          id: providerId,
+          models: models.map((m) => ({
+            id: m.qualifiedId,
+            displayName: m.displayName,
+            contextWindow: m.contextWindow,
+            enabled: enabledSet.has(m.qualifiedId),
+            ...(m.supportsThinking ? { supportsAdaptiveThinking: true } : {}),
+          })),
+        }));
+      } catch (err) {
+        return [
+          {
+            id: "error",
+            models: [],
+            error: err instanceof Error ? err.message : String(err),
+          },
+        ];
+      }
     },
 
     // ─── models.setEnabled ───────────────────────────────────────────────────
@@ -344,14 +307,32 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
     },
 
     // ─── models.listEnabled ──────────────────────────────────────────────────
+    // Cross-references the DB with the engine's actual model list so stale entries
+    // from previous engine configurations are silently dropped. If none of the
+    // enabled DB entries match the current engine, all engine models are returned
+    // (default-all-enabled behaviour on first use / engine switch).
     "models.listEnabled": async (): Promise<ModelInfo[]> => {
       const db = getDb();
-      return db
-        .query<{ qualified_model_id: string }, [number]>(
-          "SELECT qualified_model_id FROM enabled_models WHERE workspace_id = ? ORDER BY qualified_model_id",
-        )
-        .all(1)
-        .map((r) => ({ id: r.qualified_model_id, contextWindow: null }));
+      if (!orchestrator) return [];
+
+      const [engineModels, dbRows] = await Promise.all([
+        orchestrator.listModels(),
+        db
+          .query<{ qualified_model_id: string }, [number]>(
+            "SELECT qualified_model_id FROM enabled_models WHERE workspace_id = ? ORDER BY qualified_model_id",
+          )
+          .all(1),
+      ]);
+
+      const engineIds = new Set(engineModels.map((m) => m.qualifiedId));
+      const enabledIds = dbRows.map((r) => r.qualified_model_id).filter((id) => engineIds.has(id));
+
+      // No overlap → engine switched or first use; treat all engine models as enabled.
+      const activeIds = enabledIds.length > 0 ? enabledIds : [...engineIds];
+
+      return engineModels
+        .filter((m) => activeIds.includes(m.qualifiedId))
+        .map((m) => ({ id: m.qualifiedId, displayName: m.displayName, contextWindow: m.contextWindow ?? null }));
     },
 
     // ─── tasks.setModel ──────────────────────────────────────────────────────
@@ -365,7 +346,6 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
 
     // ─── tasks.contextUsage ──────────────────────────────────────────────────
     "tasks.contextUsage": async (params: { taskId: number }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
-      const config = getConfig();
       const db = getDb();
       const task = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
       const taskModel = task?.model ?? null;
@@ -389,7 +369,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         )
         .get(params.taskId);
       if (row?.current_execution_id != null) {
-        cancelExecution(row.current_execution_id);
+        orchestrator?.cancel(row.current_execution_id);
       }
       const task = fetchTaskWithDetail(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
@@ -427,7 +407,7 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
         )
         .get(params.taskId);
       if (row?.current_execution_id != null) {
-        cancelExecution(row.current_execution_id);
+        orchestrator?.cancel(row.current_execution_id);
       }
 
       // Remove worktree (no-op if not created, returns warning if directory is gone)
@@ -609,15 +589,11 @@ export function taskHandlers(onToken: OnToken, onError: OnError, onTaskUpdated: 
       );
     },
 
-    // ─── tasks.sessionMemory ─────────────────────────────────────────────────
-    "tasks.sessionMemory": async (params: { taskId: number }): Promise<{ content: string | null }> => {
-      return { content: readSessionMemory(params.taskId) };
-    },
-
     // ─── tasks.respondShellApproval ──────────────────────────────────────────
     "tasks.respondShellApproval": async (params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" }): Promise<{ ok: boolean }> => {
-      const ok = resolveShellApproval(params.taskId, params.decision, onTaskUpdated);
-      return { ok };
+      if (!orchestrator) return { ok: false };
+      orchestrator.respondShellApproval(params.taskId, params.decision);
+      return { ok: true };
     },
 
     // ─── tasks.setShellAutoApprove ────────────────────────────────────────────

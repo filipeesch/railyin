@@ -5,6 +5,8 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
+import { Orchestrator } from "../engine/orchestrator.ts";
+import { NativeEngine } from "../engine/native/engine.ts";
 import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { compactMessages } from "../workflow/engine.ts";
 import type { Database } from "bun:sqlite";
@@ -36,9 +38,15 @@ afterEach(() => {
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 function makeHandlers() {
+  const orch = new Orchestrator(
+    new NativeEngine(),
+    () => {},
+    () => {},
+    () => {},
+    () => {},
+  );
   return taskHandlers(
-    () => {},
-    () => {},
+    orch,
     () => {},
     () => {},
   );

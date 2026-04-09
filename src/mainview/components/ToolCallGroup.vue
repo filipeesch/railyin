@@ -2,7 +2,7 @@
   <div class="tcg">
     <button class="tcg__header" @click="open = !open">
       <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right', 'tcg__chevron']" />
-      <i :class="['pi', toolIcon, 'tcg__tool-icon']" />
+      <i :class="['pi', statusIcon, 'tcg__tool-icon']" :style="statusIconStyle" />
       <code class="tcg__tool-name">{{ toolName }}</code>
       <span v-if="primaryArg" class="tcg__primary-arg">{{ primaryArg }}</span>
       <span v-if="diffPayload && diffPayload.added > 0" class="tcg__stat tcg__stat--added">+{{ diffPayload.added }}</span>
@@ -11,7 +11,7 @@
 
     <div v-if="open" :class="['tcg__body', (entry.diff || toolName === 'read_file') ? 'tcg__body--flush' : '']">
       <FileDiff v-if="entry.diff" :payload="diffPayload!" />
-      <ReadView v-else-if="toolName === 'read_file'" :content="entry.result?.content ?? ''" />
+      <ReadView v-else-if="toolName === 'read_file'" :content="parsedResult?.content ?? entry.result?.content ?? ''" />
       <pre v-else-if="entry.result" class="tcg__output">{{ truncated }}</pre>
     </div>
   </div>
@@ -51,14 +51,15 @@ const parsedCall = computed(() => {
   try {
     const p = JSON.parse(props.entry.call.content) as {
       name?: string;
-      function?: { name?: string };
+      function?: { name?: string; arguments?: string | Record<string, unknown> };
       arguments?: string | Record<string, unknown>;
     };
     const name = p?.name ?? p?.function?.name ?? "tool";
+    const rawArgs = p?.function?.arguments ?? p?.arguments;
     const args: Record<string, unknown> =
-      typeof p?.arguments === "string"
-        ? JSON.parse(p.arguments as string)
-        : (p?.arguments ?? {});
+      typeof rawArgs === "string"
+        ? JSON.parse(rawArgs as string)
+        : (rawArgs ?? {});
     return { name, args };
   } catch {
     return { name: "tool", args: {} as Record<string, unknown> };
@@ -67,6 +68,31 @@ const parsedCall = computed(() => {
 
 const toolName = computed(() => parsedCall.value.name);
 const toolIcon = computed(() => TOOL_ICONS[toolName.value] ?? "pi-code");
+
+// Outcome icon: spinner while running, check on success, times on error
+const parsedResult = computed(() => {
+  if (!props.entry.result) return null;
+  try {
+    return JSON.parse(props.entry.result.content) as {
+      type?: string;
+      tool_use_id?: string;
+      content?: string;
+      is_error?: boolean;
+    };
+  } catch {
+    return null;
+  }
+});
+
+const statusIcon = computed(() => {
+  if (!props.entry.result) return "pi-spin pi-spinner";
+  return parsedResult.value?.is_error ? "pi-times-circle" : "pi-check-circle";
+});
+
+const statusIconStyle = computed(() => {
+  if (!props.entry.result) return undefined;
+  return { color: parsedResult.value?.is_error ? "#dc2626" : "#16a34a" };
+});
 
 const primaryArg = computed(() => {
   const { args } = parsedCall.value;
@@ -77,7 +103,8 @@ const primaryArg = computed(() => {
 });
 
 const truncated = computed(() => {
-  const c = props.entry.result?.content ?? "";
+  const raw = props.entry.result?.content ?? "";
+  const c = parsedResult.value?.content ?? raw;
   return c.length > 800 ? c.slice(0, 800) + "\n…[truncated]" : c;
 });
 

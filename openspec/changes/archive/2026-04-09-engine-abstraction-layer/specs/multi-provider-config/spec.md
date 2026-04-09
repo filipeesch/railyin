@@ -1,7 +1,4 @@
-## Purpose
-The multi-provider configuration allows users to configure multiple named AI providers in `workspace.yaml`. Each provider has a type, connection details, and an optional default model. The system resolves which provider to use based on the fully-qualified model ID prefix.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Workspace config supports a providers list with typed entries
 The system SHALL read an optional `providers:` list from the `engine:` block when `engine.type` is `native`. Each entry SHALL have a unique `id` field and a `type` field. Type-specific fields are required per type:
@@ -41,7 +38,7 @@ The system SHALL detect a legacy workspace config with top-level `providers:`, `
 - **THEN** the `engine:` block is used and top-level provider fields are ignored
 
 ### Requirement: Provider IDs are unique and used as model prefixes
-The system SHALL require that each provider's `id` is unique within the workspace. When a model is selected as a fully-qualified ID (`{providerId}/{modelId}`), `resolveProvider` parses the prefix to find the matching provider instance.
+The system SHALL require that each provider's `id` is unique within the native engine's provider list. When a model is selected as a fully-qualified ID (`{providerId}/{modelId}`), `resolveProvider` parses the prefix to find the matching provider instance.
 
 #### Scenario: Provider resolved from fully-qualified model ID
 - **WHEN** the task model is `"openrouter/anthropic/claude-3-5-sonnet"` and a provider with `id: "openrouter"` is configured
@@ -65,6 +62,8 @@ The system SHALL allow each provider config entry to declare an optional `fallba
 #### Scenario: Invalid fallback model ignored gracefully
 - **WHEN** `fallback_model` references an unconfigured provider (e.g., `"openai/gpt-4o"` but no `openai` provider is configured)
 - **THEN** the fallback is treated as `null` with a warning log; the primary retry behavior proceeds normally
+
+## ADDED Requirements
 
 ### Requirement: Engine config uses a single engine block with type discriminator
 The `workspace.yaml` SHALL support a top-level `engine:` block with a required `type` field that discriminates the config schema. For `type: native`, the block contains `providers`, `default_model`, `anthropic`, `search`, and `lsp` sub-fields. For `type: copilot`, the block contains an optional `model` field and no provider/API configuration.

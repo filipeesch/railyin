@@ -3,6 +3,17 @@ import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
 import { loadConfig } from "./config/index.ts";
 
+// ─── Global error handlers ────────────────────────────────────────────────────
+// These must be registered before any async work so unhandled rejections from
+// SDK events, network I/O, or other background tasks are captured and logged
+// rather than crashing the process silently.
+process.on("unhandledRejection", (reason) => {
+  console.error("[railyin] Unhandled rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[railyin] Uncaught exception:", err);
+});
+
 // ─── CLI flags (must run before any module reads process.env) ─────────────────
 // --debug      → enables the debug HTTP server on :9229 (same as RAILYN_DEBUG=1)
 // --memory-db  → uses an in-memory SQLite database (same as RAILYN_DB=:memory:)
@@ -17,20 +28,39 @@ import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
 import { launchHandlers } from "./handlers/launch.ts";
 import { lspHandlers } from "./handlers/lsp.ts";
-import { handleHumanTurn, cancelExecution, compactConversation, handleTransition } from "./workflow/engine.ts";
-import { mapTask, mapConversationMessage } from "./db/mappers.ts";
+import { mapTask } from "./db/mappers.ts";
+import { compactConversation } from "./workflow/engine.ts";
+import { resolveEngine } from "./engine/resolver.ts";
+import { Orchestrator } from "./engine/orchestrator.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
 import type { RailynRPCType } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
-
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 // 1. Load config (YAML files)
-const { error: configError } = loadConfig();
+const { config, error: configError } = loadConfig();
 
 // 2. Run DB migrations + seed default workspace
 runMigrations();
 seedDefaultWorkspace();
+
+// 3. Reset any tasks/executions that were still 'running' when the process
+//    last exited (crash, SIGKILL, etc.) so they don't appear stuck forever.
+{
+  const db = getDb();
+  const stuckCount = db
+    .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tasks WHERE execution_state = 'running'")
+    .get()?.n ?? 0;
+  if (stuckCount > 0) {
+    console.warn(`[db] Resetting ${stuckCount} task(s) stuck in 'running' state from previous session`);
+    db.run("UPDATE tasks SET execution_state = 'failed' WHERE execution_state = 'running'");
+    db.run(
+      `UPDATE executions SET status = 'failed', finished_at = datetime('now'),
+       details = 'Process restarted while execution was running'
+       WHERE status = 'running'`,
+    );
+  }
+}
 
 // ─── IPC streaming callbacks (capture win lazily — only called after win is created) ──
 
@@ -58,13 +88,24 @@ function notifyWorkflowReloaded(): void {
 
 // ─── Wire up RPC handlers ─────────────────────────────────────────────────────
 
+// Create engine + orchestrator once all RPC callbacks are defined
+const orchestrator: Orchestrator | null = config
+  ? new Orchestrator(
+      resolveEngine(config, notifyTaskUpdated, notifyNewMessage),
+      onToken,
+      onError,
+      notifyTaskUpdated,
+      notifyNewMessage,
+    )
+  : null;
+
 const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
   handlers: {
     requests: {
       ...workspaceHandlers(),
       ...boardHandlers(),
       ...projectHandlers(),
-      ...taskHandlers(onToken, onError, notifyTaskUpdated, notifyNewMessage),
+      ...taskHandlers(orchestrator, notifyTaskUpdated, notifyNewMessage),
       ...conversationHandlers(),
       ...workflowHandlers(notifyWorkflowReloaded),
       ...launchHandlers(),
@@ -378,13 +419,10 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
         return new Response(JSON.stringify({ __error: "taskId and text required" }), { status: 400, headers: { "content-type": "application/json" } });
       }
       try {
-        const { message, executionId } = await handleHumanTurn(
+        if (!orchestrator) throw new Error("Engine not initialized");
+        const { message, executionId } = await orchestrator.executeHumanTurn(
           taskId,
           text,
-          onToken,
-          onError,
-          notifyTaskUpdated,
-          notifyNewMessage,
         );
         // Push the user message to the Vue store via IPC — in the normal RPC
         // path, sendMessage() does messages.value.push(message) from the RPC
@@ -409,7 +447,7 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
         "SELECT current_execution_id FROM tasks WHERE id = ?",
       ).get(taskId);
       if (row?.current_execution_id != null) {
-        cancelExecution(row.current_execution_id);
+        orchestrator?.cancel(row.current_execution_id);
       }
       return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
     }
@@ -453,7 +491,8 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
         return new Response(JSON.stringify({ __error: "taskId and toState required" }), { status: 400, headers: { "content-type": "application/json" } });
       }
       try {
-        const result = await handleTransition(taskId, toState, onToken, onError, notifyTaskUpdated, notifyNewMessage);
+        if (!orchestrator) throw new Error("Engine not initialized");
+        const result = await orchestrator.executeTransition(taskId, toState);
         // Push the updated task to the Vue store so the board re-renders the card
         // in the new column (analogous to how the RPC tasks.transition response
         // triggers store.onTaskUpdated in the Vue transitionTask() method).
