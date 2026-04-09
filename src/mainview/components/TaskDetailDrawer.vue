@@ -860,8 +860,8 @@ watch(
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--p-primary-color, #6366f1);
-  background: var(--p-primary-50, #eef2ff);
-  border: 1px solid var(--p-primary-200, #c7d2fe);
+  background: var(--p-highlight-background, #eef2ff);
+  border: 1px solid var(--p-content-border-color, #c7d2fe);
   border-radius: 10px;
   padding: 1px 7px;
   cursor: pointer;
@@ -871,7 +871,7 @@ watch(
 }
 
 .drawer-header__changed-badge:hover {
-  background: var(--p-primary-100, #e0e7ff);
+  background: var(--p-highlight-focus-background, #e0e7ff);
 }
 
 .drawer-header {
@@ -1196,16 +1196,6 @@ watch(
 </style>
 
 <style>
-html.dark-mode .drawer-header__changed-badge {
-  background: color-mix(in srgb, var(--p-primary-color) 20%, transparent);
-  border-color: color-mix(in srgb, var(--p-primary-color) 40%, transparent);
-  color: var(--p-primary-300, #a5b4fc);
-}
-
-html.dark-mode .drawer-header__changed-badge:hover {
-  background: color-mix(in srgb, var(--p-primary-color) 30%, transparent);
-}
-
 html.dark-mode .dialog-warning {
   color: var(--p-orange-400);
   background: color-mix(in srgb, var(--p-orange-500) 15%, transparent);
