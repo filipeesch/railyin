@@ -77,4 +77,11 @@ body,
   background: var(--p-surface-50, #f8fafc);
   color: var(--p-text-color, #1e293b);
 }
+
+html.dark-mode,
+html.dark-mode body,
+html.dark-mode #app,
+html.dark-mode .railyn-app {
+  background: var(--p-surface-950);
+}
 </style>

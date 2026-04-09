@@ -52,9 +52,9 @@ function stateIcon(state: HunkDecision | "pending"): string {
 .review-file-list {
   width: 220px;
   flex-shrink: 0;
-  border-right: 1px solid var(--p-surface-200, #e2e8f0);
+  border-right: 1px solid var(--p-content-border-color, #e2e8f0);
   overflow-y: auto;
-  background: var(--p-surface-50, #f8fafc);
+  background: var(--p-content-background, #f8fafc);
   display: flex;
   flex-direction: column;
 }
@@ -66,7 +66,7 @@ function stateIcon(state: HunkDecision | "pending"): string {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--p-text-muted-color, #64748b);
-  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  border-bottom: 1px solid var(--p-content-border-color, #e2e8f0);
 }
 
 .review-file-list__items {
@@ -87,11 +87,11 @@ function stateIcon(state: HunkDecision | "pending"): string {
 }
 
 .review-file-list__item:hover {
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background, #f1f5f9);
 }
 
 .review-file-list__item.active {
-  background: var(--p-primary-50, #eef2ff);
+  background: var(--p-highlight-background, #eef2ff);
   font-weight: 500;
 }
 

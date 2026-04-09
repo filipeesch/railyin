@@ -137,3 +137,12 @@ function respond(decision: "approve_once" | "approve_all" | "deny") {
   color: var(--p-surface-500, #71717a);
 }
 </style>
+
+<style>
+html.dark-mode .shell-approval__command {
+  background: var(--p-surface-800, #1e293b);
+}
+html.dark-mode .shell-approval__command code {
+  color: var(--p-surface-200, #e2e8f0);
+}
+</style>

@@ -122,3 +122,17 @@ function toggle() {
   50%       { opacity: 0; }
 }
 </style>
+
+<style>
+html.dark-mode .rb__header {
+  background: var(--p-surface-800, #1e293b);
+  color: var(--p-text-color);
+}
+html.dark-mode .rb__header:hover {
+  background: var(--p-surface-700, #334155);
+}
+html.dark-mode .rb__body {
+  background: var(--p-surface-900, #0f172a);
+  border-top-color: var(--p-surface-700, #334155);
+}
+</style>

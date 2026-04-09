@@ -422,3 +422,20 @@ function goToBoard() {
   margin-top: 12px;
 }
 </style>
+
+<style>
+html.dark-mode .setup-view {
+  background: var(--p-surface-950);
+}
+html.dark-mode .setup-card {
+  background: var(--p-surface-900, #0f172a);
+  border-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .config-summary {
+  background: var(--p-surface-800, #1e293b);
+  border-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .project-item {
+  border-bottom-color: var(--p-surface-700, #334155);
+}
+</style>

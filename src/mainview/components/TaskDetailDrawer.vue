@@ -860,8 +860,8 @@ watch(
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--p-primary-color, #6366f1);
-  background: var(--p-primary-50, #eef2ff);
-  border: 1px solid var(--p-primary-200, #c7d2fe);
+  background: var(--p-highlight-background, #eef2ff);
+  border: 1px solid var(--p-content-border-color, #c7d2fe);
   border-radius: 10px;
   padding: 1px 7px;
   cursor: pointer;
@@ -871,7 +871,7 @@ watch(
 }
 
 .drawer-header__changed-badge:hover {
-  background: var(--p-primary-100, #e0e7ff);
+  background: var(--p-highlight-focus-background, #e0e7ff);
 }
 
 .drawer-header {
@@ -1080,8 +1080,8 @@ watch(
 }
 
 .msg--assistant .msg__bubble {
-  background: var(--p-surface-0, #fff);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-background);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 12px 12px 12px 2px;
   padding: 10px 14px;
   max-width: 85%;
@@ -1101,7 +1101,7 @@ watch(
 .msg--assistant .msg__bubble :deep(li) { margin: 0.15em 0; line-height: 1.5; }
 .msg--assistant .msg__bubble :deep(code) {
   font-family: ui-monospace, monospace; font-size: 0.82em;
-  background: var(--p-surface-100, #f1f5f9); border-radius: 4px; padding: 1px 5px;
+  background: var(--p-content-hover-background); border-radius: 4px; padding: 1px 5px;
 }
 .msg--assistant .msg__bubble :deep(pre) {
   background: var(--p-surface-900, #0f172a); color: var(--p-surface-100, #f1f5f9);
@@ -1141,7 +1141,7 @@ watch(
   white-space: pre-wrap;
   margin: 0;
   color: var(--p-text-color, #1e293b);
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background);
   border-radius: 4px;
   padding: 6px 8px;
 }
@@ -1192,5 +1192,25 @@ watch(
   border-radius: 6px;
   padding: 8px 12px;
   margin-top: 10px;
+}
+</style>
+
+<style>
+html.dark-mode .dialog-warning {
+  color: var(--p-orange-400);
+  background: color-mix(in srgb, var(--p-orange-500) 15%, transparent);
+  border-color: color-mix(in srgb, var(--p-orange-500) 35%, transparent);
+}
+html.dark-mode .launch-bar {
+  border-bottom-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .task-detail__side {
+  border-left-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .task-detail__input {
+  border-top-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .context-gauge {
+  background: var(--p-surface-700, #334155);
 }
 </style>

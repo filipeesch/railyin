@@ -318,3 +318,9 @@ function formatCtx(tokens: number): string {
   font-size: 0.75rem;
 }
 </style>
+
+<style>
+html.dark-mode .model-tree__thinking-toggle {
+  background: var(--p-surface-800, #1e293b);
+}
+</style>

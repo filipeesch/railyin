@@ -267,3 +267,34 @@ function loadMoreDown() {
   overflow-x: auto;
 }
 </style>
+
+<style>
+html.dark-mode .fdiff__load-more {
+  background: #0f172a;
+  color: #60a5fa;
+  border-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .fdiff__load-more:hover {
+  background: #1e293b;
+}
+html.dark-mode .fdiff__hunk-header {
+  background: #1e2d45;
+  color: #60a5fa;
+}
+html.dark-mode .fdiff__line--added   { background: #0d2b1a; }
+html.dark-mode .fdiff__line--removed { background: #2b0d0d; }
+html.dark-mode .fdiff__line--added   .fdiff__sign { color: #4ade80; }
+html.dark-mode .fdiff__line--removed .fdiff__sign { color: #f87171; }
+html.dark-mode .fdiff__tag--added {
+  background: #14532d;
+  color: #86efac;
+}
+html.dark-mode .fdiff__tag--removed {
+  background: #450a0a;
+  color: #fca5a5;
+}
+html.dark-mode .fdiff__tag--info {
+  background: #1e2d45;
+  color: #60a5fa;
+}
+</style>
