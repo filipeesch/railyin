@@ -73,3 +73,27 @@ bun run dev:test
 # GET  /reset-decisions  — clear hunk decisions for a task (test helper)
 # GET  /setup-test-env   — create a self-contained test task + git worktree
 ```
+
+## Copilot Engine
+
+To use the GitHub Copilot engine you need:
+
+1. **Node.js 22+** in your PATH. The `@github/copilot` CLI uses `node:sqlite` and `node:sea` which require Node 22.
+
+2. **`@github/copilot` installed globally under Node 22:**
+
+   ```sh
+   nvm use 22
+   npm install -g @github/copilot
+   ```
+
+3. **`COPILOT_CLI_PATH` environment variable** pointing to the installed CLI. Add this to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.) — it must be evaluated while Node 22 is active:
+
+   ```sh
+   export COPILOT_CLI_PATH=$(npm root -g)/@github/copilot/index.js
+   ```
+
+4. **Restart your shell** (or `source ~/.zshrc`) then launch the app.
+
+> **Why is this needed?** macOS `.app` bundles don't inherit your shell environment. Railyin reads `COPILOT_CLI_PATH` directly so it can locate the CLI regardless of how the app was launched.
+

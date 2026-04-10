@@ -132,7 +132,17 @@ export class CopilotEngine implements ExecutionEngine {
   }
 
   async listModels(): Promise<EngineModelInfo[]> {
-    const sdkModels = await this.sdkAdapter.listModels();
+    let sdkModels;
+    try {
+      sdkModels = await this.sdkAdapter.listModels();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[copilot] listModels failed:", err instanceof Error ? err.stack ?? err.message : err);
+      throw new Error(
+        `Copilot CLI failed to start: ${msg}\n\nEnsure @github/copilot is installed and set COPILOT_CLI_PATH to the path of your @github/copilot/index.js, then restart the app.\nExample: export COPILOT_CLI_PATH=$(npm root -g)/@github/copilot/index.js`,
+        { cause: err },
+      );
+    }
     return sdkModels.map((m) => ({
       qualifiedId: `copilot/${m.id}`,
       displayName: m.name ?? m.id,
