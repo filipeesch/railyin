@@ -4,7 +4,7 @@ Provides a reference syntax (`/stem`) that Railyin resolves at execution time by
 ## Requirements
 
 ### Requirement: Slash references resolve to prompt files from the project worktree
-The system SHALL resolve a value matching the pattern `/stem` (and optional text argument) — when it appears at the very beginning of the value — by reading `.github/prompts/{stem}.prompt.md` from the project's worktree. The resolved body (YAML frontmatter stripped) SHALL be used in place of the original reference string.
+The system SHALL resolve a value matching the pattern `/stem` (and optional text argument) — when it appears at the very beginning of the value — by reading `.github/prompts/{stem}.prompt.md` from the project's worktree. The system SHALL preserve the original slash invocation as the user-visible chat content while using the resolved prompt body for execution.
 
 #### Scenario: Valid slash reference resolves to prompt body
 - **WHEN** a value starts with `/opsx-propose` and `.github/prompts/opsx-propose.prompt.md` exists in the worktree
@@ -25,6 +25,18 @@ The system SHALL resolve a value matching the pattern `/stem` (and optional text
 #### Scenario: $input is replaced with empty string when no argument provided
 - **WHEN** the slash reference has no trailing argument text (e.g., `/opsx-sync`)
 - **THEN** every occurrence of `$input` in the resolved prompt body is replaced with an empty string
+
+#### Scenario: Visible chat shows slash invocation, engine receives resolved body
+- **WHEN** the user sends `/my-prompt refine this function` and `.github/prompts/my-prompt.prompt.md` exists
+- **THEN** the conversation timeline shows the original invocation `/my-prompt refine this function`, and the engine executes the resolved prompt body with `$input` substituted
+
+#### Scenario: Resolved prompt body is not rendered as a normal user bubble
+- **WHEN** a slash reference is resolved successfully
+- **THEN** the resolved prompt body is kept out of standard user-facing chat bubbles unless explicitly rendered through a dedicated prompt marker
+
+#### Scenario: Workflow/internal prompt entries may show compact display text
+- **WHEN** the system records a workflow-driven prompt entry that has a display label distinct from its resolved prompt body
+- **THEN** the chat timeline renders the display label or hides the entry, but it does not render the full resolved body as if the user typed it
 
 #### Scenario: File not found surfaces a hard error
 - **WHEN** the referenced file does not exist in the worktree

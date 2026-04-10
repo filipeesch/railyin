@@ -1,6 +1,11 @@
 <template>
-  <div v-if="chunk.type === 'user'" class="msg msg--user">
-    <div class="msg__bubble">{{ chunk.content }}</div>
+  <div v-if="chunk.type === 'user' && chunk.role === 'prompt'" class="msg msg--prompt">
+    <i class="pi pi-bolt" />
+    <code class="msg--prompt__label">{{ displayContent }}</code>
+  </div>
+
+  <div v-else-if="chunk.type === 'user'" class="msg msg--user">
+    <div class="msg__bubble">{{ displayContent }}</div>
     <div class="msg__meta">You</div>
   </div>
 
@@ -79,7 +84,11 @@ function renderMd(content: string): string {
   return marked.parse(content, { async: false }) as string;
 }
 
-const meta = computed(() => props.chunk.metadata as Record<string, string> | null);
+const meta = computed(() => props.chunk.metadata as Record<string, unknown> | null);
+
+const displayContent = computed(() => {
+  return typeof meta.value?.display_content === "string" ? meta.value.display_content : props.chunk.content;
+});
 
 /** True when an assistant message was generated in XML <tool_call> format instead of the JSON API format. These should be silently hidden. */
 const isXmlToolCall = computed(() =>
@@ -188,6 +197,7 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
   max-width: 80%;
   white-space: pre-wrap;
   word-break: break-word;
+  font-size: 0.92rem;
 }
 
 .msg--assistant {
@@ -201,6 +211,7 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
   padding: 10px 14px;
   max-width: 85%;
   word-break: break-word;
+  font-size: 0.92rem;
 }
 
 /* ── Prose styles for rendered markdown ─────────────────────────────────── */
@@ -310,6 +321,19 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
 .msg--ask-prompt {
   align-items: flex-start;
   max-width: 100%;
+}
+
+.msg--prompt {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  color: var(--p-text-muted-color, #94a3b8);
+}
+
+.msg--prompt__label {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.78rem;
 }
 
 .msg--compaction {

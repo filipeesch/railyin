@@ -650,7 +650,13 @@ function scrollToBottom() {
 
 // Auto-scroll to bottom when messages change
 watch(
-  [() => taskStore.messages.length, () => taskStore.streamingToken],
+  [
+    () => taskStore.messages.length,
+    () => taskStore.streamingToken.length,
+    () => taskStore.streamingReasoningToken.length,
+    () => taskStore.streamingStatusMessage.length,
+    () => task.value?.executionState,
+  ],
   async () => {
     await nextTick();
     if (autoScroll.value) scrollToBottom();

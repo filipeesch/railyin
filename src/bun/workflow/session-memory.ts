@@ -111,7 +111,7 @@ async function _doExtract(taskId: number): Promise<void> {
       .query<ConversationMessageRow, [number]>(
         `SELECT * FROM conversation_messages
          WHERE task_id = ? AND type IN ('user', 'assistant', 'tool_call', 'tool_result')
-         ORDER BY created_at DESC LIMIT 40`,
+         ORDER BY id DESC LIMIT 40`,
       )
       .all(taskId)
       .reverse();

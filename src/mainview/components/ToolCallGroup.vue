@@ -5,21 +5,22 @@
       <i :class="['pi', statusIcon, 'tcg__tool-icon']" :style="statusIconStyle" />
       <code class="tcg__tool-name">{{ toolName }}</code>
       <span v-if="primaryArg" class="tcg__primary-arg">{{ primaryArg }}</span>
-      <span v-if="diffPayload && diffPayload.added > 0" class="tcg__stat tcg__stat--added">+{{ diffPayload.added }}</span>
-      <span v-if="diffPayload && diffPayload.removed > 0" class="tcg__stat tcg__stat--removed">-{{ diffPayload.removed }}</span>
+      <span v-if="effectiveDiffPayload && effectiveDiffPayload.added > 0" class="tcg__stat tcg__stat--added">+{{ effectiveDiffPayload.added }}</span>
+      <span v-if="effectiveDiffPayload && effectiveDiffPayload.removed > 0" class="tcg__stat tcg__stat--removed">-{{ effectiveDiffPayload.removed }}</span>
     </button>
 
-    <div v-if="open" :class="['tcg__body', (entry.diff || toolName === 'read_file') ? 'tcg__body--flush' : '']">
-      <FileDiff v-if="entry.diff" :payload="diffPayload!" />
-      <ReadView v-else-if="toolName === 'read_file'" :content="parsedResult?.content ?? entry.result?.content ?? ''" />
-      <pre v-else-if="entry.result" class="tcg__output">{{ truncated }}</pre>
+    <div v-if="open" :class="['tcg__body', (effectiveDiffPayload || toolName === 'read_file') ? 'tcg__body--flush' : '']">
+      <FileDiff v-if="effectiveDiffPayload" :payload="effectiveDiffPayload" />
+      <ReadView v-else-if="toolName === 'read_file'" :content="displayContent" />
+      <pre v-else-if="entry.result && hasOutput" class="tcg__output">{{ truncated }}</pre>
+      <div v-else-if="entry.result" class="tcg__empty">No output produced.</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { ConversationMessage, FileDiffPayload } from "@shared/rpc-types";
+import type { ConversationMessage, FileDiffPayload, Hunk } from "@shared/rpc-types";
 import FileDiff from "./FileDiff.vue";
 import ReadView from "./ReadView.vue";
 
@@ -67,7 +68,6 @@ const parsedCall = computed(() => {
 });
 
 const toolName = computed(() => parsedCall.value.name);
-const toolIcon = computed(() => TOOL_ICONS[toolName.value] ?? "pi-code");
 
 // Outcome icon: spinner while running, check on success, times on error
 const parsedResult = computed(() => {
@@ -77,6 +77,8 @@ const parsedResult = computed(() => {
       type?: string;
       tool_use_id?: string;
       content?: string;
+      detailedContent?: string;
+      contents?: Array<Record<string, unknown>>;
       is_error?: boolean;
     };
   } catch {
@@ -103,10 +105,29 @@ const primaryArg = computed(() => {
 });
 
 const truncated = computed(() => {
-  const raw = props.entry.result?.content ?? "";
-  const c = parsedResult.value?.content ?? raw;
+  const c = displayContent.value;
   return c.length > 800 ? c.slice(0, 800) + "\n…[truncated]" : c;
 });
+
+const displayContent = computed(() => {
+  const parsed = parsedResult.value;
+  if (parsed?.detailedContent?.trim()) return parsed.detailedContent.trim();
+
+  const contentBlocks = parsed?.contents ?? [];
+  const textFromBlocks = contentBlocks
+    .flatMap((block) => {
+      if (block.type === "text" && typeof block.text === "string") return [block.text];
+      if (block.type === "terminal" && typeof block.text === "string") return [block.text];
+      return [];
+    })
+    .join("\n\n")
+    .trim();
+  if (textFromBlocks) return textFromBlocks;
+
+  return (parsed?.content ?? props.entry.result?.content ?? "").trim();
+});
+
+const hasOutput = computed(() => displayContent.value.length > 0);
 
 const diffPayload = computed<FileDiffPayload | null>(() => {
   if (!props.entry.diff) return null;
@@ -116,6 +137,113 @@ const diffPayload = computed<FileDiffPayload | null>(() => {
     return { operation: "write_file", path: "unknown", added: 0, removed: 0 };
   }
 });
+
+const effectiveDiffPayload = computed<FileDiffPayload | null>(() => {
+  return diffPayload.value ?? inferDiffPayload(displayContent.value, toolName.value, parsedCall.value.args);
+});
+
+function inferDiffPayload(
+  text: string,
+  rawToolName: string,
+  args: Record<string, unknown>,
+): FileDiffPayload | null {
+  const diffText = extractUnifiedDiff(text);
+  if (!diffText) return null;
+  const path = String(args.path ?? args.filePath ?? args.target_file ?? args.from_path ?? "unknown");
+  const operation = inferOperation(rawToolName, args);
+  const parsed = parseUnifiedDiff(diffText, path, operation);
+  return (parsed.hunks?.length ?? 0) > 0 || parsed.operation === "rename_file" ? parsed : null;
+}
+
+function extractUnifiedDiff(text: string): string | null {
+  const fenced = text.match(/```diff\s*([\s\S]*?)```/i)?.[1];
+  const candidate = (fenced ?? text).trim();
+  if (!candidate.includes("@@") && !candidate.includes("--- ") && !candidate.includes("+++ ")) {
+    return null;
+  }
+  return candidate;
+}
+
+function inferOperation(toolName: string, args: Record<string, unknown>): FileDiffPayload["operation"] {
+  const normalized = toolName.toLowerCase();
+  if (normalized.includes("rename")) return "rename_file";
+  if (normalized.includes("delete")) return "delete_file";
+  if (normalized.includes("patch")) return "patch_file";
+  if (normalized.includes("edit")) return "edit_file";
+  if (args.from_path && args.to_path) return "rename_file";
+  return "write_file";
+}
+
+function parseUnifiedDiff(
+  diffText: string,
+  fallbackPath: string,
+  operation: FileDiffPayload["operation"],
+): FileDiffPayload {
+  const lines = diffText.split("\n");
+  const hunks: Hunk[] = [];
+  let currentHunk: Hunk | null = null;
+  let oldLine = 0;
+  let newLine = 0;
+  let path = fallbackPath;
+  let toPath: string | undefined;
+  let added = 0;
+  let removed = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("--- ")) {
+      path = normalizeDiffPath(line.slice(4).trim(), fallbackPath);
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      toPath = normalizeDiffPath(line.slice(4).trim(), fallbackPath);
+      continue;
+    }
+    const header = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (header) {
+      currentHunk = {
+        old_start: Number(header[1]),
+        new_start: Number(header[2]),
+        lines: [],
+      };
+      hunks.push(currentHunk);
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      continue;
+    }
+    if (!currentHunk) continue;
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      currentHunk.lines.push({ type: "added", new_line: newLine, content: line.slice(1) });
+      newLine += 1;
+      added += 1;
+      continue;
+    }
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      currentHunk.lines.push({ type: "removed", old_line: oldLine, content: line.slice(1) });
+      oldLine += 1;
+      removed += 1;
+      continue;
+    }
+    if (line.startsWith(" ")) {
+      currentHunk.lines.push({ type: "context", old_line: oldLine, new_line: newLine, content: line.slice(1) });
+      oldLine += 1;
+      newLine += 1;
+    }
+  }
+
+  return {
+    operation,
+    path,
+    ...(toPath && toPath !== path ? { to_path: toPath } : {}),
+    added,
+    removed,
+    ...(hunks.length > 0 ? { hunks } : {}),
+  };
+}
+
+function normalizeDiffPath(path: string, fallbackPath: string): string {
+  const cleaned = path.replace(/^a\//, "").replace(/^b\//, "");
+  return cleaned === "/dev/null" ? fallbackPath : cleaned;
+}
 </script>
 
 <style scoped>
@@ -235,6 +363,13 @@ const diffPayload = computed<FileDiffPayload | null>(() => {
   overflow-y: auto;
   color: var(--p-text-color, #1e293b);
   line-height: 1.5;
+}
+
+.tcg__empty {
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color, #94a3b8);
+  font-style: italic;
 }
 </style>
 

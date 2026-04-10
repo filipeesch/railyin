@@ -11,7 +11,7 @@ export function conversationHandlers() {
       const db = getDb();
       return db
         .query<ConversationMessageRow, [number]>(
-          "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+          "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
         )
         .all(params.taskId)
         .map(mapConversationMessage);

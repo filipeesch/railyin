@@ -165,16 +165,50 @@ export function reasoning(content: string): MockTurnStep {
 }
 
 export function toolStart(callId: string, toolName: string, args: unknown = {}): MockTurnStep {
+    return toolStartWithOptions(callId, toolName, args);
+}
+
+export function toolStartWithOptions(
+    callId: string,
+    toolName: string,
+    args: unknown = {},
+    options: { parentToolCallId?: string; source?: string } = {},
+): MockTurnStep {
     return {
         kind: "emit",
-        event: { type: "tool.execution_start", data: { toolCallId: callId, toolName, arguments: args } },
+        event: {
+            type: "tool.execution_start",
+            ...(options.source ? { source: options.source } : {}),
+            data: { toolCallId: callId, toolName, arguments: args, parentToolCallId: options.parentToolCallId },
+        },
     };
 }
 
 export function toolResult(callId: string, result: string, success = true): MockTurnStep {
+    return toolResultWithOptions(callId, result, success);
+}
+
+export function toolResultWithOptions(
+    callId: string,
+    result: string,
+    success = true,
+    options: { detailedContent?: string; contents?: Array<Record<string, unknown>>; source?: string } = {},
+): MockTurnStep {
     return {
         kind: "emit",
-        event: { type: "tool.execution_complete", data: { toolCallId: callId, success, result: { content: result } } },
+        event: {
+            type: "tool.execution_complete",
+            ...(options.source ? { source: options.source } : {}),
+            data: {
+                toolCallId: callId,
+                success,
+                result: {
+                    content: result,
+                    detailedContent: options.detailedContent,
+                    contents: options.contents,
+                },
+            },
+        },
     };
 }
 

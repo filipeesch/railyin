@@ -1697,7 +1697,7 @@ export async function executeTool(
       if (includeN > 0) {
         const msgs = db
           .query<ConversationMessageRow, [number, number]>(
-            `SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at DESC LIMIT ?`,
+            `SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id DESC LIMIT ?`,
           )
           .all(taskId, includeN)
           .reverse()

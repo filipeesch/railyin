@@ -84,7 +84,7 @@ The system SHALL display a `@@ -oldStart +newStart @@` header for each hunk grou
 - **THEN** the `@@` header shows the line numbers of the first visible line in that hunk portion, not the original `old_start`/`new_start`
 
 ### Requirement: ToolCallGroup.vue shows +N/-N stat badges for write operations
-The system SHALL render green `+N` and red `-N` count badges in the `ToolCallGroup` header for any tool entry that has an associated `file_diff` payload.
+The system SHALL render green `+N` and red `-N` count badges in the `ToolCallGroup` header for any tool entry that has an associated `file_diff` payload. Tool rows SHALL also support richer Copilot-originated edit results by rendering line-level added/removed changes when structured diff data or equivalent detailed tool result content is available.
 
 #### Scenario: Header shows added/removed counts
 - **WHEN** a tool entry has a `file_diff` with `added > 0` or `removed > 0`
@@ -93,6 +93,14 @@ The system SHALL render green `+N` and red `-N` count badges in the `ToolCallGro
 #### Scenario: No badge when counts are zero
 - **WHEN** a tool entry has a `file_diff` with `added: 0` and `removed: 0` (e.g. rename)
 - **THEN** no stat badges appear in the header
+
+#### Scenario: Copilot file edit shows line-level changes
+- **WHEN** a Copilot tool result describes a file edit and includes sufficient diff detail for the UI
+- **THEN** the tool row renders added and removed lines instead of an empty output shell
+
+#### Scenario: Fallback placeholder shown when no visible diff or output exists
+- **WHEN** a write-oriented tool result contains no renderable diff detail and no readable output text
+- **THEN** the expanded row renders the explicit no-output placeholder rather than an empty collapsible body
 
 ### Requirement: code_review is a first-class message type
 The system SHALL define `"code_review"` as a valid `MessageType` in `rpc-types.ts`. The content of a `code_review` message SHALL be a JSON-serialized `CodeReviewPayload` containing the full set of hunk decisions submitted by the reviewer.

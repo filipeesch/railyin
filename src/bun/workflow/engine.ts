@@ -470,7 +470,7 @@ export function estimateContextUsage(
   // Fallback: character-count estimation when no actual usage is recorded yet.
   const messages = db
     .query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
     )
     .all(taskId);
 
@@ -653,7 +653,7 @@ export async function compactConversation(taskId: number): Promise<ConversationM
 
   const history = db
     .query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
     )
     .all(taskId);
 
@@ -857,7 +857,13 @@ export async function handleTransition(
     conversationId,
     "user",
     "prompt",
-    resolvedOnEnterPrompt,
+    column.on_enter_prompt,
+    resolvedOnEnterPrompt === column.on_enter_prompt
+      ? undefined
+      : {
+          resolved_content: resolvedOnEnterPrompt,
+          display_content: column.on_enter_prompt,
+        },
   );
 
   // 9. Register AbortController for cancellation (D3)
@@ -1119,7 +1125,7 @@ async function runExecution(
     const column = getColumnConfig(templateId, task.workflow_state);
     const history = db
       .query<ConversationMessageRow, [number]>(
-        "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+        "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
       )
       .all(taskId);
 
@@ -1426,7 +1432,7 @@ async function runExecution(
           }
           // Reload messages and retry the round
           const freshRows = db.query<ConversationMessageRow, [number]>(
-            "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+            "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
           ).all(taskId);
           const freshMessages = compactMessages(freshRows);
           liveMessages.length = 0;

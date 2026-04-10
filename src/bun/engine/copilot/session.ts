@@ -9,14 +9,40 @@ export interface CopilotSdkSessionConfig {
 
 export type CopilotSdkResumeSessionConfig = Omit<CopilotSdkSessionConfig, "sessionId">;
 
+export interface CopilotSdkToolResultContentBlock {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface CopilotSdkToolResultPayload {
+  content?: string;
+  detailedContent?: string;
+  contents?: CopilotSdkToolResultContentBlock[];
+}
+
 export type CopilotSdkEvent =
-  | { type: "assistant.message_delta"; data: { deltaContent: string } }
-  | { type: "assistant.message"; data: { content?: string } }
-  | { type: "assistant.reasoning_delta"; data: { deltaContent: string } }
-  | { type: "assistant.reasoning"; data: { content?: string } }
+  | { type: "assistant.message_delta"; data: { deltaContent: string }; source?: string }
+  | { type: "assistant.message"; data: { content?: string }; source?: string }
+  | { type: "assistant.reasoning_delta"; data: { deltaContent: string }; source?: string }
+  | { type: "assistant.reasoning"; data: { content?: string }; source?: string }
   | { type: "session.ask_user"; data: { payload: string } }
-  | { type: "tool.execution_start"; data: { toolCallId: string; toolName: string; arguments?: unknown } }
-  | { type: "tool.execution_complete"; data: { toolCallId: string; success: boolean; result?: { content?: string } } }
+  | {
+      type: "tool.execution_start";
+      data: { toolCallId: string; toolName: string; arguments?: unknown; parentToolCallId?: string };
+      source?: string;
+    }
+  | { type: "tool.execution_partial_result"; data: { toolCallId: string; partialOutput: string }; source?: string }
+  | { type: "tool.execution_progress"; data: { toolCallId: string; progressMessage: string }; source?: string }
+  | {
+      type: "tool.execution_complete";
+      data: {
+        toolCallId: string;
+        success: boolean;
+        result?: CopilotSdkToolResultPayload;
+        isUserRequested?: boolean;
+      };
+      source?: string;
+    }
   | { type: "assistant.usage"; data: { inputTokens?: number; outputTokens?: number } }
   | { type: "session.task_complete" }
   | { type: "session.idle" }
