@@ -28,6 +28,8 @@ export class CopilotEngine implements ExecutionEngine {
     _onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: CopilotSdkAdapter = createDefaultCopilotSdkAdapter(),
+    // cliPath is only used when constructing the default adapter above;
+    // when a custom sdkAdapter is injected (tests) this parameter is unused.
   ) {
     this.defaultModel = defaultModel;
     this.sdkAdapter = sdkAdapter;
@@ -39,6 +41,18 @@ export class CopilotEngine implements ExecutionEngine {
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
     const { executionId, taskId, boardId, prompt, systemInstructions, workingDirectory, model } = params;
+
+    // Collect status messages from the adapter (download/setup progress)
+    // so we can yield them as engine events for the UI.
+    const pendingStatus: string[] = [];
+    const unsubStatus = this.sdkAdapter.onStatus((msg) => pendingStatus.push(msg));
+
+    // Helper: yield any buffered status events.
+    const flushStatus = function* (): Generator<EngineEvent> {
+      while (pendingStatus.length > 0) {
+        yield { type: "status", message: pendingStatus.shift()! };
+      }
+    };
 
     // Resolve model: prefer execution-specific model, fall back to engine default.
     // Strip the "copilot/" namespace prefix — it's our internal qualifier, the SDK
@@ -86,11 +100,15 @@ export class CopilotEngine implements ExecutionEngine {
     let session: CopilotSdkSession | undefined;
     try {
       try {
+        yield* flushStatus();
         session = await this.sdkAdapter.resumeSession(sdkSessionId, sessionConfig);
+        yield* flushStatus();
       } catch {
         // Session data doesn't exist on disk yet (first run) or was deleted.
         // Create with the same deterministic ID so future runs can always resume it.
+        yield* flushStatus();
         session = await this.sdkAdapter.createSession({ sessionId: sdkSessionId, ...sessionConfig });
+        yield* flushStatus();
       }
 
       this.sessions.set(executionId, session);
@@ -112,6 +130,7 @@ export class CopilotEngine implements ExecutionEngine {
         fatal: true,
       };
     } finally {
+      unsubStatus();
       this.sessions.delete(executionId);
       if (session) {
         await this.sdkAdapter.disconnectSession(session).catch(() => { });
@@ -139,7 +158,7 @@ export class CopilotEngine implements ExecutionEngine {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[copilot] listModels failed:", err instanceof Error ? err.stack ?? err.message : err);
       throw new Error(
-        `Copilot CLI failed to start: ${msg}\n\nEnsure @github/copilot is installed and set COPILOT_CLI_PATH to the path of your @github/copilot/index.js, then restart the app.\nExample: export COPILOT_CLI_PATH=$(npm root -g)/@github/copilot/index.js`,
+        `Copilot CLI failed to start: ${msg}\n\nRailyn automatically downloads the Copilot CLI binary on first use.\nPlease check your internet connection and try again.\n\nIf the problem persists, check the logs at ~/.railyn/logs/bun.log`,
         { cause: err },
       );
     }

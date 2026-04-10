@@ -122,6 +122,30 @@ export interface LoadedConfig {
   engine: EngineConfig;
 }
 
+// ─── Global config (config.yaml) ────────────────────────────────────────────
+
+/** Machine/user-level global config. Lives at ~/.railyn/config/config.yaml. */
+export interface GlobalConfig {
+  // Reserved for future global settings.
+}
+
+/** Read ~/.railyn/config/config.yaml. Returns an empty object if the file is absent or unparseable.
+ *  Always reads from the real user data directory — intentionally bypasses the dev config dir
+ *  override (__RAILYN_DEV_CONFIG_DIR__) since global config is machine-scoped, not project-scoped. */
+export function readGlobalConfig(): GlobalConfig {
+  const dataDir = process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
+  const configPath = join(dataDir, "config", "config.yaml");
+  if (!existsSync(configPath)) return {};
+  try {
+    const parsed = yaml.load(readFileSync(configPath, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null) return {};
+    return parsed as GlobalConfig;
+  } catch (err) {
+    console.warn("[config] Failed to parse config.yaml:", err);
+    return {};
+  }
+}
+
 // ─── Config singleton ─────────────────────────────────────────────────────────
 
 let _config: LoadedConfig | null = null;

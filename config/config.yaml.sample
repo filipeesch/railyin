@@ -1,0 +1,4 @@
+# Railyin global configuration — machine/user-level settings shared across all workspaces.
+# Copy this file to ~/.railyn/config/config.yaml and fill in the values you need.
+
+# (Currently no global settings are required — Railyin auto-manages engine binaries.)

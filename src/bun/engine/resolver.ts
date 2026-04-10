@@ -10,6 +10,7 @@ import type { LoadedConfig } from "../config/index.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import { NativeEngine } from "./native/engine.ts";
 import { CopilotEngine } from "./copilot/engine.ts";
+import { createDefaultCopilotSdkAdapter } from "./copilot/session.ts";
 
 /**
  * Resolve and instantiate the correct engine based on workspace config.
@@ -26,7 +27,12 @@ export function resolveEngine(
   const engine = config.engine;
 
   if (engine.type === "copilot") {
-    return new CopilotEngine(engine.model, onTaskUpdated, onNewMessage);
+    return new CopilotEngine(
+      engine.model,
+      onTaskUpdated,
+      onNewMessage,
+      createDefaultCopilotSdkAdapter(),
+    );
   }
 
   return new NativeEngine();

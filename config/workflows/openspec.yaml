@@ -9,27 +9,13 @@ columns:
     label: Explore
     description: Think through the problem, investigate options, clarify requirements
     on_enter_prompt: /opsx-explore
-    stage_instructions: (Don't propose yet)
-    tools:
-      - read
-      - search
-      - web
-      - interactions
-      - agents
+    stage_instructions: exploration mode
 
   - id: propose
     label: Propose
     description: Create a change proposal with design, specs, and tasks
     on_enter_prompt: /opsx-propose
-    stage_instructions: (Don't apply yet)
-    tools:
-      - read
-      - write
-      - search
-      - shell
-      - interactions
-      - agents
-      - todos
+    stage_instructions: proposal mode
 
   - id: apply
     label: Apply
@@ -42,16 +28,6 @@ columns:
         3 - Remove any dead code
         4 - Execute the tests
         5 - Go back to step 2 two times
-    tools:
-      - read
-      - write
-      - search
-      - web
-      - shell
-      - interactions
-      - agents
-      - todos
-      - lsp
 
   - id: done
     label: Done
@@ -62,10 +38,3 @@ columns:
       solve possible conflicts.
       Use ask_me tool if the conflicts resolution is not clear.
       Remove the task worktree.
-    tools:
-      - read
-      - write
-      - shell
-      - interactions
-      - agents
-      - todos
