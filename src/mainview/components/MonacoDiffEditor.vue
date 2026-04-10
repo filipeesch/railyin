@@ -22,11 +22,13 @@ const props = withDefaults(
     sideBySide?: boolean;
     reviewMode?: boolean;
     onRequestLineComment?: (lineStart: number, lineEnd: number) => void;
+    theme?: string;
   }>(),
   {
     language: "plaintext",
     sideBySide: false,
     reviewMode: false,
+    theme: "vs",
   },
 );
 
@@ -145,7 +147,7 @@ async function initEditor() {
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
     automaticLayout: true,
-    theme: "vs",
+    theme: props.theme,
     glyphMargin: true,
   });
 
@@ -189,6 +191,13 @@ watch(
   () => props.sideBySide,
   (val) => {
     if (editor) editor.updateOptions({ renderSideBySide: val });
+  },
+);
+
+watch(
+  () => props.theme,
+  (val) => {
+    if (monacoInstance) monacoInstance.editor.setTheme(val ?? "vs");
   },
 );
 

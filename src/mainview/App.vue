@@ -118,4 +118,11 @@ body,
   user-select: none;
   margin-left: 8px;
 }
+
+html.dark-mode,
+html.dark-mode body,
+html.dark-mode #app,
+html.dark-mode .railyn-app {
+  background: var(--p-surface-950);
+}
 </style>

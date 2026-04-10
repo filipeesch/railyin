@@ -1,0 +1,25 @@
+run:
+  profiles:
+    - label: "Run"
+      icon: "pi-play"
+      command: "bun run dev"
+    - label: "Debug"
+      icon: "lucide:bug"
+      command: "bun run dev:debug"
+    - label: "Test"
+      icon: "pi-check-circle"
+      command: "bun test src/bun/test --timeout 20000"
+    - label: "UI Tests"
+      icon: "pi-desktop"
+      command: "bun run test:ui"
+
+  tools:
+    - label: "VS Code"
+      icon: "logos:visual-studio-code"
+      command: "code ."
+    - label: "VS Code Insiders"
+      icon: "logos:visual-studio-code-insiders"
+      command: "code-insiders ."
+    - label: "Cursor"
+      icon: "simple-icons:cursor"
+      command: "cursor ."

@@ -4,7 +4,7 @@ Projects represent registered Git repositories (or monorepo sub-folders) that ta
 ## Requirements
 
 ### Requirement: Project is a registered folder
-The system SHALL allow users to register a folder as a project. A project may be the root of a standalone Git repository or a subfolder within a monorepo.
+The system SHALL allow users to register a folder as a project. A project may be the root of a standalone Git repository or a subfolder within a monorepo. An optional `railyin.yaml` file at the project root MAY define run profiles and tool launchers for tasks belonging to that project.
 
 #### Scenario: Standalone repository registered
 - **WHEN** a user registers a folder where `project_path == git_root_path`
@@ -13,6 +13,10 @@ The system SHALL allow users to register a folder as a project. A project may be
 #### Scenario: Monorepo sub-project registered
 - **WHEN** a user registers a folder where `project_path` is a subdirectory of `git_root_path`
 - **THEN** the project stores both paths independently, allowing Git operations at the repo root
+
+#### Scenario: Project has railyin.yaml at project root
+- **WHEN** a `railyin.yaml` file exists at `project_path`
+- **THEN** the system can read launch profiles and tools from it for tasks belonging to this project
 
 ### Requirement: Project stores git root and project path independently
 The system SHALL store `project_path` and `git_root_path` as separate fields. All Git operations (branch creation, worktree management) SHALL use `git_root_path`. Agent execution context SHALL include both paths.

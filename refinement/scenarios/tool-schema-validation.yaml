@@ -1,0 +1,34 @@
+name: tool-schema-validation
+description: >
+  Validates that the full tool set (read + write + search + web + shell +
+  interactions + agents + lsp) contains the expected core tools and does NOT
+  contain deprecated/removed tools (list_dir, delete_file, rename_file).
+  Also checks that the tools array is non-trivially large (all groups loaded).
+prompt: "What tools do you have access to? List them all."
+expected_behavior:
+  must_complete: true
+  max_rounds: 1
+  ideal_rounds: 1
+
+column_tools:
+  - read
+  - write
+  - search
+  - web
+  - shell
+  - interactions
+  - agents
+  - lsp
+
+assertions:
+  - type: tools_include
+    names: [read_file, edit_file, search_text, spawn_agent, ask_me, run_command, fetch_url]
+  - type: tools_exclude
+    names: [list_dir, delete_file, rename_file]
+  - type: cache_prefix_stable
+
+script:
+  - role: user
+    content: "List available tools and their capabilities."
+  - respond_with: text
+    content: "I have access to: read_file, edit_file, search_text, find_files, spawn_agent, ask_me, run_command, fetch_url, and more."

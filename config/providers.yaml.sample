@@ -1,0 +1,71 @@
+# providers.yaml.sample — copy to config/providers.yaml and customize
+#
+# Stable commit for worktree creation. All non-mock providers will create
+# a git worktree at /tmp/railyin-bench-<provider-id>-<ts> at this commit.
+stable_commit: c679d29
+
+# How many times to run each scenario per provider (for variance detection).
+# Default: 2
+runs_per_scenario: 2
+
+# Provider IDs to use when --providers is not specified.
+default_providers:
+  - mock-default
+
+# Optional: Provider to use for behavioral gate validation.
+# If absent, the first lmstudio provider is used. If none, gate is skipped.
+# behavioral_provider: lmstudio-qwen
+
+providers:
+  # ─── Mock (scripted, no backend, no worktree) ────────────────────────────
+  - id: mock-default
+    type: mock
+
+  # ─── LM Studio (local) ──────────────────────────────────────────────────
+  - id: lmstudio-qwen
+    type: lmstudio
+    model_key: qwen/qwen3.5-9b
+    model: lmstudio/qwen3.5-9b
+    host: localhost
+    port: 1234
+    context_length: 32768
+    gpu: 1.0
+
+  # ─── LM Studio (network via LM Link) ─────────────────────────────────────
+  # - id: lmstudio-qwen35-9b
+  #   type: lmstudio
+  #   model_key: qwen/qwen3.5-9b
+  #   model: lmstudio/qwen3.5-9b
+  #   host: 192.168.86.129
+  #   port: 1234
+  #   link_device: my-device-name   # from: lms link --name my-device-name
+  #   context_length: 32768
+  #
+  # - id: lmstudio-qwen35-35b
+  #   type: lmstudio
+  #   model_key: qwen/qwen3.5-35b-a3b
+  #   model: lmstudio/qwen3.5-35b-a3b
+  #   host: 192.168.86.129
+  #   port: 1234
+  #   link_device: my-device-name
+  #   context_length: 32768
+  #
+  # - id: lmstudio-gemma4-26b
+  #   type: lmstudio
+  #   model_key: google/gemma-4-26b-a4b
+  #   model: lmstudio/gemma-4-26b-a4b
+  #   host: 192.168.86.129
+  #   port: 1234
+  #   link_device: my-device-name
+  #   context_length: 32768
+
+  # ─── Anthropic API ───────────────────────────────────────────────────────
+  - id: anthropic-sonnet
+    type: anthropic
+    model: anthropic/claude-sonnet-4-20250514
+    # api_key: sk-ant-...  (or set ANTHROPIC_API_KEY env var)
+    pricing:
+      input: 3.00
+      cache_write: 6.00
+      cache_read: 0.30
+      output: 15.00

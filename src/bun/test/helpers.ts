@@ -54,6 +54,8 @@ export function initDb(): Database {
       created_from_task_id      INTEGER REFERENCES tasks(id),
       created_from_execution_id INTEGER,
       model                     TEXT,
+      shell_auto_approve        INTEGER NOT NULL DEFAULT 0,
+      approved_commands         TEXT    NOT NULL DEFAULT '[]',
       created_at                TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS task_git_context (
@@ -75,7 +77,12 @@ export function initDb(): Database {
       started_at  TEXT NOT NULL DEFAULT (datetime('now')),
       finished_at TEXT,
       summary     TEXT,
-      details     TEXT
+      details     TEXT,
+      cost_estimate REAL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_creation_input_tokens INTEGER,
+      cache_read_input_tokens INTEGER
     );
     CREATE TABLE IF NOT EXISTS conversation_messages (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,6 +129,17 @@ export function initDb(): Database {
       content    TEXT    NOT NULL,
       created_at TEXT    NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS task_todos (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      title      TEXT    NOT NULL,
+      status     TEXT    NOT NULL DEFAULT 'not-started',
+      context    TEXT,
+      result     TEXT,
+      created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
   `);
   db.run("INSERT INTO workspaces (id, name) VALUES (1, 'test-workspace')");
   return db;
@@ -197,6 +215,7 @@ export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: (
   );
 
   process.env.RAILYN_CONFIG_DIR = configDir;
+  process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");
   resetConfig();
   loadConfig();
 
@@ -205,6 +224,7 @@ export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: (
     cleanup: () => {
       rmSync(configDir, { recursive: true, force: true });
       delete process.env.RAILYN_CONFIG_DIR;
+      delete process.env.RAILYN_SESSION_MEMORY_DIR;
       resetConfig();
     },
   };

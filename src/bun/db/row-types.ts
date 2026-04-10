@@ -48,6 +48,8 @@ export interface TaskRow {
   created_from_execution_id: number | null;
   created_at: string;
   model: string | null;
+  shell_auto_approve: number;
+  approved_commands: string;
   // Fields from LEFT JOIN task_git_context (populated by extended queries)
   worktree_status?: string | null;
   branch_name?: string | null;
@@ -76,6 +78,11 @@ export interface ExecutionRow {
   finished_at: string | null;
   summary: string | null;
   details: string | null;
+  cost_estimate: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  cache_read_input_tokens: number | null;
 }
 
 export interface ConversationMessageRow {
@@ -94,4 +101,14 @@ export interface PendingMessageRow {
   task_id: number;
   content: string;
   created_at: string;
+}
+
+export interface TaskTodoRow {
+  id: number;
+  task_id: number;
+  title: string;
+  status: string; // 'not-started' | 'in-progress' | 'completed'
+  result: string | null;
+  created_at: string;
+  updated_at: string;
 }

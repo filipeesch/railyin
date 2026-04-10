@@ -1,0 +1,73 @@
+name: spawn-agent-cache-sharing
+description: >
+  Tests the exec-96 pattern: a parent agent spawns 2 sub-agents. With the
+  parentToolDefs mechanism in place, all 3 agents (parent + 2 children) should
+  share the same tools_hash, meaning cache reads on turns 2 & 3. Without the
+  fix, sub-agents would get a different (smaller) tool set and break the prefix.
+  Asserts sub_agent_gets_parent_tools to verify the sharing works.
+prompt: >
+  Implement the dark-mode feature: read styles.css to understand the current
+  CSS variables, then add dark mode CSS variables. Use parallel sub-agents.
+fixtures: basic-typescript
+expected_behavior:
+  must_call:
+    - spawn_agent
+  must_complete: true
+  max_rounds: 12
+  ideal_rounds: 5
+
+column_tools:
+  - read
+  - write
+  - search
+  - shell
+  - interactions
+  - agents
+
+assertions:
+  - type: cache_prefix_stable
+  - type: sub_agent_gets_parent_tools
+  - type: tools_include
+    names: [spawn_agent, read_file, edit_file]
+  - type: cost_under
+    value: 1.50
+
+script:
+  - role: user
+    content: "Implement the dark-mode feature: read styles.css and add dark mode CSS variables."
+  # Parent: spawns 2 sub-agents
+  - respond_with: tool_use
+    tool: spawn_agent
+    input:
+      agents:
+        - instructions: "Read src/styles.css and identify current CSS variables."
+          tools: [read_file, search_text]
+        - instructions: "Add dark mode CSS variables to src/styles.css."
+          tools: [read_file, edit_file]
+  # Sub-agent 1/2 (Agent 1 of 2): reads file
+  - respond_with: tool_use
+    tool: read_file
+    input:
+      file_path: src/styles.css
+      start_line: 1
+      end_line: 30
+  - role: user
+    content: "[tool_result: :root { --color-bg: white; --color-text: black; }]"
+  - respond_with: text
+    content: "Found CSS variables: --color-bg and --color-text."
+  # Sub-agent 2/2 (Agent 2 of 2): edits file
+  - respond_with: tool_use
+    tool: edit_file
+    input:
+      file_path: src/styles.css
+      old_string: ":root {"
+      new_string: ":root {\n  --color-bg-dark: #1a1a1a;\n  --color-text-dark: #f0f0f0;"
+  - role: user
+    content: "[tool_result: ok]"
+  - respond_with: text
+    content: "Added dark mode variables to styles.css."
+  # Parent: receives tool results from spawn_agent
+  - role: user
+    content: "[tool_result: [{\"result\":\"Found CSS variables\"},{\"result\":\"Added dark mode variables\"}]]"
+  - respond_with: text
+    content: "Dark mode implemented successfully."

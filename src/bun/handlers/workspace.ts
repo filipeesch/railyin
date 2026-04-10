@@ -1,5 +1,6 @@
 import { getDb } from "../db/index.ts";
-import { getConfig, resetConfig, loadConfig } from "../config/index.ts";
+import { getConfig, resetConfig, loadConfig, patchWorkspaceYaml } from "../config/index.ts";
+import { clearProviderCache } from "../ai/index.ts";
 import type { WorkspaceConfig } from "../../shared/rpc-types.ts";
 
 export function workspaceHandlers() {
@@ -33,7 +34,15 @@ export function workspaceHandlers() {
           contextWindowTokens: legacyAi?.context_window_tokens ?? firstProvider?.context_window_tokens,
         },
         worktreeBasePath: config.workspace.worktree_base_path ?? "",
+        enableThinking: config.workspace.anthropic?.enable_thinking ?? false,
       };
+    },
+
+    "workspace.setThinking": async (params: { enabled: boolean }): Promise<Record<string, never>> => {
+      patchWorkspaceYaml({ anthropic: { enable_thinking: params.enabled } });
+      // Clear provider cache so the next execution picks up the new setting
+      clearProviderCache();
+      return {};
     },
   };
 }

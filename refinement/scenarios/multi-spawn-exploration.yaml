@@ -1,0 +1,91 @@
+name: multi-spawn-exploration
+description: >
+  Multi-round parent with 2 sequential spawn_agent calls, simulating the
+  exec-96 $1.12 pattern. Tests progressive cache warming: the second spawn
+  should show cache hits (lower cost) relative to the first. Asserts
+  cache_prefix_stable across all agents and sub_agent_gets_parent_tools.
+prompt: >
+  Explore the codebase: first find all TypeScript files with a 'Config' class,
+  then read each one and summarize their purpose.
+fixtures: multi-module
+expected_behavior:
+  must_call:
+    - spawn_agent
+  must_complete: true
+  max_rounds: 10
+  ideal_rounds: 4
+
+column_tools:
+  - read
+  - search
+  - web
+  - interactions
+  - agents
+
+assertions:
+  - type: cache_prefix_stable
+  - type: sub_agent_gets_parent_tools
+  - type: tools_include
+    names: [spawn_agent, read_file, search_text]
+  - type: cost_under
+    value: 2.00
+
+script:
+  - role: user
+    content: "Explore the codebase: first find all TypeScript files with a 'Config' class, then read each one."
+  # Parent: first spawn — exploration
+  - respond_with: tool_use
+    tool: spawn_agent
+    input:
+      agents:
+        - instructions: "Search for TypeScript files containing 'class Config'. Return the file paths."
+          tools: [search_text]
+  # Sub-agent 1 (first spawn): searches
+  - respond_with: tool_use
+    tool: search_text
+    input:
+      pattern: "class Config"
+      glob: "**/*.ts"
+  - role: user
+    content: "[tool_result: src/bun/config/index.ts:12: export class Config {\nsrc/bun/ai/config.ts:5: class Config {]"
+  - respond_with: text
+    content: "Found 2 files: src/bun/config/index.ts and src/bun/ai/config.ts"
+  # Parent receives result from first spawn
+  - role: user
+    content: "[tool_result: [{\"result\":\"Found 2 files: src/bun/config/index.ts and src/bun/ai/config.ts\"}]]"
+  # Parent: second spawn — reading the files found
+  - respond_with: tool_use
+    tool: spawn_agent
+    input:
+      agents:
+        - instructions: "Read src/bun/config/index.ts lines 1-40 and summarize the Config class."
+          tools: [read_file]
+        - instructions: "Read src/bun/ai/config.ts lines 1-30 and summarize the Config class."
+          tools: [read_file]
+  # Sub-agent 1 of 2 (second spawn): reads first file
+  - respond_with: tool_use
+    tool: read_file
+    input:
+      file_path: src/bun/config/index.ts
+      start_line: 1
+      end_line: 40
+  - role: user
+    content: "[tool_result: export class Config { constructor(private path: string) {} load() {...} }]"
+  - respond_with: text
+    content: "Config class manages workspace configuration loading."
+  # Sub-agent 2 of 2 (second spawn): reads second file
+  - respond_with: tool_use
+    tool: read_file
+    input:
+      file_path: src/bun/ai/config.ts
+      start_line: 1
+      end_line: 30
+  - role: user
+    content: "[tool_result: class Config { model: string; apiKey: string; }]"
+  - respond_with: text
+    content: "AI config class holds model and API key settings."
+  # Parent receives results from second spawn
+  - role: user
+    content: "[tool_result: [{\"result\":\"Config manages workspace config\"},{\"result\":\"AI config holds model settings\"}]]"
+  - respond_with: text
+    content: "Exploration complete. Found two Config classes with different purposes."

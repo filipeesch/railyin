@@ -32,3 +32,16 @@ Thumbs.db
 # User workspace config (contains local paths and API keys)
 # Copy config/workspace.yaml.sample to config/workspace.yaml to get started
 config/workspace.yaml
+
+# Provider config (contains local paths and API keys)
+# Copy config/providers.yaml.sample to config/providers.yaml to get started
+config/providers.yaml
+
+# Refinement harness reports (machine-specific)
+refinement/reports/
+
+# Local knowledge base (machine-specific research notes)
+knowledge/
+
+# Custom Copilot prompts (local workflows)
+.github/prompts/

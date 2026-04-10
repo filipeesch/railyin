@@ -37,6 +37,10 @@ export function onWorkflowReloaded(cb: () => void) { _onWorkflowReloaded = cb; }
 
 /** Send a log line to bun's stdout (visible in the terminal running `bun run dev`). */
 export function sendDebugLog(level: "log" | "warn" | "error", ...args: unknown[]) {
-  const text = args.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+  const text = args.map((a) => {
+    if (a instanceof Error) return `${a.name}: ${a.message}${a.stack ? `\n${a.stack}` : ""}`;
+    if (typeof a === "object" && a !== null) return JSON.stringify(a);
+    return String(a);
+  }).join(" ");
   electroview.rpc?.send["debug.log"]?.({ level, args: text });
 }

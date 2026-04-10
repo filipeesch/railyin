@@ -51,11 +51,11 @@ bun run test:ui
 bun run test:ui:review
 ```
 
-> **Important:** Always use `bun run dev:test` (not `bun run dev`) when running UI tests. `RAILYN_DEBUG=1` is required to open the HTTP debug bridge on `localhost:9229` — without it all UI tests fail immediately with `ConnectionRefused`. `RAILYN_DB=:memory:` uses an isolated in-memory database so tests never touch your real data.
+> **Important:** Always use `bun run dev:test` (not `bun run dev`) when running UI tests. `RAILYN_DEBUG=1` (or `--debug`) is required to open the HTTP debug bridge on `localhost:9229` — without it all UI tests fail immediately with `ConnectionRefused`. `RAILYN_DB=:memory:` uses an isolated in-memory database so tests never touch your real data. They reset their own DB state at the start of each suite — no manual cleanup needed.
 
 ### Debug HTTP bridge
 
-The debug bridge (`localhost:9229`) is only started when `RAILYN_DEBUG=1` is set. It is never open in a normal `bun run dev` session.
+The debug bridge (`localhost:9229`) is only started when the `--debug` flag is passed. It is never open in a normal `bun run dev` session.
 
 ```bash
 # Start with debug bridge enabled (real DB):
@@ -65,9 +65,6 @@ bun run dev:debug
 # Start with debug bridge + isolated in-memory DB (for tests):
 bun run dev:test
 # equivalent: RAILYN_DEBUG=1 RAILYN_DB=:memory: vite build && electrobun dev --watch
-
-# legacy manual form:
-RAILYN_DEBUG=1 bun run dev
 
 # Useful endpoints:
 # POST /inspect          — evaluate JS in the WebView and return the result

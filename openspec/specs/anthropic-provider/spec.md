@@ -4,14 +4,24 @@ The Anthropic provider translates the engine's internal `AIMessage[]` format to 
 ## Requirements
 
 ### Requirement: Anthropic provider sends requests to the native Messages API
-The system SHALL implement `AnthropicProvider` that sends requests to `POST https://api.anthropic.com/v1/messages` with:
+The system SHALL implement `AnthropicProvider` that sends requests to the configured base URL (defaulting to `https://api.anthropic.com`) at path `/v1/messages` with:
 - `x-api-key: <api_key>` header
 - `anthropic-version: 2023-06-01` header
 - Request body in Anthropic Messages format (not OpenAI format)
 
+When a provider config entry of type `anthropic` includes a `base_url` field, `instantiateProvider()` SHALL pass it to the `AnthropicProvider` constructor, overriding the default `https://api.anthropic.com`.
+
 #### Scenario: Valid request sent with correct headers
-- **WHEN** the engine calls `provider.stream(messages, options)` on an `AnthropicProvider` instance
+- **WHEN** the engine calls `provider.stream(messages, options)` on an `AnthropicProvider` instance with no custom base_url
 - **THEN** the HTTP request is sent to `https://api.anthropic.com/v1/messages` with `x-api-key` and `anthropic-version` headers present and no `Authorization` header
+
+#### Scenario: Custom base_url in provider config
+- **WHEN** a provider config has `{ type: "anthropic", api_key: "fake", base_url: "http://localhost:8999" }`
+- **THEN** `instantiateProvider()` creates an `AnthropicProvider` with `baseUrl = "http://localhost:8999"` and requests are sent to `http://localhost:8999/v1/messages`
+
+#### Scenario: No base_url in config uses default
+- **WHEN** a provider config has `{ type: "anthropic", api_key: "sk-ant-..." }` without a `base_url` field
+- **THEN** `instantiateProvider()` creates an `AnthropicProvider` with the default `baseUrl = "https://api.anthropic.com"`
 
 ### Requirement: Anthropic provider extracts system messages to the top-level system field
 The system SHALL extract all `AIMessage` entries with `role: "system"` and concatenate their content into the top-level `system` field of the Anthropic request body. These messages SHALL NOT appear in the `messages` array sent to the API.
@@ -69,3 +79,33 @@ The system SHALL implement `provider.listModels()` by calling `GET https://api.a
 #### Scenario: Empty array returned on API failure
 - **WHEN** the `/v1/models` request returns an error or non-JSON response
 - **THEN** `listModels()` returns an empty array without throwing
+
+### Requirement: Anthropic provider supports configurable cache TTL
+The system SHALL support an optional `ttl` field in `cache_control` blocks sent to the Anthropic API. When the workspace config sets `anthropic.cache_ttl` to `"1h"`, all `cache_control` blocks SHALL include `ttl: "1h"`. When set to `"5m"` or omitted, no `ttl` field is included (Anthropic defaults to 5 minutes).
+
+#### Scenario: Default 5-minute TTL (no config or explicit "5m")
+- **WHEN** `anthropic.cache_ttl` is absent or `"5m"` in workspace config
+- **THEN** `cache_control` blocks are `{ type: "ephemeral" }` with no `ttl` field
+
+#### Scenario: Extended 1-hour TTL
+- **WHEN** `anthropic.cache_ttl` is `"1h"` in workspace config
+- **THEN** `cache_control` blocks are `{ type: "ephemeral", ttl: "1h" }`
+
+#### Scenario: Non-Anthropic providers unaffected
+- **WHEN** the active provider is not Anthropic
+- **THEN** no `cache_control` field is included in any request body
+
+### Requirement: stream() uses configured effort as default for parent agent calls
+The system SHALL apply `anthropic.effort` from workspace config to `stream()` calls when no explicit `effort` is provided in `AICallOptions`. When `AICallOptions.effort` is explicitly set (e.g. sub-agents passing `"low"`), it SHALL take precedence over the config value.
+
+#### Scenario: Config effort applied when no explicit effort given
+- **WHEN** `anthropic.effort` is `"medium"` in workspace config AND `stream()` is called without an `effort` field in `AICallOptions`
+- **THEN** the Anthropic request body includes `output_config: { effort: "medium" }`
+
+#### Scenario: Explicit AICallOptions effort overrides config
+- **WHEN** `anthropic.effort` is `"medium"` in workspace config AND `stream()` is called with `effort: "low"` in `AICallOptions`
+- **THEN** the Anthropic request body includes `output_config: { effort: "low" }`
+
+#### Scenario: No effort in config and no explicit effort — omit output_config
+- **WHEN** `anthropic.effort` is absent from workspace config AND `stream()` is called without `effort` in `AICallOptions`
+- **THEN** the Anthropic request body does NOT include an `output_config` field

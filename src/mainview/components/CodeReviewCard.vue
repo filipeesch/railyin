@@ -156,3 +156,39 @@ function decisionIcon(decision: HunkDecision): string {
 .hunk-range { font-family: monospace; font-size: 0.75rem; color: var(--p-text-muted-color, #64748b); }
 .hunk-comment { font-style: italic; color: var(--p-text-color, #1e293b); flex: 1; }
 </style>
+
+<style>
+html.dark-mode .badge--rejected {
+  background: color-mix(in srgb, var(--p-red-500) 20%, transparent);
+  color: var(--p-red-300);
+}
+html.dark-mode .badge--change {
+  background: color-mix(in srgb, var(--p-orange-500) 20%, transparent);
+  color: var(--p-orange-300);
+}
+html.dark-mode .badge--accepted {
+  background: color-mix(in srgb, var(--p-green-500) 20%, transparent);
+  color: var(--p-green-300);
+}
+html.dark-mode .hunk--rejected {
+  background: color-mix(in srgb, var(--p-red-500) 15%, transparent);
+}
+html.dark-mode .hunk--change_request {
+  background: color-mix(in srgb, var(--p-orange-500) 15%, transparent);
+}
+html.dark-mode .hunk--accepted {
+  background: color-mix(in srgb, var(--p-green-500) 15%, transparent);
+}
+html.dark-mode .code-review-card__header {
+  background: var(--p-surface-800, #1e293b);
+}
+html.dark-mode .code-review-card__header:hover {
+  background: var(--p-surface-700, #334155);
+}
+html.dark-mode .badge--pending {
+  background: var(--p-surface-700, #334155);
+}
+html.dark-mode .hunk--pending {
+  background: var(--p-surface-800, #1e293b);
+}
+</style>

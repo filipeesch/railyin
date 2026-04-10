@@ -23,15 +23,15 @@ Each task SHALL maintain two distinct state fields: `workflow_state` representin
 - **THEN** `execution_state` transitions to `waiting_user` (via the transient `cancelled` execution status)
 
 ### Requirement: Task stores a model override
-Each task SHALL have an optional `model` field that overrides the workspace-level model for all AI executions run in the context of that task.
+Each task SHALL have an optional `model` field that overrides the engine-level default model for all AI executions run in the context of that task. The model field is engine-agnostic — it stores a model identifier suitable for the active engine (fully-qualified ID for native engine, plain model name for Copilot engine).
 
 #### Scenario: Task model used when set
 - **WHEN** a task has a non-null `model` field and an execution is triggered
-- **THEN** the AI provider is created with the task's model value
+- **THEN** the orchestrator passes the task's model value as `ExecutionParams.model` to the engine
 
-#### Scenario: Workspace model used when task model is null
+#### Scenario: Engine default model used when task model is null
 - **WHEN** a task's `model` field is null
-- **THEN** the workspace-level `ai.model` is used for all executions
+- **THEN** the engine's default model (from engine config) is used for all executions
 
 ### Requirement: Task exposes git context fields
 The `Task` domain type SHALL include `worktreeStatus`, `branchName`, and `worktreePath` populated from `task_git_context`.
@@ -41,7 +41,7 @@ The `Task` domain type SHALL include `worktreeStatus`, `branchName`, and `worktr
 - **THEN** the returned Task object includes `worktreeStatus`, `branchName`, and `worktreePath` (nullable if not yet set)
 
 ### Requirement: Task owns a persistent conversation
-Each task SHALL own exactly one conversation. All executions, retries, user messages, assistant responses, transition events, and system messages for that task are appended to this single conversation timeline. The conversation is never reset.
+Each task SHALL own exactly one conversation. All executions, retries, user messages, assistant responses, transition events, and system messages for that task are appended to this single conversation timeline. The conversation is never reset. Messages from different engines (native vs Copilot) coexist in the same timeline using the same `ConversationMessage` types.
 
 #### Scenario: Conversation persists through transitions
 - **WHEN** a task moves from one column to another
@@ -50,6 +50,25 @@ Each task SHALL own exactly one conversation. All executions, retries, user mess
 #### Scenario: Conversation persists through retries
 - **WHEN** a retry is triggered
 - **THEN** the retry's messages are appended to the existing conversation with prior attempt messages still visible
+
+#### Scenario: Conversation messages normalized from different engines
+- **WHEN** the Copilot engine produces tool_start and tool_result events for built-in tools
+- **THEN** the orchestrator persists them as `tool_call` and `tool_result` conversation messages in the same format as native engine messages
+
+### Requirement: Task conversation records are engine-agnostic
+The `conversation_messages` table SHALL store messages from any engine using the same schema. The orchestrator normalizes all `EngineEvent` types to `ConversationMessage` types before persisting. No engine-specific message types exist in the database.
+
+#### Scenario: Native engine messages stored as ConversationMessage
+- **WHEN** the native engine produces token, tool_start, tool_result, and done events
+- **THEN** the orchestrator writes `assistant`, `tool_call`, and `tool_result` rows to `conversation_messages`
+
+#### Scenario: Copilot engine messages stored as ConversationMessage
+- **WHEN** the Copilot engine translates SDK events to EngineEvents
+- **THEN** the orchestrator writes the same `assistant`, `tool_call`, and `tool_result` row types to `conversation_messages`
+
+#### Scenario: Conversation timeline displays uniformly regardless of engine
+- **WHEN** a task's conversation was produced by the Copilot engine
+- **THEN** the frontend renders the conversation timeline identically to native engine conversations
 
 ### Requirement: Task supports retry in current column
 The system SHALL allow a user to retry an execution while keeping the task in its current workflow column. A retry creates a new execution using the current column's configured prompt and appends output to the existing conversation.
@@ -150,3 +169,37 @@ The system SHALL push task state updates to the board card immediately when exec
 #### Scenario: Card flips to completed when stream finishes
 - **WHEN** the AI finishes its response
 - **THEN** the board card execution badge updates to `completed`
+
+### Requirement: Task stores shell auto-approve preference
+Each task SHALL have a `shell_auto_approve` boolean field (stored as `INTEGER DEFAULT 0` in SQLite). When `true`, all `run_command` calls for the task bypass the binary approval gate. The field SHALL be exposed in `TaskRow`, mapped in `mapTask`, included in the `Task` RPC type, and readable from the task store on the frontend.
+
+#### Scenario: shell_auto_approve defaults to false
+- **WHEN** a new task is created
+- **THEN** `shell_auto_approve` is `0` (false) in the DB
+
+#### Scenario: shell_auto_approve included in task RPC response
+- **WHEN** any RPC that returns a Task object is called
+- **THEN** the response includes the `shellAutoApprove` boolean field
+
+#### Scenario: shell_auto_approve persists through column transitions
+- **WHEN** a task is moved to a new column
+- **THEN** `shell_auto_approve` is not modified and retains its current value
+
+### Requirement: Task stores per-task approved command binaries
+Each task SHALL have an `approved_commands` field (stored as `TEXT DEFAULT '[]'` in SQLite, containing a JSON array of binary name strings). The system SHALL provide helpers to read and append to this field. The field SHALL be exposed in `TaskRow`, mapped in `mapTask`, included in the `Task` RPC type, and readable from the task store on the frontend.
+
+#### Scenario: approved_commands defaults to empty array
+- **WHEN** a new task is created
+- **THEN** `approved_commands` is `'[]'` in the DB
+
+#### Scenario: Approved binaries appended correctly
+- **WHEN** the engine appends `["git", "bun"]` to an existing `approved_commands` value of `["npm"]`
+- **THEN** the stored value becomes `["npm", "git", "bun"]`
+
+#### Scenario: approved_commands included in task RPC response
+- **WHEN** any RPC that returns a Task object is called
+- **THEN** the response includes the `approvedCommands` field as an array of strings
+
+#### Scenario: approved_commands persists through column transitions
+- **WHEN** a task moves to a new workflow column
+- **THEN** `approved_commands` retains all previously stored binary names

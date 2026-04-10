@@ -71,12 +71,38 @@ function computeBackoffMs(attempt: number, retryAfter?: number, baseMs = BASE_BA
   if (baseMs === 0) return retryAfter ? retryAfter * 1_000 : 0;
   const exp = Math.min(baseMs * Math.pow(2, attempt), MAX_BACKOFF_MS);
   const jitter = Math.random() * JITTER_MS;
-  const base = exp + jitter;
-  return retryAfter ? Math.max(base, retryAfter * 1_000) : base;
+  // Apply jitter AFTER Math.max so it is never absorbed by a large retryAfter value.
+  const base = retryAfter ? Math.max(exp, retryAfter * 1_000) : exp;
+  return base + jitter;
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ─── Cooldown helpers ─────────────────────────────────────────────────────────
+
+/**
+ * If the provider has an active rate-limit cooldown, sleeps until it expires.
+ * Called before every API attempt so all concurrent callers respect the window
+ * established by the first caller to receive a 429.
+ */
+function waitForCooldown(provider: AIProvider): Promise<void> {
+  const remaining = provider.cooldownUntil - Date.now();
+  if (remaining > 0) {
+    log("info", `Provider rate-limit cooldown active, waiting ${Math.round(remaining)}ms`, {});
+    return sleep(remaining);
+  }
+  return Promise.resolve();
+}
+
+/**
+ * Records a provider-level cooldown based on the `retry-after` header value.
+ * Once set, all concurrent callers sharing this provider instance will wait
+ * before their next attempt.
+ */
+function setCooldown(provider: AIProvider, retryAfter: number): void {
+  provider.cooldownUntil = Date.now() + retryAfter * 1_000;
 }
 
 // ─── retryStream ──────────────────────────────────────────────────────────────
@@ -99,6 +125,8 @@ export async function* retryStream(
   maxStreamRetries = DEFAULT_MAX_STREAM_RETRIES,
   maxTurnRetries = DEFAULT_MAX_TURN_RETRIES,
   _tc: _RetryTimingConfig = {},
+  source: "foreground" | "background" = "foreground",
+  fallbackProvider: AIProvider | null = null,
 ): AsyncGenerator<StreamEvent> {
   const idleTimeoutMs = _tc.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const stallWarnMs = _tc.stallWarnMs ?? DEFAULT_STALL_WARN_MS;
@@ -111,11 +139,15 @@ export async function* retryStream(
     const watchdogController = new AbortController();
     let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
     let stallWarnTimer: ReturnType<typeof setTimeout> | null = null;
+    let stallCount = 0;
+    let totalStallMs = 0;
 
     const resetWatchdog = () => {
       if (watchdogTimer) clearTimeout(watchdogTimer);
       if (stallWarnTimer) clearTimeout(stallWarnTimer);
       stallWarnTimer = setTimeout(() => {
+        stallCount++;
+        totalStallMs += stallWarnMs;
         log("warn", `Stream stalled for ${stallWarnMs / 1_000}s with no events`, {});
       }, stallWarnMs);
       watchdogTimer = setTimeout(() => {
@@ -136,12 +168,16 @@ export async function* retryStream(
       : watchdogController.signal;
 
     try {
+      await waitForCooldown(provider);
       resetWatchdog();
       for await (const event of provider.stream(messages, { ...options, signal: combinedSignal })) {
         resetWatchdog(); // reset on every yielded event
         yield event;
       }
       clearWatchdog();
+      if (stallCount > 0) {
+        log("info", `Stream round completed with ${stallCount} stall(s) (~${Math.round(totalStallMs / 1_000)}s total stalled)`, {});
+      }
       return; // stream completed successfully
     } catch (err) {
       clearWatchdog();
@@ -160,10 +196,28 @@ export async function* retryStream(
 
       // ProviderError: check if retryable.
       if (err instanceof ProviderError && isRetryableStatus(err.status)) {
+        if (err.status === 429) {
+          if (err.retryAfter) setCooldown(provider, err.retryAfter);
+          if (source === "background") {
+            log("warn", `Stream 429 on background source — bailing immediately`, {});
+            throw err;
+          }
+        }
         if (err.status === 529) {
           consecutive529++;
           if (consecutive529 >= MAX_529_RETRIES) {
             log("error", `Stream hit ${MAX_529_RETRIES} consecutive 529s, giving up`, {});
+            if (fallbackProvider) {
+              log("warn", `Attempting stream fallback provider after 529 exhaustion`, {});
+              try {
+                for await (const event of fallbackProvider.stream(messages, options)) {
+                  yield event;
+                }
+                return;
+              } catch {
+                // fallback failed — throw the original error
+              }
+            }
             throw err;
           }
         } else {
@@ -183,7 +237,7 @@ export async function* retryStream(
 
   // Stream retry budget exhausted — fall back to non-streaming turn.
   log("warn", `Stream retry exhausted (${maxStreamRetries + 1} attempts), falling back to non-streaming`, {});
-  yield* _retryStreamFallback(provider, messages, options, maxTurnRetries, _tc);
+  yield* _retryStreamFallback(provider, messages, options, maxTurnRetries, _tc, source);
 }
 
 /**
@@ -196,6 +250,7 @@ async function* _retryStreamFallback(
   options: AICallOptions,
   maxTurnRetries: number,
   _tc: _RetryTimingConfig = {},
+  source: "foreground" | "background" = "foreground",
 ): AsyncGenerator<StreamEvent> {
   const baseBackoffMs = _tc.baseBackoffMs ?? BASE_BACKOFF_MS;
   let turnAttempt = 0;
@@ -205,6 +260,8 @@ async function* _retryStreamFallback(
     let turnDone = false;
     let result: AITurnResult | null = null;
     let turnError: unknown = null;
+
+    await waitForCooldown(provider);
 
     const turnPromise = provider
       .turn(messages, { ...options })
@@ -239,6 +296,13 @@ async function* _retryStreamFallback(
     if (turnError !== null) {
       if (options.signal?.aborted) throw turnError;
       if (turnError instanceof ProviderError && isRetryableStatus(turnError.status)) {
+        if (turnError.status === 429) {
+          if (turnError.retryAfter) setCooldown(provider, turnError.retryAfter);
+          if (source === "background") {
+            log("warn", `Non-streaming fallback 429 on background source — bailing immediately`, {});
+            throw turnError;
+          }
+        }
         if (turnError.status === 529) {
           consecutive529++;
           if (consecutive529 >= MAX_529_RETRIES) throw turnError;
@@ -283,6 +347,8 @@ export async function retryTurn(
   options: AICallOptions = {},
   maxRetries = DEFAULT_MAX_TURN_RETRIES,
   _tc: _RetryTimingConfig = {},
+  source: "foreground" | "background" = "foreground",
+  fallbackProvider: AIProvider | null = null,
 ): Promise<AITurnResult> {
   const baseBackoffMs = _tc.baseBackoffMs ?? BASE_BACKOFF_MS;
   let attempt = 0;
@@ -290,14 +356,33 @@ export async function retryTurn(
 
   while (true) {
     try {
+      await waitForCooldown(provider);
       return await provider.turn(messages, options);
     } catch (err) {
       if (options.signal?.aborted) throw err;
       if (!(err instanceof ProviderError) || !isRetryableStatus(err.status)) throw err;
 
+      if (err.status === 429) {
+        if (err.retryAfter) setCooldown(provider, err.retryAfter);
+        if (source === "background") {
+          log("warn", `retryTurn 429 on background source — bailing immediately`, {});
+          throw err;
+        }
+      }
+
       if (err.status === 529) {
         consecutive529++;
-        if (consecutive529 >= MAX_529_RETRIES) throw err;
+        if (consecutive529 >= MAX_529_RETRIES) {
+          if (fallbackProvider) {
+            log("warn", `retryTurn attempting fallback provider after ${MAX_529_RETRIES} consecutive 529s`, {});
+            try {
+              return await fallbackProvider.turn(messages, options);
+            } catch {
+              // fallback failed — throw the original error
+            }
+          }
+          throw err;
+        }
       } else {
         consecutive529 = 0;
       }

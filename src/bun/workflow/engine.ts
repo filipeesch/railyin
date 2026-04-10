@@ -12,13 +12,29 @@ import {
 import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
-import { resolveToolsForColumn, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
+import { resolveToolsForColumn, getToolDescriptionBlock, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
+import { LSPServerManager } from "../lsp/manager.ts";
 import { formatReviewMessageForLLM } from "./review.ts";
+import { resolveSlashReference } from "./slash-prompt.ts";
+import { listTodos } from "../db/todos.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // Task 5.5: Tool results larger than this (in chars, ~1 token ≈ 4 chars) are truncated
-const TOOL_RESULT_MAX_CHARS = 8_000; // ~2,000 tokens
+const TOOL_RESULT_MAX_CHARS = 8_000; // default for tools not in TOOL_RESULT_LIMITS
+
+/** Per-tool result size limits in chars. Tools not listed fall back to TOOL_RESULT_MAX_CHARS. */
+const TOOL_RESULT_LIMITS = new Map<string, number>([
+  ["read_file", 100_000],       // ~25,000 tokens — large files need full content
+  ["search_text", 20_000],      // ripgrep output
+  ["find_files", 10_000],       // file listing
+  ["run_command", 30_000],      // command output (matches Free Code's bash limit)
+  ["fetch_url", 100_000],       // web page content
+  ["spawn_agent", 100_000],     // sub-agent results can be large
+  ["edit_file", 2_000],         // just a confirmation message
+  ["write_file", 2_000],        // just a confirmation message
+  ["lsp", 100_000],             // LSP results (definition, references, symbols)
+]);
 
 // Task 5.6: Warn when assembled context exceeds this fraction of the context window
 const CONTEXT_WARN_FRACTION = 0.8;
@@ -34,7 +50,8 @@ export const MICRO_COMPACT_CLEARABLE_TOOLS = new Set([
   "search_text",
   "find_files",
   "fetch_url",
-  "patch_file",
+  "edit_file",
+  "patch_file", // backward compat: clear old patch_file results in stored conversations
 ]);
 
 // ─── Streaming callback type ──────────────────────────────────────────────────
@@ -51,7 +68,54 @@ const executionControllers = new Map<number, AbortController>();
 
 export function cancelExecution(executionId: number): void {
   const controller = executionControllers.get(executionId);
-  if (controller) controller.abort();
+  if (controller) {
+    controller.abort();
+    return;
+  }
+  // No live controller — zombie cleanup: mark orphaned execution failed and unblock the task.
+  const db = getDb();
+  const execRow = db.query<{ task_id: number; status: string; finished_at: string | null }, [number]>(
+    "SELECT task_id, status, finished_at FROM executions WHERE id = ?",
+  ).get(executionId);
+  if (execRow && execRow.status === "running" && execRow.finished_at == null) {
+    db.run("UPDATE executions SET status = 'failed', finished_at = datetime('now') WHERE id = ?", [executionId]);
+    db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [execRow.task_id]);
+  }
+}
+
+// ─── Shell approval pending map ───────────────────────────────────────────────
+// Keyed by taskId. Holds the resolver for in-flight approval prompts.
+
+type ShellApprovalDecision = "approve_once" | "approve_all" | "deny";
+const pendingShellApprovals = new Map<number, (decision: ShellApprovalDecision) => void>();
+
+export function getApprovedCommands(taskId: number): string[] {
+  const db = getDb();
+  const row = db.query<{ approved_commands: string }, [number]>(
+    "SELECT approved_commands FROM tasks WHERE id = ?",
+  ).get(taskId);
+  try { return JSON.parse(row?.approved_commands ?? "[]"); } catch { return []; }
+}
+
+export function appendApprovedCommands(taskId: number, binaries: string[]): void {
+  const current = getApprovedCommands(taskId);
+  const updated = [...new Set([...current, ...binaries])];
+  const db = getDb();
+  db.run("UPDATE tasks SET approved_commands = ? WHERE id = ?", [JSON.stringify(updated), taskId]);
+}
+
+export function resolveShellApproval(taskId: number, decision: ShellApprovalDecision, onTaskUpdated: OnTaskUpdated): boolean {
+  const resolve = pendingShellApprovals.get(taskId);
+  if (!resolve) return false;
+  pendingShellApprovals.delete(taskId);
+  // Flip execution_state back to running before the promise resolves so the
+  // frontend reflects the resumed state before tool output arrives.
+  const db = getDb();
+  db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+  const runRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+  if (runRow) onTaskUpdated(mapTask(runRow));
+  resolve(decision);
+  return true;
 }
 
 // ─── Helper: get column config ────────────────────────────────────────────────
@@ -102,7 +166,7 @@ function stripXmlToolCalls(text: string): { clean: string; hadToolCalls: boolean
 
 
 
-export function compactMessages(messages: ConversationMessageRow[]): AIMessage[] {
+export function compactMessages(messages: ConversationMessageRow[], opts?: { quiet?: boolean }): AIMessage[] {
   // If a compaction_summary exists, use the most recent one as the history baseline:
   // inject it as a system message and only process messages that came after it.
   const lastSummaryIdx = messages.map((m) => m.type).lastIndexOf("compaction_summary");
@@ -140,12 +204,18 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
   const maxMicroTurn = microTurn;
 
   const result: AIMessage[] = [];
+  const orphanedMsgIds: number[] = [];
   let i = 0;
   while (i < toProcess.length) {
     const m = toProcess[i];
 
     if (m.type === "user" || m.type === "assistant") {
-      result.push({ role: m.role as "user" | "assistant", content: m.content });
+      // role='prompt' is a slash-command injection — skip it entirely.
+      // Anthropic's adaptMessages() was already silently dropping these (only
+      // pushes role=user|assistant). OpenAI-compat rejects role='prompt' with 400.
+      if (m.role !== "prompt") {
+        result.push({ role: m.role as "user" | "assistant", content: m.content });
+      }
       i++;
       continue;
     }
@@ -160,6 +230,15 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
     // tool_call rows: reconstruct as an OpenAI-format assistant message with
     // tool_calls array, then consume the paired tool_result(s).
     if (m.type === "tool_call") {
+      // Orphaned tool_call: no following tool_result (execution was interrupted after
+      // the tool_call row was written but before the result was stored). Emitting an
+      // assistant+tool_calls message with no matching tool message causes an Anthropic
+      // 400 on every retry, permanently sticking the task. Skip silently and warn.
+      if (i + 1 >= toProcess.length || toProcess[i + 1].type !== "tool_result") {
+        orphanedMsgIds.push(m.id);
+        i++;
+        continue;
+      }
       // Collect all consecutive tool_call messages in this round (they may be
       // stored interleaved with their results when roundCalls has multiple calls).
       // Strategy: gather all consecutive tool_call + tool_result pairs as
@@ -203,8 +282,9 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
         const shouldClear =
           MICRO_COMPACT_CLEARABLE_TOOLS.has(toolName) &&
           turnDistance > MICRO_COMPACT_TURN_WINDOW;
-        const rawContent = toProcess[i].content.length > TOOL_RESULT_MAX_CHARS
-          ? toProcess[i].content.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+        const toolLimit = TOOL_RESULT_LIMITS.get(toolName) ?? TOOL_RESULT_MAX_CHARS;
+        const rawContent = toProcess[i].content.length > toolLimit
+          ? toProcess[i].content.slice(0, toolLimit) + "\n\n[truncated]"
           : toProcess[i].content;
         result.push({
           role: "tool",
@@ -225,6 +305,10 @@ export function compactMessages(messages: ConversationMessageRow[]): AIMessage[]
 
     // file_diff, code_review, ask_user_prompt, transition_event, artifact_event, reasoning — excluded
     i++;
+  }
+
+  if (orphanedMsgIds.length > 0 && !opts?.quiet) {
+    log("warn", `compactMessages: skipped ${orphanedMsgIds.length} orphaned tool_call(s) with no following tool_result (msg ids: ${orphanedMsgIds.join(", ")})`, {});
   }
 
   // Collapse consecutive user messages — caused by failed retries where the
@@ -261,6 +345,8 @@ function assembleMessages(
   newMessage: string,
   gitContext?: GitContext,
   sessionNotes?: string | null,
+  taskId?: number,
+  columnTools?: string[],
 ): AIMessage[] {
   const messages: AIMessage[] = [];
 
@@ -284,46 +370,28 @@ function assembleMessages(
       `- git_root_path: ${gitContext.git_root_path}`,
       `- project_path:  ${gitContext.project_path}`,
       "",
-      "You have access to the following tools to work with the project files:",
-      "",
-      "**Read tools:**",
-      "- list_dir(path): list files/directories relative to the worktree root",
-      "- read_file(path, start_line?, end_line?): read a file; use start_line/end_line (1-based) for partial reads of large files",
-      "",
-      "**Write tools:**",
-      "- write_file(path, content): create or fully overwrite a file",
-      "- patch_file(path, content, position, anchor?): targeted edit — position is start/end/before/after/replace; anchor required for before/after/replace and must appear exactly once",
-      "- delete_file(path): delete a file",
-      "- rename_file(from_path, to_path): move or rename a file",
-      "",
-      "**Search tools:**",
-      "- search_text(pattern, glob?, context_lines?): grep for a text/regex pattern; context_lines shows N lines around each match",
-      "- find_files(glob): find files matching a glob pattern",
-      "",
-      "**Web tools:**",
-      "- fetch_url(url): fetch a public URL and return its text content",
-      "- search_internet(query): search the web (requires search config in workspace.yaml)",
-      "",
-      "**Shell tool:**",
-      "- run_command(command): run a read-only shell command (grep, git log, git diff, etc.) — write redirections are blocked",
-      "",
-      "**Interaction tool:**",
-      "- ask_me(questions): pause and ask one or more questions with structured options (label, description?, recommended?, preview?)",
-      "",
-      "**Agent tool:**",
-      "- spawn_agent(children): run parallel sub-agents in this worktree; each child gets its own instructions and tools",
-      "",
-      "Always read before you write. Use patch_file for targeted edits to existing files.",
-      "",
-      "CRITICAL: Always invoke tools using the API tool_call mechanism. NEVER write tool calls as XML (`<tool_call>`), JSON, or any other text format in your response — those formats are silently ignored and the tool will not run.",
+      getToolDescriptionBlock(columnTools),
     ];
     messages.push({ role: "system", content: lines.join("\n") });
   }
 
-  // Session notes — inject as a system message after the worktree context block
-  // so the model can reference them throughout the conversation.
-  if (sessionNotes) {
-    messages.push({ role: "system", content: formatSessionNotesBlock(sessionNotes) });
+  // Active todos — inject as a system block so the list survives compaction.
+  // Only id/title/status are injected.
+  if (taskId) {
+    const todos = listTodos(taskId);
+    if (todos.length > 0) {
+      const STATUS_ICON: Record<string, string> = {
+        "completed": "✓",
+        "in-progress": "●",
+        "not-started": "○",
+      };
+      const lines = ["## Active Todos", ""];
+      for (const t of todos) {
+        const icon = STATUS_ICON[t.status] ?? "○";
+        lines.push(`[${t.id}] ${icon}  ${t.title}`);
+      }
+      messages.push({ role: "system", content: lines.join("\n") });
+    }
   }
 
   // Compacted conversation history
@@ -359,6 +427,16 @@ function assembleMessages(
     messages.push({ role: "user", content: newMessage });
   }
 
+  // Session notes — appended to the final user message as a <session_context> block.
+  // Keeping variable content OUT of the stable system prefix prevents cache invalidation
+  // when extractSessionMemory() updates notes every SESSION_MEMORY_EXTRACTION_INTERVAL turns.
+  if (sessionNotes) {
+    const finalMsg = messages[messages.length - 1];
+    if (finalMsg?.role === "user") {
+      finalMsg.content = (finalMsg.content as string) + formatSessionNotesBlock(sessionNotes);
+    }
+  }
+
   return messages;
 }
 
@@ -373,6 +451,23 @@ export function estimateContextUsage(
   maxTokens: number,
 ): { usedTokens: number; maxTokens: number; fraction: number } {
   const db = getDb();
+
+  // Use actual input_tokens from the most recent completed execution when available.
+  // Only completed executions are used to avoid reading partial values from an
+  // in-flight stream (which may have outputTokens=0 from the early message_start event).
+  const recentExec = db
+    .query<{ input_tokens: number | null }, [number]>(
+      "SELECT input_tokens FROM executions WHERE task_id = ? AND status = 'completed' AND input_tokens IS NOT NULL ORDER BY id DESC LIMIT 1",
+    )
+    .get(taskId);
+
+  if (recentExec?.input_tokens != null) {
+    const usedTokens = recentExec.input_tokens;
+    const fraction = maxTokens > 0 ? Math.min(usedTokens / maxTokens, 1) : 0;
+    return { usedTokens, maxTokens, fraction };
+  }
+
+  // Fallback: character-count estimation when no actual usage is recorded yet.
   const messages = db
     .query<ConversationMessageRow, [number]>(
       "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
@@ -381,7 +476,8 @@ export function estimateContextUsage(
 
   // Use compactMessages() so the estimate reflects post-decay content sizes
   // (micro-compact clears old tool results, reducing the effective token count).
-  const compacted = compactMessages(messages);
+  // quiet=true to suppress orphan warnings — context gauge polls frequently.
+  const compacted = compactMessages(messages, { quiet: true });
   const totalChars = compacted.reduce((sum, m) => {
     if (typeof m.content === "string") return sum + m.content.length;
     return sum + JSON.stringify(m.content ?? "").length;
@@ -457,7 +553,7 @@ Your <summary> must include the following sections:
 4. Errors and Fixes: List all errors encountered and how they were fixed. Include any specific user feedback received.
 5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
 6. All User Messages: List ALL user messages verbatim (not paraphrased). These are critical for understanding user feedback and intent.
-7. Pending Tasks: Outline any pending tasks explicitly requested.
+7. Pending Tasks: If an "## Active Todos" system block was injected into this conversation, do NOT re-enumerate those items here — they are persisted separately and will be re-injected fresh on the next call. Simply write: "Managed via todo system (see Active Todos block)." Only record pending items in prose here if no todo system block was present.
 8. Current Work: Describe in detail precisely what was being worked on immediately before this summary, paying special attention to the most recent messages. Include file names and code snippets.
 9. Optional Next Step: List the next step directly in line with the most recent work. IMPORTANT: only list a next step if it is explicitly in line with the user's most recent request. Include direct quotes from the most recent conversation showing exactly what task was being worked on.
 
@@ -614,7 +710,7 @@ export async function compactConversation(taskId: number): Promise<ConversationM
     const { callMessages, totalWords, truncated } = buildMessages(maxWords);
     log("info", `compaction: attempt ${attempt}`, { taskId, data: { model: resolvedModel, contextWindow, maxWords, words: totalWords, truncated } });
     try {
-      const result = await retryTurn(provider, callMessages, {});
+      const result = await retryTurn(provider, callMessages, {}, 10, {}, "background");
       const rawSummary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
       // Strip the <analysis> scratchpad block — only the <summary> block is stored.
       const summary = extractSummaryBlock(rawSummary);
@@ -676,13 +772,22 @@ export async function handleTransition(
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
+  // Ensure the task has a conversation — tasks created before conversations were
+  // required may have conversation_id = null. Create one on demand and persist it.
+  let conversationId = task.conversation_id;
+  if (conversationId == null) {
+    const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [taskId]);
+    conversationId = convResult.lastInsertRowid as number;
+    db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [conversationId, taskId]);
+  }
+
   const fromState = task.workflow_state;
 
   // 1. Update workflow_state immediately (design D6)
   db.run("UPDATE tasks SET workflow_state = ? WHERE id = ?", [toState, taskId]);
 
   // 2. Append transition event to conversation
-  appendMessage(task.conversation_id!, task.conversation_id!, "transition_event", null, "", {
+  appendMessage(taskId, conversationId, "transition_event", null, "", {
     from: fromState,
     to: toState,
   });
@@ -691,9 +796,14 @@ export async function handleTransition(
   const templateId = getBoardTemplateId(task.board_id);
   const column = getColumnConfig(templateId, toState);
 
-  // Resolve and persist model — only override if the column specifies one
+  // Resolve and persist model — column model takes precedence, workspace default is fallback
   if (column?.model != null) {
     db.run("UPDATE tasks SET model = ? WHERE id = ?", [column.model, taskId]);
+  } else {
+    const workspaceDefault = getConfig()?.workspace.default_model;
+    if (workspaceDefault != null) {
+      db.run("UPDATE tasks SET model = ? WHERE id = ?", [workspaceDefault, taskId]);
+    }
   }
 
   // 4. If no prompt configured → idle (design D7)
@@ -720,20 +830,44 @@ export async function handleTransition(
   // 7. Append system message
   appendMessage(
     taskId,
-    task.conversation_id!,
+    conversationId,
     "system",
     null,
     `Running prompt: ${column.id}`,
   );
 
-  // 8. Register AbortController for cancellation (D3)
+  // 8. Resolve and persist the on_enter_prompt so its content survives in
+  // conversation history across subsequent human turns and compaction.
+  // Resolution happens here so the worktree context is available.
+  const transitionGitRow = db
+    .query<{ worktree_path: string | null; worktree_status: string }, [number]>(
+      "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+    )
+    .get(taskId);
+  const transitionWorktreePath =
+    transitionGitRow?.worktree_status === "ready" ? (transitionGitRow.worktree_path ?? "") : "";
+  let resolvedOnEnterPrompt = column.on_enter_prompt;
+  try {
+    resolvedOnEnterPrompt = await resolveSlashReference(column.on_enter_prompt, transitionWorktreePath);
+  } catch {
+    // If resolution fails, fall back to raw slug — runExecution will surface the error
+  }
+  appendMessage(
+    taskId,
+    conversationId,
+    "user",
+    "prompt",
+    resolvedOnEnterPrompt,
+  );
+
+  // 9. Register AbortController for cancellation (D3)
   const controller = new AbortController();
   executionControllers.set(executionId, controller);
 
   // 9. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
   const resolvedModel = updatedRow.model ?? "";
-  runExecution(taskId, executionId, column.on_enter_prompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
+  runExecution(taskId, executionId, resolvedOnEnterPrompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
     () => { },
   );
 
@@ -752,11 +886,24 @@ async function runSubExecution({
   instructions,
   tools,
   qualifiedModel,
+  signal,
+  agentLabel,
+  parentContext,
+  parentToolDefs,
 }: {
   worktreePath: string;
   instructions: string;
   tools: string[];
   qualifiedModel: string;
+  signal: AbortSignal;
+  agentLabel?: string;
+  /** When provided, use the parent's assembled message context as the base conversation.
+   *  The child's instructions are appended as a final user message. This enables
+   *  cache-prefix sharing with the parent, yielding near-100% cache hit on the first call. */
+  parentContext?: AIMessage[];
+  /** When provided, use these tool definitions for the API call (matching parent's cache prefix).
+   *  The child's resolved tool names are used only as an execution whitelist. */
+  parentToolDefs?: import("../ai/types.ts").AIToolDefinition[];
 }): Promise<string> {
   const config = getConfig();
   let provider;
@@ -765,20 +912,79 @@ async function runSubExecution({
   } catch {
     return "(sub-agent skipped: no provider configured for this model)";
   }
-  const toolCtx = { worktreePath, searchConfig: config.workspace.search };
-  const toolDefs = resolveToolsForColumn(tools);
 
-  const liveMessages: AIMessage[] = [
-    { role: "user", content: instructions },
-  ];
+  // Resolve fallback provider for 529 exhaustion
+  let fallbackProvider: import("../ai/types.ts").AIProvider | null = null;
+  {
+    const slashIdx = qualifiedModel.indexOf("/");
+    const providerId = slashIdx >= 0 ? qualifiedModel.slice(0, slashIdx) : "";
+    const activeProviderConfig = config.providers.find((p) => p.id === providerId);
+    if (activeProviderConfig?.fallback_model) {
+      try {
+        ({ provider: fallbackProvider } = resolveProvider(activeProviderConfig.fallback_model, config.providers));
+      } catch {
+        fallbackProvider = null;
+      }
+    }
+  }
+
+  const subLspManager = new LSPServerManager(
+    config.workspace.lsp?.servers ?? [],
+    worktreePath,
+  );
+  const toolCtx = { worktreePath, searchConfig: config.workspace.search, mtimeCache: new Map<string, number>(), lspManager: subLspManager };
+  // Child's own tool names — used as execution whitelist
+  const childToolDefs = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+  const childToolNames = new Set(childToolDefs.map((t) => t.name));
+  // API tool definitions: use parent's (for cache prefix sharing) if provided, else child's own
+  const apiToolDefs = parentToolDefs ?? childToolDefs;
+
+  const systemContent = [
+    "You are a focused sub-agent in an orchestrator-workers pipeline. Complete the task described in the user message.",
+    "",
+    "## Environment",
+    `- worktree_path: ${worktreePath}`,
+  ].join("\n");
+
+  // When a parent context is provided, inherit it and append instructions as the
+  // final user message. This shares the parent's cache prefix so the first API call
+  // achieves a cache hit instead of a cold write.
+  // When no parent context is provided (workflow triggers, tests), use the minimal
+  // [system, user] pair construction.
+  // When a parent context is provided, append instructions as a new user turn.
+  // The parent's messages always end with a user message (the triggering prompt),
+  // so we merge instructions into that final user message instead of pushing a
+  // separate one — Anthropic's API requires strictly alternating user/assistant turns.
+  const liveMessages: AIMessage[] = (() => {
+    if (!parentContext) {
+      return [
+        { role: "system", content: systemContent },
+        { role: "user", content: instructions },
+      ];
+    }
+    const base = [...parentContext];
+    const last = base[base.length - 1];
+    if (last?.role === "user") {
+      // Merge sub-agent instructions into the existing final user message to avoid
+      // consecutive user turns (would cause a 422 from the Anthropic API).
+      base[base.length - 1] = {
+        ...last,
+        content: `${last.content as string}\n\n---\n\n${instructions}`,
+      };
+      return base;
+    }
+    // Context ends with a non-user message (unlikely with current caller): append normally.
+    return [...base, { role: "user", content: instructions }];
+  })();
 
   const MAX_SUB_ROUNDS = 10;
   let toolRounds = 0;
 
   while (toolRounds < MAX_SUB_ROUNDS) {
-    const turn = await retryTurn(provider, liveMessages, { tools: toolDefs });
+    const turn = await retryTurn(provider, liveMessages, { tools: apiToolDefs, effort: "low", signal, agentLabel, maxTokens: 16384 }, undefined, {}, "foreground", fallbackProvider);
 
     if (turn.type === "text") {
+      subLspManager.shutdown();
       return (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
     }
 
@@ -802,12 +1008,23 @@ async function runSubExecution({
         });
         continue;
       }
+      // Tool execution whitelist: only allow tools in the child's tool list
+      if (parentToolDefs && !childToolNames.has(fnName)) {
+        liveMessages.push({
+          role: "tool",
+          content: `Error: tool "${fnName}" is not available to this sub-agent. Available tools: ${[...childToolNames].join(", ")}.`,
+          tool_call_id: call.id,
+          name: fnName,
+        });
+        continue;
+      }
       const result = await executeTool(fnName, call.function.arguments, toolCtx);
       const llmStr = typeof result === "object" && result !== null && "content" in result
         ? (result as WriteResult).content
         : result as string;
-      const stored = llmStr.length > TOOL_RESULT_MAX_CHARS
-        ? llmStr.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+      const toolLimit = TOOL_RESULT_LIMITS.get(fnName) ?? TOOL_RESULT_MAX_CHARS;
+      const stored = llmStr.length > toolLimit
+        ? llmStr.slice(0, toolLimit) + "\n\n[truncated]"
         : llmStr;
       liveMessages.push({
         role: "tool",
@@ -818,15 +1035,20 @@ async function runSubExecution({
     }
   }
 
-  // Hit round limit — ask for a summary
-  const lastSubMsg = liveMessages[liveMessages.length - 1];
-  if (lastSubMsg?.role === "user") {
-    lastSubMsg.content = (lastSubMsg.content as string) + "\n\nYou have reached the tool call limit. Please summarise your work so far.";
-  } else {
-    liveMessages.push({ role: "user", content: "You have reached the tool call limit. Please summarise your work so far." });
+  // Hit round limit — synthesize a return string without an extra API call.
+  // Collecting the last round's tool names gives the parent enough context.
+  const lastActions: string[] = [];
+  for (const msg of liveMessages) {
+    if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+      lastActions.length = 0; // keep only the last assistant turn's actions
+      for (const call of msg.tool_calls) {
+        lastActions.push(call.function.name);
+      }
+    }
   }
-  const final = await retryTurn(provider, liveMessages, { tools: [] });
-  return final.type === "text" ? (final.content ?? "(no response)") : "(sub-agent hit tool limit)";
+  const actionSummary = lastActions.length > 0 ? `last actions: ${lastActions.join(", ")}` : "no tool calls recorded";
+  subLspManager.shutdown();
+  return `(sub-agent reached tool limit after ${MAX_SUB_ROUNDS} rounds — ${actionSummary})`;
 }
 
 // ─── Task 5.2 + 5.3: Execute prompt ──────────────────────────────────────────
@@ -841,7 +1063,7 @@ async function runExecution(
   onToken: OnToken,
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
-  onNewMessage: OnNewMessage,
+  onNewMessage: OnNewMessage = () => {},
 ): Promise<void> {
   const db = getDb();
 
@@ -858,8 +1080,40 @@ async function runExecution(
     if (cancelledRow) onTaskUpdated(mapTask(cancelledRow));
   }
 
+  let lspManager: LSPServerManager | undefined;
   try {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+
+    // Auto-cancel any stale 'running' executions for this task. These arise when
+    // a previous execution was interrupted (user transition, API error, app restart)
+    // without being finalized. Leaving them in 'running' causes compactMessages()
+    // to find orphaned tool_calls every time and log repeated warnings.
+    const staleCancelled = db.run(
+      "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE task_id = ? AND status = 'running' AND id != ?",
+      [taskId, executionId],
+    );
+    if (staleCancelled.changes > 0) {
+      log("info", `Auto-cancelled ${staleCancelled.changes} stale running execution(s)`, { taskId, executionId });
+    }
+
+    // Auto-clean orphaned tool_call rows: a tool_call with no immediately following
+    // tool_result can never be completed. These accumulate from crashed/cancelled
+    // executions and cause repeated warnings from compactMessages(). Delete them so
+    // subsequent calls are clean.
+    const orphans = db.query<{ id: number }, [number]>(
+      `SELECT cm1.id FROM conversation_messages cm1
+       WHERE cm1.task_id = ? AND cm1.type = 'tool_call'
+         AND NOT EXISTS (
+           SELECT 1 FROM conversation_messages cm2
+           WHERE cm2.id = cm1.id + 1 AND cm2.type = 'tool_result'
+         )`,
+    ).all(taskId);
+    if (orphans.length > 0) {
+      const ids = orphans.map((o) => o.id);
+      db.run(`DELETE FROM conversation_messages WHERE id IN (${ids.join(",")})`, []);
+      log("info", `Auto-cleaned ${orphans.length} orphaned tool_call(s) (msg ids: ${ids.join(", ")})`, { taskId, executionId });
+    }
+
     log("info", "Execution started", { taskId, executionId, data: { model, column: task.workflow_state } });
     const templateId = getBoardTemplateId(task.board_id);
     const column = getColumnConfig(templateId, task.workflow_state);
@@ -892,9 +1146,37 @@ async function runExecution(
       }
     }
 
+    // Resolve slash references in prompt and stage_instructions using the worktree path.
+    // Resolution happens here (at execution time) so the worktree context is available.
+    const worktreePath = gitContext?.worktree_path ?? "";
+    let resolvedPrompt: string;
+    let resolvedStageInstructions: string | undefined;
+    try {
+      resolvedPrompt = await resolveSlashReference(prompt, worktreePath);
+      resolvedStageInstructions = stageInstructions
+        ? await resolveSlashReference(stageInstructions, worktreePath)
+        : undefined;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log("warn", `Slash reference resolution failed: ${msg}`, { taskId, executionId });
+      appendMessage(taskId, task.conversation_id ?? 0, "system", null, `Error: ${msg}`);
+      db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+      db.run(
+        "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+        [executionId],
+      );
+      executionControllers.delete(executionId);
+      const waitRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+      if (waitRow) onTaskUpdated(mapTask(waitRow));
+      return;
+    }
+
     // Task 5.3: Assemble full execution payload as messages
     const sessionNotes = readSessionMemory(taskId);
-    const messages = assembleMessages(task, stageInstructions, history, prompt, gitContext, sessionNotes);
+    const messages = assembleMessages(task, resolvedStageInstructions, history, resolvedPrompt, gitContext, sessionNotes, taskId, column?.tools);
+
+    // Log the full message payload for debugging (stored in DB only, not printed to stdout).
+    log("debug", "Messages assembled for AI call", { taskId, executionId, data: { messageCount: messages.length, messages } });
 
     const config = getConfig();
     // Resolve provider from qualified model ID (e.g. "lmstudio/qwen3-8b")
@@ -919,10 +1201,30 @@ async function runExecution(
       throw err;
     }
 
+    // Resolve fallback provider for 529 exhaustion (task 3.1)
+    let fallbackProvider: import("../ai/types.ts").AIProvider | null = null;
+    {
+      const slashIdx = model.indexOf("/");
+      const providerId = slashIdx >= 0 ? model.slice(0, slashIdx) : "";
+      const activeProviderConfig = config.providers.find((p) => p.id === providerId);
+      if (activeProviderConfig?.fallback_model) {
+        try {
+          ({ provider: fallbackProvider } = resolveProvider(activeProviderConfig.fallback_model, config.providers));
+        } catch {
+          fallbackProvider = null;
+        }
+      }
+    }
+
     // ── Tool-call loop ────────────────────────────────────────────────────────
     const MAX_TOOL_ROUNDS = 10;
     // Build fire-and-forget wrappers so task tools can trigger transitions /
     // human turns without importing engine.ts (which would be circular).
+
+    // Pre-fetch shell approval state for this execution
+    const shellAutoApprove = task.shell_auto_approve === 1;
+    const approvedCommandsSet: string[] = getApprovedCommands(taskId);
+
     const taskCallbacks: TaskToolCallbacks = {
       handleTransition: (tId, toState) => {
         handleTransition(tId, toState, onToken, onError, onTaskUpdated, onNewMessage).catch(
@@ -935,13 +1237,56 @@ async function runExecution(
         );
       },
       cancelExecution: (execId) => cancelExecution(execId),
+      requestShellApproval: (tId, command, unapprovedBinaries) => {
+        return new Promise<ShellApprovalDecision>((resolve) => {
+          // Write approval prompt to conversation
+          const payload = JSON.stringify({ subtype: "shell_approval", command, unapprovedBinaries });
+          const approvalMsgId = appendMessage(
+            tId,
+            task.conversation_id ?? 0,
+            "ask_user_prompt" as MessageType,
+            null,
+            payload,
+          );
+          onNewMessage({
+            id: approvalMsgId,
+            taskId: tId,
+            conversationId: task.conversation_id ?? 0,
+            type: "ask_user_prompt" as MessageType,
+            role: null,
+            content: payload,
+            metadata: null,
+            createdAt: new Date().toISOString(),
+          });
+          onToken(tId, executionId, "", true);
+          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [tId]);
+          db.run(
+            "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+            [executionId],
+          );
+          const waitingRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(tId);
+          if (waitingRow) onTaskUpdated(mapTask(waitingRow));
+          pendingShellApprovals.set(tId, resolve);
+        });
+      },
+      appendApprovedCommands: (tId, binaries) => {
+        appendApprovedCommands(tId, binaries);
+      },
     };
+    lspManager = new LSPServerManager(
+      config.workspace.lsp?.servers ?? [],
+      worktreePath,
+    );
     const toolCtx = {
-      worktreePath: gitContext?.worktree_path ?? "",
+      worktreePath,
       searchConfig: config.workspace.search,
       taskId,
       boardId: task.board_id,
       taskCallbacks,
+      shellAutoApprove,
+      approvedCommands: approvedCommandsSet,
+      mtimeCache: new Map<string, number>(),
+      lspManager,
     };
 
     let tools = resolveToolsForColumn(column?.tools);
@@ -957,6 +1302,7 @@ async function runExecution(
     let toolRounds = 0;
     let emptyResponseNudges = 0;
     let totalNudges = 0;
+    let totalCostEst = 0;
     const MAX_NUDGES = 5;
     // Per-round reasoning accumulator — reset at start of each round
     let reasoningAccum = "";
@@ -984,10 +1330,12 @@ async function runExecution(
       // Reset per-round reasoning state
       reasoningAccum = "";
       hadReasoning = false;
+      let stopReasonEvent: string | null = null;
 
       try {
-        log("debug", `Stream round ${toolRounds + 1} started`, { taskId, executionId, data: { toolCount: tools.length } });
-        for await (const event of retryStream(provider, liveMessages, { tools, signal })) {
+        log("debug", `Stream round ${toolRounds + 1} started`, { taskId, executionId, data: { toolCount: tools.length, messageCount: liveMessages.length, messages: liveMessages } });
+        const roundStartMs = Date.now();
+        for await (const event of retryStream(provider, liveMessages, { tools, signal }, undefined, undefined, {}, "foreground", fallbackProvider)) {
           if (event.type === "token") {
             fullResponse += event.content;
             onToken(taskId, executionId, event.content, false);
@@ -1001,17 +1349,29 @@ async function runExecution(
           } else if (event.type === "tool_calls") {
             log("debug", `Tool calls received: ${event.calls.map(c => c.function.name).join(", ")}`, { taskId, executionId });
             roundCalls = event.calls;
+          } else if (event.type === "stop_reason") {
+            stopReasonEvent = event.reason;
+          } else if (event.type === "usage") {
+            totalCostEst += event.costEst;
+            // Persist token usage to the executions row so estimateContextUsage()
+            // can use actual counts instead of character-based estimates.
+            db.run(
+              "UPDATE executions SET input_tokens = ?, output_tokens = ?, cache_creation_input_tokens = ?, cache_read_input_tokens = ? WHERE id = ?",
+              [event.usage.inputTokens, event.usage.outputTokens, event.usage.cacheCreationInputTokens ?? null, event.usage.cacheReadInputTokens ?? null, executionId],
+            );
           } else if (event.type === "done") {
             break;
           }
         }
+        log("debug", `Stream round ${toolRounds + 1} done in ${((Date.now() - roundStartMs) / 1_000).toFixed(1)}s`, { taskId, executionId });
       } catch (streamErr) {
         // Distinguish abort from real stream errors
         if (streamErr instanceof Error && streamErr.name === "AbortError") {
           if (fullResponse) {
             const { clean } = stripXmlToolCalls(fullResponse);
             if (clean && !isBadAssistantResponse(clean)) {
-              appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+              const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+              onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: clean, metadata: null, createdAt: new Date().toISOString() });
             }
           }
           handleCancelled(task);
@@ -1020,7 +1380,8 @@ async function runExecution(
         if (fullResponse) {
           const { clean } = stripXmlToolCalls(fullResponse);
           if (clean && !isBadAssistantResponse(clean)) {
-            appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+            const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+            onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: clean, metadata: null, createdAt: new Date().toISOString() });
           }
         }
         const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
@@ -1036,6 +1397,45 @@ async function runExecution(
         const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
         if (failedRow) onTaskUpdated(mapTask(failedRow));
         return;
+      }
+
+      // Handle non-standard stop reasons from the model
+      if (stopReasonEvent) {
+        if (stopReasonEvent === "refusal") {
+          log("warn", `Model refused to respond (stop_reason: refusal)`, { taskId, executionId });
+          const refusalMsg = "The model refused to generate a response for this request.";
+          appendMessage(taskId, task.conversation_id ?? 0, "system", null, refusalMsg);
+          executionControllers.delete(executionId);
+          db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+          db.run(
+            "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
+            [refusalMsg, executionId],
+          );
+          onError(taskId, executionId, refusalMsg);
+          const refusalRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+          if (refusalRow) onTaskUpdated(mapTask(refusalRow));
+          return;
+        } else if (stopReasonEvent === "model_context_window_exceeded") {
+          log("warn", `Context window exceeded — triggering compaction`, { taskId, executionId });
+          appendMessage(taskId, task.conversation_id ?? 0, "system", null, "Compacting conversation…");
+          try {
+            await compactConversation(taskId);
+          } catch (compactErr) {
+            const errMsg = compactErr instanceof Error ? compactErr.message : String(compactErr);
+            log("error", `Compaction failed after context_window_exceeded: ${errMsg}`, { taskId, executionId });
+          }
+          // Reload messages and retry the round
+          const freshRows = db.query<ConversationMessageRow, [number]>(
+            "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY created_at ASC",
+          ).all(taskId);
+          const freshMessages = compactMessages(freshRows);
+          liveMessages.length = 0;
+          liveMessages.push(...freshMessages);
+          fullResponse = "";
+          continue;
+        } else {
+          log("warn", `Unrecognized stop_reason: ${stopReasonEvent} — continuing`, { taskId, executionId });
+        }
       }
 
       // If no tool calls — the stream was the final response; exit
@@ -1251,14 +1651,40 @@ async function runExecution(
           spawnArgs = { children: [] };
         }
 
+        // Record tool_call message before executing children, matching the pattern
+        // used by all other tools in the loop.
+        const spawnCallContent = JSON.stringify({ name: "spawn_agent", arguments: spawnCall.function.arguments });
+        const spawnCallId = appendMessage(
+          taskId,
+          task.conversation_id ?? 0,
+          "tool_call",
+          null,
+          spawnCallContent,
+        );
+        onNewMessage({
+          id: spawnCallId, taskId, conversationId: task.conversation_id ?? 0,
+          type: "tool_call", role: null, content: spawnCallContent, metadata: null,
+          createdAt: new Date().toISOString(),
+        });
+
         const childResults = await Promise.all(
           (spawnArgs.children ?? []).map(async (child, idx) => {
             try {
+              const totalChildren = (spawnArgs.children ?? []).length;
               const result = await runSubExecution({
                 worktreePath: toolCtx.worktreePath,
                 instructions: child.instructions,
                 tools: child.tools,
                 qualifiedModel: model,
+                signal,
+                agentLabel: `Agent ${idx + 1}/${totalChildren}`,
+                // Pass the assembled parent context so the sub-agent starts from the
+                // same cache prefix. The `messages` variable is the context assembled
+                // for this round (already micro-compacted via compactMessages).
+                parentContext: messages,
+                // Pass the parent's full sorted tool definitions so the sub-agent
+                // uses the same [system, tools] prefix → cache hit on first call.
+                parentToolDefs: tools,
               });
               return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
             } catch (e) {
@@ -1268,8 +1694,9 @@ async function runExecution(
         );
 
         const spawnResultStr = JSON.stringify(childResults);
-        const stored = spawnResultStr.length > TOOL_RESULT_MAX_CHARS
-          ? spawnResultStr.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+        const spawnLimit = TOOL_RESULT_LIMITS.get("spawn_agent") ?? TOOL_RESULT_MAX_CHARS;
+        const stored = spawnResultStr.length > spawnLimit
+          ? spawnResultStr.slice(0, spawnLimit) + "\n\n[truncated]"
           : spawnResultStr;
 
         appendMessage(
@@ -1324,13 +1751,15 @@ async function runExecution(
           }
         }
 
-        // Write tools return { content, diff }; read/search tools return a plain string
+        // Write tools return { content, diff } or { content, diffs }; read/search tools return a plain string
         const isWriteResult = typeof result === "object" && result !== null && "content" in result;
         const llmContent = isWriteResult ? (result as WriteResult).content : result as string;
         const diff = isWriteResult ? (result as WriteResult).diff : undefined;
+        const diffs = isWriteResult ? (result as WriteResult).diffs : undefined;
 
-        const storedResult = llmContent.length > TOOL_RESULT_MAX_CHARS
-          ? llmContent.slice(0, TOOL_RESULT_MAX_CHARS) + "\n\n[truncated]"
+        const toolLimit = TOOL_RESULT_LIMITS.get(fnName) ?? TOOL_RESULT_MAX_CHARS;
+        const storedResult = llmContent.length > toolLimit
+          ? llmContent.slice(0, toolLimit) + "\n\n[truncated]"
           : llmContent;
 
         const resultMeta = { tool_call_id: call.id, name: fnName };
@@ -1349,8 +1778,9 @@ async function runExecution(
         });
 
         // Emit UI-only file_diff message (never forwarded to LLM)
-        if (diff) {
-          const diffContent = JSON.stringify(diff);
+        const diffsToEmit = diffs ?? (diff ? [diff] : []);
+        for (const d of diffsToEmit) {
+          const diffContent = JSON.stringify(d);
           const diffId = appendMessage(
             taskId,
             task.conversation_id ?? 0,
@@ -1376,10 +1806,12 @@ async function runExecution(
       if (toolRounds >= MAX_TOOL_ROUNDS) {
         liveMessages.push({
           role: "user",
-          content: "You have reached the tool call limit. Please summarise your findings and respond now.",
+          content: "You have reached the tool call limit. Please summarise your findings and respond now. Do not call any more tools.",
         });
-        // Remove tools so the model is forced to respond with text
-        tools = [];
+        // Keep tools in the request to preserve the cache prefix (tools → system → messages).
+        // Dropping tools changes the tools hash and invalidates the entire cache, causing an
+        // expensive cold write on content that is never read again. The "do not call any more
+        // tools" instruction is sufficient to prevent further tool use.
       }
     }
 
@@ -1388,7 +1820,8 @@ async function runExecution(
       if (fullResponse) {
         const { clean } = stripXmlToolCalls(fullResponse);
         if (clean && !isBadAssistantResponse(clean)) {
-          appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+          const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", clean);
+          onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: clean, metadata: null, createdAt: new Date().toISOString() });
         }
       }
       handleCancelled(task);
@@ -1415,7 +1848,8 @@ async function runExecution(
     }
 
     if (!isBadAssistantResponse(cleanResponse)) {
-      appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", cleanResponse);
+      const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", cleanResponse);
+      onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: cleanResponse, metadata: null, createdAt: new Date().toISOString() });
 
       // Trigger background session memory extraction every N completed AI turns.
       // Count only persisted assistant messages so the interval is stable.
@@ -1460,12 +1894,12 @@ async function runExecution(
       return;
     }
 
-    log("info", "Execution completed", { taskId, executionId });
+    log("info", `Execution completed (${toolRounds} round${toolRounds !== 1 ? "s" : ""}, ~$${totalCostEst.toFixed(4)})`, { taskId, executionId });
     onToken(taskId, executionId, "", true);
     db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
     db.run(
-      "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ? WHERE id = ?",
-      [cleanResponse.slice(0, 500), executionId],
+      "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ?, cost_estimate = ? WHERE id = ?",
+      [cleanResponse.slice(0, 500), totalCostEst, executionId],
     );
     const completedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (completedRow) onTaskUpdated(mapTask(completedRow));
@@ -1509,6 +1943,8 @@ async function runExecution(
     onError(taskId, executionId, errMsg);
     const outerFailedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (outerFailedRow) onTaskUpdated(mapTask(outerFailedRow));
+  } finally {
+    lspManager?.shutdown();
   }
 }
 // ─── Task 5.7: Human turn ─────────────────────────────────────────────────────

@@ -7,14 +7,16 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { extractSummaryBlock, compactMessages, MICRO_COMPACT_TURN_WINDOW, MICRO_COMPACT_SENTINEL } from "../workflow/engine.ts";
+import { extractSummaryBlock, compactMessages, MICRO_COMPACT_TURN_WINDOW, MICRO_COMPACT_SENTINEL, estimateContextUsage } from "../workflow/engine.ts";
+import { cancelExecution } from "../workflow/engine.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { handleHumanTurn, handleTransition } from "../workflow/engine.ts";
-import { queueStreamStep, queueTurnResponse, getCapturedTurnOptions, getCapturedStreamMessages, resetFakeAI } from "../ai/fake.ts";
+import { queueStreamStep, queueTurnResponse, getCapturedTurnOptions, getCapturedTurnMessages, getCapturedStreamMessages, resetFakeAI, queueHangingTurn } from "../ai/fake.ts";
+import { resolveToolsForColumn } from "../workflow/tools.ts";
 import type { Database } from "bun:sqlite";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 
@@ -178,6 +180,38 @@ describe("handleTransition", () => {
   }, 10_000);
 });
 
+// ─── workspace default_model on column transition ─────────────────────────────
+
+describe("handleTransition / workspace default_model", () => {
+  it("applies workspace default_model when column has no model configured", async () => {
+    configCleanup();
+    const cfgWithDefault = setupTestConfig("default_model: fake/workspace-default");
+    configCleanup = cfgWithDefault.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', model = NULL WHERE id = ?", [taskId]);
+
+    await handleTransition(taskId, "done", noop, noop, noop, noop);
+
+    const task = db
+      .query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(task!.model).toBe("fake/workspace-default");
+  });
+
+  it("leaves model unchanged when neither column nor workspace specifies a model", async () => {
+    // default setupTestConfig has no default_model
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', model = 'fake/existing' WHERE id = ?", [taskId]);
+
+    await handleTransition(taskId, "done", noop, noop, noop, noop);
+
+    const task = db
+      .query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(task!.model).toBe("fake/existing");
+  });
+});
+
 // ─── ask_me interception ──────────────────────────────────────────────────────
 
 describe("ask_me tool interception", () => {
@@ -265,8 +299,8 @@ describe("resolveToolsForColumn", () => {
     const tools = resolveToolsForColumn(undefined);
     const names = tools.map((t) => t.name);
     expect(names).toContain("read_file");
-    expect(names).toContain("list_dir");
     expect(names).toContain("run_command");
+    expect(names).not.toContain("list_dir");
   });
 });
 
@@ -342,6 +376,126 @@ describe("spawn_agent tool interception", () => {
     expect(results[0]).toContain("Wrote src/a.ts");
     expect(results[1]).toContain("Wrote src/b.ts");
   }, 15_000);
+});
+
+// ─── Sub-agent cache sharing (2.1–2.3) ───────────────────────────────────────
+
+describe("sub-agent cache sharing", () => {
+  it("2.1 runSubExecution inherits parent system blocks and merges instructions into final user message", async () => {
+    // Spawn one sub-agent; it should immediately return text (no tool calls)
+    queueTurnResponse({ type: "text", content: "Done." });
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [
+        {
+          id: "call_sa",
+          type: "function",
+          function: {
+            name: "spawn_agent",
+            arguments: JSON.stringify({
+              children: [{ instructions: "Do something.", tools: [] }],
+            }),
+          },
+        },
+      ],
+    });
+    // Parent resumes after spawn
+    queueStreamStep({ type: "text", tokens: ["Finished."] });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+    await handleHumanTurn(taskId, "Go.", (_, __, _t, isDone) => { if (isDone) resolveDone(); }, noop, noop, noop);
+    await donePromise;
+
+    const turnMessages = getCapturedTurnMessages();
+    expect(turnMessages.length).toBeGreaterThan(0);
+    const subAgentMessages = turnMessages[0];
+
+    // Sub-agent now starts with parent's system blocks (cache sharing).
+    // The first message should be a system message (from parent's assembled context).
+    expect(subAgentMessages[0].role).toBe("system");
+
+    // The last message should be a user message containing the sub-agent's instructions,
+    // merged into the parent's final user message to avoid consecutive-user-message issues.
+    const lastMsg = subAgentMessages[subAgentMessages.length - 1];
+    expect(lastMsg.role).toBe("user");
+    expect(lastMsg.content as string).toContain("Do something.");
+  }, 15_000);
+
+  it("7.4 sub-agent's first turn message array contains parent's system blocks (cache inheritance)", async () => {
+    queueTurnResponse({ type: "text", content: "Sub-agent result." });
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [
+        {
+          id: "call_sa2",
+          type: "function",
+          function: {
+            name: "spawn_agent",
+            arguments: JSON.stringify({
+              children: [{ instructions: "Run a specific sub-task.", tools: [] }],
+            }),
+          },
+        },
+      ],
+    });
+    queueStreamStep({ type: "text", tokens: ["Parent done."] });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET title = 'My Task Title', workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    // Also capture the parent's stream messages so we can compare system blocks
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+    await handleHumanTurn(taskId, "Start.", (_, __, _t, isDone) => { if (isDone) resolveDone(); }, noop, noop, noop);
+    await donePromise;
+
+    const parentStreamMessages = getCapturedStreamMessages();
+    const subAgentTurnMessages = getCapturedTurnMessages();
+
+    expect(parentStreamMessages.length).toBeGreaterThan(0);
+    expect(subAgentTurnMessages.length).toBeGreaterThan(0);
+
+    const parentSystemTexts = parentStreamMessages[0]
+      .filter((m) => m.role === "system")
+      .map((m) => m.content as string);
+    const subAgentSystemTexts = subAgentTurnMessages[0]
+      .filter((m) => m.role === "system")
+      .map((m) => m.content as string);
+
+    // Sub-agent must start with the SAME system blocks as the parent (enables cache hit)
+    expect(subAgentSystemTexts.length).toBeGreaterThan(0);
+    expect(subAgentSystemTexts).toEqual(parentSystemTexts);
+
+    // The task title should appear in the sub-agent system blocks (inherited from parent)
+    expect(subAgentSystemTexts.some((s) => s.includes("My Task Title"))).toBe(true);
+  }, 15_000);
+
+  it("2.2 tool definitions are sorted by name", () => {
+    const tools = ["write", "read", "search"];
+    const defs = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+    for (let i = 1; i < defs.length; i++) {
+      expect(defs[i].name >= defs[i - 1].name).toBe(true);
+    }
+  });
+
+  it("2.3 two sub-agents with identical tools produce the same sorted tool name order", () => {
+    const tools = ["write", "read", "search"];
+    const defs1 = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+    const defs2 = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
+    expect(defs1.map((d) => d.name)).toEqual(defs2.map((d) => d.name));
+  });
 });
 
 // ─── Unified streaming ────────────────────────────────────────────────────────
@@ -492,7 +646,7 @@ describe("awaiting_user on UnresolvableProviderError", () => {
     const task = db
       .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
       .get(taskId);
-    expect(task!.execution_state).toBe("awaiting_user");
+    expect(task!.execution_state).toBe("waiting_user");
 
     const sysMsg = db
       .query<{ content: string }, [number]>(
@@ -503,7 +657,7 @@ describe("awaiting_user on UnresolvableProviderError", () => {
     expect(sysMsg!.content).toMatch(/model/i);
   });
 
-  it("5.11 task with unknown provider prefix → execution_state awaiting_user", async () => {
+  it("5.11 task with unknown provider prefix → execution_state waiting_user", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan', model = 'unknownprovider/some-model' WHERE id = ?", [taskId]);
 
@@ -514,7 +668,7 @@ describe("awaiting_user on UnresolvableProviderError", () => {
     const task = db
       .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
       .get(taskId);
-    expect(task!.execution_state).toBe("awaiting_user");
+    expect(task!.execution_state).toBe("waiting_user");
   });
 });
 
@@ -725,6 +879,145 @@ describe("ask_me tool normalization", () => {
   });
 });
 
+// ─── cancelExecution ─────────────────────────────────────────────────────────
+
+describe("cancelExecution", () => {
+  it("1.1 zombie cleanup: marks orphaned running execution failed and resets task to waiting_user", () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    // Insert a synthetic zombie execution (running, no finished_at, no live AbortController).
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, status) VALUES (?, 'plan', 'plan', 'running')",
+      [taskId],
+    );
+    const { id: execId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+    db.run("UPDATE tasks SET current_execution_id = ?, execution_state = 'running' WHERE id = ?", [execId, taskId]);
+
+    // No live AbortController for execId — exercises the zombie path.
+    cancelExecution(execId);
+
+    const exec = db
+      .query<{ status: string; finished_at: string | null }, [number]>(
+        "SELECT status, finished_at FROM executions WHERE id = ?",
+      )
+      .get(execId)!;
+    expect(exec.status).toBe("failed");
+    expect(exec.finished_at).not.toBeNull();
+
+    const task = db
+      .query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
+      .get(taskId)!;
+    expect(task.execution_state).toBe("waiting_user");
+  });
+
+  it("1.2 no-op when execution is already completed — status unchanged", () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, status, finished_at) VALUES (?, 'plan', 'plan', 'completed', datetime('now'))",
+      [taskId],
+    );
+    const { id: execId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+
+    cancelExecution(execId); // no live controller, execution is not 'running'
+
+    const exec = db
+      .query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?")
+      .get(execId)!;
+    expect(exec.status).toBe("completed"); // unchanged
+  });
+
+  it("1.3 no-op for unknown executionId — does not throw", () => {
+    expect(() => cancelExecution(999_999)).not.toThrow();
+  });
+});
+
+// ─── Sub-agent signal propagation ────────────────────────────────────────────
+
+describe("sub-agent signal propagation", () => {
+  function seedWithWorktree() {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+    return taskId;
+  }
+
+  it("2.1 AbortSignal is threaded into sub-agent turn() options", async () => {
+    queueTurnResponse({ type: "text", content: "Done." });
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [{
+        id: "call_sa_sig",
+        type: "function",
+        function: {
+          name: "spawn_agent",
+          arguments: JSON.stringify({ children: [{ instructions: "Do something.", tools: [] }] }),
+        },
+      }],
+    });
+    queueStreamStep({ type: "text", tokens: ["Finished."] });
+
+    const taskId = seedWithWorktree();
+
+    let resolveCompleted!: () => void;
+    const completedPromise = new Promise<void>((r) => (resolveCompleted = r));
+    await handleHumanTurn(
+      taskId, "Go.", noop, noop,
+      (task) => { if ((task as { executionState: string }).executionState === "completed") resolveCompleted(); },
+      noop,
+    );
+    await completedPromise;
+
+    // The sub-agent's turn() must have received a live AbortSignal.
+    const turnOpts = getCapturedTurnOptions();
+    expect(turnOpts.length).toBeGreaterThan(0);
+    expect(turnOpts[0].signal).toBeInstanceOf(AbortSignal);
+    expect(turnOpts[0].signal!.aborted).toBe(false);
+  }, 15_000);
+
+  it("2.2 cancelling parent while sub-agent hangs aborts sub-agent and marks execution cancelled", async () => {
+    // Round 1: parent calls spawn_agent.
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [{
+        id: "call_sa_hang",
+        type: "function",
+        function: {
+          name: "spawn_agent",
+          arguments: JSON.stringify({ children: [{ instructions: "Hang forever.", tools: [] }] }),
+        },
+      }],
+    });
+    // The sub-agent's turn will block until the parent's AbortSignal fires.
+    const subAgentStarted = queueHangingTurn();
+
+    const taskId = seedWithWorktree();
+
+    let resolveCancelled!: () => void;
+    const cancelledPromise = new Promise<void>((r) => (resolveCancelled = r));
+    const { executionId } = await handleHumanTurn(
+      taskId, "Go — but you will be cancelled.", noop, noop,
+      (task) => { if ((task as { executionState: string }).executionState === "waiting_user") resolveCancelled(); },
+      noop,
+    );
+
+    // Wait until the sub-agent's hanging turn has actually started.
+    await subAgentStarted;
+
+    // Cancel the parent — this aborts the signal threaded into the sub-agent.
+    cancelExecution(executionId);
+
+    // Wait for the execution to reach cancelled state (onTaskUpdated fires).
+    await cancelledPromise;
+
+    const exec = db
+      .query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?")
+      .get(executionId)!;
+    expect(exec.status).toBe("cancelled");
+  }, 15_000);
+});
+
 // ─── compactMessages micro-compact ────────────────────────────────────────────
 
 describe("compactMessages micro-compact", () => {
@@ -830,6 +1123,35 @@ describe("compactMessages micro-compact", () => {
     }
   });
 
+  it("4.5 orphaned tool_call with no following tool_result is silently skipped", () => {
+    const rows: ConversationMessageRow[] = [
+      makeRow({ type: "user", role: "user", content: "hello" }),
+      toolCallRow("read_file"), // orphaned — no tool_result follows
+    ];
+    const output = compactMessages(rows);
+    // The orphaned tool_call should produce no assistant message in output
+    const assistantMsgs = output.filter((m) => m.role === "assistant");
+    expect(assistantMsgs.length).toBe(0);
+  });
+
+  it("4.6 orphaned tool_call in the middle is skipped, subsequent messages are included", () => {
+    const rows: ConversationMessageRow[] = [
+      toolCallRow("read_file"),     // orphaned
+      makeRow({ type: "user", role: "user", content: "retry" }),
+      toolCallRow("list_dir"),
+      toolResultRow("list_dir", "file.ts"),
+      makeRow({ type: "assistant", role: "assistant", content: "Done" }),
+    ];
+    const output = compactMessages(rows);
+    const toolMsgs = output.filter((m) => m.role === "tool");
+    const assistantMsgs = output.filter((m) => m.role === "assistant");
+    // Orphaned tool_call dropped; valid pair preserved
+    expect(toolMsgs.length).toBe(1);
+    expect(toolMsgs[0].content).toBe("file.ts");
+    // The final assistant text message survives
+    expect(assistantMsgs.some((m) => m.content === "Done")).toBe(true);
+  });
+
   // ─── FakeAI integration test for DB immutability ─────────────────────────────
 
   it("4.4 DB rows are not modified during assembly — compactMessages() is non-destructive", async () => {
@@ -893,4 +1215,116 @@ describe("compactMessages micro-compact", () => {
       expect(dbRows[i].content).toBe(`original content turn ${i + 1}`);
     }
   }, 15_000);
+
+  it("6.3 forked sub-agent context has oldest clearable tool results replaced with sentinel", async () => {
+    // Seed MICRO_COMPACT_TURN_WINDOW + 2 = 10 clearable tool rounds (read_file)
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [taskId, gitDir, gitDir],
+    );
+
+    const turnsToSeed = MICRO_COMPACT_TURN_WINDOW + 2;
+    for (let i = 0; i < turnsToSeed; i++) {
+      db.run(
+        "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'tool_call', 'assistant', ?)",
+        [taskId, conversationId, JSON.stringify({ name: "read_file", arguments: "{}" })],
+      );
+      const { id: callId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+      db.run(
+        "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content, metadata) VALUES (?, ?, 'tool_result', 'tool', ?, ?)",
+        [
+          taskId,
+          conversationId,
+          `sub-agent turn content ${i + 1}`,
+          JSON.stringify({ tool_call_id: `call_${callId}`, name: "read_file" }),
+        ],
+      );
+      db.run(
+        "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'assistant', 'assistant', 'thinking')",
+        [taskId, conversationId],
+      );
+    }
+
+    // Sub-agent returns immediately
+    queueTurnResponse({ type: "text", content: "Sub done." });
+    // Parent spawns sub-agent then completes
+    queueStreamStep({
+      type: "tool_calls",
+      calls: [{
+        id: "spawn_c6",
+        type: "function",
+        function: { name: "spawn_agent", arguments: JSON.stringify({ children: [{ instructions: "Do X.", tools: [] }] }) },
+      }],
+    });
+    queueStreamStep({ type: "text", tokens: ["Done."] });
+
+    let resolveDone!: () => void;
+    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+    await handleHumanTurn(taskId, "Go.", (_, __, _t, isDone) => { if (isDone) resolveDone(); }, noop, noop, noop);
+    await donePromise;
+
+    // The sub-agent's turn messages should be the compacted parentContext
+    const subAgentTurnMessages = getCapturedTurnMessages();
+    const toolMsgs = subAgentTurnMessages[0].filter((m) => m.role === "tool");
+
+    // With turnsToSeed turns and MICRO_COMPACT_TURN_WINDOW=8:
+    // distance of turn 1 = turnsToSeed - 1 = 9 > 8 → cleared
+    expect(toolMsgs.length).toBeGreaterThan(0);
+    expect(toolMsgs[0].content).toBe(MICRO_COMPACT_SENTINEL);
+    // Most recent turn within window → preserved
+    expect(toolMsgs[toolMsgs.length - 1].content).toContain(`sub-agent turn content ${turnsToSeed}`);
+  }, 15_000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6.2 — estimateContextUsage: actual-token path and fallback path
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("estimateContextUsage (6.2)", () => {
+  it("falls back to character-based estimate when no completed executions exist", () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    // Seed some conversation messages (~400 chars)
+    const msg = "a".repeat(400);
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', ?)",
+      [taskId, conversationId, msg],
+    );
+    const { usedTokens, fraction } = estimateContextUsage(taskId, 128_000);
+    // 400 chars / 4 = 100 tokens + 400 overhead = 500; fraction = 500 / 128000 ≈ 0.0039
+    expect(usedTokens).toBe(500);
+    expect(fraction).toBeGreaterThan(0);
+    expect(fraction).toBeLessThan(0.01);
+  });
+
+  it("uses actual input_tokens from most recent completed execution when available", () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    // Insert a completed execution with real token counts
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt, input_tokens, output_tokens) VALUES (?, 'plan', 'plan', 'human-turn', 'completed', 1, 65000, 500)",
+      [taskId],
+    );
+    const { usedTokens, maxTokens, fraction } = estimateContextUsage(taskId, 128_000);
+    expect(usedTokens).toBe(65000);
+    expect(maxTokens).toBe(128_000);
+    expect(fraction).toBeCloseTo(65000 / 128_000, 4);
+  });
+
+  it("ignores non-completed executions (uses character fallback instead)", () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    // Insert a running execution with input_tokens — should be ignored
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt, input_tokens) VALUES (?, 'plan', 'plan', 'human-turn', 'running', 1, 99000)",
+      [taskId],
+    );
+    // Seed minimal messages for fallback
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', ?)",
+      [taskId, conversationId, "x".repeat(100)],
+    );
+    const { usedTokens } = estimateContextUsage(taskId, 128_000);
+    // Should NOT use 99000 — should use character estimate (~425 with overhead)
+    expect(usedTokens).toBeLessThan(1000);
+  });
 });

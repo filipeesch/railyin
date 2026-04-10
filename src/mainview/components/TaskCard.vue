@@ -20,20 +20,51 @@
         @click.stop="emit('openReview')"
       >⬡ {{ changedCount }}</span>
     </div>
+
+    <!-- Launch buttons: only when worktree is ready -->
+    <div v-if="launchConfig && task.worktreePath" class="task-card__launch-row">
+      <LaunchButtons
+        :profiles="launchConfig.profiles"
+        :tools="launchConfig.tools"
+        :card-mode="true"
+        @click.stop
+        @pointerdown.stop
+        @run="runLaunch"
+      />
+    </div>
+
+
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 import Tag from "primevue/tag";
-import type { Task } from "@shared/rpc-types";
+import { useToast } from "primevue/usetoast";
+import LaunchButtons from "./LaunchButtons.vue";
+import type { Task, LaunchConfig } from "@shared/rpc-types";
 import { useTaskStore } from "../stores/task";
+import { useLaunchStore } from "../stores/launch";
 
 const props = defineProps<{ task: Task }>();
 const emit = defineEmits<{ click: []; openReview: [] }>();
-
 const taskStore = useTaskStore();
+const launchStore = useLaunchStore();
+const toast = useToast();
 const changedCount = computed(() => taskStore.changedFileCounts[props.task.id] ?? 0);
+
+const launchConfig = ref<LaunchConfig | null>(null);
+
+onMounted(async () => {
+  launchConfig.value = await launchStore.getConfig(props.task.id, props.task.projectId);
+});
+
+async function runLaunch(command: string, mode: "terminal" | "app") {
+  const result = await launchStore.run(props.task.id, command, mode);
+  if (!result.ok) {
+    toast.add({ severity: "error", summary: "Launch failed", detail: result.error, life: 5000 });
+  }
+}
 
 const execLabel = computed(() => {
   const map: Record<string, string> = {
@@ -64,8 +95,8 @@ const execSeverity = computed(() => {
 
 <style scoped>
 .task-card {
-  background: var(--p-surface-0, #fff);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-background);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 8px;
   padding: 12px;
   cursor: default;
@@ -98,6 +129,12 @@ const execSeverity = computed(() => {
   gap: 8px;
 }
 
+.task-card__launch-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
 .task-card__retry-count {
   font-size: 0.75rem;
   color: var(--p-text-muted-color, #94a3b8);
@@ -106,9 +143,9 @@ const execSeverity = computed(() => {
 .task-card__changed-badge {
   font-size: 0.72rem;
   font-weight: 600;
-  color: var(--p-primary-color, #6366f1);
-  background: var(--p-primary-50, #eef2ff);
-  border: 1px solid var(--p-primary-200, #c7d2fe);
+  color: var(--p-primary-color);
+  background: var(--p-highlight-background);
+  border: 1px solid color-mix(in srgb, var(--p-primary-color) 30%, transparent);
   border-radius: 10px;
   padding: 1px 7px;
   cursor: pointer;
@@ -117,6 +154,8 @@ const execSeverity = computed(() => {
 }
 
 .task-card__changed-badge:hover {
-  background: var(--p-primary-100, #e0e7ff);
+  background: var(--p-highlight-focus-background);
 }
+
+
 </style>

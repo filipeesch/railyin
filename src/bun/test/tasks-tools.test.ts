@@ -260,6 +260,40 @@ describe("executeTool / create_task", () => {
         );
         expect(result).toContain("Error: project 999999 not found");
     });
+
+    it("inherits workspace default_model when no model arg is given", async () => {
+        cfg.cleanup();
+        cfg = setupTestConfig("default_model: fake/workspace-default");
+        const result = await executeTool(
+            "create_task",
+            JSON.stringify({ project_id: projectId, title: "Default model task", description: "" }),
+            ctx(),
+        );
+        const task = JSON.parse(result as string);
+        expect(task.model).toBe("fake/workspace-default");
+    });
+
+    it("explicit model arg overrides workspace default_model", async () => {
+        cfg.cleanup();
+        cfg = setupTestConfig("default_model: fake/workspace-default");
+        const result = await executeTool(
+            "create_task",
+            JSON.stringify({ project_id: projectId, title: "Override model task", description: "", model: "fake/explicit" }),
+            ctx(),
+        );
+        const task = JSON.parse(result as string);
+        expect(task.model).toBe("fake/explicit");
+    });
+
+    it("model is null when no model arg and no workspace default_model", async () => {
+        const result = await executeTool(
+            "create_task",
+            JSON.stringify({ project_id: projectId, title: "No model task", description: "" }),
+            ctx(),
+        );
+        const task = JSON.parse(result as string);
+        expect(task.model).toBeNull();
+    });
 });
 
 // ─── edit_task ────────────────────────────────────────────────────────────────

@@ -24,6 +24,14 @@
       </div>
       <div class="board-header__right">
         <Button
+          :icon="isDark ? 'pi pi-sun' : 'pi pi-moon'"
+          severity="secondary"
+          text
+          rounded
+          :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+          @click="toggleDark"
+        />
+        <Button
           icon="pi pi-cog"
           severity="secondary"
           text
@@ -109,6 +117,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
+import { useDarkMode } from "../composables/useDarkMode";
 import { electroview, onWorkflowReloaded } from "../rpc";
 import Select from "primevue/select";
 import Button from "primevue/button";
@@ -128,6 +137,7 @@ const boardStore = useBoardStore();
 const taskStore = useTaskStore();
 const projectStore = useProjectStore();
 const reviewStore = useReviewStore();
+const { isDark, toggle: toggleDark } = useDarkMode();
 
 const showCreateTask = ref(false);
 const dragOverColumnId = ref<string | null>(null);
@@ -320,8 +330,8 @@ async function onTaskCreated() {
   align-items: center;
   justify-content: space-between;
   padding: 12px 20px;
-  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
-  background: var(--p-surface-0, #fff);
+  border-bottom: 1px solid var(--p-content-border-color);
+  background: var(--p-content-background);
   gap: 12px;
   flex-shrink: 0;
 }
@@ -351,7 +361,7 @@ async function onTaskCreated() {
   flex: 0 0 260px;
   display: flex;
   flex-direction: column;
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background);
   border-radius: 10px;
   padding: 12px;
   max-height: 100%;

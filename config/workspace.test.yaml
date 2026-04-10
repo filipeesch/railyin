@@ -1,5 +1,7 @@
 name: Test Workspace
 
-providers:
-  - id: fake
-    type: fake
+engine:
+  type: native
+  providers:
+    - id: fake
+      type: fake

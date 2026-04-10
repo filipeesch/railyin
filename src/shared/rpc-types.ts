@@ -46,6 +46,8 @@ export interface Task {
   createdFromTaskId: number | null;
   createdFromExecutionId: number | null;
   model: string | null;
+  shellAutoApprove: boolean;
+  approvedCommands: string[];
   worktreeStatus: string | null;
   branchName: string | null;
   worktreePath: string | null;
@@ -67,6 +69,7 @@ export type MessageType =
 
 export interface ModelInfo {
   id: string;
+  displayName?: string;
   contextWindow: number | null;
 }
 
@@ -74,8 +77,11 @@ export interface ProviderModelList {
   id: string;
   models: Array<{
     id: string;
+    displayName?: string;
     contextWindow: number | null;
     enabled: boolean;
+    /** True when the model supports adaptive thinking (Anthropic claude-3-7+ and claude-4+). */
+    supportsAdaptiveThinking?: boolean;
   }>;
   error?: string;
 }
@@ -96,7 +102,7 @@ export interface Hunk {
 }
 
 export interface FileDiffPayload {
-  operation: "write_file" | "patch_file" | "delete_file" | "rename_file";
+  operation: "write_file" | "edit_file" | "patch_file" | "delete_file" | "rename_file";
   path: string;
   to_path?: string;
   is_new?: boolean;
@@ -213,6 +219,25 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+export interface TodoItem {
+  id: number;
+  title: string;
+  status: string; // 'not-started' | 'in-progress' | 'completed'
+}
+
+// ─── Launch types ─────────────────────────────────────────────────────────────
+
+export interface LaunchEntry {
+  label?: string;
+  icon: string;
+  command: string;
+}
+
+export interface LaunchConfig {
+  profiles: LaunchEntry[];
+  tools: LaunchEntry[];
+}
+
 export interface WorkspaceConfig {
   id: number;
   name: string;
@@ -224,6 +249,8 @@ export interface WorkspaceConfig {
     contextWindowTokens?: number;
   };
   worktreeBasePath: string;
+  /** Whether adaptive thinking is enabled for supported Anthropic models. */
+  enableThinking: boolean;
 }
 
 export interface WorkflowColumn {
@@ -236,6 +263,28 @@ export interface WorkflowTemplate {
   id: string;
   name: string;
   columns: WorkflowColumn[];
+}
+
+// ─── LSP setup types ─────────────────────────────────────────────────────────
+
+export interface LspInstallOption {
+  label: string;
+  command: string;
+  platforms: string[];
+}
+
+export interface LspLanguageEntry {
+  name: string;
+  detectionGlobs: string[];
+  serverName: string;
+  extensions: string[];
+  installOptions: LspInstallOption[];
+}
+
+export interface LspDetectedLanguage {
+  entry: LspLanguageEntry;
+  alreadyInstalled: boolean;
+  installOptions: LspInstallOption[];
 }
 
 // ─── IPC streaming token event ───────────────────────────────────────────────
@@ -265,6 +314,10 @@ export type RailynRPCType = {
       "workspace.getConfig": {
         params: Record<string, never>;
         response: WorkspaceConfig;
+      };
+      "workspace.setThinking": {
+        params: { enabled: boolean };
+        response: Record<string, never>;
       };
 
       // Boards
@@ -433,6 +486,42 @@ export type RailynRPCType = {
       "tasks.sessionMemory": {
         params: { taskId: number };
         response: { content: string | null };
+      };
+      "tasks.respondShellApproval": {
+        params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" };
+        response: { ok: boolean };
+      };
+      "tasks.setShellAutoApprove": {
+        params: { taskId: number; enabled: boolean };
+        response: Task;
+      };
+      "todos.list": {
+        params: { taskId: number };
+        response: TodoItem[];
+      };
+
+      // Launch
+      "launch.getConfig": {
+        params: { taskId: number };
+        response: LaunchConfig | null;
+      };
+      "launch.run": {
+        params: { taskId: number; command: string; mode: "terminal" | "app" };
+        response: { ok: true } | { ok: false; error: string };
+      };
+
+      // LSP setup
+      "lsp.detectLanguages": {
+        params: { projectPath: string };
+        response: LspDetectedLanguage[];
+      };
+      "lsp.addToConfig": {
+        params: { projectPath: string; languageServerName: string };
+        response: { ok: boolean };
+      };
+      "lsp.runInstall": {
+        params: { command: string; projectPath: string };
+        response: { success: boolean; output: string };
       };
     };
     messages: Record<string, never>;

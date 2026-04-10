@@ -75,11 +75,21 @@
     </template>
 
     <div v-if="task" class="task-detail">
+      <!-- Launch controls bar: outside scroll, just below header -->
+      <div v-if="launchConfig" class="launch-bar">
+        <LaunchButtons
+          :profiles="launchConfig.profiles"
+          :tools="launchConfig.tools"
+          @run="runLaunch"
+        />
+      </div>
+
       <!-- Two-column layout: conversation + side panel -->
       <div class="task-detail__body">
 
         <!-- Conversation timeline -->
         <div class="task-detail__conversation" ref="scrollEl" @scroll.passive="onScroll">
+
           <div class="conversation-inner">
             <template v-for="item in displayItems" :key="item.key">
               <ToolCallGroup
@@ -218,6 +228,11 @@
       </div>
 
       <!-- Chat input (9.4) -->
+      <TodoPanel
+        v-if="task"
+        :task-id="task.id"
+        :refresh-trigger="todoRefreshTrigger"
+      />
       <div class="task-detail__input">
         <div class="task-detail__input-row">
           <Textarea
@@ -314,6 +329,15 @@
             :loading="compacting"
             @click="compactConversation"
           />
+          <!-- Shell auto-approve toggle -->
+          <div class="shell-autoapprove-toggle" :title="task.shellAutoApprove ? 'Shell auto-approve ON — commands run without prompting' : 'Shell auto-approve OFF — commands require approval'">
+            <ToggleSwitch
+              :model-value="task.shellAutoApprove"
+              size="small"
+              @update:model-value="toggleShellAutoApprove"
+            />
+            <span class="shell-autoapprove-label">Auto-approve shell</span>
+          </div>
         </div>
       </div>
     </div>
@@ -373,22 +397,37 @@ import Textarea from "primevue/textarea";
 import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import ProgressSpinner from "primevue/progressspinner";
+import ToggleSwitch from "primevue/toggleswitch";
 import MessageBubble from "./MessageBubble.vue";
 import ToolCallGroup, { type ToolEntry } from "./ToolCallGroup.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
+import TodoPanel from "./TodoPanel.vue";
+import LaunchButtons from "./LaunchButtons.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
 import { useToast } from "primevue/usetoast";
 import { useReviewStore } from "../stores/review";
+import { useLaunchStore } from "../stores/launch";
 import { electroview } from "../rpc";
-import type { ConversationMessage, ExecutionState } from "@shared/rpc-types";
+import type { ConversationMessage, ExecutionState, LaunchConfig } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
 const toast = useToast();
 const reviewStore = useReviewStore();
+const launchStore = useLaunchStore();
+
+const launchConfig = ref<LaunchConfig | null>(null);
+
+async function runLaunch(command: string, mode: "terminal" | "app") {
+  if (!task.value) return;
+  const result = await launchStore.run(task.value.id, command, mode);
+  if (!result.ok) {
+    toast.add({ severity: "error", summary: "Launch failed", detail: result.error, life: 5000 });
+  }
+}
 
 const manageModelsOpen = ref(false);
 
@@ -496,13 +535,14 @@ function onHide() {
 // PrimeVue teleports overlays (Select panels, Dialog backdrops) to document.body,
 // outside the Drawer subtree. We disable PrimeVue's built-in dismissable and
 // implement a smarter guard that ignores those overlay clicks.
-// Note: relies on PrimeVue 4.x adding 'p-overlay-open' to document.body when
-// any overlay is active.
+// PrimeVue teleports overlay panels (Select, MultiSelect, etc.) to document.body
+// with the class 'p-select-overlay'. We must skip closing when a click lands inside one.
 
 function handleOutsideClick(e: MouseEvent) {
   if (!open.value) return;
-  // Skip if any PrimeVue overlay is open
-  if (document.body.classList.contains('p-overlay-open')) return;
+  // Skip if the click is inside any PrimeVue overlay panel teleported to body
+  const target = e.target as Element | null;
+  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay')) return;
   // Skip if our own dialogs are open
   if (editDialogVisible.value || deleteDialogVisible.value) return;
   // PrimeVue Drawer teleports its panel to document.body, so $el is a comment
@@ -555,6 +595,9 @@ const cancelling = ref(false);
 const scrollEl = ref<HTMLElement | null>(null);
 const contextWarning = ref<string | null>(null);
 const compacting = ref(false);
+
+// Incremented whenever the model completes a turn, to trigger a todo refresh.
+const todoRefreshTrigger = ref(0);
 
 // Git diff stat (fetched on drawer open when worktree is ready)
 const gitStat = ref<string | null>(null);
@@ -692,6 +735,12 @@ async function onModelChange(model: string) {
   await taskStore.setModel(task.value.id, model);
 }
 
+async function toggleShellAutoApprove() {
+  if (!task.value) return;
+  const newValue = !task.value.shellAutoApprove;
+  await electroview.rpc!.request["tasks.setShellAutoApprove"]({ taskId: task.value.id, enabled: newValue });
+}
+
 async function compactConversation() {
   if (!task.value) return;
   compacting.value = true;
@@ -758,6 +807,7 @@ watch(
   async (id) => {
     gitStat.value = null;
     sessionMemoryContent.value = null;
+    launchConfig.value = null;
     if (!id) return;
     taskStore.loadEnabledModels();
     const t = taskStore.activeTask;
@@ -769,8 +819,22 @@ watch(
       const { content } = await electroview.rpc!.request["tasks.sessionMemory"]({ taskId: id });
       sessionMemoryContent.value = content;
     } catch { /* non-fatal */ }
+    // Load launch config (deduped in store by projectId)
+    if (t) {
+      launchConfig.value = await launchStore.getConfig(id, t.projectId);
+    }
   },
   { immediate: true },
+);
+
+// Refresh todos when the model finishes a turn (executionState leaves 'running').
+watch(
+  () => task.value?.executionState,
+  (state, prev) => {
+    if (prev === "running" && state !== "running") {
+      todoRefreshTrigger.value++;
+    }
+  },
 );
 </script>
 
@@ -796,8 +860,8 @@ watch(
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--p-primary-color, #6366f1);
-  background: var(--p-primary-50, #eef2ff);
-  border: 1px solid var(--p-primary-200, #c7d2fe);
+  background: var(--p-highlight-background, #eef2ff);
+  border: 1px solid var(--p-content-border-color, #c7d2fe);
   border-radius: 10px;
   padding: 1px 7px;
   cursor: pointer;
@@ -807,7 +871,7 @@ watch(
 }
 
 .drawer-header__changed-badge:hover {
-  background: var(--p-primary-100, #e0e7ff);
+  background: var(--p-highlight-focus-background, #e0e7ff);
 }
 
 .drawer-header {
@@ -843,6 +907,16 @@ watch(
   flex: 1;
   overflow-y: auto;
   padding: 8px 4px 8px 0;
+}
+
+.launch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 0;
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  margin-bottom: 8px;
 }
 
 .conversation-inner {
@@ -912,6 +986,20 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shell-autoapprove-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.shell-autoapprove-label {
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color);
+  white-space: nowrap;
 }
 
 .input-model-select {
@@ -992,8 +1080,8 @@ watch(
 }
 
 .msg--assistant .msg__bubble {
-  background: var(--p-surface-0, #fff);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-background);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 12px 12px 12px 2px;
   padding: 10px 14px;
   max-width: 85%;
@@ -1013,7 +1101,7 @@ watch(
 .msg--assistant .msg__bubble :deep(li) { margin: 0.15em 0; line-height: 1.5; }
 .msg--assistant .msg__bubble :deep(code) {
   font-family: ui-monospace, monospace; font-size: 0.82em;
-  background: var(--p-surface-100, #f1f5f9); border-radius: 4px; padding: 1px 5px;
+  background: var(--p-content-hover-background); border-radius: 4px; padding: 1px 5px;
 }
 .msg--assistant .msg__bubble :deep(pre) {
   background: var(--p-surface-900, #0f172a); color: var(--p-surface-100, #f1f5f9);
@@ -1053,7 +1141,7 @@ watch(
   white-space: pre-wrap;
   margin: 0;
   color: var(--p-text-color, #1e293b);
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background);
   border-radius: 4px;
   padding: 6px 8px;
 }
@@ -1104,5 +1192,25 @@ watch(
   border-radius: 6px;
   padding: 8px 12px;
   margin-top: 10px;
+}
+</style>
+
+<style>
+html.dark-mode .dialog-warning {
+  color: var(--p-orange-400);
+  background: color-mix(in srgb, var(--p-orange-500) 15%, transparent);
+  border-color: color-mix(in srgb, var(--p-orange-500) 35%, transparent);
+}
+html.dark-mode .launch-bar {
+  border-bottom-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .task-detail__side {
+  border-left-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .task-detail__input {
+  border-top-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .context-gauge {
+  background: var(--p-surface-700, #334155);
 }
 </style>

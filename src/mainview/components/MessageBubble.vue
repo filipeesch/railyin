@@ -23,7 +23,15 @@
   </div>
 
   <div v-else-if="chunk.type === 'ask_user_prompt'" class="msg msg--ask-prompt">
+    <ShellApprovalPrompt
+      v-if="shellApprovalPayload"
+      :command="shellApprovalPayload.command"
+      :unapproved-binaries="shellApprovalPayload.unapprovedBinaries"
+      :answered="answeredText"
+      @respond="onShellApprovalRespond"
+    />
     <AskUserPrompt
+      v-else
       :questions="askPayload.questions"
       :answered-text="answeredText"
       @submit="onAskSubmit"
@@ -55,7 +63,9 @@ import { marked } from "marked";
 import type { ConversationMessage, AskUserPromptContent } from "@shared/rpc-types";
 import AskUserPrompt from "./AskUserPrompt.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
+import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
 import { useTaskStore } from "../stores/task";
+import { electroview } from "../rpc";
 
 const props = defineProps<{
   chunk: ConversationMessage;
@@ -132,6 +142,31 @@ async function onAskSubmit(answer: string) {
   if (taskId === null) return;
   await taskStore.sendMessage(taskId, answer);
 }
+
+// ─── Shell approval support ───────────────────────────────────────────────────
+
+type ShellApprovalPayload = { subtype: "shell_approval"; command: string; unapprovedBinaries: string[] };
+
+const shellApprovalPayload = computed<ShellApprovalPayload | null>(() => {
+  if (props.chunk.type !== "ask_user_prompt") return null;
+  try {
+    const raw = JSON.parse(props.chunk.content) as Record<string, unknown>;
+    if (raw.subtype === "shell_approval") {
+      return {
+        subtype: "shell_approval",
+        command: String(raw.command ?? ""),
+        unapprovedBinaries: Array.isArray(raw.unapprovedBinaries) ? raw.unapprovedBinaries as string[] : [],
+      };
+    }
+  } catch { /* not a shell_approval message */ }
+  return null;
+});
+
+async function onShellApprovalRespond(decision: "approve_once" | "approve_all" | "deny") {
+  const taskId = taskStore.activeTaskId;
+  if (taskId === null) return;
+  await electroview.rpc!.request["tasks.respondShellApproval"]({ taskId, decision });
+}
 </script>
 
 <style scoped>
@@ -160,8 +195,8 @@ async function onAskSubmit(answer: string) {
 }
 
 .msg--assistant .msg__bubble {
-  background: var(--p-surface-0, #fff);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-background);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 12px 12px 12px 2px;
   padding: 10px 14px;
   max-width: 85%;
@@ -197,7 +232,7 @@ async function onAskSubmit(answer: string) {
 .prose :deep(code) {
   font-family: ui-monospace, "Cascadia Code", monospace;
   font-size: 0.82em;
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background);
   border-radius: 4px;
   padding: 1px 5px;
 }
@@ -220,7 +255,7 @@ async function onAskSubmit(answer: string) {
 }
 
 .prose :deep(blockquote) {
-  border-left: 3px solid var(--p-surface-300, #cbd5e1);
+  border-left: 3px solid var(--p-content-border-color);
   margin: 0.5em 0;
   padding: 2px 0 2px 12px;
   color: var(--p-text-muted-color, #94a3b8);
@@ -235,18 +270,18 @@ async function onAskSubmit(answer: string) {
 }
 .prose :deep(th),
 .prose :deep(td) {
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border: 1px solid var(--p-content-border-color);
   padding: 5px 10px;
   text-align: left;
 }
 .prose :deep(th) {
-  background: var(--p-surface-50, #f8fafc);
+  background: var(--p-content-hover-background);
   font-weight: 600;
 }
 
 .prose :deep(hr) {
   border: none;
-  border-top: 1px solid var(--p-surface-200, #e2e8f0);
+  border-top: 1px solid var(--p-content-border-color);
   margin: 0.8em 0;
 }
 
@@ -297,7 +332,7 @@ async function onAskSubmit(answer: string) {
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-border-color);
 }
 
 .msg--compaction__label {
@@ -315,9 +350,17 @@ async function onAskSubmit(answer: string) {
 .msg--compaction__summary {
   margin-top: 6px;
   padding: 8px 12px;
-  background: var(--p-surface-50, #f8fafc);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-background);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 8px;
   font-size: 0.82rem;
+}
+</style>
+
+<style>
+/* Dark mode overrides for palette-based colors that don't flip via PrimeVue variables */
+html.dark-mode .msg--user .msg__bubble {
+  background: color-mix(in srgb, var(--p-primary-color) 25%, var(--p-content-background) 75%) !important;
+  color: var(--p-text-color) !important;
 }
 </style>

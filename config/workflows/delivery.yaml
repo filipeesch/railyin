@@ -26,6 +26,12 @@ columns:
     description: Active development
     on_enter_prompt: |
       Implement this task according to the plan.
+      In the end:
+        1 - build the app and execute tests
+        2 - Optmize the implementation
+        3 - Remove any dead code
+        4 - Execute the tests
+        5 - Go back to step 2 two times
     stage_instructions:
     # Tools available to the model in this column (group names or individual tool names):
     tools:
@@ -51,4 +57,4 @@ columns:
   - id: done
     label: Done
     description: Task complete
-    on_enter_prompt: merge the current branch to main branch, solve possible conflicts. use ask_me tool if the conflicts resolution is not clear.
+    on_enter_prompt: merge the current branch to main branch, solve possible conflicts. use ask_me tool if the conflicts resolution is not clear. remove the task worktree.

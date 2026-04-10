@@ -1,16 +1,19 @@
-import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, StreamEvent } from "./types.ts";
+import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, StreamEvent, UsageStats } from "./types.ts";
 import { ProviderError } from "./retry.ts";
 
 export class OpenAICompatibleProvider implements AIProvider {
+  cooldownUntil = 0;
   private baseUrl: string;
   private apiKey: string;
   private model: string;
+  private providerArgs?: Record<string, unknown>;
 
-  constructor(baseUrl: string, apiKey: string, model: string) {
+  constructor(baseUrl: string, apiKey: string, model: string, providerArgs?: Record<string, unknown>) {
     // Normalise: strip trailing slash, also strip a trailing /v1 so we can add it ourselves
     this.baseUrl = baseUrl.replace(/\/$/, "").replace(/\/v1$/, "");
     this.apiKey = apiKey;
     this.model = model;
+    this.providerArgs = providerArgs;
   }
 
   private headers(): Record<string, string> {
@@ -26,8 +29,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       model: this.model,
       messages: messages.map(toWireMessage),
       stream: false,
-      enable_thinking: false,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+      ...(this.providerArgs ? { provider: this.providerArgs } : {}),
     };
 
     if (options.tools?.length) {
@@ -59,16 +62,22 @@ export class OpenAICompatibleProvider implements AIProvider {
           tool_calls?: AIToolCall[];
         };
       }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
 
     const message = json.choices?.[0]?.message;
     if (!message) throw new Error("AI provider returned empty response");
 
+    const turnUsage: UsageStats | undefined = json.usage?.prompt_tokens != null ? {
+      inputTokens: json.usage.prompt_tokens,
+      outputTokens: json.usage.completion_tokens ?? 0,
+    } : undefined;
+
     if (message.tool_calls?.length) {
-      return { type: "tool_calls", calls: message.tool_calls };
+      return { type: "tool_calls", calls: message.tool_calls, ...(turnUsage ? { usage: turnUsage } : {}) };
     }
 
-    return { type: "text", content: message.content ?? "" };
+    return { type: "text", content: message.content ?? "", ...(turnUsage ? { usage: turnUsage } : {}) };
   }
 
   // ─── Unified streaming (text tokens + tool calls in same SSE stream) ─────────
@@ -78,9 +87,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       model: this.model,
       messages: messages.map(toWireMessage),
       stream: true,
-      // Suppress <think> preamble on models that support it (e.g. Qwen3)
-      enable_thinking: false,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+      ...(this.providerArgs ? { provider: this.providerArgs } : {}),
     };
 
     if (options.tools?.length) {
@@ -115,6 +123,9 @@ export class OpenAICompatibleProvider implements AIProvider {
     // State for stripping <think>...</think> blocks that some models emit
     let inThinkBlock = false;
     let thinkBuf = "";
+
+    // Accumulate usage from final chunk (not all providers include it)
+    let streamUsage: UsageStats | undefined;
 
     // Accumulator for streaming tool_calls deltas (index-keyed)
     const toolCallAccum: Array<{
@@ -152,6 +163,7 @@ export class OpenAICompatibleProvider implements AIProvider {
               };
               finish_reason?: string | null;
             }>;
+            usage?: { prompt_tokens?: number; completion_tokens?: number };
           };
 
           try {
@@ -161,6 +173,15 @@ export class OpenAICompatibleProvider implements AIProvider {
           }
 
           const choice = parsed.choices?.[0];
+
+          // ── Usage (final chunk, if present) ──────────────────────────────
+          if (parsed.usage?.prompt_tokens != null) {
+            streamUsage = {
+              inputTokens: parsed.usage.prompt_tokens,
+              outputTokens: parsed.usage.completion_tokens ?? 0,
+            };
+          }
+
           if (!choice) continue;
 
           const delta = choice.delta;
@@ -231,6 +252,10 @@ export class OpenAICompatibleProvider implements AIProvider {
       }
     } finally {
       reader.releaseLock();
+    }
+
+    if (streamUsage) {
+      yield { type: "usage", usage: streamUsage, costEst: 0 };
     }
 
     yield { type: "done" };

@@ -139,3 +139,14 @@ function loadMoreDown() {
   font-size: 0.72rem;
 }
 </style>
+
+<style>
+html.dark-mode .rv__load-more {
+  background: #0f172a;
+  color: #60a5fa;
+  border-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .rv__load-more:hover {
+  background: #1e293b;
+}
+</style>

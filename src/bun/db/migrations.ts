@@ -156,6 +156,13 @@ const migrations: Array<{ id: string; sql: string }> = [
     `,
   },
   {
+    id: "007_shell_command_approval",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN shell_auto_approve INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN approved_commands TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
+  {
     id: "006_pending_messages",
     sql: `
       CREATE TABLE IF NOT EXISTS pending_messages (
@@ -194,6 +201,50 @@ const migrations: Array<{ id: string; sql: string }> = [
       ALTER TABLE task_hunk_decisions ADD COLUMN original_end  INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE task_hunk_decisions ADD COLUMN modified_end  INTEGER NOT NULL DEFAULT 0;
     `,
+  },
+  {
+    id: "008_task_todos",
+    sql: `
+      CREATE TABLE IF NOT EXISTS task_todos (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        title      TEXT    NOT NULL,
+        status     TEXT    NOT NULL DEFAULT 'not-started',
+        context    TEXT,
+        result     TEXT,
+        created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
+    `,
+  },
+  {
+    id: "009_execution_cost",
+    sql: `
+      ALTER TABLE executions ADD COLUMN cost_estimate REAL;
+    `,
+  },
+  {
+    id: "010_drop_todo_context",
+    sql: `
+      ALTER TABLE task_todos DROP COLUMN context;
+    `,
+  },
+  {
+    id: "011_execution_input_tokens",
+    sql: `ALTER TABLE executions ADD COLUMN input_tokens INTEGER;`,
+  },
+  {
+    id: "012_execution_output_tokens",
+    sql: `ALTER TABLE executions ADD COLUMN output_tokens INTEGER;`,
+  },
+  {
+    id: "013_execution_cache_creation_tokens",
+    sql: `ALTER TABLE executions ADD COLUMN cache_creation_input_tokens INTEGER;`,
+  },
+  {
+    id: "014_execution_cache_read_tokens",
+    sql: `ALTER TABLE executions ADD COLUMN cache_read_input_tokens INTEGER;`,
   },
 ];
 

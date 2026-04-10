@@ -4,7 +4,7 @@ The AI provider abstraction decouples execution logic from any specific AI backe
 ## Requirements
 
 ### Requirement: AI provider uses OpenAI-compatible chat completions format
-The system SHALL communicate with OpenAI-compatible providers using the OpenAI chat completions API format (`POST /v1/chat/completions`). The provider endpoint is configured per-provider entry in the `providers:` list, each with `base_url`, `api_key`, and optional `model`. A new `AnthropicProvider` communicates with Anthropic's native `/v1/messages` API instead. The `createProvider(config)` factory is replaced by `resolveProvider(qualifiedModel, providers)` which selects the correct provider instance from the configured list. Both providers SHALL throw `ProviderError` (with a numeric `status` field and optional `retryAfter`) for any non-2xx HTTP response instead of a plain `Error`.
+The system SHALL communicate with OpenAI-compatible providers using the OpenAI chat completions API format (`POST /v1/chat/completions`). The provider endpoint is configured per-provider entry in the `providers:` list, each with `base_url`, `api_key`, optional `model`, and optional `provider_args`. A new `AnthropicProvider` communicates with Anthropic's native `/v1/messages` API instead. The `createProvider(config)` factory is replaced by `resolveProvider(qualifiedModel, providers)` which selects the correct provider instance from the configured list. Both providers SHALL throw `ProviderError` (with a numeric `status` field and optional `retryAfter`) for any non-2xx HTTP response instead of a plain `Error`. When `provider_args` is set on a provider entry, `OpenAICompatibleProvider` SHALL merge it as the `provider` key in every request body; `AnthropicProvider` SHALL ignore it.
 
 #### Scenario: OpenRouter configured as provider
 - **WHEN** `workspace.yaml` has a provider entry with `type: openrouter` and `base_url: https://openrouter.ai/api/v1` with a valid API key
@@ -21,6 +21,10 @@ The system SHALL communicate with OpenAI-compatible providers using the OpenAI c
 #### Scenario: Provider throws ProviderError on non-2xx response
 - **WHEN** the upstream API returns a non-2xx HTTP status (e.g., 429, 529, 500)
 - **THEN** the provider throws `ProviderError` with the numeric `status` and optional `retryAfter` parsed from the `retry-after` response header; never a plain `Error`
+
+#### Scenario: OpenRouter provider_args routing preferences applied
+- **WHEN** `workspace.yaml` has a provider entry with `type: openrouter` and `provider_args: { ignore: ["google-vertex", "azure"] }`
+- **THEN** every request to OpenRouter includes `"provider": { "ignore": ["google-vertex", "azure"] }` in the body, preventing routing to those backends
 
 ### Requirement: AI responses are streamed and appended in real time
 The system SHALL use server-sent events (SSE) streaming for AI responses. Tokens SHALL be appended to the conversation timeline as they arrive, providing real-time feedback in the task detail view. Streaming SHALL also handle structured tool call deltas in the same SSE stream — the engine does not require a separate non-streaming call for tool rounds. The engine SHALL call `retryStream()` rather than `provider.stream()` directly, so retry and watchdog protection is applied automatically. When streaming repeatedly fails and non-streaming fallback is active, the frontend SHALL surface ephemeral status messages during the wait and clear them when the response arrives.
@@ -126,6 +130,17 @@ The system SHALL use a non-streaming request for each tool-call round and switch
 #### Scenario: Final response is streamed
 - **WHEN** the model produces its final text answer after tool rounds
 - **THEN** tokens are streamed to the frontend via `retryStream()` as usual
+
+### Requirement: Anthropic provider sends system content as structured blocks with cache hints
+The system SHALL send the Anthropic `system` field as a `ContentBlock[]` array rather than a plain string when prompt caching is enabled. Each block contains `{ type: "text", text: string, cache_control?: { type: "ephemeral" } }`. The last block always carries the cache breakpoint marker.
+
+#### Scenario: System content block array accepted by Anthropic API
+- **WHEN** `adaptMessages()` is called for an Anthropic API call with system messages present
+- **THEN** the request body contains `system: [{ type: "text", text: "...", cache_control: { type: "ephemeral" } }]` as an array rather than `system: "..."`
+
+#### Scenario: Anthropic non-streaming turn also sends system block array
+- **WHEN** `provider.turn()` is called for a compaction or sub-agent call using AnthropicProvider
+- **THEN** the same block array form is used for the `system` field, consistent with streaming calls
 
 ### Requirement: AI provider exposes a unified streaming method
 The system SHALL provide an `AIProvider.stream()` method that accepts messages and tool definitions and yields typed stream events covering both text tokens and structured tool calls in a single call. The separate `chat()` method SHALL be removed.
