@@ -579,7 +579,7 @@ function startResize(e: MouseEvent) {
 }
 
 function renderMd(content: string): string {
-  return marked.parse(content, { async: false }) as string;
+  return marked.parse(content, { async: false, breaks: true, gfm: true }) as string;
 }
 
 const open = computed({

@@ -81,7 +81,7 @@ const props = defineProps<{
 const taskStore = useTaskStore();
 
 function renderMd(content: string): string {
-  return marked.parse(content, { async: false }) as string;
+  return marked.parse(content, { async: false, breaks: true, gfm: true }) as string;
 }
 
 const meta = computed(() => props.chunk.metadata as Record<string, unknown> | null);

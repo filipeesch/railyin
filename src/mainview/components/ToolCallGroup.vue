@@ -12,6 +12,12 @@
     <div v-if="open" :class="['tcg__body', (effectiveDiffPayload || toolName === 'read_file') ? 'tcg__body--flush' : '']">
       <FileDiff v-if="effectiveDiffPayload" :payload="effectiveDiffPayload" />
       <ReadView v-else-if="toolName === 'read_file'" :content="displayContent" />
+      <div v-else-if="entry.result && displayBlocks.length > 0" class="tcg__blocks">
+        <section v-for="block in displayBlocks" :key="block.key" class="tcg__block">
+          <div class="tcg__block-label">{{ block.label }}</div>
+          <pre class="tcg__output tcg__output--block">{{ block.content }}</pre>
+        </section>
+      </div>
       <pre v-else-if="entry.result && hasOutput" class="tcg__output">{{ truncated }}</pre>
       <div v-else-if="entry.result" class="tcg__empty">No output produced.</div>
     </div>
@@ -86,6 +92,12 @@ const parsedResult = computed(() => {
   }
 });
 
+type DisplayBlock = {
+  key: string;
+  label: string;
+  content: string;
+};
+
 const statusIcon = computed(() => {
   if (!props.entry.result) return "pi-spin pi-spinner";
   return parsedResult.value?.is_error ? "pi-times-circle" : "pi-check-circle";
@@ -125,6 +137,37 @@ const displayContent = computed(() => {
   if (textFromBlocks) return textFromBlocks;
 
   return (parsed?.content ?? props.entry.result?.content ?? "").trim();
+});
+
+const displayBlocks = computed<DisplayBlock[]>(() => {
+  const parsed = parsedResult.value;
+  const blocks = parsed?.contents ?? [];
+  return blocks.flatMap((block, index) => {
+    const label = block.type === "terminal"
+      ? "Terminal output"
+      : block.type === "text"
+        ? "Text output"
+        : "Output block";
+
+    const text = typeof block.text === "string"
+      ? block.text
+      : typeof block.content === "string"
+        ? block.content
+        : "";
+
+    if (text.trim()) {
+      return [{ key: `${block.type ?? "block"}-${index}`, label, content: text.trim() }];
+    }
+
+    if (block.type === "text" || block.type === "terminal") {
+      return [];
+    }
+
+    const fallback = JSON.stringify(block, null, 2).trim();
+    return fallback
+      ? [{ key: `${block.type ?? "block"}-${index}`, label, content: fallback }]
+      : [];
+  });
 });
 
 const hasOutput = computed(() => displayContent.value.length > 0);
@@ -353,6 +396,29 @@ function normalizeDiffPath(path: string, fallbackPath: string): string {
   padding: 0;
 }
 
+.tcg__blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tcg__block {
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tcg__block-label {
+  padding: 6px 10px;
+  background: var(--p-surface-50, #f8fafc);
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--p-text-muted-color, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .tcg__output {
   margin: 0;
   font-family: monospace;
@@ -363,6 +429,10 @@ function normalizeDiffPath(path: string, fallbackPath: string): string {
   overflow-y: auto;
   color: var(--p-text-color, #1e293b);
   line-height: 1.5;
+}
+
+.tcg__output--block {
+  padding: 8px 10px;
 }
 
 .tcg__empty {
@@ -387,6 +457,13 @@ html.dark-mode .tcg__header:hover {
 html.dark-mode .tcg__body {
   background: var(--p-surface-900, #0f172a);
   border-top-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .tcg__block {
+  border-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .tcg__block-label {
+  background: var(--p-surface-800, #1e293b);
+  border-bottom-color: var(--p-surface-700, #334155);
 }
 html.dark-mode .tcg__stat--added {
   background: color-mix(in srgb, var(--p-green-500) 20%, transparent);
