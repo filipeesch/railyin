@@ -8,7 +8,9 @@ columns:
   - id: explore
     label: Explore
     description: Think through the problem, investigate options, clarify requirements
-    on_enter_prompt: /opsx-explore
+    on_enter_prompt: |
+      /opsx-explore
+      use "which" in the shell to find other cli tools and use the full path to execute them.
     stage_instructions: exploration mode
 
   - id: propose
@@ -27,14 +29,17 @@ columns:
         2 - Optimize the implementation
         3 - Remove any dead code
         4 - Execute the tests
-        5 - Go back to step 2 two times
+        5 - Go back to step 2 one time
 
   - id: done
     label: Done
     description: Change implemented and archived
     on_enter_prompt: |
-      /opsx-archive
-      merge the current branch to main branch
+      /opsx-archive 
+      commit our changes.
+      squash all the diff from main to a single consise conventional commit message.
+      rebase from main
       solve possible conflicts.
       Use ask_me tool if the conflicts resolution is not clear.
+      merge to main
       Remove the task worktree.
