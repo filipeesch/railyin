@@ -30,6 +30,7 @@ export async function* translateCopilotStream(
   session: CopilotSdkSession,
   signal?: AbortSignal,
   sendPromise?: Promise<unknown>,
+  onWatchdogFire?: () => Promise<boolean>,
 ): AsyncGenerator<EngineEvent> {
   // Use a queue + promise to bridge the callback-based session.on() API
   // into an async generator.
@@ -74,16 +75,30 @@ export async function* translateCopilotStream(
     wake();
   });
 
+  // Watchdog configuration and per-execution state
+  const IDLE_TIMEOUT_MS = 120_000;
+  const MAX_SILENCE_COUNT = 3;
+  let silenceCount = 0;
+  // Count of tool calls that have started but not yet completed. The watchdog
+  // is suppressed while any tool is in-flight — a long-running tool (e.g.
+  // `bun test`) can legitimately produce no events for minutes at a time.
+  let toolsInFlight = 0;
+
   const unsubscribe: () => void = session.on((event: CopilotSdkEvent) => {
+    silenceCount = 0; // CLI is active; reset the consecutive-silence counter
     if (event.type === "assistant.message_delta") receivedTokenDelta = true;
     if (event.type === "assistant.reasoning_delta") receivedReasoningDelta = true;
     if (event.type === "tool.execution_start") {
+      toolsInFlight++;
       const data = event.data as { toolCallId: string; toolName: string; parentToolCallId?: string };
       toolMetaByCallId.set(data.toolCallId, {
         name: data.toolName,
         parentCallId: data.parentToolCallId,
         isInternal: isInternalCopilotEvent(event, data.toolName, data.parentToolCallId),
       });
+    }
+    if (event.type === "tool.execution_complete") {
+      toolsInFlight = Math.max(0, toolsInFlight - 1);
     }
 
     const engineEvent = translateEvent(event, receivedTokenDelta, receivedReasoningDelta, toolMetaByCallId);
@@ -112,19 +127,41 @@ export async function* translateCopilotStream(
       if (done) break;
 
       // Wait for more events, with a watchdog timeout.
-      // If no SDK events arrive within IDLE_TIMEOUT_MS, we assume the Copilot
-      // CLI process has crashed or the connection has silently dropped, and we
-      // yield a fatal error so consumeStream can write 'failed' state and exit.
-      const IDLE_TIMEOUT_MS = 120_000;
+      // The watchdog is suppressed while tools are in-flight — a tool like
+      // `bun test` can legitimately run for minutes with no streaming events.
+      // On each timeout (no tools in-flight):
+      //   - CLI dead (ping fails/times out within 5s) → fatal error immediately
+      //   - CLI alive but session silent → increment silenceCount
+      //     - silenceCount >= MAX_SILENCE_COUNT → unresponsive error
+      //     - otherwise → restart the timer and keep waiting
       await new Promise<void>((r) => {
         notify = r;
-        const t = setTimeout(() => {
-          queue.push({
-            type: "error",
-            message: `Copilot connection timed out (no events for ${IDLE_TIMEOUT_MS / 1000}s)`,
-            fatal: true,
-          });
-          done = true;
+        const t = setTimeout(async () => {
+          notify = null; // prevent double-resolve if an event arrives during the async check
+          // A tool is currently running — silence is expected; just restart the timer.
+          if (toolsInFlight > 0) {
+            r();
+            return;
+          }
+          const cliHealthy = onWatchdogFire ? await onWatchdogFire() : true;
+          if (!cliHealthy) {
+            queue.push({
+              type: "error",
+              message: "Copilot CLI process crashed or became unreachable",
+              fatal: true,
+            });
+            done = true;
+          } else {
+            silenceCount++;
+            if (silenceCount >= MAX_SILENCE_COUNT) {
+              queue.push({
+                type: "error",
+                message: `Copilot session unresponsive (no events for ${(IDLE_TIMEOUT_MS * MAX_SILENCE_COUNT) / 1000}s, CLI healthy)`,
+                fatal: true,
+              });
+              done = true;
+            }
+          }
           r();
         }, IDLE_TIMEOUT_MS);
         // Store a reference so the timeout can be cancelled when an event arrives

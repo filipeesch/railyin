@@ -154,6 +154,19 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
         this.trace.listModelsCalls += 1;
         return this.models;
     }
+
+    async pingClient(_sessionId: string): Promise<boolean> {
+        return true;
+    }
+
+    async releaseClient(_sessionId: string): Promise<void> {
+        // no-op in mock — no real CLI to release
+    }
+
+    onStatus(_listener: (message: string) => void): () => void {
+        // no-op in mock — no setup progress to report
+        return () => {};
+    }
 }
 
 export function token(content: string): MockTurnStep {

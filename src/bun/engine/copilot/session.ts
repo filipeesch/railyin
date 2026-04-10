@@ -71,12 +71,18 @@ export interface CopilotSdkAdapter {
   abortSession(session: CopilotSdkSession): Promise<void>;
   disconnectSession(session: CopilotSdkSession): Promise<void>;
   listModels(): Promise<CopilotSdkModelInfo[]>;
+  /** Ping the CLI process for the given session and return true if healthy, false if dead/unreachable. */
+  pingClient(sessionId: string): Promise<boolean>;
+  /** Release (evict) the CLI process associated with the given session, stopping it if idle. */
+  releaseClient(sessionId: string): Promise<void>;
   /** Register a callback for setup progress (e.g. "Downloading engine..."). */
   onStatus(listener: (message: string) => void): () => void;
 }
 
 type LoadedCopilotClient = {
   start(): Promise<void>;
+  stop(): Promise<unknown>;
+  ping(message?: string): Promise<unknown>;
   listModels(): Promise<unknown[]>;
   createSession(config: CopilotSdkSessionConfig & { sessionId: string }): Promise<LoadedCopilotSession>;
   resumeSession(sessionId: string, config: CopilotSdkResumeSessionConfig): Promise<LoadedCopilotSession>;
@@ -89,8 +95,17 @@ type LoadedCopilotSession = {
   disconnect(): Promise<void>;
 };
 
-// Singleton client — lazily initialised, shared across all executions.
-let _clientPromise: Promise<LoadedCopilotClient> | undefined;
+// Shared singleton — used only for listModels(), reuses an existing CLI via port file.
+let _sharedClientPromise: Promise<LoadedCopilotClient> | undefined;
+
+// Per-task CLI pool — each session gets its own isolated CLI process.
+type PoolEntry = {
+  clientPromise: Promise<LoadedCopilotClient>;
+  idleTimer: ReturnType<typeof setTimeout>;
+};
+const _taskCliPool = new Map<string, PoolEntry>();
+const POOL_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
 // Status listeners waiting for progress updates from ensureCliBinary / getClient.
 let _statusListeners: Set<(message: string) => void> = new Set();
 
@@ -285,21 +300,72 @@ async function getOrSpawnCliPort(binaryPath: string): Promise<number> {
   return port;
 }
 
-function getClient(): Promise<LoadedCopilotClient> {
-  if (!_clientPromise) {
-    _clientPromise = (async () => {
+function getSharedClient(): Promise<LoadedCopilotClient> {
+  if (!_sharedClientPromise) {
+    _sharedClientPromise = (async () => {
       const binaryPath = await ensureCliBinary();
       emitStatus("Starting Copilot engine...");
-      console.log("[copilot] Connecting to CLI:", binaryPath);
+      console.log("[copilot] Connecting to shared CLI:", binaryPath);
       const port = await getOrSpawnCliPort(binaryPath);
-      console.log("[copilot] CLI port:", port);
+      console.log("[copilot] Shared CLI port:", port);
       const mod = await import("@github/copilot-sdk");
       const client = new mod.CopilotClient({ cliUrl: `localhost:${port}` }) as LoadedCopilotClient;
       await client.start();
       return client;
     })();
   }
-  return _clientPromise;
+  return _sharedClientPromise;
+}
+
+function scheduleEviction(sessionId: string): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(async () => {
+    const entry = _taskCliPool.get(sessionId);
+    if (!entry || entry.idleTimer !== timer) return; // entry was refreshed before timer fired
+    _taskCliPool.delete(sessionId);
+    entry.clientPromise.then((c) => c.stop()).catch(() => { });
+  }, POOL_IDLE_TIMEOUT_MS);
+  return timer;
+}
+
+async function evictPoolEntry(sessionId: string): Promise<void> {
+  const entry = _taskCliPool.get(sessionId);
+  if (!entry) return;
+  clearTimeout(entry.idleTimer);
+  _taskCliPool.delete(sessionId);
+  try {
+    const client = await entry.clientPromise;
+    await client.stop();
+  } catch { /* ignore errors during cleanup */ }
+}
+
+async function getOrCreatePoolEntry(sessionId: string): Promise<LoadedCopilotClient> {
+  const existing = _taskCliPool.get(sessionId);
+  if (existing) {
+    clearTimeout(existing.idleTimer);
+    existing.idleTimer = scheduleEviction(sessionId);
+    return existing.clientPromise;
+  }
+
+  const clientPromise: Promise<LoadedCopilotClient> = (async () => {
+    const binaryPath = await ensureCliBinary();
+    emitStatus("Starting Copilot engine...");
+    console.log(`[copilot] Spawning dedicated CLI for session ${sessionId}`);
+    const port = await spawnCliAndGetPort(binaryPath);
+    console.log(`[copilot] Session ${sessionId} CLI port:`, port);
+    const mod = await import("@github/copilot-sdk");
+    const client = new mod.CopilotClient({ cliUrl: `localhost:${port}` }) as LoadedCopilotClient;
+    await client.start();
+    return client;
+  })();
+
+  const entry: PoolEntry = {
+    clientPromise,
+    idleTimer: scheduleEviction(sessionId),
+  };
+  _taskCliPool.set(sessionId, entry);
+  // Remove entry on spawn failure so the next call retries cleanly
+  clientPromise.catch(() => { _taskCliPool.delete(sessionId); });
+  return clientPromise;
 }
 
 /**
@@ -341,13 +407,13 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
   }
 
   async createSession(config: CopilotSdkSessionConfig & { sessionId: string }): Promise<CopilotSdkSession> {
-    const client = await getClient();
+    const client = await getOrCreatePoolEntry(config.sessionId);
     const session = await client.createSession(config);
     return new DefaultCopilotSdkSession(session);
   }
 
   async resumeSession(sessionId: string, config: CopilotSdkResumeSessionConfig): Promise<CopilotSdkSession> {
-    const client = await getClient();
+    const client = await getOrCreatePoolEntry(sessionId);
     const session = await client.resumeSession(sessionId, config);
     return new DefaultCopilotSdkSession(session);
   }
@@ -360,8 +426,32 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
     return session.disconnect();
   }
 
+  async pingClient(sessionId: string): Promise<boolean> {
+    const entry = _taskCliPool.get(sessionId);
+    if (!entry) return false;
+    let timedOut = false;
+    try {
+      const client = await entry.clientPromise;
+      await Promise.race([
+        client.ping(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => { timedOut = true; reject(new Error("ping timeout")); }, 5_000)
+        ),
+      ]);
+      return true;
+    } catch {
+      // A timeout means the CLI is alive but busy with a long API call — not a crash.
+      // A connection error (ECONNREFUSED/ECONNRESET) means the CLI process is dead.
+      return timedOut;
+    }
+  }
+
+  async releaseClient(sessionId: string): Promise<void> {
+    await evictPoolEntry(sessionId);
+  }
+
   async listModels(): Promise<CopilotSdkModelInfo[]> {
-    const client = await getClient();
+    const client = await getSharedClient();
     await client.start();
     return (await client.listModels()) as CopilotSdkModelInfo[];
   }

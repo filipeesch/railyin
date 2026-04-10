@@ -116,13 +116,17 @@ export class CopilotEngine implements ExecutionEngine {
       // Bail early if the execution was cancelled while we were creating the session
       // (user clicked stop before session creation completed).
       if (params.signal?.aborted) {
+        // Abort the session explicitly — cancel() may have run before sessions.set()
+        // and therefore couldn't abort it. The finally block handles disconnect.
+        await this.sdkAdapter.abortSession(session).catch(() => { });
         return;
       }
 
       // Fire the prompt; pass the promise into translateCopilotStream so a rejection
       // (e.g. CLI crash) is surfaced as a fatal error rather than silently hanging.
       const sendPromise = session.send({ prompt });
-      yield* translateCopilotStream(session, params.signal, sendPromise);
+      const onWatchdogFire = () => this.sdkAdapter.pingClient(sdkSessionId);
+      yield* translateCopilotStream(session, params.signal, sendPromise, onWatchdogFire);
     } catch (err) {
       yield {
         type: "error",
@@ -135,6 +139,9 @@ export class CopilotEngine implements ExecutionEngine {
       if (session) {
         await this.sdkAdapter.disconnectSession(session).catch(() => { });
       }
+      // Release the dedicated CLI process for this session now that the execution
+      // is complete. Avoids orphaned CLI processes piling up between runs.
+      await this.sdkAdapter.releaseClient(sdkSessionId).catch(() => { });
     }
   }
 
