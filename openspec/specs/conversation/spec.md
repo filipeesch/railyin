@@ -4,7 +4,7 @@ The conversation is the canonical history of a task. It is an append-only log of
 ## Requirements
 
 ### Requirement: Conversation is an append-only message timeline
-Each task's conversation SHALL be an ordered, append-only sequence of messages. Messages are never deleted or reordered. The conversation serves as the canonical history of everything that happened to the task.
+Each task's conversation SHALL be an ordered, append-only sequence of messages. Messages are never deleted or reordered. The conversation serves as the canonical history of everything that happened to the task. The canonical chronology SHALL follow append order, and conversation reads SHALL preserve that order even when multiple messages share the same timestamp.
 
 #### Scenario: Messages accumulate across executions
 - **WHEN** multiple executions run for the same task
@@ -13,6 +13,14 @@ Each task's conversation SHALL be an ordered, append-only sequence of messages. 
 #### Scenario: Messages cannot be deleted
 - **WHEN** a task exists
 - **THEN** the system provides no mechanism to delete individual conversation messages
+
+#### Scenario: Messages created in the same second keep append order
+- **WHEN** `reasoning`, `tool_call`, `tool_result`, `file_diff`, and `assistant` messages are appended within the same timestamp second
+- **THEN** conversation reads return them in the same order they were appended
+
+#### Scenario: Timeline assembly does not reorder neighboring message types
+- **WHEN** the frontend groups tool rows or renders live chat items
+- **THEN** the visible conversation preserves the same relative order as the underlying append-only message sequence
 
 ### Requirement: Conversation supports distinct message types
 The system SHALL support the following message types in a conversation: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `transition_event`, `file_diff`, `ask_user_prompt`, `reasoning`, `compaction_summary`, `code_review`. Each message stores its type, content, and creation timestamp.

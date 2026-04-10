@@ -43,6 +43,10 @@ export const useTaskStore = defineStore("task", () => {
     return null;
   });
 
+  function sortMessagesInPlace() {
+    messages.value = [...messages.value].sort((a, b) => a.id - b.id);
+  }
+
   // ─── Load tasks for a board ───────────────────────────────────────────────
 
   async function loadTasks(boardId: number) {
@@ -103,6 +107,7 @@ export const useTaskStore = defineStore("task", () => {
       content,
     });
     messages.value.push(message);
+    sortMessagesInPlace();
     streamingTaskId.value = taskId;
     streamingToken.value = "";
   }
@@ -119,6 +124,7 @@ export const useTaskStore = defineStore("task", () => {
     }
     try {
       messages.value = await electroview.rpc.request["conversations.getMessages"]({ taskId });
+      sortMessagesInPlace();
     } finally {
       messagesLoading.value = false;
     }
@@ -192,6 +198,7 @@ export const useTaskStore = defineStore("task", () => {
       metadata: null,
       createdAt: new Date().toISOString(),
     });
+    sortMessagesInPlace();
   }
 
   function onTaskUpdated(task: Task) {
@@ -244,6 +251,7 @@ export const useTaskStore = defineStore("task", () => {
       streamingToken.value = "";
     }
     messages.value.push(message);
+    sortMessagesInPlace();
   }
 
   // ─── Load enabled models (for chat dropdown) ──────────────────────────────────

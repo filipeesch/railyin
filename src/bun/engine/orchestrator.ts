@@ -9,7 +9,7 @@
  * and RPC relay. This path is scaffolded here and completed in Task Group 5/7.
  */
 
-import type { ExecutionEngine, EngineEvent, ExecutionParams } from "./types.ts";
+import type { ExecutionEngine, EngineEvent, ExecutionParams, NativeExecutionType } from "./types.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
@@ -27,6 +27,7 @@ import { getDb } from "../db/index.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { getConfig } from "../config/index.ts";
 import { resolveSlashReference } from "../workflow/slash-prompt.ts";
+import { NativeEngine } from "./native/engine.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly engine: ExecutionEngine;
@@ -55,8 +56,7 @@ export class Orchestrator implements ExecutionCoordinator {
   // ─── Engine type check ──────────────────────────────────────────────────────
 
   private get isNativeEngine(): boolean {
-    // Detect native engine by constructor name — avoids circular imports
-    return this.engine.constructor.name === "NativeEngine";
+    return this.engine instanceof NativeEngine;
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────
@@ -110,11 +110,24 @@ export class Orchestrator implements ExecutionCoordinator {
       )
       .get(taskId);
     const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
+    const displayPrompt = column.on_enter_prompt;
     let resolvedPrompt = column.on_enter_prompt;
     try {
       resolvedPrompt = await resolveSlashReference(column.on_enter_prompt, worktreePath);
     } catch { /* fall back to raw text */ }
-    appendMessage(taskId, conversationId, "user", "prompt", resolvedPrompt);
+    appendMessage(
+      taskId,
+      conversationId,
+      "user",
+      "prompt",
+      displayPrompt,
+      resolvedPrompt === displayPrompt
+        ? undefined
+        : {
+            resolved_content: resolvedPrompt,
+            display_content: displayPrompt,
+          },
+    );
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt)
@@ -128,7 +141,15 @@ export class Orchestrator implements ExecutionCoordinator {
     );
 
     const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-    const execParams = this._buildExecutionParams(updatedRow, executionId, resolvedPrompt, column.stage_instructions, worktreePath);
+    const execParams = this._buildExecutionParams(
+      updatedRow,
+      executionId,
+      resolvedPrompt,
+      column.stage_instructions,
+      worktreePath,
+      "transition",
+      toState,
+    );
 
     this._runNonNative(taskId, executionId, execParams);
     return { task: mapTask(updatedRow), executionId };
@@ -146,7 +167,6 @@ export class Orchestrator implements ExecutionCoordinator {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
 
-    const msgId = appendMessage(taskId, task.conversation_id ?? 0, "user", "user", content);
     const column = this._getColumnConfig(task.board_id, task.workflow_state);
 
     const execResult = db.run(
@@ -167,8 +187,35 @@ export class Orchestrator implements ExecutionCoordinator {
       )
       .get(taskId);
     const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
+    let resolvedPrompt = content;
+    try {
+      resolvedPrompt = await resolveSlashReference(content, worktreePath);
+    } catch {
+      // Keep raw content on non-native resolution failures — this path remains
+      // non-blocking and still records what the user actually typed.
+    }
+    const msgId = appendMessage(
+      taskId,
+      task.conversation_id ?? 0,
+      "user",
+      "user",
+      content,
+      resolvedPrompt === content
+        ? undefined
+        : {
+            resolved_content: resolvedPrompt,
+            display_content: content,
+          },
+    );
 
-    const execParams = this._buildExecutionParams(task, executionId, content, column?.stage_instructions, worktreePath);
+    const execParams = this._buildExecutionParams(
+      task,
+      executionId,
+      resolvedPrompt,
+      column?.stage_instructions,
+      worktreePath,
+      "human_turn",
+    );
     this._runNonNative(taskId, executionId, execParams);
 
     const msgRow = db
@@ -214,7 +261,14 @@ export class Orchestrator implements ExecutionCoordinator {
     const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
     const retryPrompt = column?.on_enter_prompt ?? "Please continue with the task.";
 
-    const execParams = this._buildExecutionParams(updatedRow, executionId, retryPrompt, column?.stage_instructions, worktreePath);
+    const execParams = this._buildExecutionParams(
+      updatedRow,
+      executionId,
+      retryPrompt,
+      column?.stage_instructions,
+      worktreePath,
+      "retry",
+    );
     this._runNonNative(taskId, executionId, execParams);
 
     return { task: mapTask(updatedRow), executionId };
@@ -271,7 +325,14 @@ export class Orchestrator implements ExecutionCoordinator {
       .get(taskId);
     const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
 
-    const execParams = this._buildExecutionParams(task, executionId, reviewText, column?.stage_instructions, worktreePath);
+    const execParams = this._buildExecutionParams(
+      task,
+      executionId,
+      reviewText,
+      column?.stage_instructions,
+      worktreePath,
+      "code_review",
+    );
     this._runNonNative(taskId, executionId, execParams);
 
     return { message: mapConversationMessage(reviewMsgRow), executionId };
@@ -328,6 +389,8 @@ export class Orchestrator implements ExecutionCoordinator {
     prompt: string,
     systemInstructions: string | undefined,
     workingDirectory: string,
+    nativeExecType: NativeExecutionType,
+    toState?: string,
     signal?: AbortSignal,
   ): ExecutionParams {
     const controller = new AbortController();
@@ -352,6 +415,8 @@ export class Orchestrator implements ExecutionCoordinator {
       workingDirectory,
       model: task.model ?? "",
       signal: signal ?? controller.signal,
+      nativeExecType,
+      toState,
     };
   }
 
@@ -447,6 +512,7 @@ export class Orchestrator implements ExecutionCoordinator {
           }
 
           case "tool_start": {
+            if (event.isInternal) break;
             // Task 5.2: Persist tool_call message immediately
             const callId = event.callId ?? `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
             const toolCallMsg = JSON.stringify({
@@ -454,12 +520,16 @@ export class Orchestrator implements ExecutionCoordinator {
               function: { name: event.name, arguments: event.arguments },
               id: callId,
             });
+            const toolMeta = {
+              parent_tool_call_id: event.parentCallId ?? null,
+            };
             const msgId = appendMessage(
               taskId,
               conversationId,
               "tool_call",
               null,
               toolCallMsg,
+              toolMeta,
             );
             this.onNewMessage({
               id: msgId,
@@ -468,26 +538,33 @@ export class Orchestrator implements ExecutionCoordinator {
               type: "tool_call",
               role: null,
               content: toolCallMsg,
-              metadata: null,
+              metadata: toolMeta,
               createdAt: new Date().toISOString(),
             });
             break;
           }
 
           case "tool_result": {
+            if (event.isInternal) break;
             // Task 5.2: Persist tool_result message
             const resultMsg = JSON.stringify({
               type: "tool_result",
               tool_use_id: event.callId,
               content: event.result,
+              detailedContent: event.detailedResult,
+              contents: event.contentBlocks,
               is_error: event.isError,
             });
+            const resultMeta = {
+              parent_tool_call_id: event.parentCallId ?? null,
+            };
             const msgId = appendMessage(
               taskId,
               conversationId,
               "tool_result",
               null,
               resultMsg,
+              resultMeta,
             );
             this.onNewMessage({
               id: msgId,
@@ -496,7 +573,7 @@ export class Orchestrator implements ExecutionCoordinator {
               type: "tool_result",
               role: null,
               content: resultMsg,
-              metadata: null,
+              metadata: resultMeta,
               createdAt: new Date().toISOString(),
             });
             break;

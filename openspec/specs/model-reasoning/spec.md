@@ -4,7 +4,7 @@ Model reasoning captures the internal thinking tokens produced by reasoning-capa
 ## Requirements
 
 ### Requirement: Reasoning tokens are surfaced as a collapsible bubble per model round
-The system SHALL render a `ReasoningBubble` component for each `reasoning` conversation message. While the reasoning is streaming, the bubble SHALL be expanded with a pulsing "Thinking…" header animation. When the round ends, the bubble SHALL auto-collapse and the header SHALL change to "Thought for Xs" with a checkmark icon, where X is the elapsed time in seconds. Each model round that produces reasoning gets its own independent bubble.
+The system SHALL render a `ReasoningBubble` component for each `reasoning` conversation message. While the reasoning is streaming, the bubble SHALL be expanded with a pulsing "Thinking…" header animation. When the round ends, the bubble SHALL auto-collapse and the header SHALL change to "Thought for Xs" with a checkmark icon, where X is the elapsed time in seconds. Each model round that produces reasoning gets its own independent bubble. Each active reasoning bubble SHALL render as part of the same visible conversation timeline used for persisted messages and live assistant output.
 
 #### Scenario: Bubble expands and animates during streaming
 - **WHEN** the engine begins forwarding reasoning tokens for a new round
@@ -25,6 +25,14 @@ The system SHALL render a `ReasoningBubble` component for each `reasoning` conve
 #### Scenario: Reasoning bubbles survive page reload in collapsed state
 - **WHEN** the user reloads the page and reopens a task drawer for a task with persisted reasoning messages
 - **THEN** reasoning bubbles render collapsed showing the recorded text, without a duration (duration is ephemeral)
+
+#### Scenario: Streaming reasoning stays in timeline order before its associated response
+- **WHEN** a model produces reasoning before a tool call or assistant response
+- **THEN** the live reasoning bubble appears in the conversation at that chronological position rather than in a separate visual lane
+
+#### Scenario: Reasoning growth participates in anchored auto-scroll
+- **WHEN** the active reasoning bubble grows while the user remains at the bottom threshold
+- **THEN** the task drawer auto-scroll keeps the newest reasoning content visible
 
 ### Requirement: Reasoning tokens are persisted to the DB as a `reasoning` message type
 The system SHALL append a `reasoning` message to the conversation once a reasoning round completes. The message content SHALL be the full accumulated reasoning text for that round. Reasoning messages are appended immediately before the `tool_call` or `assistant` message they preceded.

@@ -13,6 +13,12 @@
 import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
 import type { EngineEvent } from "../types.ts";
 
+type ToolEventMeta = {
+  name: string;
+  parentCallId?: string;
+  isInternal: boolean;
+};
+
 /**
  * Subscribe to a CopilotSession and yield EngineEvents until the session
  * completes (session.idle or session.task_complete) or errors.
@@ -44,8 +50,9 @@ export async function* translateCopilotStream(
   let receivedTokenDelta = false;
   let receivedReasoningDelta = false;
 
-  // Track tool names by callId so tool.execution_complete can include the tool name.
-  const toolNameByCallId = new Map<string, string>();
+  // Track tool metadata by callId so tool.execution_complete can include the tool
+  // name and preserve filtering context.
+  const toolMetaByCallId = new Map<string, ToolEventMeta>();
 
   // Unblock the generator immediately when the caller aborts (e.g. stop button).
   // Without this, translateCopilotStream would hang waiting for the next SDK event
@@ -71,11 +78,15 @@ export async function* translateCopilotStream(
     if (event.type === "assistant.message_delta") receivedTokenDelta = true;
     if (event.type === "assistant.reasoning_delta") receivedReasoningDelta = true;
     if (event.type === "tool.execution_start") {
-      const data = event.data as { toolCallId: string; toolName: string };
-      toolNameByCallId.set(data.toolCallId, data.toolName);
+      const data = event.data as { toolCallId: string; toolName: string; parentToolCallId?: string };
+      toolMetaByCallId.set(data.toolCallId, {
+        name: data.toolName,
+        parentCallId: data.parentToolCallId,
+        isInternal: isInternalCopilotEvent(event, data.toolName, data.parentToolCallId),
+      });
     }
 
-    const engineEvent = translateEvent(event, receivedTokenDelta, receivedReasoningDelta, toolNameByCallId);
+    const engineEvent = translateEvent(event, receivedTokenDelta, receivedReasoningDelta, toolMetaByCallId);
     if (engineEvent) {
       queue.push(engineEvent);
     }
@@ -136,7 +147,7 @@ function translateEvent(
   event: CopilotSdkEvent,
   receivedTokenDelta: boolean,
   receivedReasoningDelta: boolean,
-  toolNameByCallId: Map<string, string>,
+  toolMetaByCallId: Map<string, ToolEventMeta>,
 ): EngineEvent | null {
   switch (event.type) {
     // Streaming delta (incremental) — preferred when streaming is active
@@ -167,25 +178,48 @@ function translateEvent(
     }
 
     case "tool.execution_start": {
-      const data = event.data as { toolName: string; arguments?: unknown; toolCallId: string };
+      const data = event.data as { toolName: string; arguments?: unknown; toolCallId: string; parentToolCallId?: string };
+      const meta = toolMetaByCallId.get(data.toolCallId);
       return {
         type: "tool_start",
         name: data.toolName,
         arguments: JSON.stringify(data.arguments ?? {}),
         callId: data.toolCallId,
+        parentCallId: meta?.parentCallId,
+        isInternal: meta?.isInternal ?? false,
       };
     }
 
+    case "tool.execution_partial_result": {
+      const data = event.data as { partialOutput: string };
+      if (!data.partialOutput) return null;
+      return { type: "status", message: data.partialOutput };
+    }
+
+    case "tool.execution_progress": {
+      const data = event.data as { progressMessage: string };
+      if (!data.progressMessage) return null;
+      return { type: "status", message: data.progressMessage };
+    }
+
     case "tool.execution_complete": {
-      const data = event.data as { toolCallId: string; success: boolean; result?: { content?: string } };
-      const name = toolNameByCallId.get(data.toolCallId) ?? "unknown";
-      toolNameByCallId.delete(data.toolCallId);
+      const data = event.data as {
+        toolCallId: string;
+        success: boolean;
+        result?: { content?: string; detailedContent?: string; contents?: Array<Record<string, unknown>> };
+      };
+      const meta = toolMetaByCallId.get(data.toolCallId);
+      toolMetaByCallId.delete(data.toolCallId);
       return {
         type: "tool_result",
-        name,
+        name: meta?.name ?? "unknown",
         result: data.result?.content ?? "",
         callId: data.toolCallId,
         isError: !data.success,
+        parentCallId: meta?.parentCallId,
+        isInternal: meta?.isInternal ?? false,
+        detailedResult: data.result?.detailedContent,
+        contentBlocks: data.result?.contents,
       };
     }
 
@@ -224,4 +258,15 @@ function translateEvent(
     default:
       return null;
   }
+}
+
+function isInternalCopilotEvent(
+  event: CopilotSdkEvent,
+  toolName?: string,
+  parentToolCallId?: string,
+): boolean {
+  if (event.source?.startsWith("skill-")) return true;
+  if (parentToolCallId) return true;
+  if (!toolName) return false;
+  return toolName.startsWith("internal_") || toolName.startsWith("copilot_");
 }

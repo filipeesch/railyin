@@ -11,8 +11,18 @@ export interface AskUserOption {
 export type EngineEvent =
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
-  | { type: "tool_start"; name: string; arguments: string; callId?: string }
-  | { type: "tool_result"; name: string; result: string; callId?: string; isError?: boolean }
+  | { type: "tool_start"; name: string; arguments: string; callId?: string; parentCallId?: string; isInternal?: boolean }
+  | {
+      type: "tool_result";
+      name: string;
+      result: string;
+      callId?: string;
+      isError?: boolean;
+      parentCallId?: string;
+      isInternal?: boolean;
+      detailedResult?: string;
+      contentBlocks?: Array<Record<string, unknown>>;
+    }
   | { type: "ask_user"; payload: string /* serialised AskUserPrompt JSON */ }
   | { type: "shell_approval"; command: string; executionId: number }
   | { type: "status"; message: string }
