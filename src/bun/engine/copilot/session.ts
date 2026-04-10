@@ -66,7 +66,16 @@ let _clientPromise: Promise<LoadedCopilotClient> | undefined;
 
 async function getClient(): Promise<LoadedCopilotClient> {
   if (!_clientPromise) {
-    _clientPromise = import("@github/copilot-sdk").then((mod) => new mod.CopilotClient({ autoStart: true }) as LoadedCopilotClient);
+    _clientPromise = import("@github/copilot-sdk").then(async (mod) => {
+      console.log("[copilot] Starting client. COPILOT_CLI_PATH:", process.env.COPILOT_CLI_PATH ?? "(not set)", "PATH:", process.env.PATH);
+      // The SDK reads COPILOT_CLI_PATH from the environment automatically.
+      // In dev it auto-discovers @github/copilot from node_modules.
+      // In production, users must set COPILOT_CLI_PATH to their global install.
+      // Requires Node.js 22+ in PATH (the CLI uses node:sea and node:sqlite).
+      const client = new mod.CopilotClient({}) as LoadedCopilotClient;
+      await client.start();
+      return client;
+    });
   }
   return _clientPromise;
 }
