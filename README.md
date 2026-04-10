@@ -31,28 +31,42 @@ bun run test:ui:run
 
 This kills any existing app, starts it in test mode with the debug bridge enabled, runs the suite, then cleans up.
 
-**Option B — manual:**
+**Option B — manual (two terminals):**
 
-**1. Start the app in debug + test mode:**
+**Terminal 1 — start the app in test mode:**
 ```bash
 bun run dev:test
-# equivalent: RAILYN_DEBUG=1 RAILYN_DB=:memory: bun run dev
+# equivalent: RAILYN_DEBUG=1 RAILYN_DB=:memory: vite build && electrobun dev --watch
 ```
 
-**2. In a separate terminal, run the UI tests:**
+Wait ~25s for the app to start, then verify the bridge is up:
+```bash
+curl http://localhost:9229/
+```
 
+**Terminal 2 — run the UI tests:**
 ```bash
 bun run test:ui
+# or for just the review overlay suite:
+bun run test:ui:review
 ```
 
-> `RAILYN_DEBUG=1` opens the debug bridge on `localhost:9229`. Without it the bridge is not available and UI tests cannot run. `RAILYN_DB=:memory:` uses an isolated in-memory database so tests never touch your real data. They reset their own DB state at the start of each suite — no manual cleanup needed.
+> **Important:** Always use `bun run dev:test` (not `bun run dev`) when running UI tests. `RAILYN_DEBUG=1` is required to open the HTTP debug bridge on `localhost:9229` — without it all UI tests fail immediately with `ConnectionRefused`. `RAILYN_DB=:memory:` uses an isolated in-memory database so tests never touch your real data.
 
 ### Debug HTTP bridge
 
 The debug bridge (`localhost:9229`) is only started when `RAILYN_DEBUG=1` is set. It is never open in a normal `bun run dev` session.
 
 ```bash
-# Start with debug bridge enabled:
+# Start with debug bridge enabled (real DB):
+bun run dev:debug
+# equivalent: RAILYN_DEBUG=1 vite build && electrobun dev --watch
+
+# Start with debug bridge + isolated in-memory DB (for tests):
+bun run dev:test
+# equivalent: RAILYN_DEBUG=1 RAILYN_DB=:memory: vite build && electrobun dev --watch
+
+# legacy manual form:
 RAILYN_DEBUG=1 bun run dev
 
 # Useful endpoints:

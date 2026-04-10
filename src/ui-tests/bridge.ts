@@ -29,10 +29,10 @@ export async function webEval<T = unknown>(script: string): Promise<T> {
   const res =
     script.length > 1_000
       ? await fetch(BRIDGE_BASE + "/inspect", {
-          method: "POST",
-          body: script,
-          headers: { "content-type": "text/plain" },
-        })
+        method: "POST",
+        body: script,
+        headers: { "content-type": "text/plain" },
+      })
       : await fetch(`${BRIDGE_BASE}/inspect?script=${encodeURIComponent(script)}`);
 
   if (!res.ok) throw new Error(`Bridge server ${res.status}: ${await res.text()}`);

@@ -22,7 +22,22 @@ Follow the existing suite structure (Suite A, B, C…). Each new suite gets the 
 bun test src/ui-tests --timeout 120000
 ```
 
-The app must already be running (`bun run dev`). If it is not, start it in the background and wait ~25s before running tests.
+The app must be running in **test+debug mode** (`bun run dev:test`), which opens the debug bridge on `localhost:9229`. A plain `bun run dev` does **not** open the bridge — all tests will fail with `ConnectionRefused`.
+
+Start the app if not already running:
+```bash
+bun run dev:test   # RAILYN_DEBUG=1 RAILYN_DB=:memory:
+```
+Wait ~25s for startup, then verify:
+```bash
+curl http://localhost:9229/
+```
+Or use the fully-automated script (start + test + cleanup):
+```bash
+bun run test:ui:run
+```
+
+After running, clearly report: **N pass, M fail** and the name/message of each failure.
 
 After running, clearly report: **N pass, M fail** and the name/message of each failure.
 
@@ -63,6 +78,7 @@ Make targeted improvements. Do not refactor things unrelated to the feature.
 
 ```bash
 bun test src/ui-tests --timeout 120000
+# app must be running: bun run dev:test
 ```
 
 All tests must still pass. If any fail, go back to Phase 3 (fix the regression, not the test).

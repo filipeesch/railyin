@@ -215,7 +215,7 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
         let boardId: number;
         let projectId: number;
         const existingTask = db.query<{ board_id: number; project_id: number }, []
-          >("SELECT board_id, project_id FROM tasks WHERE title != 'UI Test Task' LIMIT 1").get();
+        >("SELECT board_id, project_id FROM tasks WHERE title != 'UI Test Task' LIMIT 1").get();
         if (existingTask) {
           boardId = existingTask.board_id;
           projectId = existingTask.project_id;

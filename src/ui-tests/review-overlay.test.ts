@@ -171,7 +171,7 @@ describe("Code Review Overlay — ViewZone UX", () => {
       if (!result.isSameElement) {
         throw new Error(
           `Accept button is not the top element — blocked by: "${result.hitCls}".\n` +
-            "Fix: ensure .hunk-bar or its ancestor has z-index above .view-lines.",
+          "Fix: ensure .hunk-bar or its ancestor has z-index above .view-lines.",
         );
       }
     });
@@ -193,9 +193,9 @@ describe("Code Review Overlay — ViewZone UX", () => {
       if (failures.length > 0) {
         throw new Error(
           `${failures.length} button(s) blocked by overlapping element:\n` +
-            failures
-              .map((f) => `  button[${f.i}] hit "${f.hitCls}"`)
-              .join("\n"),
+          failures
+            .map((f) => `  button[${f.i}] hit "${f.hitCls}"`)
+            .join("\n"),
         );
       }
 
@@ -233,7 +233,7 @@ describe("Code Review Overlay — ViewZone UX", () => {
       if (zeros.length > 0) {
         throw new Error(
           `${zeros.length}/${visible.length} visible zones have offsetHeight 0 ` +
-            `(zone container has height but inner content is not rendering)`,
+          `(zone container has height but inner content is not rendering)`,
         );
       }
     });
@@ -253,7 +253,7 @@ describe("Code Review Overlay — ViewZone UX", () => {
       if (stuck.length > 0) {
         throw new Error(
           `${stuck.length}/${heights.length} zone(s) stuck at 108px — layoutZone() may not be ` +
-            "reading the correct element height (should use firstElementChild, not domNode).",
+          "reading the correct element height (should use firstElementChild, not domNode).",
         );
       }
     });
@@ -310,7 +310,7 @@ describe("Code Review Overlay — ViewZone UX", () => {
         if (delta >= 80) {
           throw new Error(
             `Editor jumped: before=${Math.round(scrollBefore)}px, after=${Math.round(scrollAfter)}px, delta=${Math.round(delta)}px. ` +
-              "The scroll restore (pendingScrollRestore) may not be firing correctly.",
+            "The scroll restore (pendingScrollRestore) may not be firing correctly.",
           );
         }
       },
@@ -354,7 +354,7 @@ describe("Code Review Overlay — ViewZone UX", () => {
         if (result.diff < -TOLERANCE_PX) {
           throw new Error(
             `Hunk bar is ${Math.abs(result.diff)}px above the editor top (tolerance=${TOLERANCE_PX}px). ` +
-              "The viewport clip compensation may not be working.",
+            "The viewport clip compensation may not be working.",
           );
         }
       },
@@ -476,8 +476,8 @@ describe("Code Review Overlay — per-hunk navigation (rich test file)", () => {
     if (missing.length > 0) {
       throw new Error(
         `${missing.length}/${hunkResults.length} hunk(s) rendered without an action bar:\n` +
-          missing.map((r) => `  hunk ${r.hunk}: barTop=${r.barTop}, lineInserts=${r.lineInserts}`).join("\n") +
-          "\nFix: ensure every pending hunk gets a ViewZone injected in injectViewZones().",
+        missing.map((r) => `  hunk ${r.hunk}: barTop=${r.barTop}, lineInserts=${r.lineInserts}`).join("\n") +
+        "\nFix: ensure every pending hunk gets a ViewZone injected in injectViewZones().",
       );
     }
   });
@@ -495,13 +495,13 @@ describe("Code Review Overlay — per-hunk navigation (rich test file)", () => {
     if (misaligned.length > 0) {
       throw new Error(
         `${misaligned.length}/${measurable.length} hunk(s) misaligned (gap > 36px):\n` +
-          misaligned
-            .map(
-              (r) =>
-                `  hunk ${r.hunk}: bar=${r.barTop}px, nearest-diff-bottom=${r.insertBottom}px, gap=${r.gap}px`,
-            )
-            .join("\n") +
-          "\nFix: check correlateHunks() — afterLineNumber may be placed too many lines after the diff region.",
+        misaligned
+          .map(
+            (r) =>
+              `  hunk ${r.hunk}: bar=${r.barTop}px, nearest-diff-bottom=${r.insertBottom}px, gap=${r.gap}px`,
+          )
+          .join("\n") +
+        "\nFix: check correlateHunks() — afterLineNumber may be placed too many lines after the diff region.",
       );
     }
   });
@@ -580,7 +580,7 @@ describe("Code Review Overlay — reject hunk regression", () => {
     if (barCountAfter >= barCountBefore) {
       throw new Error(
         `Bar count did not decrease after reject: before=${barCountBefore}, after=${barCountAfter}. ` +
-          "The rejected hunk ViewZone(s) may not have been removed.",
+        "The rejected hunk ViewZone(s) may not have been removed.",
       );
     }
   });
@@ -599,7 +599,7 @@ describe("Code Review Overlay — reject hunk regression", () => {
     if (gapAfterReject > 36) {
       throw new Error(
         `Remaining bar is misaligned after reject: gap=${gapAfterReject}px > 36px. ` +
-          "Rejecting a hunk may have shifted line offsets without re-running correlateHunks().",
+        "Rejecting a hunk may have shifted line offsets without re-running correlateHunks().",
       );
     }
   });
@@ -725,10 +725,10 @@ describe("Code Review Overlay — all changed files have action bars", () => {
 
       throw new Error(
         `${missing.length}/${allResults.length} hunk(s) across all files rendered without an action bar:\n` +
-          Object.entries(byFile)
-            .map(([f, hunks]) => `  ${f}: hunks ${hunks.join(", ")}`)
-            .join("\n") +
-          "\nFix: ensure mapLineChangesToHunks() maps every Monaco ILineChange to a git hunk.",
+        Object.entries(byFile)
+          .map(([f, hunks]) => `  ${f}: hunks ${hunks.join(", ")}`)
+          .join("\n") +
+        "\nFix: ensure mapLineChangesToHunks() maps every Monaco ILineChange to a git hunk.",
       );
     }
   });
@@ -801,10 +801,10 @@ describe("Code Review Overlay — bars match Monaco ILineChanges per file", () =
     if (mismatches.length > 0) {
       throw new Error(
         "Some files have colored diff regions without an action bar:\n" +
-          mismatches
-            .map((c) => `  ${c.file.split("/").slice(-1)[0]}: monacoChanges=${c.monacoChanges}, bars=${c.bars} (missing ${c.monacoChanges - c.bars})`)
-            .join("\n") +
-          "\nFix: ensure injectViewZones() injects one bar per Monaco ILineChange via mapLineChangesToHunks().",
+        mismatches
+          .map((c) => `  ${c.file.split("/").slice(-1)[0]}: monacoChanges=${c.monacoChanges}, bars=${c.bars} (missing ${c.monacoChanges - c.bars})`)
+          .join("\n") +
+        "\nFix: ensure injectViewZones() injects one bar per Monaco ILineChange via mapLineChangesToHunks().",
       );
     }
   });
@@ -896,9 +896,9 @@ describe("Code Review Overlay — reject precision", () => {
     if (barsRemoved !== monacoRemoved) {
       throw new Error(
         `Reject removed ${barsRemoved} bar(s) but only ${monacoRemoved} Monaco ILineChange(s) disappeared.\n` +
-          `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
-          `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
-          "This indicates bars belonging to a DIFFERENT git hunk were also removed — wrong hunk assignment in mapLineChangesToHunks().",
+        `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
+        `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
+        "This indicates bars belonging to a DIFFERENT git hunk were also removed — wrong hunk assignment in mapLineChangesToHunks().",
       );
     }
   });
@@ -911,7 +911,7 @@ describe("Code Review Overlay — reject precision", () => {
     if (barsAfter < monacoChangesAfter) {
       throw new Error(
         `After reject: bars=${barsAfter} < monacoChanges=${monacoChangesAfter}.\n` +
-          "Some remaining colored diff regions have no action bar — the reject caused a bar to disappear for a DIFFERENT hunk.",
+        "Some remaining colored diff regions have no action bar — the reject caused a bar to disappear for a DIFFERENT hunk.",
       );
     }
   });
@@ -1038,7 +1038,7 @@ describe("Code Review Overlay — pending counter accuracy", () => {
     if (initialCounter > initialGitHunks) {
       throw new Error(
         `Counter shows ${initialCounter} pending but only ${initialGitHunks} bars are present. ` +
-          "Counter is overcounting (possibly counting Monaco ILineChanges instead of git hunks).",
+        "Counter is overcounting (possibly counting Monaco ILineChanges instead of git hunks).",
       );
     }
   });
@@ -1055,8 +1055,8 @@ describe("Code Review Overlay — pending counter accuracy", () => {
     if (dropped !== 1) {
       throw new Error(
         `Counter dropped by ${dropped} after accepting one hunk (expected exactly 1).\n` +
-          `before=${initialCounter}, after=${counterAfterAccept}.\n` +
-          "If dropped by >1, the counter is counting Monaco ILineChanges not git hunks.",
+        `before=${initialCounter}, after=${counterAfterAccept}.\n` +
+        "If dropped by >1, the counter is counting Monaco ILineChanges not git hunks.",
       );
     }
   });
@@ -1155,14 +1155,14 @@ describe("Code Review Overlay — Change Request validation and behaviour", () =
     if (!errorVisibleWithoutComment) {
       throw new Error(
         "No '.hunk-bar__error-msg' element visible after clicking Change Request without a comment.\n" +
-          "The validation error should appear to tell the user a comment is required.",
+        "The validation error should appear to tell the user a comment is required.",
       );
     }
     // Bar must NOT be removed (decision was not saved)
     if (barCountAfterCR < barCountBeforeCR) {
       throw new Error(
         `Bar count dropped from ${barCountBeforeCR} to ${barCountAfterCR} after Change Request with empty comment.\n` +
-          "The bar should remain — the decision must not be saved without a comment.",
+        "The bar should remain — the decision must not be saved without a comment.",
       );
     }
   });
@@ -1178,7 +1178,7 @@ describe("Code Review Overlay — Change Request validation and behaviour", () =
     if (!decidedBadgeVisible) {
       throw new Error(
         "No '.hunk-btn--cr.hunk-btn--active' element found after submitting Change Request with a comment.\n" +
-          "The CR button should have the '--active' class to indicate the decision was recorded.",
+        "The CR button should have the '--active' class to indicate the decision was recorded.",
       );
     }
   });
@@ -1303,9 +1303,9 @@ describe("Code Review Overlay — decision persistence across file switches", ()
     if (barCountInFileAAfterSwitch >= barCountInFileABeforeAccept) {
       throw new Error(
         `After switching away and back to ${fileA.split("/").pop()}, bar count returned to ${barCountInFileAAfterSwitch} ` +
-          `(was ${barCountInFileABeforeAccept} before accept).\n` +
-          "The accepted hunk's decision was not persisted — it re-appeared after file switch.\n" +
-          "Fix: ensure accepted decisions are read from DB when loading a file (buildDisplayModel must apply them).",
+        `(was ${barCountInFileABeforeAccept} before accept).\n` +
+        "The accepted hunk's decision was not persisted — it re-appeared after file switch.\n" +
+        "Fix: ensure accepted decisions are read from DB when loading a file (buildDisplayModel must apply them).",
       );
     }
     // NOTE: We intentionally do NOT assert bars >= monacoChanges here.
@@ -1389,9 +1389,9 @@ describe("Code Review Overlay — accept precision", () => {
     if (barsRemoved !== monacoRemoved) {
       throw new Error(
         `Accept removed ${barsRemoved} bar(s) but ${monacoRemoved} Monaco ILineChange(s) disappeared.\n` +
-          `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
-          `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
-          "Bars removed and Monaco changes removed must be equal — if they differ, the display model patch is wrong.",
+        `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
+        `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
+        "Bars removed and Monaco changes removed must be equal — if they differ, the display model patch is wrong.",
       );
     }
 
@@ -1399,7 +1399,7 @@ describe("Code Review Overlay — accept precision", () => {
     if (barsAfter < monacoChangesAfter) {
       throw new Error(
         `After accept: bars=${barsAfter} < monacoChanges=${monacoChangesAfter}.\n` +
-          "Some remaining colored diff regions have no action bar.",
+        "Some remaining colored diff regions have no action bar.",
       );
     }
   });
@@ -1465,21 +1465,21 @@ describe("Code Review Overlay — partial-change file: bars and Monaco ILineChan
     if (result.monacoChanges === 0) {
       throw new Error(
         `No Monaco ILineChanges found in ${partialFile}.\n` +
-          "Expected ≥2 for a tracked file with two disjoint changed regions.\n" +
-          "Check that /setup-test-env committed the base content and then modified only top+bottom sections.",
+        "Expected ≥2 for a tracked file with two disjoint changed regions.\n" +
+        "Check that /setup-test-env committed the base content and then modified only top+bottom sections.",
       );
     }
     if (result.bars < result.monacoChanges) {
       throw new Error(
         `bars=${result.bars} < monacoChanges=${result.monacoChanges} in ${partialFile}.\n` +
-          "Some colored diff regions have no action bar in a tracked partial-change file.",
+        "Some colored diff regions have no action bar in a tracked partial-change file.",
       );
     }
     // Additional: for a file with two disjoint hunks, expect ≥2 Monaco ILineChanges.
     if (result.monacoChanges < 2) {
       throw new Error(
         `Expected ≥2 Monaco ILineChanges in ${partialFile} (two disjoint changed regions) but got ${result.monacoChanges}.\n` +
-          "The file may not have the expected structure — check /setup-test-env partial file content.",
+        "The file may not have the expected structure — check /setup-test-env partial file content.",
       );
     }
   });
@@ -1521,7 +1521,7 @@ describe("Code Review Overlay — partial-change file: bars and Monaco ILineChan
     if (missing.length > 0) {
       throw new Error(
         `${missing.length} hunk(s) in ${partialFile} rendered without a visible action bar: hunks ${missing.join(", ")}.\n` +
-          "Fix: ensure injectViewZones() covers all Monaco ILineChanges in partial-change (tracked) files.",
+        "Fix: ensure injectViewZones() covers all Monaco ILineChanges in partial-change (tracked) files.",
       );
     }
   }, 120_000);
@@ -1610,16 +1610,16 @@ describe("Code Review Overlay — partial-change file: reject removes only targe
     if (barsRemoved !== monacoRemoved) {
       throw new Error(
         `Reject removed ${barsRemoved} bar(s) but ${monacoRemoved} Monaco ILineChange(s) disappeared in ${partialFile}.\n` +
-          `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
-          `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
-          "Bars removed and Monaco changes removed must be equal — wrong hunk assignment in mapLineChangesToHunks().",
+        `before: bars=${barsBefore}, monacoChanges=${monacoChangesBefore}\n` +
+        `after:  bars=${barsAfter}, monacoChanges=${monacoChangesAfter}\n` +
+        "Bars removed and Monaco changes removed must be equal — wrong hunk assignment in mapLineChangesToHunks().",
       );
     }
     // At least one bar+change should have been removed
     if (barsRemoved === 0) {
       throw new Error(
         `No bars were removed after rejecting a hunk in ${partialFile}.\n` +
-          "The reject action may not have worked, or the overlay did not rebuild.",
+        "The reject action may not have worked, or the overlay did not rebuild.",
       );
     }
   });
@@ -1632,14 +1632,14 @@ describe("Code Review Overlay — partial-change file: reject removes only targe
     if (barsAfter < monacoChangesAfter) {
       throw new Error(
         `After rejecting one hunk in ${partialFile}: bars=${barsAfter} < monacoChanges=${monacoChangesAfter}.\n` +
-          "The second hunk's action bar disappeared — rejecting one hunk removed bars for the other.\n" +
-          "Fix: ensure rejectHunk() only records a decision for the targeted git hunk hash.",
+        "The second hunk's action bar disappeared — rejecting one hunk removed bars for the other.\n" +
+        "Fix: ensure rejectHunk() only records a decision for the targeted git hunk hash.",
       );
     }
     if (barsAfter === 0 && monacoChangesAfter > 0) {
       throw new Error(
         `All bars removed after rejecting one hunk in ${partialFile}, but ${monacoChangesAfter} Monaco changes remain.\n` +
-          "The remaining hunk lost its action bar.",
+        "The remaining hunk lost its action bar.",
       );
     }
   });
@@ -1702,8 +1702,8 @@ describe("Code Review Overlay — glyph click opens LineCommentBar", () => {
     if (!barAppearedAfterClick) {
       throw new Error(
         "No '.line-comment-bar' element appeared after triggering onRequestLineComment.\n" +
-          "Fix: ensure injectCommentZone() creates a ViewZone that renders LineCommentBar.\n" +
-          "Check that CodeReviewOverlay exposes onRequestLineComment and MonacoDiffEditor wires it.",
+        "Fix: ensure injectCommentZone() creates a ViewZone that renders LineCommentBar.\n" +
+        "Check that CodeReviewOverlay exposes onRequestLineComment and MonacoDiffEditor wires it.",
       );
     }
     expect(barState).toBe("open");
@@ -1717,7 +1717,7 @@ describe("Code Review Overlay — glyph click opens LineCommentBar", () => {
     if (!textareaFocused) {
       throw new Error(
         "'.line-comment-bar__textarea' is not focused on mount.\n" +
-          "Fix: ensure LineCommentBar's onMounted() calls textareaEl.value.focus() when state === 'open'.",
+        "Fix: ensure LineCommentBar's onMounted() calls textareaEl.value.focus() when state === 'open'.",
       );
     }
   });
@@ -1779,13 +1779,13 @@ describe("Code Review Overlay — cancel removes comment zone without IPC", () =
     if (barCountBeforeCancel === 0) {
       throw new Error(
         "No '.line-comment-bar' appeared before cancel — cannot test cancel behaviour.\n" +
-          "This is a dependency on test 24 passing.",
+        "This is a dependency on test 24 passing.",
       );
     }
     if (barCountAfterCancel >= barCountBeforeCancel) {
       throw new Error(
         `Cancel did not remove the comment bar: before=${barCountBeforeCancel}, after=${barCountAfterCancel}.\n` +
-          "Fix: ensure onCancel() calls removeCommentZone(commentId).",
+        "Fix: ensure onCancel() calls removeCommentZone(commentId).",
       );
     }
   });
@@ -1795,7 +1795,7 @@ describe("Code Review Overlay — cancel removes comment zone without IPC", () =
     if (lineCommentsInDbAfterCancel !== lineCommentsInDbBeforeCancel) {
       throw new Error(
         `DB line comments changed after cancel: before=${lineCommentsInDbBeforeCancel}, after=${lineCommentsInDbAfterCancel}.\n` +
-          "Cancel must not persist anything to the DB.",
+        "Cancel must not persist anything to the DB.",
       );
     }
   });
@@ -1866,8 +1866,8 @@ describe("Code Review Overlay — posting a comment persists it and switches to 
     if (!postedBarVisible) {
       throw new Error(
         "After clicking Post, no '.line-comment-bar__comment-text' is visible.\n" +
-          "The bar may not have re-mounted in 'posted' state after addLineComment returned.\n" +
-          "Fix: ensure injectCommentZone's onPost handler unmounts the open app and remounts a posted app.",
+        "The bar may not have re-mounted in 'posted' state after addLineComment returned.\n" +
+        "Fix: ensure injectCommentZone's onPost handler unmounts the open app and remounts a posted app.",
       );
     }
   });
@@ -1876,7 +1876,7 @@ describe("Code Review Overlay — posting a comment persists it and switches to 
     if (dbRowCount === 0) {
       throw new Error(
         "No rows found in task_line_comments after posting a comment.\n" +
-          "Fix: ensure tasks.addLineComment IPC handler inserts into task_line_comments.",
+        "Fix: ensure tasks.addLineComment IPC handler inserts into task_line_comments.",
       );
     }
     expect(dbRowCount).toBeGreaterThanOrEqual(1);
@@ -1975,7 +1975,7 @@ describe("Code Review Overlay — delete a posted comment removes zone and DB ro
     if (barAfterDelete) {
       throw new Error(
         "'.line-comment-bar' is still present after clicking Delete.\n" +
-          "Fix: ensure handleDeleteComment calls removeCommentZone after deleteLineComment IPC.",
+        "Fix: ensure handleDeleteComment calls removeCommentZone after deleteLineComment IPC.",
       );
     }
   });
@@ -1988,7 +1988,7 @@ describe("Code Review Overlay — delete a posted comment removes zone and DB ro
     if (dbRowsAfterDelete >= dbRowsBeforeDelete) {
       throw new Error(
         `DB row count did not decrease after delete: before=${dbRowsBeforeDelete}, after=${dbRowsAfterDelete}.\n` +
-          "Fix: ensure tasks.deleteLineComment handler deletes the row by id.",
+        "Fix: ensure tasks.deleteLineComment handler deletes the row by id.",
       );
     }
   });
@@ -2056,7 +2056,7 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
     if (barCountAfter >= barCountBefore) {
       throw new Error(
         `Bar count did not decrease after accept: before=${barCountBefore}, after=${barCountAfter}.\n` +
-          "Fix: ensure onDecideHunk 'accepted' path calls removeZoneForHash(hash).",
+        "Fix: ensure onDecideHunk 'accepted' path calls removeZoneForHash(hash).",
       );
     }
   });
@@ -2069,8 +2069,8 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
     if (!greenDecorationPresent) {
       throw new Error(
         "No '.accepted-hunk-decoration' element found in the DOM after accepting a hunk.\n" +
-          "Fix: ensure applyDecisionDecorations() applies deltaDecorations with 'accepted-hunk-decoration' className.\n" +
-          "Also verify the CSS class is defined globally (in App.vue, not scoped).",
+        "Fix: ensure applyDecisionDecorations() applies deltaDecorations with 'accepted-hunk-decoration' className.\n" +
+        "Also verify the CSS class is defined globally (in App.vue, not scoped).",
       );
     }
   });
@@ -2185,8 +2185,8 @@ describe("Code Review Overlay — review submit payload includes line comments a
     if (!hasLineComments) {
       throw new Error(
         `The outgoing review message does not contain a LINE COMMENT section.\n` +
-          `Message content (first 500 chars): ${submitMessageContent.slice(0, 500)}\n` +
-          "Fix: ensure formatReviewMessageForLLM includes lineComments from the payload.",
+        `Message content (first 500 chars): ${submitMessageContent.slice(0, 500)}\n` +
+        "Fix: ensure formatReviewMessageForLLM includes lineComments from the payload.",
       );
     }
   });
@@ -2199,8 +2199,8 @@ describe("Code Review Overlay — review submit payload includes line comments a
     if (!hasHunkDiff) {
       throw new Error(
         `The outgoing review message does not contain a diff block or hunk decision metadata.\n` +
-          `Message content (first 500 chars): ${submitMessageContent.slice(0, 500)}\n` +
-          "Fix: ensure formatReviewMessageForLLM renders mini-diff blocks for accepted/change_request hunks.",
+        `Message content (first 500 chars): ${submitMessageContent.slice(0, 500)}\n` +
+        "Fix: ensure formatReviewMessageForLLM renders mini-diff blocks for accepted/change_request hunks.",
       );
     }
   });
@@ -2297,7 +2297,7 @@ describe("Code Review Overlay — sent marking: items marked sent=1 after submit
     if (unsentHunksAfterSubmit > 0) {
       throw new Error(
         `${unsentHunksAfterSubmit} hunk decision(s) still have sent=0 after submit.\n` +
-          "Fix: ensure handleCodeReview runs UPDATE task_hunk_decisions SET sent=1 after building the payload.",
+        "Fix: ensure handleCodeReview runs UPDATE task_hunk_decisions SET sent=1 after building the payload.",
       );
     }
   });
@@ -2314,7 +2314,7 @@ describe("Code Review Overlay — sent marking: items marked sent=1 after submit
     if (unsentCommentsAfterSubmit > 0) {
       throw new Error(
         `${unsentCommentsAfterSubmit} line comment(s) still have sent=0 after submit.\n` +
-          "Fix: ensure handleCodeReview runs UPDATE task_line_comments SET sent=1 after building the payload.",
+        "Fix: ensure handleCodeReview runs UPDATE task_line_comments SET sent=1 after building the payload.",
       );
     }
   });
@@ -2415,8 +2415,8 @@ describe("Code Review Overlay — sent comments are not re-rendered after round 
     if (commentBarsAfterReopen > 0) {
       throw new Error(
         `${commentBarsAfterReopen} line comment bar(s) rendered after reopening in round 2.\n` +
-          "These belong to the prior round (sent=1) and must NOT be rendered.\n" +
-          "Fix: ensure tasks.getLineComments queries WHERE sent = 0, and loadLineComments() only injects unsent comments.",
+        "These belong to the prior round (sent=1) and must NOT be rendered.\n" +
+        "Fix: ensure tasks.getLineComments queries WHERE sent = 0, and loadLineComments() only injects unsent comments.",
       );
     }
   });
