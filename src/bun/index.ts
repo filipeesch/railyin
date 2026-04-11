@@ -54,17 +54,17 @@ import { workflowHandlers } from "./handlers/workflow.ts";
 import { launchHandlers } from "./handlers/launch.ts";
 import { lspHandlers } from "./handlers/lsp.ts";
 import { mapTask } from "./db/mappers.ts";
-import { compactConversation } from "./workflow/engine.ts";
+import { appendMessage, compactConversation } from "./workflow/engine.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
 import type { RailynRPCType } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
-// 1. Run DB migrations + seed default workspace rows
+// 1. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
 runMigrations();
-seedDefaultWorkspace();
 syncFileBackedCompatibilityState();
+seedDefaultWorkspace();
 
 // 2. Load default workspace config (YAML files)
 const { error: configError } = loadConfig();
@@ -466,6 +466,155 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
       }
     }
 
+    // Test-only: seed synthetic tool-call conversations for drawer rendering tests.
+    if (url.pathname === "/seed-tool-messages") {
+      const taskId = Number(url.searchParams.get("taskId"));
+      const scenario = url.searchParams.get("scenario") ?? "";
+      if (!taskId || !scenario) {
+        return new Response(JSON.stringify({ __error: "taskId and scenario required" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      try {
+        const db = getDb();
+        const task = db.query<{ conversation_id: number | null }, [number]>(
+          "SELECT conversation_id FROM tasks WHERE id = ?",
+        ).get(taskId);
+        const conversationId = task?.conversation_id ?? 0;
+        if (!conversationId) throw new Error(`Task ${taskId} has no conversation`);
+
+        db.run("DELETE FROM conversation_messages WHERE task_id = ?", [taskId]);
+        db.run("UPDATE tasks SET execution_state = 'idle', current_execution_id = NULL WHERE id = ?", [taskId]);
+
+        const makeCall = (
+          callId: string,
+          name: string,
+          args: Record<string, unknown>,
+          metadata?: Record<string, unknown>,
+        ) => {
+          appendMessage(
+            taskId,
+            conversationId,
+            "tool_call",
+            null,
+            JSON.stringify({
+              type: "function",
+              function: { name, arguments: JSON.stringify(args) },
+              id: callId,
+            }),
+            metadata,
+          );
+        };
+
+        const makeResult = (
+          callId: string,
+          content: string,
+          metadata?: Record<string, unknown>,
+        ) => {
+          appendMessage(
+            taskId,
+            conversationId,
+            "tool_result",
+            null,
+            JSON.stringify({
+              type: "tool_result",
+              tool_use_id: callId,
+              content,
+              detailedContent: content,
+              is_error: false,
+            }),
+            { tool_call_id: callId, ...(metadata ?? {}) },
+          );
+        };
+
+        const makeDiff = (callId: string, payload: Record<string, unknown>) => {
+          appendMessage(
+            taskId,
+            conversationId,
+            "file_diff",
+            null,
+            JSON.stringify(payload),
+            { tool_call_id: callId },
+          );
+        };
+
+        switch (scenario) {
+          case "batched": {
+            const paths = ["alpha.ts", "beta.ts", "gamma.ts", "delta.ts"];
+            for (const path of paths) makeCall(`call_${path}`, "read_file", { path });
+            for (const path of paths) makeResult(`call_${path}`, `RESULT:${path}`);
+            break;
+          }
+
+          case "copilot-diff": {
+            makeCall("call_edit", "edit_file", { path: "partial-x.ts" });
+            makeResult("call_edit", "Updated partial-x.ts");
+            makeDiff("call_edit", {
+              operation: "edit_file",
+              path: "partial-x.ts",
+              rawDiff: [
+                "--- a/partial-x.ts",
+                "+++ b/partial-x.ts",
+                "@@ -1,2 +1,2 @@",
+                "-export function alpha() { return 1; }",
+                "+export function alpha() { return 'alpha'; }",
+              ].join("\n"),
+            });
+            break;
+          }
+
+          case "subagent": {
+            makeCall("call_spawn", "spawn_agent", { prompt: "Inspect files" });
+            makeCall("call_child_1", "read_file", { path: "alpha.ts" }, { parent_tool_call_id: "call_spawn" });
+            makeCall("call_child_2", "list_dir", { path: "src" }, { parent_tool_call_id: "call_spawn" });
+            makeCall("call_child_3", "edit_file", { path: "beta.ts" }, { parent_tool_call_id: "call_spawn" });
+
+            makeResult("call_spawn", "Subagent completed");
+            makeResult("call_child_1", "alpha contents", { parent_tool_call_id: "call_spawn" });
+            makeResult("call_child_2", "src\nsrc/main.ts", { parent_tool_call_id: "call_spawn" });
+            makeResult("call_child_3", "beta updated", { parent_tool_call_id: "call_spawn" });
+            break;
+          }
+
+          case "timeout": {
+            const msgId = appendMessage(
+              taskId,
+              conversationId,
+              "tool_call",
+              null,
+              JSON.stringify({
+                type: "function",
+                function: { name: "run_command", arguments: JSON.stringify({ command: "sleep 999" }) },
+                id: "call_timeout",
+              }),
+            );
+            db.run(
+              "UPDATE conversation_messages SET created_at = datetime('now', '-40 seconds') WHERE id = ?",
+              [msgId],
+            );
+            break;
+          }
+
+          default:
+            return new Response(JSON.stringify({ __error: `Unknown scenario: ${scenario}` }), {
+              status: 400,
+              headers: { "content-type": "application/json" },
+            });
+        }
+
+        return new Response(JSON.stringify({ ok: true, scenario }), {
+          headers: { "content-type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ __error: String(e) }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
     // Test-only: send a chat message directly via handleHumanTurn, bypassing the
     // RPC/IPC path that would deadlock when called from inside webEval.
     // Returns { messageId, executionId } immediately; streaming arrives via normal IPC.
@@ -560,7 +709,7 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
       }
     }
 
-    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=", { status: 200 });
+    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=", { status: 200 });
   },
 });
 if (process.env.RAILYN_DEBUG) console.log("[Debug] HTTP server listening on http://localhost:9229");

@@ -7,6 +7,7 @@
  *   GET  /click?selector=...          — dispatch mousedown + mouseup + click on a DOM element
  *   GET  /screenshot?path=...         — capture screen via screencapture (returns {path})
  *   GET  /reset-decisions?taskId=N    — delete all hunk decisions for task N from the DB (test setup helper)
+ *   GET  /seed-tool-messages?taskId=&scenario= — seed synthetic tool-call rows for drawer rendering tests
  *
  * All scripts must use explicit `return` statements (not bare expressions) and may
  * use `new Promise(...)` for async operations since evaluateJavascriptWithResponse
@@ -186,6 +187,18 @@ export async function setupTestEnv(): Promise<{ taskId: number; files: string[] 
   if (data.__error) throw new Error(`setupTestEnv failed: ${data.__error}`);
   if (!data.taskId || !data.files) throw new Error("setupTestEnv: unexpected response");
   return { taskId: data.taskId, files: data.files };
+}
+
+export async function seedToolMessages(
+  taskId: number,
+  scenario: "batched" | "copilot-diff" | "subagent" | "timeout",
+): Promise<void> {
+  const res = await fetch(
+    `${BRIDGE_BASE}/seed-tool-messages?taskId=${taskId}&scenario=${encodeURIComponent(scenario)}`,
+  );
+  const data = await res.json() as { ok?: boolean; __error?: string };
+  if (data.__error) throw new Error(`seedToolMessages failed: ${data.__error}`);
+  if (!data.ok) throw new Error("seedToolMessages: unexpected response");
 }
 
 // ─── Timing ───────────────────────────────────────────────────────────────────

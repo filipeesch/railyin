@@ -1862,16 +1862,18 @@ async function runExecution(
         const diffsToEmit = diffs ?? (diff ? [diff] : []);
         for (const d of diffsToEmit) {
           const diffContent = JSON.stringify(d);
+          const diffMeta = { tool_call_id: call.id };
           const diffId = appendMessage(
             taskId,
             task.conversation_id ?? 0,
             "file_diff",
             null,
             diffContent,
+            diffMeta,
           );
           onNewMessage({
             id: diffId, taskId, conversationId: task.conversation_id ?? 0,
-            type: "file_diff", role: null, content: diffContent, metadata: null,
+            type: "file_diff", role: null, content: diffContent, metadata: diffMeta,
             createdAt: new Date().toISOString(),
           });
         }

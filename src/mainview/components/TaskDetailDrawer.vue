@@ -427,7 +427,8 @@ import Select from "primevue/select";
 import ProgressSpinner from "primevue/progressspinner";
 import ToggleSwitch from "primevue/toggleswitch";
 import MessageBubble from "./MessageBubble.vue";
-import ToolCallGroup, { type ToolEntry } from "./ToolCallGroup.vue";
+import ToolCallGroup from "./ToolCallGroup.vue";
+import { pairToolMessages, type ToolEntry } from "../utils/pairToolMessages";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
@@ -519,23 +520,6 @@ type DisplayItem =
   | { kind: "code_review"; message: ConversationMessage; key: string }
   | { kind: "single";     message: ConversationMessage; msgIndex: number; key: string };
 
-function pairToolMessages(msgs: ConversationMessage[]): ToolEntry[] {
-  const entries: ToolEntry[] = [];
-  let i = 0;
-  while (i < msgs.length) {
-    if (msgs[i].type === "tool_call") {
-      const entry: ToolEntry = { call: msgs[i], result: null, diff: null };
-      i++;
-      if (i < msgs.length && msgs[i].type === "tool_result")  { entry.result = msgs[i]; i++; }
-      if (i < msgs.length && msgs[i].type === "file_diff")    { entry.diff   = msgs[i]; i++; }
-      entries.push(entry);
-    } else {
-      i++; // skip orphaned result/diff
-    }
-  }
-  return entries;
-}
-
 const displayItems = computed<DisplayItem[]>(() => {
   const msgs = taskStore.messages;
   const items: DisplayItem[] = [];
@@ -553,6 +537,8 @@ const displayItems = computed<DisplayItem[]>(() => {
       const entries = pairToolMessages(toolMsgs);
       if (entries.length > 0) {
         for (const entry of entries) {
+          const meta = entry.call.metadata as Record<string, unknown> | null;
+          if (typeof meta?.parent_tool_call_id === "string") continue;
           items.push({ kind: "tool_entry", entry, key: `e-${entry.call.id}` });
         }
       }

@@ -5,6 +5,10 @@
       <i :class="['pi', statusIcon, 'tcg__tool-icon']" :style="statusIconStyle" />
       <code class="tcg__tool-name">{{ toolName }}</code>
       <span v-if="primaryArg" class="tcg__primary-arg">{{ primaryArg }}</span>
+      <span v-if="hasChildren" class="tcg__badge">
+        <i class="pi pi-sitemap tcg__badge-icon" />
+        {{ entry.children.length }}
+      </span>
       <span v-if="effectiveDiffPayload && effectiveDiffPayload.added > 0" class="tcg__stat tcg__stat--added">+{{ effectiveDiffPayload.added }}</span>
       <span v-if="effectiveDiffPayload && effectiveDiffPayload.removed > 0" class="tcg__stat tcg__stat--removed">-{{ effectiveDiffPayload.removed }}</span>
     </button>
@@ -19,40 +23,32 @@
         </section>
       </div>
       <pre v-else-if="entry.result && hasOutput" class="tcg__output">{{ truncated }}</pre>
-      <div v-else-if="entry.result" class="tcg__empty">No output produced.</div>
+      <div v-else-if="entry.result && !hasChildren" class="tcg__empty">No output produced.</div>
+
+      <div v-if="hasChildren" class="tcg__children">
+        <ToolCallGroup
+          v-for="child in entry.children"
+          :key="child.call.id"
+          :entry="child"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import type { ConversationMessage, FileDiffPayload, Hunk } from "@shared/rpc-types";
+import { ref, computed, onBeforeUnmount, watch } from "vue";
+import type { FileDiffPayload, Hunk } from "@shared/rpc-types";
+import type { ToolEntry } from "../utils/pairToolMessages";
 import FileDiff from "./FileDiff.vue";
 import ReadView from "./ReadView.vue";
-
-export type ToolEntry = {
-  call:   ConversationMessage;
-  result: ConversationMessage | null;
-  diff:   ConversationMessage | null;
-};
 
 const props = defineProps<{ entry: ToolEntry }>();
 
 const open = ref(false);
-
-const TOOL_ICONS: Record<string, string> = {
-  read_file:       "pi-file",
-  list_dir:        "pi-folder-open",
-  write_file:      "pi-file-edit",
-  patch_file:      "pi-file-edit",
-  delete_file:     "pi-trash",
-  rename_file:     "pi-arrow-right-arrow-left",
-  search_text:     "pi-search",
-  run_command:     "pi-terminal",
-  fetch_url:       "pi-globe",
-  search_internet: "pi-globe",
-  spawn_agent:     "pi-microchip-ai",
-};
+const TOOL_TIMEOUT_MS = 30_000;
+const hasTimedOut = ref(false);
+let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
 const parsedCall = computed(() => {
   try {
@@ -65,7 +61,7 @@ const parsedCall = computed(() => {
     const rawArgs = p?.function?.arguments ?? p?.arguments;
     const args: Record<string, unknown> =
       typeof rawArgs === "string"
-        ? JSON.parse(rawArgs as string)
+        ? JSON.parse(rawArgs)
         : (rawArgs ?? {});
     return { name, args };
   } catch {
@@ -74,6 +70,7 @@ const parsedCall = computed(() => {
 });
 
 const toolName = computed(() => parsedCall.value.name);
+const hasChildren = computed(() => props.entry.children.length > 0);
 
 // Outcome icon: spinner while running, check on success, times on error
 const parsedResult = computed(() => {
@@ -99,12 +96,14 @@ type DisplayBlock = {
 };
 
 const statusIcon = computed(() => {
-  if (!props.entry.result) return "pi-spin pi-spinner";
+  if (!props.entry.result) return hasTimedOut.value ? "pi-question-circle" : "pi-spin pi-spinner";
   return parsedResult.value?.is_error ? "pi-times-circle" : "pi-check-circle";
 });
 
 const statusIconStyle = computed(() => {
-  if (!props.entry.result) return undefined;
+  if (!props.entry.result) {
+    return hasTimedOut.value ? { color: "#94a3b8" } : undefined;
+  }
   return { color: parsedResult.value?.is_error ? "#dc2626" : "#16a34a" };
 });
 
@@ -175,7 +174,13 @@ const hasOutput = computed(() => displayContent.value.length > 0);
 const diffPayload = computed<FileDiffPayload | null>(() => {
   if (!props.entry.diff) return null;
   try {
-    return JSON.parse(props.entry.diff.content) as FileDiffPayload;
+    const parsed = JSON.parse(props.entry.diff.content) as FileDiffPayload & {
+      rawDiff?: string;
+    };
+    if (typeof parsed.rawDiff === "string") {
+      return parseUnifiedDiff(parsed.rawDiff, parsed.path, parsed.operation);
+    }
+    return parsed;
   } catch {
     return { operation: "write_file", path: "unknown", added: 0, removed: 0 };
   }
@@ -287,6 +292,50 @@ function normalizeDiffPath(path: string, fallbackPath: string): string {
   const cleaned = path.replace(/^a\//, "").replace(/^b\//, "");
   return cleaned === "/dev/null" ? fallbackPath : cleaned;
 }
+
+function clearTimeoutHandle() {
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+    timeoutId = null;
+  }
+}
+
+function syncTimeoutState() {
+  clearTimeoutHandle();
+
+  if (props.entry.result) {
+    hasTimedOut.value = false;
+    return;
+  }
+
+  const createdAt = new Date(props.entry.call.createdAt).getTime();
+  if (!Number.isFinite(createdAt)) {
+    hasTimedOut.value = true;
+    return;
+  }
+
+  const remaining = TOOL_TIMEOUT_MS - (Date.now() - createdAt);
+  if (remaining <= 0) {
+    hasTimedOut.value = true;
+    return;
+  }
+
+  hasTimedOut.value = false;
+  timeoutId = setTimeout(() => {
+    hasTimedOut.value = true;
+    timeoutId = null;
+  }, remaining);
+}
+
+watch(
+  () => [props.entry.result?.id ?? null, props.entry.call.createdAt] as const,
+  syncTimeoutState,
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  clearTimeoutHandle();
+});
 </script>
 
 <style scoped>
@@ -441,6 +490,15 @@ function normalizeDiffPath(path: string, fallbackPath: string): string {
   color: var(--p-text-muted-color, #94a3b8);
   font-style: italic;
 }
+
+.tcg__children {
+  margin-top: 8px;
+  padding-left: 12px;
+  border-left: 2px solid var(--p-surface-200, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 </style>
 
 <style>
@@ -476,5 +534,8 @@ html.dark-mode .tcg__stat--removed {
 html.dark-mode .tcg__badge {
   background: color-mix(in srgb, var(--p-blue-500) 20%, transparent);
   color: var(--p-blue-300);
+}
+html.dark-mode .tcg__children {
+  border-left-color: var(--p-surface-700, #334155);
 }
 </style>

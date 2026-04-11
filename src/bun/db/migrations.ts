@@ -336,13 +336,37 @@ export function seedDefaultWorkspace(): void {
   // app boots into BoardView instead of the first-time setup wizard.
   // Tests then create their own task rows via /setup-test-env.
   if (process.env.RAILYN_DB === ":memory:") {
+    const workspaceId = getDefaultWorkspaceId();
+    const workspaceEntry = getWorkspaceRegistry()[0];
+
+    db.run(
+      "INSERT OR IGNORE INTO workspaces (id, name, config_key) VALUES (?, ?, ?)",
+      [workspaceId, workspaceEntry?.name ?? "My Workspace", workspaceEntry?.key ?? "default"],
+    );
+
+    let projectId = db
+      .query<{ id: number }, [number]>("SELECT id FROM projects WHERE workspace_id = ? LIMIT 1")
+      .get(workspaceId)?.id;
+
+    if (!projectId) {
+      const projectPath = workspaceEntry?.configDir ?? process.cwd();
+      db.run(
+        `INSERT INTO projects
+           (workspace_id, name, project_path, git_root_path, default_branch, slug, description)
+         VALUES (?, 'UI Test Project', ?, ?, 'main', 'ui-test-project', 'Seeded for in-memory UI tests')`,
+        [workspaceId, projectPath, projectPath],
+      );
+      projectId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()?.id;
+      console.log("[db] Seeded test project");
+    }
+
     const hasBoard = db.query<{ id: number }, []>("SELECT id FROM boards LIMIT 1").get();
     if (!hasBoard) {
-      const workspaceId = getDefaultWorkspaceId();
       const projectIds = listProjectsForWorkspace(workspaceId).map((project) => project.id);
+      const serializedProjectIds = JSON.stringify(projectIds.length > 0 ? projectIds : [projectId]);
       db.run(
         "INSERT INTO boards (workspace_id, name, workflow_template_id, project_ids) VALUES (?, 'Test Board', 'delivery', ?)",
-        [workspaceId, JSON.stringify(projectIds)],
+        [workspaceId, serializedProjectIds],
       );
       console.log("[db] Seeded test board");
     }

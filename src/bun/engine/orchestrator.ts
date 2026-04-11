@@ -627,6 +627,8 @@ export class Orchestrator implements ExecutionCoordinator {
     let tokenAccum = "";
     let reasoningAccum = "";
     let hadOutput = false; // true once any visible output (tokens, tools, prompts) is produced
+    // Track tool_start arguments by callId so tool_result can access them for file_diff
+    const toolArgsByCallId = new Map<string, string>();
 
     try {
       // Task 5.3: Use the AbortController registered by _buildExecutionParams.
@@ -699,6 +701,8 @@ export class Orchestrator implements ExecutionCoordinator {
             const toolMeta = {
               parent_tool_call_id: event.parentCallId ?? null,
             };
+            // Track arguments for later file_diff emission in tool_result
+            toolArgsByCallId.set(callId, event.arguments ?? "{}");
             const msgId = appendMessage(
               taskId,
               conversationId,
@@ -733,6 +737,7 @@ export class Orchestrator implements ExecutionCoordinator {
               is_error: event.isError,
             });
             const resultMeta = {
+              tool_call_id: event.callId ?? null,
               parent_tool_call_id: event.parentCallId ?? null,
             };
             const msgId = appendMessage(
@@ -753,6 +758,17 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: resultMeta,
               createdAt: new Date().toISOString(),
             });
+
+            // Emit UI-only file_diff for write tools (never forwarded to LLM)
+            if (!event.isError && event.callId) {
+              await this._emitFileDiffIfWrite(
+                taskId,
+                conversationId,
+                event.callId,
+                event.name,
+                toolArgsByCallId.get(event.callId) ?? "{}",
+              );
+            }
             break;
           }
 
@@ -931,6 +947,71 @@ export class Orchestrator implements ExecutionCoordinator {
       if (finalRow) {
         this.onTaskUpdated(mapTask(finalRow));
       }
+    }
+  }
+
+  /**
+   * After a write-tool result from the Copilot engine, run `git diff HEAD -- <path>`
+   * and emit a UI-only `file_diff` message linked to the originating tool_call by ID.
+   * This mirrors the file_diff emission in engine.ts for the direct Anthropic/OpenAI path.
+   */
+  private async _emitFileDiffIfWrite(
+    taskId: number,
+    conversationId: number,
+    callId: string,
+    toolName: string,
+    argsJson: string,
+  ): Promise<void> {
+    const WRITE_TOOLS = new Set(["write_file", "edit_file", "patch_file", "multi_replace"]);
+    if (!WRITE_TOOLS.has(toolName)) return;
+
+    let filePath: string | undefined;
+    try {
+      const args = JSON.parse(argsJson) as Record<string, unknown>;
+      filePath = typeof args.path === "string" ? args.path : undefined;
+    } catch {
+      return;
+    }
+    if (!filePath) return;
+
+    const db = getDb();
+    const gitRow = db
+      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
+        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+      )
+      .get(taskId);
+    const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
+    if (!worktreePath) return;
+
+    try {
+      const proc = Bun.spawn(["git", "diff", "HEAD", "--", filePath], {
+        cwd: worktreePath,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await proc.exited;
+      const diffOut = await new Response(proc.stdout).text();
+      if (!diffOut.trim()) return;
+
+      const diffMeta = { tool_call_id: callId };
+      const diffContent = JSON.stringify({
+        operation: toolName as "write_file" | "edit_file" | "patch_file",
+        path: filePath,
+        rawDiff: diffOut,
+      });
+      const diffId = appendMessage(taskId, conversationId, "file_diff", null, diffContent, diffMeta);
+      this.onNewMessage({
+        id: diffId,
+        taskId,
+        conversationId,
+        type: "file_diff",
+        role: null,
+        content: diffContent,
+        metadata: diffMeta,
+        createdAt: new Date().toISOString(),
+      });
+    } catch {
+      // git diff failure is non-fatal — silently ignore
     }
   }
 }
