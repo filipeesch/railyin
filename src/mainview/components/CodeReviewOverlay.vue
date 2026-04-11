@@ -56,8 +56,12 @@
         <ReviewFileList
           :files="fileListItems"
           :selected-path="reviewStore.selectedFile"
+          :style="{ width: fileListWidth + 'px' }"
           @select="onSelectFile"
         />
+
+        <!-- Resizable splitter -->
+        <div class="review-overlay__splitter" @mousedown.prevent="startSplitterDrag" />
 
         <!-- Diff panel — Monaco fills this entirely, ViewZones provide inline action bars -->
         <div class="review-overlay__diff-panel">
@@ -78,10 +82,11 @@
             :modified="diffContent.modified"
             :language="guessLanguage(reviewStore.selectedFile)"
             :side-by-side="sideBySide"
-            :review-mode="reviewStore.mode === 'review'"
+            :enable-comments="true"
             :on-request-line-comment="onRequestLineComment"
             :theme="isDark ? 'vs-dark' : 'vs'"
             @hunks-ready="onHunksReady"
+            @content-change="onContentChange"
           />
         </div>
       </div>
@@ -94,6 +99,7 @@
         <Button
           size="small"
           label="Submit Review"
+          class="submit-review-btn"
           :disabled="!canSubmit || submitting"
           :loading="submitting"
           @click="onSubmit"
@@ -105,6 +111,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, createApp } from "vue";
+import { createPatch } from "diff";
 import type { App } from "vue";
 import Button from "primevue/button";
 import Select from "primevue/select";
@@ -116,7 +123,13 @@ import ReviewFileList from "./ReviewFileList.vue";
 import MonacoDiffEditor from "./MonacoDiffEditor.vue";
 import HunkActionBar from "./HunkActionBar.vue";
 import LineCommentBar from "./LineCommentBar.vue";
-import type { FileDiffContent, HunkWithDecisions, HunkDecision, LineComment } from "@shared/rpc-types";
+import type {
+  FileDiffContent,
+  HunkWithDecisions,
+  HunkDecision,
+  LineComment,
+  ManualEdit,
+} from "@shared/rpc-types";
 import type { ILineChange } from "./MonacoDiffEditor.vue";
 
 const reviewStore = useReviewStore();
@@ -135,6 +148,91 @@ const currentPendingIdx = ref(0);
 const pendingNavTarget = ref<"first" | "last" | null>(null);
 const lastLineChanges = ref<ILineChange[]>([]);
 const diffEditorRef = ref<InstanceType<typeof MonacoDiffEditor> | null>(null);
+
+// ——— Resizable file list panel ——————————————————————————————————————————
+
+const STORAGE_KEY_FILE_LIST_WIDTH = "railyn:review-file-list-width";
+const fileListWidth = ref<number>(
+  Number(localStorage.getItem(STORAGE_KEY_FILE_LIST_WIDTH)) || 220,
+);
+function startSplitterDrag(e: MouseEvent) {
+  const startX = e.clientX;
+  const startWidth = fileListWidth.value;
+
+  function onMouseMove(ev: MouseEvent) {
+    const delta = ev.clientX - startX;
+    fileListWidth.value = Math.min(500, Math.max(150, startWidth + delta));
+  }
+
+  function onMouseUp() {
+    localStorage.setItem(STORAGE_KEY_FILE_LIST_WIDTH, String(fileListWidth.value));
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+  }
+
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
+}
+
+// ——— Edit tracking (live-save to disk) ——————————————————————————————————
+
+const editedContent = ref(new Map<string, string>());
+const editedFiles = ref(new Set<string>());
+const editBaseContent = ref(new Map<string, string>());
+let writeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingWriteFile: string | null = null;
+let pendingWriteContent: string | null = null;
+
+function onContentChange(value: string) {
+  const filePath = reviewStore.selectedFile;
+  if (!filePath || !reviewStore.taskId) return;
+  editedContent.value.set(filePath, value);
+  editedFiles.value.add(filePath);
+  pendingWriteFile = filePath;
+  pendingWriteContent = value;
+  if (writeDebounceTimer) clearTimeout(writeDebounceTimer);
+  writeDebounceTimer = setTimeout(() => flushWrite(filePath, value), 500);
+}
+
+async function flushWrite(filePath: string, content: string) {
+  if (!reviewStore.taskId) return;
+  try {
+    await electroview.rpc!.request["tasks.writeFile"]({
+      taskId: reviewStore.taskId,
+      filePath,
+      content,
+    });
+  } catch { /* non-fatal — disk write failed */ }
+  if (pendingWriteFile === filePath) {
+    pendingWriteFile = null;
+    pendingWriteContent = null;
+  }
+}
+
+async function flushPendingWrite() {
+  if (pendingWriteFile && pendingWriteContent !== null) {
+    if (writeDebounceTimer) { clearTimeout(writeDebounceTimer); writeDebounceTimer = null; }
+    await flushWrite(pendingWriteFile, pendingWriteContent);
+  }
+}
+
+function buildManualEdits(): ManualEdit[] {
+  const items: ManualEdit[] = [];
+  for (const filePath of editedFiles.value) {
+    const modified = editedContent.value.get(filePath);
+    const base = editBaseContent.value.get(filePath);
+    if (modified == null || base == null || modified === base) continue;
+    items.push({
+      filePath,
+      unifiedDiff: createPatch(filePath, base, modified, "before-review-edit", "manual-edit"),
+    });
+  }
+  return items;
+}
+
+// ——— Checkpoint ref ————————————————————————————————————————————————————
+
+const checkpointRef = ref<string | null>(null);
 
 // ——— ViewZone tracking ——————————————————————————————————————————————————
 
@@ -163,7 +261,8 @@ const commentZones = new Map<number, ZoneRecord & { commentId: number; lineStart
 let nextTempCommentId = -1; // decremented for each open comment zone before persisting
 
 // Decoration IDs for decided hunk overlays; replaced on each applyDecisionDecorations call.
-let decisionDecorations: string[] = [];
+let modifiedDecisionDecorations: string[] = [];
+let originalDecisionDecorations: string[] = [];
 
 // ——— Static config ———————————————————————————————————————————————————————
 
@@ -333,18 +432,46 @@ function applyDecisionDecorations() {
   const editor = diffEditorRef.value?.getEditor();
   if (!editor) return;
   const modEditor = editor.getModifiedEditor();
-  const newDecorations = allHunks.value
-    .filter((h) => effectiveDecision(h) !== "pending")
+  const origEditor = sideBySide.value ? editor.getOriginalEditor() : null;
+  const modifiedDecorations = allHunks.value
+    .filter((h) => effectiveDecision(h) !== "pending" && h.modifiedStart > 0)
     .map((h) => {
-      const cls = effectiveDecision(h) === "accepted" ? "accepted-hunk-decoration" : "rejected-hunk-decoration";
+      const accepted = effectiveDecision(h) === "accepted";
       const startLine = Math.max(h.modifiedStart, 1);
       const endLine = Math.max(h.modifiedEnd, h.modifiedStart, 1);
       return {
         range: { startLineNumber: startLine, startColumn: 1, endLineNumber: endLine, endColumn: Number.MAX_SAFE_INTEGER },
-        options: { isWholeLine: true, className: cls },
+        options: {
+          isWholeLine: true,
+          className: accepted ? "accepted-hunk-decoration" : "rejected-hunk-decoration",
+          inlineClassName: accepted ? "accepted-hunk-inline-decoration" : "rejected-hunk-inline-decoration",
+          zIndex: accepted ? 20 : 10,
+        },
       };
     });
-  decisionDecorations = modEditor.deltaDecorations(decisionDecorations, newDecorations);
+  modifiedDecisionDecorations = modEditor.deltaDecorations(modifiedDecisionDecorations, modifiedDecorations);
+
+  if (origEditor) {
+    const originalDecorations = allHunks.value
+      .filter((h) => effectiveDecision(h) !== "pending" && h.originalStart > 0)
+      .map((h) => {
+        const accepted = effectiveDecision(h) === "accepted";
+        const startLine = Math.max(h.originalStart, 1);
+        const endLine = Math.max(h.originalEnd, h.originalStart, 1);
+        return {
+          range: { startLineNumber: startLine, startColumn: 1, endLineNumber: endLine, endColumn: Number.MAX_SAFE_INTEGER },
+          options: {
+            isWholeLine: true,
+            className: accepted ? "accepted-hunk-decoration" : "rejected-hunk-decoration",
+            inlineClassName: accepted ? "accepted-hunk-inline-decoration" : "rejected-hunk-inline-decoration",
+            zIndex: accepted ? 20 : 10,
+          },
+        };
+      });
+    originalDecisionDecorations = origEditor.deltaDecorations(originalDecisionDecorations, originalDecorations);
+  } else if (originalDecisionDecorations.length > 0) {
+    originalDecisionDecorations = [];
+  }
 }
 
 function injectViewZones(lineChanges: ILineChange[]) {
@@ -556,6 +683,13 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
       // Remove the action bar zone for this hunk; apply accepted decoration.
       removeZoneForHash(hash);
       applyDecisionDecorations();
+      const remainingPendingInFile = diffContent.value.hunks.filter((candidate) => effectiveDecision(candidate) === "pending").length;
+      if (remainingPendingInFile > 0) {
+        currentPendingIdx.value = Math.min(currentPendingIdx.value, remainingPendingInFile - 1);
+        nextTick(() => scrollToPendingHunk());
+      } else {
+        navigateNext();
+      }
     } else if (decision === "change_request") {
       // Diff stays visible — clear and re-inject zones so visibility filter applies.
       clearAllZones();
@@ -737,7 +871,7 @@ function navigateNext() {
   if (idx < 0 || idx >= reviewStore.files.length - 1) return;
   pendingNavTarget.value = "first";
   currentPendingIdx.value = 0;
-  reviewStore.selectedFile = reviewStore.files[idx + 1];
+  reviewStore.selectFile(reviewStore.files[idx + 1]);
 }
 
 function navigatePrev() {
@@ -750,7 +884,7 @@ function navigatePrev() {
   const idx = reviewStore.files.indexOf(reviewStore.selectedFile ?? "");
   if (idx <= 0) return;
   pendingNavTarget.value = "last";
-  reviewStore.selectedFile = reviewStore.files[idx - 1];
+  reviewStore.selectFile(reviewStore.files[idx - 1]);
 }
 
 function scrollToPendingHunk() {
@@ -808,12 +942,13 @@ async function toggleViewMode() {
 // ——— File loading ————————————————————————————————————————————————————————
 
 async function onSelectFile(path: string) {
-  reviewStore.selectedFile = path;
+  reviewStore.selectFile(path);
   await loadDiff(path);
 }
 
 async function loadDiff(path: string | null) {
   if (!path || !reviewStore.taskId) return;
+  await flushPendingWrite();
   clearAllZones();
   currentPendingIdx.value = 0;
   diffLoading.value = true;
@@ -822,10 +957,28 @@ async function loadDiff(path: string | null) {
     diffContent.value = await electroview.rpc!.request["tasks.getFileDiff"]({
       taskId: reviewStore.taskId,
       filePath: path,
+      ...(checkpointRef.value ? { checkpointRef: checkpointRef.value } : {}),
     });
+    if (!editBaseContent.value.has(path) || !editedFiles.value.has(path)) {
+      editBaseContent.value.set(path, diffContent.value.modified);
+    }
     // Monaco prop watcher fires → applyModels → onDidUpdateDiff → onHunksReady
     // Load line comments for this file (injected as posted ViewZones)
     await loadLineComments(path);
+    // WKWebView occasionally misses Monaco's initial onDidUpdateDiff event on fresh app boot.
+    // Fall back to git-hunk-based bar injection so review mode remains usable.
+    setTimeout(() => {
+      if (
+        reviewStore.isOpen &&
+        reviewStore.mode === "review" &&
+        diffContent.value?.hunks.length &&
+        hunkZones.size === 0
+      ) {
+        clearAllZones();
+        injectViewZones([]);
+        applyDecisionDecorations();
+      }
+    }, 180);
   } catch {
     diffError.value = "Could not load diff for this file.";
   } finally {
@@ -839,9 +992,11 @@ async function onSubmit() {
   if (!reviewStore.taskId || !canSubmit.value) return;
   submitting.value = true;
   try {
+    await flushPendingWrite();
+    const manualEdits = buildManualEdits();
     await electroview.rpc!.request["tasks.sendMessage"]({
       taskId: reviewStore.taskId,
-      content: JSON.stringify({ _type: "code_review" }),
+      content: JSON.stringify({ _type: "code_review", manualEdits }),
     });
     reviewStore.closeReview();
   } finally {
@@ -871,13 +1026,26 @@ async function onRefresh() {
 watch(
   () => reviewStore.isOpen,
   async (open) => {
-    if (open && reviewStore.selectedFile) {
-      await loadDiff(reviewStore.selectedFile);
+    if (open && reviewStore.taskId) {
+      // Fetch the latest checkpoint ref so diffs are scoped to pending hunks.
+      try {
+        checkpointRef.value = await electroview.rpc!.request["tasks.getCheckpointRef"]({
+          taskId: reviewStore.taskId,
+        });
+      } catch {
+        checkpointRef.value = null;
+      }
+      if (reviewStore.selectedFile) await loadDiff(reviewStore.selectedFile);
     }
     if (!open) {
+      await flushPendingWrite();
       clearAllZones();
       diffContent.value = null;
       diffError.value = null;
+      editedContent.value.clear();
+      editedFiles.value.clear();
+      editBaseContent.value.clear();
+      checkpointRef.value = null;
     }
   },
 );
@@ -885,7 +1053,10 @@ watch(
 watch(
   () => reviewStore.selectedFile,
   async (path) => {
-    if (path && reviewStore.isOpen) await loadDiff(path);
+    if (path && reviewStore.isOpen) {
+      await flushPendingWrite();
+      await loadDiff(path);
+    }
   },
 );
 
@@ -992,6 +1163,19 @@ function guessLanguage(path: string | null): string {
   display: flex;
   flex: 1;
   overflow: hidden;
+}
+
+.review-overlay__splitter {
+  width: 4px;
+  flex-shrink: 0;
+  background: var(--p-content-border-color, #e2e8f0);
+  cursor: col-resize;
+  transition: background 0.15s;
+}
+
+.review-overlay__splitter:hover,
+.review-overlay__splitter:active {
+  background: var(--p-primary-color, #6366f1);
 }
 
 .review-overlay__diff-panel {

@@ -24,13 +24,7 @@
           rounded
           class="ml-2"
         />
-        <!-- Changed files badge -->
-        <span
-          v-if="changedCount > 0"
-          class="drawer-header__changed-badge"
-          :title="`${changedCount} file${changedCount !== 1 ? 's' : ''} changed — click to review`"
-          @click="openReviewOverlay"
-        >&#x2B21; {{ changedCount }}</span>
+        <!-- Changed files badge removed — see ChangedFilesPanel below chat -->
         <Button
           icon="pi pi-refresh"
           text
@@ -183,12 +177,6 @@
             <div class="side-value side-value--mono side-value--break">{{ task.worktreePath }}</div>
           </div>
 
-          <!-- Git diff stat -->
-          <div class="side-section" v-if="gitStat">
-            <div class="side-label">Changes</div>
-            <pre class="side-git-stat">{{ gitStat }}</pre>
-          </div>
-
           <!-- Session notes -->
           <div class="side-section" v-if="sessionMemoryContent">
             <div class="side-label">Session Notes</div>
@@ -226,6 +214,15 @@
           </div>
         </div>
       </div>
+
+      <!-- Changed files panel — visible when task has git changes -->
+      <ChangedFilesPanel
+        v-if="task && numstat"
+        :task-id="task.id"
+        :numstat="numstat"
+        :pending-by-file="pendingByFile"
+        @open-review="onOpenReview"
+      />
 
       <!-- Chat input (9.4) -->
       <TodoPanel
@@ -433,6 +430,7 @@ import ReasoningBubble from "./ReasoningBubble.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
 import TodoPanel from "./TodoPanel.vue";
+import ChangedFilesPanel from "./ChangedFilesPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
@@ -440,7 +438,7 @@ import { useToast } from "primevue/usetoast";
 import { useReviewStore } from "../stores/review";
 import { useLaunchStore } from "../stores/launch";
 import { electroview } from "../rpc";
-import type { ConversationMessage, ExecutionState, LaunchConfig } from "@shared/rpc-types";
+import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
@@ -493,10 +491,22 @@ const selectedModelOption = computed(() => {
 const changedCount = computed(() => task.value ? (taskStore.changedFileCounts[task.value.id] ?? 0) : 0);
 const syncingChanges = ref(false);
 
-async function openReviewOverlay() {
+async function openReviewOverlay(filePath?: string | null, mode: "review" | "changes" = "review") {
   if (!task.value) return;
   const files = await electroview.rpc!.request["tasks.getChangedFiles"]({ taskId: task.value.id });
   reviewStore.openReview(task.value.id, files);
+  reviewStore.mode = mode;
+  if (filePath) reviewStore.selectFile(filePath);
+}
+
+async function onOpenReview(filePath: string | null, mode: "review" | "changes") {
+  await openReviewOverlay(filePath, mode);
+  // Refresh pending summary after reviewing
+  if (task.value) {
+    try {
+      pendingByFile.value = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({ taskId: task.value.id });
+    } catch { /* non-fatal */ }
+  }
 }
 
 async function syncChangedFiles() {
@@ -504,6 +514,8 @@ async function syncChangedFiles() {
   syncingChanges.value = true;
   try {
     await taskStore.refreshChangedFiles(task.value.id);
+    numstat.value = await taskStore.getGitStat(task.value.id);
+    pendingByFile.value = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({ taskId: task.value.id });
   } finally {
     syncingChanges.value = false;
   }
@@ -631,8 +643,11 @@ const compacting = ref(false);
 // Incremented whenever the model completes a turn, to trigger a todo refresh.
 const todoRefreshTrigger = ref(0);
 
-// Git diff stat (fetched on drawer open when worktree is ready)
-const gitStat = ref<string | null>(null);
+// Git numstat (fetched on drawer open when worktree is ready)
+const numstat = ref<GitNumstat | null>(null);
+
+// Pending hunks per file (awaiting human review)
+const pendingByFile = ref<{ filePath: string; pendingCount: number }[]>([]);
 
 // Session memory notes (fetched on drawer open)
 const sessionMemoryContent = ref<string | null>(null);
@@ -843,15 +858,19 @@ async function deleteTask() {
 watch(
   () => taskStore.activeTaskId,
   async (id) => {
-    gitStat.value = null;
+    numstat.value = null;
+    pendingByFile.value = [];
     sessionMemoryContent.value = null;
     launchConfig.value = null;
     if (!id) return;
     taskStore.loadEnabledModels(taskWorkspaceId.value);
     const t = taskStore.activeTask;
     if (t?.worktreeStatus === "ready") {
-      gitStat.value = await taskStore.getGitStat(id);
+      numstat.value = await taskStore.getGitStat(id);
       taskStore.refreshChangedFiles(id);
+      try {
+        pendingByFile.value = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({ taskId: id });
+      } catch { /* non-fatal */ }
     }
     try {
       const { content } = await electroview.rpc!.request["tasks.sessionMemory"]({ taskId: id });
@@ -868,9 +887,16 @@ watch(
 // Refresh todos when the model finishes a turn (executionState leaves 'running').
 watch(
   () => task.value?.executionState,
-  (state, prev) => {
+  async (state, prev) => {
     if (prev === "running" && state !== "running") {
       todoRefreshTrigger.value++;
+      // Refresh changed files + pending hunks after model turn completes
+      if (task.value) {
+        numstat.value = await taskStore.getGitStat(task.value.id);
+        try {
+          pendingByFile.value = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({ taskId: task.value.id });
+        } catch { /* non-fatal */ }
+      }
     }
   },
 );
@@ -892,24 +918,6 @@ watch(
 .drawer-resize-handle:active {
   background: var(--p-primary-color, #6366f1);
   opacity: 0.35;
-}
-
-.drawer-header__changed-badge {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--p-primary-color, #6366f1);
-  background: var(--p-highlight-background, #eef2ff);
-  border: 1px solid var(--p-content-border-color, #c7d2fe);
-  border-radius: 10px;
-  padding: 1px 7px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.12s;
-  margin-left: 6px;
-}
-
-.drawer-header__changed-badge:hover {
-  background: var(--p-highlight-focus-background, #e0e7ff);
 }
 
 .drawer-header {
@@ -1191,17 +1199,6 @@ watch(
 
 .side-value--break {
   word-break: break-all;
-}
-
-.side-git-stat {
-  font-family: ui-monospace, monospace;
-  font-size: 0.72rem;
-  white-space: pre-wrap;
-  margin: 0;
-  color: var(--p-text-color, #1e293b);
-  background: var(--p-content-hover-background);
-  border-radius: 4px;
-  padding: 6px 8px;
 }
 
 .edit-form {

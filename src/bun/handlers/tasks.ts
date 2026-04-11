@@ -217,10 +217,13 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       // Check if content is a code review trigger
       try {
-        const parsed = JSON.parse(params.content) as { _type?: string };
+        const parsed = JSON.parse(params.content) as {
+          _type?: string;
+          manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[];
+        };
         if (parsed._type === "code_review") {
           if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-          return orchestrator.executeCodeReview(params.taskId);
+          return orchestrator.executeCodeReview(params.taskId, parsed.manualEdits);
         }
       } catch { /* not JSON — treat as plain text */ }
 
@@ -482,7 +485,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     // ─── tasks.getGitStat ────────────────────────────────────────────────────
-    "tasks.getGitStat": async (params: { taskId: number }): Promise<string | null> => {
+    "tasks.getGitStat": async (params: { taskId: number }): Promise<import("../../shared/rpc-types.ts").GitNumstat | null> => {
       const db = getDb();
       const gitRow = db
         .query<{ worktree_path: string | null; worktree_status: string | null }, [number]>(
@@ -491,14 +494,28 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         .get(params.taskId);
       if (!gitRow?.worktree_path || gitRow.worktree_status !== "ready") return null;
       try {
-        const proc = Bun.spawn(["git", "diff", "--stat", "HEAD"], {
+        const proc = Bun.spawn(["git", "diff", "--numstat", "HEAD"], {
           cwd: gitRow.worktree_path,
           stdout: "pipe",
           stderr: "pipe",
         });
         await proc.exited;
-        const out = await new Response(proc.stdout).text();
-        return out.trim() || null;
+        const out = (await new Response(proc.stdout).text()).trim();
+        if (!out) return null;
+        const files: import("../../shared/rpc-types.ts").GitFileNumstat[] = [];
+        let totalAdditions = 0;
+        let totalDeletions = 0;
+        for (const line of out.split("\n")) {
+          const parts = line.split("\t");
+          if (parts.length < 3) continue;
+          const additions = parseInt(parts[0], 10) || 0;
+          const deletions = parseInt(parts[1], 10) || 0;
+          const path = parts[2];
+          files.push({ path, additions, deletions });
+          totalAdditions += additions;
+          totalDeletions += deletions;
+        }
+        return files.length > 0 ? { files, totalAdditions, totalDeletions } : null;
       } catch {
         return null;
       }
@@ -531,7 +548,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     // ─── tasks.getFileDiff ───────────────────────────────────────────────────
-    "tasks.getFileDiff": async (params: { taskId: number; filePath: string }): Promise<FileDiffContent> => {
+    "tasks.getFileDiff": async (params: { taskId: number; filePath: string; checkpointRef?: string }): Promise<FileDiffContent> => {
       const db = getDb();
       const gitRow = db
         .query<{ worktree_path: string | null }, [number]>(
@@ -539,7 +556,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         )
         .get(params.taskId);
       if (!gitRow?.worktree_path) return { original: "", modified: "", hunks: [] };
-      return readFileDiffContent(db, params.taskId, gitRow.worktree_path, params.filePath);
+      return readFileDiffContent(db, params.taskId, gitRow.worktree_path, params.filePath, params.checkpointRef);
     },
 
     // ─── tasks.rejectHunk ────────────────────────────────────────────────────
@@ -713,6 +730,59 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       db.run(`DELETE FROM task_line_comments WHERE id = ? AND task_id = ?`, [params.commentId, params.taskId]);
     },
 
+    // ─── tasks.writeFile ────────────────────────────────────────────────────
+    "tasks.writeFile": async (params: { taskId: number; filePath: string; content: string }): Promise<void> => {
+      const db = getDb();
+      const gitRow = db
+        .query<{ worktree_path: string | null }, [number]>(
+          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+        )
+        .get(params.taskId);
+      if (!gitRow?.worktree_path) throw new Error("Worktree not found for task");
+      const { resolve, normalize } = await import("node:path");
+      const resolvedPath = resolve(gitRow.worktree_path, params.filePath);
+      // Path traversal guard
+      if (!resolvedPath.startsWith(normalize(gitRow.worktree_path) + "/") && resolvedPath !== normalize(gitRow.worktree_path)) {
+        throw new Error("Invalid file path: path traversal detected");
+      }
+      await Bun.write(resolvedPath, params.content);
+    },
+
+    // ─── tasks.getPendingHunkSummary ─────────────────────────────────────────
+    "tasks.getPendingHunkSummary": async (params: { taskId: number }): Promise<{ filePath: string; pendingCount: number }[]> => {
+      const db = getDb();
+      const rows = db
+        .query<{ file_path: string; pendingCount: number }, [number]>(
+          `SELECT file_path, COUNT(*) as pendingCount
+           FROM task_hunk_decisions
+           WHERE task_id = ? AND sent = 0 AND decision = 'pending'
+           GROUP BY file_path`,
+        )
+        .all(params.taskId);
+      return rows.map((r) => ({ filePath: r.file_path, pendingCount: r.pendingCount }));
+    },
+
+    // ─── tasks.getCheckpointRef ──────────────────────────────────────────────
+    "tasks.getCheckpointRef": async (params: { taskId: number }): Promise<string | null> => {
+      const db = getDb();
+      // Find the most recent execution for this task that has unsent pending hunk decisions
+      const row = db
+        .query<{ stash_ref: string | null }, [number]>(
+          `SELECT tec.stash_ref
+           FROM task_execution_checkpoints tec
+           JOIN executions e ON tec.execution_id = e.id
+           WHERE e.task_id = ?
+             AND EXISTS (
+               SELECT 1 FROM task_hunk_decisions thd
+               WHERE thd.task_id = ? AND thd.sent = 0
+             )
+           ORDER BY tec.created_at DESC
+           LIMIT 1`,
+        )
+        .get(params.taskId, params.taskId);
+      return row?.stash_ref ?? null;
+    },
+
     // ─── tasks.sessionMemory ─────────────────────────────────────────────────
     "tasks.sessionMemory": async (params: { taskId: number }): Promise<{ content: string | null }> => {
       return { content: readSessionMemory(params.taskId) };
@@ -750,10 +820,14 @@ async function readFileDiffContent(
   taskId: number,
   worktreePath: string,
   filePath: string,
+  checkpointRef?: string,
 ): Promise<FileDiffContent> {
+  // Determine the base ref: use checkpoint if provided, otherwise HEAD
+  const baseRef = checkpointRef || "HEAD";
+
   let original = "";
   try {
-    const headProc = Bun.spawn(["git", "show", `HEAD:${filePath}`], {
+    const headProc = Bun.spawn(["git", "show", `${baseRef}:${filePath}`], {
       cwd: worktreePath,
       stdout: "pipe",
       stderr: "pipe",
@@ -775,7 +849,10 @@ async function readFileDiffContent(
   // Parse git diff to get hunk metadata + hashes
   let hunks: HunkWithDecisions[] = [];
   try {
-    const diffProc = Bun.spawn(["git", "diff", "HEAD", "--", filePath], {
+    const diffArgs = checkpointRef
+      ? ["git", "diff", checkpointRef, "HEAD", "--", filePath]
+      : ["git", "diff", "HEAD", "--", filePath];
+    const diffProc = Bun.spawn(diffArgs, {
       cwd: worktreePath,
       stdout: "pipe",
       stderr: "pipe",

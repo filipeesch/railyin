@@ -40,7 +40,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from "vue";
+import { ref, computed, nextTick } from "vue";
 
 const props = defineProps<{
   lineStart: number;
@@ -80,18 +80,6 @@ function onTextareaInput() {
     emit("heightChange");
   });
 }
-
-onMounted(() => {
-  if (props.state === "open") {
-    // The ViewZone DOM node is placed into Monaco's layout asynchronously after mount.
-    // Wait two animation frames so Monaco has committed zone layout before focusing.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        textareaEl.value?.focus();
-      });
-    });
-  }
-});
 </script>
 
 <style scoped>
@@ -195,5 +183,45 @@ onMounted(() => {
 
 .lcb-btn--delete:hover {
   background: var(--p-red-50, #fef2f2);
+}
+</style>
+
+<style>
+html.dark-mode .line-comment-bar {
+  background: #1e293b;
+  border-left-color: var(--p-blue-400, #60a5fa);
+}
+
+html.dark-mode .line-comment-bar__textarea {
+  background: #0f172a;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+html.dark-mode .line-comment-bar__textarea:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+
+html.dark-mode .lcb-btn {
+  background: #1e293b;
+  color: #cbd5e1;
+  border-color: #475569;
+}
+
+html.dark-mode .lcb-btn--post {
+  background: var(--p-blue-500, #3b82f6);
+  color: #fff;
+  border-color: var(--p-blue-500, #3b82f6);
+}
+
+html.dark-mode .lcb-btn--delete {
+  color: #f87171;
+  border-color: #7f1d1d;
+}
+
+html.dark-mode .line-comment-bar__range-label,
+html.dark-mode .line-comment-bar__comment-text {
+  color: #94a3b8;
 }
 </style>

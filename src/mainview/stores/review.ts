@@ -40,6 +40,10 @@ export const useReviewStore = defineStore("review", () => {
     optimisticUpdates.value.clear();
   }
 
+  function selectFile(filePath: string) {
+    selectedFile.value = filePath;
+  }
+
   return {
     isOpen,
     mode,
@@ -51,5 +55,6 @@ export const useReviewStore = defineStore("review", () => {
     openReview,
     closeReview,
     resetSession,
+    selectFile,
   };
 });

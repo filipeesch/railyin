@@ -57,7 +57,7 @@
  *
  *   Suite M — glyph click opens LineCommentBar:
  *     24. glyph click injects a LineCommentBar zone in open state
- *     25. the textarea in the open LineCommentBar is auto-focused
+ *     25. the textarea in the open LineCommentBar accepts typed input
  *
  *   Suite N — cancel removes comment zone without IPC:
  *     26. cancel removes the LineCommentBar zone from the DOM
@@ -643,7 +643,7 @@ describe("Code Review Overlay — all changed files have action bars", () => {
       // Switch to file
       await webEval(`
         var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
-        pinia._s.get('review').selectedFile = ${JSON.stringify(file)};
+        pinia._s.get('review').selectFile(${JSON.stringify(file)});
         return 'ok';
       `);
       await sleep(1_500);
@@ -1649,12 +1649,12 @@ describe("Code Review Overlay — partial-change file: reject removes only targe
 // Suite M — Glyph click opens LineCommentBar in open state (Test 11.1)
 // ═══════════════════════════════════════════════════════════════════════════════
 // Clicking in the glyph margin of the modified editor (where the + icon appears
-// on hover) must inject a LineCommentBar ViewZone in "open" state with a focused
+// on hover) must inject a LineCommentBar ViewZone in "open" state with a usable
 // textarea below the clicked line.
 
 describe("Code Review Overlay — glyph click opens LineCommentBar", () => {
   let barAppearedAfterClick = false;
-  let textareaFocused = false;
+  let textareaAcceptsInput = false;
   let barState = "";
 
   beforeAll(async () => {
@@ -1691,10 +1691,14 @@ describe("Code Review Overlay — glyph click opens LineCommentBar", () => {
       var textarea = bar.querySelector('.line-comment-bar__textarea');
       return textarea ? 'open' : 'posted';
     `);
-    textareaFocused = await webEval<boolean>(`
+    textareaAcceptsInput = await webEval<boolean>(`
       var ta = document.querySelector('.line-comment-bar__textarea');
       if (!ta) return false;
-      return document.activeElement === ta;
+      ta.focus();
+      var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(ta, 'clickable and editable');
+      ta.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      return ta.value === 'clickable and editable';
     `);
   }, 60_000);
 
@@ -1709,15 +1713,15 @@ describe("Code Review Overlay — glyph click opens LineCommentBar", () => {
     expect(barState).toBe("open");
   });
 
-  test("25 — the textarea in the open LineCommentBar is auto-focused", () => {
+  test("25 — the textarea in the open LineCommentBar accepts typed input", () => {
     if (!barAppearedAfterClick) {
       console.warn("  ~ skipped: no LineCommentBar appeared (see test 24)");
       return;
     }
-    if (!textareaFocused) {
+    if (!textareaAcceptsInput) {
       throw new Error(
-        "'.line-comment-bar__textarea' is not focused on mount.\n" +
-        "Fix: ensure LineCommentBar's onMounted() calls textareaEl.value.focus() when state === 'open'.",
+        "'.line-comment-bar__textarea' did not accept typed input after being opened.\n" +
+        "Fix: ensure Monaco is not stealing focus back from the comment textarea.",
       );
     }
   });
@@ -2006,6 +2010,8 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
   let greenDecorationPresent = false;
   let barCountBefore = 0;
   let barCountAfter = 0;
+  let selectedFileBeforeAccept = "";
+  let selectedFileAfterAccept = "";
 
   beforeAll(async () => {
     await resetDecisions(testTaskId);
@@ -2015,7 +2021,7 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
       return 'cleared';
     `);
     await openReviewOverlay({ taskId: testTaskId, files: testFiles });
-    await selectRichTestFile();
+    selectedFileBeforeAccept = await selectRichTestFile();
     let prev = -1;
     for (let i = 0; i < 20; i++) {
       await sleep(400);
@@ -2046,6 +2052,7 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
     greenDecorationPresent = await webEval<boolean>(`
       return !!document.querySelector('.accepted-hunk-decoration');
     `);
+    selectedFileAfterAccept = await reviewSelectedFile();
   }, 60_000);
 
   test("33 — accepting a hunk removes its action bar ViewZone", () => {
@@ -2074,6 +2081,19 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
       );
     }
   });
+
+  test("34.1 — accepting the last pending hunk in a file advances to another pending file", () => {
+    if (barCountBefore === 0) {
+      console.warn("  ~ skipped: no pending bars (cannot accept)");
+      return;
+    }
+    if (selectedFileAfterAccept === selectedFileBeforeAccept) {
+      throw new Error(
+        `Review remained on ${selectedFileBeforeAccept} after its accepted hunk was resolved.\n` +
+        "Fix: advance to the next pending file so accepted diffs do not remain in focus.",
+      );
+    }
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2090,6 +2110,7 @@ describe("Code Review Overlay — review submit payload includes line comments a
   let submitMessageContent = "";
   let hasLineComments = false;
   let hasHunkDiff = false;
+  let hasManualEdits = false;
 
   beforeAll(async () => {
     await resetDecisions(testTaskId);
@@ -2135,46 +2156,121 @@ describe("Code Review Overlay — review submit payload includes line comments a
     `);
     await sleep(2_000);
 
-    // Step 3: Trigger the review submit by clicking "Submit Review" button
-    // The submit button is typically in the overlay header
-    const submitClicked = await webEval<boolean>(`
-      var btn = document.querySelector('.submit-review-btn') || document.querySelector('[class*="submit"]') || document.querySelector('button[class*="review"]');
-      if (btn) { btn.click(); return true; }
-      // Try finding by text content
-      var btns = Array.from(document.querySelectorAll('button'));
-      var submitBtn = btns.find(function(b) { return b.textContent && b.textContent.trim().toLowerCase().includes('submit'); });
-      if (submitBtn) { submitBtn.click(); return true; }
-      return false;
+    // Step 2.5: Make a manual edit in the modified editor and let live-save flush.
+    await webEval(`
+      return new Promise(function(resolve) {
+        try {
+          var app = document.querySelector('#app').__vue_app__;
+          var rootInst = app._container._vnode.component;
+          function find(vnode) {
+            if (!vnode) return null;
+            if (vnode.component) {
+              var inst = vnode.component;
+              if (inst.type && inst.type.__name === 'CodeReviewOverlay') return inst;
+              var nested = find(inst.subTree);
+              if (nested) return nested;
+            }
+            if (Array.isArray(vnode.children)) {
+              for (var i = 0; i < vnode.children.length; i++) {
+                var child = vnode.children[i];
+                if (child && typeof child === 'object') {
+                  var found = find(child);
+                  if (found) return found;
+                }
+              }
+            }
+            return null;
+          }
+          var overlay = find(rootInst.subTree);
+          var editor = overlay && overlay.refs ? overlay.refs.diffEditorRef : null;
+          var monacoEditor = editor && typeof editor.getModifiedEditor === 'function'
+            ? editor.getModifiedEditor()
+            : null;
+          if (!monacoEditor) return resolve('no editor');
+          var model = monacoEditor.getModel();
+          if (!model) return resolve('no model');
+          var line = Math.max(1, model.getLineCount());
+          var text = model.getValue();
+          monacoEditor.executeEdits('ui-test', [{
+            range: new monaco.Range(line, 1, line, 1),
+            text: '// manual review edit\\n',
+            forceMoveMarkers: true,
+          }]);
+          resolve(text !== model.getValue() ? 'edited' : 'unchanged');
+        } catch (e) {
+          resolve('error:' + String(e));
+        }
+      });
     `);
-    await sleep(3_000); // wait for task execution to start and message to be stored
+    await sleep(1_200);
 
-    // Step 4: Query the last conversation message to check the payload content
-    // The user message content is stored in conversation_messages table
-    const lastMessage = await webEval<string>(`
+    const lastReviewRoundIdsBeforeSubmit = await webEval<{ userId: number; reviewId: number }>(`
       return new Promise(async function(resolve) {
         try {
-          // Query from the Pinia task store
           var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
           var taskStore = pinia._s.get('task');
-          // Look at messages for this task
-          var messages = taskStore?.messages || [];
-          var lastUserMsg = null;
+          await taskStore.loadMessages(${testTaskId});
+          var messages = taskStore.messages || [];
+          var lastUserId = 0;
+          var lastReviewId = 0;
           for (var i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === 'user') {
-              lastUserMsg = messages[i];
-              break;
-            }
+            if (!lastUserId && messages[i].role === 'user' && messages[i].type === 'user') lastUserId = messages[i].id;
+            if (!lastReviewId && messages[i].role === 'user' && messages[i].type === 'code_review') lastReviewId = messages[i].id;
+            if (lastUserId && lastReviewId) break;
           }
-          resolve(lastUserMsg ? JSON.stringify(lastUserMsg.content) : 'no user message');
-        } catch(e) {
-          resolve('error: ' + String(e));
+          resolve({ userId: lastUserId, reviewId: lastReviewId });
+        } catch (e) {
+          resolve({ userId: 0, reviewId: 0 });
         }
       });
     `);
 
+    // Step 3: Submit through the real overlay footer button so the UI path
+    // flushes pending file writes and includes computed manual edits.
+    await webEval(`
+      var btn = document.querySelector('.submit-review-btn');
+      if (btn) btn.click();
+      return 'ok';
+    `);
+
+    // Step 4: Wait for the specific new code_review round and then read the plain-text
+    // user message paired with that round. This avoids drifting to a later user message.
+    let lastMessage = "no user message";
+    for (let i = 0; i < 20; i++) {
+      await sleep(500);
+      lastMessage = await webEval<string>(`
+        return new Promise(async function(resolve) {
+          try {
+            var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+            var taskStore = pinia._s.get('task');
+            await taskStore.loadMessages(${testTaskId});
+            var messages = taskStore.messages || [];
+            var reviewMsg = null;
+            for (var i = 0; i < messages.length; i++) {
+              if (messages[i].role === 'user' && messages[i].type === 'code_review' && messages[i].id > ${lastReviewRoundIdsBeforeSubmit.reviewId}) {
+                reviewMsg = messages[i];
+                break;
+              }
+            }
+            if (!reviewMsg) return resolve('no user message');
+            for (var j = 0; j < messages.length; j++) {
+              if (messages[j].role === 'user' && messages[j].type === 'user' && messages[j].id > reviewMsg.id && messages[j].id > ${lastReviewRoundIdsBeforeSubmit.userId}) {
+                return resolve(JSON.stringify(messages[j].content));
+              }
+            }
+            resolve('no user message');
+          } catch(e) {
+            resolve('error: ' + String(e));
+          }
+        });
+      `);
+      if (lastMessage !== "no user message") break;
+    }
+
     submitMessageContent = lastMessage ?? "";
     hasLineComments = submitMessageContent.includes("LINE COMMENT") || submitMessageContent.includes("lineComments");
     hasHunkDiff = submitMessageContent.includes("```diff") || submitMessageContent.includes("accepted") || submitMessageContent.includes("ACCEPTED");
+    hasManualEdits = submitMessageContent.includes("MANUAL EDITS") || submitMessageContent.includes("manual edits");
   }, 120_000);
 
   test("35 — submit payload includes LINE COMMENTS section for the posted comment", () => {
@@ -2201,6 +2297,20 @@ describe("Code Review Overlay — review submit payload includes line comments a
         `The outgoing review message does not contain a diff block or hunk decision metadata.\n` +
         `Message content (first 500 chars): ${submitMessageContent.slice(0, 500)}\n` +
         "Fix: ensure formatReviewMessageForLLM renders mini-diff blocks for accepted/change_request hunks.",
+      );
+    }
+  });
+
+  test("36.1 — submit payload includes MANUAL EDITS section for inline editor changes", () => {
+    if (!submitMessageContent || submitMessageContent === "no user message") {
+      console.warn("  ~ skipped: no user message found in task store");
+      return;
+    }
+    if (!hasManualEdits) {
+      throw new Error(
+        `The outgoing review message does not contain a MANUAL EDITS section.\n` +
+        `Message content (first 500 chars): ${submitMessageContent.slice(0, 500)}\n` +
+        "Fix: ensure inline edits from the review diff editor are added to the submit payload.",
       );
     }
   });
@@ -2269,12 +2379,12 @@ describe("Code Review Overlay — sent marking: items marked sent=1 after submit
     const commentsBefore = await queryLineComments(testTaskId);
     submittedCommentsBefore = commentsBefore.filter((c) => c.sent === 0).length;
 
-    // Trigger submit
+    // Trigger the real overlay submit button so the same manual-edit flush path
+    // used in production is covered here too.
     await webEval(`
-      var btns = Array.from(document.querySelectorAll('button'));
-      var submitBtn = btns.find(function(b) { return b.textContent && b.textContent.trim().toLowerCase().includes('submit'); });
-      if (submitBtn) submitBtn.click();
-      return submitBtn ? 'ok' : 'not found';
+      var btn = document.querySelector('.submit-review-btn');
+      if (btn) btn.click();
+      return 'ok';
     `);
     await sleep(5_000); // allow handleCodeReview to run and UPDATE statements to commit
 

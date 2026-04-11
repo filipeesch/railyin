@@ -251,6 +251,16 @@ const migrations: Array<{ id: string; sql: string }> = [
     sql: `ALTER TABLE executions ADD COLUMN cache_read_input_tokens INTEGER;`,
   },
   {
+    id: "016_execution_checkpoints",
+    sql: `
+      CREATE TABLE IF NOT EXISTS task_execution_checkpoints (
+        execution_id INTEGER PRIMARY KEY REFERENCES executions(id),
+        stash_ref    TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `,
+  },
+  {
     id: "015_workspace_config_key",
     sql: `
       ALTER TABLE workspaces ADD COLUMN config_key TEXT;

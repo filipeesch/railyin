@@ -329,7 +329,7 @@ export async function selectRichTestFile(): Promise<string> {
       || files.find(function(f) { return f.includes('BoardView'); })
       || files.find(function(f) { return f.endsWith('.vue'); })
       || files[0];
-    r.selectedFile = best;
+    r.selectFile(best);
     return best;
   `);
   await sleep(1_200);
@@ -353,7 +353,7 @@ export async function selectPartialTestFile(): Promise<string> {
       || files.find(function(f) { return f.endsWith('.ts') && !f.includes('feature'); })
       || files.find(function(f) { return f.endsWith('.ts'); })
       || files[0];
-    r.selectedFile = best;
+    r.selectFile(best);
     return best;
   `);
   await sleep(1_200);

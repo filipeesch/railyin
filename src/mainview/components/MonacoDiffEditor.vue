@@ -20,14 +20,14 @@ const props = withDefaults(
     modified: string;
     language?: string;
     sideBySide?: boolean;
-    reviewMode?: boolean;
+    enableComments?: boolean;
     onRequestLineComment?: (lineStart: number, lineEnd: number) => void;
     theme?: string;
   }>(),
   {
     language: "plaintext",
     sideBySide: false,
-    reviewMode: false,
+    enableComments: false,
     theme: "vs",
   },
 );
@@ -38,6 +38,11 @@ const emit = defineEmits<{
    * ILineChange[] from DiffEditor.getLineChanges() for hunk extraction.
    */
   hunksReady: [changes: ILineChange[]];
+  /**
+   * Emitted whenever the modified (right) editor content changes.
+   * Used by CodeReviewOverlay to live-save edits to disk.
+   */
+  contentChange: [value: string];
 }>();
 
 const containerEl = ref<HTMLElement | null>(null);
@@ -54,6 +59,7 @@ let glyphHoverDecorations: string[] = [];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let commentWidget: any = null;
 let commentWidgetRange = { startLine: 0, endLine: 0 };
+let diffFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function showCommentWidget(modEditor: any, startLine: number, endLine: number) {
@@ -97,7 +103,7 @@ function registerReviewHandlers() {
   const GLYPH = (monacoInstance as any).editor.MouseTargetType.GUTTER_GLYPH_MARGIN;
 
   modEditor.onMouseMove((e: any) => {
-    if (!props.reviewMode) {
+    if (!props.enableComments) {
       glyphHoverDecorations = modEditor.deltaDecorations(glyphHoverDecorations, []);
       return;
     }
@@ -117,7 +123,7 @@ function registerReviewHandlers() {
   });
 
   modEditor.onMouseDown((e: any) => {
-    if (!props.reviewMode) return;
+    if (!props.enableComments) return;
     if (e.target?.type === GLYPH && e.target.position) {
       const ln = e.target.position.lineNumber;
       e.event.preventDefault();
@@ -126,7 +132,7 @@ function registerReviewHandlers() {
   });
 
   modEditor.onDidChangeCursorSelection((e: any) => {
-    if (!props.reviewMode) { hideCommentWidget(modEditor); return; }
+    if (!props.enableComments) { hideCommentWidget(modEditor); return; }
     const sel = e.selection;
     if (sel && sel.startLineNumber !== sel.endLineNumber) {
       showCommentWidget(modEditor, sel.startLineNumber, sel.endLineNumber);
@@ -136,6 +142,19 @@ function registerReviewHandlers() {
   });
 }
 
+function registerContentHandlers() {
+  if (!editor) return;
+  editor.getModifiedEditor().onDidChangeModelContent(() => {
+    emit("contentChange", editor.getModifiedEditor().getValue());
+  });
+}
+
+function emitCurrentLineChanges() {
+  if (!editor) return;
+  const changes: ILineChange[] = editor.getLineChanges() ?? [];
+  emit("hunksReady", changes);
+}
+
 async function initEditor() {
   if (!containerEl.value || disposed) return;
   monacoInstance = await loader.init();
@@ -143,7 +162,6 @@ async function initEditor() {
 
   editor = monacoInstance.editor.createDiffEditor(containerEl.value, {
     renderSideBySide: props.sideBySide,
-    readOnly: true,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
     automaticLayout: true,
@@ -153,6 +171,7 @@ async function initEditor() {
 
   applyModels();
   registerReviewHandlers();
+  registerContentHandlers();
 }
 
 function applyModels() {
@@ -165,8 +184,7 @@ function applyModels() {
   // trivial (e.g. new files with only additions). If we registered after, we'd
   // miss the event and never emit hunksReady for those files.
   diffUpdateDisposable = editor.onDidUpdateDiff(() => {
-    const changes: ILineChange[] = editor.getLineChanges() ?? [];
-    emit("hunksReady", changes);
+    emitCurrentLineChanges();
   });
 
   const lang = props.language;
@@ -175,6 +193,14 @@ function applyModels() {
     original: monacoInstance.editor.createModel(props.original, lang),
     modified: monacoInstance.editor.createModel(props.modified, lang),
   });
+  // Original (left) side is always read-only; modified (right) side is editable
+  editor.getOriginalEditor().updateOptions({ readOnly: true });
+  editor.getModifiedEditor().updateOptions({ readOnly: false });
+  editor.layout();
+  if (diffFallbackTimer) clearTimeout(diffFallbackTimer);
+  diffFallbackTimer = setTimeout(() => {
+    emitCurrentLineChanges();
+  }, 120);
   // Dispose old models after setModel to avoid memory leaks
   oldModel?.original?.dispose();
   oldModel?.modified?.dispose();
@@ -208,6 +234,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true;
   diffUpdateDisposable?.dispose();
+  if (diffFallbackTimer) clearTimeout(diffFallbackTimer);
   for (const app of mountedApps) {
     try {
       app.unmount();
@@ -221,6 +248,8 @@ onBeforeUnmount(() => {
 
 defineExpose({
   getEditor: () => editor,
+  getModifiedEditor: () => editor?.getModifiedEditor?.() ?? null,
+  getOriginalEditor: () => editor?.getOriginalEditor?.() ?? null,
   registerApp: (app: App) => {
     mountedApps.push(app);
   },

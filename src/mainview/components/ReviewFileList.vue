@@ -1,32 +1,52 @@
 <template>
   <nav class="review-file-list">
-    <div class="review-file-list__header">Files ({{ files.length }})</div>
+    <div class="review-file-list__search">
+      <input
+        v-model="filterText"
+        type="search"
+        placeholder="Filter files…"
+        class="review-file-list__search-input"
+        @click.stop
+      />
+    </div>
     <ul class="review-file-list__items">
       <li
-        v-for="file in files"
+        v-for="file in filteredFiles"
         :key="file.path"
         class="review-file-list__item"
         :class="{ active: file.path === selectedPath }"
+        :title="file.path"
         @click="emit('select', file.path)"
       >
         <span class="review-file-list__icon">{{ stateIcon(aggregateStates?.[file.path] ?? 'pending') }}</span>
-        <span class="review-file-list__name" :title="file.path">{{ basename(file.path) }}</span>
-        <span class="review-file-list__dir">{{ dirname(file.path) }}</span>
+        <div class="review-file-list__info">
+          <span class="review-file-list__name">{{ basename(file.path) }}</span>
+          <span class="review-file-list__dir">{{ dirname(file.path) }}</span>
+        </div>
       </li>
     </ul>
   </nav>
 </template>
 
 <script setup lang="ts">
+import { ref, computed } from "vue";
 import type { HunkDecision } from "@shared/rpc-types";
 
-defineProps<{
+const props = defineProps<{
   files: { path: string }[];
   selectedPath: string | null;
   aggregateStates?: Record<string, HunkDecision | "pending">;
 }>();
 
 const emit = defineEmits<{ select: [path: string] }>();
+
+const filterText = ref("");
+
+const filteredFiles = computed(() => {
+  const q = filterText.value.trim().toLowerCase();
+  if (!q) return props.files;
+  return props.files.filter((f) => f.path.toLowerCase().includes(q));
+});
 
 function basename(path: string) {
   return path.split("/").pop() ?? path;
@@ -50,40 +70,60 @@ function stateIcon(state: HunkDecision | "pending"): string {
 
 <style scoped>
 .review-file-list {
-  width: 220px;
+  width: 100%;
+  min-width: 150px;
   flex-shrink: 0;
-  border-right: 1px solid var(--p-content-border-color, #e2e8f0);
   overflow-y: auto;
   background: var(--p-content-background, #f8fafc);
   display: flex;
   flex-direction: column;
 }
 
-.review-file-list__header {
-  padding: 10px 12px 6px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--p-text-muted-color, #64748b);
+.review-file-list__search {
+  padding: 8px 8px 4px;
   border-bottom: 1px solid var(--p-content-border-color, #e2e8f0);
+  flex-shrink: 0;
+}
+
+.review-file-list__search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px solid var(--p-content-border-color, #cbd5e1);
+  border-radius: 4px;
+  background: var(--p-surface-card, #fff);
+  color: var(--p-text-color, #1e293b);
+  font-size: 0.78rem;
+  outline: none;
+}
+
+.review-file-list__search-input::placeholder {
+  color: var(--p-text-muted-color, #94a3b8);
+}
+
+.review-file-list__search-input:focus {
+  border-color: var(--p-primary-color, #6366f1);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--p-primary-color, #6366f1) 20%, transparent);
 }
 
 .review-file-list__items {
   list-style: none;
   margin: 0;
   padding: 4px 0;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .review-file-list__item {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px;
+  padding: 6px 10px;
   cursor: pointer;
   border-radius: 4px;
   margin: 1px 4px;
   transition: background 0.1s;
+  min-width: 0;
 }
 
 .review-file-list__item:hover {
@@ -100,12 +140,18 @@ function stateIcon(state: HunkDecision | "pending"): string {
   flex-shrink: 0;
 }
 
+.review-file-list__info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
 .review-file-list__name {
   font-size: 0.82rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
 }
 
 .review-file-list__dir {
@@ -114,7 +160,20 @@ function stateIcon(state: HunkDecision | "pending"): string {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 80px;
-  text-align: right;
+  direction: rtl;
+  text-align: left;
+}
+
+/* Dark mode overrides */
+.dark .review-file-list,
+[data-theme="dark"] .review-file-list {
+  background: var(--p-surface-card, #1e293b);
+}
+
+.dark .review-file-list__search-input,
+[data-theme="dark"] .review-file-list__search-input {
+  background: var(--p-surface-ground, #0f172a);
+  color: var(--p-text-color, #f1f5f9);
+  border-color: var(--p-surface-border, #334155);
 }
 </style>

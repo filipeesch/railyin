@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { electroview } from "../rpc";
-import type { Task, ConversationMessage, StreamToken, StreamError, ModelInfo, ProviderModelList } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamToken, StreamError, ModelInfo, ProviderModelList, GitNumstat } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 
 export const useTaskStore = defineStore("task", () => {
@@ -403,7 +403,7 @@ export const useTaskStore = defineStore("task", () => {
     await fetchContextUsage(taskId);
   }
 
-  async function getGitStat(taskId: number): Promise<string | null> {
+  async function getGitStat(taskId: number): Promise<GitNumstat | null> {
     return electroview.rpc.request["tasks.getGitStat"]({ taskId });
   }
 

@@ -1156,7 +1156,28 @@ async function runExecution(
     }
 
     const worktreePath = gitContext?.worktree_path ?? "";
-    let resolvedPrompt = prompt;
+
+    // Create a per-turn git checkpoint before the AI modifies anything.
+    // This enables "diff since last review" in the overlay.
+    if (worktreePath) {
+      try {
+        const stashProc = Bun.spawn(["git", "stash", "create"], {
+          cwd: worktreePath,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        await stashProc.exited;
+        const stashRef = (await new Response(stashProc.stdout).text()).trim() || null;
+        db.run(
+          `INSERT OR REPLACE INTO task_execution_checkpoints (execution_id, stash_ref) VALUES (?, ?)`,
+          [executionId, stashRef],
+        );
+      } catch (err) {
+        log("warn", `git stash create failed (checkpoint skipped): ${err instanceof Error ? err.message : String(err)}`, { taskId, executionId });
+      }
+    }
+    let resolvedPrompt: string;
+    let resolvedStageInstructions: string | undefined;
     try {
       resolvedPrompt = await resolvePrompt(prompt, worktreePath);
     } catch (err) {
@@ -2186,6 +2207,7 @@ export async function handleCodeReview(
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
   onNewMessage: OnNewMessage,
+  manualEdits: import("../../shared/rpc-types.ts").ManualEdit[] = [],
 ): Promise<{ message: import("../../shared/rpc-types.ts").ConversationMessage; executionId: number }> {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -2310,6 +2332,7 @@ export async function handleCodeReview(
   const payload: import("../../shared/rpc-types.ts").CodeReviewPayload = {
     taskId,
     files: Array.from(fileMap.entries()).map(([path, data]) => ({ path, hunks: data.hunks, lineComments: data.lineComments })),
+    manualEdits,
   };
 
   const llmText = formatReviewMessageForLLM(payload);

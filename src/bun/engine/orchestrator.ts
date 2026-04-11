@@ -24,6 +24,7 @@ import {
   appendMessage,
   ensureTaskConversation,
 } from "../workflow/engine.ts";
+import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { getDb } from "../db/index.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
@@ -370,6 +371,7 @@ export class Orchestrator implements ExecutionCoordinator {
 
   async executeCodeReview(
     taskId: number,
+    manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[],
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -378,23 +380,142 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+        () => handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, manualEdits),
       );
     }
 
-    // Build a minimal code review prompt from hunk decisions
-    type DecisionRow = { hunk_hash: string; file_path: string; decision: string; comment: string | null };
+    type DecisionRow = {
+      hunk_hash: string;
+      file_path: string;
+      decision: string;
+      comment: string | null;
+      original_start: number;
+      original_end: number;
+      modified_start: number;
+      modified_end: number;
+    };
+    type LineCommentRow = {
+      id: number;
+      file_path: string;
+      line_start: number;
+      line_end: number;
+      line_text: string;
+      context_lines: string;
+      comment: string;
+      reviewer_type: string;
+    };
+
     const decisions = db
       .query<DecisionRow, [number]>(
-        `SELECT hunk_hash, file_path, decision, comment FROM task_hunk_decisions
-         WHERE task_id = ? AND reviewer_id = 'user' ORDER BY file_path`,
+        `SELECT hunk_hash, file_path, decision, comment, original_start, original_end, modified_start, modified_end
+          FROM task_hunk_decisions
+          WHERE task_id = ? AND reviewer_id = 'user' AND sent = 0
+          ORDER BY file_path, modified_start`,
       )
       .all(taskId);
-    const reviewText = decisions.length > 0
-      ? decisions.map((d) => `${d.file_path}: ${d.decision}${d.comment ? ` — ${d.comment}` : ""}`).join("\n")
-      : "Please review the code changes and provide feedback.";
+    const lineComments = db
+      .query<LineCommentRow, [number]>(
+        `SELECT id, file_path, line_start, line_end, line_text, context_lines, comment, reviewer_type
+         FROM task_line_comments
+         WHERE task_id = ? AND sent = 0
+         ORDER BY file_path, line_start`,
+      )
+      .all(taskId);
 
-    const reviewMsgId = appendMessage(taskId, task.conversation_id ?? 0, "code_review", "user", reviewText);
+    const gitRow = db
+      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
+        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+      )
+      .get(taskId);
+    const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
+
+    type HunkLines = { originalLines: string[]; modifiedLines: string[] };
+    const diffCache = new Map<string, Map<string, HunkLines>>();
+    const uniqueFiles = [...new Set(decisions.map((row) => row.file_path))];
+    for (const filePath of uniqueFiles) {
+      const hunkLineMap = new Map<string, HunkLines>();
+      if (worktreePath) {
+        try {
+          const proc = Bun.spawn(["git", "diff", "HEAD", "--", filePath], {
+            cwd: worktreePath,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          await proc.exited;
+          const diffOut = await new Response(proc.stdout).text();
+          if (diffOut.trim()) {
+            const hhRe = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+            const lines = diffOut.split("\n");
+            let i = 0;
+            while (i < lines.length) {
+              if (!hhRe.test(lines[i])) { i++; continue; }
+              i++;
+              const body: string[] = [];
+              while (i < lines.length && !hhRe.test(lines[i])) { body.push(lines[i]); i++; }
+              const origL = body.filter((line) => line.startsWith("-") || line.startsWith(" ")).map((line) => line.slice(1));
+              const modL = body.filter((line) => line.startsWith("+") || line.startsWith(" ")).map((line) => line.slice(1));
+              const { createHash } = await import("node:crypto");
+              const hash = createHash("sha256")
+                .update(filePath + "\0" + origL.join("\n") + "\0" + modL.join("\n"))
+                .digest("hex");
+              hunkLineMap.set(hash, { originalLines: origL, modifiedLines: modL });
+            }
+          }
+        } catch {
+          // Ignore diff parsing failures; the fallback payload still includes ranges/comments.
+        }
+      }
+      diffCache.set(filePath, hunkLineMap);
+    }
+
+    const fileMap = new Map<string, {
+      hunks: import("../../shared/rpc-types.ts").CodeReviewHunk[];
+      lineComments: import("../../shared/rpc-types.ts").LineComment[];
+    }>();
+    for (const row of decisions) {
+      if (!fileMap.has(row.file_path)) fileMap.set(row.file_path, { hunks: [], lineComments: [] });
+      const hunkLines = diffCache.get(row.file_path)?.get(row.hunk_hash) ?? { originalLines: [], modifiedLines: [] };
+      fileMap.get(row.file_path)!.hunks.push({
+        hunkIndex: 0,
+        originalRange: [row.original_start, row.original_end],
+        modifiedRange: [row.modified_start, row.modified_end],
+        decision: row.decision as import("../../shared/rpc-types.ts").HunkDecision,
+        comment: row.comment,
+        originalLines: hunkLines.originalLines,
+        modifiedLines: hunkLines.modifiedLines,
+      });
+    }
+    for (const row of lineComments) {
+      if (!fileMap.has(row.file_path)) fileMap.set(row.file_path, { hunks: [], lineComments: [] });
+      fileMap.get(row.file_path)!.lineComments.push({
+        id: row.id,
+        filePath: row.file_path,
+        lineStart: row.line_start,
+        lineEnd: row.line_end,
+        lineText: JSON.parse(row.line_text),
+        contextLines: JSON.parse(row.context_lines),
+        comment: row.comment,
+        reviewerType: row.reviewer_type as "human" | "ai",
+      });
+    }
+
+    const payload: import("../../shared/rpc-types.ts").CodeReviewPayload = {
+      taskId,
+      files: Array.from(fileMap.entries()).map(([path, data]) => ({ path, hunks: data.hunks, lineComments: data.lineComments })),
+      manualEdits,
+    };
+    const reviewText = formatReviewMessageForLLM(payload);
+
+    db.run(
+      `UPDATE task_hunk_decisions SET sent = 1 WHERE task_id = ? AND reviewer_id = 'user' AND sent = 0`,
+      [taskId],
+    );
+    db.run(
+      `UPDATE task_line_comments SET sent = 1 WHERE task_id = ? AND sent = 0`,
+      [taskId],
+    );
+
+    const reviewMsgId = appendMessage(taskId, task.conversation_id ?? 0, "code_review", "user", JSON.stringify(payload));
     appendMessage(taskId, task.conversation_id ?? 0, "user", "user", reviewText);
 
     const column = this._getColumnConfig(config, task.board_id, task.workflow_state);
@@ -414,13 +535,6 @@ export class Orchestrator implements ExecutionCoordinator {
       .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
       .get(reviewMsgId)!;
     this.onNewMessage(mapConversationMessage(reviewMsgRow));
-
-    const gitRow = db
-      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
-        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-    const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
 
     const execParams = this._buildExecutionParams(
       task,

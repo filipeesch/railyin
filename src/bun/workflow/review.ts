@@ -35,7 +35,7 @@ export function formatReviewMessageForLLM(payload: CodeReviewPayload): string {
     }
   }
 
-  const hasActionable = rejectedItems.length > 0 || changeRequestItems.length > 0 || lineCommentItems.length > 0;
+  const hasActionable = rejectedItems.length > 0 || changeRequestItems.length > 0 || lineCommentItems.length > 0 || (payload.manualEdits?.length ?? 0) > 0;
 
   if (!hasActionable) {
     return "=== Code Review ===\n\nAll changes were accepted. No action required.";
@@ -63,7 +63,17 @@ export function formatReviewMessageForLLM(payload: CodeReviewPayload): string {
     );
   }
 
-  sections.push("Please address all rejected, change-requested items, and line comments.");
+  if (payload.manualEdits && payload.manualEdits.length > 0) {
+    const editItems = payload.manualEdits.map(
+      (e) => `  • ${e.filePath}\n\`\`\`diff\n${e.unifiedDiff}\n\`\`\``,
+    );
+    sections.push(
+      "✏️ MANUAL EDITS — the user directly edited these files in the diff editor:\n" +
+      editItems.join("\n\n"),
+    );
+  }
+
+  sections.push("Please address all rejected, change-requested items, line comments, and respect the manual edits.");
 
   return sections.join("\n\n");
 }

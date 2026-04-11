@@ -2,7 +2,6 @@ import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
 import { runMigrations, seedDefaultWorkspace, syncFileBackedCompatibilityState } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
 import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
-import { listProjects } from "./project-store.ts";
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 {
@@ -42,7 +41,12 @@ process.on("uncaughtException", (err) => {
 // ─── CLI flags (must run before any module reads process.env) ─────────────────
 // --debug      → enables the debug HTTP server on :9229 (same as RAILYN_DEBUG=1)
 // --memory-db  → uses an in-memory SQLite database (same as RAILYN_DB=:memory:)
+declare const __RAILYN_FORCE_DEBUG__: boolean | undefined;
+declare const __RAILYN_FORCE_MEMORY_DB__: boolean | undefined;
+
 const argv = process.argv.slice(2);
+if (__RAILYN_FORCE_DEBUG__) process.env.RAILYN_DEBUG = "1";
+if (__RAILYN_FORCE_MEMORY_DB__) process.env.RAILYN_DB = ":memory:";
 if (argv.includes("--debug")) process.env.RAILYN_DEBUG = "1";
 if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 import { workspaceHandlers } from "./handlers/workspace.ts";
@@ -279,18 +283,29 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
         // Clean up any previous test task so we don't accumulate stale rows.
         const prev = db.query<{ id: number; conversation_id: number | null }, []>("SELECT id, conversation_id FROM tasks WHERE title = 'UI Test Task' LIMIT 1").get();
         if (prev) {
-          db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [prev.id]);
-          db.run("DELETE FROM task_git_context WHERE task_id = ?", [prev.id]);
-          db.run("DELETE FROM executions WHERE task_id = ?", [prev.id]);
-          db.run("DELETE FROM conversation_messages WHERE task_id = ?", [prev.id]);
-          db.run("DELETE FROM tasks WHERE id = ?", [prev.id]);
-          if (prev.conversation_id) {
-            db.run("DELETE FROM conversations WHERE id = ?", [prev.conversation_id]);
-          }
+          db.transaction(() => {
+            db.run(
+              "DELETE FROM task_execution_checkpoints WHERE execution_id IN (SELECT id FROM executions WHERE task_id = ?)",
+              [prev.id],
+            );
+            db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [prev.id]);
+            db.run("DELETE FROM task_line_comments WHERE task_id = ?", [prev.id]);
+            db.run("DELETE FROM task_todos WHERE task_id = ?", [prev.id]);
+            db.run("DELETE FROM pending_messages WHERE task_id = ?", [prev.id]);
+            db.run("DELETE FROM task_git_context WHERE task_id = ?", [prev.id]);
+            db.run("DELETE FROM executions WHERE task_id = ?", [prev.id]);
+            db.run("DELETE FROM conversation_messages WHERE task_id = ?", [prev.id]);
+            db.run("DELETE FROM tasks WHERE id = ?", [prev.id]);
+            if (prev.conversation_id) {
+              db.run("DELETE FROM conversations WHERE id = ?", [prev.conversation_id]);
+            }
+          })();
         }
 
         // Resolve board + project IDs — either from an existing task (real DB mode)
-        // or by seeding minimum rows (in-memory / clean test DB, i.e. RAILYN_DB=:memory:).
+        // or by creating the minimal workspace/project/board rows needed for a
+        // clean in-memory UI-test boot. This keeps /setup-test-env self-contained
+        // instead of depending on startup seed order.
         let boardId: number;
         let projectId: number;
         const existingTask = db.query<{ board_id: number; project_id: number }, []
@@ -299,18 +314,48 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
           boardId = existingTask.board_id;
           projectId = existingTask.project_id;
         } else {
-          // In-memory test mode — seedDefaultWorkspace() has already created a
-          // workspace and board. Resolve the first file-backed project.
-          const boardRow = db.query<{ id: number }, []>("SELECT id FROM boards LIMIT 1").get();
-          const project = listProjects()[0];
-          if (!boardRow || !project) {
-            return new Response(
-              JSON.stringify({ __error: "No board or project found — make sure the app was started with bun run test:ui:run (which seeds them automatically)." }),
-              { status: 500, headers: { "content-type": "application/json" } },
+          const workspaceRegistry = getWorkspaceRegistry();
+          const defaultWorkspace = workspaceRegistry[0];
+          const workspaceId = defaultWorkspace?.id ?? 1;
+          const workspaceKey = defaultWorkspace?.key ?? "default";
+          const workspaceName = defaultWorkspace?.name ?? "My Workspace";
+
+          db.run(
+            "INSERT OR IGNORE INTO workspaces (id, name, config_key) VALUES (?, ?, ?)",
+            [workspaceId, workspaceName, workspaceKey],
+          );
+
+          const existingProject = db
+            .query<{ id: number }, [number]>(
+              "SELECT id FROM projects WHERE workspace_id = ? ORDER BY id LIMIT 1",
+            )
+            .get(workspaceId);
+          if (existingProject) {
+            projectId = existingProject.id;
+          } else {
+            db.run(
+              `INSERT INTO projects
+                 (workspace_id, name, project_path, git_root_path, default_branch, slug, description)
+               VALUES (?, 'Test Project', '/tmp/railyn-test-project', '/tmp/railyn-test-project', 'main', 'test-project', 'Seeded project for UI tests')`,
+              [workspaceId],
             );
+            projectId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
           }
-          boardId = boardRow.id;
-          projectId = project.id;
+
+          const boardRow = db
+            .query<{ id: number }, [number]>(
+              "SELECT id FROM boards WHERE workspace_id = ? ORDER BY id LIMIT 1",
+            )
+            .get(workspaceId);
+          if (boardRow) {
+            boardId = boardRow.id;
+          } else {
+            db.run(
+              "INSERT INTO boards (workspace_id, name, workflow_template_id, project_ids) VALUES (?, 'Test Board', 'delivery', ?)",
+              [workspaceId, JSON.stringify([projectId])],
+            );
+            boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+          }
         }
 
         // Create a temp git repo with known test files.

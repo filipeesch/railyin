@@ -234,6 +234,23 @@ describe("formatReviewMessageForLLM", () => {
     expect(msg).toContain("CHANGE REQUESTED");
     expect(msg).toContain("Use const instead of let");
   });
+
+  it("includes manual edits when present", () => {
+    const payload: CodeReviewPayload = {
+      taskId: 1,
+      files: [],
+      manualEdits: [
+        {
+          filePath: "app.ts",
+          unifiedDiff: "--- before\n+++ after\n@@ -1 +1 @@\n-const x = 1;\n+const x = 2;",
+        },
+      ],
+    };
+    const msg = formatReviewMessageForLLM(payload);
+    expect(msg).toContain("MANUAL EDITS");
+    expect(msg).toContain("app.ts");
+    expect(msg).toContain("const x = 2");
+  });
 });
 
 // ─── compactMessages excludes code_review ────────────────────────────────────
@@ -367,5 +384,32 @@ describe("handleCodeReview DB read", () => {
     // The stored content should include the file path from DB
     const payload: CodeReviewPayload = JSON.parse(message.content);
     expect(payload.files.some((f: any) => f.path === "app.ts")).toBe(true);
+  });
+
+  it("includes frontend manual edits in the stored code_review payload", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    seedGitContext(taskId);
+    const handlers = makeHandlers();
+
+    db.run(
+      `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start)
+       VALUES (?, 'deadbeef', 'app.ts', 'human', 'user', 'change_request', 'fix this', 1, 1)`,
+      [taskId],
+    );
+
+    const manualEdits = [
+      {
+        filePath: "app.ts",
+        unifiedDiff: "--- before\n+++ after\n@@ -1 +1 @@\n-const x = 1;\n+const x = 2;",
+      },
+    ];
+
+    const { message } = await handlers["tasks.sendMessage"]({
+      taskId,
+      content: JSON.stringify({ _type: "code_review", manualEdits }),
+    });
+
+    const payload: CodeReviewPayload = JSON.parse(message.content);
+    expect(payload.manualEdits).toEqual(manualEdits);
   });
 });

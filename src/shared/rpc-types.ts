@@ -198,6 +198,28 @@ export interface CodeReviewFile {
 export interface CodeReviewPayload {
   taskId: number;
   files: CodeReviewFile[];
+  /** Manual edits the user made directly in the diff editor; populated at submit time. */
+  manualEdits?: ManualEdit[];
+}
+
+/** A manual edit the user made directly in the Monaco diff editor. */
+export interface ManualEdit {
+  filePath: string;
+  unifiedDiff: string;
+}
+
+/** Per-file git numstat entry. */
+export interface GitFileNumstat {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+/** Structured git numstat result (replaces raw string from getGitStat). */
+export interface GitNumstat {
+  files: GitFileNumstat[];
+  totalAdditions: number;
+  totalDeletions: number;
 }
 
 /** A single reviewer's decision on a hunk (human or future AI reviewer). */
@@ -470,15 +492,27 @@ export type RailynRPCType = {
       };
       "tasks.getGitStat": {
         params: { taskId: number };
-        response: string | null;
+        response: GitNumstat | null;
       };
       "tasks.getChangedFiles": {
         params: { taskId: number };
         response: string[];
       };
       "tasks.getFileDiff": {
-        params: { taskId: number; filePath: string };
+        params: { taskId: number; filePath: string; checkpointRef?: string };
         response: FileDiffContent;
+      };
+      "tasks.writeFile": {
+        params: { taskId: number; filePath: string; content: string };
+        response: void;
+      };
+      "tasks.getPendingHunkSummary": {
+        params: { taskId: number };
+        response: { filePath: string; pendingCount: number }[];
+      };
+      "tasks.getCheckpointRef": {
+        params: { taskId: number };
+        response: string | null;
       };
       "tasks.rejectHunk": {
         params: { taskId: number; filePath: string; hunkIndex: number };

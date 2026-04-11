@@ -90,13 +90,27 @@ body,
 
 /* Monaco code-review hunk decorations (applied via deltaDecorations — must be global) */
 .accepted-hunk-decoration {
-  background: rgba(34, 197, 94, 0.08) !important;
+  background: color-mix(in srgb, var(--p-content-background, #ffffff) 92%, #22c55e 8%) !important;
+  border-left: 2px solid #22c55e;
 }
 
 .rejected-hunk-decoration {
   background: rgba(239, 68, 68, 0.08) !important;
   text-decoration: line-through;
   opacity: 0.6;
+}
+
+.monaco-editor .accepted-hunk-inline-decoration,
+.monaco-editor .accepted-hunk-inline-decoration.char-insert,
+.monaco-editor .accepted-hunk-inline-decoration.char-delete {
+  background: transparent !important;
+}
+
+.monaco-editor .accepted-hunk-decoration.line-insert,
+.monaco-editor .accepted-hunk-decoration.line-delete,
+.monaco-editor .accepted-hunk-decoration.char-insert,
+.monaco-editor .accepted-hunk-decoration.char-delete {
+  background: color-mix(in srgb, var(--p-content-background, #ffffff) 96%, #22c55e 4%) !important;
 }
 
 /* Glyph margin comment icon (shown on hover in review mode) */
