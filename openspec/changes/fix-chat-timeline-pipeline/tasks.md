@@ -81,9 +81,9 @@
 
 ## 6. Subagent pipeline integration
 
-- [ ] 6.1 Add `onStreamEvent?: OnStreamEvent` parameter to `runSubExecution()`
-- [ ] 6.2 In `runSubExecution()`'s streaming loop, emit events via `onStreamEvent` with `subagentId` set (e.g., `"agent-{idx+1}"`) and `blockId` prefixed with `"sa{n}-"`
-- [ ] 6.3 In the parent `runExecution()`, when calling `runSubExecution()`, pass a wrapped `onStreamEvent` that inserts a `subagent_start` event before and `subagent_done` event after the subagent's events
+- [x] 6.1 Add `onStreamEvent?: OnStreamEvent` parameter to `runSubExecution()`
+- [x] 6.2 In `runSubExecution()`'s streaming loop, emit events via `onStreamEvent` with `subagentId` set (e.g., `"agent-{idx+1}"`) and `blockId` prefixed with `"sa{n}-"`
+- [x] 6.3 In the parent `runExecution()`, when calling `runSubExecution()`, pass a wrapped `onStreamEvent` that inserts a `subagent_start` event before and `subagent_done` event after the subagent's events
 
 ## 7. Wire batcher into `index.ts`
 
@@ -133,10 +133,10 @@
 
 ## 12. UI Tests — Suite T (new scenarios)
 
-- [ ] 12.1 Add `/queue-stream-events` endpoint to the debug server
-- [ ] 12.2 Add bridge helpers for stream events
-- [ ] 12.3 Add block inspection helpers to bridge
-- [ ] 12.4 Create `src/ui-tests/timeline-pipeline.test.ts` — Suite T scenarios T-28 through T-34
+- [x] 12.1 Add `/queue-stream-events` endpoint to the debug server
+- [x] 12.2 Add bridge helpers for stream events
+- [x] 12.3 Add block inspection helpers to bridge
+- [x] 12.4 Create `src/ui-tests/timeline-pipeline.test.ts` — Suite T scenarios T-28 through T-34
 
 ## 13. Regression and cleanup
 

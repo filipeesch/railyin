@@ -768,6 +768,77 @@ export async function waitForTaskCardClass(
   return false;
 }
 
+
+/**
+ * Push synthetic StreamEvent objects directly into the frontend via IPC.
+ * Events are forwarded immediately to the Pinia task store's onStreamEvent handler.
+ * Use this to test live streaming UI without needing a real AI execution.
+ */
+export async function queueStreamEvents(events: Array<{
+  taskId: number;
+  executionId: number;
+  seq: number;
+  blockId: string;
+  type: string;
+  content: string;
+  metadata?: string | null;
+  subagentId?: string | null;
+  done?: boolean;
+}>): Promise<void> {
+  const res = await fetch(`${BRIDGE_BASE}/queue-stream-events`, {
+    method: "POST",
+    body: JSON.stringify({ events }),
+    headers: { "content-type": "application/json" },
+  });
+  const data = await res.json() as { ok?: boolean; count?: number; __error?: string };
+  if (data.__error) throw new Error(`queueStreamEvents failed: ${data.__error}`);
+  if (!data.ok) throw new Error("queueStreamEvents: unexpected response");
+  // Small delay to let Vue process the IPC events
+  await sleep(100);
+}
+
+/**
+ * Read the active stream state for the given task from the Pinia store.
+ * Returns blockIds and their types/content, or null if no stream state.
+ */
+export async function getStreamState(taskId: number): Promise<{
+  blockOrder: string[];
+  blocks: Array<{ blockId: string; type: string; content: string; done: boolean }>;
+  isDone: boolean;
+  statusMessage: string;
+} | null> {
+  return webEval(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var taskStore = pinia._s.get('task');
+    var state = taskStore.streamStates.get(${taskId});
+    if (!state) return null;
+    return JSON.stringify({
+      blockOrder: state.blockOrder,
+      blocks: state.blockOrder.map(function(id) {
+        var b = state.blocks.get(id);
+        return b ? { blockId: b.blockId, type: b.type, content: b.content, done: b.done } : null;
+      }).filter(Boolean),
+      isDone: state.isDone,
+      statusMessage: state.statusMessage,
+    });
+  `);
+}
+
+/**
+ * Clear the stream state for a task by setting isDone=true via a synthetic done event.
+ */
+export async function clearStreamState(taskId: number, executionId: number): Promise<void> {
+  await queueStreamEvents([{
+    taskId,
+    executionId,
+    seq: 9999,
+    blockId: `${executionId}-done`,
+    type: "done",
+    content: "",
+    done: true,
+  }]);
+}
+
 /**
  * Read a task's executionState directly from the Pinia board/task store,
  * without needing the task drawer to be open.

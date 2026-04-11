@@ -907,6 +907,10 @@ async function runSubExecution({
   agentLabel,
   parentContext,
   parentToolDefs,
+  taskId,
+  executionId,
+  subagentId,
+  onStreamEvent,
 }: {
   worktreePath: string;
   instructions: string;
@@ -921,6 +925,10 @@ async function runSubExecution({
   /** When provided, use these tool definitions for the API call (matching parent's cache prefix).
    *  The child's resolved tool names are used only as an execution whitelist. */
   parentToolDefs?: import("../ai/types.ts").AIToolDefinition[];
+  taskId?: number;
+  executionId?: number;
+  subagentId?: string;
+  onStreamEvent?: OnStreamEvent;
 }): Promise<string> {
   const config = getConfig();
   let provider;
@@ -997,12 +1005,41 @@ async function runSubExecution({
   const MAX_SUB_ROUNDS = 10;
   let toolRounds = 0;
 
+  // Helper: emit a stream event for this subagent if pipeline is wired
+  const emitSub = (
+    type: import("../../shared/rpc-types.ts").StreamEventType,
+    content: string,
+    blockId?: string,
+    metadata?: string | null,
+  ) => {
+    if (!onStreamEvent || taskId == null || executionId == null) return;
+    onStreamEvent({
+      taskId,
+      executionId,
+      seq: 0,
+      blockId: blockId ?? "",
+      type,
+      content,
+      metadata: metadata ?? null,
+      subagentId: subagentId ?? null,
+      done: false,
+    });
+  };
+
+  if (subagentId) {
+    emitSub("status_chunk", agentLabel ? `${agentLabel} thinking…` : "Sub-agent thinking…");
+  }
+
   while (toolRounds < MAX_SUB_ROUNDS) {
     const turn = await retryTurn(provider, liveMessages, { tools: apiToolDefs, effort: "low", signal, agentLabel, maxTokens: 16384 }, undefined, {}, "foreground", fallbackProvider);
 
     if (turn.type === "text") {
       subLspManager.shutdown();
-      return (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
+      const result = (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
+      if (subagentId) {
+        emitSub("assistant", result);
+      }
+      return result;
     }
 
     toolRounds++;
@@ -1015,24 +1052,32 @@ async function runSubExecution({
 
     for (const call of turn.calls) {
       const fnName = call.function.name;
+      // Emit tool_call event for this subagent tool call
+      if (subagentId) {
+        emitSub("tool_call", JSON.stringify({ name: fnName, arguments: call.function.arguments }), call.id);
+      }
       // spawn_agent cannot recursively spawn (prevent infinite nesting)
       if (fnName === "spawn_agent") {
+        const errMsg = "Error: spawn_agent cannot be called from within a sub-agent.";
         liveMessages.push({
           role: "tool",
-          content: "Error: spawn_agent cannot be called from within a sub-agent.",
+          content: errMsg,
           tool_call_id: call.id,
           name: fnName,
         });
+        if (subagentId) emitSub("tool_result", errMsg, call.id);
         continue;
       }
       // Tool execution whitelist: only allow tools in the child's tool list
       if (parentToolDefs && !childToolNames.has(fnName)) {
+        const errMsg = `Error: tool "${fnName}" is not available to this sub-agent. Available tools: ${[...childToolNames].join(", ")}.`;
         liveMessages.push({
           role: "tool",
-          content: `Error: tool "${fnName}" is not available to this sub-agent. Available tools: ${[...childToolNames].join(", ")}.`,
+          content: errMsg,
           tool_call_id: call.id,
           name: fnName,
         });
+        if (subagentId) emitSub("tool_result", errMsg, call.id);
         continue;
       }
       const result = await executeTool(fnName, call.function.arguments, toolCtx);
@@ -1049,6 +1094,7 @@ async function runSubExecution({
         tool_call_id: call.id,
         name: fnName,
       });
+      if (subagentId) emitSub("tool_result", stored, call.id);
     }
   }
 
@@ -1798,6 +1844,11 @@ async function runExecution(
                 // Pass the parent's full sorted tool definitions so the sub-agent
                 // uses the same [system, tools] prefix → cache hit on first call.
                 parentToolDefs: tools,
+                // Pipeline: wire stream events so subagent activity is visible live
+                taskId,
+                executionId,
+                subagentId: `${spawnCall.id}-${idx}`,
+                onStreamEvent,
               });
               return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
             } catch (e) {

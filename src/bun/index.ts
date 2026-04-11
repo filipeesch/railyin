@@ -127,6 +127,10 @@ function getOrCreateBatcher(taskId: number, executionId: number): StreamBatcher 
   if (existing) return existing;
   const batcher = new StreamBatcher(taskId, executionId, (events) => {
     for (const event of events) {
+      // Chunks were already forwarded immediately in onStreamEvent; skip here
+      if (event.type === "text_chunk" || event.type === "reasoning_chunk" || event.type === "status_chunk") {
+        continue;
+      }
       win.webview.rpc.send["stream.event"](event);
     }
   });
@@ -787,7 +791,33 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
       }
     }
 
-    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=", { status: 200 });
+    // Test-only: push synthetic stream events directly to the frontend via IPC.
+    // Accepts a JSON body: { events: StreamEvent[] }
+    // Events are sent immediately via win.webview.rpc.send["stream.event"].
+    if (url.pathname === "/queue-stream-events") {
+      try {
+        const body = await req.json() as { events?: unknown[] };
+        if (!Array.isArray(body.events)) {
+          return new Response(JSON.stringify({ __error: "events array required" }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        for (const event of body.events) {
+          win.webview.rpc.send["stream.event"](event as StreamEvent);
+        }
+        return new Response(JSON.stringify({ ok: true, count: body.events.length }), {
+          headers: { "content-type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ __error: String(e) }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
+    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=, /queue-stream-events", { status: 200 });
   },
 });
 if (process.env.RAILYN_DEBUG) console.log("[Debug] HTTP server listening on http://localhost:9229");
