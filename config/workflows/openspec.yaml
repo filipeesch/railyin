@@ -11,13 +11,13 @@ columns:
     on_enter_prompt: |
       /opsx-explore
       use "which" in the shell to find other cli tools and use the full path to execute them.
-    stage_instructions: exploration mode
+    stage_instructions: Do not exit exploration mode without my call
 
   - id: propose
     label: Propose
     description: Create a change proposal with design, specs, and tasks
     on_enter_prompt: /opsx-propose
-    stage_instructions: proposal mode
+    stage_instructions: Do not exit propose mode without my call
 
   - id: apply
     label: Apply
@@ -35,11 +35,12 @@ columns:
     label: Done
     description: Change implemented and archived
     on_enter_prompt: |
-      /opsx-archive 
-      commit our changes.
+      commit our changes using conventional commits with a meaninful message (8 words max).
       squash all the diff from main to a single consise conventional commit message.
-      rebase from main
-      solve possible conflicts.
+      rebase from main.
+      solve possible conflicts. Read the recent archived changes in openspec folder to know what to do.
       Use ask_me tool if the conflicts resolution is not clear.
-      merge to main
+      /opsx-archive with sync.
+      merge to main.
       Remove the task worktree.
+      push main branch.
