@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { resolveSlashReference } from "../workflow/slash-prompt.ts";
+import { resolvePrompt as resolveSlashReference } from "../engine/dialects/copilot-prompt-resolver.ts";
 
 let tmpDir: string;
 

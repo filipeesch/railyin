@@ -373,6 +373,7 @@
   <!-- Manage models modal -->
   <ManageModelsModal
     v-model="manageModelsOpen"
+    :workspace-id="taskWorkspaceId"
     @close="onManageModelsClosed"
   />
 
@@ -459,7 +460,7 @@ async function runLaunch(command: string, mode: "terminal" | "app") {
 const manageModelsOpen = ref(false);
 
 async function onManageModelsClosed() {
-  await taskStore.loadEnabledModels();
+  await taskStore.loadEnabledModels(taskWorkspaceId.value);
 }
 
 const groupedModels = computed(() => {
@@ -630,6 +631,9 @@ const open = computed({
 });
 
 const task = computed(() => taskStore.activeTask);
+const taskWorkspaceId = computed(() =>
+  task.value ? (boardStore.boards.find((b) => b.id === task.value!.boardId)?.workspaceId ?? undefined) : undefined,
+);
 const inputText = ref("");
 const transitioning = ref(false);
 const retrying = ref(false);
@@ -857,7 +861,7 @@ watch(
     sessionMemoryContent.value = null;
     launchConfig.value = null;
     if (!id) return;
-    taskStore.loadEnabledModels();
+    taskStore.loadEnabledModels(taskWorkspaceId.value);
     const t = taskStore.activeTask;
     if (t?.worktreeStatus === "ready") {
       gitStat.value = await taskStore.getGitStat(id);

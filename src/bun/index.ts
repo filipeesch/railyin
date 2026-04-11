@@ -69,20 +69,23 @@ syncFileBackedCompatibilityState();
 // 2. Load default workspace config (YAML files)
 const { error: configError } = loadConfig();
 
-// 3. Reset any tasks/executions that were still 'running' when the process
-//    last exited (crash, SIGKILL, etc.) so they don't appear stuck forever.
+// 3. Reset any tasks/executions that were still 'running' or 'waiting_user' when
+//    the process last exited (crash, SIGKILL, etc.) so they don't appear stuck forever.
+//    'waiting_user' is included because non-native engines (CopilotEngine, ClaudeEngine)
+//    hold the resume promise in memory — after a restart that in-memory state is gone and
+//    any future message would call engine.resume() on a dead execution.
 {
   const db = getDb();
   const stuckCount = db
-    .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tasks WHERE execution_state = 'running'")
+    .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tasks WHERE execution_state IN ('running', 'waiting_user')")
     .get()?.n ?? 0;
   if (stuckCount > 0) {
-    console.warn(`[db] Resetting ${stuckCount} task(s) stuck in 'running' state from previous session`);
-    db.run("UPDATE tasks SET execution_state = 'failed' WHERE execution_state = 'running'");
+    console.warn(`[db] Resetting ${stuckCount} task(s) stuck in 'running'/'waiting_user' state from previous session`);
+    db.run("UPDATE tasks SET execution_state = 'failed' WHERE execution_state IN ('running', 'waiting_user')");
     db.run(
       `UPDATE executions SET status = 'failed', finished_at = datetime('now'),
        details = 'Process restarted while execution was running'
-       WHERE status = 'running'`,
+       WHERE status IN ('running', 'waiting_user')`,
     );
   }
 }

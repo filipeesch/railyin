@@ -316,12 +316,18 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
 
   async listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]> {
     const sdk = await loadClaudeRuntime();
+    // A no-op onElicitation forces the SDK into bidirectional mode
+    // (hasBidirectionalNeeds=true → isSingleUserTurn=false). Without it the
+    // SDK closes stdin after the first result, tearing down the control channel
+    // before supportedModels() can receive its response and throwing
+    // "Query closed before response received".
     const query = sdk.query({
       prompt: "List available Claude models.",
       options: {
         cwd: workingDirectory,
         permissionMode: "plan",
         tools: [],
+        onElicitation: async () => ({ action: "decline" }),
       },
     });
 
@@ -335,6 +341,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         supportsAdaptiveThinking: Boolean(model.supportsAdaptiveThinking),
       }));
     } finally {
+      await query.interrupt?.().catch(() => { });
       query.close?.();
     }
   }

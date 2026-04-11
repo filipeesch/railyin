@@ -8,7 +8,7 @@
     @hide="emit('close')"
   >
     <div class="manage-models-body">
-      <ModelTreeView />
+      <ModelTreeView :workspace-id="props.workspaceId" />
     </div>
 
     <template #footer>
@@ -23,7 +23,7 @@ import Dialog from "primevue/dialog";
 import Button from "primevue/button";
 import ModelTreeView from "./ModelTreeView.vue";
 
-const props = defineProps<{ modelValue: boolean }>();
+const props = defineProps<{ modelValue: boolean; workspaceId?: number }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void; (e: "close"): void }>();
 
 const visible = ref(props.modelValue);

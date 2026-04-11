@@ -110,8 +110,12 @@ import ToggleSwitch from "primevue/toggleswitch";
 import { useTaskStore } from "../stores/task";
 import { useWorkspaceStore } from "../stores/workspace";
 
+const props = withDefaults(defineProps<{ workspaceId?: number }>(), { workspaceId: undefined });
+
 const taskStore = useTaskStore();
 const workspaceStore = useWorkspaceStore();
+
+const effectiveWorkspaceId = computed(() => props.workspaceId ?? workspaceStore.activeWorkspaceId ?? undefined);
 
 const loading = ref(false);
 const collapsed = ref(new Set<string>());
@@ -155,14 +159,14 @@ onMounted(async () => {
       workspaceStore.loadWorkspaces(),
       workspaceStore.load(),
     ]);
-    await taskStore.loadAllModels(workspaceStore.activeWorkspaceId ?? undefined);
+    await taskStore.loadAllModels(effectiveWorkspaceId.value);
   } finally {
     loading.value = false;
   }
 });
 
 watch(
-  () => workspaceStore.activeWorkspaceId,
+  effectiveWorkspaceId,
   async (workspaceId) => {
     if (workspaceId == null) return;
     await taskStore.loadAllModels(workspaceId);
@@ -180,14 +184,14 @@ function toggleProvider(id: string) {
 async function refresh(providerId: string) {
   refreshing.value.add(providerId);
   try {
-    await taskStore.loadAllModels(workspaceStore.activeWorkspaceId ?? undefined);
+    await taskStore.loadAllModels(effectiveWorkspaceId.value);
   } finally {
     refreshing.value.delete(providerId);
   }
 }
 
 async function onToggle(qualifiedModelId: string, enabled: boolean) {
-  await taskStore.setModelEnabled(qualifiedModelId, enabled, workspaceStore.activeWorkspaceId ?? undefined);
+  await taskStore.setModelEnabled(qualifiedModelId, enabled, effectiveWorkspaceId.value);
 }
 
 function modelLabel(model: { id: string; displayName?: string }): string {

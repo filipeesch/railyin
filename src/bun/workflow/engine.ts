@@ -16,7 +16,7 @@ import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { resolveToolsForColumn, getToolDescriptionBlock, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
 import { LSPServerManager } from "../lsp/manager.ts";
 import { formatReviewMessageForLLM } from "./review.ts";
-import { resolveSlashReference } from "./slash-prompt.ts";
+import { resolvePrompt } from "../engine/dialects/copilot-prompt-resolver.ts";
 import { listTodos } from "../db/todos.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -865,23 +865,12 @@ export async function handleTransition(
   const transitionWorktreePath =
     transitionGitRow?.worktree_status === "ready" ? (transitionGitRow.worktree_path ?? "") : "";
   let resolvedOnEnterPrompt = column.on_enter_prompt;
-  try {
-    resolvedOnEnterPrompt = await resolveSlashReference(column.on_enter_prompt, transitionWorktreePath);
-  } catch {
-    // If resolution fails, fall back to raw slug — runExecution will surface the error
-  }
   appendMessage(
     taskId,
     conversationId,
     "user",
     "prompt",
     column.on_enter_prompt,
-    resolvedOnEnterPrompt === column.on_enter_prompt
-      ? undefined
-      : {
-          resolved_content: resolvedOnEnterPrompt,
-          display_content: column.on_enter_prompt,
-        },
   );
 
   // 9. Register AbortController for cancellation (D3)
@@ -1166,19 +1155,13 @@ async function runExecution(
       }
     }
 
-    // Resolve slash references in prompt and stage_instructions using the worktree path.
-    // Resolution happens here (at execution time) so the worktree context is available.
     const worktreePath = gitContext?.worktree_path ?? "";
-    let resolvedPrompt: string;
-    let resolvedStageInstructions: string | undefined;
+    let resolvedPrompt = prompt;
     try {
-      resolvedPrompt = await resolveSlashReference(prompt, worktreePath);
-      resolvedStageInstructions = stageInstructions
-        ? await resolveSlashReference(stageInstructions, worktreePath)
-        : undefined;
+      resolvedPrompt = await resolvePrompt(prompt, worktreePath);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log("warn", `Slash reference resolution failed: ${msg}`, { taskId, executionId });
+      log("warn", `Prompt resolution failed: ${msg}`, { taskId, executionId });
       appendMessage(taskId, task.conversation_id ?? 0, "system", null, `Error: ${msg}`);
       db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
       db.run(
@@ -1190,6 +1173,7 @@ async function runExecution(
       if (waitRow) onTaskUpdated(mapTask(waitRow));
       return;
     }
+    const resolvedStageInstructions = stageInstructions;
 
     // Task 5.3: Assemble full execution payload as messages
     const sessionNotes = readSessionMemory(taskId);

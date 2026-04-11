@@ -201,10 +201,7 @@ describe("Copilot backend RPC scenarios", () => {
             .get(taskId);
         expect(persisted?.role).toBe("user");
         expect(persisted?.content).toBe("/opsx-propose add-dark-mode");
-        expect(JSON.parse(persisted?.metadata ?? "{}")).toEqual({
-            display_content: "/opsx-propose add-dark-mode",
-            resolved_content: "Resolved body: add-dark-mode",
-        });
+        expect(persisted?.metadata).toBeNull();
     });
 
     it("filters internal Copilot tool activity and preserves rich external tool results", async () => {

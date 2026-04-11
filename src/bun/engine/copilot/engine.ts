@@ -15,6 +15,7 @@ import type { CopilotSdkAdapter, CopilotSdkSession } from "./session";
 import { copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
+import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -143,7 +144,15 @@ export class CopilotEngine implements ExecutionEngine {
         return;
       }
 
-      let nextPrompt: string | null = prompt;
+      let resolvedInitialPrompt: string;
+      try {
+        resolvedInitialPrompt = await resolvePrompt(prompt, workingDirectory ?? "");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        yield { type: "error", message: msg, fatal: true };
+        return;
+      }
+      let nextPrompt: string | null = resolvedInitialPrompt;
 
       while (nextPrompt != null) {
         // Fire the prompt; pass the promise into translateCopilotStream so a rejection

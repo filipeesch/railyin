@@ -94,11 +94,7 @@ function renderMd(content: string): string {
   return marked.parse(content, { async: false, breaks: true, gfm: true }) as string;
 }
 
-const meta = computed(() => props.chunk.metadata as Record<string, unknown> | null);
-
-const displayContent = computed(() => {
-  return typeof meta.value?.display_content === "string" ? meta.value.display_content : props.chunk.content;
-});
+const displayContent = computed(() => props.chunk.content);
 
 /** True when an assistant message was generated in XML <tool_call> format instead of the JSON API format. These should be silently hidden. */
 const isXmlToolCall = computed(() =>
@@ -192,7 +188,8 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
 const interviewPayload = computed<InterviewPayload>(() => {
   if (props.chunk.type !== "interview_prompt") return { questions: [] };
   try {
-    return JSON.parse(props.chunk.content) as InterviewPayload;
+    const parsed = JSON.parse(props.chunk.content) as InterviewPayload;
+    return Array.isArray(parsed.questions) ? parsed : { ...parsed, questions: [] };
   } catch {
     return { questions: [] };
   }

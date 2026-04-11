@@ -1,7 +1,4 @@
-## Purpose
-Provides a reference syntax (`/stem`) that Railyin resolves at execution time by reading a prompt file from the project's worktree. Applies to workflow column fields (`on_enter_prompt`, `stage_instructions`) and task chat input.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Slash references resolve to prompt files from the project worktree
 The system SHALL resolve a value matching the pattern `/stem` (and optional text argument) — when it appears at the very beginning of the value — by reading `.github/prompts/{stem}.prompt.md`. The resolution SHALL be performed by the engine, not the orchestrator. The lookup SHALL first check the project worktree, then fall back to `process.cwd()/.github/prompts/` (the railyin app repo). The system SHALL preserve the original slash invocation as the user-visible chat content and pass the resolved prompt body to the underlying LLM.
@@ -37,3 +34,17 @@ The system SHALL resolve a value matching the pattern `/stem` (and optional text
 #### Scenario: Non-slash values pass through unchanged
 - **WHEN** a value does not start with `/stem` pattern
 - **THEN** the value is used as-is with no resolution attempted
+
+## REMOVED Requirements
+
+### Requirement: Visible chat shows slash invocation, engine receives resolved body via resolved_content metadata
+**Reason**: `resolved_content` metadata is no longer written to `conversation_messages`. The raw slash reference stored as message content IS the correct display value. Engine resolution happens internally and is not persisted.
+**Migration**: Remove reads of `metadata.resolved_content` from any display logic. The `content` field of prompt messages already contains the user-visible value.
+
+### Requirement: Resolved prompt body is not rendered as a normal user bubble
+**Reason**: No longer applicable — the raw slash reference is the message content; there is no separate resolved body stored.
+**Migration**: None required.
+
+### Requirement: Workflow/internal prompt entries may show compact display text
+**Reason**: The `display_content` metadata field is removed along with `resolved_content`. The message `content` field holds the display value directly.
+**Migration**: Remove reads of `metadata.display_content` from display logic.

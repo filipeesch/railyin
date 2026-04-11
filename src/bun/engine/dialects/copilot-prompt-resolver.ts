@@ -25,15 +25,25 @@ function stripFrontmatter(content: string): string {
 }
 
 /**
+ * Copilot dialect prompt resolver.
+ *
  * Resolves a slash reference like `/opsx-propose add-dark-mode` to the body of
- * `.github/prompts/opsx-propose.prompt.md` in the given worktree, with `$input`
- * substituted by any trailing argument text.
+ * `.github/prompts/opsx-propose.prompt.md`, with `$input` substituted by any
+ * trailing argument text.
+ *
+ * Lookup order:
+ *   1. `<worktreePath>/.github/prompts/<stem>.prompt.md`
+ *   2. `<process.cwd()>/.github/prompts/<stem>.prompt.md` (railyin app repo fallback)
  *
  * - If `value` does not match the slash pattern, it is returned unchanged.
- * - If the pattern matches but the file is not found, an error is thrown with a
- *   descriptive message identifying the missing path.
+ * - If the pattern matches but no file is found in either location, an error is
+ *   thrown with a descriptive message identifying the missing path.
+ *
+ * Used by: NativeEngine, CopilotEngine.
+ * Not used by: ClaudeEngine (passes prompt raw to the SDK, which resolves
+ * `.claude/commands/` and `.claude/skills/` natively in the cwd).
  */
-export async function resolveSlashReference(value: string, worktreePath: string): Promise<string> {
+export async function resolvePrompt(value: string, worktreePath: string): Promise<string> {
   const match = SLASH_PATTERN.exec(value.trim());
   if (!match) return value;
 
@@ -41,7 +51,18 @@ export async function resolveSlashReference(value: string, worktreePath: string)
   const fileName = `${stem}.prompt.md`;
   const filePath = join(worktreePath, ".github", "prompts", fileName);
 
-  if (!existsSync(filePath)) {
+  // Resolve path: try worktree first, then fall back to the app's own .github/prompts/
+  let resolvedPath: string | null = null;
+  if (existsSync(filePath)) {
+    resolvedPath = filePath;
+  } else {
+    const fallbackPath = join(process.cwd(), ".github", "prompts", fileName);
+    if (existsSync(fallbackPath)) {
+      resolvedPath = fallbackPath;
+    }
+  }
+
+  if (!resolvedPath) {
     // Not a slash reference — the leading / might be a path or URL fragment.
     // Only treat as an error if the stem looks like an intentional prompt name
     // (contains at least one letter and no path separators).
@@ -52,7 +73,7 @@ export async function resolveSlashReference(value: string, worktreePath: string)
     );
   }
 
-  const raw = readFileSync(filePath, "utf-8");
+  const raw = readFileSync(resolvedPath, "utf-8");
   const body = stripFrontmatter(raw);
   const resolved = body.replaceAll("$input", input.trim());
   return appendContent.trim() ? `${resolved}\n\n${appendContent.trim()}` : resolved;

@@ -28,7 +28,6 @@ import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { getDb } from "../db/index.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
-import { resolveSlashReference } from "../workflow/slash-prompt.ts";
 import { resolveEngine } from "./resolver.ts";
 import { getBoardWorkspaceId, getDefaultWorkspaceId, getTaskWorkspaceId, getWorkspaceConfigById } from "../workspace-context.ts";
 import type { MessageType } from "../../shared/rpc-types.ts";
@@ -152,23 +151,13 @@ export class Orchestrator implements ExecutionCoordinator {
       )
       .get(taskId);
     const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
-    const displayPrompt = column.on_enter_prompt;
-    let resolvedPrompt = column.on_enter_prompt;
-    try {
-      resolvedPrompt = await resolveSlashReference(column.on_enter_prompt, worktreePath);
-    } catch { /* fall back to raw text */ }
+    const resolvedPrompt = column.on_enter_prompt;
     appendMessage(
       taskId,
       conversationId,
       "user",
       "prompt",
-      displayPrompt,
-      resolvedPrompt === displayPrompt
-        ? undefined
-        : {
-            resolved_content: resolvedPrompt,
-            display_content: displayPrompt,
-          },
+      resolvedPrompt,
     );
 
     const execResult = db.run(
@@ -225,12 +214,24 @@ export class Orchestrator implements ExecutionCoordinator {
         [task.current_execution_id],
       );
       this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
-      await engine.resume(task.current_execution_id, { type: "ask_user", content });
-
-      const msgRow = db
-        .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-        .get(msgId)!;
-      return { message: mapConversationMessage(msgRow), executionId: task.current_execution_id };
+      try {
+        await engine.resume(task.current_execution_id, { type: "ask_user", content });
+        const msgRow = db
+          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
+          .get(msgId)!;
+        return { message: mapConversationMessage(msgRow), executionId: task.current_execution_id };
+      } catch {
+        // The engine has no live session for this execution (e.g. process was restarted).
+        // Roll back the optimistic state writes and fall through to start a fresh execution.
+        db.run(
+          "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = 'Engine session lost; restarted as new execution' WHERE id = ?",
+          [task.current_execution_id],
+        );
+        db.run(
+          "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = NULL WHERE id = ?",
+          [taskId],
+        );
+      }
     }
 
     const column = this._getColumnConfig(config, task.board_id, task.workflow_state);
@@ -253,25 +254,13 @@ export class Orchestrator implements ExecutionCoordinator {
       )
       .get(taskId);
     const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
-    let resolvedPrompt = content;
-    try {
-      resolvedPrompt = await resolveSlashReference(content, worktreePath);
-    } catch {
-      // Keep raw content on non-native resolution failures — this path remains
-      // non-blocking and still records what the user actually typed.
-    }
+    const resolvedPrompt = content;
     const msgId = appendMessage(
       taskId,
       conversationId,
       "user",
       "user",
       content,
-      resolvedPrompt === content
-        ? undefined
-        : {
-            resolved_content: resolvedPrompt,
-            display_content: content,
-          },
     );
 
     const execParams = this._buildExecutionParams(
@@ -601,6 +590,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const db = getDb();
     let tokenAccum = "";
     let reasoningAccum = "";
+    let hadOutput = false; // true once any visible output (tokens, tools, prompts) is produced
 
     try {
       // Task 5.3: Use the AbortController registered by _buildExecutionParams.
@@ -642,6 +632,7 @@ export class Orchestrator implements ExecutionCoordinator {
           case "token": {
             // Task 5.2: Accumulate tokens for eventual assistant message
             tokenAccum += event.content;
+            hadOutput = true;
             this.onToken(taskId, executionId, event.content, false);
             break;
           }
@@ -661,6 +652,7 @@ export class Orchestrator implements ExecutionCoordinator {
 
           case "tool_start": {
             if (event.isInternal) break;
+            hadOutput = true;
             // Task 5.2: Persist tool_call message immediately
             const callId = event.callId ?? `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
             const toolCallMsg = JSON.stringify({
@@ -694,6 +686,7 @@ export class Orchestrator implements ExecutionCoordinator {
 
           case "tool_result": {
             if (event.isInternal) break;
+            hadOutput = true;
             // Task 5.2: Persist tool_result message
             const resultMsg = JSON.stringify({
               type: "tool_result",
@@ -757,6 +750,21 @@ export class Orchestrator implements ExecutionCoordinator {
                 type: "assistant",
                 role: "assistant",
                 content: tokenAccum,
+                metadata: null,
+                createdAt: new Date().toISOString(),
+              });
+            } else if (!hadOutput) {
+              // Execution completed with no model output at all — surface a
+              // visible warning so the user isn't left with a silent no-op.
+              const warnMsg = "Agent completed with no output. The prompt may not have been resolved correctly.";
+              const msgId = appendMessage(taskId, conversationId, "system", null, warnMsg);
+              this.onNewMessage({
+                id: msgId,
+                taskId,
+                conversationId,
+                type: "system",
+                role: null,
+                content: warnMsg,
                 metadata: null,
                 createdAt: new Date().toISOString(),
               });
