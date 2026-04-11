@@ -223,6 +223,7 @@ export class Orchestrator implements ExecutionCoordinator {
       } catch {
         // The engine has no live session for this execution (e.g. process was restarted).
         // Roll back the optimistic state writes and fall through to start a fresh execution.
+        // The user message is already saved — skip re-appending it below.
         db.run(
           "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = 'Engine session lost; restarted as new execution' WHERE id = ?",
           [task.current_execution_id],
@@ -231,6 +232,41 @@ export class Orchestrator implements ExecutionCoordinator {
           "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = NULL WHERE id = ?",
           [taskId],
         );
+
+        const column = this._getColumnConfig(config, task.board_id, task.workflow_state);
+        const execResult = db.run(
+          `INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt)
+           VALUES (?, ?, ?, 'human-turn', 'running', ?)`,
+          [taskId, task.workflow_state, task.workflow_state, task.retry_count + 1],
+        );
+        const newExecutionId = execResult.lastInsertRowid as number;
+        db.run(
+          "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+          [newExecutionId, taskId],
+        );
+        this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
+
+        const gitRow = db
+          .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
+            "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+          )
+          .get(taskId);
+        const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
+
+        const execParams = this._buildExecutionParams(
+          task,
+          newExecutionId,
+          content,
+          column?.stage_instructions,
+          worktreePath,
+          "human_turn",
+        );
+        this._runNonNative(taskId, newExecutionId, engine, execParams);
+
+        const msgRow = db
+          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
+          .get(msgId)!;
+        return { message: mapConversationMessage(msgRow), executionId: newExecutionId };
       }
     }
 
