@@ -1,8 +1,32 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { electroview } from "../rpc";
-import type { Task, ConversationMessage, StreamToken, StreamError, ModelInfo, ProviderModelList, GitNumstat } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamToken, StreamError, StreamEvent, StreamEventType, ModelInfo, ProviderModelList, GitNumstat } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
+
+// ─── Per-task stream state ────────────────────────────────────────────────────
+
+export interface StreamBlock {
+  blockId: string;
+  type: StreamEventType;
+  content: string;
+  metadata: string | null;
+  subagentId: string | null;
+  done: boolean;
+}
+
+export interface TaskStreamState {
+  taskId: number;
+  executionId: number;
+  /** Ordered list of blockIds as they arrived */
+  blockOrder: string[];
+  /** Block content by blockId */
+  blocks: Map<string, StreamBlock>;
+  /** Whether the execution is complete */
+  isDone: boolean;
+  /** Ephemeral status message (not stored) */
+  statusMessage: string;
+}
 
 export const useTaskStore = defineStore("task", () => {
   // All tasks keyed by boardId
@@ -13,14 +37,15 @@ export const useTaskStore = defineStore("task", () => {
   // Active task detail
   const activeTaskId = ref<number | null>(null);
   const messages = ref<ConversationMessage[]>([]);
-  const streamingToken = ref("");     // accumulates current stream
-  const streamingTaskId = ref<number | null>(null);   // which task is streaming
 
-  // Reasoning display (task 4.1-4.3)
-  const streamingReasoningToken = ref("");   // live reasoning text for active round
-  const isStreamingReasoning = ref(false);   // true while reasoning tokens are arriving
+  // ── Per-task stream states (fixes cross-task contamination) ──
+  const streamStates = ref(new Map<number, TaskStreamState>());
 
-  // Ephemeral status message during non-streaming fallback (never stored in DB)
+  // Legacy streaming refs (kept for backward compat with old engine path)
+  const streamingToken = ref("");
+  const streamingTaskId = ref<number | null>(null);
+  const streamingReasoningToken = ref("");
+  const isStreamingReasoning = ref(false);
   const streamingStatusMessage = ref("");
 
   const loading = ref(false);
@@ -40,6 +65,10 @@ export const useTaskStore = defineStore("task", () => {
 
   const activeTask = computed(() => {
     return activeTaskId.value != null ? taskIndex.value[activeTaskId.value] ?? null : null;
+  });
+
+  const activeStreamState = computed(() => {
+    return activeTaskId.value != null ? streamStates.value.get(activeTaskId.value) ?? null : null;
   });
 
   function sortMessagesInPlace() {
@@ -164,6 +193,19 @@ export const useTaskStore = defineStore("task", () => {
     try {
       messages.value = await electroview.rpc.request["conversations.getMessages"]({ taskId });
       sortMessagesInPlace();
+      // If there is an active stream state for this task, merge DB messages into it
+      // to avoid showing duplicates from both sources
+      const existingState = streamStates.value.get(taskId);
+      if (existingState) {
+        // Remove blocks that correspond to DB messages (they'll be in messages[])
+        const persistedTypes: StreamEventType[] = ["assistant", "reasoning", "tool_call", "tool_result", "file_diff", "user", "system"];
+        const liveOnly = existingState.blockOrder.filter((bid) => {
+          const b = existingState.blocks.get(bid);
+          return b && !persistedTypes.includes(b.type as StreamEventType);
+        });
+        existingState.blockOrder = liveOnly;
+        streamStates.value = new Map(streamStates.value);
+      }
     } finally {
       messagesLoading.value = false;
     }
@@ -188,6 +230,123 @@ export const useTaskStore = defineStore("task", () => {
   }
 
   // ─── IPC push handlers ────────────────────────────────────────────────────
+
+  /** New unified stream event handler — replaces the three-channel old approach */
+  function onStreamEvent(event: StreamEvent) {
+    // Refresh changed file count when a file_diff arrives
+    if (event.type === "file_diff") {
+      refreshChangedFiles(event.taskId);
+    }
+
+    // Mark unread for non-active tasks on content events
+    if (event.taskId !== activeTaskId.value &&
+      (event.type === "assistant" || event.type === "reasoning" || event.type === "system" || event.type === "file_diff")
+    ) {
+      markTaskUnread(event.taskId);
+    }
+
+    // Ensure a state entry exists for this task
+    let state = streamStates.value.get(event.taskId);
+    if (!state) {
+      state = {
+        taskId: event.taskId,
+        executionId: event.executionId,
+        blockOrder: [],
+        blocks: new Map(),
+        isDone: false,
+        statusMessage: "",
+      };
+      streamStates.value.set(event.taskId, state);
+    }
+
+    if (event.type === "done") {
+      state.isDone = true;
+      state.statusMessage = "";
+      // Trigger Vue reactivity
+      streamStates.value = new Map(streamStates.value);
+      return;
+    }
+
+    if (event.type === "status_chunk") {
+      state.statusMessage = event.content;
+      streamStates.value = new Map(streamStates.value);
+      return;
+    }
+
+    // For chunks, append to existing live block or create one
+    if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
+      const blockType = event.type === "text_chunk" ? "text_chunk" : "reasoning_chunk";
+      // Find existing live block of same type at end of blockOrder
+      const lastBlockId = state.blockOrder.at(-1);
+      const lastBlock = lastBlockId ? state.blocks.get(lastBlockId) : undefined;
+
+      if (lastBlock && lastBlock.type === blockType && !lastBlock.done) {
+        // Append to existing live block
+        lastBlock.content += event.content;
+      } else {
+        // Start new live block
+        const newBlockId = `live-${blockType}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        state.blockOrder.push(newBlockId);
+        state.blocks.set(newBlockId, {
+          blockId: newBlockId,
+          type: blockType,
+          content: event.content,
+          metadata: null,
+          subagentId: event.subagentId,
+          done: false,
+        });
+      }
+      streamStates.value = new Map(streamStates.value);
+      return;
+    }
+
+    // For persisted events (assistant, reasoning, tool_call, tool_result, file_diff, user, system)
+    // Close out any existing live blocks of incompatible type
+    const blockId = event.blockId || `${event.type}-${event.seq || Date.now()}`;
+
+    if (event.type === "assistant") {
+      // Close live text_chunk blocks — persisted version replaces them
+      const newBlockOrder = state.blockOrder.filter((bid) => {
+        const b = state!.blocks.get(bid);
+        return b?.type !== "text_chunk";
+      });
+      for (const removedId of state.blockOrder) {
+        if (!newBlockOrder.includes(removedId)) {
+          state.blocks.delete(removedId);
+        }
+      }
+      state.blockOrder = newBlockOrder;
+    }
+
+    if (event.type === "reasoning") {
+      // Close live reasoning_chunk blocks — persisted version replaces them
+      const newBlockOrder = state.blockOrder.filter((bid) => {
+        const b = state!.blocks.get(bid);
+        return b?.type !== "reasoning_chunk";
+      });
+      for (const removedId of state.blockOrder) {
+        if (!newBlockOrder.includes(removedId)) {
+          state.blocks.delete(removedId);
+        }
+      }
+      state.blockOrder = newBlockOrder;
+    }
+
+    // Add persisted block if not already present
+    if (!state.blocks.has(blockId)) {
+      state.blockOrder.push(blockId);
+      state.blocks.set(blockId, {
+        blockId,
+        type: event.type,
+        content: event.content,
+        metadata: event.metadata,
+        subagentId: event.subagentId,
+        done: true,
+      });
+    }
+
+    streamStates.value = new Map(streamStates.value);
+  }
 
   function onStreamToken(payload: StreamToken) {
     // Always accumulate tokens regardless of which task is open in the drawer.
@@ -455,6 +614,8 @@ export const useTaskStore = defineStore("task", () => {
     isStreamingReasoning,
     streamingStatusMessage,
     streamingTaskId,
+    streamStates,
+    activeStreamState,
     loading,
     messagesLoading,
     availableModels,
@@ -487,6 +648,7 @@ export const useTaskStore = defineStore("task", () => {
     workspaceHasUnread,
     onStreamToken,
     onStreamError,
+    onStreamEvent,
     onTaskUpdated,
     onNewMessage,
   };

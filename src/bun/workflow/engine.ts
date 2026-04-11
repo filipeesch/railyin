@@ -57,10 +57,13 @@ export const MICRO_COMPACT_CLEARABLE_TOOLS = new Set([
 
 // ─── Streaming callback type ──────────────────────────────────────────────────
 
+/** @deprecated Use OnStreamEvent instead */
 export type OnToken = (taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean) => void;
 export type OnError = (taskId: number, executionId: number, error: string) => void;
 export type OnTaskUpdated = (task: Task) => void;
+/** @deprecated Use OnStreamEvent instead */
 export type OnNewMessage = (message: ConversationMessage) => void;
+export type OnStreamEvent = (event: import("../../shared/rpc-types.ts").StreamEvent) => void;
 
 // ─── Cancellation map ─────────────────────────────────────────────────────────
 // Keyed by executionId. Populated at execution start, removed on finish.
@@ -790,6 +793,7 @@ export async function handleTransition(
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
   onNewMessage: OnNewMessage,
+  onStreamEvent?: OnStreamEvent,
 ): Promise<{ task: Task; executionId: number | null }> {
   const db = getDb();
 
@@ -880,7 +884,7 @@ export async function handleTransition(
   // 9. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
   const resolvedModel = updatedRow.model ?? "";
-  runExecution(taskId, executionId, resolvedOnEnterPrompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
+  runExecution(taskId, executionId, resolvedOnEnterPrompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage, onStreamEvent).catch(
     () => { },
   );
 
@@ -1077,6 +1081,7 @@ async function runExecution(
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
   onNewMessage: OnNewMessage = () => {},
+  onStreamEvent?: OnStreamEvent,
 ): Promise<void> {
   const db = getDb();
 
@@ -1091,6 +1096,7 @@ async function runExecution(
     );
     const cancelledRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (cancelledRow) onTaskUpdated(mapTask(cancelledRow));
+    onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, subagentId: null, done: true });
   }
 
   let lspManager: LSPServerManager | undefined;
@@ -1252,12 +1258,12 @@ async function runExecution(
 
     const taskCallbacks: TaskToolCallbacks = {
       handleTransition: (tId, toState) => {
-        handleTransition(tId, toState, onToken, onError, onTaskUpdated, onNewMessage).catch(
+        handleTransition(tId, toState, onToken, onError, onTaskUpdated, onNewMessage, onStreamEvent).catch(
           (err) => log("error", `task-tool handleTransition failed: ${err}`, { taskId, executionId }),
         );
       },
       handleHumanTurn: (tId, message) => {
-        handleHumanTurn(tId, message, onToken, onError, onTaskUpdated, onNewMessage).catch(
+        handleHumanTurn(tId, message, onToken, onError, onTaskUpdated, onNewMessage, onStreamEvent).catch(
           (err) => log("error", `task-tool handleHumanTurn failed: ${err}`, { taskId, executionId }),
         );
       },
@@ -1364,13 +1370,16 @@ async function runExecution(
           if (event.type === "token") {
             fullResponse += event.content;
             onToken(taskId, executionId, event.content, false);
+            onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, subagentId: null, done: false });
           } else if (event.type === "reasoning") {
             reasoningAccum += event.content;
             hadReasoning = true;
             onToken(taskId, executionId, event.content, false, true);
+            onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, subagentId: null, done: false });
           } else if (event.type === "status") {
             // Ephemeral status event from non-streaming fallback — forward to frontend only, no DB write.
             onToken(taskId, executionId, event.content, false, false, true);
+            onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.content, metadata: null, subagentId: null, done: false });
           } else if (event.type === "tool_calls") {
             log("debug", `Tool calls received: ${event.calls.map(c => c.function.name).join(", ")}`, { taskId, executionId });
             roundCalls = event.calls;
@@ -1522,6 +1531,7 @@ async function runExecution(
         if (cleanReasoning) {
           const rId = appendMessage(taskId, task.conversation_id ?? 0, "reasoning" as MessageType, null, cleanReasoning);
           onNewMessage({ id: rId, taskId, conversationId: task.conversation_id ?? 0, type: "reasoning", role: null, content: cleanReasoning, metadata: null, createdAt: new Date().toISOString() });
+          onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: cleanReasoning, metadata: null, subagentId: null, done: false });
         }
         reasoningAccum = "";
         hadReasoning = false;
@@ -1556,6 +1566,7 @@ async function runExecution(
             metadata: null,
             createdAt: new Date().toISOString(),
           });
+          onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: preambleClean, metadata: null, subagentId: null, done: false });
         }
       }
 
@@ -1837,6 +1848,7 @@ async function runExecution(
           type: "tool_call", role: null, content: callContent, metadata: null,
           createdAt: new Date().toISOString(),
         });
+        onStreamEvent?.({ taskId, executionId, seq: 0, blockId: call.id ?? callId.toString(), type: "tool_call", content: callContent, metadata: null, subagentId: null, done: false });
 
         const result = await executeTool(fnName, fnArgs, toolCtx);
 
@@ -1878,6 +1890,7 @@ async function runExecution(
           type: "tool_result", role: null, content: storedResult, metadata: resultMeta,
           createdAt: new Date().toISOString(),
         });
+        onStreamEvent?.({ taskId, executionId, seq: 0, blockId: call.id ?? resultId.toString(), type: "tool_result", content: storedResult, metadata: JSON.stringify(resultMeta), subagentId: null, done: false });
 
         // Emit UI-only file_diff message (never forwarded to LLM)
         const diffsToEmit = diffs ?? (diff ? [diff] : []);
@@ -1897,6 +1910,7 @@ async function runExecution(
             type: "file_diff", role: null, content: diffContent, metadata: diffMeta,
             createdAt: new Date().toISOString(),
           });
+          onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${call.id}-diff`, type: "file_diff", content: diffContent, metadata: JSON.stringify(diffMeta), subagentId: null, done: false });
         }
 
         liveMessages.push({
@@ -1947,6 +1961,7 @@ async function runExecution(
       if (cleanReasoning) {
         const rId = appendMessage(taskId, task.conversation_id ?? 0, "reasoning" as MessageType, null, cleanReasoning);
         onNewMessage({ id: rId, taskId, conversationId: task.conversation_id ?? 0, type: "reasoning", role: null, content: cleanReasoning, metadata: null, createdAt: new Date().toISOString() });
+        onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: cleanReasoning, metadata: null, subagentId: null, done: false });
       }
       reasoningAccum = "";
     }
@@ -1954,6 +1969,7 @@ async function runExecution(
     if (!isBadAssistantResponse(cleanResponse)) {
       const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", cleanResponse);
       onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: cleanResponse, metadata: null, createdAt: new Date().toISOString() });
+      onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: cleanResponse, metadata: null, subagentId: null, done: false });
 
       // Trigger background session memory extraction every N completed AI turns.
       // Count only persisted assistant messages so the interval is stable.
@@ -2000,6 +2016,7 @@ async function runExecution(
 
     log("info", `Execution completed (${toolRounds} round${toolRounds !== 1 ? "s" : ""}, ~$${totalCostEst.toFixed(4)})`, { taskId, executionId });
     onToken(taskId, executionId, "", true);
+    onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, subagentId: null, done: true });
     db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
     db.run(
       "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ?, cost_estimate = ? WHERE id = ?",
@@ -2060,6 +2077,7 @@ export async function handleHumanTurn(
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
   onNewMessage: OnNewMessage,
+  onStreamEvent?: OnStreamEvent,
 ): Promise<{ message: ConversationMessage; executionId: number }> {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -2126,7 +2144,7 @@ export async function handleHumanTurn(
   const resolvedModel = task.model ?? "";
 
   // Run async
-  runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
+  runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage, onStreamEvent).catch(
     () => { },
   );
 

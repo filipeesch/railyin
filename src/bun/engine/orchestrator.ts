@@ -13,7 +13,7 @@ import type { ExecutionEngine, EngineEvent, ExecutionParams, NativeExecutionType
 import type { LoadedConfig } from "../config/index.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
-import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
+import type { OnToken, OnError, OnTaskUpdated, OnNewMessage, OnStreamEvent } from "../workflow/engine.ts";
 import {
   handleTransition,
   handleHumanTurn,
@@ -39,10 +39,15 @@ export class Orchestrator implements ExecutionCoordinator {
   private readonly onError: OnError;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly onNewMessage: OnNewMessage;
+  private onStreamEvent?: OnStreamEvent;
   private readonly engines = new Map<string, ExecutionEngine>();
 
   /** Map of executionId → AbortController for managing cancellation */
   private readonly abortControllers = new Map<number, AbortController>();
+
+  setOnStreamEvent(cb: OnStreamEvent): void {
+    this.onStreamEvent = cb;
+  }
 
   constructor(
     engine: ExecutionEngine,
@@ -111,7 +116,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleTransition(taskId, toState, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+        () => handleTransition(taskId, toState, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
       );
     }
 
@@ -198,7 +203,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleHumanTurn(taskId, content, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+        () => handleHumanTurn(taskId, content, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
       );
     }
 
@@ -326,7 +331,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleRetry(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+        () => handleRetry(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
       );
     }
 
@@ -380,7 +385,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, manualEdits),
+        () => handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, manualEdits, this.onStreamEvent),
       );
     }
 
@@ -771,12 +776,20 @@ export class Orchestrator implements ExecutionCoordinator {
       for await (const event of stream) {
         // Check for cancellation (Task 5.3)
         if (abortController.signal.aborted) {
+          // Task 5.7: Flush tokenAccum before cancel to prevent text loss
+          if (tokenAccum) {
+            const cancelFlushId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
+            this.onNewMessage({ id: cancelFlushId, taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, metadata: null, createdAt: new Date().toISOString() });
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, subagentId: null, done: false });
+            tokenAccum = "";
+          }
           db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
           db.run(
             "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
             [executionId],
           );
           this.onToken(taskId, executionId, "", true);
+          this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, subagentId: null, done: true });
           return;
         }
 
@@ -786,6 +799,7 @@ export class Orchestrator implements ExecutionCoordinator {
             tokenAccum += event.content;
             hadOutput = true;
             this.onToken(taskId, executionId, event.content, false);
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, subagentId: null, done: false });
             break;
           }
 
@@ -793,19 +807,27 @@ export class Orchestrator implements ExecutionCoordinator {
             // Task 5.2: Accumulate reasoning separately
             reasoningAccum += event.content;
             this.onToken(taskId, executionId, event.content, false, true);
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, subagentId: null, done: false });
             break;
           }
 
           case "status": {
             // Ephemeral status — relay but don't persist
             this.onToken(taskId, executionId, event.message, false, false, true);
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.message, metadata: null, subagentId: null, done: false });
             break;
           }
 
           case "tool_start": {
             if (event.isInternal) break;
             hadOutput = true;
-            // Task 5.2: Persist tool_call message immediately
+            // Task 5.4: Flush tokenAccum BEFORE emitting tool_call to fix ordering bug
+            if (tokenAccum) {
+              const flushId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
+              this.onNewMessage({ id: flushId, taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, metadata: null, createdAt: new Date().toISOString() });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, subagentId: null, done: false });
+              tokenAccum = "";
+            }
             const callId = event.callId ?? `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
             const toolCallMsg = JSON.stringify({
               type: "function",
@@ -835,6 +857,7 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: toolMeta,
               createdAt: new Date().toISOString(),
             });
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), subagentId: null, done: false });
             break;
           }
 
@@ -872,6 +895,7 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: resultMeta,
               createdAt: new Date().toISOString(),
             });
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: event.callId ?? msgId.toString(), type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), subagentId: null, done: false });
 
             // Emit UI-only file_diff for write tools (never forwarded to LLM)
             if (!event.isError && event.callId) {
@@ -900,7 +924,7 @@ export class Orchestrator implements ExecutionCoordinator {
           }
 
           case "done": {
-            // Task 5.2: Flush accumulated tokens as final assistant message
+            // Task 5.8: Flush accumulated tokens as final assistant message
             if (tokenAccum) {
               const msgId = appendMessage(
                 taskId,
@@ -919,6 +943,8 @@ export class Orchestrator implements ExecutionCoordinator {
                 metadata: null,
                 createdAt: new Date().toISOString(),
               });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, subagentId: null, done: false });
+              tokenAccum = "";
             } else if (!hadOutput) {
               // Execution completed with no model output at all — surface a
               // visible warning so the user isn't left with a silent no-op.
@@ -943,6 +969,7 @@ export class Orchestrator implements ExecutionCoordinator {
               [executionId],
             );
             this.onToken(taskId, executionId, "", true);
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, subagentId: null, done: true });
             break;
           }
 

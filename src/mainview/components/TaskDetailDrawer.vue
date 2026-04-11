@@ -101,35 +101,64 @@
               />
             </template>
 
-            <!-- Live streaming reasoning bubble (task 6.2) -->
-            <ReasoningBubble
-              v-if="taskStore.streamingReasoningToken && taskStore.streamingTaskId === task.id"
-              :content="taskStore.streamingReasoningToken"
-              :streaming="taskStore.isStreamingReasoning"
-              key="live-reasoning"
-            />
+            <!-- Unified live stream blocks (arrival order guaranteed) -->
+            <template v-if="taskStore.activeStreamState && !taskStore.activeStreamState.isDone">
+              <template v-for="blockId in taskStore.activeStreamState.blockOrder" :key="blockId">
+                <!-- Live reasoning chunk -->
+                <ReasoningBubble
+                  v-if="taskStore.activeStreamState.blocks.get(blockId)?.type === 'reasoning_chunk'"
+                  :content="taskStore.activeStreamState.blocks.get(blockId)!.content"
+                  :streaming="true"
+                />
+                <!-- Live text chunk -->
+                <div
+                  v-else-if="taskStore.activeStreamState.blocks.get(blockId)?.type === 'text_chunk'"
+                  class="msg msg--assistant"
+                >
+                  <div class="msg__bubble prose streaming" v-html="renderMd(taskStore.activeStreamState.blocks.get(blockId)!.content)" />
+                  <div class="msg__meta">AI<span class="cursor">▌</span></div>
+                </div>
+              </template>
+              <!-- Ephemeral status message -->
+              <div
+                v-if="taskStore.activeStreamState.statusMessage"
+                class="msg msg--system msg--status-ephemeral"
+              >
+                <ProgressSpinner style="width: 16px; height: 16px" />
+                <span>{{ taskStore.activeStreamState.statusMessage }}</span>
+              </div>
+            </template>
 
-            <!-- Live streaming bubble (only when this task is the one streaming) -->
-            <div
-              v-if="taskStore.streamingToken && taskStore.streamingTaskId === task.id"
-              class="msg msg--assistant"
-            >
-              <div class="msg__bubble prose streaming" v-html="renderMd(taskStore.streamingToken)" />
-              <div class="msg__meta">AI<span class="cursor">▌</span></div>
-            </div>
-
-            <!-- Ephemeral status message during non-streaming fallback (cleared when tokens arrive) -->
-            <div
-              v-else-if="taskStore.streamingStatusMessage && taskStore.streamingTaskId === task.id"
-              class="msg msg--system msg--status-ephemeral"
-            >
-              <ProgressSpinner style="width: 16px; height: 16px" />
-              <span>{{ taskStore.streamingStatusMessage }}</span>
-            </div>
+            <!-- Fallback: legacy streaming (non-pipeline engine path) -->
+            <template v-else-if="!taskStore.activeStreamState">
+              <!-- Live streaming reasoning bubble -->
+              <ReasoningBubble
+                v-if="taskStore.streamingReasoningToken && taskStore.streamingTaskId === task.id"
+                :content="taskStore.streamingReasoningToken"
+                :streaming="taskStore.isStreamingReasoning"
+                key="live-reasoning"
+              />
+              <!-- Live streaming text bubble -->
+              <div
+                v-if="taskStore.streamingToken && taskStore.streamingTaskId === task.id"
+                class="msg msg--assistant"
+              >
+                <div class="msg__bubble prose streaming" v-html="renderMd(taskStore.streamingToken)" />
+                <div class="msg__meta">AI<span class="cursor">▌</span></div>
+              </div>
+              <!-- Ephemeral status (legacy) -->
+              <div
+                v-else-if="taskStore.streamingStatusMessage && taskStore.streamingTaskId === task.id"
+                class="msg msg--system msg--status-ephemeral"
+              >
+                <ProgressSpinner style="width: 16px; height: 16px" />
+                <span>{{ taskStore.streamingStatusMessage }}</span>
+              </div>
+            </template>
 
             <!-- Running spinner when no tokens yet -->
             <div
-              v-else-if="task.executionState === 'running'"
+              v-if="task.executionState === 'running' && !hasLiveContent"
               class="msg msg--system"
             >
               <ProgressSpinner style="width: 20px; height: 20px" />
@@ -560,6 +589,13 @@ const displayItems = computed<DisplayItem[]>(() => {
     }
   }
   return items;
+});
+
+// True if there is any live content in the stream state (suppresses the "Thinking..." spinner)
+const hasLiveContent = computed(() => {
+  const state = taskStore.activeStreamState;
+  if (!state || state.isDone) return false;
+  return state.blockOrder.length > 0 || !!state.statusMessage;
 });
 
 // ─── Resizable drawer ────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
 import { runMigrations, seedDefaultWorkspace, syncFileBackedCompatibilityState } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
 import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
+import { StreamBatcher } from "./pipeline/batcher.ts";
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 {
@@ -61,7 +62,7 @@ import { mapTask } from "./db/mappers.ts";
 import { appendMessage, compactConversation } from "./workflow/engine.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
-import type { RailynRPCType } from "../shared/rpc-types.ts";
+import type { RailynRPCType, StreamEvent } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -118,6 +119,34 @@ function notifyWorkflowReloaded(): void {
   win.webview.rpc.send["workflow.reloaded"]({});
 }
 
+// ─── Per-execution stream batchers ───────────────────────────────────────────
+const batchers = new Map<number, StreamBatcher>();
+
+function getOrCreateBatcher(taskId: number, executionId: number): StreamBatcher {
+  const existing = batchers.get(executionId);
+  if (existing) return existing;
+  const batcher = new StreamBatcher(taskId, executionId, (events) => {
+    for (const event of events) {
+      win.webview.rpc.send["stream.event"](event);
+    }
+  });
+  batcher.start();
+  batchers.set(executionId, batcher);
+  return batcher;
+}
+
+function onStreamEvent(event: StreamEvent): void {
+  const batcher = getOrCreateBatcher(event.taskId, event.executionId);
+  // Real-time relay for chunk events (before buffering)
+  if (event.type === "text_chunk" || event.type === "reasoning_chunk" || event.type === "status_chunk") {
+    win.webview.rpc.send["stream.event"](event);
+  }
+  batcher.push(event);
+  if (event.done) {
+    batchers.delete(event.executionId);
+  }
+}
+
 // ─── Wire up RPC handlers ─────────────────────────────────────────────────────
 
 // Create orchestrator once all RPC callbacks are defined
@@ -129,6 +158,10 @@ const orchestrator: Orchestrator | null = !configError
       notifyNewMessage,
     )
   : null;
+
+if (orchestrator) {
+  orchestrator.setOnStreamEvent(onStreamEvent);
+}
 
 const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
   handlers: {
