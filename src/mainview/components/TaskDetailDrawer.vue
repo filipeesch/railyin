@@ -305,21 +305,35 @@
               />
             </div>
           </template>
-          <!-- Context gauge -->
-          <div
+          <!-- Context ring gauge -->
+          <svg
             v-if="taskStore.contextUsage"
-            class="context-gauge"
+            class="context-ring"
+            width="28"
+            height="28"
+            viewBox="0 0 28 28"
             :title="`~${taskStore.contextUsage.usedTokens.toLocaleString()} / ${taskStore.contextUsage.maxTokens.toLocaleString()} tokens (${Math.round(taskStore.contextUsage.fraction * 100)}%)`"
           >
-            <div
-              class="context-gauge__bar"
-              :class="{
-                'context-gauge__bar--warn': taskStore.contextUsage.fraction >= 0.70 && taskStore.contextUsage.fraction < 0.90,
-                'context-gauge__bar--danger': taskStore.contextUsage.fraction >= 0.90,
-              }"
-              :style="{ width: `${Math.round(taskStore.contextUsage.fraction * 100)}%` }"
+            <!-- track -->
+            <circle cx="14" cy="14" r="10" fill="none" stroke-width="3" class="context-ring__track" />
+            <!-- fill arc -->
+            <circle
+              cx="14" cy="14" r="10" fill="none" stroke-width="3"
+              stroke-linecap="round"
+              stroke-dasharray="62.83"
+              :stroke-dashoffset="62.83 * (1 - taskStore.contextUsage.fraction)"
+              :stroke="taskStore.contextUsage.fraction >= 0.90 ? 'var(--p-red-500, #ef4444)' : taskStore.contextUsage.fraction >= 0.70 ? 'var(--p-yellow-500, #eab308)' : 'var(--p-green-500, #22c55e)'"
+              transform="rotate(-90 14 14)"
             />
-          </div>
+            <!-- percentage label -->
+            <text
+              v-if="taskStore.contextUsage.fraction > 0"
+              x="14" y="18"
+              text-anchor="middle"
+              font-size="7"
+              class="context-ring__label"
+            >{{ Math.round(taskStore.contextUsage.fraction * 100) }}%</text>
+          </svg>
           <!-- Compact button -->
           <Button
             label="Compact"
@@ -1028,29 +1042,18 @@ watch(
   border-top: 1px solid var(--p-content-border-color);
 }
 
-.context-gauge {
-  flex: 1;
-  max-width: 80px;
-  height: 6px;
-  background: var(--p-surface-200, #e2e8f0);
-  border-radius: 3px;
-  overflow: hidden;
+.context-ring {
+  flex-shrink: 0;
   cursor: default;
 }
 
-.context-gauge__bar {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--p-green-500, #22c55e);
-  transition: width 0.3s ease;
+.context-ring__track {
+  stroke: var(--p-surface-200, #e2e8f0);
 }
 
-.context-gauge__bar--warn {
-  background: var(--p-yellow-500, #eab308);
-}
-
-.context-gauge__bar--danger {
-  background: var(--p-red-500, #ef4444);
+.context-ring__label {
+  fill: var(--p-text-color, #1e293b);
+  font-family: system-ui, sans-serif;
 }
 
 .context-warning {
@@ -1216,7 +1219,10 @@ html.dark-mode .task-detail__side {
 html.dark-mode .task-detail__input {
   border-top-color: var(--p-surface-700, #334155);
 }
-html.dark-mode .context-gauge {
-  background: var(--p-surface-700, #334155);
+html.dark-mode .context-ring__track {
+  stroke: var(--p-surface-700, #334155);
+}
+html.dark-mode .context-ring__label {
+  fill: var(--p-text-color, #e2e8f0);
 }
 </style>

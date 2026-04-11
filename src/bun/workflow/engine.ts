@@ -488,17 +488,22 @@ export function estimateContextUsage(
   return { usedTokens, maxTokens, fraction };
 }
 
-export function estimateContextWarning(taskId: number): string | null {
+export function estimateContextWarning(taskId: number, contextWindowOverride?: number): string | null {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
   if (!task) return null;
 
-  const config = getConfig();
-  // Resolve fallback context window from task's provider config
-  const qualifiedModel = task?.model ?? "";
-  const provId = qualifiedModel.split("/")[0];
-  const provConfig = config.providers.find((p) => p.id === provId);
-  const contextWindowTokens = provConfig?.context_window_tokens ?? 128_000;
+  let contextWindowTokens: number;
+  if (contextWindowOverride != null) {
+    contextWindowTokens = contextWindowOverride;
+  } else {
+    const config = getConfig();
+    // Resolve fallback context window from task's provider config
+    const qualifiedModel = task.model ?? "";
+    const provId = qualifiedModel.split("/")[0];
+    const provConfig = config.providers.find((p) => p.id === provId);
+    contextWindowTokens = provConfig?.context_window_tokens ?? 128_000;
+  }
   const warnAt = Math.floor(contextWindowTokens * CONTEXT_WARN_FRACTION);
 
   const { usedTokens } = estimateContextUsage(taskId, contextWindowTokens);

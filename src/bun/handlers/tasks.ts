@@ -18,6 +18,29 @@ import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getBoardWorkspaceId, getDefaultWorkspaceId, getTaskWorkspaceId, getWorkspaceConfigById } from "../workspace-context.ts";
 import { getProjectById } from "../project-store.ts";
 
+// ─── Helper: resolve model context window across all engine types ─────────────
+// Resolution order:
+//   1. orchestrator.listModels() — works for Copilot + native engines
+//   2. resolveModelContextWindow() — fallback for native/OpenAI-compat providers
+//   3. 128_000 — hard fallback
+
+async function resolveContextWindow(
+  taskModel: string,
+  workspaceId: number,
+  orchestrator: ExecutionCoordinator | null,
+): Promise<number> {
+  if (orchestrator) {
+    try {
+      const models = await orchestrator.listModels(workspaceId);
+      const found = models.find((m) => m.qualifiedId === taskModel);
+      if (found?.contextWindow != null) return found.contextWindow;
+    } catch { /* fall through */ }
+  }
+  try {
+    return await resolveModelContextWindow(taskModel);
+  } catch { /* fall through */ }
+  return 128_000;
+}
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
 
@@ -185,7 +208,12 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         }
       } catch { /* not JSON — treat as plain text */ }
 
-      const warning = estimateContextWarning(params.taskId);
+      const taskWorkspaceId = getTaskWorkspaceId(params.taskId);
+      const taskRow2 = getDb().query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
+      const resolvedCtxWindow = taskRow2?.model
+        ? await resolveContextWindow(taskRow2.model, taskWorkspaceId, orchestrator)
+        : 128_000;
+      const warning = estimateContextWarning(params.taskId, resolvedCtxWindow);
       if (warning) {
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
@@ -351,10 +379,11 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       const db = getDb();
       const task = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
       const taskModel = task?.model ?? null;
-      const workspaceConfig = getWorkspaceConfigById(getTaskWorkspaceId(params.taskId));
+      const workspaceId = getTaskWorkspaceId(params.taskId);
+      const workspaceConfig = getWorkspaceConfigById(workspaceId);
       const maxTokens = await runWithConfig(workspaceConfig, async () => (
         taskModel
-          ? resolveModelContextWindow(taskModel)
+          ? resolveContextWindow(taskModel, workspaceId, orchestrator)
           : Promise.resolve(128_000)
       ));
       return estimateContextUsage(params.taskId, maxTokens);

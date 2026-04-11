@@ -7,6 +7,7 @@ import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
 import type { Database } from "bun:sqlite";
 import type { Task } from "../../shared/rpc-types.ts";
+import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 
 let db: Database;
 let gitDir: string;
@@ -260,6 +261,80 @@ describe("tasks.delete", () => {
     // Task must still be gone from DB despite the warning
     const afterTask = db.query<{ id: number }, [number]>("SELECT id FROM tasks WHERE id = ?").get(task.id);
     expect(afterTask).toBeNull();
+  });
+});
+
+// ─── resolveContextWindow (via tasks.contextUsage) ────────────────────────────
+// Tests the engine-agnostic context window resolution introduced in task 1.1.
+// resolveContextWindow is private; tested through the tasks.contextUsage handler.
+
+function makeMockOrchestrator(models: Array<{ qualifiedId: string; contextWindow?: number }>): ExecutionCoordinator {
+  return {
+    listModels: async () => models.map((m) => ({
+      qualifiedId: m.qualifiedId,
+      displayName: m.qualifiedId,
+      contextWindow: m.contextWindow,
+    })),
+    executeTransition: async () => { throw new Error("not implemented"); },
+    executeHumanTurn: async () => { throw new Error("not implemented"); },
+    executeRetry: async () => { throw new Error("not implemented"); },
+    executeCodeReview: async () => { throw new Error("not implemented"); },
+    cancel: () => {},
+  };
+}
+
+describe("tasks.contextUsage — resolveContextWindow", () => {
+  it("uses contextWindow from orchestrator.listModels() when model is found", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/claude-sonnet-4.6' WHERE id = ?", [taskId]);
+
+    const orchestrator = makeMockOrchestrator([
+      { qualifiedId: "copilot/claude-sonnet-4.6", contextWindow: 200_000 },
+    ]);
+    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+
+    const result = await handlers["tasks.contextUsage"]({ taskId });
+    expect(result.maxTokens).toBe(200_000);
+  });
+
+  it("falls back to 128_000 when orchestrator returns no matching model", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/unknown-model' WHERE id = ?", [taskId]);
+
+    // Orchestrator returns a different model — no match
+    const orchestrator = makeMockOrchestrator([
+      { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
+    ]);
+    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+
+    const result = await handlers["tasks.contextUsage"]({ taskId });
+    // No matching model in orchestrator; resolveModelContextWindow also won't find
+    // a provider for "copilot" in the test config — final fallback is 128_000.
+    expect(result.maxTokens).toBe(128_000);
+  });
+
+  it("falls back to 128_000 when no model is set on the task", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
+
+    const handlers = taskHandlers(null, () => {}, () => {});
+
+    const result = await handlers["tasks.contextUsage"]({ taskId });
+    expect(result.maxTokens).toBe(128_000);
+  });
+
+  it("uses contextWindow = null entry but still falls back to 128_000", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/claude-opus' WHERE id = ?", [taskId]);
+
+    // Model found but contextWindow is null/undefined
+    const orchestrator = makeMockOrchestrator([
+      { qualifiedId: "copilot/claude-opus", contextWindow: undefined },
+    ]);
+    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+
+    const result = await handlers["tasks.contextUsage"]({ taskId });
+    expect(result.maxTokens).toBe(128_000);
   });
 });
 
