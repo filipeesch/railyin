@@ -257,6 +257,14 @@ export const useTaskStore = defineStore("task", () => {
         statusMessage: "",
       };
       streamStates.value.set(event.taskId, state);
+    } else if (state.executionId !== event.executionId) {
+      // New execution started for this task — reset live stream state so the
+      // previous run's isDone=true doesn't hide the new execution's content.
+      state.blockOrder = [];
+      state.blocks = new Map();
+      state.isDone = false;
+      state.statusMessage = "";
+      state.executionId = event.executionId;
     }
 
     if (event.type === "done") {
@@ -303,6 +311,21 @@ export const useTaskStore = defineStore("task", () => {
     // For persisted events (assistant, reasoning, tool_call, tool_result, file_diff, user, system)
     // Close out any existing live blocks of incompatible type
     const blockId = event.blockId || `${event.type}-${event.seq || Date.now()}`;
+
+    if (event.type === "tool_call") {
+      // Belt-and-suspenders: clear live reasoning_chunk blocks when a tool fires.
+      // The reasoning persisted event normally handles this, but the batcher 500ms
+      // window can leave reasoning_chunk blocks visible below the tool_call in
+      // displayItems. Clearing here prevents them from stacking out of order.
+      const reasoningIds = state.blockOrder.filter((bid) => {
+        const b = state!.blocks.get(bid);
+        return b?.type === "reasoning_chunk";
+      });
+      for (const rid of reasoningIds) state.blocks.delete(rid);
+      if (reasoningIds.length > 0) {
+        state.blockOrder = state.blockOrder.filter((id) => !reasoningIds.includes(id));
+      }
+    }
 
     if (event.type === "assistant") {
       // Close live text_chunk blocks — persisted version replaces them

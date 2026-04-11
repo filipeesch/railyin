@@ -776,6 +776,13 @@ export class Orchestrator implements ExecutionCoordinator {
       for await (const event of stream) {
         // Check for cancellation (Task 5.3)
         if (abortController.signal.aborted) {
+          // Flush reasoningAccum before cancel so the reasoning bubble closes
+          if (reasoningAccum) {
+            const rCancelId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+            this.onNewMessage({ id: rCancelId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, subagentId: null, done: false });
+            reasoningAccum = "";
+          }
           // Task 5.7: Flush tokenAccum before cancel to prevent text loss
           if (tokenAccum) {
             const cancelFlushId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
@@ -821,6 +828,13 @@ export class Orchestrator implements ExecutionCoordinator {
           case "tool_start": {
             if (event.isInternal) break;
             hadOutput = true;
+            // Flush reasoningAccum before tool_call so the reasoning bubble closes in the right position
+            if (reasoningAccum) {
+              const rId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+              this.onNewMessage({ id: rId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, subagentId: null, done: false });
+              reasoningAccum = "";
+            }
             // Task 5.4: Flush tokenAccum BEFORE emitting tool_call to fix ordering bug
             if (tokenAccum) {
               const flushId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
@@ -924,6 +938,13 @@ export class Orchestrator implements ExecutionCoordinator {
           }
 
           case "done": {
+            // Flush reasoningAccum before the final assistant message
+            if (reasoningAccum) {
+              const rDoneId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+              this.onNewMessage({ id: rDoneId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, subagentId: null, done: false });
+              reasoningAccum = "";
+            }
             // Task 5.8: Flush accumulated tokens as final assistant message
             if (tokenAccum) {
               const msgId = appendMessage(

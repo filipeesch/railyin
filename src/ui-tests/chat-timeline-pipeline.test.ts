@@ -16,6 +16,10 @@
  *     T-32: reasoning_chunk followed by text_chunk: both blocks present in correct order
  *     T-33: stream state survives drawer close and reopen
  *     T-34: status_chunk renders ephemeral status text
+ *     T-35: reasoning bubble closes (stops pulsing) after `done` event
+ *     T-36: status message disappears after `done` event
+ *     T-37: new execution (different executionId) resets state so second run is visible
+ *     T-38: tool_call event clears live reasoning_chunk blocks (no stacked reasoning)
  */
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
@@ -285,5 +289,224 @@ describe("Suite T — stream-event pipeline rendering", () => {
     // status_chunk does NOT create a text_chunk block
     const hasTextBlock = state!.blocks.some((b) => b.type === "text_chunk");
     expect(hasTextBlock).toBe(false);
+  });
+
+  test("T-35: reasoning bubble closes (stops pulsing) after done event", async () => {
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 0,
+        blockId: `${EXEC_ID}-r1`,
+        type: "reasoning_chunk",
+        content: "Thinking deeply for T-35",
+        done: false,
+      },
+    ]);
+
+    const appeared = await waitFor(".rb__icon--pulse", 4_000);
+    expect(appeared).toBe(true);
+
+    // Send done — the entire live section should disappear
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 99,
+        blockId: `${EXEC_ID}-done`,
+        type: "done",
+        content: "",
+        done: true,
+      },
+    ]);
+    await sleep(400);
+
+    const stillPulsing = await webEval<boolean>(`
+      return !!document.querySelector('.rb__icon--pulse');
+    `);
+    expect(stillPulsing).toBe(false);
+  });
+
+  test("T-36: status message disappears after done event", async () => {
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 0,
+        blockId: `${EXEC_ID}-status`,
+        type: "status_chunk",
+        content: "Starting Copilot engines",
+        done: false,
+      },
+    ]);
+    await sleep(300);
+
+    const state1 = await getStreamState(taskId);
+    expect(state1?.statusMessage).toBe("Starting Copilot engines");
+
+    const statusVisible = await webEval<boolean>(`
+      var el = document.querySelector('.msg--status-ephemeral');
+      return el ? el.textContent.includes('Starting Copilot engines') : false;
+    `);
+    expect(statusVisible).toBe(true);
+
+    // Done should clear status message
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 99,
+        blockId: `${EXEC_ID}-done`,
+        type: "done",
+        content: "",
+        done: true,
+      },
+    ]);
+    await sleep(400);
+
+    const state2 = await getStreamState(taskId);
+    expect(state2?.statusMessage).toBe("");
+
+    const statusGone = await webEval<boolean>(`
+      return !document.querySelector('.msg--status-ephemeral');
+    `);
+    expect(statusGone).toBe(true);
+  });
+
+  test("T-37: new execution (different executionId) resets stream state so second run is visible", async () => {
+    // First execution: complete it so isDone = true
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 0,
+        blockId: `${EXEC_ID}-t1`,
+        type: "text_chunk",
+        content: "First execution",
+        done: false,
+      },
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 99,
+        blockId: `${EXEC_ID}-done`,
+        type: "done",
+        content: "",
+        done: true,
+      },
+    ]);
+    await sleep(400);
+
+    const state1 = await getStreamState(taskId);
+    expect(state1?.isDone).toBe(true);
+
+    // Second execution with different executionId
+    const EXEC_ID_2 = EXEC_ID + 1;
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID_2,
+        seq: 0,
+        blockId: `${EXEC_ID_2}-status`,
+        type: "status_chunk",
+        content: "Starting Copilot engines",
+        done: false,
+      },
+    ]);
+    await sleep(300);
+
+    // State should have been reset — isDone must be false
+    const state2 = await getStreamState(taskId);
+    expect(state2?.isDone).toBe(false);
+    expect(state2?.statusMessage).toBe("Starting Copilot engines");
+
+    // Status should be visible in the UI
+    const statusVisible = await webEval<boolean>(`
+      var el = document.querySelector('.msg--status-ephemeral');
+      return el ? el.textContent.includes('Starting Copilot engines') : false;
+    `);
+    expect(statusVisible).toBe(true);
+
+    // Second execution text should also render
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID_2,
+        seq: 1,
+        blockId: `${EXEC_ID_2}-t1`,
+        type: "text_chunk",
+        content: "Second execution response",
+        done: false,
+      },
+    ]);
+    await sleep(300);
+
+    const textVisible = await waitFor(".msg__bubble.streaming", 4_000);
+    expect(textVisible).toBe(true);
+
+    const text = await webEval<string>(`
+      var el = document.querySelector('.msg__bubble.streaming');
+      return el ? el.textContent.trim() : '';
+    `);
+    expect(text).toContain("Second execution response");
+
+    // Cleanup: send done for second execution
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID_2,
+        seq: 99,
+        blockId: `${EXEC_ID_2}-done`,
+        type: "done",
+        content: "",
+        done: true,
+      },
+    ]);
+    await sleep(300);
+  });
+
+  test("T-38: tool_call event clears live reasoning_chunk blocks (prevents stacked reasoning)", async () => {
+    // Reasoning arrives real-time
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 0,
+        blockId: `${EXEC_ID}-r1`,
+        type: "reasoning_chunk",
+        content: "Thinking about the tool to call...",
+        done: false,
+      },
+    ]);
+    await sleep(200);
+
+    // Verify reasoning bubble is visible
+    const rbVisible = await waitFor(".rb__icon--pulse", 4_000);
+    expect(rbVisible).toBe(true);
+
+    // tool_call persisted event fires (simulates the batcher sending it after the tool starts)
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 1,
+        blockId: `${EXEC_ID}-tc1`,
+        type: "tool_call",
+        content: JSON.stringify({ type: "function", function: { name: "read_file", arguments: "{}" }, id: "tc1" }),
+        done: false,
+      },
+    ]);
+    await sleep(300);
+
+    // reasoning_chunk live block should be cleared by the tool_call handler
+    const state = await getStreamState(taskId);
+    const reasoningBlocks = state!.blocks.filter((b) => b.type === "reasoning_chunk");
+    expect(reasoningBlocks).toHaveLength(0);
+
+    // Reasoning bubble should no longer be pulsing
+    const stillPulsing = await webEval<boolean>(`
+      return !!document.querySelector('.rb__icon--pulse');
+    `);
+    expect(stillPulsing).toBe(false);
   });
 });

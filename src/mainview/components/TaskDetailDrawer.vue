@@ -108,7 +108,7 @@
                 <ReasoningBubble
                   v-if="taskStore.activeStreamState.blocks.get(blockId)?.type === 'reasoning_chunk'"
                   :content="taskStore.activeStreamState.blocks.get(blockId)!.content"
-                  :streaming="true"
+                  :streaming="!taskStore.activeStreamState.blocks.get(blockId)?.done"
                 />
                 <!-- Live text chunk -->
                 <div
