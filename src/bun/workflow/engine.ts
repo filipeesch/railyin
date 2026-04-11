@@ -1200,7 +1200,7 @@ async function runExecution(
       if (waitRow) onTaskUpdated(mapTask(waitRow));
       return;
     }
-    const resolvedStageInstructions = stageInstructions;
+    resolvedStageInstructions = stageInstructions;
 
     // Task 5.3: Assemble full execution payload as messages
     const sessionNotes = readSessionMemory(taskId);
