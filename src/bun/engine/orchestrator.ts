@@ -722,6 +722,33 @@ export class Orchestrator implements ExecutionCoordinator {
             return;
           }
 
+          case "interview_me": {
+            const msgId = appendMessage(
+              taskId,
+              conversationId,
+              "interview_prompt",
+              null,
+              event.payload,
+            );
+            this.onNewMessage({
+              id: msgId,
+              taskId,
+              conversationId,
+              type: "interview_prompt",
+              role: null,
+              content: event.payload,
+              metadata: null,
+              createdAt: new Date().toISOString(),
+            });
+            db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+            db.run(
+              "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+              [executionId],
+            );
+            this.onToken(taskId, executionId, "", true);
+            return;
+          }
+
           case "task_updated": {
             this.onTaskUpdated(event.task);
             break;

@@ -43,6 +43,15 @@
     />
   </div>
 
+  <div v-else-if="chunk.type === 'interview_prompt'" class="msg msg--interview-prompt">
+    <InterviewMe
+      :questions="interviewPayload.questions"
+      :context="interviewPayload.context"
+      :answered-text="interviewAnsweredText"
+      @submit="onInterviewSubmit"
+    />
+  </div>
+
   <!-- Persisted reasoning messages from DB (collapsed, non-streaming) -->
   <ReasoningBubble
     v-else-if="chunk.type === 'reasoning'"
@@ -65,8 +74,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { marked } from "marked";
-import type { ConversationMessage, AskUserPromptContent } from "@shared/rpc-types";
+import type { ConversationMessage, AskUserPromptContent, InterviewPayload } from "@shared/rpc-types";
 import AskUserPrompt from "./AskUserPrompt.vue";
+import InterviewMe from "./InterviewMe.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
 import { useTaskStore } from "../stores/task";
@@ -175,6 +185,31 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
   const taskId = taskStore.activeTaskId;
   if (taskId === null) return;
   await electroview.rpc!.request["tasks.respondShellApproval"]({ taskId, decision });
+}
+
+// ─── interview_prompt support ─────────────────────────────────────────────────
+
+const interviewPayload = computed<InterviewPayload>(() => {
+  if (props.chunk.type !== "interview_prompt") return { questions: [] };
+  try {
+    return JSON.parse(props.chunk.content) as InterviewPayload;
+  } catch {
+    return { questions: [] };
+  }
+});
+
+const interviewAnsweredText = computed(() => {
+  if (props.chunk.type !== "interview_prompt" || props.index === undefined) return undefined;
+  const messages = taskStore.messages;
+  const later = messages.slice(props.index + 1);
+  const reply = later.find((m) => m.type === "user");
+  return reply?.content;
+});
+
+async function onInterviewSubmit(answer: string) {
+  const taskId = taskStore.activeTaskId;
+  if (taskId === null) return;
+  await taskStore.sendMessage(taskId, answer);
 }
 </script>
 
@@ -319,6 +354,11 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
 }
 
 .msg--ask-prompt {
+  align-items: flex-start;
+  max-width: 100%;
+}
+
+.msg--interview-prompt {
   align-items: flex-start;
   max-width: 100%;
 }

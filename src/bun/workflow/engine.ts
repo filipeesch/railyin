@@ -304,7 +304,7 @@ export function compactMessages(messages: ConversationMessageRow[], opts?: { qui
       continue;
     }
 
-    // file_diff, code_review, ask_user_prompt, transition_event, artifact_event, reasoning — excluded
+    // file_diff, code_review, ask_user_prompt, interview_prompt, transition_event, artifact_event, reasoning — excluded
     i++;
   }
 
@@ -671,7 +671,7 @@ export async function compactConversation(taskId: number): Promise<ConversationM
   // Render history as plain text to avoid Jinja template issues (tool_call/tool role
   // sequences can't be sent to models with strict chat templates like Qwen3).
   const lines = history
-    .filter((m) => !["transition_event", "compaction_summary", "reasoning"].includes(m.type))
+    .filter((m) => !["transition_event", "compaction_summary", "reasoning", "interview_prompt"].includes(m.type))
     .map((m) => {
       const label = m.role ?? m.type;
       const content = m.type === "tool_call"
@@ -1631,6 +1631,83 @@ async function runExecution(
             taskId,
             conversationId: task.conversation_id ?? 0,
             type: "ask_user_prompt" as MessageType,
+            role: null,
+            content: JSON.stringify(normalized),
+            metadata: null,
+            createdAt: new Date().toISOString(),
+          });
+          onToken(taskId, executionId, "", true);
+          executionControllers.delete(executionId);
+          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+          db.run(
+            "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+            [executionId],
+          );
+          const waitingRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+          if (waitingRow) onTaskUpdated(mapTask(waitingRow));
+          return;
+        }
+      }
+
+      // Intercept interview_me before executing any tools — suspends execution
+      const interviewCall = sanitizedRoundCalls.find((c) => c.function.name === "interview_me");
+      if (interviewCall) {
+        let normalized: { context?: string; questions: Array<{ question: string; type: string; weight?: string; model_lean?: string; model_lean_reason?: string; answers_affect_followup?: boolean; options?: Array<{ title: string; description: string }> }> };
+        try {
+          const raw = JSON.parse(interviewCall.function.arguments) as Record<string, unknown>;
+          normalized = {
+            ...(raw.context ? { context: String(raw.context) } : {}),
+            questions: (Array.isArray(raw.questions) ? raw.questions : []).map((q: Record<string, unknown>) => ({
+              question: String(q.question ?? ""),
+              type: (["exclusive", "non_exclusive", "freetext"].includes(String(q.type)) ? q.type : "exclusive") as string,
+              ...(q.weight ? { weight: q.weight } : {}),
+              ...(q.model_lean ? { model_lean: String(q.model_lean) } : {}),
+              ...(q.model_lean_reason ? { model_lean_reason: String(q.model_lean_reason) } : {}),
+              ...(q.answers_affect_followup ? { answers_affect_followup: true } : {}),
+              ...(Array.isArray(q.options) ? {
+                options: q.options.map((o: unknown) => ({
+                  title: String((o as Record<string, unknown>).title ?? ""),
+                  description: String((o as Record<string, unknown>).description ?? ""),
+                })),
+              } : {}),
+            })),
+          };
+        } catch {
+          normalized = { questions: [] };
+        }
+
+        // Validate: must have at least one question with content
+        const firstQ = normalized.questions[0];
+        const isValid = normalized.questions.length > 0 &&
+          firstQ?.question?.trim() &&
+          (firstQ.type === "freetext" || (Array.isArray(firstQ.options) && firstQ.options.length > 0));
+
+        if (!isValid) {
+          if (emptyResponseNudges < 3 && totalNudges < MAX_NUDGES) {
+            emptyResponseNudges++;
+            totalNudges++;
+            log("warn", `interview_me called with missing/empty fields — nudging (nudge ${emptyResponseNudges})`, { taskId, executionId });
+            liveMessages.push({
+              role: "tool",
+              content: "Error: interview_me was called with missing or empty fields. You MUST call interview_me again with a non-empty 'questions' array. Each question needs 'question' (text) and 'type' ('exclusive'/'non_exclusive'/'freetext'). Questions of type 'exclusive' or 'non_exclusive' need a non-empty 'options' array where each option has 'title' and 'description'.",
+              tool_call_id: interviewCall.id,
+            });
+            continue;
+          }
+          log("warn", "interview_me called without valid questions repeatedly — skipping", { taskId, executionId });
+        } else {
+          const interviewMsgId = appendMessage(
+            taskId,
+            task.conversation_id ?? 0,
+            "interview_prompt" as MessageType,
+            null,
+            JSON.stringify(normalized),
+          );
+          onNewMessage({
+            id: interviewMsgId,
+            taskId,
+            conversationId: task.conversation_id ?? 0,
+            type: "interview_prompt" as MessageType,
             role: null,
             content: JSON.stringify(normalized),
             metadata: null,

@@ -24,6 +24,7 @@ export type EngineEvent =
       contentBlocks?: Array<Record<string, unknown>>;
     }
   | { type: "ask_user"; payload: string /* serialised AskUserPrompt JSON */ }
+  | { type: "interview_me"; payload: string /* serialised InterviewPayload JSON */ }
   | { type: "shell_approval"; command: string; executionId: number }
   | { type: "status"; message: string }
   | { type: "usage"; inputTokens: number; outputTokens: number }

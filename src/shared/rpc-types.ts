@@ -64,6 +64,7 @@ export type MessageType =
   | "tool_result"
   | "transition_event"
   | "ask_user_prompt"
+  | "interview_prompt"
   | "file_diff"
   | "reasoning"
   | "compaction_summary"
@@ -130,6 +131,28 @@ export interface AskUserQuestion {
 
 export interface AskUserPromptContent {
   questions: AskUserQuestion[];
+}
+
+// ─── Interview prompt types ───────────────────────────────────────────────────
+
+export interface InterviewOption {
+  title: string;
+  description: string;
+}
+
+export interface InterviewQuestion {
+  question: string;
+  type: "exclusive" | "non_exclusive" | "freetext";
+  weight?: "critical" | "medium" | "easy";
+  model_lean?: string;
+  model_lean_reason?: string;
+  answers_affect_followup?: boolean;
+  options?: InterviewOption[];
+}
+
+export interface InterviewPayload {
+  context?: string;
+  questions: InterviewQuestion[];
 }
 
 // ─── Code review types ──────────────────────────────────────────────────────

@@ -75,7 +75,15 @@ export class CopilotEngine implements ExecutionEngine {
       },
     };
 
-    const tools = buildCopilotTools(toolContext);
+    // Signal for interview_me interception: when the model calls interview_me,
+    // store the payload and abort the session so the engine can emit the event.
+    let pendingInterviewPayload: string | null = null;
+    const interviewAbortController = new AbortController();
+
+    const tools = buildCopilotTools(toolContext, (payload: string) => {
+      pendingInterviewPayload = payload;
+      interviewAbortController.abort();
+    });
 
     // Build system message — append stage_instructions to SDK's managed prompt
     const systemMessage = systemInstructions
@@ -124,9 +132,23 @@ export class CopilotEngine implements ExecutionEngine {
 
       // Fire the prompt; pass the promise into translateCopilotStream so a rejection
       // (e.g. CLI crash) is surfaced as a fatal error rather than silently hanging.
+      // Combine the external abort signal with the interview_me internal abort.
+      const combinedController = new AbortController();
+      params.signal?.addEventListener("abort", () => combinedController.abort(), { once: true });
+      interviewAbortController.signal.addEventListener("abort", () => {
+        this.sdkAdapter.abortSession(session!).catch(() => { });
+        combinedController.abort();
+      }, { once: true });
+
       const sendPromise = session.send({ prompt });
       const onWatchdogFire = () => this.sdkAdapter.pingClient(sdkSessionId);
-      yield* translateCopilotStream(session, params.signal, sendPromise, onWatchdogFire);
+      yield* translateCopilotStream(session, combinedController.signal, sendPromise, onWatchdogFire);
+
+      // If interview_me was called, emit the interview event so the orchestrator
+      // can write the message and set waiting_user state.
+      if (pendingInterviewPayload !== null) {
+        yield { type: "interview_me", payload: pendingInterviewPayload };
+      }
     } catch (err) {
       yield {
         type: "error",
