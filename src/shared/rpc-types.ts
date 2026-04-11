@@ -12,7 +12,9 @@ export interface Board {
 
 export interface Project {
   id: number;
+  key: string;
   workspaceId: number;
+  workspaceKey: string;
   name: string;
   projectPath: string;
   gitRootPath: string;
@@ -240,7 +242,9 @@ export interface LaunchConfig {
 
 export interface WorkspaceConfig {
   id: number;
+  key: string;
   name: string;
+  workflows: WorkflowTemplate[];
   ai: {
     baseUrl: string;
     apiKey: string;
@@ -251,6 +255,12 @@ export interface WorkspaceConfig {
   worktreeBasePath: string;
   /** Whether adaptive thinking is enabled for supported Anthropic models. */
   enableThinking: boolean;
+}
+
+export interface WorkspaceSummary {
+  id: number;
+  key: string;
+  name: string;
 }
 
 export interface WorkflowColumn {
@@ -312,11 +322,15 @@ export type RailynRPCType = {
     requests: {
       // Workspace
       "workspace.getConfig": {
-        params: Record<string, never>;
+        params: { workspaceId?: number };
         response: WorkspaceConfig;
       };
+      "workspace.list": {
+        params: Record<string, never>;
+        response: WorkspaceSummary[];
+      };
       "workspace.setThinking": {
-        params: { enabled: boolean };
+        params: { workspaceId?: number; enabled: boolean };
         response: Record<string, never>;
       };
 
@@ -326,7 +340,7 @@ export type RailynRPCType = {
         response: Array<Board & { template: WorkflowTemplate }>;
       };
       "boards.create": {
-        params: { name: string; projectIds: number[]; workflowTemplateId: string };
+        params: { workspaceId: number; name: string; projectIds: number[]; workflowTemplateId: string };
         response: Board;
       };
 
@@ -337,6 +351,7 @@ export type RailynRPCType = {
       };
       "projects.register": {
         params: {
+          workspaceId: number;
           name: string;
           projectPath: string;
           gitRootPath: string;
@@ -382,15 +397,15 @@ export type RailynRPCType = {
 
       // Models
       "models.list": {
-        params: Record<string, never>;
+        params: { workspaceId?: number };
         response: ProviderModelList[];
       };
       "models.setEnabled": {
-        params: { qualifiedModelId: string; enabled: boolean };
+        params: { workspaceId?: number; qualifiedModelId: string; enabled: boolean };
         response: Record<string, never>;
       };
       "models.listEnabled": {
-        params: Record<string, never>;
+        params: { workspaceId?: number };
         response: ModelInfo[];
       };
 
@@ -476,11 +491,11 @@ export type RailynRPCType = {
 
       // Workflow
       "workflow.getYaml": {
-        params: { templateId: string };
+        params: { workspaceId?: number; templateId: string };
         response: { yaml: string };
       };
       "workflow.saveYaml": {
-        params: { templateId: string; yaml: string };
+        params: { workspaceId?: number; templateId: string; yaml: string };
         response: { ok: true };
       };
       "tasks.sessionMemory": {

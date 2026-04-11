@@ -65,19 +65,15 @@ The `EngineEvent` type SHALL be a discriminated union on the `type` field with t
 - **THEN** the orchestrator writes an `ask_user_prompt` message, sets execution state to `waiting_user`, and relays the question to the frontend
 
 ### Requirement: Engine resolver instantiates the correct engine from workspace config
-The system SHALL provide a `resolveEngine(config)` function that reads the `engine.type` field from workspace config and returns the corresponding `ExecutionEngine` instance. Supported types SHALL be `native` and `copilot`.
+The system SHALL resolve the execution engine from the workspace that owns the task being executed, not from a single global workspace config. Supported engine types remain `native` and `copilot`.
 
-#### Scenario: Native engine resolved from config
-- **WHEN** `workspace.yaml` has `engine.type: native`
-- **THEN** `resolveEngine` returns an instance of `NativeEngine`
+#### Scenario: Task execution uses owning workspace config
+- **WHEN** a task belongs to a board in workspace A
+- **THEN** `resolveEngine` uses workspace A's resolved config for that execution
 
-#### Scenario: Copilot engine resolved from config
-- **WHEN** `workspace.yaml` has `engine.type: copilot`
-- **THEN** `resolveEngine` returns an instance of `CopilotEngine`
-
-#### Scenario: Unknown engine type rejected
-- **WHEN** `workspace.yaml` has `engine.type: unsupported`
-- **THEN** `resolveEngine` throws an error indicating the engine type is not supported
+#### Scenario: Concurrent executions use different workspace engines
+- **WHEN** one running task belongs to a `native` workspace and another running task belongs to a `copilot` workspace
+- **THEN** both executions proceed concurrently using their own workspace-specific engine instances and config
 
 ### Requirement: Orchestrator consumes engine events and handles persistence and relay
 The orchestrator SHALL consume the `AsyncIterable<EngineEvent>` produced by the engine and handle all engine-agnostic concerns: persisting conversation messages to the database, relaying streaming tokens to the frontend via RPC, updating execution and task state in the database, managing AbortController lifecycle, and recording token usage.

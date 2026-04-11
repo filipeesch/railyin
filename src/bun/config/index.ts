@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "fs";
 import { join } from "path";
+import { createHash } from "crypto";
 import yaml from "js-yaml";
 
 // ─── Config types ─────────────────────────────────────────────────────────────
@@ -71,6 +73,7 @@ export interface AIProviderConfig {
 
 export interface WorkspaceYaml {
   name?: string;
+  projects?: WorkspaceProjectYaml[];
   /**
    * New engine block. Discriminated by `type`:
    *   - `native`  (default): built-in provider-based loop
@@ -95,6 +98,16 @@ export interface WorkspaceYaml {
   lsp?: LspConfig;
 }
 
+export interface WorkspaceProjectYaml {
+  key?: string;
+  name: string;
+  project_path: string;
+  git_root_path?: string;
+  default_branch?: string;
+  slug?: string;
+  description?: string;
+}
+
 export interface WorkflowColumnConfig {
   id: string;
   label: string;
@@ -114,7 +127,12 @@ export interface WorkflowTemplateConfig {
 }
 
 export interface LoadedConfig {
+  workspaceId: number;
+  workspaceKey: string;
+  workspaceName: string;
+  configDir: string;
   workspace: WorkspaceYaml;
+  projects: LoadedProject[];
   /** Normalized, de-duplicated provider list — always populated after load (native engine only) */
   providers: ProviderConfig[];
   workflows: WorkflowTemplateConfig[];
@@ -125,8 +143,52 @@ export interface LoadedConfig {
 // ─── Global config (config.yaml) ────────────────────────────────────────────
 
 /** Machine/user-level global config. Lives at ~/.railyn/config/config.yaml. */
+export interface GlobalWorkspaceEntry {
+  key?: string;
+  name?: string;
+  config_dir?: string;
+}
+
 export interface GlobalConfig {
-  // Reserved for future global settings.
+  defaults?: Partial<WorkspaceYaml>;
+  workspaces?: GlobalWorkspaceEntry[];
+}
+
+export interface WorkspaceRegistryEntry {
+  id: number;
+  key: string;
+  name: string;
+  configDir: string;
+}
+
+export interface LoadedProject {
+  id: number;
+  key: string;
+  workspaceId: number;
+  workspaceKey: string;
+  name: string;
+  projectPath: string;
+  gitRootPath: string;
+  defaultBranch: string;
+  slug?: string;
+  description?: string;
+}
+
+function getWorkspaceCacheKey(entry: WorkspaceRegistryEntry): string {
+  return `${entry.key}:${entry.configDir}`;
+}
+
+function stableNumericId(seed: string): number {
+  const hex = createHash("sha1").update(seed).digest("hex").slice(0, 12);
+  return parseInt(hex, 16);
+}
+
+export function getWorkspaceIdForKey(workspaceKey: string): number {
+  return workspaceKey === "default" ? 1 : stableNumericId(`workspace:${workspaceKey}`);
+}
+
+export function getProjectIdForKey(workspaceKey: string, projectKey: string): number {
+  return stableNumericId(`project:${workspaceKey}:${projectKey}`);
 }
 
 /** Read ~/.railyn/config/config.yaml. Returns an empty object if the file is absent or unparseable.
@@ -149,13 +211,16 @@ export function readGlobalConfig(): GlobalConfig {
 // ─── Config singleton ─────────────────────────────────────────────────────────
 
 let _config: LoadedConfig | null = null;
+const _configsByKey = new Map<string, LoadedConfig>();
 let _configError: string | null = null;
+let _workspaceRegistry: WorkspaceRegistryEntry[] | null = null;
+const configContext = new AsyncLocalStorage<LoadedConfig>();
 
 // Injected at build time by electrobun.config.ts for dev builds (via Bun define).
 // In production builds this is undefined and the fallback to ~/.railyn/config is used.
 declare const __RAILYN_DEV_CONFIG_DIR__: string | undefined;
 
-export function getConfigDir(): string {
+function getDefaultConfigDir(): string {
   // 1. Explicit env override (used by tests and CI)
   if (process.env.RAILYN_CONFIG_DIR) return process.env.RAILYN_CONFIG_DIR;
   // 2. Dev build: absolute path baked in at bundle time by electrobun.config.ts
@@ -167,10 +232,142 @@ export function getConfigDir(): string {
   return join(dataDir, "config");
 }
 
+function getDataDir(): string {
+  return process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
+}
+
+function getWorkspaceRootDir(): string {
+  return process.env.RAILYN_WORKSPACES_DIR ?? join(getDataDir(), "workspaces");
+}
+
+function getLegacyWorkspaceDir(): string {
+  return getDefaultConfigDir();
+}
+
+function sanitizeWorkspaceKey(raw: string | undefined, fallback: string): string {
+  const key = (raw ?? fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  return key || fallback;
+}
+
+function sanitizeProjectKey(raw: string | undefined, fallback: string): string {
+  const key = (raw ?? fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  return key || fallback;
+}
+
+function titleizeKey(key: string): string {
+  return key
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getWorkspaceFileName(): string {
+  return process.env.RAILYN_DB === ":memory:" ? "workspace.test.yaml" : "workspace.yaml";
+}
+
+function readWorkspaceYamlFile(configDir: string): WorkspaceYaml | null {
+  const workspaceFile = join(configDir, getWorkspaceFileName());
+  if (!existsSync(workspaceFile)) return null;
+  try {
+    const parsed = yaml.load(readFileSync(workspaceFile, "utf-8"));
+    return (typeof parsed === "object" && parsed !== null ? parsed : {}) as WorkspaceYaml;
+  } catch {
+    return null;
+  }
+}
+
+function mergeWorkspaceDefaults(
+  workspace: WorkspaceYaml,
+  defaults?: Partial<WorkspaceYaml>,
+): WorkspaceYaml {
+  if (!defaults) return workspace;
+  const merged: WorkspaceYaml = {
+    ...defaults,
+    ...workspace,
+  };
+  if (defaults.anthropic || workspace.anthropic) {
+    merged.anthropic = { ...(defaults.anthropic ?? {}), ...(workspace.anthropic ?? {}) };
+  }
+  if (defaults.search || workspace.search) {
+    merged.search = { ...(defaults.search ?? {} as SearchConfig), ...(workspace.search ?? {} as SearchConfig) };
+  }
+  if (defaults.lsp || workspace.lsp) {
+    merged.lsp = { ...(defaults.lsp ?? {}), ...(workspace.lsp ?? {}) };
+  }
+  if (defaults.engine || workspace.engine) {
+    merged.engine = { ...(defaults.engine ?? {} as EngineConfig), ...(workspace.engine ?? {} as EngineConfig) } as EngineConfig;
+  }
+  return merged;
+}
+
+export function getWorkspaceRegistry(): WorkspaceRegistryEntry[] {
+  if (_workspaceRegistry) return _workspaceRegistry;
+
+  if (process.env.RAILYN_CONFIG_DIR) {
+    const key = "default";
+    const configDir = process.env.RAILYN_CONFIG_DIR;
+    const workspace = readWorkspaceYamlFile(configDir) ?? {};
+    _workspaceRegistry = [{
+      id: getWorkspaceIdForKey(key),
+      key,
+      name: workspace.name?.trim() || "My Workspace",
+      configDir,
+    }];
+    return _workspaceRegistry;
+  }
+
+  const workspaceRootDir = getWorkspaceRootDir();
+  const workspaceFileName = getWorkspaceFileName();
+  const entries: WorkspaceRegistryEntry[] = [];
+
+  if (existsSync(workspaceRootDir)) {
+    for (const entry of readdirSync(workspaceRootDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const key = sanitizeWorkspaceKey(entry.name, entry.name);
+      const configDir = join(workspaceRootDir, entry.name);
+      const workspace = readWorkspaceYamlFile(configDir) ?? {};
+      entries.push({
+        id: getWorkspaceIdForKey(key),
+        key,
+        name: workspace.name?.trim() || titleizeKey(key),
+        configDir,
+      });
+    }
+  }
+
+  if (entries.length === 0) {
+    const legacyDir = getLegacyWorkspaceDir();
+    const legacyWorkspaceFile = join(legacyDir, workspaceFileName);
+    const legacyWorkflowsDir = join(legacyDir, "workflows");
+    const defaultDir = existsSync(legacyWorkspaceFile) || existsSync(legacyWorkflowsDir)
+      ? legacyDir
+      : join(workspaceRootDir, "default");
+    const workspace = readWorkspaceYamlFile(defaultDir) ?? {};
+    entries.push({
+      id: getWorkspaceIdForKey("default"),
+      key: "default",
+      name: workspace.name?.trim() || "My Workspace",
+      configDir: defaultDir,
+    });
+  }
+
+  _workspaceRegistry = entries.sort((a, b) => a.key.localeCompare(b.key));
+
+  return _workspaceRegistry;
+}
+
+export function getConfigDir(workspaceKey?: string): string {
+  const entry = getWorkspaceRegistry().find((item) => item.key === (workspaceKey ?? getWorkspaceRegistry()[0]?.key));
+  return entry?.configDir ?? getDefaultConfigDir();
+}
+
 // ─── Default file content ────────────────────────────────────────────────────
 
 const DEFAULT_WORKSPACE_YAML = `
 name: My Workspace
+
+projects: []
 
 # List all AI providers you want to use simultaneously.
 providers:
@@ -248,7 +445,7 @@ columns:
 `.trimStart();
 
 function ensureConfigExists(configDir: string): void {
-  const workspaceFile = join(configDir, "workspace.yaml");
+  const workspaceFile = join(configDir, getWorkspaceFileName());
   const workflowsDir = join(configDir, "workflows");
   const deliveryFile = join(workflowsDir, "delivery.yaml");
 
@@ -264,14 +461,27 @@ function ensureConfigExists(configDir: string): void {
   }
 }
 
-export function loadConfig(): { config: LoadedConfig | null; error: string | null } {
-  const configDir = getConfigDir();
+export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null; error: string | null } {
+  const registry = getWorkspaceRegistry();
+  const entry = registry.find((item) => item.key === (workspaceKey ?? registry[0]?.key)) ?? registry[0];
+  if (!entry) {
+    _configError = "No workspace registry entries available.";
+    return { config: null, error: _configError };
+  }
+  const configDir = entry.configDir;
+  const cacheKey = getWorkspaceCacheKey(entry);
+  if (_configsByKey.has(cacheKey)) {
+    const cached = _configsByKey.get(cacheKey)!;
+    _config = cached;
+    _configError = null;
+    return { config: cached, error: null };
+  }
+  const globalConfig = readGlobalConfig();
 
   // Auto-create default config files if they don't exist yet
   ensureConfigExists(configDir);
 
-  const isTestMode = process.env.RAILYN_DB === ":memory:";
-  const workspaceFileName = isTestMode ? "workspace.test.yaml" : "workspace.yaml";
+  const workspaceFileName = getWorkspaceFileName();
   const workspaceFile = join(configDir, workspaceFileName);
 
   let workspace: WorkspaceYaml;
@@ -282,6 +492,8 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
     _configError = `Failed to parse ${workspaceFileName}: ${err instanceof Error ? err.message : String(err)}`;
     return { config: null, error: _configError };
   }
+
+  workspace = mergeWorkspaceDefaults(workspace ?? {}, globalConfig.defaults);
 
   // ── Resolve engine config ──────────────────────────────────────────────────
   //
@@ -375,8 +587,9 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
     deduped.push(p);
   }
 
-  // Load workflow templates from config/workflows/
+  // Load workflow templates from config/workflows/ (and legacy workflows.yaml)
   const workflowsDir = join(configDir, "workflows");
+  const legacyWorkflowsFile = join(configDir, "workflows.yaml");
   const workflows: WorkflowTemplateConfig[] = [];
 
   if (existsSync(workflowsDir)) {
@@ -393,6 +606,19 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
       }
     }
   }
+  if (workflows.length === 0 && existsSync(legacyWorkflowsFile)) {
+    try {
+      const raw = readFileSync(legacyWorkflowsFile, "utf-8");
+      const parsed = yaml.load(raw);
+      const templates = Array.isArray(parsed) ? parsed : [parsed];
+      for (const item of templates) {
+        const tmpl = item as WorkflowTemplateConfig;
+        if (tmpl?.id && tmpl?.columns) workflows.push(tmpl);
+      }
+    } catch (err) {
+      console.warn(`[config] Could not parse legacy workflows.yaml: ${err}`);
+    }
+  }
 
   // Always include the bundled default template
   const defaultTemplate = getDefaultTemplate();
@@ -400,21 +626,68 @@ export function loadConfig(): { config: LoadedConfig | null; error: string | nul
     workflows.push(defaultTemplate);
   }
 
-  _config = { workspace, providers: deduped, workflows, engine };
+  const rawProjects = workspace.projects ?? [];
+  const projects: LoadedProject[] = rawProjects.map((project, index) => {
+    const key = sanitizeProjectKey(project.key ?? project.slug, project.name || `project-${index + 1}`);
+    return {
+      id: getProjectIdForKey(entry.key, key),
+      key,
+      workspaceId: entry.id,
+      workspaceKey: entry.key,
+      name: project.name,
+      projectPath: project.project_path,
+      gitRootPath: project.git_root_path ?? project.project_path,
+      defaultBranch: project.default_branch ?? "main",
+      ...(project.slug ? { slug: project.slug } : {}),
+      ...(project.description ? { description: project.description } : {}),
+    };
+  });
+
+  _config = {
+    workspaceId: entry.id,
+    workspaceKey: entry.key,
+    workspaceName: workspace.name ?? entry.name,
+    configDir,
+    workspace,
+    projects,
+    providers: deduped,
+    workflows,
+    engine,
+  };
+  _configsByKey.set(cacheKey, _config);
   _configError = null;
   return { config: _config, error: null };
 }
 
-export function getConfig(): LoadedConfig {
+export function getConfig(workspaceKey?: string): LoadedConfig {
+  if (workspaceKey) {
+    const entry = getWorkspaceRegistry().find((item) => item.key === workspaceKey);
+    if (entry) {
+      const cached = _configsByKey.get(getWorkspaceCacheKey(entry));
+      if (cached) return cached;
+    }
+    const { config } = loadConfig(workspaceKey);
+    if (config) return config;
+  }
+  const scoped = configContext.getStore();
+  if (scoped) return scoped;
   if (!_config) {
+    const { config } = loadConfig();
+    if (config) return config;
     throw new Error("Config not loaded. Call loadConfig() at startup.");
   }
   return _config;
 }
 
+export function runWithConfig<T>(config: LoadedConfig, fn: () => T): T {
+  return configContext.run(config, fn);
+}
+
 export function resetConfig(): void {
   _config = null;
   _configError = null;
+  _configsByKey.clear();
+  _workspaceRegistry = null;
 }
 
 /**
@@ -422,8 +695,8 @@ export function resetConfig(): void {
  * fields into the existing parsed document and writing it back.
  * This does not preserve comments in the yaml file.
  */
-export function patchWorkspaceYaml(patch: Partial<WorkspaceYaml>): void {
-  const configDir = getConfigDir();
+export function patchWorkspaceYaml(patch: Partial<WorkspaceYaml>, workspaceKey?: string): void {
+  const configDir = getConfigDir(workspaceKey);
   const isTestMode = process.env.RAILYN_DB === ":memory:";
   const workspaceFileName = isTestMode ? "workspace.test.yaml" : "workspace.yaml";
   const workspaceFile = join(configDir, workspaceFileName);

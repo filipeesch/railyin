@@ -17,6 +17,7 @@ export const useProjectStore = defineStore("project", () => {
   }
 
   async function registerProject(params: {
+    workspaceId: number;
     name: string;
     projectPath: string;
     gitRootPath: string;

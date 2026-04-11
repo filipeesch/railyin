@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, ReviewerDecision, FileDiffContent, LineComment, ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
+import { syncFileBackedCompatibilityState } from "../db/migrations.ts";
 import {
   appendMessage,
   estimateContextWarning,
@@ -10,10 +11,12 @@ import {
   compactConversation,
   resolveModelContextWindow,
 } from "../workflow/engine.ts";
+import { runWithConfig } from "../config/index.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
-import type { ProjectRow } from "../db/row-types.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
+import { getBoardWorkspaceId, getDefaultWorkspaceId, getTaskWorkspaceId, getWorkspaceConfigById } from "../workspace-context.ts";
+import { getProjectById } from "../project-store.ts";
 
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
@@ -56,7 +59,16 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       title: string;
       description: string;
     }): Promise<Task> => {
+      syncFileBackedCompatibilityState();
       const db = getDb();
+      const project = getProjectById(params.projectId);
+      if (!project) {
+        throw new Error(`Project ${params.projectId} not found`);
+      }
+      const boardWorkspaceId = getBoardWorkspaceId(params.boardId);
+      if (project.workspaceId !== boardWorkspaceId) {
+        throw new Error("Project does not belong to the selected workspace");
+      }
 
       // Create conversation first with placeholder task_id=0
       const convResult = db.run("INSERT INTO conversations (task_id) VALUES (0)");
@@ -81,13 +93,8 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
       // Register git context for this task so tool calling works (best-effort)
       try {
-        const project = db
-          .query<Pick<ProjectRow, "git_root_path">, [number]>(
-            "SELECT git_root_path FROM projects WHERE id = ?",
-          )
-          .get(params.projectId);
-        if (project?.git_root_path) {
-          registerProjectGitContext(taskId, project.git_root_path);
+        if (project.gitRootPath) {
+          registerProjectGitContext(taskId, project.gitRootPath);
         }
       } catch (err) {
         console.warn("[railyn] failed to register git context for task", taskId, err);
@@ -131,13 +138,9 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         }
 
         // Backfill git context for tasks created before this was wired up
-        const project = db
-          .query<Pick<ProjectRow, "git_root_path">, [number]>(
-            "SELECT git_root_path FROM projects WHERE id = ?",
-          )
-          .get(taskRow.project_id);
-        if (project?.git_root_path) {
-          registerProjectGitContext(params.taskId, project.git_root_path);
+        const project = getProjectById(taskRow.project_id);
+        if (project?.gitRootPath) {
+          registerProjectGitContext(params.taskId, project.gitRootPath);
         }
 
         const postStatus = (msg: string) => {
@@ -211,13 +214,9 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [retryConvId, params.taskId]);
         }
 
-        const project = db
-          .query<Pick<ProjectRow, "git_root_path">, [number]>(
-            "SELECT git_root_path FROM projects WHERE id = ?",
-          )
-          .get(taskRow.project_id);
-        if (project?.git_root_path) {
-          registerProjectGitContext(params.taskId, project.git_root_path);
+        const project = getProjectById(taskRow.project_id);
+        if (project?.gitRootPath) {
+          registerProjectGitContext(params.taskId, project.gitRootPath);
         }
 
         const postStatus = (msg: string) => {
@@ -244,8 +243,9 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     // ─── models.list ─────────────────────────────────────────────────────────
-    "models.list": async (): Promise<ProviderModelList[]> => {
+    "models.list": async (params: { workspaceId?: number } = {}): Promise<ProviderModelList[]> => {
       const db = getDb();
+      const workspaceId = params.workspaceId ?? getDefaultWorkspaceId();
 
       if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
 
@@ -254,12 +254,12 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           .query<{ qualified_model_id: string }, [number]>(
             "SELECT qualified_model_id FROM enabled_models WHERE workspace_id = ?",
           )
-          .all(1)
+          .all(workspaceId)
           .map((r) => r.qualified_model_id),
       );
 
       try {
-        const engineModels = await orchestrator.listModels();
+        const engineModels = await orchestrator.listModels(workspaceId);
         // Group models by provider (first part of the qualified ID before slash)
         const byProvider = new Map<string, typeof engineModels>();
         for (const model of engineModels) {
@@ -290,17 +290,18 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     // ─── models.setEnabled ───────────────────────────────────────────────────
-    "models.setEnabled": async (params: { qualifiedModelId: string; enabled: boolean }): Promise<Record<string, never>> => {
+    "models.setEnabled": async (params: { workspaceId?: number; qualifiedModelId: string; enabled: boolean }): Promise<Record<string, never>> => {
       const db = getDb();
+      const workspaceId = params.workspaceId ?? getDefaultWorkspaceId();
       if (params.enabled) {
         db.run(
           "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, ?)",
-          [1, params.qualifiedModelId],
+          [workspaceId, params.qualifiedModelId],
         );
       } else {
         db.run(
           "DELETE FROM enabled_models WHERE workspace_id = ? AND qualified_model_id = ?",
-          [1, params.qualifiedModelId],
+          [workspaceId, params.qualifiedModelId],
         );
       }
       return {};
@@ -311,17 +312,18 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     // from previous engine configurations are silently dropped. If none of the
     // enabled DB entries match the current engine, all engine models are returned
     // (default-all-enabled behaviour on first use / engine switch).
-    "models.listEnabled": async (): Promise<ModelInfo[]> => {
+    "models.listEnabled": async (params: { workspaceId?: number } = {}): Promise<ModelInfo[]> => {
       const db = getDb();
+      const workspaceId = params.workspaceId ?? getDefaultWorkspaceId();
       if (!orchestrator) return [];
 
       const [engineModels, dbRows] = await Promise.all([
-        orchestrator.listModels(),
+        orchestrator.listModels(workspaceId),
         db
           .query<{ qualified_model_id: string }, [number]>(
             "SELECT qualified_model_id FROM enabled_models WHERE workspace_id = ? ORDER BY qualified_model_id",
           )
-          .all(1),
+          .all(workspaceId),
       ]);
 
       const engineIds = new Set(engineModels.map((m) => m.qualifiedId));
@@ -349,9 +351,12 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       const db = getDb();
       const task = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
       const taskModel = task?.model ?? null;
-      const maxTokens = taskModel
-        ? await resolveModelContextWindow(taskModel)
-        : 128_000;
+      const workspaceConfig = getWorkspaceConfigById(getTaskWorkspaceId(params.taskId));
+      const maxTokens = await runWithConfig(workspaceConfig, async () => (
+        taskModel
+          ? resolveModelContextWindow(taskModel)
+          : Promise.resolve(128_000)
+      ));
       return estimateContextUsage(params.taskId, maxTokens);
     },
 

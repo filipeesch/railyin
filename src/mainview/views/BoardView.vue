@@ -3,9 +3,26 @@
     <!-- Header bar -->
     <div class="board-header">
       <div class="board-header__left">
+        <div v-if="workspaceStore.workspaces.length > 0" class="workspace-tabs">
+          <button
+            v-for="workspace in workspaceStore.workspaces"
+            :key="workspace.id"
+            type="button"
+            class="workspace-tab"
+            :class="{ 'is-active': workspaceStore.activeWorkspaceId === workspace.id }"
+            @click="onWorkspaceChange(workspace.id)"
+          >
+            <span>{{ workspace.name }}</span>
+            <span
+              v-if="taskStore.workspaceHasUnread(workspace.id, boardStore.boards)"
+              class="workspace-tab__unread-dot"
+              aria-label="Unread workspace activity"
+            />
+          </button>
+        </div>
         <Select
           v-model="boardStore.activeBoardId"
-          :options="boardStore.boards"
+          :options="visibleBoards"
           option-label="name"
           option-value="id"
           placeholder="Select board"
@@ -97,6 +114,7 @@
     <WorkflowEditorOverlay
       v-if="workflowEditor.templateId"
       :visible="workflowEditor.visible"
+      :workspace-id="workspaceStore.activeWorkspaceId ?? undefined"
       :template-id="workflowEditor.templateId"
       :template-name="workflowEditor.templateName"
       :initial-yaml="workflowEditor.yaml"
@@ -126,6 +144,7 @@ import { useBoardStore } from "../stores/board";
 import { useTaskStore } from "../stores/task";
 import { useProjectStore } from "../stores/project";
 import { useReviewStore } from "../stores/review";
+import { useWorkspaceStore } from "../stores/workspace";
 import TaskCard from "../components/TaskCard.vue";
 import TaskDetailDrawer from "../components/TaskDetailDrawer.vue";
 import CreateTaskDialog from "../components/CreateTaskDialog.vue";
@@ -133,6 +152,7 @@ import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 
 const router = useRouter();
+const workspaceStore = useWorkspaceStore();
 const boardStore = useBoardStore();
 const taskStore = useTaskStore();
 const projectStore = useProjectStore();
@@ -152,11 +172,18 @@ const workflowEditor = ref({
   yaml: "",
 });
 
+const visibleBoards = computed(() => {
+  const workspaceId = workspaceStore.activeWorkspaceId;
+  if (workspaceId == null) return boardStore.boards;
+  return boardStore.boards.filter((board) => board.workspaceId === workspaceId);
+});
+
 async function onEditWorkflow() {
   const board = boardStore.activeBoard;
   if (!board) return;
   try {
     const { yaml } = await electroview.rpc.request["workflow.getYaml"]({
+      workspaceId: workspaceStore.activeWorkspaceId ?? undefined,
       templateId: board.workflowTemplateId,
     });
     workflowEditor.value = {
@@ -204,6 +231,9 @@ watch(
 
 onMounted(async () => {
   await projectStore.loadProjects();
+  if (workspaceStore.activeWorkspaceId != null && !boardStore.activeBoard) {
+    boardStore.selectFirstBoardInWorkspace(workspaceStore.activeWorkspaceId);
+  }
 });
 
 function columnTasks(columnId: string) {
@@ -217,6 +247,11 @@ function columnTasks(columnId: string) {
 async function onBoardChange() {
   const id = boardStore.activeBoardId;
   if (id != null) await taskStore.loadTasks(id);
+}
+
+async function onWorkspaceChange(workspaceId: number) {
+  await workspaceStore.selectWorkspace(workspaceId);
+  boardStore.selectFirstBoardInWorkspace(workspaceId);
 }
 
 function onCardPointerDown(event: PointerEvent, taskId: number) {
@@ -341,6 +376,38 @@ async function onTaskCreated() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.workspace-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+}
+
+.workspace-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--p-content-border-color);
+  background: var(--p-content-background);
+  color: var(--p-text-color);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.workspace-tab.is-active {
+  border-color: var(--p-primary-color, #6366f1);
+  color: var(--p-primary-color, #6366f1);
+}
+
+.workspace-tab__unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--p-blue-500, #3b82f6);
 }
 
 .board-selector {

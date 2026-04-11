@@ -1,9 +1,10 @@
 import { getDb } from "../db/index.ts";
-import { mapTask, mapProject } from "../db/mappers.ts";
-import type { TaskRow, ProjectRow } from "../db/row-types.ts";
+import { mapTask } from "../db/mappers.ts";
+import type { TaskRow } from "../db/row-types.ts";
 import type { LaunchConfig } from "../../shared/rpc-types.ts";
 import { readLaunchConfig } from "../launch/config.ts";
 import { launchInTerminal, launchApp } from "../launch/launcher.ts";
+import { getProjectById } from "../project-store.ts";
 
 export function launchHandlers() {
   return {
@@ -15,12 +16,8 @@ export function launchHandlers() {
         .get(params.taskId);
       if (!taskRow) return null;
 
-      const projectRow = db
-        .query<ProjectRow, [number]>("SELECT * FROM projects WHERE id = ?")
-        .get(taskRow.project_id);
-      if (!projectRow) return null;
-
-      const project = mapProject(projectRow);
+      const project = getProjectById(taskRow.project_id);
+      if (!project) return null;
       return readLaunchConfig(project.projectPath);
     },
 
@@ -47,11 +44,9 @@ export function launchHandlers() {
       if (task.worktreePath) {
         cwd = task.worktreePath;
       } else {
-        const projectRow = db
-          .query<ProjectRow, [number]>("SELECT * FROM projects WHERE id = ?")
-          .get(taskRow.project_id);
-        if (!projectRow) return { ok: false, error: "Project not found" };
-        cwd = mapProject(projectRow).projectPath;
+        const project = getProjectById(taskRow.project_id);
+        if (!project) return { ok: false, error: "Project not found" };
+        cwd = project.projectPath;
       }
 
       try {

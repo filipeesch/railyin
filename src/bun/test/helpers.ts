@@ -15,7 +15,8 @@ export function initDb(): Database {
   db.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
       id   INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL
+      name TEXT NOT NULL,
+      config_key TEXT
     );
     CREATE TABLE IF NOT EXISTS projects (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,12 +113,30 @@ export function initDb(): Database {
       decision       TEXT    NOT NULL DEFAULT 'pending',
       comment        TEXT,
       original_start INTEGER NOT NULL DEFAULT 0,
+      original_end   INTEGER NOT NULL DEFAULT 0,
       modified_start INTEGER NOT NULL DEFAULT 0,
+      modified_end   INTEGER NOT NULL DEFAULT 0,
+      sent           INTEGER NOT NULL DEFAULT 0,
       created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
       updated_at     TEXT    NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (task_id, hunk_hash, reviewer_id)
     );
     CREATE INDEX IF NOT EXISTS idx_hunk_decisions_task ON task_hunk_decisions(task_id);
+    CREATE TABLE IF NOT EXISTS task_line_comments (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      file_path     TEXT    NOT NULL,
+      line_start    INTEGER NOT NULL,
+      line_end      INTEGER NOT NULL,
+      line_text     TEXT    NOT NULL,
+      context_lines TEXT,
+      comment       TEXT    NOT NULL,
+      reviewer_type TEXT    NOT NULL DEFAULT 'human',
+      sent          INTEGER NOT NULL DEFAULT 0,
+      created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_line_comments_task ON task_line_comments(task_id);
     CREATE TABLE IF NOT EXISTS enabled_models (
       workspace_id        INTEGER NOT NULL,
       qualified_model_id  TEXT    NOT NULL,
@@ -141,7 +160,7 @@ export function initDb(): Database {
     );
     CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
   `);
-  db.run("INSERT INTO workspaces (id, name) VALUES (1, 'test-workspace')");
+  db.run("INSERT INTO workspaces (id, name, config_key) VALUES (1, 'test-workspace', 'default')");
   return db;
 }
 
@@ -189,6 +208,12 @@ export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: (
     join(configDir, "workspace.test.yaml"),
     [
       "name: test",
+      "projects:",
+      "  - key: test-project",
+      "    name: Test Project",
+      "    project_path: /tmp/test-git",
+      "    git_root_path: /tmp/test-git",
+      "    default_branch: main",
       "providers:",
       "  - id: fake",
       "    type: fake",

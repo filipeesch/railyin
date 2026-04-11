@@ -13,7 +13,7 @@
       <!-- Note -->
       <div class="workflow-editor-overlay__note">
         <i class="pi pi-info-circle" />
-        Changes apply to all boards using this template.
+        Changes apply to all boards using this template in the current workspace.
       </div>
 
       <!-- Editor -->
@@ -57,6 +57,7 @@ import { useDarkMode } from "../composables/useDarkMode";
 
 const props = defineProps<{
   visible: boolean;
+  workspaceId?: number;
   templateId: string;
   templateName: string;
   initialYaml: string;
@@ -143,6 +144,7 @@ async function onSave() {
   try {
     const content = editor?.getValue() ?? props.initialYaml;
     await electroview.rpc.request["workflow.saveYaml"]({
+      workspaceId: props.workspaceId,
       templateId: props.templateId,
       yaml: content,
     });

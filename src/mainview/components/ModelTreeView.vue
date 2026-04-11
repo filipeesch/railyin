@@ -96,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import Button from "primevue/button";
 import Tag from "primevue/tag";
 import Checkbox from "primevue/checkbox";
@@ -144,11 +144,23 @@ const filteredProviders = computed(() => {
 onMounted(async () => {
   loading.value = true;
   try {
-    await Promise.all([taskStore.loadAllModels(), workspaceStore.load()]);
+    await Promise.all([
+      workspaceStore.loadWorkspaces(),
+      workspaceStore.load(),
+    ]);
+    await taskStore.loadAllModels(workspaceStore.activeWorkspaceId ?? undefined);
   } finally {
     loading.value = false;
   }
 });
+
+watch(
+  () => workspaceStore.activeWorkspaceId,
+  async (workspaceId) => {
+    if (workspaceId == null) return;
+    await taskStore.loadAllModels(workspaceId);
+  },
+);
 
 function toggleProvider(id: string) {
   if (collapsed.value.has(id)) {
@@ -161,14 +173,14 @@ function toggleProvider(id: string) {
 async function refresh(providerId: string) {
   refreshing.value.add(providerId);
   try {
-    await taskStore.loadAllModels();
+    await taskStore.loadAllModels(workspaceStore.activeWorkspaceId ?? undefined);
   } finally {
     refreshing.value.delete(providerId);
   }
 }
 
 async function onToggle(qualifiedModelId: string, enabled: boolean) {
-  await taskStore.setModelEnabled(qualifiedModelId, enabled);
+  await taskStore.setModelEnabled(qualifiedModelId, enabled, workspaceStore.activeWorkspaceId ?? undefined);
 }
 
 function modelLabel(qualifiedId: string, providerId: string): string {

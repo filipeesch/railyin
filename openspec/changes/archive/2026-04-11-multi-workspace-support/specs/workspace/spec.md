@@ -1,7 +1,4 @@
-## Purpose
-The workspace is the top-level container for boards, projects, workflow templates, and AI/provider execution configuration. Installations may contain multiple local workspaces.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Workspace is the top-level container
 The system SHALL maintain one or more workspaces per installation. Each workspace acts as the root container for its own boards, projects, workflow templates, and workspace-local AI configuration. The UI SHALL allow one workspace to be active at a time without deleting or merging the others.
@@ -54,28 +51,3 @@ Each workspace SHALL store its own engine and AI provider settings in that works
 #### Scenario: Workspace-local override wins
 - **WHEN** a workspace defines a value in its own `workspace.yaml` that is also present in `config.yaml`
 - **THEN** the workspace-local value is used for that workspace's executions
-
-### Requirement: Workspace schema includes workspace_id for future tenancy
-The database schema SHALL include a `workspace_id` foreign key on boards and projects to support future multi-user deployments without schema migration.
-
-#### Scenario: workspace_id is always set
-- **WHEN** a board or project is created
-- **THEN** it is assigned the current workspace ID (default: 1 for single-user installations)
-
-### Requirement: Workspace config is hot-reloaded on demand
-The system SHALL re-read `workspace.yaml` from disk and update all AI provider settings without restarting the application.
-
-#### Scenario: Reload config reflects edited YAML
-- **WHEN** the user edits `workspace.yaml` and clicks "Reload config" in the Setup view
-- **THEN** all subsequent AI calls use the updated settings without restarting the app
-
-#### Scenario: Invalid YAML on reload surfaces an error
-- **WHEN** the user reloads config and `workspace.yaml` contains a parse error
-- **THEN** an error message is shown in the Setup view and the previous valid configuration continues to apply
-
-### Requirement: Default config files are created on first launch
-The system SHALL auto-create `workspace.yaml` and the default workflow YAML when the config directory does not exist, so users can start without manual setup.
-
-#### Scenario: Config directory created automatically
-- **WHEN** the application starts and `~/.railyn/config/` does not exist
-- **THEN** the directory and default config files are created with safe defaults (`provider: fake`)

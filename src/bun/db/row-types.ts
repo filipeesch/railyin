@@ -5,6 +5,7 @@
 export interface WorkspaceRow {
   id: number;
   name: string;
+  config_key?: string | null;
 }
 
 export interface BoardRow {

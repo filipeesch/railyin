@@ -90,6 +90,7 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
     private readonly resumeOutcomes: ResumeOutcome[] = [];
     private readonly createOutcomes: CreateOutcome[] = [];
     private models: CopilotSdkModelInfo[] = [];
+    private readonly statusListeners = new Set<(message: string) => void>();
 
     readonly trace = {
         resumeCalls: [] as Array<{ sessionId: string; config: CopilotSdkResumeSessionConfig }>,
@@ -163,9 +164,9 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
         // no-op in mock — no real CLI to release
     }
 
-    onStatus(_listener: (message: string) => void): () => void {
-        // no-op in mock — no setup progress to report
-        return () => {};
+    onStatus(listener: (message: string) => void): () => void {
+        this.statusListeners.add(listener);
+        return () => this.statusListeners.delete(listener);
     }
 }
 

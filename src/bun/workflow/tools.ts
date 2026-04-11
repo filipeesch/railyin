@@ -22,6 +22,8 @@ import { getConfig } from "../config/index.ts";
 import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { removeWorktree } from "../git/worktree.ts";
+import { getProjectById } from "../project-store.ts";
+import { syncFileBackedCompatibilityState } from "../db/migrations.ts";
 import {
   createTodo,
   updateTodo as dbUpdateTodo,
@@ -1770,13 +1772,14 @@ export async function executeTool(
       const description = (args.description ?? "").trim();
       const boardId = args.board_id ? parseInt(args.board_id, 10) : (ctx.boardId ?? 0);
       if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
+      syncFileBackedCompatibilityState();
       const db = getDb();
       // Validate board exists
       const boardRow = db.query<{ id: number }, [number]>("SELECT id FROM boards WHERE id = ?").get(boardId);
       if (!boardRow) return `Error: board ${boardId} not found`;
       // Validate project exists
-      const projRow = db.query<{ id: number }, [number]>("SELECT id FROM projects WHERE id = ?").get(projectId);
-      if (!projRow) return `Error: project ${projectId} not found`;
+      const project = getProjectById(projectId);
+      if (!project) return `Error: project ${projectId} not found`;
       // Create conversation first
       const convRes = db.run("INSERT INTO conversations (task_id) VALUES (0)");
       const convId = convRes.lastInsertRowid as number;

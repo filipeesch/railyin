@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { electroview } from "../rpc";
 import type { Board, WorkflowTemplate } from "@shared/rpc-types";
+import { findFirstBoardInWorkspace } from "../workspace-helpers";
 
 type BoardWithTemplate = Board & { template: WorkflowTemplate };
 
@@ -30,8 +31,9 @@ export const useBoardStore = defineStore("board", () => {
     }
   }
 
-  async function createBoard(name: string, workflowTemplateId: string) {
+  async function createBoard(workspaceId: number, name: string, workflowTemplateId: string) {
     const board = await electroview.rpc.request["boards.create"]({
+      workspaceId,
       name,
       projectIds: [],
       workflowTemplateId,
@@ -45,5 +47,19 @@ export const useBoardStore = defineStore("board", () => {
     activeBoardId.value = id;
   }
 
-  return { boards, activeBoardId, activeBoard, loading, error, loadBoards, createBoard, selectBoard };
+  function selectFirstBoardInWorkspace(workspaceId: number) {
+    activeBoardId.value = findFirstBoardInWorkspace(boards.value, workspaceId);
+  }
+
+  return {
+    boards,
+    activeBoardId,
+    activeBoard,
+    loading,
+    error,
+    loadBoards,
+    createBoard,
+    selectBoard,
+    selectFirstBoardInWorkspace,
+  };
 });

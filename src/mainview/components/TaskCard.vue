@@ -1,7 +1,10 @@
 <template>
   <div class="task-card" :class="[`exec-${task.executionState}`]" :data-task-id="task.id" @click="emit('click')">
     <!-- Title -->
-    <div class="task-card__title">{{ task.title }}</div>
+    <div class="task-card__title-row">
+      <div class="task-card__title">{{ task.title }}</div>
+      <span v-if="isUnread" class="task-card__unread-dot" aria-label="Unread activity" />
+    </div>
 
     <!-- Execution state badge + changed files badge -->
     <div class="task-card__footer">
@@ -52,6 +55,7 @@ const taskStore = useTaskStore();
 const launchStore = useLaunchStore();
 const toast = useToast();
 const changedCount = computed(() => taskStore.changedFileCounts[props.task.id] ?? 0);
+const isUnread = computed(() => taskStore.hasUnread(props.task.id));
 
 const launchConfig = ref<LaunchConfig | null>(null);
 
@@ -121,6 +125,23 @@ const execSeverity = computed(() => {
   font-size: 0.9rem;
   margin-bottom: 8px;
   line-height: 1.4;
+}
+
+.task-card__title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-card__unread-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: var(--p-blue-500, #3b82f6);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--p-blue-500, #3b82f6) 18%, transparent);
 }
 
 .task-card__footer {

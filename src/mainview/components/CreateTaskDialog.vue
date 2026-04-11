@@ -23,7 +23,7 @@
         <Select
           id="ct-project"
           v-model="form.projectId"
-          :options="projectStore.projects"
+          :options="visibleProjects"
           option-label="name"
           option-value="id"
           placeholder="Select project"
@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from "vue";
+import { ref, reactive, computed } from "vue";
 import Dialog from "primevue/dialog";
 import InputText from "primevue/inputtext";
 import Textarea from "primevue/textarea";
@@ -64,6 +64,7 @@ import Select from "primevue/select";
 import Button from "primevue/button";
 import { useProjectStore } from "../stores/project";
 import { useTaskStore } from "../stores/task";
+import { useWorkspaceStore } from "../stores/workspace";
 
 const props = defineProps<{ boardId: number }>();
 const emit = defineEmits<{ created: [] }>();
@@ -72,7 +73,11 @@ const show = defineModel<boolean>("visible", { default: false });
 
 const projectStore = useProjectStore();
 const taskStore = useTaskStore();
+const workspaceStore = useWorkspaceStore();
 const saving = ref(false);
+const visibleProjects = computed(() =>
+  projectStore.projects.filter((project) => project.workspaceId === workspaceStore.activeWorkspaceId),
+);
 
 const form = reactive({ title: "", description: "", projectId: null as number | null });
 

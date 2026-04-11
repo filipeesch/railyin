@@ -1,31 +1,35 @@
-import { getDb } from "../db/index.ts";
-import { getConfig, resetConfig, loadConfig, patchWorkspaceYaml } from "../config/index.ts";
+import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml } from "../config/index.ts";
 import { clearProviderCache } from "../ai/index.ts";
-import type { WorkspaceConfig } from "../../shared/rpc-types.ts";
+import type { WorkspaceConfig, WorkspaceSummary } from "../../shared/rpc-types.ts";
+import { getDefaultWorkspaceId, getWorkspaceKeyById } from "../workspace-context.ts";
 
 export function workspaceHandlers() {
   return {
-    "workspace.getConfig": async (): Promise<WorkspaceConfig> => {
-      // Always reload from disk so the Reload config button picks up changes
+    "workspace.getConfig": async (params: { workspaceId?: number }): Promise<WorkspaceConfig> => {
       resetConfig();
-      const { error } = loadConfig();
+      const workspaceId = params.workspaceId ?? getDefaultWorkspaceId();
+      const workspaceKey = getWorkspaceKeyById(workspaceId);
+      const { error } = loadConfig(workspaceKey);
       if (error) throw new Error(error);
-      const db = getDb();
-      const config = getConfig();
-
-      const workspace = db
-        .query<{ id: number; name: string }, []>(
-          "SELECT id, name FROM workspaces LIMIT 1",
-        )
-        .get();
+      const config = getConfig(workspaceKey);
 
       // Support both legacy `ai:` block and new `providers:` list
       const legacyAi = config.workspace.ai;
       const firstProvider = config.providers[0];
 
       return {
-        id: workspace?.id ?? 1,
-        name: workspace?.name ?? "My Workspace",
+        id: config.workspaceId,
+        key: config.workspaceKey,
+        name: config.workspaceName,
+        workflows: config.workflows.map((workflow) => ({
+          id: workflow.id,
+          name: workflow.name,
+          columns: workflow.columns.map((column) => ({
+            id: column.id,
+            label: column.label,
+            model: column.model,
+          })),
+        })),
         ai: {
           baseUrl: legacyAi?.base_url ?? firstProvider?.base_url ?? "",
           apiKey: legacyAi?.api_key ?? firstProvider?.api_key ?? "",
@@ -38,8 +42,19 @@ export function workspaceHandlers() {
       };
     },
 
-    "workspace.setThinking": async (params: { enabled: boolean }): Promise<Record<string, never>> => {
-      patchWorkspaceYaml({ anthropic: { enable_thinking: params.enabled } });
+    "workspace.list": async (): Promise<WorkspaceSummary[]> => {
+      resetConfig();
+      return getWorkspaceRegistry().map((workspace) => ({
+        id: workspace.id,
+        key: workspace.key,
+        name: workspace.name,
+      }));
+    },
+
+    "workspace.setThinking": async (params: { workspaceId?: number; enabled: boolean }): Promise<Record<string, never>> => {
+      resetConfig();
+      const workspaceKey = getWorkspaceKeyById(params.workspaceId ?? getDefaultWorkspaceId());
+      patchWorkspaceYaml({ anthropic: { enable_thinking: params.enabled } }, workspaceKey);
       // Clear provider cache so the next execution picks up the new setting
       clearProviderCache();
       return {};

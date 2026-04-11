@@ -10,6 +10,7 @@
  */
 
 import type { ExecutionEngine, EngineEvent, ExecutionParams, NativeExecutionType } from "./types.ts";
+import type { LoadedConfig } from "../config/index.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
@@ -25,16 +26,18 @@ import {
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { getDb } from "../db/index.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
-import { getConfig } from "../config/index.ts";
+import { runWithConfig } from "../config/index.ts";
 import { resolveSlashReference } from "../workflow/slash-prompt.ts";
-import { NativeEngine } from "./native/engine.ts";
+import { resolveEngine } from "./resolver.ts";
+import { getBoardWorkspaceId, getDefaultWorkspaceId, getTaskWorkspaceId, getWorkspaceConfigById } from "../workspace-context.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
-  private readonly engine: ExecutionEngine;
+  private readonly injectedEngine: ExecutionEngine | null;
   private readonly onToken: OnToken;
   private readonly onError: OnError;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly onNewMessage: OnNewMessage;
+  private readonly engines = new Map<string, ExecutionEngine>();
 
   /** Map of executionId → AbortController for managing cancellation */
   private readonly abortControllers = new Map<number, AbortController>();
@@ -45,18 +48,52 @@ export class Orchestrator implements ExecutionCoordinator {
     onError: OnError,
     onTaskUpdated: OnTaskUpdated,
     onNewMessage: OnNewMessage,
+  );
+  constructor(
+    onToken: OnToken,
+    onError: OnError,
+    onTaskUpdated: OnTaskUpdated,
+    onNewMessage: OnNewMessage,
+  );
+  constructor(
+    engineOrOnToken: ExecutionEngine | OnToken,
+    onTokenOrOnError: OnToken | OnError,
+    onErrorOrOnTaskUpdated: OnError | OnTaskUpdated,
+    onTaskUpdatedOrOnNewMessage: OnTaskUpdated | OnNewMessage,
+    maybeOnNewMessage?: OnNewMessage,
   ) {
-    this.engine = engine;
-    this.onToken = onToken;
-    this.onError = onError;
-    this.onTaskUpdated = onTaskUpdated;
-    this.onNewMessage = onNewMessage;
+    if (typeof engineOrOnToken === "object" && "execute" in engineOrOnToken) {
+      this.injectedEngine = engineOrOnToken;
+      this.onToken = onTokenOrOnError as OnToken;
+      this.onError = onErrorOrOnTaskUpdated as OnError;
+      this.onTaskUpdated = onTaskUpdatedOrOnNewMessage as OnTaskUpdated;
+      this.onNewMessage = maybeOnNewMessage!;
+      return;
+    }
+    this.injectedEngine = null;
+    this.onToken = engineOrOnToken;
+    this.onError = onTokenOrOnError as OnError;
+    this.onTaskUpdated = onErrorOrOnTaskUpdated as OnTaskUpdated;
+    this.onNewMessage = onTaskUpdatedOrOnNewMessage as OnNewMessage;
   }
 
   // ─── Engine type check ──────────────────────────────────────────────────────
 
-  private get isNativeEngine(): boolean {
-    return this.engine instanceof NativeEngine;
+  private isNativeEngine(engine: ExecutionEngine): boolean {
+    return engine.constructor.name === "NativeEngine";
+  }
+
+  private getEngineForWorkspace(workspaceId: number): { config: LoadedConfig; engine: ExecutionEngine } {
+    const config = getWorkspaceConfigById(workspaceId);
+    if (this.injectedEngine) {
+      return { config, engine: this.injectedEngine };
+    }
+    let engine = this.engines.get(config.workspaceKey);
+    if (!engine) {
+      engine = resolveEngine(config, this.onTaskUpdated, this.onNewMessage);
+      this.engines.set(config.workspaceKey, engine);
+    }
+    return { config, engine };
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────
@@ -65,13 +102,16 @@ export class Orchestrator implements ExecutionCoordinator {
     taskId: number,
     toState: string,
   ): Promise<{ task: Task; executionId: number | null }> {
-    if (this.isNativeEngine) {
-      return handleTransition(taskId, toState, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage);
-    }
-
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
+    const { config, engine } = this.getEngineForWorkspace(getBoardWorkspaceId(task.board_id));
+    if (this.isNativeEngine(engine)) {
+      return runWithConfig(
+        config,
+        () => handleTransition(taskId, toState, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+      );
+    }
 
     // Ensure conversation exists
     let conversationId = task.conversation_id;
@@ -86,10 +126,10 @@ export class Orchestrator implements ExecutionCoordinator {
 
     appendMessage(taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
 
-    const column = this._getColumnConfig(task.board_id, toState);
+    const column = this._getColumnConfig(config, task.board_id, toState);
 
     // Resolve model
-    const resolvedModel = column?.model ?? task.model ?? getConfig()?.workspace.default_model ?? "";
+    const resolvedModel = column?.model ?? task.model ?? config.workspace.default_model ?? "";
     if (column?.model != null) {
       db.run("UPDATE tasks SET model = ? WHERE id = ?", [column.model, taskId]);
     } else if (resolvedModel) {
@@ -151,7 +191,7 @@ export class Orchestrator implements ExecutionCoordinator {
       toState,
     );
 
-    this._runNonNative(taskId, executionId, execParams);
+    this._runNonNative(taskId, executionId, engine, execParams);
     return { task: mapTask(updatedRow), executionId };
   }
 
@@ -159,15 +199,18 @@ export class Orchestrator implements ExecutionCoordinator {
     taskId: number,
     content: string,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
-    if (this.isNativeEngine) {
-      return handleHumanTurn(taskId, content, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage);
-    }
-
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
+    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceId(taskId));
+    if (this.isNativeEngine(engine)) {
+      return runWithConfig(
+        config,
+        () => handleHumanTurn(taskId, content, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+      );
+    }
 
-    const column = this._getColumnConfig(task.board_id, task.workflow_state);
+    const column = this._getColumnConfig(config, task.board_id, task.workflow_state);
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt)
@@ -216,7 +259,7 @@ export class Orchestrator implements ExecutionCoordinator {
       worktreePath,
       "human_turn",
     );
-    this._runNonNative(taskId, executionId, execParams);
+    this._runNonNative(taskId, executionId, engine, execParams);
 
     const msgRow = db
       .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
@@ -227,18 +270,21 @@ export class Orchestrator implements ExecutionCoordinator {
   async executeRetry(
     taskId: number,
   ): Promise<{ task: Task; executionId: number }> {
-    if (this.isNativeEngine) {
-      return handleRetry(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage);
-    }
-
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
+    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceId(taskId));
+    if (this.isNativeEngine(engine)) {
+      return runWithConfig(
+        config,
+        () => handleRetry(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+      );
+    }
 
     db.run("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ?", [taskId]);
     const attempt = (task.retry_count ?? 0) + 1;
 
-    const column = this._getColumnConfig(task.board_id, task.workflow_state);
+    const column = this._getColumnConfig(config, task.board_id, task.workflow_state);
     const execResult = db.run(
       `INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt)
        VALUES (?, ?, ?, ?, 'running', ?)`,
@@ -269,7 +315,7 @@ export class Orchestrator implements ExecutionCoordinator {
       worktreePath,
       "retry",
     );
-    this._runNonNative(taskId, executionId, execParams);
+    this._runNonNative(taskId, executionId, engine, execParams);
 
     return { task: mapTask(updatedRow), executionId };
   }
@@ -277,13 +323,16 @@ export class Orchestrator implements ExecutionCoordinator {
   async executeCodeReview(
     taskId: number,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
-    if (this.isNativeEngine) {
-      return handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage);
-    }
-
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
+    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceId(taskId));
+    if (this.isNativeEngine(engine)) {
+      return runWithConfig(
+        config,
+        () => handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+      );
+    }
 
     // Build a minimal code review prompt from hunk decisions
     type DecisionRow = { hunk_hash: string; file_path: string; decision: string; comment: string | null };
@@ -300,7 +349,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const reviewMsgId = appendMessage(taskId, task.conversation_id ?? 0, "code_review", "user", reviewText);
     appendMessage(taskId, task.conversation_id ?? 0, "user", "user", reviewText);
 
-    const column = this._getColumnConfig(task.board_id, task.workflow_state);
+    const column = this._getColumnConfig(config, task.board_id, task.workflow_state);
     const execResult = db.run(
       `INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt)
        VALUES (?, ?, ?, 'code-review', 'running', ?)`,
@@ -333,7 +382,7 @@ export class Orchestrator implements ExecutionCoordinator {
       worktreePath,
       "code_review",
     );
-    this._runNonNative(taskId, executionId, execParams);
+    this._runNonNative(taskId, executionId, engine, execParams);
 
     return { message: mapConversationMessage(reviewMsgRow), executionId };
   }
@@ -341,22 +390,24 @@ export class Orchestrator implements ExecutionCoordinator {
   // ─── Cancellation ──────────────────────────────────────────────────────────
 
   cancel(executionId: number): void {
-    if (this.isNativeEngine) {
-      nativeCancelExecution(executionId);
-    } else {
-      // Trigger abort for non-native engine execution (Task 5.3)
-      const controller = this.abortControllers.get(executionId);
-      if (controller) {
-        controller.abort();
-      }
-      this.engine.cancel(executionId);
+    nativeCancelExecution(executionId);
+    const controller = this.abortControllers.get(executionId);
+    if (controller) {
+      controller.abort();
+    }
+    if (this.injectedEngine) {
+      this.injectedEngine.cancel(executionId);
+    }
+    for (const engine of this.engines.values()) {
+      engine.cancel(executionId);
     }
   }
 
   // ─── Model listing ─────────────────────────────────────────────────────────
 
-  listModels() {
-    return this.engine.listModels();
+  listModels(workspaceId?: number) {
+    const { config, engine } = this.getEngineForWorkspace(workspaceId ?? getDefaultWorkspaceId());
+    return runWithConfig(config, () => engine.listModels());
   }
 
   // ─── Shell approval ─────────────────────────────────────────────────────────
@@ -370,7 +421,7 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Non-native engine helpers ─────────────────────────────────────────────
 
-  private _getColumnConfig(boardId: number, columnId: string) {
+  private _getColumnConfig(config: LoadedConfig, boardId: number, columnId: string) {
     const db = getDb();
     const board = db
       .query<{ workflow_template_id: string }, [number]>(
@@ -378,7 +429,6 @@ export class Orchestrator implements ExecutionCoordinator {
       )
       .get(boardId);
     const templateId = board?.workflow_template_id ?? "delivery";
-    const config = getConfig();
     const template = config.workflows.find((w) => w.id === templateId);
     return template?.columns.find((c) => c.id === columnId) ?? null;
   }
@@ -420,8 +470,13 @@ export class Orchestrator implements ExecutionCoordinator {
     };
   }
 
-  private _runNonNative(taskId: number, executionId: number, params: ExecutionParams): void {
-    const stream = this.engine.execute(params);
+  private _runNonNative(
+    taskId: number,
+    executionId: number,
+    engine: ExecutionEngine,
+    params: ExecutionParams,
+  ): void {
+    const stream = engine.execute(params);
     this.consumeStream(taskId, executionId, stream).catch((err) => {
       console.error(`[orchestrator] Unhandled error from consumeStream (task=${taskId}, execution=${executionId}):`, err);
     });

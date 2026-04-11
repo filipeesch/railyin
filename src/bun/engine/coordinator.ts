@@ -7,5 +7,5 @@ export interface ExecutionCoordinator {
     executeRetry(taskId: number): Promise<{ task: Task; executionId: number }>;
     executeCodeReview(taskId: number): Promise<{ message: ConversationMessage; executionId: number }>;
     cancel(executionId: number): void;
-    listModels(): Promise<EngineModelInfo[]>;
+    listModels(workspaceId?: number): Promise<EngineModelInfo[]>;
 }

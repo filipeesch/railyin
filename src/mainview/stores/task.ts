@@ -2,10 +2,13 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { electroview } from "../rpc";
 import type { Task, ConversationMessage, StreamToken, StreamError, ModelInfo, ProviderModelList } from "@shared/rpc-types";
+import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 
 export const useTaskStore = defineStore("task", () => {
   // All tasks keyed by boardId
   const tasksByBoard = ref<Record<number, Task[]>>({});
+  const taskIndex = ref<Record<number, Task>>({});
+  const unreadTaskIds = ref(new Set<number>());
 
   // Active task detail
   const activeTaskId = ref<number | null>(null);
@@ -36,15 +39,21 @@ export const useTaskStore = defineStore("task", () => {
   const changedFileCounts = ref<Record<number, number>>({});
 
   const activeTask = computed(() => {
-    for (const tasks of Object.values(tasksByBoard.value)) {
-      const found = tasks.find((t) => t.id === activeTaskId.value);
-      if (found) return found;
-    }
-    return null;
+    return activeTaskId.value != null ? taskIndex.value[activeTaskId.value] ?? null : null;
   });
 
   function sortMessagesInPlace() {
     messages.value = [...messages.value].sort((a, b) => a.id - b.id);
+  }
+
+  function markTaskUnread(taskId: number) {
+    unreadTaskIds.value = new Set([...unreadTaskIds.value, taskId]);
+  }
+
+  function clearTaskUnread(taskId: number) {
+    const next = new Set(unreadTaskIds.value);
+    next.delete(taskId);
+    unreadTaskIds.value = next;
   }
 
   // ─── Load tasks for a board ───────────────────────────────────────────────
@@ -52,7 +61,11 @@ export const useTaskStore = defineStore("task", () => {
   async function loadTasks(boardId: number) {
     loading.value = true;
     try {
-      tasksByBoard.value[boardId] = await electroview.rpc.request["tasks.list"]({ boardId });
+      const tasks = await electroview.rpc.request["tasks.list"]({ boardId });
+      tasksByBoard.value[boardId] = tasks;
+      for (const task of tasks) {
+        taskIndex.value[task.id] = task;
+      }
     } finally {
       loading.value = false;
     }
@@ -69,6 +82,7 @@ export const useTaskStore = defineStore("task", () => {
     const task = await electroview.rpc.request["tasks.create"](params);
     if (!tasksByBoard.value[params.boardId]) tasksByBoard.value[params.boardId] = [];
     tasksByBoard.value[params.boardId].push(task);
+    taskIndex.value[task.id] = task;
     return task;
   }
 
@@ -134,6 +148,7 @@ export const useTaskStore = defineStore("task", () => {
 
   async function selectTask(taskId: number) {
     activeTaskId.value = taskId;
+    clearTaskUnread(taskId);
     contextUsage.value = null;
     await loadMessages(taskId);
     fetchContextUsage(taskId);
@@ -201,8 +216,14 @@ export const useTaskStore = defineStore("task", () => {
     sortMessagesInPlace();
   }
 
-  function onTaskUpdated(task: Task) {
+  function onTaskUpdated(task: Task): TaskActivityEvent | null {
+    const previous = taskIndex.value[task.id] ?? null;
     _replaceTask(task);
+    taskIndex.value[task.id] = task;
+    const activity = classifyTaskActivity(previous, task);
+    if (activity && activeTaskId.value !== task.id) {
+      markTaskUnread(task.id);
+    }
     // Refresh changed file count when execution completes
     if (task.executionState === "completed") {
       refreshChangedFiles(task.id);
@@ -226,12 +247,22 @@ export const useTaskStore = defineStore("task", () => {
     ) {
       fetchContextUsage(task.id);
     }
+    return activity;
   }
 
   function onNewMessage(message: ConversationMessage) {
     // Refresh changed file count when a file_diff arrives
     if (message.type === "file_diff") {
       refreshChangedFiles(message.taskId);
+    }
+    if (
+      message.taskId !== activeTaskId.value &&
+      (message.type === "assistant" ||
+        message.type === "reasoning" ||
+        message.type === "system" ||
+        message.type === "file_diff")
+    ) {
+      markTaskUnread(message.taskId);
     }
     // Only append if this task is currently open in the drawer
     if (message.taskId !== activeTaskId.value) return;
@@ -256,25 +287,25 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── Load enabled models (for chat dropdown) ──────────────────────────────────
 
-  async function loadEnabledModels() {
-    availableModels.value = await electroview.rpc.request["models.listEnabled"]({});
+  async function loadEnabledModels(workspaceId?: number) {
+    availableModels.value = await electroview.rpc.request["models.listEnabled"]({ workspaceId });
   }
 
   // Keep loadModels as an alias for backward compat (called from App.vue etc.)
-  async function loadModels() {
-    await loadEnabledModels();
+  async function loadModels(workspaceId?: number) {
+    await loadEnabledModels(workspaceId);
   }
 
   // ─── Load all provider models (for tree view) ─────────────────────────────────
 
-  async function loadAllModels() {
-    allProviderModels.value = await electroview.rpc.request["models.list"]({});
+  async function loadAllModels(workspaceId?: number) {
+    allProviderModels.value = await electroview.rpc.request["models.list"]({ workspaceId });
   }
 
   // ─── Toggle model enabled state ─────────────────────────────────────────────────
 
-  async function setModelEnabled(qualifiedModelId: string, enabled: boolean) {
-    await electroview.rpc.request["models.setEnabled"]({ qualifiedModelId, enabled });
+  async function setModelEnabled(qualifiedModelId: string, enabled: boolean, workspaceId?: number) {
+    await electroview.rpc.request["models.setEnabled"]({ workspaceId, qualifiedModelId, enabled });
     // Optimistic update in allProviderModels
     for (const provider of allProviderModels.value) {
       const model = provider.models.find((m) => m.id === qualifiedModelId);
@@ -334,6 +365,8 @@ export const useTaskStore = defineStore("task", () => {
       activeTaskId.value = null;
       messages.value = [];
     }
+    delete taskIndex.value[taskId];
+    clearTaskUnread(taskId);
     return { warning: result.warning };
   }
 
@@ -360,6 +393,17 @@ export const useTaskStore = defineStore("task", () => {
     }
   }
 
+  function hasUnread(taskId: number): boolean {
+    return unreadTaskIds.value.has(taskId);
+  }
+
+  function workspaceHasUnread(
+    workspaceId: number,
+    boards: Array<{ id: number; workspaceId: number }>,
+  ): boolean {
+    return workspaceHasUnreadTasks(workspaceId, boards, taskIndex.value, unreadTaskIds.value);
+  }
+
   // ─── Internal helpers ─────────────────────────────────────────────────────
 
   function _replaceTask(updated: Task) {
@@ -373,6 +417,7 @@ export const useTaskStore = defineStore("task", () => {
         break;
       }
     }
+    taskIndex.value[updated.id] = updated;
   }
 
   return {
@@ -391,6 +436,7 @@ export const useTaskStore = defineStore("task", () => {
     allProviderModels,
     contextUsage,
     changedFileCounts,
+    unreadTaskIds,
     loadTasks,
     createTask,
     transitionTask,
@@ -411,6 +457,8 @@ export const useTaskStore = defineStore("task", () => {
     deleteTask,
     getGitStat,
     refreshChangedFiles,
+    hasUnread,
+    workspaceHasUnread,
     onStreamToken,
     onStreamError,
     onTaskUpdated,

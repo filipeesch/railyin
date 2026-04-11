@@ -56,7 +56,9 @@ export function mapBoard(row: BoardRow): Board {
 export function mapProject(row: ProjectRow): Project {
   return {
     id: row.id,
+    key: row.slug ?? row.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-"),
     workspaceId: row.workspace_id,
+    workspaceKey: row.workspace_id === 1 ? "default" : `legacy-${row.workspace_id}`,
     name: row.name,
     projectPath: row.project_path,
     gitRootPath: row.git_root_path,

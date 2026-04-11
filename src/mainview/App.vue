@@ -14,12 +14,21 @@ import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
 import { onStreamToken, onStreamError, onTaskUpdated, onNewMessage } from "./rpc";
+import { getTaskActivityToast } from "./task-activity";
 
 const router = useRouter();
 const toast = useToast();
 const workspaceStore = useWorkspaceStore();
 const boardStore = useBoardStore();
 const taskStore = useTaskStore();
+
+function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) {
+  if (!activity) return;
+  const board = boardStore.boards.find((entry) => entry.id === activity.task.boardId);
+  const workspace = workspaceStore.workspaces.find((entry) => entry.id === board?.workspaceId);
+  const toastPayload = getTaskActivityToast(activity, workspace?.name ?? "Workspace");
+  if (toastPayload) toast.add(toastPayload);
+}
 
 onMounted(async () => {
   // Register IPC push handlers from Bun
@@ -39,7 +48,7 @@ onMounted(async () => {
   });
 
   onTaskUpdated((task) => {
-    taskStore.onTaskUpdated(task);
+    toastForActivity(taskStore.onTaskUpdated(task));
   });
 
   onNewMessage((message) => {
@@ -47,6 +56,7 @@ onMounted(async () => {
   });
 
   // Boot: load workspace config
+  await workspaceStore.loadWorkspaces();
   await workspaceStore.load();
 
   if (!workspaceStore.isConfigured()) {

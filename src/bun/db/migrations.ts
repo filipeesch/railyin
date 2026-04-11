@@ -1,4 +1,8 @@
 import { getDb } from "./index.ts";
+import { getDefaultWorkspaceId } from "../workspace-context.ts";
+import { listFileBackedProjects, listProjectsForWorkspace } from "../project-store.ts";
+import { getWorkspaceIdForKey, getWorkspaceRegistry } from "../config/index.ts";
+import type { Project } from "../../shared/rpc-types.ts";
 
 // ─── Schema migrations ───────────────────────────────────────────────────────
 // Each entry is applied in order. Once applied, it is recorded in the
@@ -246,7 +250,37 @@ const migrations: Array<{ id: string; sql: string }> = [
     id: "014_execution_cache_read_tokens",
     sql: `ALTER TABLE executions ADD COLUMN cache_read_input_tokens INTEGER;`,
   },
+  {
+    id: "015_workspace_config_key",
+    sql: `
+      ALTER TABLE workspaces ADD COLUMN config_key TEXT;
+      UPDATE workspaces SET config_key = 'default' WHERE config_key IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_config_key ON workspaces(config_key);
+    `,
+  },
 ];
+
+function hasColumn(tableName: string, columnName: string): boolean {
+  const db = getDb();
+  const columns = db.query<Record<string, unknown>, []>(`PRAGMA table_info(${tableName})`).all();
+  return columns.some((column) => String(column.name ?? "") === columnName);
+}
+
+function applyMigration(id: string, sql: string): void {
+  const db = getDb();
+  db.transaction(() => {
+    if (id === "015_workspace_config_key") {
+      if (!hasColumn("workspaces", "config_key")) {
+        db.exec("ALTER TABLE workspaces ADD COLUMN config_key TEXT");
+      }
+      db.run("UPDATE workspaces SET config_key = 'default' WHERE config_key IS NULL");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_config_key ON workspaces(config_key)");
+    } else {
+      db.exec(sql);
+    }
+    db.run("INSERT INTO schema_migrations (id) VALUES (?)", [id]);
+  })();
+}
 
 export function runMigrations(): void {
   const db = getDb();
@@ -266,10 +300,7 @@ export function runMigrations(): void {
   for (const migration of migrations) {
     if (applied.has(migration.id)) continue;
 
-    db.transaction(() => {
-      db.exec(migration.sql);
-      db.run("INSERT INTO schema_migrations (id) VALUES (?)", [migration.id]);
-    })();
+    applyMigration(migration.id, migration.sql);
 
     console.log(`[db] Applied migration: ${migration.id}`);
   }
@@ -279,31 +310,96 @@ export function runMigrations(): void {
 
 export function seedDefaultWorkspace(): void {
   const db = getDb();
-  const existing = db.query<{ id: number }, []>("SELECT id FROM workspaces LIMIT 1").get();
-  if (!existing) {
-    db.run("INSERT INTO workspaces (id, name) VALUES (1, 'My Workspace')");
-    console.log("[db] Seeded default workspace");
-  }
 
   // In test mode (in-memory DB) also seed a minimal project + board so the
   // app boots into BoardView instead of the first-time setup wizard.
   // Tests then create their own task rows via /setup-test-env.
   if (process.env.RAILYN_DB === ":memory:") {
-    const hasProject = db.query<{ id: number }, []>("SELECT id FROM projects LIMIT 1").get();
-    if (!hasProject) {
-      db.run(
-        "INSERT INTO projects (workspace_id, name, project_path, git_root_path, default_branch) VALUES (1, 'Test Project', '/tmp', '/tmp', 'main')",
-      );
-      console.log("[db] Seeded test project");
-    }
     const hasBoard = db.query<{ id: number }, []>("SELECT id FROM boards LIMIT 1").get();
     if (!hasBoard) {
-      const project = db.query<{ id: number }, []>("SELECT id FROM projects LIMIT 1").get()!;
+      const workspaceId = getDefaultWorkspaceId();
+      const projectIds = listProjectsForWorkspace(workspaceId).map((project) => project.id);
       db.run(
-        "INSERT INTO boards (workspace_id, name, workflow_template_id, project_ids) VALUES (1, 'Test Board', 'delivery', ?)",
-        [JSON.stringify([project.id])],
+        "INSERT INTO boards (workspace_id, name, workflow_template_id, project_ids) VALUES (?, 'Test Board', 'delivery', ?)",
+        [workspaceId, JSON.stringify(projectIds)],
       );
       console.log("[db] Seeded test board");
     }
   }
+}
+
+export function syncConfiguredWorkspaces(
+  workspaces: Array<{ key: string; name: string }>,
+): void {
+  const db = getDb();
+  db.transaction(() => {
+    for (const workspace of workspaces) {
+      const expectedId = getWorkspaceIdForKey(workspace.key);
+      const byKey = db
+        .query<{ id: number }, [string]>("SELECT id FROM workspaces WHERE config_key = ?")
+        .get(workspace.key);
+
+      if (!byKey) {
+        db.run(
+          "INSERT INTO workspaces (id, name, config_key) VALUES (?, ?, ?)",
+          [expectedId, workspace.name, workspace.key],
+        );
+        continue;
+      }
+
+      if (byKey.id !== expectedId) {
+        db.run("UPDATE boards SET workspace_id = ? WHERE workspace_id = ?", [expectedId, byKey.id]);
+        db.run("UPDATE projects SET workspace_id = ? WHERE workspace_id = ?", [expectedId, byKey.id]);
+        db.run("UPDATE enabled_models SET workspace_id = ? WHERE workspace_id = ?", [expectedId, byKey.id]);
+        db.run(
+          "UPDATE workspaces SET id = ?, name = ?, config_key = ? WHERE id = ?",
+          [expectedId, workspace.name, workspace.key, byKey.id],
+        );
+        continue;
+      }
+
+      db.run(
+        "UPDATE workspaces SET name = ?, config_key = ? WHERE id = ?",
+        [workspace.name, workspace.key, expectedId],
+      );
+    }
+  })();
+}
+
+export function syncConfiguredProjects(projects: Project[]): void {
+  const db = getDb();
+  db.transaction(() => {
+    for (const project of projects) {
+      db.run(
+        `INSERT INTO projects
+           (id, workspace_id, name, project_path, git_root_path, default_branch, slug, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           workspace_id = excluded.workspace_id,
+           name = excluded.name,
+           project_path = excluded.project_path,
+           git_root_path = excluded.git_root_path,
+           default_branch = excluded.default_branch,
+           slug = excluded.slug,
+           description = excluded.description`,
+        [
+          project.id,
+          project.workspaceId,
+          project.name,
+          project.projectPath,
+          project.gitRootPath,
+          project.defaultBranch,
+          project.slug ?? null,
+          project.description ?? null,
+        ],
+      );
+    }
+  })();
+}
+
+export function syncFileBackedCompatibilityState(): void {
+  syncConfiguredWorkspaces(
+    getWorkspaceRegistry().map((workspace) => ({ key: workspace.key, name: workspace.name })),
+  );
+  syncConfiguredProjects(listFileBackedProjects());
 }

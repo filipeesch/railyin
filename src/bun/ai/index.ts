@@ -86,12 +86,21 @@ export function resolveProvider(
     );
   }
 
-  // Cache by full qualified model (model is embedded in provider instance)
-  if (!_registry.has(qualifiedModel)) {
-    _registry.set(qualifiedModel, instantiateProvider(config, modelId));
+  // Cache by config scope when available, but don't require global config for unit tests
+  // that call resolveProvider() directly with an explicit providers list.
+  let cacheScope = "global";
+  try {
+    const loadedConfig = getConfig();
+    cacheScope = `${loadedConfig.workspaceKey}:${loadedConfig.configDir}`;
+  } catch {
+    // Explicit providers are enough to instantiate the provider for these call sites.
+  }
+  const cacheKey = `${cacheScope}:${qualifiedModel}`;
+  if (!_registry.has(cacheKey)) {
+    _registry.set(cacheKey, instantiateProvider(config, modelId));
   }
 
-  return { provider: _registry.get(qualifiedModel)!, model: modelId };
+  return { provider: _registry.get(cacheKey)!, model: modelId };
 }
 
 // ─── Model list helpers ───────────────────────────────────────────────────────

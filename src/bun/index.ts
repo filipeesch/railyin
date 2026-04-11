@@ -1,7 +1,8 @@
 import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
-import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
+import { runMigrations, seedDefaultWorkspace, syncFileBackedCompatibilityState } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
-import { loadConfig } from "./config/index.ts";
+import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
+import { listProjects } from "./project-store.ts";
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 {
@@ -54,19 +55,19 @@ import { launchHandlers } from "./handlers/launch.ts";
 import { lspHandlers } from "./handlers/lsp.ts";
 import { mapTask } from "./db/mappers.ts";
 import { compactConversation } from "./workflow/engine.ts";
-import { resolveEngine } from "./engine/resolver.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
 import type { RailynRPCType } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
-// 1. Load config (YAML files)
-const { config, error: configError } = loadConfig();
-
-// 2. Run DB migrations + seed default workspace
+// 1. Run DB migrations + seed default workspace rows
 runMigrations();
 seedDefaultWorkspace();
+syncFileBackedCompatibilityState();
+
+// 2. Load default workspace config (YAML files)
+const { error: configError } = loadConfig();
 
 // 3. Reset any tasks/executions that were still 'running' when the process
 //    last exited (crash, SIGKILL, etc.) so they don't appear stuck forever.
@@ -112,10 +113,9 @@ function notifyWorkflowReloaded(): void {
 
 // ─── Wire up RPC handlers ─────────────────────────────────────────────────────
 
-// Create engine + orchestrator once all RPC callbacks are defined
-const orchestrator: Orchestrator | null = config
+// Create orchestrator once all RPC callbacks are defined
+const orchestrator: Orchestrator | null = !configError
   ? new Orchestrator(
-      resolveEngine(config, notifyTaskUpdated, notifyNewMessage),
       onToken,
       onError,
       notifyTaskUpdated,
@@ -297,17 +297,17 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
           projectId = existingTask.project_id;
         } else {
           // In-memory test mode — seedDefaultWorkspace() has already created a
-          // workspace, project and board. Just look them up.
+          // workspace and board. Resolve the first file-backed project.
           const boardRow = db.query<{ id: number }, []>("SELECT id FROM boards LIMIT 1").get();
-          const projectRow = db.query<{ id: number }, []>("SELECT id FROM projects LIMIT 1").get();
-          if (!boardRow || !projectRow) {
+          const project = listProjects()[0];
+          if (!boardRow || !project) {
             return new Response(
               JSON.stringify({ __error: "No board or project found — make sure the app was started with bun run test:ui:run (which seeds them automatically)." }),
               { status: 500, headers: { "content-type": "application/json" } },
             );
           }
           boardId = boardRow.id;
-          projectId = projectRow.id;
+          projectId = project.id;
         }
 
         // Create a temp git repo with known test files.
@@ -431,17 +431,23 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
         );
         const taskRow = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!;
         const taskId = taskRow.id;
+        const boardWorkspace = db
+          .query<{ workspace_id: number }, [number]>("SELECT workspace_id FROM boards WHERE id = ?")
+          .get(boardId);
+        const workspaceId = boardWorkspace?.workspace_id ?? 1;
 
         // Fix up the conversation → task back-link
         db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
 
         // Ensure the fake model is listed in enabled_models so the UI shows it.
         db.run(
-          "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (1, 'fake/test')",
+          "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, 'fake/test')",
+          [workspaceId],
         );
         // Register a second fake model so model-switching tests can change the selection.
         db.run(
-          "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (1, 'fake/v2')",
+          "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, 'fake/v2')",
+          [workspaceId],
         );
 
         db.run(

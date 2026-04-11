@@ -6,48 +6,48 @@
         <span class="logo-text">Railyn</span>
       </div>
 
+      <div v-if="workspaceStore.workspaces.length > 0" class="setup-workspace-picker">
+        <span class="setup-workspace-picker__label">Workspace</span>
+        <Select
+          :modelValue="workspaceStore.activeWorkspaceId"
+          :options="workspaceStore.workspaces"
+          option-label="name"
+          option-value="id"
+          class="setup-workspace-picker__select"
+          @update:modelValue="onWorkspaceSelected"
+        />
+      </div>
+
+      <div class="setup-section setup-section--compact">
+        <h3>Workspace Config</h3>
+        <p class="setup-hint">
+          Edit <code>~/.railyn/workspaces/&lt;workspace&gt;/workspace.yaml</code> to configure the active workspace.
+        </p>
+
+        <Message v-if="workspaceStore.error" severity="error" :closable="false">
+          {{ workspaceStore.error }}
+        </Message>
+
+        <div class="setup-header-actions">
+          <Button
+            label="Reload config"
+            icon="pi pi-refresh"
+            severity="secondary"
+            :loading="workspaceStore.loading"
+            @click="reloadWorkspaceConfig"
+          />
+          <Button
+            v-if="hasAnyBoards"
+            label="Go to board"
+            icon="pi pi-arrow-right"
+            icon-pos="right"
+            @click="goToBoard"
+          />
+        </div>
+      </div>
+
       <!-- Tab navigation -->
       <TabView v-model:activeIndex="activeTab">
-
-        <!-- Workspace / AI settings -->
-        <TabPanel header="Workspace">
-          <div class="setup-section">
-            <h3>AI Provider</h3>
-            <p class="setup-hint">
-              Railyn uses any OpenAI-compatible API. Edit
-              <code>~/.railyn/config/workspace.yaml</code> (or
-              <code>config/workspace.yaml</code> in the repo) to configure.
-            </p>
-
-            <div v-if="workspaceStore.config" class="config-summary">
-              <div class="config-row">
-                <span class="config-label">Base URL</span>
-                <code>{{ workspaceStore.config.ai.baseUrl }}</code>
-              </div>
-              <div class="config-row">
-                <span class="config-label">Model</span>
-                <code>{{ workspaceStore.config.ai.model }}</code>
-              </div>
-              <div class="config-row">
-                <span class="config-label">API Key</span>
-                <code>{{ workspaceStore.config.ai.apiKey ? "••••••••" : "not set" }}</code>
-              </div>
-            </div>
-
-            <Message v-if="workspaceStore.error" severity="error" :closable="false">
-              {{ workspaceStore.error }}
-            </Message>
-
-            <Button
-              label="Reload config"
-              icon="pi pi-refresh"
-              severity="secondary"
-              :loading="workspaceStore.loading"
-              class="mt-3"
-              @click="workspaceStore.load()"
-            />
-          </div>
-        </TabPanel>
 
         <!-- Register a project -->
         <TabPanel header="Projects">
@@ -99,14 +99,14 @@
               v-if="showLspPrompt"
               :detected-languages="lspLanguages"
               :project-path="lastRegisteredPath"
-              @done="showLspPrompt = false; if (!boardStore.boards.length) activeTab = 2;"
+              @done="showLspPrompt = false; if (!visibleBoards.length) activeTab = 1;"
             />
 
             <!-- Project list -->
-            <div v-if="projectStore.projects.length" class="project-list">
+            <div v-if="visibleProjects.length" class="project-list">
               <h4>Registered projects</h4>
               <div
-                v-for="p in projectStore.projects"
+                v-for="p in visibleProjects"
                 :key="p.id"
                 class="project-item"
               >
@@ -128,20 +128,30 @@
               <InputText v-model="boardName" placeholder="Q2 Delivery" class="w-full" />
             </div>
 
+            <div class="field">
+              <label>Workflow</label>
+              <select :key="workflowOptionsKey" v-model="boardWorkflowTemplateId" class="setup-native-select">
+                <option disabled value="">Select workflow</option>
+                <option v-for="workflow in workflowOptions" :key="workflow.value" :value="workflow.value">
+                  {{ workflow.label }}
+                </option>
+              </select>
+            </div>
+
             <Message v-if="boardError" severity="error" :closable="false">{{ boardError }}</Message>
 
             <Button
               label="Create board"
               icon="pi pi-plus"
-              :disabled="!boardName.trim()"
+              :disabled="!boardName.trim() || !boardWorkflowTemplateId"
               :loading="boardSaving"
               @click="createBoard"
             />
 
-            <div v-if="boardStore.boards.length" class="project-list">
+            <div v-if="visibleBoards.length" class="project-list">
               <h4>Boards</h4>
               <div
-                v-for="b in boardStore.boards"
+                v-for="b in visibleBoards"
                 :key="b.id"
                 class="project-item"
               >
@@ -165,20 +175,17 @@
 
       </TabView>
 
-      <!-- Done button (only shown when at least one board exists) -->
-      <div class="setup-footer" v-if="boardStore.boards.length">
-        <Button label="Go to board →" icon="pi pi-arrow-right" icon-pos="right" @click="goToBoard" />
-      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
+import { computed, ref, reactive, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import TabView from "primevue/tabview";
 import TabPanel from "primevue/tabpanel";
 import InputText from "primevue/inputtext";
+import Select from "primevue/select";
 import Button from "primevue/button";
 import Message from "primevue/message";
 import { electroview } from "../rpc";
@@ -187,7 +194,7 @@ import { useBoardStore } from "../stores/board";
 import { useProjectStore } from "../stores/project";
 import ModelTreeView from "../components/ModelTreeView.vue";
 import LspSetupPrompt from "../components/LspSetupPrompt.vue";
-import type { LspDetectedLanguage } from "../../shared/rpc-types";
+import type { LspDetectedLanguage, WorkflowTemplate } from "../../shared/rpc-types";
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
@@ -211,18 +218,63 @@ const showLspPrompt = ref(false);
 
 // Board form
 const boardName = ref("");
+const boardWorkflowTemplateId = ref("");
 const boardSaving = ref(false);
 const boardError = ref<string | null>(null);
+const workflowOptions = ref<Array<{ label: string; value: string }>>([]);
+const workflowOptionsKey = computed(() =>
+  `${workspaceStore.activeWorkspaceId ?? "none"}:${workflowOptions.value.map((entry) => entry.value).join(",")}`,
+);
+const hasAnyBoards = computed(() => boardStore.boards.length > 0);
+
+const visibleProjects = computed(() =>
+  projectStore.projects.filter((project) => project.workspaceId === workspaceStore.activeWorkspaceId),
+);
+const visibleBoards = computed(() =>
+  boardStore.boards.filter((board) => board.workspaceId === workspaceStore.activeWorkspaceId),
+);
 
 onMounted(async () => {
-  await Promise.all([projectStore.loadProjects(), boardStore.loadBoards()]);
-  if (!workspaceStore.config) await workspaceStore.load();
+  await workspaceStore.loadWorkspaces();
+  await Promise.all([projectStore.loadProjects(), boardStore.loadBoards(), workspaceStore.load()]);
+  await loadWorkflowOptions(workspaceStore.activeWorkspaceId);
 
   // Navigate to the tab most relevant for first-run
-  if (!workspaceStore.config) activeTab.value = 0;
-  else if (!projectStore.projects.length) activeTab.value = 1;
-  else if (!boardStore.boards.length) activeTab.value = 2;
+  if (!visibleProjects.value.length) activeTab.value = 0;
+  else if (!visibleBoards.value.length) activeTab.value = 1;
 });
+
+function setWorkflowOptions(workflows: WorkflowTemplate[]) {
+  workflowOptions.value = workflows.map((workflow) => ({
+    label: workflow.name,
+    value: workflow.id,
+  }));
+  if (!workflowOptions.value.length) {
+    boardWorkflowTemplateId.value = "";
+    return;
+  }
+  if (!workflowOptions.value.some((workflow) => workflow.value === boardWorkflowTemplateId.value)) {
+    boardWorkflowTemplateId.value = workflowOptions.value[0]!.value;
+  }
+}
+
+async function loadWorkflowOptions(workspaceId: number | null) {
+  boardWorkflowTemplateId.value = "";
+  if (workspaceId == null) {
+    workflowOptions.value = [];
+    return;
+  }
+  const config = await electroview.rpc.request["workspace.getConfig"]({ workspaceId });
+  setWorkflowOptions(config.workflows);
+}
+
+watch(
+  () => workspaceStore.activeWorkspaceId,
+  async (workspaceId) => {
+    await loadWorkflowOptions(workspaceId);
+  },
+  { immediate: true },
+);
 
 async function registerProject() {
   projError.value = null;
@@ -230,6 +282,7 @@ async function registerProject() {
   try {
     const registeredPath = proj.projectPath.trim();
     await projectStore.registerProject({
+      workspaceId: workspaceStore.activeWorkspaceId ?? 1,
       name: proj.name.trim(),
       projectPath: registeredPath,
       gitRootPath: proj.gitRootPath.trim() || registeredPath,
@@ -254,7 +307,7 @@ async function registerProject() {
     }
 
     // If we have projects now, nudge to boards tab
-    if (!boardStore.boards.length) activeTab.value = 2;
+    if (!visibleBoards.value.length) activeTab.value = 1;
   } catch (e) {
     projError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -266,7 +319,14 @@ async function createBoard() {
   boardError.value = null;
   boardSaving.value = true;
   try {
-    await boardStore.createBoard(boardName.value.trim(), "delivery");
+    if (!boardWorkflowTemplateId.value) {
+      throw new Error("Select a workflow template");
+    }
+    await boardStore.createBoard(
+      workspaceStore.activeWorkspaceId ?? 1,
+      boardName.value.trim(),
+      boardWorkflowTemplateId.value,
+    );
     boardName.value = "";
   } catch (e) {
     boardError.value = e instanceof Error ? e.message : String(e);
@@ -275,7 +335,31 @@ async function createBoard() {
   }
 }
 
-function goToBoard() {
+async function onWorkspaceSelected(workspaceId: number | string) {
+  await workspaceStore.selectWorkspace(workspaceId);
+  await loadWorkflowOptions(workspaceStore.activeWorkspaceId);
+}
+
+async function reloadWorkspaceConfig() {
+  await workspaceStore.load();
+  await loadWorkflowOptions(workspaceStore.activeWorkspaceId);
+}
+
+async function goToBoard() {
+  if (!boardStore.activeBoardId) {
+    const currentWorkspaceBoard = boardStore.boards.find(
+      (board) => board.workspaceId === workspaceStore.activeWorkspaceId,
+    );
+    if (currentWorkspaceBoard) {
+      boardStore.selectBoard(currentWorkspaceBoard.id);
+    } else {
+      const firstBoard = boardStore.boards[0];
+      if (firstBoard) {
+        await workspaceStore.selectWorkspace(firstBoard.workspaceId);
+        boardStore.selectBoard(firstBoard.id);
+      }
+    }
+  }
   router.push("/board");
 }
 </script>
@@ -330,6 +414,10 @@ function goToBoard() {
   padding: 8px 0;
 }
 
+.setup-section--compact {
+  padding-top: 0;
+}
+
 .setup-section h3 {
   margin: 0 0 4px;
   font-size: 1rem;
@@ -359,29 +447,21 @@ function goToBoard() {
   color: var(--p-text-muted-color, #94a3b8);
 }
 
-.config-summary {
-  background: var(--p-surface-50, #f8fafc);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
+.setup-header-actions {
   display: flex;
-  flex-direction: column;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.config-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.config-label {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--p-text-muted-color, #94a3b8);
-  width: 80px;
-  flex-shrink: 0;
+.setup-native-select {
+  width: 100%;
+  min-height: 2.5rem;
+  border: 1px solid var(--p-content-border-color, #cbd5e1);
+  border-radius: 6px;
+  background: var(--p-content-background, #fff);
+  color: var(--p-text-color, #1e293b);
+  padding: 0.625rem 0.75rem;
+  font: inherit;
 }
 
 .project-list {
@@ -412,12 +492,6 @@ function goToBoard() {
   margin-left: auto;
 }
 
-.setup-footer {
-  margin-top: 20px;
-  display: flex;
-  justify-content: flex-end;
-}
-
 .mt-3 {
   margin-top: 12px;
 }
@@ -431,11 +505,12 @@ html.dark-mode .setup-card {
   background: var(--p-surface-900, #0f172a);
   border-color: var(--p-surface-700, #334155);
 }
-html.dark-mode .config-summary {
-  background: var(--p-surface-800, #1e293b);
-  border-color: var(--p-surface-700, #334155);
-}
 html.dark-mode .project-item {
   border-bottom-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .setup-native-select {
+  background: var(--p-surface-900, #0f172a);
+  border-color: var(--p-surface-700, #334155);
+  color: var(--p-text-color, #e2e8f0);
 }
 </style>

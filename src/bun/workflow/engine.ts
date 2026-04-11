@@ -1,4 +1,5 @@
 import { getDb } from "../db/index.ts";
+import { getProjectById } from "../project-store.ts";
 import { getConfig } from "../config/index.ts";
 import { log } from "../logger.ts";
 import { resolveProvider, UnresolvableProviderError, listOpenAICompatibleModels, retryStream, retryTurn } from "../ai/index.ts";
@@ -1137,17 +1138,13 @@ async function runExecution(
       .get(taskId);
     let gitContext: { git_root_path: string; worktree_path: string | null; worktree_status: string; project_path: string } | undefined;
     if (gitRow?.worktree_status === "ready") {
-      const projectRow = db
-        .query<{ project_path: string }, [number]>(
-          "SELECT project_path FROM projects WHERE id = ?",
-        )
-        .get(task.project_id);
-      if (projectRow) {
+      const project = getProjectById(task.project_id);
+      if (project) {
         gitContext = {
           git_root_path: gitRow.git_root_path,
           worktree_path: gitRow.worktree_path,
           worktree_status: gitRow.worktree_status,
-          project_path: projectRow.project_path,
+          project_path: project.projectPath,
         };
       }
     }
