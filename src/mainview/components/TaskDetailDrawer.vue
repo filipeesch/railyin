@@ -85,21 +85,23 @@
         <div class="task-detail__conversation" ref="scrollEl" @scroll.passive="onScroll">
 
           <div class="conversation-inner">
-            <template v-for="item in displayItems" :key="item.key">
-              <ToolCallGroup
-                v-if="item.kind === 'tool_entry'"
-                :entry="item.entry"
-              />
-              <CodeReviewCard
-                v-else-if="item.kind === 'code_review'"
-                :message="item.message"
-              />
-              <MessageBubble
-                v-else
-                :chunk="item.message"
-                :index="item.msgIndex"
-              />
-            </template>
+            <TransitionGroup name="chat-item" tag="div" class="chat-items">
+              <template v-for="item in displayItems" :key="item.key">
+                <ToolCallGroup
+                  v-if="item.kind === 'tool_entry'"
+                  :entry="item.entry"
+                />
+                <CodeReviewCard
+                  v-else-if="item.kind === 'code_review'"
+                  :message="item.message"
+                />
+                <MessageBubble
+                  v-else
+                  :chunk="item.message"
+                  :index="item.msgIndex"
+                />
+              </template>
+            </TransitionGroup>
 
             <!-- Unified live stream blocks (arrival order guaranteed) -->
             <template v-if="taskStore.activeStreamState && !taskStore.activeStreamState.isDone">
@@ -726,12 +728,12 @@ function onScroll() {
   autoScroll.value = distFromBottom < SCROLL_THRESHOLD;
 }
 
-function scrollToBottom() {
+function scrollToBottom(behavior: ScrollBehavior = "instant") {
   if (!scrollEl.value) return;
-  scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
+  scrollEl.value.scrollTo({ top: scrollEl.value.scrollHeight, behavior });
 }
 
-// Auto-scroll to bottom when messages change
+// Auto-scroll to bottom when messages or live stream changes
 watch(
   [
     () => taskStore.messages.length,
@@ -739,10 +741,14 @@ watch(
     () => taskStore.streamingReasoningToken.length,
     () => taskStore.streamingStatusMessage.length,
     () => task.value?.executionState,
+    () => taskStore.streamVersion,
   ],
-  async () => {
+  async ([newMsgLen, , , , , newStreamVersion], [oldMsgLen, , , , , oldStreamVersion]) => {
     await nextTick();
-    if (autoScroll.value) scrollToBottom();
+    if (!autoScroll.value) return;
+    // Smooth scroll only when a whole new message arrives; instant during streaming chunks
+    const isNewMessage = newMsgLen !== oldMsgLen;
+    scrollToBottom(isNewMessage ? "smooth" : "instant");
   },
 );
 
@@ -1170,6 +1176,28 @@ watch(
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+/* Chat item enter animation */
+@keyframes msgFadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.chat-item-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.chat-item-enter-active {
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+}
+.chat-item-enter-to {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.chat-items {
+  display: contents;
 }
 
 .msg {

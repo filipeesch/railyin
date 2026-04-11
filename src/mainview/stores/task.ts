@@ -40,6 +40,8 @@ export const useTaskStore = defineStore("task", () => {
 
   // ── Per-task stream states (fixes cross-task contamination) ──
   const streamStates = ref(new Map<number, TaskStreamState>());
+  /** Incremented on every onStreamEvent call — watch this for autoscroll during pipeline streaming */
+  const streamVersion = ref(0);
 
   // Legacy streaming refs (kept for backward compat with old engine path)
   const streamingToken = ref("");
@@ -233,6 +235,9 @@ export const useTaskStore = defineStore("task", () => {
 
   /** New unified stream event handler — replaces the three-channel old approach */
   function onStreamEvent(event: StreamEvent) {
+    // Bump version so watchers (e.g. autoscroll) fire on every event
+    streamVersion.value++;
+
     // Refresh changed file count when a file_diff arrives
     if (event.type === "file_diff") {
       refreshChangedFiles(event.taskId);
@@ -638,6 +643,7 @@ export const useTaskStore = defineStore("task", () => {
     streamingStatusMessage,
     streamingTaskId,
     streamStates,
+    streamVersion,
     activeStreamState,
     loading,
     messagesLoading,

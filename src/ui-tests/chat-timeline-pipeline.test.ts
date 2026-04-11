@@ -20,6 +20,8 @@
  *     T-36: status message disappears after `done` event
  *     T-37: new execution (different executionId) resets state so second run is visible
  *     T-38: tool_call event clears live reasoning_chunk blocks (no stacked reasoning)
+ *     T-39: autoscroll fires during text_chunk streaming — scroll reaches bottom
+ *     T-40: autoscroll fires during reasoning_chunk streaming — reasoning bubble visible in viewport
  */
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
@@ -508,5 +510,80 @@ describe("Suite T — stream-event pipeline rendering", () => {
       return !!document.querySelector('.rb__icon--pulse');
     `);
     expect(stillPulsing).toBe(false);
+  });
+
+  test("T-39: autoscroll fires during text_chunk streaming — scroll reaches bottom", async () => {
+    // Scroll to top first so we can verify autoscroll pulls us back
+    await webEval(`
+      var el = document.querySelector('.task-detail__conversation');
+      if (el) { el.scrollTop = 0; }
+    `);
+    await sleep(100);
+
+    // Send several text_chunk events to produce content
+    const chunks = Array.from({ length: 20 }, (_, i) => ({
+      taskId,
+      executionId: EXEC_ID,
+      seq: i,
+      blockId: `${EXEC_ID}-text-autoscroll`,
+      type: "text_chunk" as const,
+      content: `Line ${i + 1}: Lorem ipsum dolor sit amet, consectetur adipiscing elit.\n`,
+      done: false,
+    }));
+    await queueStreamEvents(chunks);
+    await sleep(600);
+
+    const atBottom = await webEval<boolean>(`
+      var el = document.querySelector('.task-detail__conversation');
+      if (!el) return false;
+      return (el.scrollHeight - el.scrollTop - el.clientHeight) < 10;
+    `);
+    expect(atBottom).toBe(true);
+  });
+
+  test("T-40: autoscroll fires during reasoning_chunk streaming — reasoning bubble visible in viewport", async () => {
+    // Scroll to top first
+    await webEval(`
+      var el = document.querySelector('.task-detail__conversation');
+      if (el) { el.scrollTop = 0; }
+    `);
+    await sleep(100);
+
+    // Send reasoning_chunk events to create a reasoning bubble
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: EXEC_ID,
+        seq: 0,
+        blockId: `${EXEC_ID}-rb-autoscroll`,
+        type: "reasoning_chunk",
+        content: "Thinking deeply about the problem...\nAnalyzing all edge cases...\nConsidering multiple approaches...",
+        done: false,
+      },
+    ]);
+    await sleep(600);
+
+    // The reasoning bubble should be visible in the scroll container
+    const rbVisible = await webEval<boolean>(`
+      var container = document.querySelector('.task-detail__conversation');
+      var rb = document.querySelector('.rb__icon--pulse');
+      if (!container || !rb) return false;
+      var containerRect = container.getBoundingClientRect();
+      var rbRect = rb.getBoundingClientRect();
+      return rbRect.bottom > containerRect.top && rbRect.top < containerRect.bottom;
+    `);
+    expect(rbVisible).toBe(true);
+
+    // Cleanup
+    await queueStreamEvents([{
+      taskId,
+      executionId: EXEC_ID,
+      seq: 99,
+      blockId: `${EXEC_ID}-rb-done`,
+      type: "done",
+      content: "",
+      done: true,
+    }]);
+    await sleep(300);
   });
 });
