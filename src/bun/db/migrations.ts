@@ -258,6 +258,23 @@ const migrations: Array<{ id: string; sql: string }> = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_config_key ON workspaces(config_key);
     `,
   },
+  {
+    id: "016_task_position",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN position REAL NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    id: "017_task_position_backfill",
+    sql: `
+      WITH ranked AS (
+        SELECT id,
+               (ROW_NUMBER() OVER (PARTITION BY board_id, workflow_state ORDER BY created_at)) * 1000.0 AS pos
+        FROM tasks
+      )
+      UPDATE tasks SET position = (SELECT pos FROM ranked WHERE ranked.id = tasks.id);
+    `,
+  },
 ];
 
 function hasColumn(tableName: string, columnName: string): boolean {
@@ -275,6 +292,10 @@ function applyMigration(id: string, sql: string): void {
       }
       db.run("UPDATE workspaces SET config_key = 'default' WHERE config_key IS NULL");
       db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_config_key ON workspaces(config_key)");
+    } else if (id === "016_task_position") {
+      if (!hasColumn("tasks", "position")) {
+        db.exec(sql);
+      }
     } else {
       db.exec(sql);
     }

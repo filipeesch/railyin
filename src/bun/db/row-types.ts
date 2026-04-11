@@ -56,6 +56,7 @@ export interface TaskRow {
   branch_name?: string | null;
   worktree_path?: string | null;
   execution_count?: number | null;
+  position: number;
 }
 
 export interface TaskGitContextRow {

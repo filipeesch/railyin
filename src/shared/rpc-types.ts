@@ -54,6 +54,7 @@ export interface Task {
   branchName: string | null;
   worktreePath: string | null;
   executionCount: number;
+  position: number;
 }
 
 export type MessageType =
@@ -399,8 +400,12 @@ export type RailynRPCType = {
         };
         response: Task;
       };
+      "tasks.reorder": {
+        params: { taskId: number; position: number };
+        response: Task;
+      };
       "tasks.transition": {
-        params: { taskId: number; toState: WorkflowState };
+        params: { taskId: number; toState: WorkflowState; targetPosition?: number };
         response: { task: Task; executionId: number | null };
       };
       "tasks.retry": {

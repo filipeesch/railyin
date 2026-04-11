@@ -86,16 +86,41 @@ export const useTaskStore = defineStore("task", () => {
     return task;
   }
 
+  // ─── Reorder task (same-column position change — no AI turn) ─────────────
+
+  async function reorderTask(taskId: number, position: number) {
+    const prior = Object.values(tasksByBoard.value).flat().find((t) => t.id === taskId);
+    if (prior) _replaceTask({ ...prior, position });
+    try {
+      const task = await electroview.rpc.request["tasks.reorder"]({ taskId, position });
+      _replaceTask(task);
+      return task;
+    } catch (err) {
+      if (prior) _replaceTask(prior);
+      throw err;
+    }
+  }
+
   // ─── Transition task ──────────────────────────────────────────────────────
 
-  async function transitionTask(taskId: number, toState: string) {
+  async function transitionTask(taskId: number, toState: string, targetPosition?: number) {
     // Optimistic update: move the card immediately so there's no visible snap-back
     // while awaiting the RPC round-trip.
     const prior = Object.values(tasksByBoard.value).flat().find((t) => t.id === taskId);
-    if (prior) _replaceTask({ ...prior, workflowState: toState });
+    if (prior) {
+      _replaceTask({
+        ...prior,
+        workflowState: toState,
+        ...(targetPosition != null ? { position: targetPosition } : {}),
+      });
+    }
 
     try {
-      const { task } = await electroview.rpc.request["tasks.transition"]({ taskId, toState });
+      const { task } = await electroview.rpc.request["tasks.transition"]({
+        taskId,
+        toState,
+        ...(targetPosition != null ? { targetPosition } : {}),
+      });
       onTaskUpdated(task); // sync final state (executionState, model override, etc.)
       return task;
     } catch (err) {
@@ -439,6 +464,7 @@ export const useTaskStore = defineStore("task", () => {
     unreadTaskIds,
     loadTasks,
     createTask,
+    reorderTask,
     transitionTask,
     retryTask,
     sendMessage,

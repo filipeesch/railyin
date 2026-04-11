@@ -94,6 +94,11 @@
             @click="onCardClick(task.id)"
             @open-review="onOpenReview(task.id)"
           />
+          <div
+            v-if="dragOverColumnId === column.id"
+            class="drop-indicator"
+            :style="{ top: dropIndicatorY + 'px' }"
+          />
         </div>
       </div>
     </div>
@@ -161,6 +166,8 @@ const { isDark, toggle: toggleDark } = useDarkMode();
 
 const showCreateTask = ref(false);
 const dragOverColumnId = ref<string | null>(null);
+const dropIndex = ref<number | null>(null);
+const dropIndicatorY = ref<number>(0);
 let lastDragEndTime = 0;
 
 // ─── Workflow editor state ────────────────────────────────────────────────────
@@ -215,6 +222,7 @@ type DragState = {
   active: boolean;
   ghostEl: HTMLElement | null;
   sourceEl: HTMLElement | null;
+  sourceColumnId: string | null;
 };
 let activeDrag: DragState | null = null;
 
@@ -239,9 +247,10 @@ onMounted(async () => {
 function columnTasks(columnId: string) {
   const boardId = boardStore.activeBoardId;
   if (!boardId) return [];
-  return (taskStore.tasksByBoard[boardId] ?? []).filter(
-    (t) => t.workflowState === columnId,
-  );
+  return (taskStore.tasksByBoard[boardId] ?? [])
+    .filter((t) => t.workflowState === columnId)
+    .slice()
+    .sort((a, b) => a.position - b.position);
 }
 
 async function onBoardChange() {
@@ -259,6 +268,7 @@ function onCardPointerDown(event: PointerEvent, taskId: number) {
   event.preventDefault(); // prevents Chromium from starting a text selection gesture
   const sourceEl = (event.currentTarget as HTMLElement);
   const rect = sourceEl.getBoundingClientRect();
+  const colEl = sourceEl.closest('[data-column-id]');
   activeDrag = {
     taskId,
     startX: event.clientX,
@@ -268,6 +278,7 @@ function onCardPointerDown(event: PointerEvent, taskId: number) {
     active: false,
     ghostEl: null,
     sourceEl,
+    sourceColumnId: colEl?.getAttribute('data-column-id') ?? null,
   };
   document.body.style.userSelect = 'none';
   document.documentElement.style.userSelect = 'none';
@@ -306,7 +317,48 @@ function onPointerMove(event: PointerEvent) {
   const el = document.elementFromPoint(event.clientX, event.clientY);
   if (activeDrag.ghostEl) activeDrag.ghostEl.style.display = '';
   const col = el?.closest('[data-column-id]');
-  dragOverColumnId.value = col?.getAttribute('data-column-id') ?? null;
+  const hoveredColumnId = col?.getAttribute('data-column-id') ?? null;
+  dragOverColumnId.value = hoveredColumnId;
+
+  // Compute drop index and indicator position within the hovered column
+  if (hoveredColumnId && col) {
+    const cardsContainer = (col as HTMLElement).querySelector('.board-column__cards');
+    if (cardsContainer) {
+      const cards = Array.from(cardsContainer.querySelectorAll<HTMLElement>('.task-card'));
+      // Exclude the dragged card from index calculation
+      const visibleCards = cards.filter(
+        (c) => c.dataset.taskId !== String(activeDrag!.taskId),
+      );
+      let idx = visibleCards.length; // default: append at end
+      for (let i = 0; i < visibleCards.length; i++) {
+        const rect = visibleCards[i].getBoundingClientRect();
+        if (event.clientY < rect.top + rect.height / 2) {
+          idx = i;
+          break;
+        }
+      }
+      dropIndex.value = idx;
+
+      // Compute pixel offset for the drop indicator line
+      const containerRect = cardsContainer.getBoundingClientRect();
+      const scrollTop = (cardsContainer as HTMLElement).scrollTop;
+      if (visibleCards.length === 0) {
+        dropIndicatorY.value = scrollTop + 4;
+      } else if (idx === 0) {
+        const firstRect = visibleCards[0].getBoundingClientRect();
+        dropIndicatorY.value = firstRect.top - containerRect.top + scrollTop - 1;
+      } else if (idx >= visibleCards.length) {
+        const lastRect = visibleCards[visibleCards.length - 1].getBoundingClientRect();
+        dropIndicatorY.value = lastRect.bottom - containerRect.top + scrollTop + 1;
+      } else {
+        const prevRect = visibleCards[idx - 1].getBoundingClientRect();
+        const nextRect = visibleCards[idx].getBoundingClientRect();
+        dropIndicatorY.value = (prevRect.bottom + nextRect.top) / 2 - containerRect.top + scrollTop;
+      }
+    }
+  } else {
+    dropIndex.value = null;
+  }
 }
 
 async function onPointerUp(event: PointerEvent) {
@@ -320,8 +372,41 @@ async function onPointerUp(event: PointerEvent) {
     try {
       if (dragOverColumnId.value) {
         const task = Object.values(taskStore.tasksByBoard).flat().find((t) => t.id === dragSnapshot.taskId);
-        if (task && task.workflowState !== dragOverColumnId.value) {
-          await taskStore.transitionTask(dragSnapshot.taskId, dragOverColumnId.value);
+        if (task) {
+          const targetColumnId = dragOverColumnId.value;
+          const targetIdx = dropIndex.value;
+          const colTasks = columnTasks(targetColumnId);
+
+          // Compute target float position
+          let targetPosition: number;
+          if (colTasks.length === 0) {
+            targetPosition = 1000;
+          } else {
+            // When reordering within same column, exclude the dragged card from the list
+            const candidates = targetColumnId === dragSnapshot.sourceColumnId
+              ? colTasks.filter((t) => t.id !== dragSnapshot.taskId)
+              : colTasks;
+            const idx = targetIdx ?? candidates.length;
+            if (candidates.length === 0) {
+              targetPosition = 1000;
+            } else if (idx === 0) {
+              targetPosition = candidates[0].position / 2;
+            } else if (idx >= candidates.length) {
+              targetPosition = candidates[candidates.length - 1].position + 1000;
+            } else {
+              targetPosition = (candidates[idx - 1].position + candidates[idx].position) / 2;
+            }
+          }
+
+          if (targetColumnId === dragSnapshot.sourceColumnId) {
+            // Same-column reorder — never triggers an AI turn
+            if (targetPosition !== task.position) {
+              await taskStore.reorderTask(dragSnapshot.taskId, targetPosition);
+            }
+          } else {
+            // Cross-column transition — may trigger AI turn via orchestrator
+            await taskStore.transitionTask(dragSnapshot.taskId, targetColumnId, targetPosition);
+          }
         }
       }
     } finally {
@@ -331,6 +416,7 @@ async function onPointerUp(event: PointerEvent) {
       document.body.style.userSelect = '';
       document.documentElement.style.userSelect = '';
       dragOverColumnId.value = null;
+      dropIndex.value = null;
     }
   }
   activeDrag = null;
@@ -458,6 +544,18 @@ async function onTaskCreated() {
   flex: 1;
   overflow-y: auto;
   min-height: 60px;
+  position: relative;
+}
+
+.drop-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--p-primary-color, #6366f1);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 10;
 }
 
 .board-empty {

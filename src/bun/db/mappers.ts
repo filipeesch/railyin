@@ -34,6 +34,7 @@ export function mapTask(row: TaskRow): Task {
     branchName: row.branch_name ?? null,
     worktreePath: row.worktree_path ?? null,
     executionCount: row.execution_count ?? 0,
+    position: row.position ?? 0,
   };
 }
 

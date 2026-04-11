@@ -70,10 +70,18 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
            WHERE t.board_id = ?
-           ORDER BY t.created_at ASC`,
+           ORDER BY t.position ASC`,
         )
         .all(params.boardId)
         .map(mapTask);
+    },
+
+    "tasks.reorder": async (params: { taskId: number; position: number }): Promise<Task> => {
+      const db = getDb();
+      db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.position, params.taskId]);
+      const task = fetchTaskWithDetail(db, params.taskId);
+      if (!task) throw new Error(`Task ${params.taskId} not found`);
+      return task;
     },
 
     "tasks.create": async (params: {
@@ -99,14 +107,16 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
       const taskResult = db.run(
         `INSERT INTO tasks
-           (board_id, project_id, title, description, workflow_state, execution_state, conversation_id)
-         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?)`,
+           (board_id, project_id, title, description, workflow_state, execution_state, conversation_id, position)
+         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
+           COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000)`,
         [
           params.boardId,
           params.projectId,
           params.title.trim(),
           params.description.trim(),
           conversationId,
+          params.boardId,
         ],
       );
       const taskId = taskResult.lastInsertRowid as number;
@@ -142,8 +152,14 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "tasks.transition": async (params: {
       taskId: number;
       toState: string;
+      targetPosition?: number;
     }): Promise<{ task: Task; executionId: number | null }> => {
       const db = getDb();
+
+      // Update position before transition so the orchestrator sees it immediately
+      if (params.targetPosition != null) {
+        db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.targetPosition, params.taskId]);
+      }
 
       const taskRow = db
         .query<{ project_id: number; conversation_id: number }, [number]>(
