@@ -73,6 +73,115 @@ type ZodRuntime = {
   };
 };
 
+const CLI_CACHE_DIR = "claude-cli";
+const CLI_FILE_NAME = "cli.js";
+const NPM_PACKAGE_NAME = "@anthropic-ai/claude-agent-sdk";
+const NPM_REGISTRY_URL = "https://registry.npmjs.org";
+
+function getDataDir(): string {
+  const { join } = require("path") as typeof import("path");
+  return process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
+}
+
+/**
+ * Extract a single file from a gzipped tarball buffer and write it to disk.
+ */
+async function extractFileFromTarball(tarballBuffer: Buffer, entryName: string, destPath: string): Promise<void> {
+  const { Readable } = require("stream") as typeof import("stream");
+  const { createGunzip } = require("zlib") as typeof import("zlib");
+
+  // We parse the tar format manually to avoid needing a tar dependency.
+  // tar files consist of 512-byte header blocks followed by file data blocks.
+  const gunzip = createGunzip();
+  const chunks: Buffer[] = [];
+
+  await new Promise<void>((resolve, reject) => {
+    const input = Readable.from(tarballBuffer);
+    const decompressed = input.pipe(gunzip);
+    decompressed.on("data", (chunk: Buffer) => chunks.push(chunk));
+    decompressed.on("end", () => resolve());
+    decompressed.on("error", (err: Error) => reject(err));
+  });
+
+  const data = Buffer.concat(chunks);
+  let offset = 0;
+  let found = false;
+
+  while (offset < data.length - 512) {
+    const header = data.subarray(offset, offset + 512);
+    const nameEnd = header.indexOf(0);
+    const name = header.subarray(0, Math.min(nameEnd >= 0 ? nameEnd : 100, 100)).toString("utf-8");
+
+    if (!name || name.trim() === "") break;
+
+    const sizeStr = header.subarray(124, 136).toString("utf-8").trim();
+    const size = parseInt(sizeStr, 8) || 0;
+
+    if (name === entryName) {
+      const fileData = data.subarray(offset + 512, offset + 512 + size);
+      const { writeFileSync } = require("fs") as typeof import("fs");
+      writeFileSync(destPath, fileData);
+      found = true;
+      break;
+    }
+
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+
+  if (!found) {
+    throw new Error(`Entry "${entryName}" not found in tarball`);
+  }
+}
+
+/**
+ * Returns the path to the cached Claude CLI script, downloading it from npm if needed.
+ *
+ * Resolution order:
+ * 1. Cached cli.js at ~/.railyn/claude-cli/cli.js — from a previous download
+ * 2. Download @anthropic-ai/claude-agent-sdk from npm, extract cli.js, cache
+ */
+async function ensureClaudeCliJs(): Promise<string> {
+  const { join } = require("path") as typeof import("path");
+  const { existsSync, mkdirSync } = require("fs") as typeof import("fs");
+
+  const dataDir = getDataDir();
+  const cacheDir = join(dataDir, CLI_CACHE_DIR);
+  const cliPath = join(cacheDir, CLI_FILE_NAME);
+
+  // Already downloaded — use the cached cli.js.
+  if (existsSync(cliPath)) {
+    console.log("[claude] Using cached cli.js:", cliPath);
+    return cliPath;
+  }
+
+  // Download from npm registry.
+  console.log(`[claude] cli.js not found. Downloading ${NPM_PACKAGE_NAME} from npm...`);
+  mkdirSync(cacheDir, { recursive: true });
+
+  // 1. Fetch package metadata to get the tarball URL.
+  const metaUrl = `${NPM_REGISTRY_URL}/${NPM_PACKAGE_NAME}/latest`;
+  const metaRes = await fetch(metaUrl);
+  if (!metaRes.ok) {
+    throw new Error(`Failed to fetch Claude SDK package metadata from ${metaUrl}: ${metaRes.status} ${metaRes.statusText}`);
+  }
+  const meta = (await metaRes.json()) as { dist: { tarball: string } };
+  const tarballUrl = meta.dist.tarball;
+  console.log("[claude] Downloading tarball:", tarballUrl);
+
+  // 2. Download the tarball.
+  const tarballRes = await fetch(tarballUrl);
+  if (!tarballRes.ok) {
+    throw new Error(`Failed to download Claude SDK tarball from ${tarballUrl}: ${tarballRes.status} ${tarballRes.statusText}`);
+  }
+  const tarballBuffer = Buffer.from(await tarballRes.arrayBuffer());
+
+  // 3. Extract cli.js from the tarball (npm tarballs use a package/ prefix).
+  await extractFileFromTarball(tarballBuffer, `package/${CLI_FILE_NAME}`, cliPath);
+
+  console.log("[claude] cli.js cached at:", cliPath);
+  return cliPath;
+}
+
 async function loadClaudeRuntime(): Promise<ClaudeSdkRuntime> {
   const moduleName = "@anthropic-ai/claude-agent-sdk";
   return await import(moduleName) as unknown as ClaudeSdkRuntime;
@@ -208,7 +317,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
 
     (async () => {
       try {
-        const [sdk, zod] = await Promise.all([loadClaudeRuntime(), loadZodRuntime()]);
+        const [sdk, zod, cliPath] = await Promise.all([loadClaudeRuntime(), loadZodRuntime(), ensureClaudeCliJs()]);
         const toolServer = buildClaudeToolServer(sdk, zod.z, config.commonToolContext, emit);
         const hasExistingSession = await sdk.getSessionInfo?.(config.sessionId, { dir: config.workingDirectory }).catch(() => undefined);
         const query = sdk.query({
@@ -216,6 +325,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           options: {
             cwd: config.workingDirectory,
             abortController,
+            pathToClaudeCodeExecutable: cliPath,
             ...(normalizeClaudeModel(config.model) ? { model: normalizeClaudeModel(config.model) } : {}),
             ...(hasExistingSession ? { resume: config.sessionId } : { sessionId: config.sessionId }),
             tools: { type: "preset", preset: "claude_code" },
@@ -315,7 +425,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   }
 
   async listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]> {
-    const sdk = await loadClaudeRuntime();
+    const [sdk, cliPath] = await Promise.all([loadClaudeRuntime(), ensureClaudeCliJs()]);
     // A no-op onElicitation forces the SDK into bidirectional mode
     // (hasBidirectionalNeeds=true → isSingleUserTurn=false). Without it the
     // SDK closes stdin after the first result, tearing down the control channel
@@ -327,6 +437,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         cwd: workingDirectory,
         permissionMode: "plan",
         tools: [],
+        pathToClaudeCodeExecutable: cliPath,
         onElicitation: async () => ({ action: "decline" }),
       },
     });
