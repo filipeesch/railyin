@@ -85,6 +85,32 @@ describe("handleHumanTurn", () => {
     expect(assistantMsg!.content.length).toBeGreaterThan(0);
   });
 
+  it("backfills a missing conversation before appending the human turn", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', conversation_id = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET task_id = 0 WHERE id = ?", [conversationId]);
+
+    await handleHumanTurn(taskId, "Repair my conversation.", noop, noop, noop, noop);
+
+    const taskRow = db
+      .query<{ conversation_id: number | null }, [number]>("SELECT conversation_id FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(taskRow?.conversation_id).not.toBeNull();
+    expect(taskRow?.conversation_id).not.toBe(conversationId);
+
+    const convRow = db
+      .query<{ id: number; task_id: number }, [number]>("SELECT id, task_id FROM conversations WHERE id = ?")
+      .get(taskRow!.conversation_id!);
+    expect(convRow).toEqual({ id: taskRow!.conversation_id!, task_id: taskId });
+
+    const msg = db
+      .query<{ conversation_id: number; content: string }, [number]>(
+        "SELECT conversation_id, content FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
+      )
+      .get(taskId);
+    expect(msg).toEqual({ conversation_id: taskRow!.conversation_id!, content: "Repair my conversation." });
+  });
+
   it("marks execution as completed", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);

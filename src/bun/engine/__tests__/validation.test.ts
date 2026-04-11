@@ -62,7 +62,7 @@ describe("Engine Abstraction Layer - Config Migration", () => {
     // (actual implementation would try to construct invalid engine)
     expect(() => {
       // @ts-expect-error - intentional invalid type
-      if (invalidConfig.engine.type !== "native" && invalidConfig.engine.type !== "copilot") {
+      if (invalidConfig.engine.type !== "native" && invalidConfig.engine.type !== "copilot" && invalidConfig.engine.type !== "claude") {
         throw new Error(`Unknown engine type: ${invalidConfig.engine.type}`);
       }
     }).toThrow("Unknown engine type: unknown_engine");

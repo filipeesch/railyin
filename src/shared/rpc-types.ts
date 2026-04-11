@@ -74,6 +74,7 @@ export type MessageType =
 export interface ModelInfo {
   id: string;
   displayName?: string;
+  description?: string;
   contextWindow: number | null;
 }
 
@@ -82,6 +83,7 @@ export interface ProviderModelList {
   models: Array<{
     id: string;
     displayName?: string;
+    description?: string;
     contextWindow: number | null;
     enabled: boolean;
     /** True when the model supports adaptive thinking (Anthropic claude-3-7+ and claude-4+). */

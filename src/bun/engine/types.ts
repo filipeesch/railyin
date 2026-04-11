@@ -38,6 +38,10 @@ export type EngineEvent =
 /** Native engine execution type — used by NativeEngine to dispatch to the right function. */
 export type NativeExecutionType = "transition" | "human_turn" | "retry" | "code_review";
 
+export type EngineResumeInput =
+  | { type: "ask_user"; content: string }
+  | { type: "shell_approval"; decision: "approve_once" | "approve_all" | "deny" };
+
 export interface ExecutionParams {
   executionId: number;
   taskId: number;
@@ -70,6 +74,8 @@ export interface EngineModelInfo {
   qualifiedId: string;
   /** Human-readable display name. */
   displayName: string;
+  /** Optional detail text shown in richer model pickers. */
+  description?: string;
   /** Context window in tokens, if known. */
   contextWindow?: number;
   /** Whether the model supports extended thinking / reasoning. */
@@ -87,6 +93,11 @@ export interface ExecutionEngine {
    * Yielding stops after a `done` or `error { fatal: true }` event.
    */
   execute(params: ExecutionParams): AsyncIterable<EngineEvent>;
+
+  /**
+   * Resume a previously paused execution with user input or a permission decision.
+   */
+  resume(executionId: number, input: EngineResumeInput): Promise<void>;
 
   /**
    * Cancel an in-flight execution by executionId.

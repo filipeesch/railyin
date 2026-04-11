@@ -22,12 +22,14 @@
     "test:ui:run": "./scripts/run-ui-tests.sh"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.98",
     "@github/copilot-sdk": "^0.2.1",
     "@iconify/vue": "^5.0.0",
     "@monaco-editor/loader": "^1.4.0",
     "electrobun": "latest",
     "js-yaml": "^4.1.0",
-    "marked": "^17.0.5"
+    "marked": "^17.0.5",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@primevue/themes": "^4.0.0",

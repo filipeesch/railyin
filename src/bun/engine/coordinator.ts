@@ -6,6 +6,7 @@ export interface ExecutionCoordinator {
     executeHumanTurn(taskId: number, content: string): Promise<{ message: ConversationMessage; executionId: number }>;
     executeRetry(taskId: number): Promise<{ task: Task; executionId: number }>;
     executeCodeReview(taskId: number): Promise<{ message: ConversationMessage; executionId: number }>;
+    respondShellApproval(taskId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void>;
     cancel(executionId: number): void;
     listModels(workspaceId?: number): Promise<EngineModelInfo[]>;
 }

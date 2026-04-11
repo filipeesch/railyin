@@ -272,7 +272,7 @@
               :options="groupedModels"
               option-group-label="label"
               option-group-children="items"
-              option-label="id"
+              option-label="label"
               option-value="id"
               filter
               filter-placeholder="Search models…"
@@ -280,6 +280,19 @@
               class="input-model-select"
               @change="(e: { value: string }) => onModelChange(e.value)"
             >
+              <template #value="{ value, placeholder }">
+                <span v-if="value" class="model-select__value" :title="selectedModelOption?.description ?? selectedModelOption?.id">
+                  {{ selectedModelOption?.label ?? value }}
+                </span>
+                <span v-else class="p-select-label p-placeholder">{{ placeholder }}</span>
+              </template>
+              <template #option="{ option }">
+                <div class="model-select__option" :title="option.description ?? option.id">
+                  <div class="model-select__option-title">{{ option.label }}</div>
+                  <div v-if="option.description" class="model-select__option-description">{{ option.description }}</div>
+                  <div class="model-select__option-id">{{ option.id }}</div>
+                </div>
+              </template>
               <template #footer>
                 <div class="model-select-footer">
                   <Button
@@ -450,14 +463,29 @@ async function onManageModelsClosed() {
 }
 
 const groupedModels = computed(() => {
-  const groups: Record<string, Array<{ id: string; contextWindow: number | null }>> = {};
+  const groups: Record<string, Array<{ id: string; label: string; description?: string; contextWindow: number | null }>> = {};
   for (const model of taskStore.availableModels) {
     const slash = model.id.indexOf("/");
     const provider = slash !== -1 ? model.id.slice(0, slash) : "other";
     if (!groups[provider]) groups[provider] = [];
-    groups[provider].push(model);
+    groups[provider].push({
+      id: model.id,
+      label: model.displayName ?? model.id,
+      description: model.description,
+      contextWindow: model.contextWindow,
+    });
   }
   return Object.entries(groups).map(([label, items]) => ({ label, items }));
+});
+
+const selectedModelOption = computed(() => {
+  const selectedId = task.value?.model ?? taskStore.availableModels[0]?.id ?? null;
+  if (!selectedId) return null;
+  for (const group of groupedModels.value) {
+    const found = group.items.find((item) => item.id === selectedId);
+    if (found) return found;
+  }
+  return null;
 });
 
 const changedCount = computed(() => task.value ? (taskStore.changedFileCounts[task.value.id] ?? 0) : 0);
@@ -1024,6 +1052,37 @@ watch(
 
 .input-model-select {
   min-width: 180px;
+}
+
+.model-select__value {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-select__option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.model-select__option-title {
+  font-weight: 600;
+}
+
+.model-select__option-description {
+  font-size: 0.8rem;
+  color: var(--p-text-muted-color);
+  white-space: normal;
+}
+
+.model-select__option-id {
+  font-size: 0.72rem;
+  color: var(--p-text-muted-color);
+  font-family: ui-monospace, "Cascadia Code", monospace;
 }
 
 .model-empty-state {

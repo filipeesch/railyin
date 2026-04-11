@@ -533,6 +533,24 @@ export function appendMessage(
   return result.lastInsertRowid as number;
 }
 
+export function ensureTaskConversation(taskId: number, conversationId: number | null): number {
+  const db = getDb();
+
+  if (conversationId != null) {
+    const existing = db
+      .query<{ id: number }, [number, number]>(
+        "SELECT id FROM conversations WHERE id = ? AND task_id = ?",
+      )
+      .get(conversationId, taskId);
+    if (existing) return conversationId;
+  }
+
+  const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [taskId]);
+  const ensuredConversationId = convResult.lastInsertRowid as number;
+  db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [ensuredConversationId, taskId]);
+  return ensuredConversationId;
+}
+
 // ─── Conversation compaction ──────────────────────────────────────────────────
 
 const COMPACTION_SYSTEM_PROMPT = `Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
@@ -778,14 +796,8 @@ export async function handleTransition(
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
-  // Ensure the task has a conversation — tasks created before conversations were
-  // required may have conversation_id = null. Create one on demand and persist it.
-  let conversationId = task.conversation_id;
-  if (conversationId == null) {
-    const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [taskId]);
-    conversationId = convResult.lastInsertRowid as number;
-    db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [conversationId, taskId]);
-  }
+  // Ensure the task has a valid conversation — legacy tasks may have a null or stale conversation_id.
+  const conversationId = ensureTaskConversation(taskId, task.conversation_id);
 
   const fromState = task.workflow_state;
 
@@ -2045,11 +2057,12 @@ export async function handleHumanTurn(
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
+  const conversationId = ensureTaskConversation(taskId, task.conversation_id);
 
   // Append user message
   const msgId = appendMessage(
     taskId,
-    task.conversation_id ?? 0,
+    conversationId,
     "user",
     "user",
     content,
@@ -2063,7 +2076,7 @@ export async function handleHumanTurn(
   const contextWindowTokens = provConf2?.context_window_tokens ?? 128_000;
   const { fraction } = estimateContextUsage(taskId, contextWindowTokens);
   if (fraction >= 0.90) {
-    appendMessage(taskId, task.conversation_id ?? 0, "system", null, "Compacting conversation…");
+    appendMessage(taskId, conversationId, "system", null, "Compacting conversation…");
     try {
       await compactConversation(taskId);
     } catch {

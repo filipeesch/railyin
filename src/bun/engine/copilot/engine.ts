@@ -9,7 +9,7 @@
  * Compaction: handled by Copilot's infinite sessions feature.
  */
 
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput } from "../types.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
 import type { CopilotSdkAdapter, CopilotSdkSession } from "./session";
 import { copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
@@ -22,6 +22,10 @@ export class CopilotEngine implements ExecutionEngine {
 
   /** Active sessions keyed by executionId. */
   private readonly sessions = new Map<number, CopilotSdkSession>();
+  private readonly pendingResumes = new Map<number, {
+    resolve: (input: EngineResumeInput) => void;
+    reject: (error: Error) => void;
+  }>();
 
   constructor(
     defaultModel: string | undefined,
@@ -37,6 +41,15 @@ export class CopilotEngine implements ExecutionEngine {
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
     return this._run(params);
+  }
+
+  async resume(executionId: number, input: EngineResumeInput): Promise<void> {
+    const pending = this.pendingResumes.get(executionId);
+    if (!pending) {
+      throw new Error(`Execution ${executionId} is not waiting for resume input`);
+    }
+    this.pendingResumes.delete(executionId);
+    pending.resolve(input);
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
@@ -130,26 +143,67 @@ export class CopilotEngine implements ExecutionEngine {
         return;
       }
 
-      // Fire the prompt; pass the promise into translateCopilotStream so a rejection
-      // (e.g. CLI crash) is surfaced as a fatal error rather than silently hanging.
-      // Combine the external abort signal with the interview_me internal abort.
-      const combinedController = new AbortController();
-      params.signal?.addEventListener("abort", () => combinedController.abort(), { once: true });
-      interviewAbortController.signal.addEventListener("abort", () => {
-        this.sdkAdapter.abortSession(session!).catch(() => { });
-        combinedController.abort();
-      }, { once: true });
+      let nextPrompt: string | null = prompt;
 
-      const sendPromise = session.send({ prompt });
-      const onWatchdogFire = () => this.sdkAdapter.pingClient(sdkSessionId);
-      yield* translateCopilotStream(session, combinedController.signal, sendPromise, onWatchdogFire);
+      while (nextPrompt != null) {
+        // Fire the prompt; pass the promise into translateCopilotStream so a rejection
+        // (e.g. CLI crash) is surfaced as a fatal error rather than silently hanging.
+        // Combine the external abort signal with the interview_me internal abort.
+        const combinedController = new AbortController();
+        params.signal?.addEventListener("abort", () => combinedController.abort(), { once: true });
+        interviewAbortController.signal.addEventListener("abort", () => {
+          this.sdkAdapter.abortSession(session!).catch(() => { });
+          combinedController.abort();
+        }, { once: true });
 
-      // If interview_me was called, emit the interview event so the orchestrator
-      // can write the message and set waiting_user state.
-      if (pendingInterviewPayload !== null) {
-        yield { type: "interview_me", payload: pendingInterviewPayload };
+        const sendPromise = session.send({ prompt: nextPrompt });
+        const onWatchdogFire = () => this.sdkAdapter.pingClient(sdkSessionId);
+        let paused = false;
+        let terminal = false;
+
+        for await (const event of translateCopilotStream(session, combinedController.signal, sendPromise, onWatchdogFire)) {
+          yield event;
+
+          if (event.type === "ask_user" || event.type === "shell_approval") {
+            paused = true;
+            break;
+          }
+
+          if (
+            event.type === "done" ||
+            (event.type === "error" && event.fatal)
+          ) {
+            terminal = true;
+            break;
+          }
+        }
+
+        if (pendingInterviewPayload !== null) {
+          yield { type: "interview_me", payload: pendingInterviewPayload };
+          return;
+        }
+
+        if (params.signal?.aborted || terminal) {
+          return;
+        }
+
+        if (!paused) {
+          return;
+        }
+
+        const resumeInput = await this.waitForResume(executionId, params.signal);
+        nextPrompt = this.mapResumeInputToPrompt(resumeInput);
       }
     } catch (err) {
+      if (
+        params.signal?.aborted ||
+        (err instanceof Error && (
+          err.message.includes("cancelled") ||
+          err.message.includes("aborted while waiting for input")
+        ))
+      ) {
+        return;
+      }
       yield {
         type: "error",
         message: err instanceof Error ? err.message : String(err),
@@ -157,6 +211,11 @@ export class CopilotEngine implements ExecutionEngine {
       };
     } finally {
       unsubStatus();
+      const pending = this.pendingResumes.get(executionId);
+      if (pending) {
+        this.pendingResumes.delete(executionId);
+        pending.reject(new Error(`Execution ${executionId} was closed before resuming`));
+      }
       this.sessions.delete(executionId);
       if (session) {
         await this.sdkAdapter.disconnectSession(session).catch(() => { });
@@ -168,6 +227,11 @@ export class CopilotEngine implements ExecutionEngine {
   }
 
   cancel(executionId: number): void {
+    const pending = this.pendingResumes.get(executionId);
+    if (pending) {
+      this.pendingResumes.delete(executionId);
+      pending.reject(new Error(`Execution ${executionId} cancelled`));
+    }
     const session = this.sessions.get(executionId);
     if (session) {
       // Abort the in-progress turn first so the model stops cleanly and the
@@ -197,5 +261,50 @@ export class CopilotEngine implements ExecutionEngine {
       contextWindow: m.capabilities.limits.max_context_window_tokens,
       supportsThinking: m.capabilities.supports.reasoningEffort,
     }));
+  }
+
+  private waitForResume(executionId: number, signal?: AbortSignal): Promise<EngineResumeInput> {
+    return new Promise<EngineResumeInput>((resolve, reject) => {
+      const existing = this.pendingResumes.get(executionId);
+      if (existing) {
+        reject(new Error(`Execution ${executionId} is already waiting for resume input`));
+        return;
+      }
+
+      const cleanup = () => {
+        signal?.removeEventListener("abort", onAbort);
+        this.pendingResumes.delete(executionId);
+      };
+
+      const onAbort = () => {
+        cleanup();
+        reject(new Error(`Execution ${executionId} aborted while waiting for input`));
+      };
+
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pendingResumes.set(executionId, {
+        resolve: (input) => {
+          cleanup();
+          resolve(input);
+        },
+        reject: (error) => {
+          cleanup();
+          reject(error);
+        },
+      });
+    });
+  }
+
+  private mapResumeInputToPrompt(input: EngineResumeInput): string {
+    switch (input.type) {
+      case "ask_user":
+        return input.content;
+      case "shell_approval":
+        return input.decision === "deny"
+          ? "The requested shell command was denied by the user. Adjust your plan and continue without it."
+          : input.decision === "approve_all"
+            ? "The requested shell command was approved for this and similar commands. Continue."
+            : "The requested shell command was approved once. Continue.";
+    }
   }
 }

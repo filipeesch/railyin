@@ -317,6 +317,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           models: models.map((m) => ({
             id: m.qualifiedId,
             displayName: m.displayName,
+            description: m.description,
             contextWindow: m.contextWindow,
             enabled: enabledSet.has(m.qualifiedId),
             ...(m.supportsThinking ? { supportsAdaptiveThinking: true } : {}),
@@ -378,7 +379,12 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
       return engineModels
         .filter((m) => activeIds.includes(m.qualifiedId))
-        .map((m) => ({ id: m.qualifiedId, displayName: m.displayName, contextWindow: m.contextWindow ?? null }));
+        .map((m) => ({
+          id: m.qualifiedId,
+          displayName: m.displayName,
+          description: m.description,
+          contextWindow: m.contextWindow ?? null,
+        }));
     },
 
     // ─── tasks.setModel ──────────────────────────────────────────────────────
@@ -715,7 +721,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     // ─── tasks.respondShellApproval ──────────────────────────────────────────
     "tasks.respondShellApproval": async (params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" }): Promise<{ ok: boolean }> => {
       if (!orchestrator) return { ok: false };
-      orchestrator.respondShellApproval(params.taskId, params.decision);
+      await orchestrator.respondShellApproval(params.taskId, params.decision);
       return { ok: true };
     },
 

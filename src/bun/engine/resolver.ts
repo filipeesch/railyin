@@ -11,6 +11,8 @@ import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import { NativeEngine } from "./native/engine.ts";
 import { CopilotEngine } from "./copilot/engine.ts";
 import { createDefaultCopilotSdkAdapter } from "./copilot/session.ts";
+import { ClaudeEngine } from "./claude/engine.ts";
+import { createDefaultClaudeSdkAdapter } from "./claude/adapter.ts";
 
 /**
  * Resolve and instantiate the correct engine based on workspace config.
@@ -32,6 +34,15 @@ export function resolveEngine(
       onTaskUpdated,
       onNewMessage,
       createDefaultCopilotSdkAdapter(),
+    );
+  }
+
+  if (engine.type === "claude") {
+    return new ClaudeEngine(
+      engine.model,
+      onTaskUpdated,
+      onNewMessage,
+      createDefaultClaudeSdkAdapter(),
     );
   }
 

@@ -20,6 +20,7 @@ import {
 } from "./support/copilot-sdk-mock.ts";
 import {
     runAskUserScenario,
+    runAskUserResumeScenario,
     runCancellationScenario,
     runFatalFailureScenario,
     runModelListingScenario,
@@ -98,6 +99,22 @@ describe("Copilot backend RPC scenarios", () => {
 
         await runAskUserScenario(runtime);
         await runCancellationScenario(runtime);
+    });
+
+    it("resumes the same execution after ask-user input", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(
+                new MockCopilotSession()
+                    .queueTurn({ steps: [askUser('{"questions":[{"question":"Need input","selection_mode":"single","options":[]}]}')] })
+                    .queueTurn({ steps: [token("Resumed successfully"), done()] }),
+            );
+        const runtime = createCopilotRuntime(adapter);
+
+        await runAskUserResumeScenario(runtime);
+        expect(adapter.trace.createCalls).toHaveLength(1);
+        expect(adapter.trace.resumeCalls).toHaveLength(1);
     });
 
     it("covers fatal failures and model listing via shared scenarios", async () => {

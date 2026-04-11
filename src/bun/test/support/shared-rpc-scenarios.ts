@@ -74,6 +74,27 @@ export async function runAskUserScenario(runtime: BackendRpcRuntime): Promise<vo
 
     const messages = runtime.getMessages(taskId);
     expect(messages.filter((message) => message.type === "assistant")).toHaveLength(0);
+    expect(messages.some((message) => message.type === "ask_user_prompt")).toBe(true);
+}
+
+export async function runAskUserResumeScenario(runtime: BackendRpcRuntime): Promise<void> {
+    const { taskId } = await runtime.createTask();
+    const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need clarification" });
+
+    await runtime.waitForExecutionStatus(first.executionId, "waiting_user");
+    await runtime.waitForTaskState(taskId, "waiting_user");
+
+    const second = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Use option A" });
+    expect(second.executionId).toBe(first.executionId);
+
+    await runtime.recorder.waitForTokenDone(second.executionId);
+    await runtime.waitForExecutionStatus(second.executionId, "completed");
+    await runtime.waitForTaskState(taskId, "completed");
+
+    const tail = runtime.getMessages(taskId).slice(-3).map((message) => [message.type, message.content]);
+    expect(tail[0]?.[0]).toBe("ask_user_prompt");
+    expect(tail[1]).toEqual(["user", "Use option A"]);
+    expect(tail[2]?.[0]).toBe("assistant");
 }
 
 export async function runCancellationScenario(runtime: BackendRpcRuntime): Promise<void> {
@@ -105,7 +126,7 @@ export async function runModelListingScenario(runtime: BackendRpcRuntime): Promi
     const listed = await runtime.handlers["models.list"]();
     const enabled = await runtime.handlers["models.listEnabled"]();
 
-    expect(listed[0]?.id).toBe("copilot");
+    expect(listed[0]?.id).toBeTruthy();
     expect(listed[0]?.models.length ?? 0).toBeGreaterThan(0);
     expect(enabled.length).toBeGreaterThan(0);
 }

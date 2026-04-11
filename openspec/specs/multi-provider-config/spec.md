@@ -4,7 +4,7 @@ The multi-provider configuration allows users to configure multiple named AI pro
 ## Requirements
 
 ### Requirement: Workspace config supports a providers list with typed entries
-The system SHALL read an optional `providers:` list from the `engine:` block when `engine.type` is `native`. Each entry SHALL have a unique `id` field and a `type` field. Type-specific fields are required per type:
+The system SHALL read an optional `providers:` list from the `engine:` block only when `engine.type` is `native`. Each entry SHALL have a unique `id` field and a `type` field. Type-specific fields are required per type:
 - `anthropic`: `api_key`
 - `openrouter`: `base_url`, `api_key`
 - `lmstudio`: `base_url`
@@ -23,6 +23,10 @@ The `providers:` list SHALL NOT exist at the workspace root level. It is scoped 
 
 #### Scenario: Providers list ignored for non-native engines
 - **WHEN** `workspace.yaml` has `engine.type: copilot`
+- **THEN** the `providers:` field is not read or required
+
+#### Scenario: Providers list ignored for Claude engine
+- **WHEN** `workspace.yaml` has `engine.type: claude`
 - **THEN** the `providers:` field is not read or required
 
 ### Requirement: Old top-level config is auto-migrated to engine.type: native format in memory
@@ -67,7 +71,7 @@ The system SHALL allow each provider config entry to declare an optional `fallba
 - **THEN** the fallback is treated as `null` with a warning log; the primary retry behavior proceeds normally
 
 ### Requirement: Engine config uses a single engine block with type discriminator
-The `workspace.yaml` SHALL support a top-level `engine:` block with a required `type` field that discriminates the config schema. For `type: native`, the block contains `providers`, `default_model`, `anthropic`, `search`, and `lsp` sub-fields. For `type: copilot`, the block contains an optional `model` field and no provider/API configuration.
+The `workspace.yaml` SHALL support a top-level `engine:` block with a required `type` field that discriminates the config schema. For `type: native`, the block contains `providers`, `default_model`, `anthropic`, `search`, and `lsp` sub-fields. For `type: copilot`, the block contains an optional `model` field and no provider/API configuration. For `type: claude`, the block contains an optional `model` field and no Claude API keys, provider lists, or base URLs.
 
 #### Scenario: Native engine config structure
 - **WHEN** `workspace.yaml` has `engine: { type: native, providers: [...], default_model: "anthropic/claude-opus-4-1" }`
@@ -76,6 +80,14 @@ The `workspace.yaml` SHALL support a top-level `engine:` block with a required `
 #### Scenario: Copilot engine config structure
 - **WHEN** `workspace.yaml` has `engine: { type: copilot, model: gpt-5 }`
 - **THEN** the system loads the copilot engine with the specified model
+
+#### Scenario: Claude engine config structure
+- **WHEN** `workspace.yaml` has `engine: { type: claude, model: claude-sonnet-4-6 }`
+- **THEN** the system loads the Claude engine with that default model
+
+#### Scenario: Minimal Claude config is valid
+- **WHEN** `workspace.yaml` has `engine: { type: claude }`
+- **THEN** the system loads the Claude engine with SDK defaults and no provider configuration
 
 #### Scenario: Missing engine block defaults to native
 - **WHEN** `workspace.yaml` has no `engine:` key and no legacy fields

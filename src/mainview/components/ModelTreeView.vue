@@ -83,7 +83,11 @@
               :binary="true"
               @update:modelValue="(v: boolean) => onToggle(model.id, v)"
             />
-            <span class="model-id">{{ modelLabel(model.id, provider.id) }}</span>
+            <div class="model-row__content" :title="model.description ?? model.id">
+              <span class="model-id">{{ modelLabel(model) }}</span>
+              <span v-if="model.description" class="model-description">{{ model.description }}</span>
+              <span class="model-raw-id">{{ model.id }}</span>
+            </div>
             <span v-if="model.contextWindow" class="model-ctx">
               {{ formatCtx(model.contextWindow) }}
             </span>
@@ -134,7 +138,10 @@ const filteredProviders = computed(() => {
     .map((provider) => {
       const sortedModels = [...provider.models].sort((a, b) => a.id.localeCompare(b.id));
       const filteredModels = q
-        ? sortedModels.filter((m) => m.id.toLowerCase().includes(q))
+        ? sortedModels.filter((m) =>
+          m.id.toLowerCase().includes(q) ||
+          (m.displayName ?? "").toLowerCase().includes(q),
+        )
         : sortedModels;
       return { ...provider, models: sortedModels, filteredModels };
     })
@@ -183,10 +190,8 @@ async function onToggle(qualifiedModelId: string, enabled: boolean) {
   await taskStore.setModelEnabled(qualifiedModelId, enabled, workspaceStore.activeWorkspaceId ?? undefined);
 }
 
-function modelLabel(qualifiedId: string, providerId: string): string {
-  return qualifiedId.startsWith(`${providerId}/`)
-    ? qualifiedId.slice(providerId.length + 1)
-    : qualifiedId;
+function modelLabel(model: { id: string; displayName?: string }): string {
+  return model.displayName ?? model.id;
 }
 
 function formatCtx(tokens: number): string {
@@ -320,8 +325,27 @@ function formatCtx(tokens: number): string {
   background: var(--p-content-hover-background);
 }
 
-.model-id {
+.model-row__content {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-id {
+  font-weight: 600;
+}
+
+.model-description {
+  font-size: 0.78rem;
+  color: var(--p-text-muted-color);
+  white-space: normal;
+}
+
+.model-raw-id {
+  font-size: 0.72rem;
+  color: var(--p-text-muted-color);
   font-family: var(--p-font-family-mono, monospace);
 }
 

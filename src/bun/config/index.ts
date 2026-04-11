@@ -57,7 +57,14 @@ export interface CopilotEngineConfig {
   model?: string;
 }
 
-export type EngineConfig = NativeEngineConfig | CopilotEngineConfig;
+/** Claude engine config — uses the Claude Agent SDK / Claude Code environment. */
+export interface ClaudeEngineConfig {
+  type: "claude";
+  /** Claude model ID (e.g. "claude-sonnet-4-6"). Leave unset for Claude defaults. */
+  model?: string;
+}
+
+export type EngineConfig = NativeEngineConfig | CopilotEngineConfig | ClaudeEngineConfig;
 
 /**
  * @deprecated Use `ProviderConfig` and `WorkspaceYaml.providers` instead.
@@ -78,6 +85,7 @@ export interface WorkspaceYaml {
    * New engine block. Discriminated by `type`:
    *   - `native`  (default): built-in provider-based loop
    *   - `copilot`: GitHub Copilot SDK
+   *   - `claude`: Claude Agent SDK / Claude Code
    * When absent, legacy top-level fields are auto-migrated to `engine.type:native` in memory.
    */
   engine?: EngineConfig;
@@ -369,30 +377,45 @@ name: My Workspace
 
 projects: []
 
-# List all AI providers you want to use simultaneously.
-providers:
-  # Fake provider — used for local UI development. Remove when using a real provider.
-  - id: fake
-    type: fake
+engine:
+  # Native engine (default) — uses configured providers below.
+  type: native
+  providers:
+    # Fake provider — used for local UI development. Remove when using a real provider.
+    - id: fake
+      type: fake
 
-  # Anthropic direct API (Claude models)
-  # - id: anthropic
-  #   type: anthropic
-  #   api_key: sk-ant-YOUR_KEY_HERE
+    # Anthropic direct API (Claude models)
+    # - id: anthropic
+    #   type: anthropic
+    #   api_key: sk-ant-YOUR_KEY_HERE
 
-  # OpenRouter (access to many models via one API key)
-  # - id: openrouter
-  #   type: openrouter
-  #   base_url: https://openrouter.ai/api/v1
-  #   api_key: sk-or-YOUR_KEY_HERE
-  #   # provider_args: forwarded as the "provider" key in every request body (OpenRouter routing preferences)
-  #   # provider_args:
-  #   #   ignore: [google-vertex, azure]
+    # OpenRouter (access to many models via one API key)
+    # - id: openrouter
+    #   type: openrouter
+    #   base_url: https://openrouter.ai/api/v1
+    #   api_key: sk-or-YOUR_KEY_HERE
+    #   # provider_args: forwarded as the "provider" key in every request body (OpenRouter routing preferences)
+    #   # provider_args:
+    #   #   ignore: [google-vertex, azure]
 
-  # LM Studio (local models)
-  # - id: lmstudio
-  #   type: lmstudio
-  #   base_url: http://localhost:1234/
+    # LM Studio (local models)
+    # - id: lmstudio
+    #   type: lmstudio
+    #   base_url: http://localhost:1234/
+
+  # default_model: anthropic/claude-sonnet-4-6
+
+# Alternative engine examples:
+#
+# engine:
+#   type: copilot
+#   model: gpt-4.1
+#
+# engine:
+#   type: claude
+#   model: claude-sonnet-4-6
+# Claude auth comes from your local Claude Code session; no API key is stored here.
 
 # Web search (used by the search_internet tool)
 # search:
@@ -510,8 +533,8 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
 
   if (workspace.engine) {
     engine = workspace.engine;
-    if (engine.type === "copilot") {
-      // Copilot engine — no local providers needed
+    if (engine.type === "copilot" || engine.type === "claude") {
+      // Non-native SDK engines — no local providers needed
       providers = [];
     } else {
       // Native engine block

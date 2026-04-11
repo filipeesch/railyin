@@ -17,6 +17,7 @@ import { NativeEngine } from "../engine/native/engine.ts";
 import { queueTurnResponse, queueStreamStep, resetFakeAI } from "../ai/fake.ts";
 import type { Database } from "bun:sqlite";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
 
 let db: Database;
 let gitDir: string;
@@ -176,6 +177,92 @@ describe("Orchestrator.executeHumanTurn", () => {
     expect(message.taskId).toBe(taskId);
     expect(typeof executionId).toBe("number");
   });
+
+  it("backfills a missing conversation for non-native human turns", async () => {
+    class StubEngine implements ExecutionEngine {
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        yield { type: "done" };
+      }
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      cancel(_executionId: number): void {}
+      async listModels() { return []; }
+    }
+
+    const nonNative = new Orchestrator(
+      new StubEngine(),
+      noop,
+      noop,
+      (task) => taskUpdates.push(task),
+      (msg) => newMessages.push(msg),
+    );
+
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', conversation_id = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET task_id = 0 WHERE id = ?", [conversationId]);
+
+    const { message } = await nonNative.executeHumanTurn(taskId, "Hello from legacy task.");
+
+    const taskRow = db
+      .query<{ conversation_id: number | null }, [number]>("SELECT conversation_id FROM tasks WHERE id = ?")
+      .get(taskId);
+    expect(taskRow?.conversation_id).not.toBeNull();
+    expect(taskRow?.conversation_id).not.toBe(conversationId);
+    expect(message.conversationId).toBe(taskRow!.conversation_id!);
+  });
+});
+
+describe("Orchestrator.respondShellApproval", () => {
+  it("keeps waiting_user state when resume fails", async () => {
+    let seededExecutionId = 0;
+    class RejectingResumeEngine implements ExecutionEngine {
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        yield { type: "done" };
+      }
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {
+        throw new Error(`Execution ${seededExecutionId} is not waiting for resume input`);
+      }
+      cancel(_executionId: number): void {}
+      async listModels() { return []; }
+    }
+
+    const approvalOrchestrator = new Orchestrator(
+      new RejectingResumeEngine(),
+      noop,
+      noop,
+      (task) => taskUpdates.push(task),
+      (msg) => newMessages.push(msg),
+    );
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'waiting_user', 1)",
+      [taskId],
+    );
+    const executionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    seededExecutionId = executionId;
+    db.run(
+      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?",
+      [executionId, taskId],
+    );
+
+    await expect(approvalOrchestrator.respondShellApproval(taskId, "approve_once")).rejects.toThrow(
+      `Execution ${executionId} is not waiting for resume input`,
+    );
+
+    const taskRow = db
+      .query<{ execution_state: string; current_execution_id: number | null }, [number]>(
+        "SELECT execution_state, current_execution_id FROM tasks WHERE id = ?",
+      )
+      .get(taskId);
+    expect(taskRow).toEqual({ execution_state: "waiting_user", current_execution_id: executionId });
+
+    const execRow = db
+      .query<{ status: string; finished_at: string | null }, [number]>(
+        "SELECT status, finished_at FROM executions WHERE id = ?",
+      )
+      .get(executionId);
+    expect(execRow).toEqual({ status: "waiting_user", finished_at: null });
+  });
 });
 
 // ─── executeRetry ─────────────────────────────────────────────────────────────
@@ -220,6 +307,53 @@ describe("Orchestrator.cancel", () => {
 
   it("is a no-op for unknown execution IDs", () => {
     expect(() => orchestrator.cancel(99999)).not.toThrow();
+  });
+
+  it("marks non-native executions cancelled immediately", () => {
+    class CancelStubEngine implements ExecutionEngine {
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        yield { type: "done" };
+      }
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      cancel(_executionId: number): void {}
+      async listModels() { return []; }
+    }
+
+    const nonNative = new Orchestrator(
+      new CancelStubEngine(),
+      noop,
+      noop,
+      (task) => taskUpdates.push(task),
+      (msg) => newMessages.push(msg),
+    );
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'running', 1)",
+      [taskId],
+    );
+    const executionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    db.run(
+      "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+      [executionId, taskId],
+    );
+
+    expect(() => nonNative.cancel(executionId)).not.toThrow();
+
+    const execRow = db
+      .query<{ status: string; finished_at: string | null }, [number]>(
+        "SELECT status, finished_at FROM executions WHERE id = ?",
+      )
+      .get(executionId);
+    expect(execRow?.status).toBe("cancelled");
+    expect(execRow?.finished_at).toBeTruthy();
+
+    const taskRow = db
+      .query<{ execution_state: string; current_execution_id: number | null }, [number]>(
+        "SELECT execution_state, current_execution_id FROM tasks WHERE id = ?",
+      )
+      .get(taskId);
+    expect(taskRow).toEqual({ execution_state: "waiting_user", current_execution_id: executionId });
   });
 });
 

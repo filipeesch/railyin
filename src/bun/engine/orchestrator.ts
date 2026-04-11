@@ -22,6 +22,7 @@ import {
   cancelExecution as nativeCancelExecution,
   resolveShellApproval,
   appendMessage,
+  ensureTaskConversation,
 } from "../workflow/engine.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { getDb } from "../db/index.ts";
@@ -30,6 +31,7 @@ import { runWithConfig } from "../config/index.ts";
 import { resolveSlashReference } from "../workflow/slash-prompt.ts";
 import { resolveEngine } from "./resolver.ts";
 import { getBoardWorkspaceId, getDefaultWorkspaceId, getTaskWorkspaceId, getWorkspaceConfigById } from "../workspace-context.ts";
+import type { MessageType } from "../../shared/rpc-types.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly injectedEngine: ExecutionEngine | null;
@@ -210,6 +212,27 @@ export class Orchestrator implements ExecutionCoordinator {
       );
     }
 
+    const conversationId = ensureTaskConversation(taskId, task.conversation_id);
+
+    if (task.execution_state === "waiting_user" && task.current_execution_id != null) {
+      const msgId = appendMessage(taskId, conversationId, "user", "user", content);
+      db.run(
+        "UPDATE tasks SET execution_state = 'running' WHERE id = ?",
+        [taskId],
+      );
+      db.run(
+        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
+        [task.current_execution_id],
+      );
+      this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
+      await engine.resume(task.current_execution_id, { type: "ask_user", content });
+
+      const msgRow = db
+        .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
+        .get(msgId)!;
+      return { message: mapConversationMessage(msgRow), executionId: task.current_execution_id };
+    }
+
     const column = this._getColumnConfig(config, task.board_id, task.workflow_state);
 
     const execResult = db.run(
@@ -239,7 +262,7 @@ export class Orchestrator implements ExecutionCoordinator {
     }
     const msgId = appendMessage(
       taskId,
-      task.conversation_id ?? 0,
+      conversationId,
       "user",
       "user",
       content,
@@ -390,16 +413,33 @@ export class Orchestrator implements ExecutionCoordinator {
   // ─── Cancellation ──────────────────────────────────────────────────────────
 
   cancel(executionId: number): void {
-    nativeCancelExecution(executionId);
     const controller = this.abortControllers.get(executionId);
     if (controller) {
       controller.abort();
     }
+    nativeCancelExecution(executionId);
+    const db = getDb();
+    const execRow = db.query<{ task_id: number; status: string; finished_at: string | null }, [number]>(
+      "SELECT task_id, status, finished_at FROM executions WHERE id = ?",
+    ).get(executionId);
+
     if (this.injectedEngine) {
       this.injectedEngine.cancel(executionId);
     }
     for (const engine of this.engines.values()) {
       engine.cancel(executionId);
+    }
+
+    if (!execRow) return;
+    const { engine } = this.getEngineForWorkspace(getTaskWorkspaceId(execRow.task_id));
+    if (!this.isNativeEngine(engine) && execRow.status === "running" && execRow.finished_at == null) {
+      db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
+      db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [execRow.task_id]);
+      const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(execRow.task_id);
+      if (taskRow) {
+        this.onTaskUpdated(mapTask(taskRow));
+      }
+      this.onToken(execRow.task_id, executionId, "", true);
     }
   }
 
@@ -412,11 +452,30 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Shell approval ─────────────────────────────────────────────────────────
 
-  respondShellApproval(
+  async respondShellApproval(
     taskId: number,
     decision: "approve_once" | "approve_all" | "deny",
-  ): void {
-    resolveShellApproval(taskId, decision, this.onTaskUpdated);
+  ): Promise<void> {
+    const db = getDb();
+    const task = db
+      .query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?")
+      .get(taskId);
+    if (!task?.current_execution_id) return;
+
+    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceId(taskId));
+    if (this.isNativeEngine(engine)) {
+      runWithConfig(config, () => resolveShellApproval(taskId, decision, this.onTaskUpdated));
+      return;
+    }
+
+    await engine.resume(task.current_execution_id, { type: "shell_approval", decision });
+
+    db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+    db.run(
+      "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
+      [task.current_execution_id],
+    );
+    this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
   }
 
   // ─── Non-native engine helpers ─────────────────────────────────────────────
@@ -480,6 +539,40 @@ export class Orchestrator implements ExecutionCoordinator {
     this.consumeStream(taskId, executionId, stream).catch((err) => {
       console.error(`[orchestrator] Unhandled error from consumeStream (task=${taskId}, execution=${executionId}):`, err);
     });
+  }
+
+  private _appendPromptMessage(
+    taskId: number,
+    conversationId: number,
+    content: string,
+  ): void {
+    const msgId = appendMessage(
+      taskId,
+      conversationId,
+      "ask_user_prompt" as MessageType,
+      null,
+      content,
+    );
+    this.onNewMessage({
+      id: msgId,
+      taskId,
+      conversationId,
+      type: "ask_user_prompt",
+      role: null,
+      content,
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  private _pauseExecution(taskId: number, executionId: number): void {
+    const db = getDb();
+    db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+    db.run(
+      "UPDATE executions SET status = 'waiting_user', finished_at = NULL WHERE id = ?",
+      [executionId],
+    );
+    this.onToken(taskId, executionId, "", true);
   }
 
   // ─── Event stream consumer (for non-native engines) ───────────────────────
@@ -704,22 +797,23 @@ export class Orchestrator implements ExecutionCoordinator {
           }
 
           case "shell_approval": {
-            // Task 5.4: This should be handled by orchestrator, not relayed here
-            // (will be implemented when Copilot integration adds permission_request)
-            // For now, just log
-            console.warn(`[orchestrator] shell_approval event not yet handled: ${event.command}`);
+            this._appendPromptMessage(
+              taskId,
+              conversationId,
+              JSON.stringify({
+                subtype: "shell_approval",
+                command: event.command,
+                unapprovedBinaries: [],
+              }),
+            );
+            this._pauseExecution(taskId, executionId);
             break;
           }
 
           case "ask_user": {
-            // Task 5.4: Parse user input request and update task state
-            db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
-            db.run(
-              "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
-              [executionId],
-            );
-            this.onToken(taskId, executionId, "", true);
-            return;
+            this._appendPromptMessage(taskId, conversationId, event.payload);
+            this._pauseExecution(taskId, executionId);
+            break;
           }
 
           case "interview_me": {

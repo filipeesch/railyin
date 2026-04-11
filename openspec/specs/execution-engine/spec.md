@@ -7,10 +7,10 @@ Defines the ExecutionEngine interface and related types (ExecutionParams, Engine
 The system SHALL define an `ExecutionEngine` interface that all engines implement. The interface SHALL include:
 - `execute(params: ExecutionParams): AsyncIterable<EngineEvent>` — run an agentic execution
 - `cancel(executionId: number): void` — abort a running execution
-- `sendMessage(executionId: number, content: string): void` — inject a follow-up user message into a running session
+- `resume(executionId: number, input: EngineResumeInput): Promise<void>` — resume a paused execution with user input or a permission decision when the engine supports in-loop pauses
 - `listModels(): Promise<EngineModelInfo[]>` — return models available through this engine
 
-Every engine implementation SHALL conform to this interface. The interface SHALL be defined in `src/bun/engine/types.ts`.
+Every engine implementation SHALL conform to this interface in a way that preserves the shared orchestrator contract. The interface SHALL be defined in `src/bun/engine/types.ts`.
 
 #### Scenario: Native engine implements ExecutionEngine
 - **WHEN** the engine resolver instantiates the native engine
@@ -19,6 +19,10 @@ Every engine implementation SHALL conform to this interface. The interface SHALL
 #### Scenario: Copilot engine implements ExecutionEngine
 - **WHEN** the engine resolver instantiates the copilot engine
 - **THEN** the returned object satisfies the `ExecutionEngine` interface and all four methods are callable
+
+#### Scenario: Claude engine implements ExecutionEngine
+- **WHEN** the engine resolver instantiates the Claude engine
+- **THEN** the returned object satisfies the shared `ExecutionEngine` contract, including execution resumption for paused Claude flows
 
 #### Scenario: execute returns an async iterable of EngineEvent
 - **WHEN** `engine.execute(params)` is called
@@ -36,7 +40,7 @@ The `ExecutionParams` type SHALL include: `executionId` (number), `taskId` (numb
 - **THEN** the orchestrator constructs `ExecutionParams` with the user message as `prompt`, column's stage_instructions, task worktree path, task model, and a fresh AbortSignal
 
 ### Requirement: EngineEvent is a discriminated union covering all execution outputs
-The `EngineEvent` type SHALL be a discriminated union on the `type` field with the following variants:
+The `EngineEvent` type SHALL remain the shared event contract for all engines, including non-native interactive pauses. It SHALL be a discriminated union on the `type` field with the following variants:
 - `token` — streamed text content
 - `reasoning` — model reasoning/thinking content
 - `tool_start` — a tool call is beginning (name + arguments)
@@ -64,19 +68,37 @@ The `EngineEvent` type SHALL be a discriminated union on the `type` field with t
 - **WHEN** the engine yields `{ type: "ask_user", question: "Which approach?" }`
 - **THEN** the orchestrator writes an `ask_user_prompt` message, sets execution state to `waiting_user`, and relays the question to the frontend
 
+#### Scenario: shell_approval event pauses a non-native execution
+- **WHEN** a non-native engine yields a `shell_approval` event
+- **THEN** the orchestrator writes an `ask_user_prompt` conversation message with a shell-approval payload, marks the task and execution as `waiting_user`, and keeps the execution resumable
+
 ### Requirement: Engine resolver instantiates the correct engine from workspace config
-The system SHALL resolve the execution engine from the workspace that owns the task being executed, not from a single global workspace config. Supported engine types remain `native` and `copilot`.
+The system SHALL resolve the execution engine from the workspace that owns the task being executed, not from a single global workspace config. Supported engine types SHALL include `native`, `copilot`, and `claude`.
 
 #### Scenario: Task execution uses owning workspace config
 - **WHEN** a task belongs to a board in workspace A
 - **THEN** `resolveEngine` uses workspace A's resolved config for that execution
 
+#### Scenario: Copilot engine resolved from config
+- **WHEN** `workspace.yaml` has `engine.type: copilot`
+- **THEN** `resolveEngine` returns an instance of `CopilotEngine`
+
+#### Scenario: Claude engine resolved from config
+- **WHEN** `workspace.yaml` has `engine.type: claude`
+- **THEN** `resolveEngine` returns an instance of `ClaudeEngine`
+
+#### Scenario: Unknown engine type rejected
+- **WHEN** `workspace.yaml` has `engine.type: unsupported`
+- **THEN** `resolveEngine` throws an error indicating the engine type is not supported
+
 #### Scenario: Concurrent executions use different workspace engines
-- **WHEN** one running task belongs to a `native` workspace and another running task belongs to a `copilot` workspace
+- **WHEN** one running task belongs to a `native` workspace and another running task belongs to a `copilot` or `claude` workspace
 - **THEN** both executions proceed concurrently using their own workspace-specific engine instances and config
 
 ### Requirement: Orchestrator consumes engine events and handles persistence and relay
-The orchestrator SHALL consume the `AsyncIterable<EngineEvent>` produced by the engine and handle all engine-agnostic concerns: persisting conversation messages to the database, relaying streaming tokens to the frontend via RPC, updating execution and task state in the database, managing AbortController lifecycle, and recording token usage.
+The orchestrator SHALL consume the `AsyncIterable<EngineEvent>` produced by the engine and handle all engine-agnostic concerns: persisting conversation messages to the database, relaying streaming tokens to the frontend via RPC, updating execution and task state in the database, managing cancellation/resume lifecycle, and recording token usage.
+
+For non-native engines that pause for input, the orchestrator SHALL treat `waiting_user` as a resumable state rather than a terminal stop.
 
 #### Scenario: Orchestrator persists tool call messages
 - **WHEN** the orchestrator receives `tool_start` and `tool_result` events
@@ -101,6 +123,14 @@ The orchestrator SHALL consume the `AsyncIterable<EngineEvent>` produced by the 
 #### Scenario: Orchestrator updates execution state on error
 - **WHEN** the orchestrator receives a fatal `error` event
 - **THEN** it updates `execution.status` to `failed` and `task.execution_state` to `failed` in the database
+
+#### Scenario: Waiting-user execution remains resumable
+- **WHEN** a non-native execution pauses for a question or approval request
+- **THEN** the task remains associated with the paused execution ID and the execution is not finalized as completed, failed, or cancelled
+
+#### Scenario: User reply resumes paused execution instead of starting a new one
+- **WHEN** a task is in `waiting_user` because a non-native execution requested input
+- **THEN** the orchestrator routes the reply into `engine.resume(...)` for the same execution rather than creating a fresh execution row
 
 ### Requirement: Orchestrator resolves slash references before passing to engine
 The orchestrator SHALL detect when an `on_enter_prompt` or user message begins with a `/stem` pattern and resolve it using the task's project worktree. The resolved plain text SHALL be passed to the engine as the `prompt` field. Engines SHALL NOT need to understand Railyin's prompt file system.

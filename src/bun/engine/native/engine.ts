@@ -7,7 +7,7 @@
  * DB writes will be moved to the orchestrator in a future extraction pass (tasks 3.2–3.7).
  */
 
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput } from "../types.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
 import {
   handleTransition,
@@ -74,6 +74,10 @@ export class NativeEngine implements ExecutionEngine {
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
     return this._run(params);
+  }
+
+  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {
+    throw new Error("Native engine resumes are handled by the workflow engine directly");
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
