@@ -3,11 +3,12 @@
 // and electroview.rpc.request.xxx() is used to call bun-side handlers.
 
 import { Electroview } from "electrobun/view";
-import type { RailynRPCType, StreamToken, StreamError, Task, ConversationMessage } from "@shared/rpc-types";
+import type { RailynRPCType, StreamToken, StreamError, StreamEvent, Task, ConversationMessage } from "@shared/rpc-types";
 
 // Mutable callbacks — registered lazily from App.vue once stores are ready.
 let _onStreamToken: (payload: StreamToken) => void = () => {};
 let _onStreamError: (payload: StreamError) => void = () => {};
+let _onStreamEvent: (payload: StreamEvent) => void = () => {};
 let _onTaskUpdated: (task: Task) => void = () => {};
 let _onNewMessage: (message: ConversationMessage) => void = () => {};
 let _onWorkflowReloaded: () => void = () => {};
@@ -19,6 +20,7 @@ const viewRpc = Electroview.defineRPC<RailynRPCType>({
     messages: {
       "stream.token": (payload) => _onStreamToken(payload),
       "stream.error": (payload) => _onStreamError(payload),
+      "stream.event": (payload) => _onStreamEvent(payload),
       "task.updated": (task) => _onTaskUpdated(task),
       "message.new": (message) => _onNewMessage(message),
       "workflow.reloaded": () => _onWorkflowReloaded(),
@@ -31,6 +33,7 @@ export const electroview = new Electroview({ rpc: viewRpc });
 
 export function onStreamToken(cb: (payload: StreamToken) => void) { _onStreamToken = cb; }
 export function onStreamError(cb: (payload: StreamError) => void) { _onStreamError = cb; }
+export function onStreamEventMessage(cb: (payload: StreamEvent) => void) { _onStreamEvent = cb; }
 export function onTaskUpdated(cb: (task: Task) => void) { _onTaskUpdated = cb; }
 export function onNewMessage(cb: (message: ConversationMessage) => void) { _onNewMessage = cb; }
 export function onWorkflowReloaded(cb: () => void) { _onWorkflowReloaded = cb; }

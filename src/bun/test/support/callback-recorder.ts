@@ -1,4 +1,4 @@
-import type { ConversationMessage, Task } from "../../../shared/rpc-types.ts";
+import type { ConversationMessage, StreamEvent, Task } from "../../../shared/rpc-types.ts";
 
 export interface RecordedTokenEvent {
     taskId: number;
@@ -29,6 +29,7 @@ export class CallbackRecorder {
     readonly taskUpdates: Task[] = [];
     readonly newMessages: ConversationMessage[] = [];
     readonly errors: RecordedErrorEvent[] = [];
+    readonly streamEvents: StreamEvent[] = [];
 
     recordToken = (
         taskId: number,
@@ -52,6 +53,22 @@ export class CallbackRecorder {
     recordError = (taskId: number, executionId: number, error: string): void => {
         this.errors.push({ taskId, executionId, error });
     };
+
+    recordStreamEvent = (event: StreamEvent): void => {
+        this.streamEvents.push(event);
+    };
+
+    async waitForStreamDone(executionId: number, timeoutMs = 5_000): Promise<void> {
+        await waitUntil(
+            () => this.streamEvents.some((e) => e.executionId === executionId && e.type === "done"),
+            `stream done for execution ${executionId}`,
+            timeoutMs,
+        );
+    }
+
+    streamEventsForExecution(executionId: number): StreamEvent[] {
+        return this.streamEvents.filter((e) => e.executionId === executionId);
+    }
 
     async waitForTokenDone(executionId: number, timeoutMs = 5_000): Promise<void> {
         await waitUntil(

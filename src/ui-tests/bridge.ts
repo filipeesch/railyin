@@ -2,11 +2,13 @@
  * bridge.ts — HTTP transport to the Electrobun debug server.
  *
  * Port discovery (in order of precedence):
- *   1. /tmp/railyn-debug.port  — written by the app at startup (all sessions)
- *   2. 9229                    — fallback for legacy setups
+ *   1. --debug=PORT CLI arg    — same flag the app uses, passed via `-- --debug=PORT`
+ *   2. /tmp/railyn-debug.port  — written by the app at startup
+ *   3. 9229                    — fallback for legacy setups
  *
- * The app is started with `--debug=0` for OS-assigned ports (parallel sessions)
- * or `--debug` / `--debug=9229` for the fixed default port.
+ * Usage:
+ *   bun test src/ui-tests/... --timeout 120000 -- --debug=19229
+ *   (start the app with: electrobun dev --test-mode -- --debug=19229)
  *
  * The debug server exposes these endpoints:
  *   GET  /inspect?script=...          — evaluate JS in WKWebView (≤ 1000 chars)
@@ -26,16 +28,23 @@
  */
 import { readFileSync } from "node:fs";
 
-function readDebugPort(): number {
+function resolveDebugPort(): number {
+  // 1. --debug=PORT from CLI (e.g. `bun test ... -- --debug=19229`)
+  const debugArg = process.argv.find(a => a.startsWith("--debug="));
+  if (debugArg) {
+    const n = parseInt(debugArg.split("=")[1]!, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  // 2. Port file written by the app at startup
   try {
     const n = parseInt(readFileSync("/tmp/railyn-debug.port", "utf8").trim(), 10);
-    return Number.isFinite(n) && n > 0 ? n : 9229;
-  } catch {
-    return 9229;
-  }
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch { /* ignore */ }
+  // 3. Default fallback
+  return 9229;
 }
 
-export const BRIDGE_BASE = `http://localhost:${readDebugPort()}`;
+export const BRIDGE_BASE = `http://localhost:${resolveDebugPort()}`;
 
 /**
  * Ask the debug server to shut down the app process.
@@ -793,6 +802,153 @@ export async function waitForTaskCardClass(
     await sleep(250);
   }
   return false;
+}
+
+
+/**
+ * Push synthetic StreamEvent objects directly into the frontend via IPC.
+ * Events are forwarded immediately to the Pinia task store's onStreamEvent handler.
+ * Use this to test live streaming UI without needing a real AI execution.
+ */
+/** @deprecated Use `injectEvents` instead — it waits for store processing via watermark. */
+export async function queueStreamEvents(events: Array<StreamEventInput>): Promise<void> {
+  const res = await fetch(`${BRIDGE_BASE}/queue-stream-events`, {
+    method: "POST",
+    body: JSON.stringify({ events }),
+    headers: { "content-type": "application/json" },
+  });
+  const data = await res.json() as { ok?: boolean; count?: number; __error?: string };
+  if (data.__error) throw new Error(`queueStreamEvents failed: ${data.__error}`);
+  if (!data.ok) throw new Error("queueStreamEvents: unexpected response");
+}
+
+export type StreamEventInput = {
+  taskId: number;
+  executionId: number;
+  seq: number;
+  blockId: string;
+  type: string;
+  content: string;
+  metadata?: string | null;
+  parentBlockId?: string | null;
+  subagentId?: string | null;
+  done?: boolean;
+};
+
+/**
+ * Read the global `streamVersion` counter from the Pinia task store.
+ * This counter increments on every `onStreamEvent` call in the store.
+ */
+export async function getStreamVersion(): Promise<number> {
+  return webEval<number>(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    return pinia._s.get('task').streamVersion;
+  `);
+}
+
+/**
+ * Poll until `streamVersion >= minVersion`. Throws on timeout with diagnostic info.
+ */
+export async function waitForStreamVersion(minVersion: number, timeoutMs = 4_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const v = await getStreamVersion();
+    if (v >= minVersion) return;
+    await sleep(50);
+  }
+  const actual = await getStreamVersion();
+  throw new Error(`waitForStreamVersion: timed out after ${timeoutMs}ms — expected >=${minVersion}, got ${actual}`);
+}
+
+/**
+ * Inject stream events and block until the Pinia store has processed all of them.
+ * Uses `streamVersion` as a causal watermark — no sleep-based guessing.
+ * Returns the new stream version after all events are processed.
+ */
+export async function injectEvents(events: Array<StreamEventInput>): Promise<number> {
+  const v0 = await getStreamVersion();
+  await queueStreamEvents(events);
+  const target = v0 + events.length;
+  await waitForStreamVersion(target);
+  return target;
+}
+
+/**
+ * Reset the stream state for a task with confirmation via version watermark.
+ * Unifies the two divergent reset patterns (Suite T / Suite S) into one path.
+ */
+export async function resetStream(taskId: number, executionId: number): Promise<number> {
+  // 1. Send synthetic done event to close any open stream
+  await queueStreamEvents([{
+    taskId,
+    executionId,
+    seq: 9999,
+    blockId: `${executionId}-reset-done`,
+    type: "done",
+    content: "",
+    done: true,
+  }]);
+  // 2. Delete from streamStates Map and trigger reactivity
+  await webEval(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var store = pinia._s.get('task');
+    store.streamStates.delete(${taskId});
+    store.streamStates = new Map(store.streamStates);
+    return 'ok';
+  `);
+  // 3. Wait for version watermark to confirm store processed the done event
+  const v = await getStreamVersion();
+  return v;
+}
+
+/**
+ * Read the active stream state for the given task from the Pinia store.
+ * Returns blockIds and their types/content, or null if no stream state.
+ */
+export async function getStreamState(taskId: number): Promise<{
+  roots: string[];
+  blocks: Array<{ blockId: string; type: string; content: string; done: boolean; parentBlockId: string | null; children: string[] }>;
+  isDone: boolean;
+  statusMessage: string;
+} | null> {
+  return webEval(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    var taskStore = pinia._s.get('task');
+    var state = taskStore.streamStates.get(${taskId});
+    if (!state) return null;
+    // Collect all blocks via DFS from roots
+    function collectBlocks(ids, result) {
+      for (var i = 0; i < ids.length; i++) {
+        var b = state.blocks.get(ids[i]);
+        if (b) {
+          result.push({ blockId: b.blockId, type: b.type, content: b.content, done: b.done, parentBlockId: b.parentBlockId, children: b.children.slice() });
+          if (b.children.length > 0) collectBlocks(b.children, result);
+        }
+      }
+      return result;
+    }
+    return JSON.stringify({
+      roots: state.roots.slice(),
+      blocks: collectBlocks(state.roots, []),
+      isDone: state.isDone,
+      statusMessage: state.statusMessage,
+    });
+  `);
+}
+
+/**
+ * Clear the stream state for a task by setting isDone=true via a synthetic done event.
+ */
+export async function clearStreamState(taskId: number, executionId: number): Promise<void> {
+  await queueStreamEvents([{
+    taskId,
+    executionId,
+    seq: 9999,
+    blockId: `${executionId}-done`,
+    type: "done",
+    content: "",
+    done: true,
+  }]);
 }
 
 /**

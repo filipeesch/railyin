@@ -159,6 +159,21 @@ export function initDb(): Database {
       updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
+    CREATE TABLE IF NOT EXISTS stream_events (
+      id           INTEGER PRIMARY KEY,
+      task_id      INTEGER NOT NULL,
+      execution_id INTEGER NOT NULL,
+      seq          INTEGER NOT NULL,
+      block_id     TEXT NOT NULL,
+      type         TEXT NOT NULL,
+      content      TEXT NOT NULL DEFAULT '',
+      metadata     TEXT,
+      parent_block_id TEXT,
+      subagent_id  TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (task_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stream_events_task ON stream_events (task_id, seq);
   `);
   db.run("INSERT INTO workspaces (id, name, config_key) VALUES (1, 'test-workspace', 'default')");
   return db;

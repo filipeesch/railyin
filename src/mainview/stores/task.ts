@@ -1,8 +1,76 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { electroview } from "../rpc";
-import type { Task, ConversationMessage, StreamToken, StreamError, ModelInfo, ProviderModelList, GitNumstat } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamToken, StreamError, StreamEvent, StreamEventType, ModelInfo, ProviderModelList, GitNumstat } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function tryParseJson(s: string): Record<string, unknown> | null {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+/** Remove live blocks of a given type scoped to a parentBlockId.
+ *  Returns the earliest position index for position-preserving insertion,
+ *  or -1 if nothing was removed. */
+function removeScopedLiveBlocks(
+  state: TaskStreamState,
+  liveType: string,
+  scopeParent: string | null,
+): number {
+  const toRemove: string[] = [];
+  for (const [bid, block] of state.blocks) {
+    if (block.type === liveType && block.parentBlockId === scopeParent) {
+      toRemove.push(bid);
+    }
+  }
+  if (toRemove.length === 0) return -1;
+
+  const removeSet = new Set(toRemove);
+  const list = scopeParent
+    ? (state.blocks.get(scopeParent)?.children ?? [])
+    : state.roots;
+
+  let earliest = -1;
+  for (let i = 0; i < list.length; i++) {
+    if (removeSet.has(list[i])) { earliest = i; break; }
+  }
+
+  if (scopeParent) {
+    const p = state.blocks.get(scopeParent);
+    if (p) p.children = p.children.filter(id => !removeSet.has(id));
+  } else {
+    state.roots = state.roots.filter(id => !removeSet.has(id));
+  }
+  for (const id of toRemove) state.blocks.delete(id);
+
+  return earliest;
+}
+
+// ─── Per-task stream state ────────────────────────────────────────────────────
+
+export interface StreamBlock {
+  blockId: string;
+  type: StreamEventType;
+  content: string;
+  metadata: string | null;
+  parentBlockId: string | null;
+  done: boolean;
+  children: string[];
+}
+
+export interface TaskStreamState {
+  taskId: number;
+  executionId: number;
+  /** Root-level blockIds (parents with no parentBlockId) */
+  roots: string[];
+  /** Block content by blockId */
+  blocks: Map<string, StreamBlock>;
+  /** Whether the execution is complete */
+  isDone: boolean;
+  /** Ephemeral status message (not stored) */
+  statusMessage: string;
+}
 
 export const useTaskStore = defineStore("task", () => {
   // All tasks keyed by boardId
@@ -13,14 +81,17 @@ export const useTaskStore = defineStore("task", () => {
   // Active task detail
   const activeTaskId = ref<number | null>(null);
   const messages = ref<ConversationMessage[]>([]);
-  const streamingToken = ref("");     // accumulates current stream
-  const streamingTaskId = ref<number | null>(null);   // which task is streaming
 
-  // Reasoning display (task 4.1-4.3)
-  const streamingReasoningToken = ref("");   // live reasoning text for active round
-  const isStreamingReasoning = ref(false);   // true while reasoning tokens are arriving
+  // ── Per-task stream states (fixes cross-task contamination) ──
+  const streamStates = ref(new Map<number, TaskStreamState>());
+  /** Incremented on every onStreamEvent call — watch this for autoscroll during pipeline streaming */
+  const streamVersion = ref(0);
 
-  // Ephemeral status message during non-streaming fallback (never stored in DB)
+  // Legacy streaming refs (kept for backward compat with old engine path)
+  const streamingToken = ref("");
+  const streamingTaskId = ref<number | null>(null);
+  const streamingReasoningToken = ref("");
+  const isStreamingReasoning = ref(false);
   const streamingStatusMessage = ref("");
 
   const loading = ref(false);
@@ -40,6 +111,10 @@ export const useTaskStore = defineStore("task", () => {
 
   const activeTask = computed(() => {
     return activeTaskId.value != null ? taskIndex.value[activeTaskId.value] ?? null : null;
+  });
+
+  const activeStreamState = computed(() => {
+    return activeTaskId.value != null ? streamStates.value.get(activeTaskId.value) ?? null : null;
   });
 
   function sortMessagesInPlace() {
@@ -164,6 +239,36 @@ export const useTaskStore = defineStore("task", () => {
     try {
       messages.value = await electroview.rpc.request["conversations.getMessages"]({ taskId });
       sortMessagesInPlace();
+      // If there is an active stream state for this task, merge DB messages into it
+      // to avoid showing duplicates from both sources
+      const existingState = streamStates.value.get(taskId);
+      if (existingState) {
+        // Remove blocks that correspond to DB messages (they'll be in messages[])
+        const persistedTypes: StreamEventType[] = ["assistant", "reasoning", "tool_call", "tool_result", "file_diff", "user", "system"];
+        const liveOnlyIds = new Set<string>();
+        const toRemove = new Set<string>();
+        
+        // Mark persisted blocks for removal
+        for (const [bid, block] of existingState.blocks) {
+          if (persistedTypes.includes(block.type as StreamEventType)) {
+            toRemove.add(bid);
+          }
+        }
+        
+        // Remove persisted blocks and rebuild roots
+        for (const bid of toRemove) {
+          existingState.blocks.delete(bid);
+        }
+        
+        // Rebuild roots: only non-persisted blocks with no parent
+        existingState.roots = [];
+        for (const [bid, block] of existingState.blocks) {
+          if (!block.parentBlockId) {
+            existingState.roots.push(bid);
+          }
+        }
+        streamStates.value = new Map(streamStates.value);
+      }
     } finally {
       messagesLoading.value = false;
     }
@@ -188,6 +293,194 @@ export const useTaskStore = defineStore("task", () => {
   }
 
   // ─── IPC push handlers ────────────────────────────────────────────────────
+
+  /** New unified stream event handler — replaces the three-channel old approach */
+  function onStreamEvent(event: StreamEvent) {
+    // Bump version so watchers (e.g. autoscroll) fire on every event
+    streamVersion.value++;
+
+    // Refresh changed file count when a file_diff arrives
+    if (event.type === "file_diff") {
+      refreshChangedFiles(event.taskId);
+    }
+
+    // Mark unread for non-active tasks on content events
+    if (event.taskId !== activeTaskId.value &&
+      (event.type === "assistant" || event.type === "reasoning" || event.type === "system" || event.type === "file_diff")
+    ) {
+      markTaskUnread(event.taskId);
+    }
+
+    // Ensure a state entry exists for this task
+    let state = streamStates.value.get(event.taskId);
+    if (!state) {
+      state = {
+        taskId: event.taskId,
+        executionId: event.executionId,
+        roots: [],
+        blocks: new Map(),
+        isDone: false,
+        statusMessage: "",
+      };
+      streamStates.value.set(event.taskId, state);
+    } else if (state.executionId !== event.executionId) {
+      // New execution started for this task — reset live stream state so the
+      // previous run's isDone=true doesn't hide the new execution's content.
+      state.roots = [];
+      state.blocks = new Map();
+      state.isDone = false;
+      state.statusMessage = "";
+      state.executionId = event.executionId;
+    }
+
+    if (event.type === "done") {
+      state.isDone = true;
+      state.statusMessage = "";
+      // Mark live blocks as done (preserves content on cancel/completion).
+      const liveTypes = new Set(["text_chunk", "reasoning_chunk"]);
+      for (const [, block] of state.blocks) {
+        if (liveTypes.has(block.type)) {
+          block.done = true;
+        }
+      }
+      streamStates.value = new Map(streamStates.value);
+      return;
+    }
+
+    if (event.type === "status_chunk") {
+      state.statusMessage = event.content;
+      streamStates.value = new Map(streamStates.value);
+      return;
+    }
+
+    // For chunks, append to existing live block or create one
+    if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
+      const blockType = event.type === "text_chunk" ? "text_chunk" : "reasoning_chunk";
+      // Find existing live block of same type with matching parent
+      let lastBlockId = undefined;
+      let lastBlock = undefined;
+      
+      // Search from end of roots (or bottom of parent's children)
+      if (event.parentBlockId) {
+        const parentBlock = state.blocks.get(event.parentBlockId);
+        if (parentBlock) {
+          lastBlockId = parentBlock.children.at(-1);
+          lastBlock = lastBlockId ? state.blocks.get(lastBlockId) : undefined;
+        }
+      } else {
+        // Root level: find from end of roots
+        lastBlockId = state.roots.at(-1);
+        lastBlock = lastBlockId ? state.blocks.get(lastBlockId) : undefined;
+      }
+
+      if (lastBlock && lastBlock.type === blockType && !lastBlock.done) {
+        // Append to existing live block
+        lastBlock.content += event.content;
+      } else {
+        // Start new live block
+        const newBlockId = `live-${blockType}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const newBlock: StreamBlock = {
+          blockId: newBlockId,
+          type: blockType,
+          content: event.content,
+          metadata: null,
+          parentBlockId: event.parentBlockId ?? null,
+          done: false,
+          children: [],
+        };
+        state.blocks.set(newBlockId, newBlock);
+        
+        // Add to parent's children or to roots
+        if (event.parentBlockId) {
+          const parentBlock = state.blocks.get(event.parentBlockId);
+          if (parentBlock) {
+            parentBlock.children.push(newBlockId);
+          }
+        } else {
+          state.roots.push(newBlockId);
+        }
+      }
+      streamStates.value = new Map(streamStates.value);
+      return;
+    }
+
+    // For persisted events (assistant, reasoning, tool_call, tool_result, file_diff, user, system)
+    // Place block in tree based on parentBlockId
+    const blockId = event.blockId || `${event.type}-${event.seq || Date.now()}`;
+    const eventScope = event.parentBlockId ?? null;
+
+    // When a persisted block replaces live blocks, record their position
+    // so the persisted block takes the same slot (preserves order).
+    let insertIdx = -1;
+
+    if (event.type === "tool_call") {
+      // Clear live reasoning_chunks at the same scope (not globally)
+      insertIdx = removeScopedLiveBlocks(state, "reasoning_chunk", eventScope);
+    }
+
+    if (event.type === "assistant") {
+      // Replace live text_chunks at the same scope only
+      insertIdx = removeScopedLiveBlocks(state, "text_chunk", eventScope);
+    }
+
+    if (event.type === "reasoning") {
+      // Replace live reasoning_chunks at the same scope only
+      insertIdx = removeScopedLiveBlocks(state, "reasoning_chunk", eventScope);
+    }
+
+    // Add persisted block if not already present
+    if (!state.blocks.has(blockId)) {
+      const newBlock: StreamBlock = {
+        blockId,
+        type: event.type,
+        content: event.content,
+        metadata: event.metadata,
+        parentBlockId: event.parentBlockId ?? null,
+        done: true,
+        children: [],
+      };
+      state.blocks.set(blockId, newBlock);
+      
+      // Place in tree — at the position of replaced live blocks if available
+      if (event.parentBlockId) {
+        const parentBlock = state.blocks.get(event.parentBlockId);
+        if (parentBlock) {
+          if (insertIdx >= 0) {
+            parentBlock.children.splice(insertIdx, 0, blockId);
+          } else {
+            parentBlock.children.push(blockId);
+          }
+        } else {
+          // Parent missing (orphan): promote to root
+          if (insertIdx >= 0) {
+            state.roots.splice(insertIdx, 0, blockId);
+          } else {
+            state.roots.push(blockId);
+          }
+        }
+      } else {
+        if (insertIdx >= 0) {
+          state.roots.splice(insertIdx, 0, blockId);
+        } else {
+          state.roots.push(blockId);
+        }
+      }
+    } else if (event.type === "tool_result") {
+      // tool_result shares blockId with its tool_call — update the existing block
+      const existing = state.blocks.get(blockId)!;
+      existing.done = true;
+      // Store result content in metadata for the renderer to display
+      const resultMeta = {
+        ...(existing.metadata ? tryParseJson(existing.metadata) : {}),
+        hasResult: true,
+        resultContent: event.content,
+        resultMetadata: event.metadata,
+      };
+      existing.metadata = JSON.stringify(resultMeta);
+    }
+
+    streamStates.value = new Map(streamStates.value);
+  }
 
   function onStreamToken(payload: StreamToken) {
     // Always accumulate tokens regardless of which task is open in the drawer.
@@ -455,6 +748,9 @@ export const useTaskStore = defineStore("task", () => {
     isStreamingReasoning,
     streamingStatusMessage,
     streamingTaskId,
+    streamStates,
+    streamVersion,
+    activeStreamState,
     loading,
     messagesLoading,
     availableModels,
@@ -487,6 +783,7 @@ export const useTaskStore = defineStore("task", () => {
     workspaceHasUnread,
     onStreamToken,
     onStreamError,
+    onStreamEvent,
     onTaskUpdated,
     onNewMessage,
   };
