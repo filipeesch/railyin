@@ -6,20 +6,20 @@
   "scripts": {
     "dev": "RAILYN_CLI=1 vite build && RAILYN_CLI=1 electrobun dev --watch",
     "dev:debug": "RAILYN_CLI=1 vite build && RAILYN_CLI=1 electrobun dev --watch -- --debug",
-    "dev:test": "RAILYN_CLI=1 vite build && RAILYN_CLI=1 electrobun dev --watch -- --debug=0 --memory-db",
+    "dev:test": "bun scripts/run-ui-tests.ts",
     "dev:kill": "pkill -f 'Railyn-dev' || true; pkill -f 'electrobun' || true",
     "dev:watch": "concurrently -n vite,electrobun -c cyan,magenta \"vite build --watch\" \"electrobun dev --watch\"",
     "build:canary": "vite build && electrobun build --env=canary",
-    "test": "bun test src/bun/test --timeout 20000",
-    "test:ui": "bun test src/ui-tests --timeout 120000",
-    "test:ui:review": "bun test src/ui-tests/review-overlay.test.ts --timeout 120000",
-    "test:ui:chat": "bun test src/ui-tests/chat.test.ts --timeout 120000",
-    "test:ui:chat-ext": "bun test src/ui-tests/extended-chat.test.ts --timeout 120000",
-    "test:ui:board": "bun test src/ui-tests/board.test.ts --timeout 120000",
+    "test": "bun test src/bun/test",
+    "test:ui": "bun scripts/run-ui-tests.ts src/ui-tests",
+    "test:ui:review": "bun scripts/run-ui-tests.ts src/ui-tests/review-overlay.test.ts",
+    "test:ui:chat": "bun scripts/run-ui-tests.ts src/ui-tests/chat.test.ts",
+    "test:ui:chat-ext": "bun scripts/run-ui-tests.ts src/ui-tests/extended-chat.test.ts",
+    "test:ui:board": "bun scripts/run-ui-tests.ts src/ui-tests/board.test.ts",
     "refine:mock": "bun refinement/runner.ts --mode mock",
     "refine:local": "bun refinement/runner.ts --mode local",
     "refine:live": "bun refinement/runner.ts --mode live",
-    "test:ui:run": "./scripts/run-ui-tests.sh"
+    "test:ui:run": "bun scripts/run-ui-tests.ts src/ui-tests"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.98",

@@ -51,8 +51,10 @@ if (__RAILYN_FORCE_MEMORY_DB__) process.env.RAILYN_DB = ":memory:";
 const debugArg = argv.find(a => a === "--debug" || a.startsWith("--debug="));
 if (debugArg) process.env.RAILYN_DEBUG = "1";
 // Port 0 means OS-assigned (for parallel test sessions). Defaults to 9229 for backward compat.
+// When __RAILYN_FORCE_DEBUG__ enables debug without an explicit --debug=PORT,
+// default to 0 (OS-assigned) so concurrent test sessions don't collide on 9229.
 const debugPort: number = (() => {
-  if (!debugArg || !debugArg.includes("=")) return 9229;
+  if (!debugArg || !debugArg.includes("=")) return __RAILYN_FORCE_DEBUG__ ? 0 : 9229;
   const n = parseInt(debugArg.split("=")[1]!, 10);
   return Number.isFinite(n) && n >= 0 ? n : 9229;
 })();
