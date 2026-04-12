@@ -10,8 +10,32 @@ function tryParseJson(s: string): Record<string, unknown> | null {
   try { return JSON.parse(s); } catch { return null; }
 }
 
-/** Remove live blocks of a given type scoped to a parentBlockId.
- *  Returns the earliest position index for position-preserving insertion,
+/** Extract display-ready text from a tool_result content string.
+ *  The orchestrator wraps results in a JSON envelope; this unwraps it
+ *  so downstream UI always receives plain text. */
+function extractToolResultText(raw: string): string {
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw) as {
+      content?: string;
+      detailedContent?: string;
+      contents?: Array<{ type?: string; text?: string }>;
+    };
+    if (typeof parsed !== "object" || parsed === null) return raw;
+    if (parsed.detailedContent?.trim()) return parsed.detailedContent.trim();
+    const textFromBlocks = (parsed.contents ?? [])
+      .filter((b) => (b.type === "text" || b.type === "terminal") && typeof b.text === "string")
+      .map((b) => b.text!)
+      .join("\n\n")
+      .trim();
+    if (textFromBlocks) return textFromBlocks;
+    return (parsed.content ?? raw).trim();
+  } catch {
+    return raw;
+  }
+}
+
+/** Remove live (ephemeral) blocks of a given type within a scope.
  *  or -1 if nothing was removed. */
 function removeScopedLiveBlocks(
   state: TaskStreamState,
@@ -469,11 +493,13 @@ export const useTaskStore = defineStore("task", () => {
       // tool_result shares blockId with its tool_call — update the existing block
       const existing = state.blocks.get(blockId)!;
       existing.done = true;
-      // Store result content in metadata for the renderer to display
+      // Extract display-ready text from the JSON envelope so UI components
+      // don't need to know the serialisation format (works for both Copilot
+      // and Claude engines).
       const resultMeta = {
         ...(existing.metadata ? tryParseJson(existing.metadata) : {}),
         hasResult: true,
-        resultContent: event.content,
+        resultContent: extractToolResultText(event.content),
         resultMetadata: event.metadata,
       };
       existing.metadata = JSON.stringify(resultMeta);

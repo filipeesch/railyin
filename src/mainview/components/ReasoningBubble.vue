@@ -11,6 +11,7 @@
 
     <div v-if="open" class="rb__body">
       <div class="rb__content" :class="{ 'rb__content--streaming': streaming }">{{ content }}</div>
+      <slot />
     </div>
   </div>
 </template>
@@ -115,6 +116,15 @@ function toggle() {
   animation: blink 1s step-end infinite;
   color: var(--p-primary-color, #6366f1);
   margin-left: 1px;
+}
+
+.rb__body > :slotted(.rb__children) {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--p-content-border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 @keyframes blink {

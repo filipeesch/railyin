@@ -15,7 +15,7 @@
 
     <div v-if="open" :class="['tcg__body', (effectiveDiffPayload || toolName === 'read_file') ? 'tcg__body--flush' : '']">
       <FileDiff v-if="effectiveDiffPayload" :payload="effectiveDiffPayload" />
-      <ReadView v-else-if="toolName === 'read_file'" :content="displayContent" />
+      <ReadView v-else-if="toolName === 'read_file'" :content="displayContent" :startLine="readFileStartLine" />
       <div v-else-if="entry.result && displayBlocks.length > 0" class="tcg__blocks">
         <section v-for="block in displayBlocks" :key="block.key" class="tcg__block">
           <div class="tcg__block-label">{{ block.label }}</div>
@@ -113,6 +113,13 @@ const primaryArg = computed(() => {
     args.path ?? args.from_path ?? args.pattern ?? args.url ?? args.command ?? "",
   );
   return val.length > 60 ? "…" + val.slice(-57) : val;
+});
+
+const readFileStartLine = computed(() => {
+  const { args } = parsedCall.value;
+  const raw = args.startLine ?? args.start_line ?? args.from_line;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 1;
 });
 
 const truncated = computed(() => {

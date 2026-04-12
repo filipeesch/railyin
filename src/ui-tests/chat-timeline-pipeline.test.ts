@@ -26,7 +26,7 @@
  *
  *   Suite S — mixed scenario rendering (mirrors Layer 1 backend scenarios):
  *     S-1 (T-41): reasoning then text — reasoning streams live, both blocks render in correct order
- *     S-2 (T-42): reasoning → tool → text — tool_call between reasoning and text, reasoning before tool
+ *     S-2 (T-42): reasoning → tool → text — tool_call nested under reasoning block, reasoning replaces live chunks
  *     S-3 (T-43): multiple tool rounds — multiple tool pairs interleaved with text
  *     S-4 (T-44): cancel mid-reasoning — partial reasoning rendered, no ghost live blocks after cancel
  *     S-5 (T-45): subagent events — subagent blocks render with correct attribution
@@ -45,7 +45,7 @@
  *
  *   Suite Q — sequential & interleaving order scenarios:
  *     T-56: same tool called twice — two separate collapsibles in DOM with distinct names
- *     T-57: fully interleaved — reasoning→tool→text→tool→text, DOM order matches event order
+ *     T-57: fully interleaved — reasoning→tool→text→tool→text, first tool nested under reasoning, DOM order correct
  *     T-58: streaming granularity — tools injected one-at-a-time, each DOM-visible before next arrives
  *     T-59: sequence inside reasoning bubble — nested tool+text children under a tool_call parent
  */
@@ -641,8 +641,8 @@ describe("Suite S — mixed scenario rendering", () => {
     await closeTaskDrawer();
   });
 
-  // T-42 ─ S-2: reasoning → tool → text
-  test("T-42 S-2: tool_call clears live reasoning; reasoning block appears before tool_call", async () => {
+  // T-42 ─ S-2: reasoning → tool → text (tool nested under reasoning)
+  test("T-42 S-2: tool_call nests under reasoning block; live reasoning_chunk replaced", async () => {
     await openTaskDrawer(taskId);
 
     // Reasoning live
@@ -651,7 +651,7 @@ describe("Suite S — mixed scenario rendering", () => {
     let state = await getStreamState(taskId);
     expect(state!.blocks.some((b) => b.type === "reasoning_chunk")).toBe(true);
 
-    // tool_call persisted (should flush reasoning)
+    // Persisted reasoning + tool_call with parentBlockId (orchestrator now nests tool under reasoning)
     const toolCallContent = JSON.stringify({
       type: "function",
       function: { name: "read_file", arguments: '{"path":"/tmp/a.txt"}' },
@@ -659,7 +659,7 @@ describe("Suite S — mixed scenario rendering", () => {
     });
     await injectEvents([
       evt(1, "reasoning", "Planning to read file...", `${S_EXEC_ID}-r1`),
-      evt(2, "tool_call", toolCallContent, "tc1"),
+      evt(2, "tool_call", toolCallContent, "tc1", { parentBlockId: `${S_EXEC_ID}-r1` }),
     ]);
 
     state = await getStreamState(taskId);
@@ -668,12 +668,11 @@ describe("Suite S — mixed scenario rendering", () => {
     // reasoning_chunk live block should be gone (replaced by persisted reasoning)
     expect(blockTypes.filter((t: string) => t === "reasoning_chunk")).toHaveLength(0);
 
-    // reasoning block before tool_call in order
-    const rIdx = blockTypes.indexOf("reasoning");
-    const tcIdx = blockTypes.indexOf("tool_call");
-    if (rIdx !== -1 && tcIdx !== -1) {
-      expect(rIdx).toBeLessThan(tcIdx);
-    }
+    // tool_call is NOT a root — it's a child of the reasoning block
+    expect(state!.roots).not.toContain("tc1");
+    const reasoningBlock = state!.blocks.find((b) => b.blockId === `${S_EXEC_ID}-r1`);
+    expect(reasoningBlock).toBeDefined();
+    expect(reasoningBlock!.children).toContain("tc1");
 
     // tool_result + text then done
     await injectEvents([
@@ -1258,13 +1257,13 @@ describe("Suite Q — sequential & interleaving order scenarios", () => {
       // reasoning live → persisted
       qEvt(0, "reasoning_chunk", "Planning..."),
       qEvt(1, "reasoning", "Planning...", `${Q_EXEC_ID}-r1`),
-      // first tool round
-      qEvt(2, "tool_call", toolCallContent("tc1", "write_file"), "tc1"),
+      // first tool round (nested under reasoning — orchestrator sets parentBlockId)
+      qEvt(2, "tool_call", toolCallContent("tc1", "write_file"), "tc1", { parentBlockId: `${Q_EXEC_ID}-r1` }),
       qEvt(3, "tool_result", toolResultContent("tc1"), "tc1"),
-      // text between tools
+      // text between tools (clears reasoning context in orchestrator)
       qEvt(4, "text_chunk", "Between tools."),
       qEvt(5, "assistant", "Between tools.", `${Q_EXEC_ID}-a1`),
-      // second tool round
+      // second tool round (no reasoning context — stays at root)
       qEvt(6, "tool_call", toolCallContent("tc2", "run_bash"), "tc2"),
       qEvt(7, "tool_result", toolResultContent("tc2"), "tc2"),
       // final text
@@ -1275,19 +1274,24 @@ describe("Suite Q — sequential & interleaving order scenarios", () => {
 
     const state = await getStreamState(taskId);
 
-    // Expected root order: reasoning, tool_call, assistant, tool_call, assistant
+    // Expected root order: reasoning, assistant, tool_call, assistant
+    // (first tool_call is nested under reasoning)
     const rootBlocks = state!.roots.map((id: string) =>
       state!.blocks.find((b: { blockId: string }) => b.blockId === id),
     );
     const rootTypes = rootBlocks.map((b: { type: string } | undefined) => b?.type);
 
     expect(rootTypes[0]).toBe("reasoning");
-    expect(rootTypes[1]).toBe("tool_call");
-    expect(rootTypes[2]).toBe("assistant");
-    expect(rootTypes[3]).toBe("tool_call");
-    expect(rootTypes[4]).toBe("assistant");
+    expect(rootTypes[1]).toBe("assistant");
+    expect(rootTypes[2]).toBe("tool_call");
+    expect(rootTypes[3]).toBe("assistant");
 
-    // DOM: .rb before first .tcg
+    // First tool_call is a child of the reasoning block
+    const reasoningBlock = state!.blocks.find((b) => b.blockId === `${Q_EXEC_ID}-r1`);
+    expect(reasoningBlock).toBeDefined();
+    expect(reasoningBlock!.children).toContain("tc1");
+
+    // DOM: .rb before first .tcg (first tcg is inside .rb__children)
     const rbBeforeFirst = await webEval<boolean>(`
       var rb = document.querySelector('.rb');
       var tcg = document.querySelector('.tcg');
@@ -1296,11 +1300,17 @@ describe("Suite Q — sequential & interleaving order scenarios", () => {
     `);
     expect(rbBeforeFirst).toBe(true);
 
-    // Two .tcg in DOM
+    // Two .tcg in DOM total (one nested in reasoning, one at root)
     const tcgCount = await webEval<number>(`
       return document.querySelectorAll('.tcg').length;
     `);
     expect(tcgCount).toBe(2);
+
+    // First .tcg is inside reasoning bubble
+    const nestedTcg = await webEval<boolean>(`
+      return !!document.querySelector('.rb__children .tcg');
+    `);
+    expect(nestedTcg).toBe(true);
   });
 
   // T-58: streaming granularity — inject one tool at a time, each appears before next

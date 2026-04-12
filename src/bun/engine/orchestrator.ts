@@ -751,6 +751,10 @@ export class Orchestrator implements ExecutionCoordinator {
     // Orchestrator context stack: callIds of open (non-internal) tool_start events.
     // Tokens/reasoning emitted while this is non-empty get parentBlockId = callStack.at(-1).
     const callStack: string[] = [];
+    // Track the ID of the most recently flushed reasoning block so tool_calls
+    // that fire right after reasoning can be visually grouped under it.
+    let reasoningBlockId: string | null = null;
+    let reasoningFlushCount = 0;
 
     try {
       // Task 5.3: Use the AbortController registered by _buildExecutionParams.
@@ -814,6 +818,8 @@ export class Orchestrator implements ExecutionCoordinator {
               this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
               reasoningAccum = "";
             }
+            // Text tokens mean reasoning phase is over — clear reasoning context
+            reasoningBlockId = null;
             // Task 5.2: Accumulate tokens for eventual assistant message
             tokenAccum += event.content;
             hadOutput = true;
@@ -842,9 +848,11 @@ export class Orchestrator implements ExecutionCoordinator {
             hadOutput = true;
             // Flush reasoningAccum before tool_call so the reasoning bubble closes in the right position
             if (reasoningAccum) {
+              const rBlockId = `${executionId}-pre-r${++reasoningFlushCount}`;
               const rId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
               this.onNewMessage({ id: rId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
-              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: rBlockId, type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+              reasoningBlockId = rBlockId;
               reasoningAccum = "";
             }
             // Task 5.4: Flush tokenAccum BEFORE emitting tool_call to fix ordering bug
@@ -883,11 +891,12 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: toolMeta,
               createdAt: new Date().toISOString(),
             });
-            // parentBlockId comes only from event.parentCallId (explicit subagent nesting).
+            // parentBlockId: prefer explicit subagent parent (event.parentCallId),
+            // then reasoning context (reasoningBlockId) for visual grouping.
             // Do NOT fall back to callStack.at(-1): parallel tool calls in the same LLM response
             // all arrive as tool_start before any tool_result, so callStack would incorrectly
             // make each tool appear as a child of the previous one.
-            const toolParentBlockId = event.parentCallId ?? null;
+            const toolParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false });
             // Push this call onto the stack so nested tokens/reasoning inherit it as parent
             callStack.push(callId);
@@ -940,8 +949,8 @@ export class Orchestrator implements ExecutionCoordinator {
             const resultCallId = event.callId ?? msgId.toString();
             const stackIdx = callStack.lastIndexOf(resultCallId);
             if (stackIdx !== -1) callStack.splice(stackIdx, 1);
-            // parentBlockId of tool_result mirrors its tool_call's parentBlockId (explicit only).
-            const resultParentBlockId = event.parentCallId ?? null;
+            // parentBlockId of tool_result mirrors its tool_call's parentBlockId.
+            const resultParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: resultCallId, type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), parentBlockId: resultParentBlockId, done: false });
 
             // Emit UI-only file_diff for write tools (never forwarded to LLM)

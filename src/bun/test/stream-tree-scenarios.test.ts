@@ -227,21 +227,22 @@ describe("S-17 [stream-tree]: cancel mid-text flushes assistant block into tree"
 // Stream:  reasoning("pre") → tool_start("c1") → reasoning("in-tool") →
 //          tool_result("c1") → token("Done") → done
 //
-// parentBlockId propagation (callStack):
+// parentBlockId propagation (callStack + reasoningBlockId):
 //   reasoning "pre"     → parentBlockId=null  (callStack=[])
-//   tool_call "c1"      → parentBlockId=null
+//   tool_call "c1"      → parentBlockId=pre-r1  (nested under reasoning)
 //   reasoning "in-tool" → parentBlockId="c1"  (callStack=["c1"])
-//   tool_result "c1"    → parentBlockId=null  (after popping c1)
+//   tool_result "c1"    → parentBlockId=pre-r1 (mirrors tool_call parent)
 //   assistant           → parentBlockId=null
 //
-// DB:   [reasoning r1 pBid=null, tool_call c1 pBid=null,
+// DB:   [reasoning pre-r1 pBid=null, tool_call c1 pBid=pre-r1,
 //        reasoning r2 pBid="c1", tool_result c1, assistant t1]
-// Tree: roots=[r1, "c1", t1]
-//       c1.children=["r2"]
+// Tree: roots=[pre-r1, t1]
+//       pre-r1.children=["c1"]
+//       c1.children=[r2]
 // ---------------------------------------------------------------------------
 
 describe("S-18 [stream-tree]: reasoning inside tool call hangs off tool block as child", () => {
-    it("roots=[r1, c1, t1]; c1.children=[r2]", async () => {
+    it("roots=[pre-r1, t1]; pre-r1.children=[c1]; c1.children=[r2]", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptReasoning("pre-tool thinking"),
@@ -260,24 +261,27 @@ describe("S-18 [stream-tree]: reasoning inside tool call hangs off tool block as
         const db = runtime.getDbStreamEvents(executionId);
         const tree = buildStreamTree(db);
 
-        const r1 = `${executionId}-r1`;
+        // Pre-tool reasoning gets a deterministic flush ID from the orchestrator
+        const preR1 = `${executionId}-pre-r1`;
+        // In-tool reasoning gets batcher-assigned ID (r2 because pre-tool reasoning_chunks consumed r1)
         const r2 = `${executionId}-r2`;
         const t1 = `${executionId}-t1`;
 
-        // Root order: pre-tool reasoning → tool → post-tool assistant
-        expect(tree.roots).toEqual([r1, "c1", t1]);
+        // Root order: pre-tool reasoning → post-tool assistant
+        // (tool_call is nested under reasoning)
+        expect(tree.roots).toEqual([preR1, t1]);
 
-        // Pre-tool reasoning: root-level
-        const r1Block = tree.blocks.get(r1);
-        expect(r1Block).toBeDefined();
-        expect(r1Block!.type).toBe("reasoning");
-        expect(r1Block!.parentBlockId).toBeNull();
-        expect(r1Block!.children).toEqual([]);
+        // Pre-tool reasoning: root-level, tool_call as child
+        const preR1Block = tree.blocks.get(preR1);
+        expect(preR1Block).toBeDefined();
+        expect(preR1Block!.type).toBe("reasoning");
+        expect(preR1Block!.parentBlockId).toBeNull();
+        expect(preR1Block!.children).toContain("c1");
 
-        // Tool call block: root-level, has in-tool reasoning as child
+        // Tool call block: child of pre-tool reasoning, has in-tool reasoning as child
         const c1Block = tree.blocks.get("c1");
         expect(c1Block).toBeDefined();
-        expect(c1Block!.parentBlockId).toBeNull();
+        expect(c1Block!.parentBlockId).toBe(preR1);
         expect(c1Block!.children).toEqual([r2]);
 
         // In-tool reasoning: child of c1
