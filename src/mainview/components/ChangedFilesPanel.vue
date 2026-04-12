@@ -1,25 +1,23 @@
 <template>
   <div v-if="hasAnyFiles" class="changed-files-panel">
-    <!-- Header -->
-    <div class="changed-files-panel__header">
-      <button
-        class="changed-files-panel__toggle"
-        type="button"
-        @click="expanded = !expanded"
-        :aria-expanded="expanded"
-      >
+    <!-- Header — full row is the click target for expand/collapse -->
+    <div
+      class="changed-files-panel__header"
+      @click="expanded = !expanded"
+    >
+      <div class="changed-files-panel__toggle">
         <span class="changed-files-panel__toggle-icon">{{ expanded ? '▾' : '▸' }}</span>
         <span class="changed-files-panel__toggle-label">
           {{ pendingLabel }}
         </span>
-      </button>
-      <div class="changed-files-panel__actions">
+      </div>
+      <div class="changed-files-panel__actions" @click.stop>
       <button
         v-if="hasAllFiles"
         class="changed-files-panel__view-btn"
         type="button"
         :title="showAll ? 'Show pending only' : 'Show all changes'"
-        @click.stop="showAll = !showAll"
+        @click="showAll = !showAll"
       >
         {{ showAll ? 'Pending' : 'All' }}
       </button>
@@ -28,7 +26,7 @@
         class="changed-files-panel__review-btn"
         type="button"
         :title="showAll ? 'Open changed files' : 'Open code review'"
-        @click.stop="openReview(null)"
+        @click="openReview(null)"
       >
         {{ showAll ? 'View Changes' : 'Review' }}
       </button>
@@ -145,9 +143,9 @@ function openReview(filePath: string | null) {
 
 <style scoped>
 .changed-files-panel {
-  border: 1px solid var(--p-content-border-color, #e2e8f0);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 6px;
-  background: var(--p-content-background, #f8fafc);
+  background: var(--p-content-background);
   margin: 0 0 8px 0;
   overflow: hidden;
   flex-shrink: 0;
@@ -158,6 +156,8 @@ function openReview(filePath: string | null) {
 .changed-files-panel__header {
   display: flex;
   align-items: stretch;
+  cursor: pointer;
+  user-select: none;
 }
 
 .changed-files-panel__toggle {
@@ -167,17 +167,13 @@ function openReview(filePath: string | null) {
   min-width: 0;
   flex: 1;
   padding: 7px 10px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  color: var(--p-text-color, #1e293b);
+  color: var(--p-text-color, inherit);
   font-size: 0.78rem;
   font-weight: 500;
 }
 
-.changed-files-panel__toggle:hover {
-  background: var(--p-content-hover-background, #f1f5f9);
+.changed-files-panel__header:hover {
+  background: var(--p-content-hover-background, rgba(0,0,0,0.04));
 }
 
 .changed-files-panel__toggle-icon {
@@ -206,9 +202,9 @@ function openReview(filePath: string | null) {
 .changed-files-panel__review-btn {
   padding: 2px 8px;
   border-radius: 4px;
-  border: 1px solid var(--p-content-border-color, #cbd5e1);
-  background: var(--p-surface-card, #fff);
-  color: var(--p-text-color, #1e293b);
+  border: 1px solid var(--p-content-border-color, currentColor);
+  background: var(--p-surface-card, var(--p-surface-0, transparent));
+  color: var(--p-text-color, inherit);
   font-size: 0.72rem;
   cursor: pointer;
   white-space: nowrap;
@@ -224,7 +220,7 @@ function openReview(filePath: string | null) {
 }
 
 .changed-files-panel__view-btn:hover {
-  background: var(--p-content-hover-background, #f1f5f9);
+  background: var(--p-content-hover-background, rgba(0,0,0,0.06));
 }
 
 .changed-files-panel__review-btn:hover {
@@ -255,7 +251,7 @@ function openReview(filePath: string | null) {
 }
 
 .changed-files-panel__item:hover {
-  background: var(--p-content-hover-background, #f1f5f9);
+  background: var(--p-content-hover-background, rgba(0,0,0,0.04));
 }
 
 .changed-files-panel__file-icon {
