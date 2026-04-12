@@ -23,3 +23,6 @@ run:
     - label: "Cursor"
       icon: "simple-icons:cursor"
       command: "cursor ."
+    - label: "Terminal"
+      icon: "lucide:terminal"
+      command: "open -a Terminal ."
