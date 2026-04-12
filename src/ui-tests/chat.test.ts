@@ -2,10 +2,10 @@
  * chat.test.ts — UI regression tests for the task chat / conversation UI.
  *
  * Test runner: bun test  (bun:test)
- * Transport:   HTTP bridge to Electrobun debug server on localhost:9229
+ * Transport:   HTTP bridge to Electrobun debug server (port from /tmp/railyn-debug.port)
  *
  * Run: bun test src/ui-tests --timeout 120000
- * Requires the app to be running with: bun run dev:test  (--debug --memory-db)
+ * Requires the app to be running with: bun run dev:test  (--debug=0 --memory-db)
  *
  * Scenarios covered:
  *   Suite M — basic send & streaming:

@@ -4,9 +4,9 @@
   "type": "module",
   "description": "AI-assisted delivery orchestration for software teams",
   "scripts": {
-    "dev": "vite build && electrobun dev --watch",
-    "dev:debug": "vite build && electrobun dev --watch -- --debug",
-    "dev:test": "bash -lc 'pid=$(lsof -nP -tiTCP:9229 -sTCP:LISTEN | head -n 1); if [ -n \"$pid\" ]; then kill \"$pid\"; fi; vite build && electrobun dev --watch --test-mode'",
+    "dev": "RAILYN_CLI=1 vite build && RAILYN_CLI=1 electrobun dev --watch",
+    "dev:debug": "RAILYN_CLI=1 vite build && RAILYN_CLI=1 electrobun dev --watch -- --debug",
+    "dev:test": "RAILYN_CLI=1 vite build && RAILYN_CLI=1 electrobun dev --watch -- --debug=0 --memory-db",
     "dev:kill": "pkill -f 'Railyn-dev' || true; pkill -f 'electrobun' || true",
     "dev:watch": "concurrently -n vite,electrobun -c cyan,magenta \"vite build --watch\" \"electrobun dev --watch\"",
     "build:canary": "vite build && electrobun build --env=canary",
