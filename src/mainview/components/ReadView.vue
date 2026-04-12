@@ -12,7 +12,7 @@
       :key="windowStart + i"
       class="rv__line"
     >
-      <span class="rv__gutter">{{ lineOffset + windowStart + i }}</span>
+      <span class="rv__gutter">{{ windowStart + i + 1 }}</span>
       <span class="rv__content">{{ line }}</span>
     </div>
 
@@ -29,11 +29,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from "vue";
 
-const props = defineProps<{ content: string; startLine?: number }>();
-
-// Offset for line numbering (1-based). When the tool call reads from startLine=50,
-// the gutter should show 50, 51, 52... instead of 1, 2, 3...
-const lineOffset = computed(() => (props.startLine && props.startLine > 0) ? props.startLine : 1);
+const props = defineProps<{ content: string }>();
 
 const CAP   = 50;
 const CHUNK = 25;

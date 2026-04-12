@@ -85,23 +85,36 @@
         <div class="task-detail__conversation" ref="scrollEl" @scroll.passive="onScroll">
 
           <div class="conversation-inner">
-            <TransitionGroup name="chat-item" tag="div" class="chat-items">
-              <template v-for="item in displayItems" :key="item.key">
+            <!-- Virtual list spacer: only visible items are in the DOM -->
+            <div :style="{ position: 'relative', height: `${virtualizer.getTotalSize()}px` }">
+              <div
+                v-for="vitem in virtualizer.getVirtualItems()"
+                :key="vitem.key"
+                :ref="measureRef"
+                :data-index="vitem.index"
+                :style="{
+                  position: 'absolute',
+                  top: 0,
+                  width: '100%',
+                  paddingBottom: '8px',
+                  transform: `translateY(${vitem.start}px)`,
+                }"
+              >
                 <ToolCallGroup
-                  v-if="item.kind === 'tool_entry'"
-                  :entry="item.entry"
+                  v-if="displayItems[vitem.index].kind === 'tool_entry'"
+                  :entry="asToolEntry(vitem.index).entry"
                 />
                 <CodeReviewCard
-                  v-else-if="item.kind === 'code_review'"
-                  :message="item.message"
+                  v-else-if="displayItems[vitem.index].kind === 'code_review'"
+                  :message="asCodeReview(vitem.index).message"
                 />
                 <MessageBubble
                   v-else
-                  :chunk="item.message"
-                  :index="item.msgIndex"
+                  :chunk="asSingle(vitem.index).message"
+                  :index="asSingle(vitem.index).msgIndex"
                 />
-              </template>
-            </TransitionGroup>
+              </div>
+            </div>
 
             <!-- Unified stream blocks: recursive tree render (roots → children via DFS) -->
             <template v-if="taskStore.activeStreamState && taskStore.activeStreamState.roots.length > 0">
@@ -436,6 +449,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
+import { useVirtualizer } from "@tanstack/vue-virtual";
 import { marked } from "marked";
 import Drawer from "primevue/drawer";
 import Dialog from "primevue/dialog";
@@ -586,6 +600,14 @@ const displayItems = computed<DisplayItem[]>(() => {
   return items;
 });
 
+type ToolEntryItem    = Extract<DisplayItem, { kind: "tool_entry" }>;
+type CodeReviewItem   = Extract<DisplayItem, { kind: "code_review" }>;
+type SingleItem       = Extract<DisplayItem, { kind: "single" }>;
+
+function asToolEntry(i: number)  { return displayItems.value[i] as ToolEntryItem; }
+function asCodeReview(i: number) { return displayItems.value[i] as CodeReviewItem; }
+function asSingle(i: number)     { return displayItems.value[i] as SingleItem; }
+
 // True if there is any live content in the stream state (suppresses the "Thinking..." spinner)
 const hasLiveContent = computed(() => {
   const state = taskStore.activeStreamState;
@@ -668,6 +690,57 @@ const transitioning = ref(false);
 const retrying = ref(false);
 const cancelling = ref(false);
 const scrollEl = ref<HTMLElement | null>(null);
+
+const virtualizer = useVirtualizer(computed(() => ({
+  count: displayItems.value.length,
+  getScrollElement: () => scrollEl.value,
+  // Stable string keys so measurements survive list updates (new messages, task
+  // switch doesn't matter since we call measure() on task switch).
+  getItemKey: (index) => displayItems.value[index]?.key ?? index,
+  // Per-kind estimates: MessageBubbles are short (~80px), ToolCallGroups with
+  // output or children can be 600–2000px. Accurate estimates minimise the
+  // position-correction jump when a new item first enters the viewport.
+  estimateSize: (index) => {
+    const item = displayItems.value[index];
+    if (!item) return 80;
+    if (item.kind === 'single') return 80;
+    if (item.kind === 'code_review') return 300;
+    // tool_entry: always starts collapsed (open=false), so the real rendered
+    // height is just the header button: padding 7px*2 + ~1rem icon ≈ 36px.
+    // Using the actual collapsed height minimises the position-correction jump
+    // that was previously causing items to appear to "blink" on scroll.
+    return 36;
+  },
+  overscan: 15,
+})));
+
+// Stable ref callback — using an inline arrow in :ref creates a new function
+// every render. A stable function is only called on actual mount/unmount.
+//
+// TanStack's own measureElement defers resizeItem during user scroll
+// (isScrolling=true) and relies on ResizeObserver to fire later. That
+// async gap causes items to remain hidden for an extra rendering pass,
+// which appears as a "pop-in" stutter. We bypass the guard by calling
+// resizeItem directly with the live offsetHeight, then still register
+// with TanStack's internal ResizeObserver for ongoing size changes (e.g.
+// ToolCallGroup expand/collapse).
+function measureRef(el: Element | null) {
+  if (!el) return;
+  const index = parseInt((el as HTMLElement).dataset.index ?? '-1');
+  if (index >= 0) {
+    virtualizer.value.resizeItem(index, (el as HTMLElement).offsetHeight);
+  }
+  // Also register with ResizeObserver so expansions are tracked.
+  virtualizer.value.measureElement(el);
+}
+
+// When true, every totalSize change will re-pin scroll to the bottom.
+// Set on task open; cleared once measurements stabilize.
+const pendingScrollBottom = ref(false);
+watch(
+  () => virtualizer.value.getTotalSize(),
+  () => { if (pendingScrollBottom.value) scrollToBottom(); },
+);
 const contextWarning = ref<string | null>(null);
 const compacting = ref(false);
 
@@ -745,13 +818,18 @@ watch(
   },
 );
 
-// Always scroll to bottom when a new task is opened
+// Always scroll to bottom when a new task is opened; also reset virtualizer
+// measurements so stale sizes from the previous task don't affect the new one.
 watch(
   () => taskStore.activeTaskId,
   async () => {
     autoScroll.value = true;
+    if (scrollEl.value) scrollEl.value.scrollTop = 0;
+    virtualizer.value.measure();
+    pendingScrollBottom.value = true;
     await nextTick();
     scrollToBottom();
+    setTimeout(() => { pendingScrollBottom.value = false; }, 500);
   },
 );
 
@@ -988,6 +1066,11 @@ watch(
   flex: 1;
   overflow-y: auto;
   padding: 8px 4px 8px 0;
+  will-change: scroll-position;
+  /* Disable browser scroll anchoring — it fights TanStack's own scroll
+     compensation when items above the viewport change size, causing a
+     double-correction flicker. TanStack handles this itself. */
+  overflow-anchor: none;
 }
 
 .launch-bar {
@@ -1003,7 +1086,6 @@ watch(
 .conversation-inner {
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .task-detail__side {
@@ -1169,28 +1251,6 @@ watch(
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
-}
-
-/* Chat item enter animation */
-@keyframes msgFadeSlideIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.chat-item-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-.chat-item-enter-active {
-  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
-}
-.chat-item-enter-to {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.chat-items {
-  display: contents;
 }
 
 .msg {

@@ -3,20 +3,9 @@
     <!-- Reasoning (live chunk or persisted) -->
     <ReasoningBubble
       v-if="block.type === 'reasoning_chunk' || block.type === 'reasoning'"
-      :content="isLiveReasoning ? typewriterReasoning : block.content"
-      :streaming="isLiveReasoning"
-    >
-      <div v-if="block.children.length > 0" class="rb__children">
-        <StreamBlockNode
-          v-for="childId in block.children"
-          :key="childId"
-          :blockId="childId"
-          :blocks="blocks"
-          :renderMd="renderMd"
-          :version="version"
-        />
-      </div>
-    </ReasoningBubble>
+      :content="block.content"
+      :streaming="!block.done && block.type === 'reasoning_chunk'"
+    />
 
     <!-- Text (live chunk or persisted assistant) -->
     <div
@@ -25,7 +14,7 @@
     >
       <div
         :class="['msg__bubble', 'prose', { streaming: isLiveText }]"
-        v-html="renderMd(isLiveText ? typewriterText : block.content)"
+        v-html="renderMd(block.content)"
       />
       <div class="msg__meta">
         AI
@@ -88,8 +77,8 @@
       <div class="msg__bubble prose" v-html="renderMd(block.content)" />
     </div>
 
-    <!-- Children for non-tool, non-reasoning blocks (those render children in their own body) -->
-    <template v-if="block.type !== 'tool_call' && block.type !== 'reasoning_chunk' && block.type !== 'reasoning' && block.children.length > 0">
+    <!-- Children for non-tool blocks (tool_call renders children in its body) -->
+    <template v-if="block.type !== 'tool_call' && block.children.length > 0">
       <StreamBlockNode
         v-for="childId in block.children"
         :key="childId"
@@ -106,7 +95,6 @@
 import { ref, computed } from "vue";
 import type { StreamBlock } from "../stores/task";
 import ReasoningBubble from "./ReasoningBubble.vue";
-import { useTypewriter } from "../composables/useTypewriter";
 
 const props = defineProps<{
   blockId: string;
@@ -130,23 +118,6 @@ const isLiveText = computed(() => {
   const b = block.value;
   return b ? !b.done && b.type === "text_chunk" : false;
 });
-
-const isLiveReasoning = computed(() => {
-  const b = block.value;
-  return b ? !b.done && b.type === "reasoning_chunk" : false;
-});
-
-// Typewriter animation for live streaming text — reveals characters progressively
-// instead of dumping entire token bursts at once.
-const typewriterText = useTypewriter(
-  () => block.value?.content ?? "",
-  () => isLiveText.value,
-);
-
-const typewriterReasoning = useTypewriter(
-  () => block.value?.content ?? "",
-  () => isLiveReasoning.value,
-);
 
 // Tool call helpers
 const parsedToolCall = computed(() => {
@@ -192,7 +163,6 @@ const toolResultBlock = computed(() => {
 
 const toolResultContent = computed(() => {
   const r = toolResultBlock.value;
-  // Store already extracts plain text from the JSON envelope
   return r?.resultContent ?? "";
 });
 

@@ -228,19 +228,15 @@ function translateEvent(
     }
 
     case "tool.execution_partial_result": {
-      const data = event.data as { toolCallId: string; partialOutput: string };
+      const data = event.data as { partialOutput: string };
       if (!data.partialOutput) return null;
-      const partialMeta = data.toolCallId ? toolMetaByCallId.get(data.toolCallId) : undefined;
-      if (partialMeta?.isInternal) return null;
-      return { type: "status", message: summarizeStatus(data.partialOutput, partialMeta?.name) };
+      return { type: "status", message: data.partialOutput };
     }
 
     case "tool.execution_progress": {
-      const data = event.data as { toolCallId: string; progressMessage: string };
+      const data = event.data as { progressMessage: string };
       if (!data.progressMessage) return null;
-      const progressMeta = data.toolCallId ? toolMetaByCallId.get(data.toolCallId) : undefined;
-      if (progressMeta?.isInternal) return null;
-      return { type: "status", message: summarizeStatus(data.progressMessage, progressMeta?.name) };
+      return { type: "status", message: data.progressMessage };
     }
 
     case "tool.execution_complete": {
@@ -299,22 +295,6 @@ function translateEvent(
     default:
       return null;
   }
-}
-
-/** Truncate a status message to a single summary line, capped at 120 chars.
- *  Uses the last non-empty line (most relevant for streaming terminal output)
- *  and prefixes with the tool name when available. */
-function summarizeStatus(raw: string, toolName?: string): string {
-  const lines = raw.split("\n");
-  let last = "";
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const trimmed = lines[i].trim();
-    if (trimmed) { last = trimmed; break; }
-  }
-  if (!last) last = raw.trim();
-  const prefix = toolName ? `${toolName}: ` : "";
-  const combined = prefix + last;
-  return combined.length > 120 ? combined.slice(0, 117) + "…" : combined;
 }
 
 function isInternalCopilotEvent(

@@ -24,8 +24,6 @@ const taskStore = useTaskStore();
 
 function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) {
   if (!activity) return;
-  // Don't toast for the task the user is currently looking at
-  if (activity.task.id === taskStore.activeTaskId) return;
   const board = boardStore.boards.find((entry) => entry.id === activity.task.boardId);
   const workspace = workspaceStore.workspaces.find((entry) => entry.id === board?.workspaceId);
   const toastPayload = getTaskActivityToast(activity, workspace?.name ?? "Workspace");

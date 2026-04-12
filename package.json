@@ -26,6 +26,7 @@
     "@github/copilot-sdk": "^0.2.1",
     "@iconify/vue": "^5.0.0",
     "@monaco-editor/loader": "^1.4.0",
+    "@tanstack/vue-virtual": "^3.13.23",
     "diff": "^8.0.4",
     "electrobun": "latest",
     "js-yaml": "^4.1.0",
