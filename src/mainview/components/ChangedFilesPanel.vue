@@ -1,69 +1,84 @@
 <template>
   <div v-if="hasAnyFiles" class="changed-files-panel">
-    <!-- Header — full row is the click target for expand/collapse -->
-    <div
-      class="changed-files-panel__header"
-      @click="expanded = !expanded"
-    >
-      <div class="changed-files-panel__toggle">
-        <span class="changed-files-panel__toggle-icon">{{ expanded ? '▾' : '▸' }}</span>
-        <span class="changed-files-panel__toggle-label">
-          {{ pendingLabel }}
-        </span>
-      </div>
-      <div class="changed-files-panel__actions" @click.stop>
-      <button
-        v-if="hasAllFiles"
-        class="changed-files-panel__view-btn"
-        type="button"
-        :title="showAll ? 'Show pending only' : 'Show all changes'"
-        @click="showAll = !showAll"
-      >
-        {{ showAll ? 'Pending' : 'All' }}
-      </button>
-      <!-- Review button -->
-      <button
-        class="changed-files-panel__review-btn"
-        type="button"
-        :title="showAll ? 'Open changed files' : 'Open code review'"
-        @click="openReview(null)"
-      >
-        {{ showAll ? 'View Changes' : 'Review' }}
-      </button>
-      </div>
-    </div>
-
-    <!-- File list -->
-    <ul v-if="expanded" class="changed-files-panel__list">
-      <li
-        v-for="file in displayedFiles"
-        :key="file.path"
-        class="changed-files-panel__item"
-        :title="file.path"
-        @click="openReview(file.path)"
-      >
-        <span class="changed-files-panel__file-icon">
-          {{ file.pendingCount > 0 ? '⬜' : '✅' }}
-        </span>
-        <div class="changed-files-panel__file-info">
-          <span class="changed-files-panel__file-name">{{ basename(file.path) }}</span>
-          <span class="changed-files-panel__file-dir">{{ dirname(file.path) }}</span>
+    <!-- ── State A: pending hunks exist ─────────────────────────────────── -->
+    <template v-if="hasPendingHunks">
+      <!-- Header -->
+      <div class="changed-files-panel__header" @click="expanded = !expanded">
+        <div class="changed-files-panel__toggle">
+          <span class="changed-files-panel__toggle-icon">{{ expanded ? '▾' : '▸' }}</span>
+          <span class="changed-files-panel__toggle-label">{{ pendingLabel }}</span>
         </div>
-        <span v-if="file.pendingCount > 0" class="changed-files-panel__pending-badge">
-          {{ file.pendingCount }}
-        </span>
-        <span v-if="file.additions || file.deletions" class="changed-files-panel__stat">
-          <span v-if="file.additions" class="changed-files-panel__stat--add">+{{ file.additions }}</span>
-          <span v-if="file.deletions" class="changed-files-panel__stat--del">-{{ file.deletions }}</span>
-        </span>
-      </li>
-    </ul>
+        <div class="changed-files-panel__actions" @click.stop>
+          <button
+            class="changed-files-panel__ghost-btn"
+            type="button"
+            title="Accept all pending hunks"
+            :disabled="deciding"
+            @click="decideAll('accepted')"
+          >Accept All</button>
+          <button
+            class="changed-files-panel__ghost-btn"
+            type="button"
+            title="Reject all pending hunks"
+            :disabled="deciding"
+            @click="decideAll('rejected')"
+          >Reject All</button>
+          <button
+            class="changed-files-panel__review-btn"
+            type="button"
+            title="Open code review"
+            @click="openReview(null, 'review')"
+          >Review</button>
+        </div>
+      </div>
+
+      <!-- File list -->
+      <ul v-if="expanded" class="changed-files-panel__list">
+        <li
+          v-for="file in pendingFiles"
+          :key="file.path"
+          class="changed-files-panel__item"
+          :title="file.path"
+          @click="openReview(file.path, 'review')"
+        >
+          <span class="changed-files-panel__file-icon">⬜</span>
+          <div class="changed-files-panel__file-info">
+            <span class="changed-files-panel__file-name">{{ basename(file.path) }}</span>
+            <span class="changed-files-panel__file-dir">{{ dirname(file.path) }}</span>
+          </div>
+          <span class="changed-files-panel__pending-badge">{{ file.pendingCount }}</span>
+          <span v-if="file.additions || file.deletions" class="changed-files-panel__stat">
+            <span v-if="file.additions" class="changed-files-panel__stat--add">+{{ file.additions }}</span>
+            <span v-if="file.deletions" class="changed-files-panel__stat--del">-{{ file.deletions }}</span>
+          </span>
+        </li>
+      </ul>
+    </template>
+
+    <!-- ── State B: all decided — summary row only ───────────────────────── -->
+    <template v-else>
+      <div class="changed-files-panel__header changed-files-panel__header--summary">
+        <div class="changed-files-panel__toggle">
+          <span class="changed-files-panel__toggle-icon changed-files-panel__toggle-icon--done">✓</span>
+          <span class="changed-files-panel__toggle-label">{{ allReviewedLabel }}</span>
+        </div>
+        <div class="changed-files-panel__actions" @click.stop>
+          <button
+            class="changed-files-panel__ghost-btn"
+            type="button"
+            title="View all changes"
+            @click="openReview(null, 'changes')"
+          >View Changes</button>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import type { GitNumstat } from "@shared/rpc-types";
+import { electroview } from "../rpc";
 
 const props = defineProps<{
   taskId: number;
@@ -76,9 +91,8 @@ const emit = defineEmits<{
 }>();
 
 const expanded = ref(false);
-const showAll = ref(false);
+const deciding = ref(false);
 
-// Build unified file list
 interface FileEntry {
   path: string;
   additions: number;
@@ -115,16 +129,16 @@ const allFiles = computed<FileEntry[]>(() => {
 });
 
 const hasAnyFiles = computed(() => allFiles.value.length > 0);
-const hasAllFiles = computed(() => (props.numstat?.files.length ?? 0) > pendingFiles.value.length);
-
-const displayedFiles = computed(() => showAll.value ? allFiles.value : pendingFiles.value);
+const hasPendingHunks = computed(() => pendingFiles.value.length > 0);
 
 const pendingLabel = computed(() => {
   const p = pendingFiles.value.length;
+  return `${p} file${p !== 1 ? 's' : ''} awaiting review`;
+});
+
+const allReviewedLabel = computed(() => {
   const total = allFiles.value.length;
-  if (p > 0) return `${p} file${p !== 1 ? 's' : ''} awaiting review`;
-  if (total > 0) return `${total} file${total !== 1 ? 's' : ''} changed`;
-  return "Changed files";
+  return `${total} file${total !== 1 ? 's' : ''} changed · all reviewed`;
 });
 
 function basename(path: string) {
@@ -136,8 +150,18 @@ function dirname(path: string) {
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
 }
 
-function openReview(filePath: string | null) {
-  emit("openReview", filePath, showAll.value ? "changes" : "review");
+function openReview(filePath: string | null, mode: "review" | "changes") {
+  emit("openReview", filePath, mode);
+}
+
+async function decideAll(decision: "accepted" | "rejected") {
+  if (deciding.value) return;
+  deciding.value = true;
+  try {
+    await electroview.rpc!.request["tasks.decideAllHunks"]({ taskId: props.taskId, decision });
+  } finally {
+    deciding.value = false;
+  }
 }
 </script>
 
@@ -160,6 +184,10 @@ function openReview(filePath: string | null) {
   user-select: none;
 }
 
+.changed-files-panel__header--summary {
+  cursor: default;
+}
+
 .changed-files-panel__toggle {
   display: flex;
   align-items: center;
@@ -172,7 +200,7 @@ function openReview(filePath: string | null) {
   font-weight: 500;
 }
 
-.changed-files-panel__header:hover {
+.changed-files-panel__header:not(.changed-files-panel__header--summary):hover {
   background: var(--p-content-hover-background, rgba(0,0,0,0.04));
 }
 
@@ -180,6 +208,12 @@ function openReview(filePath: string | null) {
   font-size: 0.65rem;
   opacity: 0.6;
   flex-shrink: 0;
+}
+
+.changed-files-panel__toggle-icon--done {
+  font-size: 0.75rem;
+  opacity: 0.8;
+  color: var(--p-green-500, #22c55e);
 }
 
 .changed-files-panel__toggle-label {
@@ -198,7 +232,7 @@ function openReview(filePath: string | null) {
   padding: 7px 10px 7px 0;
 }
 
-.changed-files-panel__view-btn,
+.changed-files-panel__ghost-btn,
 .changed-files-panel__review-btn {
   padding: 2px 8px;
   border-radius: 4px;
@@ -212,15 +246,20 @@ function openReview(filePath: string | null) {
   transition: background 0.1s, border-color 0.1s;
 }
 
+.changed-files-panel__ghost-btn:hover:not(:disabled) {
+  background: var(--p-content-hover-background, rgba(0,0,0,0.06));
+}
+
+.changed-files-panel__ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .changed-files-panel__review-btn {
   background: var(--p-primary-color, #6366f1);
   border-color: var(--p-primary-color, #6366f1);
   color: #fff;
   font-weight: 600;
-}
-
-.changed-files-panel__view-btn:hover {
-  background: var(--p-content-hover-background, rgba(0,0,0,0.06));
 }
 
 .changed-files-panel__review-btn:hover {

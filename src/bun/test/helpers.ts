@@ -65,7 +65,8 @@ export function initDb(): Database {
       subrepo_path    TEXT,
       branch_name     TEXT,
       worktree_path   TEXT,
-      worktree_status TEXT NOT NULL DEFAULT 'not_created'
+      worktree_status TEXT NOT NULL DEFAULT 'not_created',
+      base_sha        TEXT
     );
     CREATE TABLE IF NOT EXISTS executions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,

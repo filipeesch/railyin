@@ -118,9 +118,26 @@ export async function createWorktree(
       throw new Error(`git worktree add failed (exit ${exitCode}): ${stderr.trim()}`);
     }
 
+    // Capture the base SHA — the fork point this worktree was created from.
+    // All future diff queries use base_sha..HEAD so committed changes stay visible for review.
+    let baseSha: string | null = null;
+    try {
+      const shaProc = Bun.spawn([resolveGit(), "rev-parse", "HEAD"], {
+        cwd: worktreePath,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await shaProc.exited;
+      if (shaProc.exitCode === 0) {
+        baseSha = (await new Response(shaProc.stdout).text()).trim() || null;
+      }
+    } catch {
+      console.warn(`[worktree] could not capture base_sha for task ${taskId}`);
+    }
+
     db.run(
-      "UPDATE task_git_context SET worktree_status = 'ready' WHERE task_id = ?",
-      [taskId],
+      "UPDATE task_git_context SET worktree_status = 'ready', base_sha = ? WHERE task_id = ?",
+      [baseSha, taskId],
     );
 
     return { path: worktreePath, branch };

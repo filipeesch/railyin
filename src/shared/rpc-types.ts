@@ -518,6 +518,10 @@ export type RailynRPCType = {
         params: { taskId: number; filePath: string; hunkIndex: number };
         response: FileDiffContent;
       };
+      "tasks.decideAllHunks": {
+        params: { taskId: number; decision: "accepted" | "rejected" };
+        response: { decided: number };
+      };
       "tasks.setHunkDecision": {
         params: {
           taskId: number;

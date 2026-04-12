@@ -285,6 +285,10 @@ const migrations: Array<{ id: string; sql: string }> = [
       UPDATE tasks SET position = (SELECT pos FROM ranked WHERE ranked.id = tasks.id);
     `,
   },
+  {
+    id: "018_git_base_sha",
+    sql: `ALTER TABLE task_git_context ADD COLUMN base_sha TEXT;`,
+  },
 ];
 
 function hasColumn(tableName: string, columnName: string): boolean {
@@ -304,6 +308,10 @@ function applyMigration(id: string, sql: string): void {
       db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_config_key ON workspaces(config_key)");
     } else if (id === "016_task_position") {
       if (!hasColumn("tasks", "position")) {
+        db.exec(sql);
+      }
+    } else if (id === "018_git_base_sha") {
+      if (!hasColumn("task_git_context", "base_sha")) {
         db.exec(sql);
       }
     } else {
