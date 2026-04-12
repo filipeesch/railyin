@@ -2,6 +2,8 @@ import type { ElectrobunConfig } from "electrobun";
 import { resolve } from "path";
 
 const isTestMode = process.argv.includes("--test-mode");
+const hasDebugFlag = process.argv.some(a => a === "--debug" || a.startsWith("--debug="));
+const hasMemoryDbFlag = process.argv.includes("--memory-db");
 
 // Bake the repo's config/ path into dev builds so the bun process can find
 // workspace.yaml regardless of the Electrobun working directory.
@@ -9,8 +11,8 @@ const isTestMode = process.argv.includes("--test-mode");
 // existsSync() will return false and the loader falls back to ~/.railyn/config/.
 const bunDefines: Record<string, string> = {
   __RAILYN_DEV_CONFIG_DIR__: JSON.stringify(resolve("config")),
-  __RAILYN_FORCE_DEBUG__: JSON.stringify(isTestMode),
-  __RAILYN_FORCE_MEMORY_DB__: JSON.stringify(isTestMode),
+  __RAILYN_FORCE_DEBUG__: JSON.stringify(isTestMode || hasDebugFlag),
+  __RAILYN_FORCE_MEMORY_DB__: JSON.stringify(isTestMode || hasMemoryDbFlag),
 };
 
 export default {
