@@ -113,6 +113,19 @@ body,
   background: color-mix(in srgb, var(--p-content-background, #ffffff) 96%, #22c55e 4%) !important;
 }
 
+.monaco-editor .rejected-hunk-inline-decoration,
+.monaco-editor .rejected-hunk-inline-decoration.char-insert,
+.monaco-editor .rejected-hunk-inline-decoration.char-delete {
+  background: transparent !important;
+}
+
+.monaco-editor .rejected-hunk-decoration.line-insert,
+.monaco-editor .rejected-hunk-decoration.line-delete,
+.monaco-editor .rejected-hunk-decoration.char-insert,
+.monaco-editor .rejected-hunk-decoration.char-delete {
+  background: rgba(239, 68, 68, 0.08) !important;
+}
+
 /* Glyph margin comment icon (shown on hover in review mode) */
 .line-comment-glyph::before {
   content: "+";

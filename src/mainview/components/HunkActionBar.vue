@@ -103,7 +103,8 @@ const decisionLabel = computed<string>(() => {
   return labels[currentDecision.value];
 });
 
-function handleDecide(decision: HunkDecision) {  console.log('[HunkActionBar] handleDecide', decision);  if (decision === "change_request" && !comment.value.trim()) {
+function handleDecide(decision: HunkDecision) {
+  if (decision === "change_request" && !comment.value.trim()) {
     // Show validation error without saving
     currentDecision.value = "change_request";
     return;

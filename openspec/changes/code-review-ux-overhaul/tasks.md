@@ -54,70 +54,70 @@
 
 ## 8. CodeReviewOverlay — Resizable Splitter + Edit Tracking + Checkpoint
 
-- [ ] 8.1 Add `fileListWidth` ref (default: load from `localStorage('railyn:review-file-list-width')` or 220); bind as `:style="{ width: fileListWidth + 'px' }"` on the `ReviewFileList` component wrapper
-- [ ] 8.2 Add `<div class="review-overlay__splitter" @mousedown.prevent="startSplitterDrag">` between `ReviewFileList` and the diff panel
-- [ ] 8.3 Implement `startSplitterDrag`: on `mousemove`, update `fileListWidth = Math.min(500, Math.max(150, e.clientX - overlayEl.getBoundingClientRect().left))`; on `mouseup`, save to localStorage; clean up listeners
-- [ ] 8.4 Add CSS: `.review-overlay__splitter { width: 4px; cursor: col-resize; background: var(--p-content-border-color); flex-shrink: 0; } .review-overlay__splitter:hover { background: var(--p-blue-400); }`
-- [ ] 8.5 Add `editedContent: Map<string, string>` and `editedFiles: Set<string>` refs in `CodeReviewOverlay`
-- [ ] 8.6 Handle `@content-change="onContentChange"` from `MonacoDiffEditor`: debounce 500ms, call `tasks.writeFile`, add to `editedFiles`
-- [ ] 8.7 On file switch (`clearAllZones`): flush any pending debounce write for the outgoing file before switching
-- [ ] 8.8 On overlay close: flush pending debounce writes for all `editedFiles`
+- [x] 8.1 Add `fileListWidth` ref (default: load from `localStorage('railyn:review-file-list-width')` or 220); bind as `:style="{ width: fileListWidth + 'px' }"` on the `ReviewFileList` component wrapper
+- [x] 8.2 Add `<div class="review-overlay__splitter" @mousedown.prevent="startSplitterDrag">` between `ReviewFileList` and the diff panel
+- [x] 8.3 Implement `startSplitterDrag`: on `mousemove`, update `fileListWidth = Math.min(500, Math.max(150, e.clientX - overlayEl.getBoundingClientRect().left))`; on `mouseup`, save to localStorage; clean up listeners
+- [x] 8.4 Add CSS: `.review-overlay__splitter { width: 4px; cursor: col-resize; background: var(--p-content-border-color); flex-shrink: 0; } .review-overlay__splitter:hover { background: var(--p-blue-400); }`
+- [x] 8.5 Add `editedContent: Map<string, string>` and `editedFiles: Set<string>` refs in `CodeReviewOverlay`
+- [x] 8.6 Handle `@content-change="onContentChange"` from `MonacoDiffEditor`: debounce 500ms, call `tasks.writeFile`, add to `editedFiles`
+- [x] 8.7 On file switch (`clearAllZones`): flush any pending debounce write for the outgoing file before switching
+- [x] 8.8 On overlay close: flush pending debounce writes for all `editedFiles`
 - [ ] 8.9 In `onDecideHunk` reject path: before calling `tasks.rejectHunk`, flush debounce write for current file; after diff reloads, show toast if file was in `editedFiles`: *"Manual edits to `<file>` were also reverted by this rejection"*; remove from `editedFiles`
-- [ ] 8.10 On overlay open: load checkpoint ref — query `tasks.getPendingHunkSummary` to detect if pending hunks exist; if yes, also fetch checkpoint ref from `tasks.getCheckpointRef({ taskId })` (new IPC, see 4.4) and pass to `tasks.getFileDiff`
-- [ ] 8.11 Pass `enableComments: true` to `MonacoDiffEditor` (replaces `reviewMode`)
-- [ ] 8.12 Add `tasks.getCheckpointRef` IPC: `params: { taskId: number }; response: string | null` — queries the most recent execution checkpoint for unsent hunk decisions
+- [x] 8.10 On overlay open: load checkpoint ref — query `tasks.getPendingHunkSummary` to detect if pending hunks exist; if yes, also fetch checkpoint ref from `tasks.getCheckpointRef({ taskId })` (new IPC, see 4.4) and pass to `tasks.getFileDiff`
+- [x] 8.11 Pass `enableComments: true` to `MonacoDiffEditor` (replaces `reviewMode`)
+- [x] 8.12 Add `tasks.getCheckpointRef` IPC: `params: { taskId: number }; response: string | null` — queries the most recent execution checkpoint for unsent hunk decisions
 
 ## 9. ReviewFileList — Search + Two-Line Layout
 
-- [ ] 9.1 Add `filterText` ref; add `<input type="search" placeholder="Filter files…" v-model="filterText" class="review-file-list__search">` as first child of `<nav>`
-- [ ] 9.2 Add computed `filteredFiles`: `files.filter(f => f.path.toLowerCase().includes(filterText.toLowerCase()))`
-- [ ] 9.3 Change `v-for` to iterate `filteredFiles`
-- [ ] 9.4 Update each file item to two-line layout: `<span class="review-file-list__name">{{ basename(f.path) }}</span>` (bold) + `<span class="review-file-list__dir">{{ dirname(f.path) }}</span>` (dimmed, below)
-- [ ] 9.5 Add `title="{{ file.path }}"` to the `<li>` for full-path tooltip
-- [ ] 9.6 Remove fixed `width: 220px` from `.review-file-list` CSS (width now controlled by parent splitter); set `width: 100%`
-- [ ] 9.7 Add CSS for search input: full-width, consistent with overlay dark theme; clear button via `type="search"` native appearance
-- [ ] 9.8 Add `html.dark-mode` CSS overrides for the search input
+- [x] 9.1 Add `filterText` ref; add `<input type="search" placeholder="Filter files…" v-model="filterText" class="review-file-list__search">` as first child of `<nav>`
+- [x] 9.2 Add computed `filteredFiles`: `files.filter(f => f.path.toLowerCase().includes(filterText.toLowerCase()))`
+- [x] 9.3 Change `v-for` to iterate `filteredFiles`
+- [x] 9.4 Update each file item to two-line layout: `<span class="review-file-list__name">{{ basename(f.path) }}</span>` (bold) + `<span class="review-file-list__dir">{{ dirname(f.path) }}</span>` (dimmed, below)
+- [x] 9.5 Add `title="{{ file.path }}"` to the `<li>` for full-path tooltip
+- [x] 9.6 Remove fixed `width: 220px` from `.review-file-list` CSS (width now controlled by parent splitter); set `width: 100%`
+- [x] 9.7 Add CSS for search input: full-width, consistent with overlay dark theme; clear button via `type="search"` native appearance
+- [x] 9.8 Add `html.dark-mode` CSS overrides for the search input
 
 ## 10. ChangedFilesPanel Component (New)
 
-- [ ] 10.1 Create `src/mainview/components/ChangedFilesPanel.vue`
-- [ ] 10.2 Props: `taskId: number`, `numstat: GitNumstat | null`, `pendingByFile: { filePath: string; pendingCount: number }[]`
-- [ ] 10.3 Computed `hasPending`: `pendingByFile.length > 0`
-- [ ] 10.4 Collapsed header row: toggle icon (`▶`/`▼`), summary text, right-aligned Review button
+- [x] 10.1 Create `src/mainview/components/ChangedFilesPanel.vue`
+- [x] 10.2 Props: `taskId: number`, `numstat: GitNumstat | null`, `pendingByFile: { filePath: string; pendingCount: number }[]`
+- [x] 10.3 Computed `hasPending`: `pendingByFile.length > 0`
+- [x] 10.4 Collapsed header row: toggle icon (`▶`/`▼`), summary text, right-aligned Review button
   - Primary (`hasPending`): `▼  N hunks pending · M files   [ 🔍 Review ]`
   - Secondary: `▼  +N −M · K files changed   [ 🔍 View Changes ]`
-- [ ] 10.5 Expanded list (primary state): one row per file in `pendingByFile`; decision icon + filename + `N hunks` count; small "show all ↗" link at bottom
-- [ ] 10.6 Expanded list (secondary state): one row per file in `numstat.files`; decision icon from `aggregateStates` + filename + `+N −N`
-- [ ] 10.7 Emit `openReview: [filePath: string | null, mode: 'review' | 'changes']` on button or row click
-- [ ] 10.8 Style: same `border-top`, `background`, padding as `TodoPanel` for visual consistency; `+N` green, `−N` red
-- [ ] 10.9 Filename display: basename bold + dir path dimmed below (same two-line pattern as ReviewFileList); `title` tooltip with full path
-- [ ] 10.10 Dark mode CSS overrides
+- [x] 10.5 Expanded list (primary state): one row per file in `pendingByFile`; decision icon + filename + `N hunks` count; small "show all ↗" link at bottom
+- [x] 10.6 Expanded list (secondary state): one row per file in `numstat.files`; decision icon from `aggregateStates` + filename + `+N −N`
+- [x] 10.7 Emit `openReview: [filePath: string | null, mode: 'review' | 'changes']` on button or row click
+- [x] 10.8 Style: same `border-top`, `background`, padding as `TodoPanel` for visual consistency; `+N` green, `−N` red
+- [x] 10.9 Filename display: basename bold + dir path dimmed below (same two-line pattern as ReviewFileList); `title` tooltip with full path
+- [x] 10.10 Dark mode CSS overrides
 
 ## 11. TaskDetailDrawer — Wire ChangedFilesPanel
 
-- [ ] 11.1 Import and add `<ChangedFilesPanel>` between `<TodoPanel>` and `<div class="task-detail__input">`
-- [ ] 11.2 Pass `taskId`, `numstat` (from `getGitStat`), `pendingByFile` (from `getPendingHunkSummary`) as props
-- [ ] 11.3 On `@open-review` emit: call `openReviewOverlay(filePath, mode)` — update `openReviewOverlay` to accept optional filePath and mode; set `reviewStore.selectedFile` if provided; set `reviewStore.mode` to passed mode
-- [ ] 11.4 Remove the `gitStat` `<pre>` block from the sidebar (`side-section` with `side-git-stat`)
-- [ ] 11.5 Remove the `drawer-header__changed-badge` `<span>` from the drawer header
-- [ ] 11.6 Update `gitStat` ref type to `GitNumstat | null`; update `taskStore.getGitStat` call to use new return type
-- [ ] 11.7 Add `pendingByFile` ref; fetch via `tasks.getPendingHunkSummary` on task load and after each `syncChangedFiles`
+- [x] 11.1 Import and add `<ChangedFilesPanel>` between `<TodoPanel>` and `<div class="task-detail__input">`
+- [x] 11.2 Pass `taskId`, `numstat` (from `getGitStat`), `pendingByFile` (from `getPendingHunkSummary`) as props
+- [x] 11.3 On `@open-review` emit: call `openReviewOverlay(filePath, mode)` — update `openReviewOverlay` to accept optional filePath and mode; set `reviewStore.selectedFile` if provided; set `reviewStore.mode` to passed mode
+- [x] 11.4 Remove the `gitStat` `<pre>` block from the sidebar (`side-section` with `side-git-stat`)
+- [x] 11.5 Remove the `drawer-header__changed-badge` `<span>` from the drawer header
+- [x] 11.6 Update `gitStat` ref type to `GitNumstat | null`; update `taskStore.getGitStat` call to use new return type
+- [x] 11.7 Add `pendingByFile` ref; fetch via `tasks.getPendingHunkSummary` on task load and after each `syncChangedFiles`
 
 ## 12. CodeReviewCard — Actionable-Only Display
 
-- [ ] 12.1 Filter hunks to `rejected` and `change_request` only (remove `pending` and `accepted` from rendered list)
-- [ ] 12.2 Update `stats` computed to count only `rejected`, `change_request`, line comments, and manual edits
-- [ ] 12.3 Remove file count from header; show only non-zero action counts: `❌ N  📝 N  💬 N  ✏️ N`
-- [ ] 12.4 If all hunks were accepted and no line comments/manual edits: show "✅ All changes accepted — no action required" in body
-- [ ] 12.5 Add line comments section in expanded body: heading `💬 LINE COMMENTS`; list each `lineComment` as `filePath · line N` + comment text
-- [ ] 12.6 Add manual edits section: heading `✏️ MANUAL EDITS`; for each `manualEdit`, render `<details><summary>{{ filePath }} (manually edited)</summary><pre class="mini-diff">{{ unifiedDiff }}</pre></details>`
-- [ ] 12.7 Import and use `diff` package in `CodeReviewCard` for any client-side diff rendering needs (unified diff is stored in `manualEdit.unifiedDiff`, so this may be display-only)
-- [ ] 12.8 Add CSS for `.mini-diff`: monospace, font-size 11px, `+` lines green, `-` lines red (simple line-start check in template or CSS `::before` trick)
-- [ ] 12.9 Dark mode CSS overrides for new sections
+- [x] 12.1 Filter hunks to `rejected` and `change_request` only (remove `pending` and `accepted` from rendered list)
+- [x] 12.2 Update `stats` computed to count only `rejected`, `change_request`, line comments, and manual edits
+- [x] 12.3 Remove file count from header; show only non-zero action counts: `❌ N  📝 N  💬 N  ✏️ N`
+- [x] 12.4 If all hunks were accepted and no line comments/manual edits: show "✅ All changes accepted — no action required" in body
+- [x] 12.5 Add line comments section in expanded body: heading `💬 LINE COMMENTS`; list each `lineComment` as `filePath · line N` + comment text
+- [x] 12.6 Add manual edits section: heading `✏️ MANUAL EDITS`; for each `manualEdit`, render `<details><summary>{{ filePath }} (manually edited)</summary><pre class="mini-diff">{{ unifiedDiff }}</pre></details>`
+- [x] 12.7 Import and use `diff` package in `CodeReviewCard` for any client-side diff rendering needs (unified diff is stored in `manualEdit.unifiedDiff`, so this may be display-only)
+- [x] 12.8 Add CSS for `.mini-diff`: monospace, font-size 11px, `+` lines green, `-` lines red (simple line-start check in template or CSS `::before` trick)
+- [x] 12.9 Dark mode CSS overrides for new sections
 
 ## 13. formatReviewMessageForLLM — Manual Edits Section
 
-- [ ] 13.1 In `review.ts`, add a `manualEditItems` array; for each `payload.manualEdits`, push a formatted block:
+- [x] 13.1 In `review.ts`, add a `manualEditItems` array; for each `payload.manualEdits`, push a formatted block:
   ```
   ✏️ MANUAL EDITS — user directly modified files (already on disk):
     • src/auth.ts
@@ -125,21 +125,21 @@
       - const isValid = token.length > 0;
       + const isValid = verifyTokenSignature(token);
   ```
-- [ ] 13.2 Add manual edits section to the assembled message string (after line comments section)
-- [ ] 13.3 Update `hasActionable` check to include `manualEditItems.length > 0`
+- [x] 13.2 Add manual edits section to the assembled message string (after line comments section)
+- [x] 13.3 Update `hasActionable` check to include `manualEditItems.length > 0`
 
 ## 14. UI Tests
 
-- [ ] 14.1 Add test (Suite M): glyph click opens LineCommentBar (existing suite M from `code-review-line-comments` tasks.md, now implement it)
-- [ ] 14.2 Add test (Suite M): textarea is NOT auto-focused (verify `document.activeElement` is not the textarea immediately after zone injection)
-- [ ] 14.3 Add test (Suite M): clicking textarea focuses it
-- [ ] 14.4 Add test (Suite N): cancel removes comment zone, no IPC call
-- [ ] 14.5 Add test (Suite O): posting a comment persists it, bar transitions to posted state, DB row correct
-- [ ] 14.6 Add test (Suite P): delete a posted comment removes zone and DB row
-- [ ] 14.7 Add test (Suite Q): accept hunk applies green decoration, removes action bar ViewZone
-- [ ] 14.8 Add test (Suite R): submit payload includes LINE COMMENTS and mini-diff blocks
-- [ ] 14.9 Add test (Suite S): hunk decisions and line comments marked sent=1 after submit
-- [ ] 14.10 Add test (Suite T): after submit + reopen, no prior-round comment bars rendered
+- [x] 14.1 Add test (Suite M): glyph click opens LineCommentBar (existing suite M from `code-review-line-comments` tasks.md, now implement it)
+- [x] 14.2 Add test (Suite M): textarea is NOT auto-focused (verify `document.activeElement` is not the textarea immediately after zone injection)
+- [x] 14.3 Add test (Suite M): clicking textarea focuses it
+- [x] 14.4 Add test (Suite N): cancel removes comment zone, no IPC call
+- [x] 14.5 Add test (Suite O): posting a comment persists it, bar transitions to posted state, DB row correct
+- [x] 14.6 Add test (Suite P): delete a posted comment removes zone and DB row
+- [x] 14.7 Add test (Suite Q): accept hunk applies green decoration, removes action bar ViewZone
+- [x] 14.8 Add test (Suite R): submit payload includes LINE COMMENTS and mini-diff blocks
+- [x] 14.9 Add test (Suite S): hunk decisions and line comments marked sent=1 after submit
+- [x] 14.10 Add test (Suite T): after submit + reopen, no prior-round comment bars rendered
 - [ ] 14.11 Add test (Suite U — splitter): drag the splitter and verify `ReviewFileList` width changes; verify width persists in localStorage
 - [ ] 14.12 Add test (Suite V — editable): type in Monaco modified editor; verify `tasks.writeFile` IPC called with correct content after debounce
 - [ ] 14.13 Add test (Suite V): reject a hunk on a file with edits; verify toast shown; verify file in `editedFiles` cleared

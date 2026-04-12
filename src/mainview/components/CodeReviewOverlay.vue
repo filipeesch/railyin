@@ -149,6 +149,11 @@ const pendingNavTarget = ref<"first" | "last" | null>(null);
 const lastLineChanges = ref<ILineChange[]>([]);
 const diffEditorRef = ref<InstanceType<typeof MonacoDiffEditor> | null>(null);
 
+// ——— Per-session fully-decided file tracking (for skip navigation) ——————————
+// Tracks files where all pending hunks were decided this session.
+// Using a plain Set (not reactive) — only read inside navigateToNextFile().
+const fullyDecidedFiles = new Set<string>();
+
 // ——— Resizable file list panel ——————————————————————————————————————————
 
 const STORAGE_KEY_FILE_LIST_WIDTH = "railyn:review-file-list-width";
@@ -688,7 +693,9 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
         currentPendingIdx.value = Math.min(currentPendingIdx.value, remainingPendingInFile - 1);
         nextTick(() => scrollToPendingHunk());
       } else {
-        navigateNext();
+        // All hunks in this file decided — track it and advance to the next pending file.
+        if (reviewStore.selectedFile) fullyDecidedFiles.add(reviewStore.selectedFile);
+        navigateToNextFile();
       }
     } else if (decision === "change_request") {
       // Diff stays visible — clear and re-inject zones so visibility filter applies.
@@ -860,6 +867,25 @@ function onRequestLineComment(lineStart: number, lineEnd: number) {
 
 // ——— Navigation ——————————————————————————————————————————————————————————
 
+/**
+ * Advance to the next file that still has pending hunks.
+ * Called when the last pending hunk in the current file is decided.
+ * Skips files already fully decided this session (fullyDecidedFiles).
+ */
+function navigateToNextFile() {
+  const idx = reviewStore.files.indexOf(reviewStore.selectedFile ?? "");
+  if (idx < 0) return;
+  for (let i = idx + 1; i < reviewStore.files.length; i++) {
+    if (!fullyDecidedFiles.has(reviewStore.files[i])) {
+      pendingNavTarget.value = "first";
+      currentPendingIdx.value = 0;
+      reviewStore.selectFile(reviewStore.files[i]);
+      return;
+    }
+  }
+  // No more pending files — stay on the current file.
+}
+
 function navigateNext() {
   if (currentPendingIdx.value < pendingHunks.value.length - 1) {
     currentPendingIdx.value++;
@@ -1027,6 +1053,7 @@ watch(
   () => reviewStore.isOpen,
   async (open) => {
     if (open && reviewStore.taskId) {
+      fullyDecidedFiles.clear();
       // Fetch the latest checkpoint ref so diffs are scoped to pending hunks.
       try {
         checkpointRef.value = await electroview.rpc!.request["tasks.getCheckpointRef"]({
@@ -1038,6 +1065,7 @@ watch(
       if (reviewStore.selectedFile) await loadDiff(reviewStore.selectedFile);
     }
     if (!open) {
+      fullyDecidedFiles.clear();
       await flushPendingWrite();
       clearAllZones();
       diffContent.value = null;
