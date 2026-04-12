@@ -15,7 +15,7 @@
 
     <div v-if="open" :class="['tcg__body', (effectiveDiffPayload || toolName === 'read_file') ? 'tcg__body--flush' : '']">
       <FileDiff v-if="effectiveDiffPayload" :payload="effectiveDiffPayload" />
-      <ReadView v-else-if=\"toolName === 'read_file'\" :content=\"displayContent\" :startLine=\"readFileStartLine\" />
+      <ReadView v-else-if="toolName === 'read_file'" :content="displayContent" :startLine="readFileStartLine" />
       <div v-else-if="entry.result && displayBlocks.length > 0" class="tcg__blocks">
         <section v-for="block in displayBlocks" :key="block.key" class="tcg__block">
           <div class="tcg__block-label">{{ block.label }}</div>
