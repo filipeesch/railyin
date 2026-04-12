@@ -102,6 +102,8 @@ let _sharedClientPromise: Promise<LoadedCopilotClient> | undefined;
 type PoolEntry = {
   clientPromise: Promise<LoadedCopilotClient>;
   idleTimer: ReturnType<typeof setTimeout>;
+  /** Number of SDK sessions currently active on this pool entry. Eviction is suppressed while > 0. */
+  activeSessions: number;
 };
 const _taskCliPool = new Map<string, PoolEntry>();
 const POOL_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -321,6 +323,7 @@ function scheduleEviction(sessionId: string): ReturnType<typeof setTimeout> {
   const timer = setTimeout(async () => {
     const entry = _taskCliPool.get(sessionId);
     if (!entry || entry.idleTimer !== timer) return; // entry was refreshed before timer fired
+    if (entry.activeSessions > 0) return; // in active use — don't evict
     _taskCliPool.delete(sessionId);
     entry.clientPromise.then((c) => c.stop()).catch(() => { });
   }, POOL_IDLE_TIMEOUT_MS);
@@ -361,6 +364,7 @@ async function getOrCreatePoolEntry(sessionId: string): Promise<LoadedCopilotCli
   const entry: PoolEntry = {
     clientPromise,
     idleTimer: scheduleEviction(sessionId),
+    activeSessions: 0,
   };
   _taskCliPool.set(sessionId, entry);
   // Remove entry on spawn failure so the next call retries cleanly
@@ -381,7 +385,10 @@ export function copilotSessionIdForTask(taskId: number): string {
 }
 
 class DefaultCopilotSdkSession implements CopilotSdkSession {
-  constructor(private readonly session: LoadedCopilotSession) { }
+  constructor(
+    private readonly session: LoadedCopilotSession,
+    private readonly sessionId: string,
+  ) { }
 
   send(input: { prompt: string }): Promise<unknown> {
     return this.session.send(input);
@@ -396,6 +403,15 @@ class DefaultCopilotSdkSession implements CopilotSdkSession {
   }
 
   disconnect(): Promise<void> {
+    const entry = _taskCliPool.get(this.sessionId);
+    if (entry && entry.activeSessions > 0) {
+      entry.activeSessions--;
+      if (entry.activeSessions === 0) {
+        // Restart the idle countdown now that no sessions are active.
+        clearTimeout(entry.idleTimer);
+        entry.idleTimer = scheduleEviction(this.sessionId);
+      }
+    }
     return this.session.disconnect();
   }
 }
@@ -408,14 +424,18 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
 
   async createSession(config: CopilotSdkSessionConfig & { sessionId: string }): Promise<CopilotSdkSession> {
     const client = await getOrCreatePoolEntry(config.sessionId);
+    const entry = _taskCliPool.get(config.sessionId);
+    if (entry) entry.activeSessions++;
     const session = await client.createSession(config);
-    return new DefaultCopilotSdkSession(session);
+    return new DefaultCopilotSdkSession(session, config.sessionId);
   }
 
   async resumeSession(sessionId: string, config: CopilotSdkResumeSessionConfig): Promise<CopilotSdkSession> {
     const client = await getOrCreatePoolEntry(sessionId);
+    const entry = _taskCliPool.get(sessionId);
+    if (entry) entry.activeSessions++;
     const session = await client.resumeSession(sessionId, config);
-    return new DefaultCopilotSdkSession(session);
+    return new DefaultCopilotSdkSession(session, sessionId);
   }
 
   abortSession(session: CopilotSdkSession): Promise<void> {

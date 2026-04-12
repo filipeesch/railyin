@@ -40,15 +40,22 @@ process.on("uncaughtException", (err) => {
 });
 
 // ─── CLI flags (must run before any module reads process.env) ─────────────────
-// --debug      → enables the debug HTTP server on :9229 (same as RAILYN_DEBUG=1)
-// --memory-db  → uses an in-memory SQLite database (same as RAILYN_DB=:memory:)
+// --debug[=PORT]  → enables the debug HTTP server; PORT defaults to 9229, 0 = OS-assigned
+// --memory-db     → uses an in-memory SQLite database (same as RAILYN_DB=:memory:)
 declare const __RAILYN_FORCE_DEBUG__: boolean | undefined;
 declare const __RAILYN_FORCE_MEMORY_DB__: boolean | undefined;
 
 const argv = process.argv.slice(2);
 if (__RAILYN_FORCE_DEBUG__) process.env.RAILYN_DEBUG = "1";
 if (__RAILYN_FORCE_MEMORY_DB__) process.env.RAILYN_DB = ":memory:";
-if (argv.includes("--debug")) process.env.RAILYN_DEBUG = "1";
+const debugArg = argv.find(a => a === "--debug" || a.startsWith("--debug="));
+if (debugArg) process.env.RAILYN_DEBUG = "1";
+// Port 0 means OS-assigned (for parallel test sessions). Defaults to 9229 for backward compat.
+const debugPort: number = (() => {
+  if (!debugArg || !debugArg.includes("=")) return 9229;
+  const n = parseInt(debugArg.split("=")[1]!, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 9229;
+})();
 if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 import { workspaceHandlers } from "./handlers/workspace.ts";
 import { boardHandlers } from "./handlers/boards.ts";
@@ -61,10 +68,17 @@ import { lspHandlers } from "./handlers/lsp.ts";
 import { mapTask } from "./db/mappers.ts";
 import { appendMessage, compactConversation } from "./workflow/engine.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
+import { getResolvedShellEnv } from "./shell-env.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
 import type { RailynRPCType, StreamEvent } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
+
+// 0. Resolve shell environment at startup (captures user PATH from login shell)
+//    This must happen before any module spawns processes, so all downstream
+//    spawn/spawnSync calls inherit the full environment. Skipped on Windows and
+//    if launched from terminal (RAILYN_CLI=1).
+await getResolvedShellEnv();
 
 // 1. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
 runMigrations();
@@ -207,12 +221,15 @@ Electrobun.events.on("before-quit", () => {
 });
 
 // ─── Debug HTTP server (dev only, --debug flag) ──────────────────────────────
-// Enable with: bun run dev:debug
-// curl "http://localhost:9229/inspect?script=return+JSON.stringify(document.querySelector('.hunk-btn--accept')?.getBoundingClientRect())"
-// curl "http://localhost:9229/click?selector=.hunk-btn--accept"
+// Enable with: bun run dev:debug  (fixed port 9229)
+//         or: electrobun dev -- --debug=0  (OS-assigned port, announced as DEBUG_PORT=N)
+// Port is written to /tmp/railyn-debug.port for bridge.ts and debug-cli.ts to discover.
+// curl "http://localhost:$(cat /tmp/railyn-debug.port)/inspect?script=return+JSON.stringify(document.querySelector('.hunk-btn--accept')?.getBoundingClientRect())"
+// curl "http://localhost:$(cat /tmp/railyn-debug.port)/click?selector=.hunk-btn--accept"
 
-if (process.env.RAILYN_DEBUG) Bun.serve({
-  port: 9229,
+if (process.env.RAILYN_DEBUG) {
+const debugServer = Bun.serve({
+  port: debugPort,
   async fetch(req: Request) {
     const url = new URL(req.url);
 
@@ -810,10 +827,20 @@ if (process.env.RAILYN_DEBUG) Bun.serve({
       }
     }
 
-    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=, /queue-stream-events", { status: 200 });
+    if (url.pathname === "/shutdown") {
+      setTimeout(() => process.exit(0), 50);
+      return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
+    }
+
+    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=, /queue-stream-events, /shutdown", { status: 200 });
   },
 });
-if (process.env.RAILYN_DEBUG) console.log("[Debug] HTTP server listening on http://localhost:9229");
+// Announce the actual port (may differ from requested when debugPort=0).
+// bridge.ts and debug-cli.ts read /tmp/railyn-debug.port for discovery.
+// run-ui-tests.sh tails the log for the DEBUG_PORT= line.
+Bun.write("/tmp/railyn-debug.port", String(debugServer.port)).catch(() => {});
+console.log(`DEBUG_PORT=${debugServer.port}`);
+}
 
 // ─── Config error: surface to UI ──────────────────────────────────────────────
 

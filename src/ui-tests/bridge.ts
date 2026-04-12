@@ -1,5 +1,12 @@
 /**
- * bridge.ts — HTTP transport to the Electrobun debug server on localhost:9229.
+ * bridge.ts — HTTP transport to the Electrobun debug server.
+ *
+ * Port discovery (in order of precedence):
+ *   1. /tmp/railyn-debug.port  — written by the app at startup (all sessions)
+ *   2. 9229                    — fallback for legacy setups
+ *
+ * The app is started with `--debug=0` for OS-assigned ports (parallel sessions)
+ * or `--debug` / `--debug=9229` for the fixed default port.
  *
  * The debug server exposes these endpoints:
  *   GET  /inspect?script=...          — evaluate JS in WKWebView (≤ 1000 chars)
@@ -8,6 +15,7 @@
  *   GET  /screenshot?path=...         — capture screen via screencapture (returns {path})
  *   GET  /reset-decisions?taskId=N    — delete all hunk decisions for task N from the DB (test setup helper)
  *   GET  /seed-tool-messages?taskId=&scenario= — seed synthetic tool-call rows for drawer rendering tests
+ *   GET  /shutdown                    — gracefully exit the app process (test/dev only)
  *
  * All scripts must use explicit `return` statements (not bare expressions) and may
  * use `new Promise(...)` for async operations since evaluateJavascriptWithResponse
@@ -16,8 +24,27 @@
  * Double-JSON encoding: the server wraps the JS return value in JSON.stringify, then
  * the Electrobun RPC layer wraps it again. We parse twice to get the real value.
  */
+import { readFileSync } from "node:fs";
 
-export const BRIDGE_BASE = "http://localhost:9229";
+function readDebugPort(): number {
+  try {
+    const n = parseInt(readFileSync("/tmp/railyn-debug.port", "utf8").trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : 9229;
+  } catch {
+    return 9229;
+  }
+}
+
+export const BRIDGE_BASE = `http://localhost:${readDebugPort()}`;
+
+/**
+ * Ask the debug server to shut down the app process.
+ * Called by run-ui-tests.sh (via curl) and any tooling that needs programmatic control.
+ * No-op if the server is unreachable (already dead).
+ */
+export async function shutdownApp(): Promise<void> {
+  await fetch(`${BRIDGE_BASE}/shutdown`).catch(() => {});
+}
 
 // ─── Core transport ───────────────────────────────────────────────────────────
 
