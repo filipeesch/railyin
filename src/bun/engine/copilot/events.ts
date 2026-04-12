@@ -228,15 +228,19 @@ function translateEvent(
     }
 
     case "tool.execution_partial_result": {
-      const data = event.data as { partialOutput: string };
+      const data = event.data as { toolCallId?: string; partialOutput: string };
       if (!data.partialOutput) return null;
-      return { type: "status", message: data.partialOutput };
+      const meta = data.toolCallId ? toolMetaByCallId.get(data.toolCallId) : undefined;
+      if (meta?.isInternal) return null;
+      return { type: "status", message: summarizeStatus(data.partialOutput, meta?.name) };
     }
 
     case "tool.execution_progress": {
-      const data = event.data as { progressMessage: string };
+      const data = event.data as { toolCallId?: string; progressMessage: string };
       if (!data.progressMessage) return null;
-      return { type: "status", message: data.progressMessage };
+      const meta = data.toolCallId ? toolMetaByCallId.get(data.toolCallId) : undefined;
+      if (meta?.isInternal) return null;
+      return { type: "status", message: summarizeStatus(data.progressMessage, meta?.name) };
     }
 
     case "tool.execution_complete": {
@@ -306,4 +310,12 @@ function isInternalCopilotEvent(
   if (parentToolCallId) return true;
   if (!toolName) return false;
   return toolName.startsWith("internal_") || toolName.startsWith("copilot_");
+}
+
+/** Truncate raw tool output to a single summary line for the status bar. */
+function summarizeStatus(raw: string, toolName?: string): string {
+  const lastLine = raw.split("\n").filter((l) => l.trim()).pop()?.trim() ?? "";
+  const prefix = toolName ? `${toolName}: ` : "";
+  const combined = prefix + lastLine;
+  return combined.length > 120 ? combined.slice(0, 117) + "…" : combined;
 }
