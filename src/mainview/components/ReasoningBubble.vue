@@ -41,7 +41,7 @@ function toggle() {
 
 <style scoped>
 .rb {
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 8px;
   overflow: hidden;
   font-size: 0.82rem;
@@ -96,7 +96,7 @@ function toggle() {
 
 .rb__body {
   background: var(--p-surface-0, #fff);
-  border-top: 1px solid var(--p-surface-200, #e2e8f0);
+  border-top: 1px solid var(--p-content-border-color);
   padding: 8px 10px;
   max-height: 320px;
   overflow-y: auto;
