@@ -168,6 +168,7 @@ export function initDb(): Database {
       type         TEXT NOT NULL,
       content      TEXT NOT NULL DEFAULT '',
       metadata     TEXT,
+      parent_block_id TEXT,
       subagent_id  TEXT,
       created_at   TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE (task_id, seq)
