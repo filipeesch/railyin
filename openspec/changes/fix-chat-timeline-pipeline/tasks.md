@@ -22,7 +22,7 @@
   - `appendStreamEventBatch(events: PersistedStreamEvent[]): void` — inserts a batch in a transaction
   - `getStreamEvents(taskId: number, afterSeq?: number): PersistedStreamEvent[]` — SELECT ordered by seq ASC
   - `PersistedStreamEvent` type (matches the table columns)
-- [ ] 1.3 Verify migration runs cleanly on a fresh in-memory DB (`bun run dev:test`)
+- [x] 1.3 Verify migration runs cleanly on a fresh in-memory DB — confirmed via test suite (all stream-tree tests use fresh DBs)
 
 ## 2. Shared `StreamEvent` type
 
@@ -129,7 +129,7 @@
 - [x] 11.2 Keep `displayItems` computed for DB-persisted messages; add unified live stream section using `activeStreamState.blockOrder`
 - [x] 11.3 Remove the three separate live bubble template sections; replaced by unified `blockOrder` loop
 - [x] 11.4 `hasLiveContent` computed suppresses the "Thinking…" spinner when stream blocks are present
-- [ ] 11.5 `SubagentBlock.vue` component — deferred to subagent task (Task 6)
+- [x] 11.5 `SubagentBlock.vue` component — subsumed by recursive StreamBlockNode.vue (subagent events render as children via parentBlockId)
 
 ## 12. UI Tests — Suite T (new scenarios)
 
