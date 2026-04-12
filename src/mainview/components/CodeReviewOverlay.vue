@@ -696,6 +696,8 @@ function onHunksReady(lineChanges: ILineChange[]) {
   // the earlier injectViewZones call; only the model was mutated to strip accepted diff colors.
   if (collapsingHunks) {
     collapsingHunks = false;
+    // Monaco clears decorations when the model is mutated; re-apply them.
+    nextTick(() => applyDecisionDecorations());
     return;
   }
 
