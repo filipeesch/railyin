@@ -9,6 +9,7 @@ export interface PersistedStreamEvent {
   type: string;
   content: string;
   metadata: string | null;
+  parentBlockId?: string | null;
   subagentId: string | null;
   createdAt?: string;
 }
@@ -16,9 +17,9 @@ export interface PersistedStreamEvent {
 export function appendStreamEvent(event: PersistedStreamEvent): number {
   const db = getDb();
   const result = db.run(
-    `INSERT OR IGNORE INTO stream_events (task_id, execution_id, seq, block_id, type, content, metadata, subagent_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [event.taskId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.subagentId ?? null],
+    `INSERT OR IGNORE INTO stream_events (task_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [event.taskId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
   );
   return result.lastInsertRowid as number;
 }
@@ -29,9 +30,9 @@ export function appendStreamEventBatch(events: PersistedStreamEvent[]): void {
   db.transaction(() => {
     for (const event of events) {
       db.run(
-        `INSERT OR IGNORE INTO stream_events (task_id, execution_id, seq, block_id, type, content, metadata, subagent_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [event.taskId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.subagentId ?? null],
+        `INSERT OR IGNORE INTO stream_events (task_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [event.taskId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
       );
     }
   })();
@@ -48,6 +49,7 @@ export function getStreamEvents(taskId: number, afterSeq?: number): PersistedStr
     type: string;
     content: string;
     metadata: string | null;
+    parent_block_id: string | null;
     subagent_id: string | null;
     created_at: string;
   }, [number, number]>(
@@ -63,6 +65,7 @@ export function getStreamEvents(taskId: number, afterSeq?: number): PersistedStr
     type: r.type,
     content: r.content,
     metadata: r.metadata,
+    parentBlockId: r.parent_block_id,
     subagentId: r.subagent_id,
     createdAt: r.created_at,
   }));

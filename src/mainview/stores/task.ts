@@ -11,15 +11,16 @@ export interface StreamBlock {
   type: StreamEventType;
   content: string;
   metadata: string | null;
-  subagentId: string | null;
+  parentBlockId: string | null;
   done: boolean;
+  children: string[];
 }
 
 export interface TaskStreamState {
   taskId: number;
   executionId: number;
-  /** Ordered list of blockIds as they arrived */
-  blockOrder: string[];
+  /** Root-level blockIds (parents with no parentBlockId) */
+  roots: string[];
   /** Block content by blockId */
   blocks: Map<string, StreamBlock>;
   /** Whether the execution is complete */
@@ -201,11 +202,28 @@ export const useTaskStore = defineStore("task", () => {
       if (existingState) {
         // Remove blocks that correspond to DB messages (they'll be in messages[])
         const persistedTypes: StreamEventType[] = ["assistant", "reasoning", "tool_call", "tool_result", "file_diff", "user", "system"];
-        const liveOnly = existingState.blockOrder.filter((bid) => {
-          const b = existingState.blocks.get(bid);
-          return b && !persistedTypes.includes(b.type as StreamEventType);
-        });
-        existingState.blockOrder = liveOnly;
+        const liveOnlyIds = new Set<string>();
+        const toRemove = new Set<string>();
+        
+        // Mark persisted blocks for removal
+        for (const [bid, block] of existingState.blocks) {
+          if (persistedTypes.includes(block.type as StreamEventType)) {
+            toRemove.add(bid);
+          }
+        }
+        
+        // Remove persisted blocks and rebuild roots
+        for (const bid of toRemove) {
+          existingState.blocks.delete(bid);
+        }
+        
+        // Rebuild roots: only non-persisted blocks with no parent
+        existingState.roots = [];
+        for (const [bid, block] of existingState.blocks) {
+          if (!block.parentBlockId) {
+            existingState.roots.push(bid);
+          }
+        }
         streamStates.value = new Map(streamStates.value);
       }
     } finally {
@@ -256,7 +274,7 @@ export const useTaskStore = defineStore("task", () => {
       state = {
         taskId: event.taskId,
         executionId: event.executionId,
-        blockOrder: [],
+        roots: [],
         blocks: new Map(),
         isDone: false,
         statusMessage: "",
@@ -265,7 +283,7 @@ export const useTaskStore = defineStore("task", () => {
     } else if (state.executionId !== event.executionId) {
       // New execution started for this task — reset live stream state so the
       // previous run's isDone=true doesn't hide the new execution's content.
-      state.blockOrder = [];
+      state.roots = [];
       state.blocks = new Map();
       state.isDone = false;
       state.statusMessage = "";
@@ -289,9 +307,22 @@ export const useTaskStore = defineStore("task", () => {
     // For chunks, append to existing live block or create one
     if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
       const blockType = event.type === "text_chunk" ? "text_chunk" : "reasoning_chunk";
-      // Find existing live block of same type at end of blockOrder
-      const lastBlockId = state.blockOrder.at(-1);
-      const lastBlock = lastBlockId ? state.blocks.get(lastBlockId) : undefined;
+      // Find existing live block of same type with matching parent
+      let lastBlockId = undefined;
+      let lastBlock = undefined;
+      
+      // Search from end of roots (or bottom of parent's children)
+      if (event.parentBlockId) {
+        const parentBlock = state.blocks.get(event.parentBlockId);
+        if (parentBlock) {
+          lastBlockId = parentBlock.children.at(-1);
+          lastBlock = lastBlockId ? state.blocks.get(lastBlockId) : undefined;
+        }
+      } else {
+        // Root level: find from end of roots
+        lastBlockId = state.roots.at(-1);
+        lastBlock = lastBlockId ? state.blocks.get(lastBlockId) : undefined;
+      }
 
       if (lastBlock && lastBlock.type === blockType && !lastBlock.done) {
         // Append to existing live block
@@ -299,78 +330,122 @@ export const useTaskStore = defineStore("task", () => {
       } else {
         // Start new live block
         const newBlockId = `live-${blockType}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        state.blockOrder.push(newBlockId);
-        state.blocks.set(newBlockId, {
+        const newBlock: StreamBlock = {
           blockId: newBlockId,
           type: blockType,
           content: event.content,
           metadata: null,
-          subagentId: event.subagentId,
+          parentBlockId: event.parentBlockId ?? null,
           done: false,
-        });
+          children: [],
+        };
+        state.blocks.set(newBlockId, newBlock);
+        
+        // Add to parent's children or to roots
+        if (event.parentBlockId) {
+          const parentBlock = state.blocks.get(event.parentBlockId);
+          if (parentBlock) {
+            parentBlock.children.push(newBlockId);
+          }
+        } else {
+          state.roots.push(newBlockId);
+        }
       }
       streamStates.value = new Map(streamStates.value);
       return;
     }
 
     // For persisted events (assistant, reasoning, tool_call, tool_result, file_diff, user, system)
-    // Close out any existing live blocks of incompatible type
+    // Place block in tree based on parentBlockId
     const blockId = event.blockId || `${event.type}-${event.seq || Date.now()}`;
 
     if (event.type === "tool_call") {
-      // Belt-and-suspenders: clear live reasoning_chunk blocks when a tool fires.
-      // The reasoning persisted event normally handles this, but the batcher 500ms
-      // window can leave reasoning_chunk blocks visible below the tool_call in
-      // displayItems. Clearing here prevents them from stacking out of order.
-      const reasoningIds = state.blockOrder.filter((bid) => {
-        const b = state!.blocks.get(bid);
-        return b?.type === "reasoning_chunk";
-      });
-      for (const rid of reasoningIds) state.blocks.delete(rid);
-      if (reasoningIds.length > 0) {
-        state.blockOrder = state.blockOrder.filter((id) => !reasoningIds.includes(id));
+      // Clear live reasoning_chunk blocks (same as before, but from whole tree)
+      const reasoningIds: string[] = [];
+      for (const [bid, block] of state.blocks) {
+        if (block.type === "reasoning_chunk") {
+          reasoningIds.push(bid);
+        }
+      }
+      for (const rid of reasoningIds) {
+        const parent = state.blocks.get(reasoningIds[0]!);
+        if (parent?.parentBlockId) {
+          const p = state.blocks.get(parent.parentBlockId);
+          if (p) p.children = p.children.filter(id => id !== rid);
+        } else {
+          state.roots = state.roots.filter(id => id !== rid);
+        }
+        state.blocks.delete(rid);
       }
     }
 
     if (event.type === "assistant") {
-      // Close live text_chunk blocks — persisted version replaces them
-      const newBlockOrder = state.blockOrder.filter((bid) => {
-        const b = state!.blocks.get(bid);
-        return b?.type !== "text_chunk";
-      });
-      for (const removedId of state.blockOrder) {
-        if (!newBlockOrder.includes(removedId)) {
-          state.blocks.delete(removedId);
+      // Close live text_chunk blocks
+      const textChunkIds: string[] = [];
+      for (const [bid, block] of state.blocks) {
+        if (block.type === "text_chunk") {
+          textChunkIds.push(bid);
         }
       }
-      state.blockOrder = newBlockOrder;
+      for (const tid of textChunkIds) {
+        const block = state.blocks.get(tid);
+        if (block?.parentBlockId) {
+          const p = state.blocks.get(block.parentBlockId);
+          if (p) p.children = p.children.filter(id => id !== tid);
+        } else {
+          state.roots = state.roots.filter(id => id !== tid);
+        }
+        state.blocks.delete(tid);
+      }
     }
 
     if (event.type === "reasoning") {
-      // Close live reasoning_chunk blocks — persisted version replaces them
-      const newBlockOrder = state.blockOrder.filter((bid) => {
-        const b = state!.blocks.get(bid);
-        return b?.type !== "reasoning_chunk";
-      });
-      for (const removedId of state.blockOrder) {
-        if (!newBlockOrder.includes(removedId)) {
-          state.blocks.delete(removedId);
+      // Close live reasoning_chunk blocks
+      const reasoningChunkIds: string[] = [];
+      for (const [bid, block] of state.blocks) {
+        if (block.type === "reasoning_chunk") {
+          reasoningChunkIds.push(bid);
         }
       }
-      state.blockOrder = newBlockOrder;
+      for (const rid of reasoningChunkIds) {
+        const block = state.blocks.get(rid);
+        if (block?.parentBlockId) {
+          const p = state.blocks.get(block.parentBlockId);
+          if (p) p.children = p.children.filter(id => id !== rid);
+        } else {
+          state.roots = state.roots.filter(id => id !== rid);
+        }
+        state.blocks.delete(rid);
+      }
     }
 
     // Add persisted block if not already present
     if (!state.blocks.has(blockId)) {
-      state.blockOrder.push(blockId);
-      state.blocks.set(blockId, {
+      const newBlock: StreamBlock = {
         blockId,
         type: event.type,
         content: event.content,
         metadata: event.metadata,
-        subagentId: event.subagentId,
+        parentBlockId: event.parentBlockId ?? null,
         done: true,
-      });
+        children: [],
+      };
+      state.blocks.set(blockId, newBlock);
+      
+      // Place in tree based on parentBlockId
+      if (event.parentBlockId) {
+        const parentBlock = state.blocks.get(event.parentBlockId);
+        if (parentBlock) {
+          // Parent exists: add as child
+          parentBlock.children.push(blockId);
+        } else {
+          // Parent missing (orphan): promote to root
+          state.roots.push(blockId);
+        }
+      } else {
+        // No parent: add to roots
+        state.roots.push(blockId);
+      }
     }
 
     streamStates.value = new Map(streamStates.value);

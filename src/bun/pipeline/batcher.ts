@@ -63,6 +63,7 @@ export class StreamBatcher {
     type: StreamEventType;
     content?: string;
     metadata?: string | null;
+    parentBlockId?: string | null;
     subagentId?: string | null;
     done?: boolean;
     blockId?: string;
@@ -81,6 +82,7 @@ export class StreamBatcher {
       type: partial.type,
       content: partial.content ?? "",
       metadata: partial.metadata ?? null,
+      parentBlockId: partial.parentBlockId ?? null,
       subagentId: partial.subagentId ?? null,
       done: partial.done ?? (partial.type === "done"),
     };
@@ -111,6 +113,7 @@ export class StreamBatcher {
         type: e.type,
         content: e.content,
         metadata: e.metadata,
+        parentBlockId: e.parentBlockId,
         subagentId: e.subagentId,
       })));
     }

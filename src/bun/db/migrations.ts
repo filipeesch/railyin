@@ -297,11 +297,19 @@ const migrations: Array<{ id: string; sql: string }> = [
         type         TEXT NOT NULL,
         content      TEXT NOT NULL DEFAULT '',
         metadata     TEXT,
+        parent_block_id TEXT,
         subagent_id  TEXT,
         created_at   TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE (task_id, seq)
       );
       CREATE INDEX IF NOT EXISTS idx_stream_events_task ON stream_events (task_id, seq);
+    `,
+  },
+  {
+    id: "019_add_parent_block_id",
+    sql: `
+      -- Add parent_block_id column if it doesn't already exist
+      -- (for fresh DB, it will be in 018; for existing DB, this migration adds it)
     `,
   },
 ];
@@ -324,6 +332,10 @@ function applyMigration(id: string, sql: string): void {
     } else if (id === "016_task_position") {
       if (!hasColumn("tasks", "position")) {
         db.exec(sql);
+      }
+    } else if (id === "019_add_parent_block_id") {
+      if (!hasColumn("stream_events", "parent_block_id")) {
+        db.exec("ALTER TABLE stream_events ADD COLUMN parent_block_id TEXT");
       }
     } else {
       db.exec(sql);

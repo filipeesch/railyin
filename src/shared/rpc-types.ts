@@ -381,6 +381,7 @@ export interface StreamEvent {
   type: StreamEventType;
   content: string;
   metadata: string | null;
+  parentBlockId?: string | null;
   subagentId: string | null;
   done: boolean;
 }

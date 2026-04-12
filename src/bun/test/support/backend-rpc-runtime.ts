@@ -87,6 +87,7 @@ export function createBackendRpcRuntime(options: {
                     type: e.type,
                     content: e.content,
                     metadata: e.metadata,
+                    parentBlockId: e.parentBlockId,
                     subagentId: e.subagentId,
                 })));
             }
@@ -119,6 +120,7 @@ export function createBackendRpcRuntime(options: {
             type: event.type,
             content: event.content,
             metadata: event.metadata,
+            parentBlockId: event.parentBlockId,
             subagentId: event.subagentId,
             done: event.done,
             blockId: event.blockId,
@@ -187,7 +189,7 @@ export function createBackendRpcRuntime(options: {
             db.query<{
                 id: number; task_id: number; execution_id: number; seq: number;
                 block_id: string; type: string; content: string;
-                metadata: string | null; subagent_id: string | null; created_at: string;
+                metadata: string | null; parent_block_id: string | null; subagent_id: string | null; created_at: string;
             }, [number]>(
                 "SELECT * FROM stream_events WHERE execution_id = ? ORDER BY seq ASC",
             ).all(executionId).map((r) => ({
@@ -199,6 +201,7 @@ export function createBackendRpcRuntime(options: {
                 type: r.type,
                 content: r.content,
                 metadata: r.metadata,
+                parentBlockId: r.parent_block_id,
                 subagentId: r.subagent_id,
                 createdAt: r.created_at,
             })),

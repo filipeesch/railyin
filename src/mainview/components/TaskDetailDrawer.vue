@@ -597,7 +597,7 @@ const displayItems = computed<DisplayItem[]>(() => {
 const hasLiveContent = computed(() => {
   const state = taskStore.activeStreamState;
   if (!state || state.isDone) return false;
-  return state.blockOrder.length > 0 || !!state.statusMessage;
+  return state.roots.length > 0 || !!state.statusMessage;
 });
 
 // ─── Resizable drawer ────────────────────────────────────────────────────────
