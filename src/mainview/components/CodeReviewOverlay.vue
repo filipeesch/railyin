@@ -678,7 +678,7 @@ function injectViewZones(lineChanges: ILineChange[]) {
 
 function onHunksReady(lineChanges: ILineChange[]) {
   lastLineChanges.value = lineChanges;
-  clearAllZones();
+  clearHunkZones();
   injectViewZones(lineChanges);
 
   // Force layout for all injected zones. Zones placed below the visible viewport
@@ -735,7 +735,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
       // Do NOT call injectViewZones here — lastLineChanges holds pre-reject line
       // positions which no longer match the new diff. Monaco will fire onHunksReady
       // with correct new ILCs after it re-computes the updated diff.
-      clearAllZones();
+      clearHunkZones();
       applyDecisionDecorations();
     } else {
       await electroview.rpc!.request["tasks.setHunkDecision"]({
@@ -782,10 +782,9 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
       }
     } else if (decision === "change_request") {
       // Diff stays visible — clear and re-inject zones so visibility filter applies.
-      clearAllZones();
+      clearHunkZones();
       injectViewZones(lastLineChanges.value);
       applyDecisionDecorations();
-      // Rejected: diffContent watcher triggers Monaco model swap → onHunksReady re-injects zones.
     }
 
     if (reviewStore.taskId) {
@@ -1037,7 +1036,7 @@ function scrollToPendingHunk() {
 
 async function toggleViewMode() {
   sideBySide.value = !sideBySide.value;
-  clearAllZones();
+  clearHunkZones();
   await nextTick();
   // Monaco may or may not re-fire onDidUpdateDiff after updateOptions;
   // if zones are still empty after 120ms we inject manually
@@ -1084,7 +1083,7 @@ async function loadDiff(path: string | null) {
         diffContent.value?.hunks.length &&
         hunkZones.size === 0
       ) {
-        clearAllZones();
+        clearHunkZones();
         injectViewZones([]);
         applyDecisionDecorations();
       }
@@ -1175,7 +1174,7 @@ watch(
 watch(
   () => reviewStore.filter,
   () => {
-    clearAllZones();
+    clearHunkZones();
     injectViewZones(lastLineChanges.value);
   },
 );
@@ -1183,7 +1182,7 @@ watch(
 watch(
   () => reviewStore.mode,
   () => {
-    clearAllZones();
+    clearHunkZones();
     injectViewZones(lastLineChanges.value);
   },
 );
