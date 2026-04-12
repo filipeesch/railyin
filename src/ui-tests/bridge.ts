@@ -809,6 +809,7 @@ export async function queueStreamEvents(events: Array<{
   type: string;
   content: string;
   metadata?: string | null;
+  parentBlockId?: string | null;
   subagentId?: string | null;
   done?: boolean;
 }>): Promise<void> {
@@ -829,8 +830,8 @@ export async function queueStreamEvents(events: Array<{
  * Returns blockIds and their types/content, or null if no stream state.
  */
 export async function getStreamState(taskId: number): Promise<{
-  blockOrder: string[];
-  blocks: Array<{ blockId: string; type: string; content: string; done: boolean }>;
+  roots: string[];
+  blocks: Array<{ blockId: string; type: string; content: string; done: boolean; parentBlockId: string | null; children: string[] }>;
   isDone: boolean;
   statusMessage: string;
 } | null> {
@@ -839,12 +840,20 @@ export async function getStreamState(taskId: number): Promise<{
     var taskStore = pinia._s.get('task');
     var state = taskStore.streamStates.get(${taskId});
     if (!state) return null;
+    // Collect all blocks via DFS from roots
+    function collectBlocks(ids, result) {
+      for (var i = 0; i < ids.length; i++) {
+        var b = state.blocks.get(ids[i]);
+        if (b) {
+          result.push({ blockId: b.blockId, type: b.type, content: b.content, done: b.done, parentBlockId: b.parentBlockId, children: b.children.slice() });
+          if (b.children.length > 0) collectBlocks(b.children, result);
+        }
+      }
+      return result;
+    }
     return JSON.stringify({
-      blockOrder: state.blockOrder,
-      blocks: state.blockOrder.map(function(id) {
-        var b = state.blocks.get(id);
-        return b ? { blockId: b.blockId, type: b.type, content: b.content, done: b.done } : null;
-      }).filter(Boolean),
+      roots: state.roots.slice(),
+      blocks: collectBlocks(state.roots, []),
       isDone: state.isDone,
       statusMessage: state.statusMessage,
     });

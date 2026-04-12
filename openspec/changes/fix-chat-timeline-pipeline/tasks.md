@@ -142,8 +142,8 @@
 
 - [x] 13.1 Run `bun test src/bun/test --timeout 20000` — all existing backend tests pass (7 pre-existing failures unchanged)
 - [x] 13.2 Run `bun test src/bun/pipeline/batcher.test.ts` — 6 batcher unit tests pass
-- [ ] 13.3 Run `bun test src/mainview/utils/pairToolMessages.test.ts` — pairing tests still pass
-- [ ] 13.4 UI tests — deferred (require debug server wiring from Task 12)
+- [x] 13.3 Run `bun test src/mainview/utils/pairToolMessages.test.ts` — pairing tests still pass
+- [x] 13.4 UI tests — updated for tree model (blockOrder → roots, parentBlockId, tool_result merge)
 - [x] 13.5 Build passes cleanly (`bun run build:canary`)
 - [x] 13.6 Created backlog task concept: remove `conversation_messages` table after this ships
 
@@ -192,10 +192,10 @@
 ## 20. Frontend timeline renderer — recursive render
 
 - [x] 20.1 In `TaskDetailDrawer.vue`: replace flat `blockOrder` iteration with recursive `renderBlock(blockId)` function that walks `roots[]` and each block's `children[]`
-- [ ] 20.2 A `tool_call` block renders itself as a collapsible; its `children[]` are rendered inside the collapsible body (nested reasoning bubbles, nested tool calls, etc.)
-- [ ] 20.3 `ReasoningBubble`: `isStreaming` prop drives open/closed state; collapses when `isStreaming` becomes false
-- [ ] 20.4 Remove `SubagentBlock.vue` if created — the recursive renderer subsumes it
-- [ ] 20.5 Remove the separate `v-if` live bubble sections (ReasoningBubble, StreamingBubble above the list) — live blocks are now part of the unified `roots[]` render pass
+- [x] 20.2 A `tool_call` block renders itself as a collapsible; its `children[]` are rendered inside the collapsible body (nested reasoning bubbles, nested tool calls, etc.)
+- [x] 20.3 `ReasoningBubble`: `isStreaming` prop drives open/closed state; collapses when `isStreaming` becomes false
+- [x] 20.4 Remove `SubagentBlock.vue` if created — the recursive renderer subsumes it (no-op, never existed)
+- [x] 20.5 Remove the separate `v-if` live bubble sections (ReasoningBubble, StreamingBubble above the list) — live blocks are now part of the unified `roots[]` render pass
 
 ## 21. Regression
 

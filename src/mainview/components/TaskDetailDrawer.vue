@@ -103,27 +103,18 @@
               </template>
             </TransitionGroup>
 
-            <!-- Unified live stream blocks (tree order: roots and children via DFS) -->
-            <template v-if="taskStore.activeStreamState && !taskStore.activeStreamState.isDone">
-              <template v-for="blockId in getFlattenedStreamBlocks()" :key="blockId">
-                <!-- Live reasoning chunk -->
-                <ReasoningBubble
-                  v-if="taskStore.activeStreamState.blocks.get(blockId)?.type === 'reasoning_chunk'"
-                  :content="taskStore.activeStreamState.blocks.get(blockId)!.content"
-                  :streaming="!taskStore.activeStreamState.blocks.get(blockId)?.done"
-                />
-                <!-- Live text chunk -->
-                <div
-                  v-else-if="taskStore.activeStreamState.blocks.get(blockId)?.type === 'text_chunk'"
-                  class="msg msg--assistant"
-                >
-                  <div class="msg__bubble prose streaming" v-html="renderMd(taskStore.activeStreamState.blocks.get(blockId)!.content)" />
-                  <div class="msg__meta">AI<span class="cursor">▌</span></div>
-                </div>
-              </template>
+            <!-- Unified stream blocks: recursive tree render (roots → children via DFS) -->
+            <template v-if="taskStore.activeStreamState && taskStore.activeStreamState.roots.length > 0">
+              <StreamBlockNode
+                v-for="rootId in taskStore.activeStreamState.roots"
+                :key="rootId"
+                :blockId="rootId"
+                :blocks="taskStore.activeStreamState.blocks"
+                :renderMd="renderMd"
+              />
               <!-- Ephemeral status message -->
               <div
-                v-if="taskStore.activeStreamState.statusMessage"
+                v-if="!taskStore.activeStreamState.isDone && taskStore.activeStreamState.statusMessage"
                 class="msg msg--system msg--status-ephemeral"
               >
                 <ProgressSpinner style="width: 16px; height: 16px" />
@@ -458,6 +449,7 @@ import MessageBubble from "./MessageBubble.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import { pairToolMessages, type ToolEntry } from "../utils/pairToolMessages";
 import ReasoningBubble from "./ReasoningBubble.vue";
+import StreamBlockNode from "./StreamBlockNode.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
 import TodoPanel from "./TodoPanel.vue";
@@ -599,28 +591,6 @@ const hasLiveContent = computed(() => {
   if (!state || state.isDone) return false;
   return state.roots.length > 0 || !!state.statusMessage;
 });
-
-// Recursively collect all blocks in tree order (DFS)
-function flattenStreamTree(blockIds: string[], state: any): string[] {
-  const result: string[] = [];
-  for (const blockId of blockIds) {
-    const block = state.blocks.get(blockId);
-    if (block) {
-      result.push(blockId);
-      if (block.children && block.children.length > 0) {
-        result.push(...flattenStreamTree(block.children, state));
-      }
-    }
-  }
-  return result;
-}
-
-// Get flattened list of all block IDs to render in tree order
-function getFlattenedStreamBlocks() {
-  const state = taskStore.activeStreamState;
-  if (!state) return [];
-  return flattenStreamTree(state.roots, state);
-}
 
 // ─── Resizable drawer ────────────────────────────────────────────────────────
 const drawerWidth = ref(Math.round(window.innerWidth * 0.7));

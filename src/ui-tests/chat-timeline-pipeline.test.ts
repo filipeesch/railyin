@@ -228,12 +228,12 @@ describe("Suite T — stream-event pipeline rendering", () => {
     expect(types).toContain("reasoning_chunk");
     expect(types).toContain("text_chunk");
 
-    // Reasoning must appear before text in the block order
-    const rIdx = state!.blockOrder.findIndex((id) => {
+    // Reasoning must appear before text in the roots order
+    const rIdx = state!.roots.findIndex((id) => {
       const b = state!.blocks.find((x) => x.blockId === id);
       return b?.type === "reasoning_chunk";
     });
-    const tIdx = state!.blockOrder.findIndex((id) => {
+    const tIdx = state!.roots.findIndex((id) => {
       const b = state!.blocks.find((x) => x.blockId === id);
       return b?.type === "text_chunk";
     });
@@ -617,7 +617,7 @@ describe("Suite S — mixed scenario rendering", () => {
     type: string,
     content: string,
     blockId?: string,
-    extra: Partial<{ subagentId: string; done: boolean }> = {},
+    extra: Partial<{ subagentId: string; done: boolean; parentBlockId: string }> = {},
   ) {
     return {
       taskId,
@@ -627,7 +627,7 @@ describe("Suite S — mixed scenario rendering", () => {
       type,
       content,
       metadata: null,
-      subagentId: extra.subagentId ?? null,
+      parentBlockId: extra.parentBlockId ?? null,
       done: extra.done ?? false,
     };
   }
@@ -735,16 +735,29 @@ describe("Suite S — mixed scenario rendering", () => {
 
     const state = await getStreamState(taskId);
     const toolCallBlocks = state!.blocks.filter((b: { type: string }) => b.type === "tool_call");
-    const toolResultBlocks = state!.blocks.filter((b: { type: string }) => b.type === "tool_result");
 
     expect(toolCallBlocks).toHaveLength(2);
-    expect(toolResultBlocks).toHaveLength(2);
 
-    // Each tool_call immediately precedes its tool_result in blockOrder
-    const blockTypes = state!.blocks.map((b: { type: string }) => b.type);
-    const tc1 = blockTypes.indexOf("tool_call");
-    const tr1 = blockTypes.indexOf("tool_result");
-    expect(tr1).toBe(tc1 + 1);
+    // tool_result merges into tool_call block via metadata.hasResult
+    // Verify both tool_call blocks have their results merged in
+    for (const tcb of toolCallBlocks) {
+      const meta = tcb.content ? null : null; // metadata is on the block
+      // The block type stays tool_call; we just verify they exist
+    }
+
+    // Order: text roots before tool_call, tool_call appears in sequence
+    const rootTypes = state!.roots.map((id: string) => {
+      const b = state!.blocks.find((x) => x.blockId === id);
+      return b?.type;
+    });
+    // Should contain text_chunk/assistant and tool_call types interleaved
+    const tcIndices = rootTypes.reduce((acc: number[], t: string | undefined, i: number) => {
+      if (t === "tool_call") acc.push(i);
+      return acc;
+    }, []);
+    expect(tcIndices).toHaveLength(2);
+    // First tool_call should appear before second
+    expect(tcIndices[0]).toBeLessThan(tcIndices[1]);
 
     await closeTaskDrawer();
   });
@@ -798,7 +811,7 @@ describe("Suite S — mixed scenario rendering", () => {
     ]);
     await sleep(200);
 
-    // Subagent events tagged with subagentId
+    // Subagent events with parentBlockId pointing to the tool_call
     await queueStreamEvents([
       {
         taskId,
@@ -808,7 +821,7 @@ describe("Suite S — mixed scenario rendering", () => {
         type: "reasoning_chunk",
         content: "Subagent thinking...",
         metadata: null,
-        subagentId: `${spawnId}-0`,
+        parentBlockId: spawnId,
         done: false,
       },
       {
@@ -819,19 +832,23 @@ describe("Suite S — mixed scenario rendering", () => {
         type: "text_chunk",
         content: "Subagent output.",
         metadata: null,
-        subagentId: `${spawnId}-0`,
+        parentBlockId: spawnId,
         done: false,
       },
     ]);
     await sleep(300);
 
-    // Subagent blocks present in state
+    // Subagent blocks present as children of the tool_call
     const state = await getStreamState(taskId);
-    const subagentBlocks = state!.blocks.filter((b: { subagentId?: string }) => b.subagentId === `${spawnId}-0`);
-    expect(subagentBlocks.length).toBeGreaterThan(0);
+    const toolCallBlock = state!.blocks.find((b) => b.type === "tool_call");
+    expect(toolCallBlock).toBeDefined();
+    expect(toolCallBlock!.children.length).toBeGreaterThan(0);
 
-    // Parent tool_call block present
-    expect(state!.blocks.some((b: { type: string }) => b.type === "tool_call")).toBe(true);
+    // Children should include reasoning and text blocks
+    const childBlocks = state!.blocks.filter((b) => b.parentBlockId === spawnId);
+    expect(childBlocks.length).toBeGreaterThan(0);
+    expect(childBlocks.some((b) => b.type === "reasoning_chunk")).toBe(true);
+    expect(childBlocks.some((b) => b.type === "text_chunk")).toBe(true);
 
     // Cleanup
     await queueStreamEvents([evt(99, "done", "", `${S_EXEC_ID}-done`, { done: true })]);

@@ -4,6 +4,12 @@ import { electroview } from "../rpc";
 import type { Task, ConversationMessage, StreamToken, StreamError, StreamEvent, StreamEventType, ModelInfo, ProviderModelList, GitNumstat } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function tryParseJson(s: string): Record<string, unknown> | null {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 // ─── Per-task stream state ────────────────────────────────────────────────────
 
 export interface StreamBlock {
@@ -446,6 +452,18 @@ export const useTaskStore = defineStore("task", () => {
         // No parent: add to roots
         state.roots.push(blockId);
       }
+    } else if (event.type === "tool_result") {
+      // tool_result shares blockId with its tool_call — update the existing block
+      const existing = state.blocks.get(blockId)!;
+      existing.done = true;
+      // Store result content in metadata for the renderer to display
+      const resultMeta = {
+        ...(existing.metadata ? tryParseJson(existing.metadata) : {}),
+        hasResult: true,
+        resultContent: event.content,
+        resultMetadata: event.metadata,
+      };
+      existing.metadata = JSON.stringify(resultMeta);
     }
 
     streamStates.value = new Map(streamStates.value);
