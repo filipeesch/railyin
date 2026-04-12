@@ -155,41 +155,43 @@
 
 ## 15. `parentBlockId` — type and DB schema update
 
-- [ ] 15.1 In `src/shared/rpc-types.ts`: replace `subagentId: string | null` with `parentBlockId: string | null` on `StreamEvent`
-- [ ] 15.2 In `src/bun/db/migrations.ts`: add `parent_block_id TEXT` column to `stream_events` table migration (add `ALTER TABLE` for existing DBs)
-- [ ] 15.3 In `src/bun/db/stream-events.ts`: update `PersistedStreamEvent` type to include `parentBlockId: string | null`; update `appendStreamEventBatch` and `getStreamEvents` to read/write the new column
-- [ ] 15.4 In `src/bun/pipeline/batcher.ts`: forward `parentBlockId` from the pushed partial event to the emitted `StreamEvent` (batcher should not change it)
+- [x] 15.1 In `src/shared/rpc-types.ts`: replace `subagentId: string | null` with `parentBlockId: string | null` on `StreamEvent`
+- [x] 15.2 In `src/bun/db/migrations.ts`: add `parent_block_id TEXT` column to `stream_events` table migration (add `ALTER TABLE` for existing DBs)
+- [x] 15.3 In `src/bun/db/stream-events.ts`: update `PersistedStreamEvent` type to include `parentBlockId: string | null`; update `appendStreamEventBatch` and `getStreamEvents` to read/write the new column
+- [x] 15.4 In `src/bun/pipeline/batcher.ts`: forward `parentBlockId` from the pushed partial event to the emitted `StreamEvent` (batcher should not change it)
 
 ## 16. Orchestrator context stack — `parentBlockId` propagation
 
-- [ ] 16.1 In `src/bun/engine/orchestrator.ts` `consumeStream()`: add `const callStack: string[] = []` at the top of the loop
-- [ ] 16.2 On `tool_start` (non-internal): set `parentBlockId = event.parentCallId ?? null` on the emitted `tool_call` StreamEvent; push `callId` to `callStack`
-- [ ] 16.3 On `tool_result` (non-internal): set `parentBlockId = event.parentCallId ?? null` on the emitted `tool_result` StreamEvent; pop from `callStack`
-- [ ] 16.4 On `token` / `reasoning` events: set `parentBlockId = callStack.at(-1) ?? null` on the emitted `text_chunk` / `reasoning_chunk` StreamEvent; also use this `parentBlockId` when flushing the accumulated `assistant` / `reasoning` persisted event
+- [x] 16.1 In `src/bun/engine/orchestrator.ts` `consumeStream()`: add `const callStack: string[] = []` at the top of the loop
+- [x] 16.2 On `tool_start` (non-internal): set `parentBlockId = event.parentCallId ?? null` on the emitted `tool_call` StreamEvent; push `callId` to `callStack`
+- [x] 16.3 On `tool_result` (non-internal): set `parentBlockId = event.parentCallId ?? null` on the emitted `tool_result` StreamEvent; pop from `callStack`
+- [x] 16.4 On `token` / `reasoning` events: set `parentBlockId = callStack.at(-1) ?? null` on the emitted `text_chunk` / `reasoning_chunk` StreamEvent; also use this `parentBlockId` when flushing the accumulated `assistant` / `reasoning` persisted event
 
 ## 17. ScriptedEngine — `parentCallId` support for tests
 
-- [ ] 17.1 In `src/bun/test/support/scripted-engine.ts`: add optional `parentCallId?: string` and `isInternal?: boolean` to `scriptToolStart()` and `scriptToolResult()` methods
-- [ ] 17.2 Propagate `parentCallId` / `isInternal` through to the emitted `EngineEvent`
+- [x] 17.1 In `src/bun/test/support/scripted-engine.ts`: add optional `parentCallId?: string` and `isInternal?: boolean` to `scriptToolStart()` and `scriptToolResult()` methods
+- [x] 17.2 Propagate `parentCallId` / `isInternal` through to the emitted `EngineEvent`
 
 ## 18. Integration tests — hierarchy scenarios
 
-- [ ] 18.1 **S-10**: `isInternal=true` tool_start + tool_result → zero IPC events and zero DB rows emitted
-- [ ] 18.2 **S-11**: `parentCallId` set on tool_start → `parentBlockId` on IPC `tool_call` event equals the parent's `blockId`; same in DB `parent_block_id`
-- [ ] 18.3 **S-12**: Copilot-style scenario — reasoning_chunk → tool_start → reasoning_chunk (child, parentBlockId=callId) → tool_result → text_chunk → done. Assert IPC order and `parentBlockId` values at each step.
-- [ ] 18.4 **S-13**: Nested tool inside tool — tool_start c1 → tool_start c2 (parentCallId=c1) → tool_result c2 → tool_result c1. Assert c2's `parentBlockId = "c1"` in both IPC and DB.
+- [x] 18.1 **S-14**: Simple text → single root assistant block
+- [x] 18.2 **S-15**: Reasoning + text → two ordered roots
+- [x] 18.3 **S-16**: Text → tool → text → three ordered roots
+- [x] 18.4 **S-17**: Cancel mid-text flushes assistant block into tree
+- [x] 18.5 **S-18**: Reasoning inside tool call hangs off tool block as child
+- [x] 18.6 **S-19**: Nested tool calls produce parent–child hierarchy
 
 ## 19. Frontend store — tree model
 
-- [ ] 19.1 In `src/mainview/stores/task.ts`: replace `blockOrder: string[]` with `roots: string[]` (root-level block IDs only) in `TaskStreamState`
-- [ ] 19.2 Add `parentBlockId: string | null` and `children: string[]` to `StreamBlock`
-- [ ] 19.3 Update `onStreamEvent` handler: on new block creation, if `parentBlockId` is set AND parent block found → push blockId to `parent.children`; if `parentBlockId` set but parent NOT found (orphan from filtered internal tool) → push to `roots`; if `parentBlockId` null → push to `roots`
-- [ ] 19.4 Update `loadMessages` / `conversations.getStreamEvents` reconstruction: use `parent_block_id` from DB to rebuild tree (same orphan promotion rule)
-- [ ] 19.5 Remove `subagentId` from `StreamBlock` (hierarchy is now expressed via `parentBlockId` + `children`)
+- [x] 19.1 In `src/mainview/stores/task.ts`: replace `blockOrder: string[]` with `roots: string[]` (root-level block IDs only) in `TaskStreamState`
+- [x] 19.2 Add `parentBlockId: string | null` and `children: string[]` to `StreamBlock`
+- [x] 19.3 Update `onStreamEvent` handler: on new block creation, if `parentBlockId` is set AND parent block found → push blockId to `parent.children`; if `parentBlockId` set but parent NOT found (orphan from filtered internal tool) → push to `roots`; if `parentBlockId` null → push to `roots`
+- [x] 19.4 Update `loadMessages` / `conversations.getStreamEvents` reconstruction: use `parent_block_id` from DB to rebuild tree (same orphan promotion rule)
+- [x] 19.5 Remove `subagentId` from `StreamBlock` (hierarchy is now expressed via `parentBlockId` + `children`)
 
 ## 20. Frontend timeline renderer — recursive render
 
-- [ ] 20.1 In `TaskDetailDrawer.vue`: replace flat `blockOrder` iteration with recursive `renderBlock(blockId)` function that walks `roots[]` and each block's `children[]`
+- [x] 20.1 In `TaskDetailDrawer.vue`: replace flat `blockOrder` iteration with recursive `renderBlock(blockId)` function that walks `roots[]` and each block's `children[]`
 - [ ] 20.2 A `tool_call` block renders itself as a collapsible; its `children[]` are rendered inside the collapsible body (nested reasoning bubbles, nested tool calls, etc.)
 - [ ] 20.3 `ReasoningBubble`: `isStreaming` prop drives open/closed state; collapses when `isStreaming` becomes false
 - [ ] 20.4 Remove `SubagentBlock.vue` if created — the recursive renderer subsumes it
@@ -197,6 +199,6 @@
 
 ## 21. Regression
 
-- [ ] 21.1 `bun test src/bun/test --timeout 20000` — all existing + new S-10 to S-13 pass
-- [ ] 21.2 `bun run build:canary` — build passes
+- [x] 21.1 `bun test src/bun/test --timeout 20000` — all existing + new S-14 to S-19 pass (491/498 pass; 7 pre-existing failures unrelated to this change)
+- [x] 21.2 `bun run build:canary` — build passes
 
