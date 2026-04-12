@@ -1,7 +1,14 @@
 // Run with: bun src/debug-inspect.ts
 // Queries the debug HTTP server running inside the app
+import { readFileSync } from "node:fs";
 
-const BASE = "http://localhost:9229";
+const debugPort = (() => {
+  try {
+    const n = parseInt(readFileSync("/tmp/railyn-debug.port", "utf8").trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : 9229;
+  } catch { return 9229; }
+})();
+const BASE = `http://localhost:${debugPort}`;
 
 async function inspect(script: string): Promise<unknown> {
   const url = new URL(BASE + "/inspect");

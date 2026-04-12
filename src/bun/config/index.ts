@@ -96,6 +96,7 @@ export interface WorkspaceYaml {
   ai?: AIProviderConfig;
   worktree_base_path?: string;
   git_path?: string; // absolute path to git binary, e.g. /usr/bin/git
+  shell_env_timeout_ms?: number; // timeout for shell environment resolution in milliseconds (default: 10000)
   /** @deprecated Use engine.type:native.default_model. Still supported for legacy configs. */
   default_model?: string;
   /** @deprecated Use engine.type:native.search. Still supported for legacy configs. */
