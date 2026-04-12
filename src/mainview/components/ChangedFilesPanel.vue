@@ -55,9 +55,9 @@
       </ul>
     </template>
 
-    <!-- ── State B: all decided — summary row only ───────────────────────── -->
+    <!-- ── State B: all decided — expandable file list ───────────────────── -->
     <template v-else>
-      <div class="changed-files-panel__header changed-files-panel__header--summary">
+      <div class="changed-files-panel__header" @click="expanded = !expanded">
         <div class="changed-files-panel__toggle">
           <span class="changed-files-panel__toggle-icon changed-files-panel__toggle-icon--done">✓</span>
           <span class="changed-files-panel__toggle-label">{{ allReviewedLabel }}</span>
@@ -71,6 +71,26 @@
           >View Changes</button>
         </div>
       </div>
+
+      <ul v-if="expanded" class="changed-files-panel__list">
+        <li
+          v-for="file in allFiles"
+          :key="file.path"
+          class="changed-files-panel__item"
+          :title="file.path"
+          @click="openReview(file.path, 'changes')"
+        >
+          <span class="changed-files-panel__file-icon changed-files-panel__file-icon--done">✓</span>
+          <div class="changed-files-panel__file-info">
+            <span class="changed-files-panel__file-name">{{ basename(file.path) }}</span>
+            <span class="changed-files-panel__file-dir">{{ dirname(file.path) }}</span>
+          </div>
+          <span v-if="file.additions || file.deletions" class="changed-files-panel__stat">
+            <span v-if="file.additions" class="changed-files-panel__stat--add">+{{ file.additions }}</span>
+            <span v-if="file.deletions" class="changed-files-panel__stat--del">-{{ file.deletions }}</span>
+          </span>
+        </li>
+      </ul>
     </template>
   </div>
 </template>
@@ -115,17 +135,26 @@ const pendingFiles = computed<FileEntry[]>(() => {
 });
 
 const allFiles = computed<FileEntry[]>(() => {
-  if (!props.numstat) return pendingFiles.value;
-  const pendingPaths = new Set(props.pendingByFile.map((p) => p.filePath));
+  const fromReview = props.pendingByFile.map((p) => {
+    const ns = props.numstat?.files.find((f) => f.path === p.filePath);
+    return {
+      path: p.filePath,
+      additions: ns?.additions ?? 0,
+      deletions: ns?.deletions ?? 0,
+      pendingCount: p.pendingCount,
+    };
+  });
+  if (!props.numstat) return fromReview;
+  const knownPaths = new Set(props.pendingByFile.map((p) => p.filePath));
   const extras = props.numstat.files
-    .filter((f) => !pendingPaths.has(f.path))
+    .filter((f) => !knownPaths.has(f.path))
     .map((f) => ({
       path: f.path,
       additions: f.additions,
       deletions: f.deletions,
       pendingCount: 0,
     }));
-  return [...pendingFiles.value, ...extras];
+  return [...fromReview, ...extras];
 });
 
 const hasAnyFiles = computed(() => allFiles.value.length > 0);
@@ -184,9 +213,7 @@ async function decideAll(decision: "accepted" | "rejected") {
   user-select: none;
 }
 
-.changed-files-panel__header--summary {
-  cursor: default;
-}
+/* State B header is also clickable (expandable file list) */
 
 .changed-files-panel__toggle {
   display: flex;
@@ -200,7 +227,7 @@ async function decideAll(decision: "accepted" | "rejected") {
   font-weight: 500;
 }
 
-.changed-files-panel__header:not(.changed-files-panel__header--summary):hover {
+.changed-files-panel__header:hover {
   background: var(--p-content-hover-background, rgba(0,0,0,0.04));
 }
 
@@ -296,6 +323,12 @@ async function decideAll(decision: "accepted" | "rejected") {
 .changed-files-panel__file-icon {
   font-size: 0.8rem;
   flex-shrink: 0;
+}
+
+.changed-files-panel__file-icon--done {
+  font-size: 0.75rem;
+  color: var(--p-green-500, #22c55e);
+  opacity: 0.8;
 }
 
 .changed-files-panel__file-info {

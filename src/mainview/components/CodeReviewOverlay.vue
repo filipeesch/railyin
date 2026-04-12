@@ -544,8 +544,9 @@ function collapseAcceptedHunks() {
         : [];
 
     if (hunk.originalStart === 0 && hunk.originalEnd === 0) {
-      // Pure addition (new file): prepend modified content.
-      origLines.splice(0, 0, ...replacement);
+      // Pure addition (new file): replace entire original with modified content.
+      // Can't just prepend — "".split("\n") yields [""], leaving a phantom empty line.
+      origLines.splice(0, origLines.length, ...replacement);
     } else {
       origLines.splice(
         hunk.originalStart - 1,
