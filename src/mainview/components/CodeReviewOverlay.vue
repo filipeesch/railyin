@@ -154,6 +154,10 @@ const diffEditorRef = ref<InstanceType<typeof MonacoDiffEditor> | null>(null);
 // Using a plain Set (not reactive) — only read inside navigateToNextFile().
 const fullyDecidedFiles = new Set<string>();
 
+// Tracks which accepted-hunk hashes have been collapsed in the original model.
+// Used as a guard to prevent onDidUpdateDiff → onHunksReady → collapseAcceptedHunks loops.
+let lastCollapsedHashes = new Set<string>();
+
 // ——— Resizable file list panel ——————————————————————————————————————————
 
 const STORAGE_KEY_FILE_LIST_WIDTH = "railyn:review-file-list-width";
@@ -479,6 +483,58 @@ function applyDecisionDecorations() {
   }
 }
 
+/**
+ * Mutate the DiffEditor's original model so accepted hunks have identical text
+ * on both sides. Monaco's diff engine recalculates and no longer highlights
+ * those ranges, naturally removing red/green diff coloring.
+ */
+function collapseAcceptedHunks() {
+  if (!diffContent.value) return;
+  const accepted = diffContent.value.hunks.filter(
+    (h) => effectiveDecision(h) === "accepted",
+  );
+  if (accepted.length === 0) return;
+
+  const currentHashes = new Set(accepted.map((h) => h.hash));
+  if (
+    currentHashes.size === lastCollapsedHashes.size &&
+    [...currentHashes].every((h) => lastCollapsedHashes.has(h))
+  ) {
+    return; // already collapsed this exact set — avoid onDidUpdateDiff loop
+  }
+  lastCollapsedHashes = currentHashes;
+
+  const origModel = diffEditorRef.value?.getOriginalEditor()?.getModel();
+  if (!origModel) return;
+
+  // Rebuild original content with accepted hunks replaced by their modified text.
+  // Use server content for stable line numbers (model may have been mutated before).
+  const origLines = diffContent.value.original.split("\n");
+  const modLines = diffContent.value.modified.split("\n");
+
+  // Process bottom-to-top so earlier splices don't shift later hunks' indices.
+  const sorted = [...accepted].sort((a, b) => b.originalStart - a.originalStart);
+  for (const hunk of sorted) {
+    const replacement =
+      hunk.modifiedStart > 0 && hunk.modifiedEnd > 0
+        ? modLines.slice(hunk.modifiedStart - 1, hunk.modifiedEnd)
+        : [];
+
+    if (hunk.originalStart === 0 && hunk.originalEnd === 0) {
+      // Pure addition (new file): prepend modified content.
+      origLines.splice(0, 0, ...replacement);
+    } else {
+      origLines.splice(
+        hunk.originalStart - 1,
+        hunk.originalEnd - hunk.originalStart + 1,
+        ...replacement,
+      );
+    }
+  }
+
+  origModel.setValue(origLines.join("\n"));
+}
+
 function injectViewZones(lineChanges: ILineChange[]) {
   // Changes mode shows a clean read-only diff — no action bars needed
   if (reviewStore.mode === "changes") return;
@@ -609,6 +665,7 @@ function onHunksReady(lineChanges: ILineChange[]) {
   nextTick(() => {
     layoutAllZones();
     applyDecisionDecorations();
+    collapseAcceptedHunks();
   });
 
   // After cross-file navigation, scroll to the first or last pending hunk in the new file.
@@ -688,6 +745,9 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
       // Remove the action bar zone for this hunk; apply accepted decoration.
       removeZoneForHash(hash);
       applyDecisionDecorations();
+      // Mutate the original model so Monaco's diff engine sees no difference
+      // for accepted hunks — their red/green coloring disappears naturally.
+      collapseAcceptedHunks();
       const remainingPendingInFile = diffContent.value.hunks.filter((candidate) => effectiveDecision(candidate) === "pending").length;
       if (remainingPendingInFile > 0) {
         currentPendingIdx.value = Math.min(currentPendingIdx.value, remainingPendingInFile - 1);
@@ -975,6 +1035,7 @@ async function onSelectFile(path: string) {
 async function loadDiff(path: string | null) {
   if (!path || !reviewStore.taskId) return;
   await flushPendingWrite();
+  lastCollapsedHashes = new Set();
   clearAllZones();
   currentPendingIdx.value = 0;
   diffLoading.value = true;

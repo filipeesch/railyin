@@ -2122,8 +2122,8 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
   });
 
   test("34.1 — accepting the last pending hunk in a file advances to another pending file", () => {
-    if (barCountBefore === 0) {
-      console.warn("  ~ skipped: no pending bars (cannot accept)");
+    if (!selectedFileBeforeAccept) {
+      console.warn("  ~ skipped: no accept button on feature-b.vue (cannot test last-hunk navigation)");
       return;
     }
     if (selectedFileAfterAccept === selectedFileBeforeAccept) {
