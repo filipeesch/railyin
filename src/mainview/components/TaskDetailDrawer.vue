@@ -103,9 +103,9 @@
               </template>
             </TransitionGroup>
 
-            <!-- Unified live stream blocks (arrival order guaranteed) -->
+            <!-- Unified live stream blocks (tree order: roots and children via DFS) -->
             <template v-if="taskStore.activeStreamState && !taskStore.activeStreamState.isDone">
-              <template v-for="blockId in taskStore.activeStreamState.blockOrder" :key="blockId">
+              <template v-for="blockId in getFlattenedStreamBlocks()" :key="blockId">
                 <!-- Live reasoning chunk -->
                 <ReasoningBubble
                   v-if="taskStore.activeStreamState.blocks.get(blockId)?.type === 'reasoning_chunk'"
@@ -599,6 +599,28 @@ const hasLiveContent = computed(() => {
   if (!state || state.isDone) return false;
   return state.roots.length > 0 || !!state.statusMessage;
 });
+
+// Recursively collect all blocks in tree order (DFS)
+function flattenStreamTree(blockIds: string[], state: any): string[] {
+  const result: string[] = [];
+  for (const blockId of blockIds) {
+    const block = state.blocks.get(blockId);
+    if (block) {
+      result.push(blockId);
+      if (block.children && block.children.length > 0) {
+        result.push(...flattenStreamTree(block.children, state));
+      }
+    }
+  }
+  return result;
+}
+
+// Get flattened list of all block IDs to render in tree order
+function getFlattenedStreamBlocks() {
+  const state = taskStore.activeStreamState;
+  if (!state) return [];
+  return flattenStreamTree(state.roots, state);
+}
 
 // ─── Resizable drawer ────────────────────────────────────────────────────────
 const drawerWidth = ref(Math.round(window.innerWidth * 0.7));
