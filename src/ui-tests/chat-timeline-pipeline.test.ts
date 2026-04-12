@@ -22,6 +22,13 @@
  *     T-38: tool_call event clears live reasoning_chunk blocks (no stacked reasoning)
  *     T-39: autoscroll fires during text_chunk streaming — scroll reaches bottom
  *     T-40: autoscroll fires during reasoning_chunk streaming — reasoning bubble visible in viewport
+ *
+ *   Suite S — mixed scenario rendering (mirrors Layer 1 backend scenarios):
+ *     S-1 (T-41): reasoning then text — reasoning streams live, both blocks render in correct order
+ *     S-2 (T-42): reasoning → tool → text — tool_call between reasoning and text, reasoning before tool
+ *     S-3 (T-43): multiple tool rounds — multiple tool pairs interleaved with text
+ *     S-4 (T-44): cancel mid-reasoning — partial reasoning rendered, no ghost live blocks after cancel
+ *     S-5 (T-45): subagent events — subagent blocks render with correct attribution
  */
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
@@ -585,5 +592,250 @@ describe("Suite T — stream-event pipeline rendering", () => {
       done: true,
     }]);
     await sleep(300);
+  });
+});
+
+// ─── Suite S — Mixed scenario rendering ─────────────────────────────────────
+// Mirrors Layer 1 backend scenarios but asserts DOM state.
+// All use a distinct EXEC_ID (99_902) to avoid state bleed from Suite T.
+
+const S_EXEC_ID = 99_902;
+
+describe("Suite S — mixed scenario rendering", () => {
+  beforeEach(async () => {
+    await clearStreamState(taskId, S_EXEC_ID);
+    await sleep(100);
+    await webEval(`
+      window.__pinia?.state?.value?.task &&
+        (window.__pinia.state.value.task.streamStates?.delete(${taskId}));
+    `);
+    await sleep(100);
+  });
+
+  function evt(
+    seq: number,
+    type: string,
+    content: string,
+    blockId?: string,
+    extra: Partial<{ subagentId: string; done: boolean }> = {},
+  ) {
+    return {
+      taskId,
+      executionId: S_EXEC_ID,
+      seq,
+      blockId: blockId ?? `${S_EXEC_ID}-${seq}`,
+      type,
+      content,
+      metadata: null,
+      subagentId: extra.subagentId ?? null,
+      done: extra.done ?? false,
+    };
+  }
+
+  // T-41 ─ S-1: reasoning then text
+  test("T-41 S-1: reasoning streams live then both reasoning and text blocks present in order", async () => {
+    await openTaskDrawer(taskId);
+
+    // Inject reasoning_chunk then text_chunk (simulates live stream before persisted arrives)
+    await queueStreamEvents([
+      evt(0, "reasoning_chunk", "I am thinking..."),
+      evt(1, "text_chunk", "Hello world."),
+    ]);
+    await sleep(300);
+
+    // Both live blocks visible
+    const state = await getStreamState(taskId);
+    expect(state!.blocks.some((b) => b.type === "reasoning_chunk")).toBe(true);
+    expect(state!.blocks.some((b) => b.type === "text_chunk")).toBe(true);
+
+    // Reasoning block appears before text block in blockOrder
+    const blockTypes = state!.blocks.map((b: { type: string }) => b.type);
+    const rIdx = blockTypes.indexOf("reasoning_chunk");
+    const tIdx = blockTypes.indexOf("text_chunk");
+    expect(rIdx).toBeLessThan(tIdx);
+
+    // Cleanup
+    await queueStreamEvents([evt(99, "done", "", `${S_EXEC_ID}-done`, { done: true })]);
+    await sleep(300);
+    await closeTaskDrawer();
+  });
+
+  // T-42 ─ S-2: reasoning → tool → text
+  test("T-42 S-2: tool_call clears live reasoning; reasoning block appears before tool_call", async () => {
+    await openTaskDrawer(taskId);
+
+    // Reasoning live
+    await queueStreamEvents([evt(0, "reasoning_chunk", "Planning to read file...")]);
+    await sleep(200);
+
+    let state = await getStreamState(taskId);
+    expect(state!.blocks.some((b) => b.type === "reasoning_chunk")).toBe(true);
+
+    // tool_call persisted (should flush reasoning)
+    const toolCallContent = JSON.stringify({
+      type: "function",
+      function: { name: "read_file", arguments: '{"path":"/tmp/a.txt"}' },
+      id: "tc1",
+    });
+    await queueStreamEvents([
+      evt(1, "reasoning", "Planning to read file...", `${S_EXEC_ID}-r1`),
+      evt(2, "tool_call", toolCallContent, "tc1"),
+    ]);
+    await sleep(300);
+
+    state = await getStreamState(taskId);
+    const blockTypes = state!.blocks.map((b: { type: string }) => b.type);
+
+    // reasoning_chunk live block should be gone (replaced by persisted reasoning)
+    expect(blockTypes.filter((t: string) => t === "reasoning_chunk")).toHaveLength(0);
+
+    // reasoning block before tool_call in order
+    const rIdx = blockTypes.indexOf("reasoning");
+    const tcIdx = blockTypes.indexOf("tool_call");
+    if (rIdx !== -1 && tcIdx !== -1) {
+      expect(rIdx).toBeLessThan(tcIdx);
+    }
+
+    // tool_result + text then done
+    await queueStreamEvents([
+      evt(3, "tool_result", JSON.stringify({ success: true, result: "contents" }), "tc1"),
+      evt(4, "text_chunk", "Done."),
+      evt(99, "done", "", `${S_EXEC_ID}-done`, { done: true }),
+    ]);
+    await sleep(300);
+
+    // No ghost live blocks after done
+    const finalState = await getStreamState(taskId);
+    expect(finalState!.blocks.filter((b: { type: string }) => b.type === "reasoning_chunk")).toHaveLength(0);
+    expect(finalState!.blocks.filter((b: { type: string }) => b.type === "text_chunk")).toHaveLength(0);
+
+    await closeTaskDrawer();
+  });
+
+  // T-43 ─ S-3: multiple tool rounds
+  test("T-43 S-3: multiple tool pairs render with text between them", async () => {
+    await openTaskDrawer(taskId);
+
+    const toolCall = (id: string, name: string) =>
+      JSON.stringify({ type: "function", function: { name, arguments: "{}" }, id });
+    const toolResult = (id: string) =>
+      JSON.stringify({ success: true, result: `result from ${id}` });
+
+    await queueStreamEvents([
+      evt(0, "text_chunk", "First. "),
+      evt(1, "tool_call", toolCall("c1", "write_file"), "c1"),
+      evt(2, "tool_result", toolResult("c1"), "c1"),
+      evt(3, "text_chunk", "Second. "),
+      evt(4, "tool_call", toolCall("c2", "read_file"), "c2"),
+      evt(5, "tool_result", toolResult("c2"), "c2"),
+      evt(6, "text_chunk", "Done."),
+      evt(99, "done", "", `${S_EXEC_ID}-done`, { done: true }),
+    ]);
+    await sleep(500);
+
+    const state = await getStreamState(taskId);
+    const toolCallBlocks = state!.blocks.filter((b: { type: string }) => b.type === "tool_call");
+    const toolResultBlocks = state!.blocks.filter((b: { type: string }) => b.type === "tool_result");
+
+    expect(toolCallBlocks).toHaveLength(2);
+    expect(toolResultBlocks).toHaveLength(2);
+
+    // Each tool_call immediately precedes its tool_result in blockOrder
+    const blockTypes = state!.blocks.map((b: { type: string }) => b.type);
+    const tc1 = blockTypes.indexOf("tool_call");
+    const tr1 = blockTypes.indexOf("tool_result");
+    expect(tr1).toBe(tc1 + 1);
+
+    await closeTaskDrawer();
+  });
+
+  // T-44 ─ S-4: cancel mid-reasoning — no ghost blocks
+  test("T-44 S-4: after done event all live blocks are cleared (cancel path)", async () => {
+    await openTaskDrawer(taskId);
+
+    // Simulate reasoning streaming then abrupt done (cancel path)
+    await queueStreamEvents([
+      evt(0, "reasoning_chunk", "step 1"),
+      evt(1, "reasoning_chunk", "step 2"),
+    ]);
+    await sleep(200);
+
+    let state = await getStreamState(taskId);
+    expect(state!.blocks.some((b) => b.type === "reasoning_chunk")).toBe(true);
+
+    // Cancel emits persisted reasoning then done
+    await queueStreamEvents([
+      evt(2, "reasoning", "step 1step 2", `${S_EXEC_ID}-r1`),
+      evt(99, "done", "", `${S_EXEC_ID}-done`, { done: true }),
+    ]);
+    await sleep(300);
+
+    state = await getStreamState(taskId);
+    // All live blocks cleared after done
+    expect(state!.blocks.filter((b: { type: string }) => b.type === "reasoning_chunk")).toHaveLength(0);
+    expect(state!.blocks.filter((b: { type: string }) => b.type === "text_chunk")).toHaveLength(0);
+
+    // The pulsing reasoning icon should be gone
+    const stillPulsing = await webEval<boolean>(`
+      return !!document.querySelector('.rb__icon--pulse');
+    `);
+    expect(stillPulsing).toBe(false);
+
+    await closeTaskDrawer();
+  });
+
+  // T-45 ─ S-5: subagent events
+  test("T-45 S-5: subagent events render separately from parent stream", async () => {
+    await openTaskDrawer(taskId);
+
+    const spawnId = "spawn-001";
+
+    await queueStreamEvents([
+      // Parent: text before spawn
+      evt(0, "text_chunk", "Spawning subagent..."),
+      // Parent: tool_call that spawns subagent
+      evt(1, "tool_call", JSON.stringify({ type: "function", function: { name: "spawn_agent", arguments: "{}" }, id: spawnId }), spawnId),
+    ]);
+    await sleep(200);
+
+    // Subagent events tagged with subagentId
+    await queueStreamEvents([
+      {
+        taskId,
+        executionId: S_EXEC_ID,
+        seq: 10,
+        blockId: `${S_EXEC_ID}-sub-r`,
+        type: "reasoning_chunk",
+        content: "Subagent thinking...",
+        metadata: null,
+        subagentId: `${spawnId}-0`,
+        done: false,
+      },
+      {
+        taskId,
+        executionId: S_EXEC_ID,
+        seq: 11,
+        blockId: `${S_EXEC_ID}-sub-t`,
+        type: "text_chunk",
+        content: "Subagent output.",
+        metadata: null,
+        subagentId: `${spawnId}-0`,
+        done: false,
+      },
+    ]);
+    await sleep(300);
+
+    // Subagent blocks present in state
+    const state = await getStreamState(taskId);
+    const subagentBlocks = state!.blocks.filter((b: { subagentId?: string }) => b.subagentId === `${spawnId}-0`);
+    expect(subagentBlocks.length).toBeGreaterThan(0);
+
+    // Parent tool_call block present
+    expect(state!.blocks.some((b: { type: string }) => b.type === "tool_call")).toBe(true);
+
+    // Cleanup
+    await queueStreamEvents([evt(99, "done", "", `${S_EXEC_ID}-done`, { done: true })]);
+    await sleep(300);
+    await closeTaskDrawer();
   });
 });

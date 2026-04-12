@@ -65,6 +65,7 @@ export function createBackendRpcRuntime(options: {
         recorder.recordTaskUpdate,
         recorder.recordNewMessage,
     );
+    coordinator.setOnStreamEvent(recorder.recordStreamEvent);
     const handlers = taskHandlers(coordinator, recorder.recordTaskUpdate, recorder.recordNewMessage);
 
     return {
