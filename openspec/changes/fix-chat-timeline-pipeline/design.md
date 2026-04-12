@@ -39,15 +39,15 @@ All events (text token, reasoning token, status, tool_call, tool_result, file_di
 **`StreamEvent` shape:**
 ```ts
 interface StreamEvent {
-  taskId:      number;
-  executionId: number;
-  seq:         number;       // monotonic per task, assigned by batcher
-  blockId:     string;       // groups chunks into collapsible UI elements
-  type:        StreamEventType;
-  content:     string;       // token text, message content, or JSON
-  metadata:    string | null; // JSON, same role as conversation_messages.metadata
-  subagentId:  string | null; // null for parent; "agent-1" etc for subagents
-  done:        boolean;      // true only on the terminal event for this execution
+  taskId:        number;
+  executionId:   number;
+  seq:           number;         // monotonic per task, assigned by batcher
+  blockId:       string;         // this block's identity
+  parentBlockId: string | null;  // parent block's identity (for tree building in UI)
+  type:          StreamEventType;
+  content:       string;         // token text, message content, or JSON
+  metadata:      string | null;  // JSON, same role as conversation_messages.metadata
+  done:          boolean;        // true only on the terminal event for this execution
 }
 
 type StreamEventType =
@@ -66,16 +66,17 @@ type StreamEventType =
 
 ### 2. `blockId` identifies collapsible UI elements
 
-Every event carries a `blockId`. The frontend renders one UI item per unique `blockId`, in `seq` order. Chunks with the same `blockId` append to the same item.
+Every event carries a `blockId`. The frontend renders one UI item per unique `blockId`. Chunks with the same `blockId` append to the same item.
 
 **Block ID assignment (bun side):**
 - Text block: `"{executionId}-t{n}"` — increments each time text resumes after a non-text event
-- Reasoning block: `"{executionId}-r{n}"` — increments each time a reasoning block starts (Anthropic: `content_block_start` with `type:"thinking"`; OpenAI: first `reasoning_content` delta after a non-reasoning delta)
-- Tool call: `"{callId}"` — the tool call's ID string
-- Subagent: `"{executionId}-sa{n}"` — wraps all events for one subagent invocation
-- Subagent children: `"{executionId}-sa{n}-{childBlockId}"`
+- Reasoning block: `"{executionId}-r{n}"` — increments each time a reasoning block starts. Reasoning always gets an explicit generated `blockId` (never empty string) so it can be placed in the block tree as a named node.
+- Tool call: `"{callId}"` — the tool call's SDK-assigned ID string
+- Tool result: `"{callId}"` — same blockId as its paired tool_call
 
 **Why `blockId` instead of event type for grouping**: Interleaved thinking (Claude 4.6 adaptive) emits reasoning and text in alternating blocks within a single model response. Without `blockId`, the frontend cannot distinguish "second reasoning block" from "still the first reasoning block". `blockId` makes each block's identity explicit and engine-agnostic.
+
+**Note on `subagentId` removal**: The previous design used a `subagentId` field to identify subagent events. This is replaced by `parentBlockId` — subagent hierarchy is encoded in the block tree, not as a separate identity field. The UI reconstructs the tree from `parentBlockId` references.
 
 ### 3. Batcher: 500ms DB flush, real-time IPC token forwarding
 
@@ -116,16 +117,16 @@ interface BatcherState {
 
 ```sql
 CREATE TABLE stream_events (
-  id           INTEGER PRIMARY KEY,
-  task_id      INTEGER NOT NULL,
-  execution_id INTEGER NOT NULL,
-  seq          INTEGER NOT NULL,
-  block_id     TEXT NOT NULL,
-  type         TEXT NOT NULL,
-  content      TEXT NOT NULL DEFAULT '',
-  metadata     TEXT,
-  subagent_id  TEXT,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  id              INTEGER PRIMARY KEY,
+  task_id         INTEGER NOT NULL,
+  execution_id    INTEGER NOT NULL,
+  seq             INTEGER NOT NULL,
+  block_id        TEXT NOT NULL,
+  parent_block_id TEXT,           -- null for root-level blocks; set for nested blocks
+  type            TEXT NOT NULL,
+  content         TEXT NOT NULL DEFAULT '',
+  metadata        TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (task_id, seq)
 );
 CREATE INDEX idx_stream_events_task ON stream_events (task_id, seq);
@@ -137,43 +138,60 @@ Only persisted types are written (not `text_chunk`, `reasoning_chunk`, `status_c
 
 ### 5. Per-task stream state in the frontend store
 
-Replace global refs with a `Map`:
+Replace global refs with a `Map`. The stream state is **flat** — all blocks in one Map keyed by `blockId`. The tree structure is built in the UI layer using `parentBlockId` references.
 
 ```ts
 interface TaskStreamState {
-  blocks:    Map<string, StreamBlock>; // blockId → block
-  blockOrder: string[];                // blockIds in seq order (for rendering)
+  blocks:    Map<string, StreamBlock>; // blockId → block (ALL blocks, flat)
+  roots:     string[];                 // blockIds with parentBlockId=null, in arrival order
   isDone:    boolean;
 }
 
 interface StreamBlock {
-  blockId:    string;
-  type:       "text" | "reasoning" | "tool_call" | "tool_result" |
-              "file_diff" | "assistant" | "system" | "user" | "subagent";
-  content:    string;   // accumulated for chunks; full content for persisted
-  metadata:   unknown;
-  subagentId: string | null;
-  isStreaming: boolean; // true while chunks are arriving
-  children:   StreamBlock[]; // for subagent blocks
+  blockId:       string;
+  parentBlockId: string | null;
+  type:          StreamEventType;
+  content:       string;    // accumulated for chunks; full content for persisted
+  metadata:      unknown;
+  isStreaming:   boolean;   // true while chunks are arriving
+  children:      string[];  // ordered list of child blockIds
 }
 
 // In store:
 const streamStates = ref(new Map<number, TaskStreamState>());
 ```
 
+**Incoming event handling:**
+1. If `blockId` not in `blocks` → create new block, then:
+   - If `parentBlockId` is set AND `blocks.has(parentBlockId)` → append to parent's `children[]`
+   - If `parentBlockId` is set BUT parent NOT found → **promote to root** (orphaned child, e.g. from filtered internal Copilot tool) — add to `roots[]`
+   - If `parentBlockId` is null → add to `roots[]`
+2. If `blockId` already in `blocks` → append content / upsert
+
 **Drawer open flow:**
 1. `loadMessages(taskId)` → `SELECT * FROM stream_events WHERE task_id = ? ORDER BY seq ASC`
-2. Build `TaskStreamState` from DB rows
+2. Build `TaskStreamState` from DB rows using `parent_block_id` column to reconstruct tree
 3. Subscribe to live `stream.event` IPC for this `taskId`
-4. Incoming events: if `blockId` exists in state → append content; if new → add block in order
 
 **Done event**: sets `isDone = true` on the `TaskStreamState`, marks all `isStreaming = false`. One atomic operation closes all rendering state.
 
-### 6. Subagent visibility
+### 6. Subagent / hierarchy visibility
 
-`runSubExecution()` receives an `onStreamEvent` callback. It calls this for every event it produces, prefixing `blockId` with `"sa{n}-"` and setting `subagentId`. The parent pipeline batcher handles the rest identically.
+Subagent and nested tool events carry `parentBlockId` pointing to the enclosing tool call's `blockId`. The frontend receives these flat events and builds the tree:
 
-The frontend renders a `SubagentBlock` component for blocks where `type === "subagent"`. Inside it, child blocks are rendered in their own seq order — same components as the main timeline (reasoning collapsible, tool call group, text bubble), just nested.
+```
+roots: ["r0", "call_c1", "t0"]
+blocks:
+  r0       { parentBlockId: null, children: [] }
+  call_c1  { parentBlockId: null, children: ["r1", "call_c2"] }
+    r1     { parentBlockId: "call_c1", children: [] }
+    call_c2{ parentBlockId: "call_c1", children: [] }
+  t0       { parentBlockId: null, children: [] }
+```
+
+The renderer walks `roots[]` recursively: each block renders itself, then renders its `children[]` recursively (indented, inside collapsible if tool_call).
+
+No dedicated `SubagentBlock` component is needed — the same recursive renderer handles any nesting depth. A tool_call block that has children renders them inline as a collapsible body.
 
 ### 7. Cancel handling
 
@@ -183,14 +201,60 @@ Both engine paths call `onStreamEvent({ type: "done", done: true, ... })` on can
 
 New executions write to `stream_events` only. `loadMessages()` reads from `stream_events`. The existing `conversation_messages` data is orphaned but not deleted. A backlog task tracks the removal. The `pairToolMessages` utility still works because tool call/result content JSON is identical in both tables.
 
+### 9. `parentBlockId` propagation — orchestrator context stack
+
+The orchestrator maintains a `callStack: string[]` to track the currently open tool call chain. This enables assigning `parentBlockId` to reasoning and token chunks without requiring the engine to expose explicit ancestry on every event.
+
+```
+callStack starts empty = []
+
+tool_start { callId: "c1", parentCallId: null }
+  → emit tool_call { blockId: "c1", parentBlockId: null }
+  → push "c1" → callStack = ["c1"]
+
+reasoning chunk (inside c1's subagent)
+  → emit reasoning_chunk { blockId: "r1", parentBlockId: callStack.at(-1) = "c1" }
+
+tool_start { callId: "c2", parentCallId: "c1" }
+  → emit tool_call { blockId: "c2", parentBlockId: "c1" }  (use event.parentCallId directly)
+  → push "c2" → callStack = ["c1", "c2"]
+
+tool_result { callId: "c2" }
+  → emit tool_result { blockId: "c2", parentBlockId: "c1" }
+  → pop → callStack = ["c1"]
+
+tool_result { callId: "c1" }
+  → emit tool_result { blockId: "c1", parentBlockId: null }
+  → pop → callStack = []
+
+token chunk (final response)
+  → emit text_chunk { blockId: "t1", parentBlockId: callStack.at(-1) = null }
+```
+
+**Rules:**
+- `tool_start`: `parentBlockId = event.parentCallId ?? null`. Push `callId` to stack **only if `!event.isInternal`** (internal tools are filtered and never emitted, their children may still arrive)
+- `tool_result`: `parentBlockId = event.parentCallId ?? null`. Pop from stack **only if `!event.isInternal`**
+- `token` / `reasoning` chunks: `parentBlockId = callStack.at(-1) ?? null`
+- Orphaned children (internal tool filtered): their `parentCallId` points to a non-emitted block → UI promotes them to root per Decision 5
+
+**Engines:**
+- Copilot: `parentCallId` is set on tools by the SDK; reasoning arrives with no explicit parent but context stack covers it
+- Claude: `parentCallId` is never set (all tools are depth-1 from our perspective); callStack is always empty for Claude; all `parentBlockId` values are `null`
+
 ## Data Flow Diagram
 
 ```
-AI SSE
-  │ chunks
+AI SDK (Copilot / Claude)
+  │ events: token, reasoning, tool_start/result (with callId, parentCallId, isInternal)
   ▼
-Engine loop (engine.ts / orchestrator.ts)
-  │ StreamEvent (with blockId, seq=0 draft)
+Engine (copilot/events.ts, claude/events.ts)
+  │ EngineEvent — normalized, isInternal flagged
+  ▼
+Orchestrator (orchestrator.ts)
+  │ callStack: string[] tracks open tool calls
+  │ assigns parentBlockId to every StreamEvent
+  │ isInternal tools: filtered out (never emitted)
+  │ StreamEvent { blockId, parentBlockId, type, content, metadata }
   ▼
 Batcher (per execution, bun side)
   ├──▶ IPC "stream.event" immediately  (text_chunk, reasoning_chunk, status_chunk)
@@ -198,23 +262,21 @@ Batcher (per execution, bun side)
   └──▶ in-memory buffer
          │ every 500ms OR on done
          ▼
-       DB write → stream_events (persisted types only)
+       DB write → stream_events (persisted types only, with parent_block_id column)
        IPC batch → "stream.event" (all accumulated events since last flush)
 
 Frontend store
-  │ on "stream.event":
-  │   if text_chunk/reasoning_chunk/status_chunk → update live block content
-  │   if persisted type → upsert block in TaskStreamState
-  │   if done → mark all blocks done, clear isStreaming
+  │ on "stream.event" (FLAT — all events regardless of depth):
+  │   create/update block in flat blocks Map
+  │   if parentBlockId && parent found → add to parent.children[]
+  │   if parentBlockId && parent NOT found → promote to roots[] (orphan)
+  │   if parentBlockId null → add to roots[]
   ▼
 TaskDetailDrawer.vue
-  renders blockOrder in seq order:
-    "t0" → TextBubble (streaming or final)
-    "r0" → ReasoningBubble (collapsible, auto-close on done)
-    "call_abc" → ToolCallGroup
-    "sa0" → SubagentBlock (collapsible)
-      "sa0-r0" → nested ReasoningBubble
-      "sa0-t0" → nested TextBubble
-      "sa0-call_xyz" → nested ToolCallGroup
-    "t1" → TextBubble (final summary)
+  recursive render of roots[]:
+    renderBlock("r0")   → ReasoningBubble (collapsible, streaming)
+    renderBlock("c1")   → ToolCallGroup (collapsible)
+      renderBlock("r1") → nested ReasoningBubble (child of c1)
+      renderBlock("c2") → nested ToolCallGroup (child of c1)
+    renderBlock("t0")   → TextBubble (final response)
 ```
