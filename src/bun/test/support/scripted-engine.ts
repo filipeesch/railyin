@@ -1,27 +1,83 @@
 import type { EngineEvent, ExecutionEngine, ExecutionParams } from "../../engine/types.ts";
 
-type ScriptStep = EngineEvent | { type: "wait_for_abort" };
+type ScriptStep =
+    | EngineEvent
+    | { type: "wait_for_abort" }
+    | { type: "checkpoint"; name: string };
 
 /**
- * ScriptedEngine implements ExecutionEngine by yielding pre-scripted EngineEvent sequences.
- * Supports a `wait_for_abort` step to pause the generator until the execution is cancelled,
- * enabling cancel-path tests without involving any real AI provider.
+ * ScriptedEngine implements ExecutionEngine with fully scripted turns.
  *
- * Usage:
- *   const engine = new ScriptedEngine();
+ * Supports two flow-control steps:
+ *   scriptWaitForAbort()     — pauses until the execution's AbortSignal fires
+ *   scriptCheckpoint(name)   — pauses until the test calls engine.proceed(name)
+ *
+ * Checkpoint protocol lets a test freeze the producer mid-stream and assert
+ * on the two IPC/DB channels independently:
+ *
  *   engine.queueTurn([
- *     { type: "reasoning", content: "thinking..." },
- *     { type: "wait_for_abort" },   // pauses until cancel() is called
- *     { type: "token", content: "Hello." },
- *     { type: "done" },
+ *     scriptReasoning("thinking"),
+ *     scriptCheckpoint("after-reasoning"),   // engine pauses here
+ *     scriptToolStart("c1", "read_file"),
+ *     scriptCheckpoint("after-tool"),
+ *     scriptDone(),
  *   ]);
+ *
+ *   // In test body:
+ *   await engine.waitForCheckpoint("after-reasoning");
+ *   // → assert IPC has reasoning_chunk, DB has nothing yet
+ *   engine.proceed("after-reasoning");
+ *
+ *   await engine.waitForCheckpoint("after-tool");
+ *   // → assert IPC has tool_start, DB has reasoning (immediate flush)
+ *   engine.proceed("after-tool");
  */
 export class ScriptedEngine implements ExecutionEngine {
     private readonly turns: ScriptStep[][] = [];
+    private readonly checkpoints = new Map<string, {
+        reached: Promise<void>;
+        resolveReached: () => void;
+        proceed: Promise<void>;
+        resolveProceed: () => void;
+    }>();
 
     queueTurn(steps: ScriptStep[]): this {
         this.turns.push(steps);
+        // Pre-register checkpoints from the turn so waitForCheckpoint() works before execute()
+        for (const step of steps) {
+            if (step.type === "checkpoint") {
+                this._registerCheckpoint(step.name);
+            }
+        }
         return this;
+    }
+
+    private _registerCheckpoint(name: string): void {
+        if (this.checkpoints.has(name)) return;
+        let resolveReached!: () => void;
+        let resolveProceed!: () => void;
+        const reached = new Promise<void>((r) => { resolveReached = r; });
+        const proceed = new Promise<void>((r) => { resolveProceed = r; });
+        this.checkpoints.set(name, { reached, resolveReached, proceed, resolveProceed });
+    }
+
+    /** Wait until the engine has paused at this checkpoint. */
+    async waitForCheckpoint(name: string, timeoutMs = 5_000): Promise<void> {
+        const cp = this.checkpoints.get(name);
+        if (!cp) throw new Error(`ScriptedEngine: checkpoint "${name}" not registered`);
+        await Promise.race([
+            cp.reached,
+            new Promise<void>((_, reject) =>
+                setTimeout(() => reject(new Error(`Timed out waiting for checkpoint "${name}"`)), timeoutMs),
+            ),
+        ]);
+    }
+
+    /** Allow the engine to continue past a checkpoint. */
+    proceed(name: string): void {
+        const cp = this.checkpoints.get(name);
+        if (!cp) throw new Error(`ScriptedEngine: checkpoint "${name}" not registered`);
+        cp.resolveProceed();
     }
 
     execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -30,8 +86,7 @@ export class ScriptedEngine implements ExecutionEngine {
         return this.emit(steps, params.signal);
     }
 
-    // Abort signal in params already cancels the generator (wait_for_abort step).
-    cancel(_executionId: number): void { /* no-op */ }
+    cancel(_executionId: number): void { /* AbortSignal handles this */ }
 
     async resume(_executionId: number, _input: import("../../engine/types.ts").EngineResumeInput): Promise<void> { /* no-op */ }
 
@@ -47,12 +102,20 @@ export class ScriptedEngine implements ExecutionEngine {
                 }
                 continue;
             }
+
+            if (step.type === "checkpoint") {
+                const cp = this.checkpoints.get(step.name)!;
+                cp.resolveReached();
+                await cp.proceed;
+                continue;
+            }
+
             yield step as EngineEvent;
         }
     }
 }
 
-// ─── Helpers to build script steps ──────────────────────────────────────────
+// ─── Script step builders ────────────────────────────────────────────────────
 
 export function scriptToken(content: string): EngineEvent {
     return { type: "token", content };
@@ -81,4 +144,9 @@ export function scriptDone(): EngineEvent {
 export function scriptWaitForAbort(): ScriptStep {
     return { type: "wait_for_abort" };
 }
+
+export function scriptCheckpoint(name: string): ScriptStep {
+    return { type: "checkpoint", name };
+}
+
 

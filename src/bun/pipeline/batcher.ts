@@ -87,6 +87,12 @@ export class StreamBatcher {
 
     this.buffer.push(event);
 
+    // Force immediate flush at tool boundaries so the DB reflects accumulated reasoning/tokens
+    // before the tool block, without waiting for the 500ms timer.
+    if (event.type === "tool_call" || event.type === "tool_result") {
+      this.flush();
+    }
+
     if (event.done) {
       this.stop();
     }

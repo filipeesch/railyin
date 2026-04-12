@@ -125,14 +125,9 @@ const batchers = new Map<number, StreamBatcher>();
 function getOrCreateBatcher(taskId: number, executionId: number): StreamBatcher {
   const existing = batchers.get(executionId);
   if (existing) return existing;
-  const batcher = new StreamBatcher(taskId, executionId, (events) => {
-    for (const event of events) {
-      // Chunks were already forwarded immediately in onStreamEvent; skip here
-      if (event.type === "text_chunk" || event.type === "reasoning_chunk" || event.type === "status_chunk") {
-        continue;
-      }
-      win.webview.rpc.send["stream.event"](event);
-    }
+  const batcher = new StreamBatcher(taskId, executionId, (_events) => {
+    // DB writes are handled by StreamBatcher.flush() internally.
+    // IPC delivery happens immediately in onStreamEvent — nothing to do here.
   });
   batcher.start();
   batchers.set(executionId, batcher);
@@ -141,10 +136,8 @@ function getOrCreateBatcher(taskId: number, executionId: number): StreamBatcher 
 
 function onStreamEvent(event: StreamEvent): void {
   const batcher = getOrCreateBatcher(event.taskId, event.executionId);
-  // Real-time relay for chunk events (before buffering)
-  if (event.type === "text_chunk" || event.type === "reasoning_chunk" || event.type === "status_chunk") {
-    win.webview.rpc.send["stream.event"](event);
-  }
+  // ALL events go to IPC immediately — no 500ms delay for any event type.
+  win.webview.rpc.send["stream.event"](event);
   batcher.push(event);
   if (event.done) {
     batchers.delete(event.executionId);

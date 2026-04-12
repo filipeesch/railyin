@@ -1085,12 +1085,20 @@ export class Orchestrator implements ExecutionCoordinator {
       // the generator was aborted (done=true set by the AbortSignal listener in
       // translateCopilotStream). In the abort case no state was written yet.
       if (abortController.signal.aborted) {
+        // Flush any accumulated reasoning before closing so the reasoning bubble closes
+        if (reasoningAccum) {
+          const rCancelId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+          this.onNewMessage({ id: rCancelId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+          this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, subagentId: null, done: false });
+          reasoningAccum = "";
+        }
         db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
         db.run(
           "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
           [executionId],
         );
         this.onToken(taskId, executionId, "", true);
+        this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, subagentId: null, done: true });
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
