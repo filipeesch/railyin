@@ -318,15 +318,19 @@ const fileListItems = computed(() => reviewStore.files.map((path) => ({ path }))
 // ——— ViewZone management —————————————————————————————————————————————————
 
 function clearAllZones() {
+  clearHunkZones();
+  clearCommentZones();
+}
+
+/** Remove only hunk action-bar zones — leaves comment zones intact. */
+function clearHunkZones() {
   for (const [, record] of hunkZones) record.observer?.disconnect();
-  for (const [, record] of commentZones) record.observer?.disconnect();
   const editor = diffEditorRef.value?.getEditor();
   if (editor) {
     const modEditor = editor.getModifiedEditor();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     modEditor.changeViewZones((accessor: any) => {
       for (const [, record] of hunkZones) accessor.removeZone(record.zoneId);
-      for (const [, record] of commentZones) accessor.removeZone(record.zoneId);
     });
     if (sideBySide.value) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -337,8 +341,27 @@ function clearAllZones() {
       });
     }
   }
-  diffEditorRef.value?.clearApps();
+  // Only unmount hunk-bar Vue apps (comment zones manage their own apps via commentZones map).
+  for (const [, record] of hunkZones) {
+    try { record.app.unmount(); } catch { /* ignore */ }
+  }
   hunkZones.clear();
+}
+
+/** Remove only line-comment zones — leaves hunk action bars intact. */
+function clearCommentZones() {
+  for (const [, record] of commentZones) record.observer?.disconnect();
+  const editor = diffEditorRef.value?.getEditor();
+  if (editor) {
+    const modEditor = editor.getModifiedEditor();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    modEditor.changeViewZones((accessor: any) => {
+      for (const [, record] of commentZones) accessor.removeZone(record.zoneId);
+    });
+  }
+  for (const [, record] of commentZones) {
+    try { record.app.unmount(); } catch { /* ignore */ }
+  }
   commentZones.clear();
 }
 
