@@ -12,7 +12,7 @@
       :key="windowStart + i"
       class="rv__line"
     >
-      <span class="rv__gutter">{{ windowStart + i + 1 }}</span>
+      <span class="rv__gutter">{{ lineOffset + windowStart + i }}</span>
       <span class="rv__content">{{ line }}</span>
     </div>
 
@@ -29,10 +29,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from "vue";
 
-const props = defineProps<{ content: string }>();
+const props = defineProps<{ content: string; startLine?: number }>();
 
 const CAP   = 50;
 const CHUNK = 25;
+const lineOffset = computed(() => Math.max(props.startLine ?? 1, 1));
 
 const lines = computed(() => {
   if (!props.content) return [];

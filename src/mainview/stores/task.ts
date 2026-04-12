@@ -10,6 +10,29 @@ function tryParseJson(s: string): Record<string, unknown> | null {
   try { return JSON.parse(s); } catch { return null; }
 }
 
+/**
+ * Extract display-ready text from the orchestrator's JSON tool_result envelope.
+ * Works for both Copilot and Claude engines (engine-agnostic).
+ */
+function extractToolResultText(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return raw;
+    // Prefer detailedContent (rich text), then joined contents[].text, then content
+    if (typeof parsed.detailedContent === "string" && parsed.detailedContent) return parsed.detailedContent;
+    if (Array.isArray(parsed.contents)) {
+      const texts = parsed.contents
+        .filter((c: Record<string, unknown>) => typeof c.text === "string")
+        .map((c: Record<string, unknown>) => c.text as string);
+      if (texts.length > 0) return texts.join("\n");
+    }
+    if (typeof parsed.content === "string") return parsed.content;
+    return raw;
+  } catch {
+    return raw;
+  }
+}
+
 /** Remove live blocks of a given type scoped to a parentBlockId.
  *  Returns the earliest position index for position-preserving insertion,
  *  or -1 if nothing was removed. */
@@ -473,7 +496,7 @@ export const useTaskStore = defineStore("task", () => {
       const resultMeta = {
         ...(existing.metadata ? tryParseJson(existing.metadata) : {}),
         hasResult: true,
-        resultContent: event.content,
+        resultContent: extractToolResultText(event.content),
         resultMetadata: event.metadata,
       };
       existing.metadata = JSON.stringify(resultMeta);

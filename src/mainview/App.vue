@@ -24,6 +24,8 @@ const taskStore = useTaskStore();
 
 function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) {
   if (!activity) return;
+  // Suppress toast for the task currently visible in the detail drawer
+  if (activity.task.id === taskStore.activeTaskId) return;
   const board = boardStore.boards.find((entry) => entry.id === activity.task.boardId);
   const workspace = workspaceStore.workspaces.find((entry) => entry.id === board?.workspaceId);
   const toastPayload = getTaskActivityToast(activity, workspace?.name ?? "Workspace");

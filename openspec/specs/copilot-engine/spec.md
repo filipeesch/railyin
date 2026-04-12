@@ -24,8 +24,12 @@ The system SHALL translate Copilot SDK streaming events to the `EngineEvent` dis
 - `assistant.thinking_delta` → `{ type: "reasoning" }`
 - `tool.execution_start` → `{ type: "tool_start" }`
 - `tool.execution_complete` → `{ type: "tool_result" }`
+- `tool.execution_partial_result` → `{ type: "status" }` only for non-internal tools, with truncated content
+- `tool.execution_progress` → `{ type: "status" }` only for non-internal tools, with truncated content
 - `session.complete` → `{ type: "done" }`
 - `session.error` → `{ type: "error" }`
+
+The `translateEvent()` function SHALL look up `toolCallId` from `tool.execution_partial_result` and `tool.execution_progress` events in `toolMetaByCallId` and suppress status events for tools marked as internal. For non-internal tools, the status message SHALL be truncated to a single summary line of at most 120 characters, using the last non-empty line of the output and prefixed with the tool name when available.
 
 #### Scenario: Message delta translated to token event
 - **WHEN** the SDK emits an `assistant.message_delta` event with content "Hello"
@@ -46,6 +50,18 @@ The system SHALL translate Copilot SDK streaming events to the `EngineEvent` dis
 #### Scenario: User-facing tool execution still appears in order
 - **WHEN** the SDK emits user-visible tool activity for a Copilot execution
 - **THEN** the translated conversation items preserve the execution order needed by the timeline and remain visible in the chat UI
+
+#### Scenario: Internal tool partial results are suppressed
+- **WHEN** the SDK emits `tool.execution_partial_result` for a tool whose `toolCallId` maps to an internal tool in `toolMetaByCallId`
+- **THEN** `translateEvent()` returns `null` and no status event is emitted
+
+#### Scenario: Internal tool progress events are suppressed
+- **WHEN** the SDK emits `tool.execution_progress` for a tool whose `toolCallId` maps to an internal tool in `toolMetaByCallId`
+- **THEN** `translateEvent()` returns `null` and no status event is emitted
+
+#### Scenario: Non-internal tool partial result is truncated to a summary line
+- **WHEN** the SDK emits `tool.execution_partial_result` with multi-line `partialOutput` for a non-internal tool named `run_in_terminal`
+- **THEN** the translated status message contains at most 120 characters, using the last non-empty line of output, prefixed with the tool name
 
 #### Scenario: Session completion translated to done event
 - **WHEN** the SDK emits `session.complete`
