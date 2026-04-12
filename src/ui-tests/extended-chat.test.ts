@@ -2,7 +2,7 @@
  * extended-chat.test.ts — Edge-case and advanced chat UI tests.
  *
  * Test runner: bun test  (bun:test)
- * Transport:   HTTP bridge to Electrobun debug server (port from /tmp/railyn-debug.port)
+ * Transport:   HTTP bridge to Electrobun debug server (--debug=PORT or /tmp/railyn-debug.port)
  *
  * Run: bun test src/ui-tests/extended-chat.test.ts --timeout 120000
  * Requires the app to be running with: bun run dev:test  (--debug=0 --memory-db)

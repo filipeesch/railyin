@@ -85,51 +85,74 @@
         <div class="task-detail__conversation" ref="scrollEl" @scroll.passive="onScroll">
 
           <div class="conversation-inner">
-            <template v-for="item in displayItems" :key="item.key">
-              <ToolCallGroup
-                v-if="item.kind === 'tool_entry'"
-                :entry="item.entry"
-              />
-              <CodeReviewCard
-                v-else-if="item.kind === 'code_review'"
-                :message="item.message"
-              />
-              <MessageBubble
-                v-else
-                :chunk="item.message"
-                :index="item.msgIndex"
+            <TransitionGroup name="chat-item" tag="div" class="chat-items">
+              <template v-for="item in displayItems" :key="item.key">
+                <ToolCallGroup
+                  v-if="item.kind === 'tool_entry'"
+                  :entry="item.entry"
+                />
+                <CodeReviewCard
+                  v-else-if="item.kind === 'code_review'"
+                  :message="item.message"
+                />
+                <MessageBubble
+                  v-else
+                  :chunk="item.message"
+                  :index="item.msgIndex"
+                />
+              </template>
+            </TransitionGroup>
+
+            <!-- Unified stream blocks: recursive tree render (roots → children via DFS) -->
+            <template v-if="taskStore.activeStreamState && taskStore.activeStreamState.roots.length > 0">
+              <StreamBlockNode
+                v-for="rootId in taskStore.activeStreamState.roots"
+                :key="rootId"
+                :blockId="rootId"
+                :blocks="taskStore.activeStreamState.blocks"
+                :renderMd="renderMd"
+                :version="taskStore.streamVersion"
               />
             </template>
-
-            <!-- Live streaming reasoning bubble (task 6.2) -->
-            <ReasoningBubble
-              v-if="taskStore.streamingReasoningToken && taskStore.streamingTaskId === task.id"
-              :content="taskStore.streamingReasoningToken"
-              :streaming="taskStore.isStreamingReasoning"
-              key="live-reasoning"
-            />
-
-            <!-- Live streaming bubble (only when this task is the one streaming) -->
+            <!-- Ephemeral status message (outside roots guard so it shows before any blocks arrive) -->
             <div
-              v-if="taskStore.streamingToken && taskStore.streamingTaskId === task.id"
-              class="msg msg--assistant"
-            >
-              <div class="msg__bubble prose streaming" v-html="renderMd(taskStore.streamingToken)" />
-              <div class="msg__meta">AI<span class="cursor">▌</span></div>
-            </div>
-
-            <!-- Ephemeral status message during non-streaming fallback (cleared when tokens arrive) -->
-            <div
-              v-else-if="taskStore.streamingStatusMessage && taskStore.streamingTaskId === task.id"
+              v-if="taskStore.activeStreamState && !taskStore.activeStreamState.isDone && taskStore.activeStreamState.statusMessage"
               class="msg msg--system msg--status-ephemeral"
             >
               <ProgressSpinner style="width: 16px; height: 16px" />
-              <span>{{ taskStore.streamingStatusMessage }}</span>
+              <span>{{ taskStore.activeStreamState.statusMessage }}</span>
             </div>
+
+            <!-- Fallback: legacy streaming (non-pipeline engine path) -->
+            <template v-else-if="!taskStore.activeStreamState">
+              <!-- Live streaming reasoning bubble -->
+              <ReasoningBubble
+                v-if="taskStore.streamingReasoningToken && taskStore.streamingTaskId === task.id"
+                :content="taskStore.streamingReasoningToken"
+                :streaming="taskStore.isStreamingReasoning"
+                key="live-reasoning"
+              />
+              <!-- Live streaming text bubble -->
+              <div
+                v-if="taskStore.streamingToken && taskStore.streamingTaskId === task.id"
+                class="msg msg--assistant"
+              >
+                <div class="msg__bubble prose streaming" v-html="renderMd(taskStore.streamingToken)" />
+                <div class="msg__meta">AI<span class="cursor">▌</span></div>
+              </div>
+              <!-- Ephemeral status (legacy) -->
+              <div
+                v-else-if="taskStore.streamingStatusMessage && taskStore.streamingTaskId === task.id"
+                class="msg msg--system msg--status-ephemeral"
+              >
+                <ProgressSpinner style="width: 16px; height: 16px" />
+                <span>{{ taskStore.streamingStatusMessage }}</span>
+              </div>
+            </template>
 
             <!-- Running spinner when no tokens yet -->
             <div
-              v-else-if="task.executionState === 'running'"
+              v-if="task.executionState === 'running' && !hasLiveContent"
               class="msg msg--system"
             >
               <ProgressSpinner style="width: 20px; height: 20px" />
@@ -427,6 +450,7 @@ import MessageBubble from "./MessageBubble.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import { pairToolMessages, type ToolEntry } from "../utils/pairToolMessages";
 import ReasoningBubble from "./ReasoningBubble.vue";
+import StreamBlockNode from "./StreamBlockNode.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
 import TodoPanel from "./TodoPanel.vue";
@@ -562,6 +586,13 @@ const displayItems = computed<DisplayItem[]>(() => {
   return items;
 });
 
+// True if there is any live content in the stream state (suppresses the "Thinking..." spinner)
+const hasLiveContent = computed(() => {
+  const state = taskStore.activeStreamState;
+  if (!state || state.isDone) return false;
+  return state.roots.length > 0 || !!state.statusMessage;
+});
+
 // ─── Resizable drawer ────────────────────────────────────────────────────────
 const drawerWidth = ref(Math.round(window.innerWidth * 0.7));
 const MIN_WIDTH = 480;
@@ -690,12 +721,12 @@ function onScroll() {
   autoScroll.value = distFromBottom < SCROLL_THRESHOLD;
 }
 
-function scrollToBottom() {
+function scrollToBottom(behavior: ScrollBehavior = "instant") {
   if (!scrollEl.value) return;
-  scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
+  scrollEl.value.scrollTo({ top: scrollEl.value.scrollHeight, behavior });
 }
 
-// Auto-scroll to bottom when messages change
+// Auto-scroll to bottom when messages or live stream changes
 watch(
   [
     () => taskStore.messages.length,
@@ -703,10 +734,14 @@ watch(
     () => taskStore.streamingReasoningToken.length,
     () => taskStore.streamingStatusMessage.length,
     () => task.value?.executionState,
+    () => taskStore.streamVersion,
   ],
-  async () => {
+  async ([newMsgLen, , , , , newStreamVersion], [oldMsgLen, , , , , oldStreamVersion]) => {
     await nextTick();
-    if (autoScroll.value) scrollToBottom();
+    if (!autoScroll.value) return;
+    // Smooth scroll only when a whole new message arrives; instant during streaming chunks
+    const isNewMessage = newMsgLen !== oldMsgLen;
+    scrollToBottom(isNewMessage ? "smooth" : "instant");
   },
 );
 
@@ -1134,6 +1169,28 @@ watch(
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+/* Chat item enter animation */
+@keyframes msgFadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.chat-item-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.chat-item-enter-active {
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+}
+.chat-item-enter-to {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.chat-items {
+  display: contents;
 }
 
 .msg {

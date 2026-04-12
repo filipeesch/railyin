@@ -2,7 +2,7 @@
  * review-overlay.test.ts — UI regression tests for the code review overlay.
  *
  * Test runner: bun test  (bun:test)
- * Transport:   HTTP bridge to Electrobun debug server (port from /tmp/railyn-debug.port)
+ * Transport:   HTTP bridge to Electrobun debug server (--debug=PORT or /tmp/railyn-debug.port)
  *
  * Run: bun test src/ui-tests --timeout 120000
  * Requires the app to be running: bun run dev:test  (--debug=0 --memory-db)

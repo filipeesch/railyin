@@ -2,6 +2,7 @@ import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
 import { runMigrations, seedDefaultWorkspace, syncFileBackedCompatibilityState } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
 import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
+import { StreamBatcher } from "./pipeline/batcher.ts";
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 {
@@ -76,7 +77,7 @@ import { appendMessage, compactConversation } from "./workflow/engine.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
-import type { RailynRPCType } from "../shared/rpc-types.ts";
+import type { RailynRPCType, StreamEvent } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -139,6 +140,31 @@ function notifyWorkflowReloaded(): void {
   win.webview.rpc.send["workflow.reloaded"]({});
 }
 
+// ─── Per-execution stream batchers ───────────────────────────────────────────
+const batchers = new Map<number, StreamBatcher>();
+
+function getOrCreateBatcher(taskId: number, executionId: number): StreamBatcher {
+  const existing = batchers.get(executionId);
+  if (existing) return existing;
+  const batcher = new StreamBatcher(taskId, executionId, (_events) => {
+    // DB writes are handled by StreamBatcher.flush() internally.
+    // IPC delivery happens immediately in onStreamEvent — nothing to do here.
+  });
+  batcher.start();
+  batchers.set(executionId, batcher);
+  return batcher;
+}
+
+function onStreamEvent(event: StreamEvent): void {
+  const batcher = getOrCreateBatcher(event.taskId, event.executionId);
+  // ALL events go to IPC immediately — no 500ms delay for any event type.
+  win.webview.rpc.send["stream.event"](event);
+  batcher.push(event);
+  if (event.done) {
+    batchers.delete(event.executionId);
+  }
+}
+
 // ─── Wire up RPC handlers ─────────────────────────────────────────────────────
 
 // Create orchestrator once all RPC callbacks are defined
@@ -150,6 +176,10 @@ const orchestrator: Orchestrator | null = !configError
       notifyNewMessage,
     )
   : null;
+
+if (orchestrator) {
+  orchestrator.setOnStreamEvent(onStreamEvent);
+}
 
 const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
   handlers: {
@@ -798,12 +828,38 @@ const debugServer = Bun.serve({
       }
     }
 
+    // Test-only: push synthetic stream events directly to the frontend via IPC.
+    // Accepts a JSON body: { events: StreamEvent[] }
+    // Events are sent immediately via win.webview.rpc.send["stream.event"].
+    if (url.pathname === "/queue-stream-events") {
+      try {
+        const body = await req.json() as { events?: unknown[] };
+        if (!Array.isArray(body.events)) {
+          return new Response(JSON.stringify({ __error: "events array required" }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        for (const event of body.events) {
+          win.webview.rpc.send["stream.event"](event as StreamEvent);
+        }
+        return new Response(JSON.stringify({ ok: true, count: body.events.length }), {
+          headers: { "content-type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ __error: String(e) }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
     if (url.pathname === "/shutdown") {
       setTimeout(() => process.exit(0), 50);
       return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
     }
 
-    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=, /shutdown", { status: 200 });
+    return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=, /queue-stream-events, /shutdown", { status: 200 });
   },
 });
 // Announce the actual port (may differ from requested when debugPort=0).

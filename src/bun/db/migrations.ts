@@ -289,6 +289,33 @@ const migrations: Array<{ id: string; sql: string }> = [
     id: "018_git_base_sha",
     sql: `ALTER TABLE task_git_context ADD COLUMN base_sha TEXT;`,
   },
+  {
+    id: "018_stream_events",
+    sql: `
+      CREATE TABLE IF NOT EXISTS stream_events (
+        id           INTEGER PRIMARY KEY,
+        task_id      INTEGER NOT NULL,
+        execution_id INTEGER NOT NULL,
+        seq          INTEGER NOT NULL,
+        block_id     TEXT NOT NULL,
+        type         TEXT NOT NULL,
+        content      TEXT NOT NULL DEFAULT '',
+        metadata     TEXT,
+        parent_block_id TEXT,
+        subagent_id  TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (task_id, seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_stream_events_task ON stream_events (task_id, seq);
+    `,
+  },
+  {
+    id: "019_add_parent_block_id",
+    sql: `
+      -- Add parent_block_id column if it doesn't already exist
+      -- (for fresh DB, it will be in 018; for existing DB, this migration adds it)
+    `,
+  },
 ];
 
 function hasColumn(tableName: string, columnName: string): boolean {
@@ -300,7 +327,18 @@ function hasColumn(tableName: string, columnName: string): boolean {
 function applyMigration(id: string, sql: string): void {
   const db = getDb();
   db.transaction(() => {
-    if (id === "015_workspace_config_key") {
+    if (id === "002_task_ux_improvements") {
+      if (!hasColumn("tasks", "model")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN model TEXT");
+      }
+    } else if (id === "007_shell_command_approval") {
+      if (!hasColumn("tasks", "shell_auto_approve")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN shell_auto_approve INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!hasColumn("tasks", "approved_commands")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN approved_commands TEXT NOT NULL DEFAULT '[]'");
+      }
+    } else if (id === "015_workspace_config_key") {
       if (!hasColumn("workspaces", "config_key")) {
         db.exec("ALTER TABLE workspaces ADD COLUMN config_key TEXT");
       }
@@ -313,6 +351,10 @@ function applyMigration(id: string, sql: string): void {
     } else if (id === "018_git_base_sha") {
       if (!hasColumn("task_git_context", "base_sha")) {
         db.exec(sql);
+      }
+    } else if (id === "019_add_parent_block_id") {
+      if (!hasColumn("stream_events", "parent_block_id")) {
+        db.exec("ALTER TABLE stream_events ADD COLUMN parent_block_id TEXT");
       }
     } else {
       db.exec(sql);
@@ -336,7 +378,10 @@ export function runMigrations(): void {
     db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all().map((r) => r.id),
   );
 
-  for (const migration of migrations) {
+  // Sort migrations by ID to ensure they're applied in the correct order
+  const sortedMigrations = [...migrations].sort((a, b) => a.id.localeCompare(b.id));
+
+  for (const migration of sortedMigrations) {
     if (applied.has(migration.id)) continue;
 
     applyMigration(migration.id, migration.sql);

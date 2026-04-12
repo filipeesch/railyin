@@ -109,7 +109,9 @@ export async function runCancellationScenario(runtime: BackendRpcRuntime): Promi
     const tokenCountAfterCancel = await runtime.recorder.waitForStableTokenCount(result.executionId);
 
     expect(tokenCountAfterCancel).toBeGreaterThanOrEqual(tokenCountBeforeCancel);
-    expect(runtime.getMessages(taskId).filter((message) => message.type === "assistant")).toHaveLength(0);
+    // Partial text accumulated before cancel is saved so the message is not lost.
+    // tokenCountBeforeCancel > 0 is guaranteed by waitForAnyToken above.
+    expect(runtime.getMessages(taskId).filter((message) => message.type === "assistant").length).toBeGreaterThan(0);
 }
 
 export async function runFatalFailureScenario(runtime: BackendRpcRuntime): Promise<void> {

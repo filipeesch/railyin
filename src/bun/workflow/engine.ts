@@ -57,10 +57,13 @@ export const MICRO_COMPACT_CLEARABLE_TOOLS = new Set([
 
 // ─── Streaming callback type ──────────────────────────────────────────────────
 
+/** @deprecated Use OnStreamEvent instead */
 export type OnToken = (taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean) => void;
 export type OnError = (taskId: number, executionId: number, error: string) => void;
 export type OnTaskUpdated = (task: Task) => void;
+/** @deprecated Use OnStreamEvent instead */
 export type OnNewMessage = (message: ConversationMessage) => void;
+export type OnStreamEvent = (event: import("../../shared/rpc-types.ts").StreamEvent) => void;
 
 // ─── Cancellation map ─────────────────────────────────────────────────────────
 // Keyed by executionId. Populated at execution start, removed on finish.
@@ -790,6 +793,7 @@ export async function handleTransition(
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
   onNewMessage: OnNewMessage,
+  onStreamEvent?: OnStreamEvent,
 ): Promise<{ task: Task; executionId: number | null }> {
   const db = getDb();
 
@@ -880,7 +884,7 @@ export async function handleTransition(
   // 9. Run async (non-blocking)
   const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
   const resolvedModel = updatedRow.model ?? "";
-  runExecution(taskId, executionId, resolvedOnEnterPrompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
+  runExecution(taskId, executionId, resolvedOnEnterPrompt, column.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage, onStreamEvent).catch(
     () => { },
   );
 
@@ -903,6 +907,10 @@ async function runSubExecution({
   agentLabel,
   parentContext,
   parentToolDefs,
+  taskId,
+  executionId,
+  subagentId,
+  onStreamEvent,
 }: {
   worktreePath: string;
   instructions: string;
@@ -917,6 +925,10 @@ async function runSubExecution({
   /** When provided, use these tool definitions for the API call (matching parent's cache prefix).
    *  The child's resolved tool names are used only as an execution whitelist. */
   parentToolDefs?: import("../ai/types.ts").AIToolDefinition[];
+  taskId?: number;
+  executionId?: number;
+  subagentId?: string;
+  onStreamEvent?: OnStreamEvent;
 }): Promise<string> {
   const config = getConfig();
   let provider;
@@ -993,12 +1005,41 @@ async function runSubExecution({
   const MAX_SUB_ROUNDS = 10;
   let toolRounds = 0;
 
+  // Helper: emit a stream event for this subagent if pipeline is wired
+  const emitSub = (
+    type: import("../../shared/rpc-types.ts").StreamEventType,
+    content: string,
+    blockId?: string,
+    metadata?: string | null,
+  ) => {
+    if (!onStreamEvent || taskId == null || executionId == null) return;
+    onStreamEvent({
+      taskId,
+      executionId,
+      seq: 0,
+      blockId: blockId ?? "",
+      type,
+      content,
+      metadata: metadata ?? null,
+      subagentId: subagentId ?? null,
+      done: false,
+    });
+  };
+
+  if (subagentId) {
+    emitSub("status_chunk", agentLabel ? `${agentLabel} thinking…` : "Sub-agent thinking…");
+  }
+
   while (toolRounds < MAX_SUB_ROUNDS) {
     const turn = await retryTurn(provider, liveMessages, { tools: apiToolDefs, effort: "low", signal, agentLabel, maxTokens: 16384 }, undefined, {}, "foreground", fallbackProvider);
 
     if (turn.type === "text") {
       subLspManager.shutdown();
-      return (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
+      const result = (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
+      if (subagentId) {
+        emitSub("assistant", result);
+      }
+      return result;
     }
 
     toolRounds++;
@@ -1011,24 +1052,32 @@ async function runSubExecution({
 
     for (const call of turn.calls) {
       const fnName = call.function.name;
+      // Emit tool_call event for this subagent tool call
+      if (subagentId) {
+        emitSub("tool_call", JSON.stringify({ name: fnName, arguments: call.function.arguments }), call.id);
+      }
       // spawn_agent cannot recursively spawn (prevent infinite nesting)
       if (fnName === "spawn_agent") {
+        const errMsg = "Error: spawn_agent cannot be called from within a sub-agent.";
         liveMessages.push({
           role: "tool",
-          content: "Error: spawn_agent cannot be called from within a sub-agent.",
+          content: errMsg,
           tool_call_id: call.id,
           name: fnName,
         });
+        if (subagentId) emitSub("tool_result", errMsg, call.id);
         continue;
       }
       // Tool execution whitelist: only allow tools in the child's tool list
       if (parentToolDefs && !childToolNames.has(fnName)) {
+        const errMsg = `Error: tool "${fnName}" is not available to this sub-agent. Available tools: ${[...childToolNames].join(", ")}.`;
         liveMessages.push({
           role: "tool",
-          content: `Error: tool "${fnName}" is not available to this sub-agent. Available tools: ${[...childToolNames].join(", ")}.`,
+          content: errMsg,
           tool_call_id: call.id,
           name: fnName,
         });
+        if (subagentId) emitSub("tool_result", errMsg, call.id);
         continue;
       }
       const result = await executeTool(fnName, call.function.arguments, toolCtx);
@@ -1045,6 +1094,7 @@ async function runSubExecution({
         tool_call_id: call.id,
         name: fnName,
       });
+      if (subagentId) emitSub("tool_result", stored, call.id);
     }
   }
 
@@ -1077,6 +1127,7 @@ async function runExecution(
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
   onNewMessage: OnNewMessage = () => {},
+  onStreamEvent?: OnStreamEvent,
 ): Promise<void> {
   const db = getDb();
 
@@ -1091,6 +1142,7 @@ async function runExecution(
     );
     const cancelledRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (cancelledRow) onTaskUpdated(mapTask(cancelledRow));
+    onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, subagentId: null, done: true });
   }
 
   let lspManager: LSPServerManager | undefined;
@@ -1252,12 +1304,12 @@ async function runExecution(
 
     const taskCallbacks: TaskToolCallbacks = {
       handleTransition: (tId, toState) => {
-        handleTransition(tId, toState, onToken, onError, onTaskUpdated, onNewMessage).catch(
+        handleTransition(tId, toState, onToken, onError, onTaskUpdated, onNewMessage, onStreamEvent).catch(
           (err) => log("error", `task-tool handleTransition failed: ${err}`, { taskId, executionId }),
         );
       },
       handleHumanTurn: (tId, message) => {
-        handleHumanTurn(tId, message, onToken, onError, onTaskUpdated, onNewMessage).catch(
+        handleHumanTurn(tId, message, onToken, onError, onTaskUpdated, onNewMessage, onStreamEvent).catch(
           (err) => log("error", `task-tool handleHumanTurn failed: ${err}`, { taskId, executionId }),
         );
       },
@@ -1364,13 +1416,16 @@ async function runExecution(
           if (event.type === "token") {
             fullResponse += event.content;
             onToken(taskId, executionId, event.content, false);
+            onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, subagentId: null, done: false });
           } else if (event.type === "reasoning") {
             reasoningAccum += event.content;
             hadReasoning = true;
             onToken(taskId, executionId, event.content, false, true);
+            onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, subagentId: null, done: false });
           } else if (event.type === "status") {
             // Ephemeral status event from non-streaming fallback — forward to frontend only, no DB write.
             onToken(taskId, executionId, event.content, false, false, true);
+            onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.content, metadata: null, subagentId: null, done: false });
           } else if (event.type === "tool_calls") {
             log("debug", `Tool calls received: ${event.calls.map(c => c.function.name).join(", ")}`, { taskId, executionId });
             roundCalls = event.calls;
@@ -1522,6 +1577,7 @@ async function runExecution(
         if (cleanReasoning) {
           const rId = appendMessage(taskId, task.conversation_id ?? 0, "reasoning" as MessageType, null, cleanReasoning);
           onNewMessage({ id: rId, taskId, conversationId: task.conversation_id ?? 0, type: "reasoning", role: null, content: cleanReasoning, metadata: null, createdAt: new Date().toISOString() });
+          onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: cleanReasoning, metadata: null, subagentId: null, done: false });
         }
         reasoningAccum = "";
         hadReasoning = false;
@@ -1556,6 +1612,7 @@ async function runExecution(
             metadata: null,
             createdAt: new Date().toISOString(),
           });
+          onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: preambleClean, metadata: null, subagentId: null, done: false });
         }
       }
 
@@ -1787,6 +1844,11 @@ async function runExecution(
                 // Pass the parent's full sorted tool definitions so the sub-agent
                 // uses the same [system, tools] prefix → cache hit on first call.
                 parentToolDefs: tools,
+                // Pipeline: wire stream events so subagent activity is visible live
+                taskId,
+                executionId,
+                subagentId: `${spawnCall.id}-${idx}`,
+                onStreamEvent,
               });
               return `[Agent ${idx + 1}${child.scope ? ` (${child.scope})` : ""}]: ${result}`;
             } catch (e) {
@@ -1837,6 +1899,7 @@ async function runExecution(
           type: "tool_call", role: null, content: callContent, metadata: null,
           createdAt: new Date().toISOString(),
         });
+        onStreamEvent?.({ taskId, executionId, seq: 0, blockId: call.id ?? callId.toString(), type: "tool_call", content: callContent, metadata: null, subagentId: null, done: false });
 
         const result = await executeTool(fnName, fnArgs, toolCtx);
 
@@ -1878,6 +1941,7 @@ async function runExecution(
           type: "tool_result", role: null, content: storedResult, metadata: resultMeta,
           createdAt: new Date().toISOString(),
         });
+        onStreamEvent?.({ taskId, executionId, seq: 0, blockId: call.id ?? resultId.toString(), type: "tool_result", content: storedResult, metadata: JSON.stringify(resultMeta), subagentId: null, done: false });
 
         // Emit UI-only file_diff message (never forwarded to LLM)
         const diffsToEmit = diffs ?? (diff ? [diff] : []);
@@ -1897,6 +1961,7 @@ async function runExecution(
             type: "file_diff", role: null, content: diffContent, metadata: diffMeta,
             createdAt: new Date().toISOString(),
           });
+          onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${call.id}-diff`, type: "file_diff", content: diffContent, metadata: JSON.stringify(diffMeta), subagentId: null, done: false });
         }
 
         liveMessages.push({
@@ -1947,6 +2012,7 @@ async function runExecution(
       if (cleanReasoning) {
         const rId = appendMessage(taskId, task.conversation_id ?? 0, "reasoning" as MessageType, null, cleanReasoning);
         onNewMessage({ id: rId, taskId, conversationId: task.conversation_id ?? 0, type: "reasoning", role: null, content: cleanReasoning, metadata: null, createdAt: new Date().toISOString() });
+        onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: cleanReasoning, metadata: null, subagentId: null, done: false });
       }
       reasoningAccum = "";
     }
@@ -1954,6 +2020,7 @@ async function runExecution(
     if (!isBadAssistantResponse(cleanResponse)) {
       const msgId = appendMessage(taskId, task.conversation_id ?? 0, "assistant", "assistant", cleanResponse);
       onNewMessage({ id: msgId, taskId, conversationId: task.conversation_id ?? 0, type: "assistant", role: "assistant", content: cleanResponse, metadata: null, createdAt: new Date().toISOString() });
+      onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: cleanResponse, metadata: null, subagentId: null, done: false });
 
       // Trigger background session memory extraction every N completed AI turns.
       // Count only persisted assistant messages so the interval is stable.
@@ -2000,6 +2067,7 @@ async function runExecution(
 
     log("info", `Execution completed (${toolRounds} round${toolRounds !== 1 ? "s" : ""}, ~$${totalCostEst.toFixed(4)})`, { taskId, executionId });
     onToken(taskId, executionId, "", true);
+    onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, subagentId: null, done: true });
     db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
     db.run(
       "UPDATE executions SET status = 'completed', finished_at = datetime('now'), summary = ?, cost_estimate = ? WHERE id = ?",
@@ -2060,6 +2128,7 @@ export async function handleHumanTurn(
   onError: OnError,
   onTaskUpdated: OnTaskUpdated,
   onNewMessage: OnNewMessage,
+  onStreamEvent?: OnStreamEvent,
 ): Promise<{ message: ConversationMessage; executionId: number }> {
   const db = getDb();
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -2126,7 +2195,7 @@ export async function handleHumanTurn(
   const resolvedModel = task.model ?? "";
 
   // Run async
-  runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage).catch(
+  runExecution(taskId, executionId, content, column?.stage_instructions, resolvedModel, controller.signal, onToken, onError, onTaskUpdated, onNewMessage, onStreamEvent).catch(
     () => { },
   );
 

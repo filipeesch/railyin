@@ -13,7 +13,7 @@ import type { ExecutionEngine, EngineEvent, ExecutionParams, NativeExecutionType
 import type { LoadedConfig } from "../config/index.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
-import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
+import type { OnToken, OnError, OnTaskUpdated, OnNewMessage, OnStreamEvent } from "../workflow/engine.ts";
 import {
   handleTransition,
   handleHumanTurn,
@@ -39,10 +39,15 @@ export class Orchestrator implements ExecutionCoordinator {
   private readonly onError: OnError;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly onNewMessage: OnNewMessage;
+  private onStreamEvent?: OnStreamEvent;
   private readonly engines = new Map<string, ExecutionEngine>();
 
   /** Map of executionId → AbortController for managing cancellation */
   private readonly abortControllers = new Map<number, AbortController>();
+
+  setOnStreamEvent(cb: OnStreamEvent): void {
+    this.onStreamEvent = cb;
+  }
 
   constructor(
     engine: ExecutionEngine,
@@ -111,7 +116,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleTransition(taskId, toState, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+        () => handleTransition(taskId, toState, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
       );
     }
 
@@ -198,7 +203,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleHumanTurn(taskId, content, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+        () => handleHumanTurn(taskId, content, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
       );
     }
 
@@ -326,7 +331,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleRetry(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage),
+        () => handleRetry(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
       );
     }
 
@@ -380,7 +385,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
-        () => handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, manualEdits),
+        () => handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, manualEdits, this.onStreamEvent),
       );
     }
 
@@ -743,6 +748,9 @@ export class Orchestrator implements ExecutionCoordinator {
     let hadOutput = false; // true once any visible output (tokens, tools, prompts) is produced
     // Track tool_start arguments by callId so tool_result can access them for file_diff
     const toolArgsByCallId = new Map<string, string>();
+    // Orchestrator context stack: callIds of open (non-internal) tool_start events.
+    // Tokens/reasoning emitted while this is non-empty get parentBlockId = callStack.at(-1).
+    const callStack: string[] = [];
 
     try {
       // Task 5.3: Use the AbortController registered by _buildExecutionParams.
@@ -771,21 +779,46 @@ export class Orchestrator implements ExecutionCoordinator {
       for await (const event of stream) {
         // Check for cancellation (Task 5.3)
         if (abortController.signal.aborted) {
+          // Flush reasoningAccum before cancel so the reasoning bubble closes
+          if (reasoningAccum) {
+            const rCancelId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+            this.onNewMessage({ id: rCancelId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+            reasoningAccum = "";
+          }
+          // Task 5.7: Flush tokenAccum before cancel to prevent text loss
+          if (tokenAccum) {
+            const cancelFlushId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
+            this.onNewMessage({ id: cancelFlushId, taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, metadata: null, createdAt: new Date().toISOString() });
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+            tokenAccum = "";
+          }
           db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
           db.run(
             "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
             [executionId],
           );
           this.onToken(taskId, executionId, "", true);
+          this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
           return;
         }
 
         switch (event.type) {
           case "token": {
+            // Flush any accumulated reasoning before the first text token so the
+            // batcher assigns the persisted "reasoning" event the same blockId as
+            // the preceding reasoning_chunk events (batcher still on block "r").
+            if (reasoningAccum) {
+              const rFlushId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+              this.onNewMessage({ id: rFlushId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+              reasoningAccum = "";
+            }
             // Task 5.2: Accumulate tokens for eventual assistant message
             tokenAccum += event.content;
             hadOutput = true;
             this.onToken(taskId, executionId, event.content, false);
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
             break;
           }
 
@@ -793,19 +826,34 @@ export class Orchestrator implements ExecutionCoordinator {
             // Task 5.2: Accumulate reasoning separately
             reasoningAccum += event.content;
             this.onToken(taskId, executionId, event.content, false, true);
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
             break;
           }
 
           case "status": {
             // Ephemeral status — relay but don't persist
             this.onToken(taskId, executionId, event.message, false, false, true);
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.message, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
             break;
           }
 
           case "tool_start": {
             if (event.isInternal) break;
             hadOutput = true;
-            // Task 5.2: Persist tool_call message immediately
+            // Flush reasoningAccum before tool_call so the reasoning bubble closes in the right position
+            if (reasoningAccum) {
+              const rId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+              this.onNewMessage({ id: rId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+              reasoningAccum = "";
+            }
+            // Task 5.4: Flush tokenAccum BEFORE emitting tool_call to fix ordering bug
+            if (tokenAccum) {
+              const flushId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
+              this.onNewMessage({ id: flushId, taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, metadata: null, createdAt: new Date().toISOString() });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+              tokenAccum = "";
+            }
             const callId = event.callId ?? `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
             const toolCallMsg = JSON.stringify({
               type: "function",
@@ -835,12 +883,28 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: toolMeta,
               createdAt: new Date().toISOString(),
             });
+            // parentBlockId comes only from event.parentCallId (explicit subagent nesting).
+            // Do NOT fall back to callStack.at(-1): parallel tool calls in the same LLM response
+            // all arrive as tool_start before any tool_result, so callStack would incorrectly
+            // make each tool appear as a child of the previous one.
+            const toolParentBlockId = event.parentCallId ?? null;
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false });
+            // Push this call onto the stack so nested tokens/reasoning inherit it as parent
+            callStack.push(callId);
             break;
           }
 
           case "tool_result": {
             if (event.isInternal) break;
             hadOutput = true;
+            // Flush any reasoning accumulated while this tool was on the callStack,
+            // using the current callStack context (before popping) as parentBlockId.
+            if (reasoningAccum) {
+              const rId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+              this.onNewMessage({ id: rId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+              reasoningAccum = "";
+            }
             // Task 5.2: Persist tool_result message
             const resultMsg = JSON.stringify({
               type: "tool_result",
@@ -872,6 +936,13 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: resultMeta,
               createdAt: new Date().toISOString(),
             });
+            // Pop this call from the stack before emitting, so result has the same parent as its call
+            const resultCallId = event.callId ?? msgId.toString();
+            const stackIdx = callStack.lastIndexOf(resultCallId);
+            if (stackIdx !== -1) callStack.splice(stackIdx, 1);
+            // parentBlockId of tool_result mirrors its tool_call's parentBlockId (explicit only).
+            const resultParentBlockId = event.parentCallId ?? null;
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: resultCallId, type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), parentBlockId: resultParentBlockId, done: false });
 
             // Emit UI-only file_diff for write tools (never forwarded to LLM)
             if (!event.isError && event.callId) {
@@ -900,7 +971,14 @@ export class Orchestrator implements ExecutionCoordinator {
           }
 
           case "done": {
-            // Task 5.2: Flush accumulated tokens as final assistant message
+            // Flush reasoningAccum before the final assistant message
+            if (reasoningAccum) {
+              const rDoneId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+              this.onNewMessage({ id: rDoneId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+              reasoningAccum = "";
+            }
+            // Task 5.8: Flush accumulated tokens as final assistant message
             if (tokenAccum) {
               const msgId = appendMessage(
                 taskId,
@@ -919,6 +997,8 @@ export class Orchestrator implements ExecutionCoordinator {
                 metadata: null,
                 createdAt: new Date().toISOString(),
               });
+              this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
+              tokenAccum = "";
             } else if (!hadOutput) {
               // Execution completed with no model output at all — surface a
               // visible warning so the user isn't left with a silent no-op.
@@ -943,6 +1023,7 @@ export class Orchestrator implements ExecutionCoordinator {
               [executionId],
             );
             this.onToken(taskId, executionId, "", true);
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
             break;
           }
 
@@ -1037,12 +1118,27 @@ export class Orchestrator implements ExecutionCoordinator {
       // the generator was aborted (done=true set by the AbortSignal listener in
       // translateCopilotStream). In the abort case no state was written yet.
       if (abortController.signal.aborted) {
+        // Flush any accumulated reasoning before closing so the reasoning bubble closes
+        if (reasoningAccum) {
+          const rCancelId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
+          this.onNewMessage({ id: rCancelId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+          this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: null, done: false });
+          reasoningAccum = "";
+        }
+        // Flush any accumulated text so it isn't lost when cancelling
+        if (tokenAccum) {
+          const tCancelId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
+          this.onNewMessage({ id: tCancelId, taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, metadata: null, createdAt: new Date().toISOString() });
+          this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: null, done: false });
+          tokenAccum = "";
+        }
         db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
         db.run(
           "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
           [executionId],
         );
         this.onToken(taskId, executionId, "", true);
+        this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);

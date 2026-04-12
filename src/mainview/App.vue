@@ -13,7 +13,7 @@ import Toast from "primevue/toast";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
-import { onStreamToken, onStreamError, onTaskUpdated, onNewMessage } from "./rpc";
+import { onStreamToken, onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage } from "./rpc";
 import { getTaskActivityToast } from "./task-activity";
 
 const router = useRouter();
@@ -45,6 +45,10 @@ onMounted(async () => {
     }
     taskStore.onStreamError(payload);
     toast.add({ severity: "warn", summary: "Execution failed", detail: payload.error, life: 6000 });
+  });
+
+  onStreamEventMessage((event) => {
+    taskStore.onStreamEvent(event);
   });
 
   onTaskUpdated((task) => {

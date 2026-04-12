@@ -347,6 +347,7 @@ export interface LspDetectedLanguage {
 
 // ─── IPC streaming token event ───────────────────────────────────────────────
 
+/** @deprecated Use StreamEvent / "stream.event" channel instead */
 export interface StreamToken {
   taskId: number;
   executionId: number;
@@ -355,6 +356,34 @@ export interface StreamToken {
   isReasoning?: boolean;
   /** True for ephemeral status events from non-streaming fallback — never stored in DB. */
   isStatus?: boolean;
+}
+
+// ─── Unified stream event (new pipeline) ─────────────────────────────────────
+
+export type StreamEventType =
+  | "text_chunk"       // live token — not persisted
+  | "reasoning_chunk"  // live reasoning token — not persisted
+  | "status_chunk"     // ephemeral status — not persisted
+  | "user"             // persisted: user message
+  | "assistant"        // persisted: finalized assistant text
+  | "reasoning"        // persisted: finalized reasoning block
+  | "tool_call"        // persisted: tool call
+  | "tool_result"      // persisted: tool result
+  | "file_diff"        // persisted: file diff
+  | "system"           // persisted: system/error message
+  | "done";            // terminal event — closes all state for this execution
+
+export interface StreamEvent {
+  taskId: number;
+  executionId: number;
+  seq: number;
+  blockId: string;
+  type: StreamEventType;
+  content: string;
+  metadata: string | null;
+  parentBlockId?: string | null;
+  subagentId: string | null;
+  done: boolean;
 }
 
 export interface StreamError {
@@ -445,6 +474,10 @@ export type RailynRPCType = {
       "conversations.getMessages": {
         params: { taskId: number };
         response: ConversationMessage[];
+      };
+      "conversations.getStreamEvents": {
+        params: { taskId: number };
+        response: import("../bun/db/stream-events").PersistedStreamEvent[];
       };
 
       // Models
@@ -614,6 +647,7 @@ export type RailynRPCType = {
     requests: Record<string, never>;
     messages: {
       "stream.token": StreamToken;
+      "stream.event": StreamEvent;
       "stream.error": StreamError;
       "task.updated": Task;
       "message.new": ConversationMessage;
