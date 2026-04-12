@@ -27,7 +27,8 @@ export class StreamBatcher {
   }
 
   private getBlockId(type: StreamEventType, overrideBlockId?: string): string {
-    if (overrideBlockId) return overrideBlockId;
+    // Empty string means "don't override, generate one"; only non-empty strings are actual overrides
+    if (overrideBlockId && overrideBlockId !== "") return overrideBlockId;
 
     if (type === "text_chunk" || type === "assistant" || type === "user" || type === "system") {
       if (this.currentBlockType !== "t") {

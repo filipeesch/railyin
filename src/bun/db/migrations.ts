@@ -323,7 +323,18 @@ function hasColumn(tableName: string, columnName: string): boolean {
 function applyMigration(id: string, sql: string): void {
   const db = getDb();
   db.transaction(() => {
-    if (id === "015_workspace_config_key") {
+    if (id === "002_task_ux_improvements") {
+      if (!hasColumn("tasks", "model")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN model TEXT");
+      }
+    } else if (id === "007_shell_command_approval") {
+      if (!hasColumn("tasks", "shell_auto_approve")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN shell_auto_approve INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!hasColumn("tasks", "approved_commands")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN approved_commands TEXT NOT NULL DEFAULT '[]'");
+      }
+    } else if (id === "015_workspace_config_key") {
       if (!hasColumn("workspaces", "config_key")) {
         db.exec("ALTER TABLE workspaces ADD COLUMN config_key TEXT");
       }
@@ -359,7 +370,10 @@ export function runMigrations(): void {
     db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all().map((r) => r.id),
   );
 
-  for (const migration of migrations) {
+  // Sort migrations by ID to ensure they're applied in the correct order
+  const sortedMigrations = [...migrations].sort((a, b) => a.id.localeCompare(b.id));
+
+  for (const migration of sortedMigrations) {
     if (applied.has(migration.id)) continue;
 
     applyMigration(migration.id, migration.sql);
