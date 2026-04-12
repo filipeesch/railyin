@@ -412,9 +412,14 @@ const debugServer = Bun.serve({
           "export function beta()  { return 2; }",
           "export function gamma() { return 3; }",
           "",
-          "// middle section — unchanged",
+          "// middle section — unchanged (must be ≥7 lines so git produces two separate hunks)",
           "export const VERSION = '1.0.0';",
           "export const NAME    = 'partial-x';",
+          "export const AUTHOR  = 'test';",
+          "export const LICENSE = 'MIT';",
+          "export const STABLE1 = true;",
+          "export const STABLE2 = true;",
+          "export const STABLE3 = true;",
           "",
           "export function delta()   { return 4; }",
           "export function epsilon() { return 5; }",
@@ -422,15 +427,20 @@ const debugServer = Bun.serve({
         ].join("\n");
 
         const partialYBase = [
-          "# partial-y.ts: committed base",
+          "// partial-y.ts: committed base",
           "export class ServiceA {",
           "  greet() { return 'hello'; }",
           "  run()   { return 'running'; }",
           "}",
           "",
-          "// stable section",
+          "// stable section — unchanged (must be ≥7 lines so git produces two separate hunks)",
           "export const MAX_RETRIES = 3;",
           "export const TIMEOUT_MS  = 5000;",
+          "export const BACKOFF_MS  = 200;",
+          "export const MAX_QUEUE   = 100;",
+          "export const LOG_LEVEL   = 'info';",
+          "export const DRY_RUN     = false;",
+          "export const STABLE_Y    = true;",
           "",
           "export class ServiceB {",
           "  stop()  { return 'stopped'; }",
@@ -450,9 +460,14 @@ const debugServer = Bun.serve({
           "export function beta()  { return 'beta'; }",   // changed return type
           "export function gamma() { return 'gamma'; }",  // changed return type
           "",
-          "// middle section — unchanged",
+          "// middle section — unchanged (must be ≥7 lines so git produces two separate hunks)",
           "export const VERSION = '1.0.0';",
           "export const NAME    = 'partial-x';",
+          "export const AUTHOR  = 'test';",
+          "export const LICENSE = 'MIT';",
+          "export const STABLE1 = true;",
+          "export const STABLE2 = true;",
+          "export const STABLE3 = true;",
           "",
           "export function delta()   { return 'delta'; }",    // changed
           "export function epsilon() { return 'epsilon'; }",  // changed
@@ -460,15 +475,20 @@ const debugServer = Bun.serve({
         ].join("\n");
 
         const partialYModified = [
-          "# partial-y.ts: worktree modifications",
+          "// partial-y.ts: worktree modifications",
           "export class ServiceA {",
           "  greet() { return 'hi there'; }",   // changed
           "  run()   { return 'active'; }",      // changed
           "}",
           "",
-          "// stable section",
+          "// stable section — unchanged (must be ≥7 lines so git produces two separate hunks)",
           "export const MAX_RETRIES = 3;",
           "export const TIMEOUT_MS  = 5000;",
+          "export const BACKOFF_MS  = 200;",
+          "export const MAX_QUEUE   = 100;",
+          "export const LOG_LEVEL   = 'info';",
+          "export const DRY_RUN     = false;",
+          "export const STABLE_Y    = true;",
           "",
           "export class ServiceB {",
           "  stop()  { return 'halted'; }",    // changed

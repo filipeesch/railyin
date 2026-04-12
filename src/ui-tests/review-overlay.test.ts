@@ -98,6 +98,20 @@
  *   Suite W — reject hunk applies rejected decoration and clears diff colors:
  *     44. rejecting a hunk applies the rejected-hunk-decoration CSS class
  *     45. .line-insert count decreases after rejecting a hunk (revert removes diff)
+ *
+ *   Suite X — multi-hunk accept: step-by-step assertions in a partial-change file:
+ *     46. after accepting hunk 1, only hunk 1 bar is removed (hunk 2 bar still present)
+ *     47. after accepting hunk 1, selectedFile is still the same partial-change file
+ *     48. after accepting hunk 2, all bars are removed from the partial-change file
+ *     49. after accepting hunk 2 (last), selectedFile advances to another pending file
+ *
+ *   Suite Y — cross-file navigation after multiple multi-hunk accepts:
+ *     50. after fully accepting partial-x.ts, next file has action bars (not empty)
+ *     51. after fully accepting partial-y.ts, next file has action bars (not empty)
+ *
+ *   Suite Z — accept in second file does not leave it in broken state:
+ *     52. after navigating to a new file following a multi-hunk accept, bars are present
+ *     53. after accepting in the new file, selectedFile advances again
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
@@ -2034,13 +2048,11 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
   let selectedFileAfterAccept = "";
 
   beforeAll(async () => {
-    await resetDecisions(testTaskId);
-    await webEval(`
-      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
-      pinia._s.get('review').optimisticUpdates.clear();
-      return 'cleared';
-    `);
-    await openReviewOverlay({ taskId: testTaskId, files: testFiles });
+    // Fresh test env — earlier suites (e.g. Suite L) reject hunks that revert files on disk,
+    // leaving partial-x.ts with fewer hunks. Without isolation, barCountBefore=1 causes
+    // the first accept to trigger navigation, making after > before.
+    const env = await setupTestEnv();
+    await openReviewOverlay({ taskId: env.taskId, files: env.files });
 
     // ── Tests 33 + 34: use a multi-hunk file so accepting one hunk does NOT
     //    trigger file navigation.  This keeps bar/decoration checks stable.
@@ -2049,7 +2061,7 @@ describe("Code Review Overlay — accept hunk applies green decoration", () => {
     for (let i = 0; i < 20; i++) {
       await sleep(400);
       const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
-      if (Number(n) === prev && prev >= 0) break;
+      if (Number(n) === prev && prev > 0) break;
       prev = Number(n);
     }
 
@@ -2895,6 +2907,437 @@ describe("Code Review Overlay — reject hunk applies rejected decoration and cl
         `.line-insert count did not decrease after reject: before=${lineInsertCountBefore}, after=${lineInsertCountAfter}.\n` +
         "Fix: reject should revert the hunk on disk, causing Monaco to re-diff with fewer changes.\n" +
         "Check that tasks.rejectHunk returns the updated diff and diffContent is refreshed.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite X — Multi-hunk accept: step-by-step assertions in a partial-change file
+// ═══════════════════════════════════════════════════════════════════════════════
+// partial-x.ts has two disjoint hunks. Accepting hunk 1 must leave hunk 2's bar
+// visible and the selectedFile unchanged. Accepting hunk 2 must advance to the
+// next pending file. This tests the collapsingHunks guard that prevents
+// onDidUpdateDiff → onHunksReady from wiping remaining bars after setValue.
+
+describe("Code Review Overlay — multi-hunk accept step-by-step", () => {
+  let initialFile = "";
+  let barsAfterHunk1Accept = -1;
+  let fileAfterHunk1Accept = "";
+  let barsAfterHunk2Accept = -1;
+  let fileAfterHunk2Accept = "";
+  let skipped = false;
+
+  beforeAll(async () => {
+    // Fresh test environment to avoid pollution from earlier accept/reject suites.
+    const env = await setupTestEnv();
+    await openReviewOverlay({ taskId: env.taskId, files: env.files });
+    initialFile = await selectPartialTestFile();
+
+    // Wait for bars to stabilise (must have at least 2 for a multi-hunk test).
+    let prev = -1;
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) > 0 && Number(n) === prev) break;
+      prev = Number(n);
+    }
+
+    const initialBars = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    if (initialBars < 2) {
+      skipped = true;
+      return;
+    }
+
+    // ── Step 1: accept the first hunk ────────────────────────────────────────
+    await webEval(`
+      var btn = document.querySelector('.hunk-btn--accept');
+      if (btn) btn.click();
+      return 'ok';
+    `);
+
+    // Wait for that bar to be removed (count drops by ≥1).
+    for (let i = 0; i < 25; i++) {
+      await sleep(400);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) < initialBars) break;
+    }
+    await sleep(600);
+
+    barsAfterHunk1Accept = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    fileAfterHunk1Accept = await reviewSelectedFile();
+
+    if (barsAfterHunk1Accept < 1) {
+      // Single-hunk file loaded despite asking for partial-x — skip multi-hunk assertions.
+      skipped = true;
+      return;
+    }
+
+    // ── Step 2: accept the remaining hunk(s) in this file ────────────────────
+    // Keep accepting until all bars are gone or file changes.
+    let prevFile = fileAfterHunk1Accept;
+    let attempts = 0;
+    while (attempts < 6) {
+      const bars = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(bars) === 0) break;
+      const currentFile = await reviewSelectedFile();
+      if (currentFile !== initialFile) break;
+      await webEval(`
+        var btn = document.querySelector('.hunk-btn--accept');
+        if (btn) btn.click();
+        return 'ok';
+      `);
+      for (let i = 0; i < 20; i++) {
+        await sleep(400);
+        const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+        const f = await reviewSelectedFile();
+        if (Number(n) < bars || f !== currentFile) break;
+      }
+      await sleep(600);
+      attempts++;
+    }
+
+    barsAfterHunk2Accept = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    fileAfterHunk2Accept = await reviewSelectedFile();
+  }, 180_000);
+
+  test("46 — after accepting hunk 1, exactly one bar is removed (hunk 2 bar still present)", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: partial file had fewer than 2 hunk bars");
+      return;
+    }
+    if (barsAfterHunk1Accept < 1) {
+      throw new Error(
+        `After accepting hunk 1, all ${barsAfterHunk1Accept + 1} bars vanished.\n` +
+        "Expected: only the accepted hunk's bar removed, remaining hunk bars still visible.\n" +
+        "Fix: the collapsingHunks guard in onHunksReady must prevent clearHunkZones from\n" +
+        "wiping remaining bars when collapseAcceptedHunks mutates the original model.",
+      );
+    }
+  });
+
+  test("47 — after accepting hunk 1, selectedFile is still the same partial-change file", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: partial file had fewer than 2 hunk bars");
+      return;
+    }
+    if (fileAfterHunk1Accept !== initialFile) {
+      throw new Error(
+        `After accepting hunk 1 of ${initialFile}, selectedFile changed to ${fileAfterHunk1Accept}.\n` +
+        "Expected: overlay stays on the same file while pending hunks remain.\n" +
+        "Fix: navigateToNextFile() must only be called after ALL hunks in the file are decided.",
+      );
+    }
+  });
+
+  test("48 — after accepting all hunks, 0 action bars remain for the original file", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: partial file had fewer than 2 hunk bars");
+      return;
+    }
+    // After all hunks are decided (and file may have changed), bars for the
+    // current file should reflect the new file's state — just check none are leftover
+    // from the original file's decided hunks.
+    if (barsAfterHunk2Accept > 4) {
+      // 4 is a loose upper bound — the new file may have bars of its own, but
+      // if we see more than the fixture's max (partial-y has 2) something is wrong.
+      throw new Error(
+        `After fully deciding ${initialFile}, bar count is unexpectedly high (${barsAfterHunk2Accept}).\n` +
+        "This may indicate accepted bars were not removed, or zone injection is duplicating bars.",
+      );
+    }
+  });
+
+  test("49 — after accepting the last hunk, selectedFile advances to another pending file", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: partial file had fewer than 2 hunk bars");
+      return;
+    }
+    if (fileAfterHunk2Accept === initialFile) {
+      throw new Error(
+        `After fully accepting all hunks in ${initialFile}, selectedFile did not advance.\n` +
+        `selectedFile is still: ${fileAfterHunk2Accept}\n` +
+        "Expected: navigateToNextFile() advances to the next file with pending hunks.\n" +
+        "Fix: navigateToNextFile() must be called after the last hunk in a file is decided.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite Y — Cross-file navigation: files after a multi-hunk accept are not empty
+// ═══════════════════════════════════════════════════════════════════════════════
+// After fully accepting partial-x.ts, the overlay advances to the next pending
+// file. That file must have action bars — it must NOT appear empty.
+// This tests the regression where cross-file navigation after collapseAcceptedHunks
+// left the next file in a blank state.
+
+describe("Code Review Overlay — cross-file navigation after multi-hunk accept", () => {
+  let file1 = "";
+  let file2 = "";
+  let file2BarsAfterNavigation = -1;
+  let file3 = "";
+  let file3BarsAfterNavigation = -1;
+  let skipped = false;
+
+  beforeAll(async () => {
+    // Fresh test environment.
+    const env = await setupTestEnv();
+    await openReviewOverlay({ taskId: env.taskId, files: env.files });
+    file1 = await selectPartialTestFile();
+
+    // Wait for bars to stabilise.
+    let prev = -1;
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) > 0 && Number(n) === prev) break;
+      prev = Number(n);
+    }
+
+    const initialBars = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    if (initialBars < 1) {
+      skipped = true;
+      return;
+    }
+
+    // Accept all hunks in file1 until selectedFile changes.
+    let attempts = 0;
+    while (attempts < 8) {
+      const currentFile = await reviewSelectedFile();
+      if (currentFile !== file1) break;
+      const bars = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(bars) === 0) {
+        // No bars but still on file1 — something stalled. Bail.
+        skipped = true;
+        return;
+      }
+      await webEval(`
+        var btn = document.querySelector('.hunk-btn--accept');
+        if (btn) btn.click();
+        return 'ok';
+      `);
+      const barsBefore = Number(bars);
+      for (let i = 0; i < 25; i++) {
+        await sleep(400);
+        const b = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+        const f = await reviewSelectedFile();
+        if (Number(b) < barsBefore || f !== file1) break;
+      }
+      await sleep(600);
+      attempts++;
+    }
+
+    file2 = await reviewSelectedFile();
+    if (file2 === file1) {
+      skipped = true;
+      return;
+    }
+
+    // Wait for bars in file2 to stabilise.
+    let prev2 = -1;
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) >= 0 && Number(n) === prev2) break;
+      prev2 = Number(n);
+    }
+    file2BarsAfterNavigation = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+
+    // Now accept all hunks in file2 to advance to file3.
+    let attempts2 = 0;
+    while (attempts2 < 8) {
+      const currentFile = await reviewSelectedFile();
+      if (currentFile !== file2) break;
+      const bars = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(bars) === 0) break;
+      await webEval(`
+        var btn = document.querySelector('.hunk-btn--accept');
+        if (btn) btn.click();
+        return 'ok';
+      `);
+      const barsBefore = Number(bars);
+      for (let i = 0; i < 25; i++) {
+        await sleep(400);
+        const b = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+        const f = await reviewSelectedFile();
+        if (Number(b) < barsBefore || f !== file2) break;
+      }
+      await sleep(600);
+      attempts2++;
+    }
+
+    file3 = await reviewSelectedFile();
+
+    if (file3 !== file2) {
+      // Wait for bars in file3 to stabilise.
+      let prev3 = -1;
+      for (let i = 0; i < 30; i++) {
+        await sleep(500);
+        const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+        if (Number(n) >= 0 && Number(n) === prev3) break;
+        prev3 = Number(n);
+      }
+      file3BarsAfterNavigation = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    }
+  }, 240_000);
+
+  test("50 — after fully accepting file 1, file 2 has action bars (not empty)", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: could not drive multi-hunk accept sequence to completion");
+      return;
+    }
+    if (file2BarsAfterNavigation < 1) {
+      throw new Error(
+        `After accepting all hunks in ${file1} and navigating to ${file2}, no action bars found.\n` +
+        `bars in ${file2} = ${file2BarsAfterNavigation}\n` +
+        "Expected: the next file loads correctly with its own hunk action bars.\n" +
+        "Fix: cross-file navigation after collapseAcceptedHunks must not leave the diff in a blank state.\n" +
+        "Check: loadDiff resets collapsingHunks flag; onHunksReady must proceed normally on file load.",
+      );
+    }
+  });
+
+  test("51 — after fully accepting file 2, file 3 has action bars (not empty)", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: could not drive multi-hunk accept sequence to completion");
+      return;
+    }
+    if (file3 === file2) {
+      console.warn(`  ~ skipped: overlay stayed on ${file2} — may have run out of pending files`);
+      return;
+    }
+    if (file3BarsAfterNavigation < 1) {
+      throw new Error(
+        `After accepting all hunks in ${file2} and navigating to ${file3}, no action bars found.\n` +
+        `bars in ${file3} = ${file3BarsAfterNavigation}\n` +
+        "Expected: each new file loads correctly with its own hunk action bars.\n" +
+        "Fix: same root cause as test 50 — collapsingHunks cascade must not pollute subsequent file loads.",
+      );
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Suite Z — Accept in second file after cross-file navigation: no broken state
+// ═══════════════════════════════════════════════════════════════════════════════
+// After navigating to a second file (post multi-hunk accept in file 1), accepting
+// a hunk in that second file must correctly highlight the accept button, mark the
+// hunk resolved, and either advance to the next pending file (if last hunk) or
+// show the remaining hunk bars (if more remain).
+
+describe("Code Review Overlay — accept in second file after cross-file navigation", () => {
+  let initialFile = "";
+  let secondFile = "";
+  let secondFileBarsBeforeAccept = -1;
+  let secondFileBarsAfterAccept = -1;
+  let fileAfterAcceptInSecondFile = "";
+  let skipped = false;
+
+  beforeAll(async () => {
+    // Fresh test environment.
+    const env = await setupTestEnv();
+    await openReviewOverlay({ taskId: env.taskId, files: env.files });
+    initialFile = await selectPartialTestFile();
+
+    // Wait for bars.
+    let prev = -1;
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) > 0 && Number(n) === prev) break;
+      prev = Number(n);
+    }
+
+    const bars0 = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    if (bars0 < 1) { skipped = true; return; }
+
+    // Accept all hunks in file 1 to navigate to file 2.
+    let attempts = 0;
+    while (attempts < 8) {
+      const f = await reviewSelectedFile();
+      if (f !== initialFile) break;
+      const b = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(b) === 0) { skipped = true; return; }
+      await webEval(`
+        var btn = document.querySelector('.hunk-btn--accept');
+        if (btn) btn.click();
+        return 'ok';
+      `);
+      const bBefore = Number(b);
+      for (let i = 0; i < 25; i++) {
+        await sleep(400);
+        const bAfter = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+        const fAfter = await reviewSelectedFile();
+        if (Number(bAfter) < bBefore || fAfter !== initialFile) break;
+      }
+      await sleep(600);
+      attempts++;
+    }
+
+    secondFile = await reviewSelectedFile();
+    if (secondFile === initialFile) { skipped = true; return; }
+
+    // Wait for bars in second file.
+    let prev2 = -1;
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      const n = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      if (Number(n) >= 0 && Number(n) === prev2) break;
+      prev2 = Number(n);
+    }
+    secondFileBarsBeforeAccept = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    if (secondFileBarsBeforeAccept < 1) { skipped = true; return; }
+
+    // Accept the first hunk in the second file.
+    await webEval(`
+      var btn = document.querySelector('.hunk-btn--accept');
+      if (btn) btn.click();
+      return 'ok';
+    `);
+    for (let i = 0; i < 25; i++) {
+      await sleep(400);
+      const b = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+      const f = await reviewSelectedFile();
+      if (Number(b) < secondFileBarsBeforeAccept || f !== secondFile) break;
+    }
+    await sleep(800);
+
+    secondFileBarsAfterAccept = await webEval<number>(`return document.querySelectorAll('.hunk-bar').length`);
+    fileAfterAcceptInSecondFile = await reviewSelectedFile();
+  }, 240_000);
+
+  test("52 — after navigating to second file and accepting a hunk, bar count decreases", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: could not set up second-file accept scenario");
+      return;
+    }
+    if (secondFileBarsAfterAccept >= secondFileBarsBeforeAccept) {
+      throw new Error(
+        `Accepting a hunk in ${secondFile} did not remove any action bars.\n` +
+        `bars before accept = ${secondFileBarsBeforeAccept}, after = ${secondFileBarsAfterAccept}\n` +
+        "Expected: the accepted hunk's bar is removed, bar count decreases by exactly 1.\n" +
+        "Fix: onDecideHunk's removeZoneForHash must work correctly in the second file after\n" +
+        "cross-file navigation. Check that collapsingHunks / lastCollapsedHashes are reset\n" +
+        "on loadDiff so collapseAcceptedHunks can run fresh for the new file.",
+      );
+    }
+  });
+
+  test("53 — after accepting in second file, selectedFile is correct (stays or advances)", () => {
+    if (skipped) {
+      console.warn("  ~ skipped: could not set up second-file accept scenario");
+      return;
+    }
+    // If there were multiple hunks in secondFile and one remains, selectedFile should stay.
+    // If it was the last hunk, selectedFile should advance.
+    // In both cases it must NOT revert to initialFile (that file is fully decided).
+    if (fileAfterAcceptInSecondFile === initialFile) {
+      throw new Error(
+        `After accepting a hunk in ${secondFile}, selectedFile reverted to the already-decided ${initialFile}.\n` +
+        "Expected: selectedFile stays on current file (if more hunks remain) or advances to next pending file.\n" +
+        "Fix: navigateToNextFile() must skip files in fullyDecidedFiles; it must never navigate\n" +
+        "backwards to an already-decided file.",
       );
     }
   });

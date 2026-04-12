@@ -158,6 +158,12 @@ const fullyDecidedFiles = new Set<string>();
 // Used as a guard to prevent onDidUpdateDiff → onHunksReady → collapseAcceptedHunks loops.
 let lastCollapsedHashes = new Set<string>();
 
+// Suppresses the onHunksReady cascade triggered by collapseAcceptedHunks → origModel.setValue.
+// Without this flag, setValue fires onDidUpdateDiff → onHunksReady → clearHunkZones +
+// injectViewZones with Monaco's shifted ILCs, which no longer match git hunk coordinates,
+// causing remaining hunk bars to fail to re-inject (the multi-hunk accept regression).
+let collapsingHunks = false;
+
 // ——— Resizable file list panel ——————————————————————————————————————————
 
 const STORAGE_KEY_FILE_LIST_WIDTH = "railyn:review-file-list-width";
@@ -556,6 +562,10 @@ function collapseAcceptedHunks() {
     }
   }
 
+  // Flag onHunksReady to skip zone clear+reinject for this model mutation.
+  // collapseAcceptedHunks operates on the original model only to remove red/green
+  // diff colors; hunk bars are managed separately via removeZoneForHash.
+  collapsingHunks = true;
   origModel.setValue(origLines.join("\n"));
 }
 
@@ -679,6 +689,16 @@ function injectViewZones(lineChanges: ILineChange[]) {
 
 function onHunksReady(lineChanges: ILineChange[]) {
   lastLineChanges.value = lineChanges;
+
+  // collapseAcceptedHunks sets this flag before calling origModel.setValue so
+  // the resulting onDidUpdateDiff event does not wipe and re-inject zones with
+  // Monaco's shifted ILCs. The bars for pending hunks are already correct from
+  // the earlier injectViewZones call; only the model was mutated to strip accepted diff colors.
+  if (collapsingHunks) {
+    collapsingHunks = false;
+    return;
+  }
+
   clearHunkZones();
   injectViewZones(lineChanges);
 
@@ -1059,6 +1079,7 @@ async function loadDiff(path: string | null) {
   if (!path || !reviewStore.taskId) return;
   await flushPendingWrite();
   lastCollapsedHashes = new Set();
+  collapsingHunks = false;
   clearAllZones();
   currentPendingIdx.value = 0;
   diffLoading.value = true;
