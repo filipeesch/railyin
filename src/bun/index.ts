@@ -43,6 +43,7 @@ process.on("uncaughtException", (err) => {
 // --memory-db     → uses an in-memory SQLite database (same as RAILYN_DB=:memory:)
 declare const __RAILYN_FORCE_DEBUG__: boolean | undefined;
 declare const __RAILYN_FORCE_MEMORY_DB__: boolean | undefined;
+declare const __RAILYN_FORCE_DEBUG_PORT__: number | undefined;
 
 const argv = process.argv.slice(2);
 if (__RAILYN_FORCE_DEBUG__) process.env.RAILYN_DEBUG = "1";
@@ -50,10 +51,16 @@ if (__RAILYN_FORCE_MEMORY_DB__) process.env.RAILYN_DB = ":memory:";
 const debugArg = argv.find(a => a === "--debug" || a.startsWith("--debug="));
 if (debugArg) process.env.RAILYN_DEBUG = "1";
 // Port 0 means OS-assigned (for parallel test sessions). Defaults to 9229 for backward compat.
+// Priority: runtime --debug=N arg → baked __RAILYN_FORCE_DEBUG_PORT__ → 9229
 const debugPort: number = (() => {
-  if (!debugArg || !debugArg.includes("=")) return 9229;
-  const n = parseInt(debugArg.split("=")[1]!, 10);
-  return Number.isFinite(n) && n >= 0 ? n : 9229;
+  if (debugArg?.includes("=")) {
+    const n = parseInt(debugArg.split("=")[1]!, 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  if (typeof __RAILYN_FORCE_DEBUG_PORT__ === "number" && __RAILYN_FORCE_DEBUG_PORT__ >= 0) {
+    return __RAILYN_FORCE_DEBUG_PORT__;
+  }
+  return 9229;
 })();
 if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 import { workspaceHandlers } from "./handlers/workspace.ts";
