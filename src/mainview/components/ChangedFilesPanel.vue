@@ -75,7 +75,7 @@ const emit = defineEmits<{
   openReview: [filePath: string | null, mode: "review" | "changes"];
 }>();
 
-const expanded = ref(true);
+const expanded = ref(false);
 const showAll = ref(false);
 
 // Build unified file list
@@ -202,8 +202,8 @@ function openReview(filePath: string | null) {
 .changed-files-panel__review-btn {
   padding: 2px 8px;
   border-radius: 4px;
-  border: 1px solid var(--p-content-border-color, currentColor);
-  background: var(--p-surface-card, var(--p-surface-0, transparent));
+  border: 1px solid var(--p-content-border-color);
+  background: transparent;
   color: var(--p-text-color, inherit);
   font-size: 0.72rem;
   cursor: pointer;
