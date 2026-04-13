@@ -5,6 +5,7 @@ export interface CopilotSdkSessionConfig {
   systemMessage?: { mode: "append"; content: string };
   onPermissionRequest?: (request: unknown, invocation: unknown) => unknown;
   workingDirectory: string;
+  streaming?: boolean;
 }
 
 export type CopilotSdkResumeSessionConfig = Omit<CopilotSdkSessionConfig, "sessionId">;

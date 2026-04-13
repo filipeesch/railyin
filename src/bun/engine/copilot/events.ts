@@ -215,7 +215,12 @@ function translateEvent(
     }
 
     case "tool.execution_start": {
-      const data = event.data as { toolName: string; arguments?: unknown; toolCallId: string; parentToolCallId?: string };
+      const data = event.data as { toolName: string; arguments?: Record<string, unknown>; toolCallId: string; parentToolCallId?: string };
+      // report_intent is the model declaring its current intent — surface as status
+      if (data.toolName === "report_intent") {
+        const intent = typeof data.arguments?.intent === "string" ? data.arguments.intent : null;
+        return intent ? { type: "status", message: intent } : null;
+      }
       const meta = toolMetaByCallId.get(data.toolCallId);
       return {
         type: "tool_start",
@@ -227,21 +232,10 @@ function translateEvent(
       };
     }
 
-    case "tool.execution_partial_result": {
-      const data = event.data as { toolCallId?: string; partialOutput: string };
-      if (!data.partialOutput) return null;
-      const meta = data.toolCallId ? toolMetaByCallId.get(data.toolCallId) : undefined;
-      if (meta?.isInternal) return null;
-      return { type: "status", message: summarizeStatus(data.partialOutput, meta?.name) };
-    }
-
-    case "tool.execution_progress": {
-      const data = event.data as { toolCallId?: string; progressMessage: string };
-      if (!data.progressMessage) return null;
-      const meta = data.toolCallId ? toolMetaByCallId.get(data.toolCallId) : undefined;
-      if (meta?.isInternal) return null;
-      return { type: "status", message: summarizeStatus(data.progressMessage, meta?.name) };
-    }
+    case "tool.execution_partial_result":
+    case "tool.execution_progress":
+      // Status is driven solely by report_intent; ignore noisy tool output fragments.
+      return null;
 
     case "tool.execution_complete": {
       const data = event.data as {
@@ -309,13 +303,8 @@ function isInternalCopilotEvent(
   if (event.source?.startsWith("skill-")) return true;
   if (parentToolCallId) return true;
   if (!toolName) return false;
+  if (toolName === "report_intent") return true;
   return toolName.startsWith("internal_") || toolName.startsWith("copilot_");
 }
 
-/** Truncate raw tool output to a single summary line for the status bar. */
-function summarizeStatus(raw: string, toolName?: string): string {
-  const lastLine = raw.split("\n").filter((l) => l.trim()).pop()?.trim() ?? "";
-  const prefix = toolName ? `${toolName}: ` : "";
-  const combined = prefix + lastLine;
-  return combined.length > 120 ? combined.slice(0, 117) + "…" : combined;
-}
+

@@ -837,7 +837,8 @@ export class Orchestrator implements ExecutionCoordinator {
           }
 
           case "status": {
-            // Ephemeral status — relay but don't persist
+            // Persist for debugging, relay as ephemeral to UI
+            appendMessage(taskId, conversationId, "status", null, event.message);
             this.onToken(taskId, executionId, event.message, false, false, true);
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.message, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
             break;
@@ -891,9 +892,9 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: toolMeta,
               createdAt: new Date().toISOString(),
             });
-            // parentBlockId: use event.parentCallId (explicit subagent nesting) or
-            // reasoningBlockId (group tools under the preceding reasoning bubble).
-            const toolParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
+            // parentBlockId: use event.parentCallId for explicit subagent nesting.
+            // Tools render at root level (not nested inside reasoning bubbles).
+            const toolParentBlockId = event.parentCallId ?? null;
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false });
             // Push this call onto the stack so nested tokens/reasoning inherit it as parent
             callStack.push(callId);

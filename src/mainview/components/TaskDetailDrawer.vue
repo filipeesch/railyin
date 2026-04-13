@@ -1086,6 +1086,7 @@ watch(
 .conversation-inner {
   display: flex;
   flex-direction: column;
+  gap: 8px;
 }
 
 .task-detail__side {

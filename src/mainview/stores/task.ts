@@ -322,7 +322,10 @@ export const useTaskStore = defineStore("task", () => {
     // Bump version so watchers (e.g. autoscroll) fire on every event
     streamVersion.value++;
 
-    // Refresh changed file count when a file_diff arrives
+    // ── Diagnostic: verify events arrive incrementally ──
+    if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
+      console.log(`[stream-diag] ${event.type} len=${event.content.length} ver=${streamVersion.value} t=${performance.now().toFixed(1)}`);
+    }
     if (event.type === "file_diff") {
       refreshChangedFiles(event.taskId);
     }
@@ -367,6 +370,11 @@ export const useTaskStore = defineStore("task", () => {
         }
       }
       streamStates.value = new Map(streamStates.value);
+      // Reload DB messages now that streaming is done — stream blocks were the
+      // sole renderer during streaming, so messages[] needs to catch up.
+      if (event.taskId === activeTaskId.value) {
+        loadMessages(event.taskId);
+      }
       return;
     }
 
@@ -607,6 +615,11 @@ export const useTaskStore = defineStore("task", () => {
     }
     // Only append if this task is currently open in the drawer
     if (message.taskId !== activeTaskId.value) return;
+    // While stream blocks own the live rendering, suppress DB message pushes
+    // to avoid dual rendering (same content in virtual list + stream blocks).
+    // Messages will be loaded from DB when the stream is done.
+    const streamState = streamStates.value.get(message.taskId);
+    if (streamState && !streamState.isDone) return;
     // Avoid duplicates — loadMessages after stream done may re-add the same messages
     if (messages.value.some((m) => m.id === message.id)) return;
     // When a reasoning round is persisted to DB, the live streaming bubble has served
@@ -774,6 +787,7 @@ export const useTaskStore = defineStore("task", () => {
     streamStates,
     streamVersion,
     activeStreamState,
+
     loading,
     messagesLoading,
     availableModels,

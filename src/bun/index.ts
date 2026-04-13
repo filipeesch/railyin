@@ -152,6 +152,10 @@ function getOrCreateBatcher(taskId: number, executionId: number): StreamBatcher 
 
 function onStreamEvent(event: StreamEvent): void {
   const batcher = getOrCreateBatcher(event.taskId, event.executionId);
+  // ── Diagnostic: verify events are sent incrementally ──
+  if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
+    console.log(`[stream-diag-bun] ${event.type} len=${event.content.length} t=${performance.now().toFixed(1)}`);
+  }
   // ALL events go to IPC immediately — no 500ms delay for any event type.
   win.webview.rpc.send["stream.event"](event);
   batcher.push(event);

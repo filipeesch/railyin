@@ -3,8 +3,8 @@
     <!-- Reasoning (live chunk or persisted) -->
     <ReasoningBubble
       v-if="block.type === 'reasoning_chunk' || block.type === 'reasoning'"
-      :content="isLiveReasoning ? typewriterReasoning : block.content"
-      :streaming="isLiveReasoning"
+      :content="block.content"
+      :streaming="!block.done && block.type === 'reasoning_chunk'"
     >
       <div v-if="block.children.length > 0" class="rb__children">
         <StreamBlockNode
@@ -24,12 +24,12 @@
       class="msg msg--assistant"
     >
       <div
-        :class="['msg__bubble', 'prose', { streaming: isLiveText }]"
-        v-html="renderMd(isLiveText ? typewriterText : block.content)"
+        :class="['msg__bubble', 'prose', { streaming: !block.done && block.type === 'text_chunk' }]"
+        v-html="renderMd(block.content)"
       />
       <div class="msg__meta">
         AI
-        <span v-if="isLiveText" class="cursor">▌</span>
+        <span v-if="!block.done && block.type === 'text_chunk'" class="cursor">▌</span>
       </div>
     </div>
 
@@ -106,7 +106,6 @@
 import { ref, computed } from "vue";
 import type { StreamBlock } from "../stores/task";
 import ReasoningBubble from "./ReasoningBubble.vue";
-import { useTypewriter } from "../composables/useTypewriter";
 
 const props = defineProps<{
   blockId: string;
@@ -123,29 +122,11 @@ const open = ref(false);
 const block = computed(() => {
   void props.version;
   const b = props.blocks.get(props.blockId);
+  if (b && (b.type === "text_chunk" || b.type === "reasoning_chunk")) {
+    console.log(`[stream-diag] BlockNode recompute id=${props.blockId.slice(0, 20)} len=${b.content.length} ver=${props.version}`);
+  }
   return b ? { ...b } : undefined;
 });
-
-const isLiveText = computed(() => {
-  const b = block.value;
-  return b ? !b.done && b.type === "text_chunk" : false;
-});
-
-const isLiveReasoning = computed(() => {
-  const b = block.value;
-  return b ? !b.done && b.type === "reasoning_chunk" : false;
-});
-
-// Typewriter animation for live streaming text
-const typewriterText = useTypewriter(
-  () => block.value?.content ?? "",
-  () => isLiveText.value,
-);
-
-const typewriterReasoning = useTypewriter(
-  () => block.value?.content ?? "",
-  () => isLiveReasoning.value,
-);
 
 // Tool call helpers
 const parsedToolCall = computed(() => {
