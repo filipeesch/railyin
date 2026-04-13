@@ -52,7 +52,7 @@ export const BRIDGE_BASE = `http://localhost:${resolveDebugPort()}`;
  * No-op if the server is unreachable (already dead).
  */
 export async function shutdownApp(): Promise<void> {
-  await fetch(`${BRIDGE_BASE}/shutdown`).catch(() => {});
+  await fetch(`${BRIDGE_BASE}/shutdown`).catch(() => { });
 }
 
 // ─── Core transport ───────────────────────────────────────────────────────────
@@ -151,12 +151,12 @@ export async function resetDecisions(taskId: number): Promise<void> {
 
 /**
  * Query persisted line comments from the DB for a task.
- * Returns raw DB rows: { id, file_path, line_start, line_end, comment, sent }[]
+ * Returns raw DB rows: { id, file_path, line_start, line_end, col_start, col_end, comment, sent }[]
  */
-export async function queryLineComments(taskId: number): Promise<{ id: number; file_path: string; line_start: number; line_end: number; comment: string; sent: number }[]> {
+export async function queryLineComments(taskId: number): Promise<{ id: number; file_path: string; line_start: number; line_end: number; col_start: number; col_end: number; comment: string; sent: number }[]> {
   const res = await fetch(`${BRIDGE_BASE}/query-line-comments?taskId=${taskId}`);
   if (!res.ok) throw new Error(`queryLineComments failed: ${await res.text()}`);
-  return res.json() as Promise<{ id: number; file_path: string; line_start: number; line_end: number; comment: string; sent: number }[]>;
+  return res.json() as Promise<{ id: number; file_path: string; line_start: number; line_end: number; col_start: number; col_end: number; comment: string; sent: number }[]>;
 }
 
 /**
@@ -164,7 +164,7 @@ export async function queryLineComments(taskId: number): Promise<{ id: number; f
  * Uses the Vue app component tree (works in production builds where __vueParentComponent is absent).
  * Returns true if the function was found and called, false otherwise.
  */
-export async function triggerLineComment(lineStart: number, lineEnd: number): Promise<boolean> {
+export async function triggerLineComment(lineStart: number, lineEnd: number, colStart?: number, colEnd?: number): Promise<boolean> {
   return webEval<boolean>(`
     try {
       // In production Vue 3, app._instance is null — use _container._vnode.component instead.
@@ -191,7 +191,7 @@ export async function triggerLineComment(lineStart: number, lineEnd: number): Pr
       }
       var exposed = search(rootInst.subTree);
       if (exposed && typeof exposed.onRequestLineComment === 'function') {
-        exposed.onRequestLineComment(${lineStart}, ${lineEnd});
+        exposed.onRequestLineComment(${lineStart}, ${lineEnd}${colStart != null && colEnd != null ? `, ${colStart}, ${colEnd}` : ""});
         return true;
       }
       return false;
@@ -207,6 +207,17 @@ export async function queryHunkDecisions(taskId: number): Promise<{ id: number; 
   const res = await fetch(`${BRIDGE_BASE}/query-hunk-decisions?taskId=${taskId}`);
   if (!res.ok) throw new Error(`queryHunkDecisions failed: ${await res.text()}`);
   return res.json() as Promise<{ id: number; file_path: string; hash: string; decision: string; sent: number }[]>;
+}
+
+/**
+ * Query conversation messages for a task directly from the DB via the HTTP bridge.
+ * Avoids the Electrobun deadlock that occurs when calling taskStore.loadMessages
+ * (which uses IPC) from inside evaluateJavascriptWithResponse.
+ */
+export async function queryMessages(taskId: number): Promise<{ id: number; role: string; type: string; content: string }[]> {
+  const res = await fetch(`${BRIDGE_BASE}/query-messages?taskId=${taskId}`);
+  if (!res.ok) throw new Error(`queryMessages failed: ${await res.text()}`);
+  return res.json() as Promise<{ id: number; role: string; type: string; content: string }[]>;
 }
 
 /**
@@ -271,12 +282,16 @@ export async function waitFor(
 export async function waitForZones(timeoutMs = 6_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ready = await webEval<boolean>(`
-      return !!Array.from(document.querySelectorAll('.hunk-bar')).find(function(b) {
-        return b.parentElement && parseInt(b.parentElement.style.height) > 0;
-      });
-    `);
-    if (ready) return true;
+    try {
+      const ready = await webEval<boolean>(`
+        return !!Array.from(document.querySelectorAll('.hunk-bar')).find(function(b) {
+          return b.parentElement && parseInt(b.parentElement.style.height) > 0;
+        });
+      `);
+      if (ready) return true;
+    } catch {
+      // Transient RPC timeout (e.g. Monaco CDN loading blocking WebView) — keep retrying
+    }
     await sleep(200);
   }
   return false;
@@ -316,7 +331,7 @@ export async function openReviewOverlay(opts?: { taskId: number; files: string[]
     if (r?.isOpen) r.closeReview();
     return 'ok';
   `);
-  await sleep(400);
+  await sleep(50);
 
   if (opts) {
     // Direct Pinia path — works for any task without needing a task card in the UI.
@@ -340,7 +355,7 @@ export async function openReviewOverlay(opts?: { taskId: number; files: string[]
 
   const opened = await waitFor(".review-overlay", 8_000);
   if (!opened) throw new Error("Review overlay did not open");
-  await sleep(1_000);
+  await sleep(100);
 
   // openReview() sets mode = "review" automatically.
   // Verify this — action bars and nav buttons only render in review mode.
@@ -368,7 +383,7 @@ export async function selectRichTestFile(): Promise<string> {
     r.selectFile(best);
     return best;
   `);
-  await sleep(1_200);
+  await sleep(150);
   return file;
 }
 
@@ -392,7 +407,7 @@ export async function selectPartialTestFile(): Promise<string> {
     r.selectFile(best);
     return best;
   `);
-  await sleep(1_200);
+  await sleep(150);
   return file;
 }
 
@@ -963,4 +978,33 @@ export async function getTaskExecutionStateFromStore(taskId: number): Promise<st
     var task = allTasks.find(function(t) { return t.id === ${taskId}; });
     return task ? task.executionState : null;
   `);
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Review version watermark (mirrors streamVersion pattern for review overlay)
+// ──────────────────────────────────────────────────────────────────
+
+/**
+ * Read the global `reviewVersion` counter from the Pinia review store.
+ * This counter increments on: selectFile, zone injection, hunk decision.
+ */
+export async function getReviewVersion(): Promise<number> {
+  return webEval<number>(`
+    var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+    return pinia._s.get('review').reviewVersion;
+  `);
+}
+
+/**
+ * Poll until `reviewVersion >= minVersion`. Throws on timeout with diagnostic info.
+ */
+export async function waitForReviewVersion(minVersion: number, timeoutMs = 6_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const v = await getReviewVersion();
+    if (v >= minVersion) return;
+    await sleep(50);
+  }
+  const actual = await getReviewVersion();
+  throw new Error(`waitForReviewVersion: timed out after ${timeoutMs}ms — expected >=${minVersion}, got ${actual}`);
 }

@@ -18,7 +18,7 @@
         :title="file.path"
         @click="emit('select', file.path)"
       >
-        <span class="review-file-list__icon">{{ stateIcon(aggregateStates?.[file.path] ?? 'pending') }}</span>
+        <span class="file-status-dot" :class="dotClass(aggregateStates?.[file.path] ?? 'pending')"></span>
         <div class="review-file-list__info">
           <span class="review-file-list__name">{{ basename(file.path) }}</span>
           <span class="review-file-list__dir">{{ dirname(file.path) }}</span>
@@ -57,14 +57,14 @@ function dirname(path: string) {
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
 }
 
-function stateIcon(state: HunkDecision | "pending"): string {
-  const icons: Record<string, string> = {
-    pending: "⬜",
-    accepted: "✅",
-    rejected: "❌",
-    change_request: "📝",
+function dotClass(state: HunkDecision | "pending"): string {
+  const classes: Record<string, string> = {
+    pending: "file-status-dot--pending",
+    accepted: "file-status-dot--accepted",
+    rejected: "file-status-dot--rejected",
+    change_request: "file-status-dot--cr",
   };
-  return icons[state] ?? "⬜";
+  return classes[state] ?? "file-status-dot--pending";
 }
 </script>
 
@@ -135,9 +135,25 @@ function stateIcon(state: HunkDecision | "pending"): string {
   font-weight: 500;
 }
 
-.review-file-list__icon {
-  font-size: 0.85rem;
+.file-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
   flex-shrink: 0;
+}
+.file-status-dot--pending {
+  border: 1.5px solid var(--p-text-muted-color, #94a3b8);
+  background: transparent;
+}
+.file-status-dot--accepted {
+  background: var(--p-green-400, #4ade80);
+}
+.file-status-dot--rejected {
+  background: var(--p-red-400, #f87171);
+}
+.file-status-dot--cr {
+  background: var(--p-amber-400, #fbbf24);
 }
 
 .review-file-list__info {

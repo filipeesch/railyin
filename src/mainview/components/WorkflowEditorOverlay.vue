@@ -50,6 +50,10 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onBeforeUnmount } from "vue";
 import loader from "@monaco-editor/loader";
+import * as monaco from "monaco-editor";
+
+// Use the local monaco-editor package instead of loading from CDN.
+loader.config({ monaco });
 import * as jsYaml from "js-yaml";
 import Button from "primevue/button";
 import { electroview } from "../rpc";

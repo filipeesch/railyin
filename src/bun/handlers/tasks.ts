@@ -216,16 +216,14 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       content: string;
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       // Check if content is a code review trigger
+      let parsed: { _type?: string; manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[] } | null = null;
       try {
-        const parsed = JSON.parse(params.content) as {
-          _type?: string;
-          manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[];
-        };
-        if (parsed._type === "code_review") {
-          if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-          return orchestrator.executeCodeReview(params.taskId, parsed.manualEdits);
-        }
+        parsed = JSON.parse(params.content) as typeof parsed;
       } catch { /* not JSON — treat as plain text */ }
+      if (parsed?._type === "code_review") {
+        if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
+        return orchestrator.executeCodeReview(params.taskId, parsed.manualEdits);
+      }
 
       const taskWorkspaceId = getTaskWorkspaceId(params.taskId);
       const taskRow2 = getDb().query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
@@ -741,21 +739,27 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       filePath: string;
       lineStart: number;
       lineEnd: number;
+      colStart?: number;
+      colEnd?: number;
       lineText: string[];
       contextLines: string[];
       comment: string;
     }): Promise<LineComment> => {
       const db = getDb();
+      const colStart = params.colStart ?? 0;
+      const colEnd = params.colEnd ?? 0;
       const result = db.run(
-        `INSERT INTO task_line_comments (task_id, file_path, line_start, line_end, line_text, context_lines, comment, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [params.taskId, params.filePath, params.lineStart, params.lineEnd, JSON.stringify(params.lineText), JSON.stringify(params.contextLines), params.comment],
+        `INSERT INTO task_line_comments (task_id, file_path, line_start, line_end, col_start, col_end, line_text, context_lines, comment, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [params.taskId, params.filePath, params.lineStart, params.lineEnd, colStart, colEnd, JSON.stringify(params.lineText), JSON.stringify(params.contextLines), params.comment],
       );
       return {
         id: result.lastInsertRowid as number,
         filePath: params.filePath,
         lineStart: params.lineStart,
         lineEnd: params.lineEnd,
+        colStart,
+        colEnd,
         lineText: params.lineText,
         contextLines: params.contextLines,
         comment: params.comment,
@@ -767,7 +771,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "tasks.getLineComments": async (params: { taskId: number }): Promise<LineComment[]> => {
       const db = getDb();
       const rows = db.query(
-        `SELECT id, file_path, line_start, line_end, line_text, context_lines, comment, reviewer_type
+        `SELECT id, file_path, line_start, line_end, col_start, col_end, line_text, context_lines, comment, reviewer_type
          FROM task_line_comments
          WHERE task_id = ? AND sent = 0
          ORDER BY file_path, line_start`,
@@ -776,6 +780,8 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         file_path: string;
         line_start: number;
         line_end: number;
+        col_start: number;
+        col_end: number;
         line_text: string;
         context_lines: string;
         comment: string;
@@ -786,6 +792,8 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         filePath: r.file_path,
         lineStart: r.line_start,
         lineEnd: r.line_end,
+        colStart: r.col_start,
+        colEnd: r.col_end,
         lineText: JSON.parse(r.line_text),
         contextLines: JSON.parse(r.context_lines),
         comment: r.comment,
@@ -820,15 +828,26 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     // ─── tasks.getPendingHunkSummary ─────────────────────────────────────────
     "tasks.getPendingHunkSummary": async (params: { taskId: number }): Promise<{ filePath: string; pendingCount: number }[]> => {
       const db = getDb();
+      // Count decided hunks per file (sent=0 means not yet submitted).
+      // A file is fully decided when ALL its hunks have a decision row.
+      // Files with no decisions at all won't appear here — the frontend
+      // must default those to "all pending".
       const rows = db
-        .query<{ file_path: string; pendingCount: number }, [number]>(
-          `SELECT file_path, COUNT(*) as pendingCount
+        .query<{ file_path: string; totalDecided: number; acceptedCount: number }, [number]>(
+          `SELECT file_path,
+                  COUNT(*) as totalDecided,
+                  SUM(CASE WHEN decision = 'accepted' THEN 1 ELSE 0 END) as acceptedCount
            FROM task_hunk_decisions
-           WHERE task_id = ? AND sent = 0 AND decision = 'pending'
+           WHERE task_id = ? AND sent = 0
            GROUP BY file_path`,
         )
         .all(params.taskId);
-      return rows.map((r) => ({ filePath: r.file_path, pendingCount: r.pendingCount }));
+      // Return pendingCount=0 only for files where every decision is accounted for.
+      // (The frontend still needs to add files absent from this list as fully pending.)
+      return rows.map((r) => ({
+        filePath: r.file_path,
+        pendingCount: r.acceptedCount === r.totalDecided && r.totalDecided > 0 ? 0 : r.totalDecided,
+      }));
     },
 
     // ─── tasks.getCheckpointRef ──────────────────────────────────────────────

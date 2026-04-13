@@ -449,10 +449,10 @@ async function cmdHunkDiag() {
   const res = await webEval(`
     var scrollEl = document.querySelector('.monaco-scrollable-element');
     var scrollTop = scrollEl ? scrollEl.scrollTop : 0;
-    var inserts = Array.from(document.querySelectorAll('.line-insert'));
-    var deleteds = Array.from(document.querySelectorAll('.line-delete'));
+    var inserts = Array.from(document.querySelectorAll('.inline-review-insertion'));
+    var deleteds = Array.from(document.querySelectorAll('.inline-review-deletion-zone'));
     var bars = Array.from(document.querySelectorAll('.hunk-bar'));
-    var editorEl = document.querySelector('.monaco-diff-editor');
+    var editorEl = document.querySelector('.inline-review-editor');
     var editorTop = editorEl ? Math.round(editorEl.getBoundingClientRect().top) : 0;
     return JSON.stringify({
       scrollTop: Math.round(scrollTop),

@@ -564,6 +564,10 @@ const displayItems = computed<DisplayItem[]>(() => {
     if (msgs[i].type === "code_review") {
       items.push({ kind: "code_review", message: msgs[i], key: `cr-${msgs[i].id}` });
       i++;
+      // Skip the companion LLM-facing user message (always stored immediately after code_review)
+      if (i < msgs.length && msgs[i].type === "user" && msgs[i].content.startsWith("=== Code Review ===")) {
+        i++;
+      }
     } else if (TOOL_MSG_TYPES.has(msgs[i].type)) {
       const toolMsgs: ConversationMessage[] = [];
       while (i < msgs.length && TOOL_MSG_TYPES.has(msgs[i].type)) {

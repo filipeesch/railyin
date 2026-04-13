@@ -28,14 +28,6 @@
         </div>
 
         <div class="review-overlay__header-actions">
-          <!-- Inline / Side-by-side toggle -->
-          <Button
-            size="small"
-            severity="secondary"
-            :label="sideBySide ? '≡ Inline' : '⇔ Side by side'"
-            @click="toggleViewMode"
-          />
-
           <Button size="small" severity="secondary" label="Refresh" @click="onRefresh" :loading="refreshing" />
 
           <Button
@@ -56,6 +48,7 @@
         <ReviewFileList
           :files="fileListItems"
           :selected-path="reviewStore.selectedFile"
+          :aggregate-states="fileAggregateStates"
           :style="{ width: fileListWidth + 'px' }"
           @select="onSelectFile"
         />
@@ -75,18 +68,20 @@
             <span>{{ diffError }}</span>
             <Button size="small" label="Reload" severity="secondary" @click="loadDiff(reviewStore.selectedFile)" />
           </div>
-          <MonacoDiffEditor
+          <InlineReviewEditor
             v-else-if="diffContent"
-            ref="diffEditorRef"
-            :original="diffContent.original"
+            ref="inlineEditorRef"
             :modified="diffContent.modified"
+            :original="diffContent.original"
+            :hunks="diffContent.hunks"
             :language="guessLanguage(reviewStore.selectedFile)"
-            :side-by-side="sideBySide"
+            :mode="reviewStore.mode"
             :enable-comments="true"
             :on-request-line-comment="onRequestLineComment"
+            :on-decide-hunk="onDecideHunk"
             :theme="isDark ? 'vs-dark' : 'vs'"
-            @hunks-ready="onHunksReady"
             @content-change="onContentChange"
+            @hunks-rendered="onHunksRendered"
           />
         </div>
       </div>
@@ -106,23 +101,36 @@
         />
       </div>
     </div>
+
+    <!-- Pending-hunks confirmation dialog -->
+    <Dialog
+      v-model:visible="showPendingDialog"
+      header="Pending Review"
+      :modal="true"
+      :closable="true"
+      :style="{ width: '400px' }"
+    >
+      <p>{{ pendingDialogCount }} file{{ pendingDialogCount !== 1 ? "s" : "" }} still pending review. Submit anyway?</p>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" size="small" @click="showPendingDialog = false" />
+        <Button label="Submit Anyway" severity="warn" size="small" @click="doSubmit" />
+      </template>
+    </Dialog>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, createApp } from "vue";
+import { ref, computed, watch, nextTick } from "vue";
 import { createPatch } from "diff";
-import type { App } from "vue";
 import Button from "primevue/button";
 import Select from "primevue/select";
+import Dialog from "primevue/dialog";
 import { useReviewStore } from "../stores/review";
 import { useTaskStore } from "../stores/task";
 import { electroview } from "../rpc";
 import { useDarkMode } from "../composables/useDarkMode";
 import ReviewFileList from "./ReviewFileList.vue";
-import MonacoDiffEditor from "./MonacoDiffEditor.vue";
-import HunkActionBar from "./HunkActionBar.vue";
-import LineCommentBar from "./LineCommentBar.vue";
+import InlineReviewEditor from "./InlineReviewEditor.vue";
 import type {
   FileDiffContent,
   HunkWithDecisions,
@@ -130,7 +138,6 @@ import type {
   LineComment,
   ManualEdit,
 } from "@shared/rpc-types";
-import type { ILineChange } from "./MonacoDiffEditor.vue";
 
 const reviewStore = useReviewStore();
 const taskStore = useTaskStore();
@@ -143,26 +150,43 @@ const diffLoading = ref(false);
 const diffError = ref<string | null>(null);
 const refreshing = ref(false);
 const submitting = ref(false);
-const sideBySide = ref(false);
+const showPendingDialog = ref(false);
+const pendingDialogCount = ref(0);
 const currentPendingIdx = ref(0);
 const pendingNavTarget = ref<"first" | "last" | null>(null);
-const lastLineChanges = ref<ILineChange[]>([]);
-const diffEditorRef = ref<InstanceType<typeof MonacoDiffEditor> | null>(null);
+const inlineEditorRef = ref<InstanceType<typeof InlineReviewEditor> | null>(null);
 
 // ——— Per-session fully-decided file tracking (for skip navigation) ——————————
 // Tracks files where all pending hunks were decided this session.
 // Using a plain Set (not reactive) — only read inside navigateToNextFile().
 const fullyDecidedFiles = new Set<string>();
 
-// Tracks which accepted-hunk hashes have been collapsed in the original model.
-// Used as a guard to prevent onDidUpdateDiff → onHunksReady → collapseAcceptedHunks loops.
-let lastCollapsedHashes = new Set<string>();
+// ——— Aggregate file states for file list dots ————————————————————————————
+const fileAggregateStates = ref<Record<string, HunkDecision | "pending">>({});
 
-// Suppresses the onHunksReady cascade triggered by collapseAcceptedHunks → origModel.setValue.
-// Without this flag, setValue fires onDidUpdateDiff → onHunksReady → clearHunkZones +
-// injectViewZones with Monaco's shifted ILCs, which no longer match git hunk coordinates,
-// causing remaining hunk bars to fail to re-inject (the multi-hunk accept regression).
-let collapsingHunks = false;
+function computeFileAggregateState(hunks: HunkWithDecisions[]): HunkDecision | "pending" {
+  // Priority: pending > change_request > rejected > accepted
+  let hasChangeRequest = false;
+  let hasRejected = false;
+  for (const h of hunks) {
+    const d = effectiveDecision(h);
+    if (d === "pending") return "pending";
+    if (d === "change_request") hasChangeRequest = true;
+    if (d === "rejected") hasRejected = true;
+  }
+  if (hasChangeRequest) return "change_request";
+  if (hasRejected) return "rejected";
+  return "accepted";
+}
+
+function updateCurrentFileAggregateState() {
+  if (!reviewStore.selectedFile || !diffContent.value) return;
+  fileAggregateStates.value = {
+    ...fileAggregateStates.value,
+    [reviewStore.selectedFile]: computeFileAggregateState(diffContent.value.hunks),
+  };
+}
+
 
 // ——— Resizable file list panel ——————————————————————————————————————————
 
@@ -249,35 +273,16 @@ function buildManualEdits(): ManualEdit[] {
 
 const checkpointRef = ref<string | null>(null);
 
-// ——— ViewZone tracking ——————————————————————————————————————————————————
+// ——— ViewZone management (delegated to InlineReviewEditor) ——————————————
 
-interface ZoneDescriptor {
-  afterLineNumber: number;
-  heightInPx: number;
-  domNode: HTMLDivElement;
+function clearAllZones() {
+  inlineEditorRef.value?.clearAllHunkVisuals();
+  inlineEditorRef.value?.clearCommentZones();
 }
 
-interface ZoneRecord {
-  zoneId: string;
-  spacerZoneId?: string;
-  domNode: HTMLDivElement;
-  zoneDescriptor: ZoneDescriptor;
-  spacerDescriptor?: ZoneDescriptor;
-  app: App;
-  hash: string;
-  afterLineNumber: number;
-  observer?: ResizeObserver;
-}
-
-const hunkZones = new Map<string, ZoneRecord>();
-
-// Separate map for line comment zones. Key = commentId (positive for posted, negative temp for open).
-const commentZones = new Map<number, ZoneRecord & { commentId: number; lineStart: number; lineEnd: number }>();
-let nextTempCommentId = -1; // decremented for each open comment zone before persisting
-
-// Decoration IDs for decided hunk overlays; replaced on each applyDecisionDecorations call.
-let modifiedDecisionDecorations: string[] = [];
-let originalDecisionDecorations: string[] = [];
+// Separate map for tracking comment metadata (for lifecycle management from overlay).
+// Key = commentId (positive for posted, negative temp for open).
+let nextTempCommentId = -1;
 
 // ——— Static config ———————————————————————————————————————————————————————
 
@@ -321,398 +326,10 @@ const canSubmit = computed(() =>
 
 const fileListItems = computed(() => reviewStore.files.map((path) => ({ path })));
 
-// ——— ViewZone management —————————————————————————————————————————————————
+// ——— Inline editor callback: hunks rendered ——————————————————————————————
 
-function clearAllZones() {
-  clearHunkZones();
-  clearCommentZones();
-}
-
-/** Remove only hunk action-bar zones — leaves comment zones intact. */
-function clearHunkZones() {
-  for (const [, record] of hunkZones) record.observer?.disconnect();
-  const editor = diffEditorRef.value?.getEditor();
-  if (editor) {
-    const modEditor = editor.getModifiedEditor();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    modEditor.changeViewZones((accessor: any) => {
-      for (const [, record] of hunkZones) accessor.removeZone(record.zoneId);
-    });
-    if (sideBySide.value) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      editor.getOriginalEditor().changeViewZones((accessor: any) => {
-        for (const [, record] of hunkZones) {
-          if (record.spacerZoneId) accessor.removeZone(record.spacerZoneId);
-        }
-      });
-    }
-  }
-  // Only unmount hunk-bar Vue apps (comment zones manage their own apps via commentZones map).
-  for (const [, record] of hunkZones) {
-    try { record.app.unmount(); } catch { /* ignore */ }
-  }
-  hunkZones.clear();
-}
-
-/** Remove only line-comment zones — leaves hunk action bars intact. */
-function clearCommentZones() {
-  for (const [, record] of commentZones) record.observer?.disconnect();
-  const editor = diffEditorRef.value?.getEditor();
-  if (editor) {
-    const modEditor = editor.getModifiedEditor();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    modEditor.changeViewZones((accessor: any) => {
-      for (const [, record] of commentZones) accessor.removeZone(record.zoneId);
-    });
-  }
-  for (const [, record] of commentZones) {
-    try { record.app.unmount(); } catch { /* ignore */ }
-  }
-  commentZones.clear();
-}
-
-function layoutZone(hash: string) {
-  const editor = diffEditorRef.value?.getEditor();
-  if (!editor) return;
-  // Layout ALL zones that belong to this git hunk (there may be multiple when Monaco
-  // splits one git hunk into several ILineChange regions).
-  for (const [, record] of hunkZones) {
-    if (record.hash !== hash) continue;
-    // Read the actual rendered content height from the inner hunk-bar element.
-    // Monaco sets an explicit height on domNode (the zone container), making
-    // domNode.scrollHeight always equal to Monaco's allocated height rather than
-    // the true content size. The first child is the Vue-mounted HunkActionBar.
-    const innerEl = (record.domNode.firstElementChild as HTMLElement) ?? record.domNode;
-    const actualHeight = Math.max(innerEl.scrollHeight, innerEl.offsetHeight) || record.domNode.scrollHeight;
-    if (actualHeight > 0) {
-      record.zoneDescriptor.heightInPx = actualHeight;
-      if (record.spacerDescriptor) record.spacerDescriptor.heightInPx = actualHeight;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    editor.getModifiedEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.zoneId));
-    if (record.spacerZoneId) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      editor.getOriginalEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.spacerZoneId!));
-    }
-  }
-}
-
-/**
- * Force-layout every active zone. Called after injection so that zones placed
- * below the visible viewport (e.g. the bottom of a large new/untracked file)
- * still get their correct height set even if the ResizeObserver hasn't fired yet
- * (WKWebView may not notify for off-screen elements inside Monaco's container).
- *
- * When the inner element is off-screen its height reads as 0. We use a fallback
- * so Monaco allocates visible space; the ResizeObserver then corrects the height
- * once the zone scrolls into view.
- */
-const FALLBACK_ZONE_HEIGHT_PX = 56; // approximate HunkActionBar height
-function layoutAllZones() {
-  const editor = diffEditorRef.value?.getEditor();
-  if (!editor) return;
-  const allRecords = [...hunkZones.values(), ...commentZones.values()];
-  for (const record of allRecords) {
-    const innerEl = (record.domNode.firstElementChild as HTMLElement) ?? record.domNode;
-    const actualHeight =
-      Math.max(innerEl.scrollHeight, innerEl.offsetHeight) ||
-      record.domNode.scrollHeight ||
-      FALLBACK_ZONE_HEIGHT_PX;
-    if (actualHeight > 0) {
-      record.zoneDescriptor.heightInPx = actualHeight;
-      if (record.spacerDescriptor) record.spacerDescriptor.heightInPx = actualHeight;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    editor.getModifiedEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.zoneId));
-    if (record.spacerZoneId) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      editor.getOriginalEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.spacerZoneId!));
-    }
-  }
-}
-
-function getVisibleUndecidedHunks(): HunkWithDecisions[] {
-  const f = reviewStore.filter;
-  return allHunks.value.filter((h) => {
-    const d = effectiveDecision(h);
-    if (f === "unreviewed") return d === "pending";
-    if (f === "needs_action") return d === "change_request";
-    if (f === "accepted") return false;
-    return d === "pending" || d === "change_request";
-  });
-}
-
-// ——— Per-hunk zone removal (for accept path) ———————————————————————————
-
-function removeZoneForHash(hash: string) {
-  const editor = diffEditorRef.value?.getEditor();
-  const modEditor = editor?.getModifiedEditor();
-  const origEditor = sideBySide.value ? editor?.getOriginalEditor() : null;
-  for (const [key, record] of hunkZones) {
-    if (record.hash !== hash) continue;
-    record.observer?.disconnect();
-    record.app.unmount();
-    if (modEditor) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      modEditor.changeViewZones((accessor: any) => accessor.removeZone(record.zoneId));
-    }
-    if (record.spacerZoneId && origEditor) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      origEditor.changeViewZones((accessor: any) => accessor.removeZone(record.spacerZoneId!));
-    }
-    hunkZones.delete(key);
-  }
-}
-
-// ——— Decision decorations (Group 6) ——————————————————————————————————————
-
-function applyDecisionDecorations() {
-  const editor = diffEditorRef.value?.getEditor();
-  if (!editor) return;
-  const modEditor = editor.getModifiedEditor();
-  const origEditor = sideBySide.value ? editor.getOriginalEditor() : null;
-  const modifiedDecorations = allHunks.value
-    .filter((h) => effectiveDecision(h) !== "pending" && h.modifiedStart > 0)
-    .map((h) => {
-      const accepted = effectiveDecision(h) === "accepted";
-      const startLine = Math.max(h.modifiedStart, 1);
-      const endLine = Math.max(h.modifiedEnd, h.modifiedStart, 1);
-      return {
-        range: { startLineNumber: startLine, startColumn: 1, endLineNumber: endLine, endColumn: Number.MAX_SAFE_INTEGER },
-        options: {
-          isWholeLine: true,
-          className: accepted ? "accepted-hunk-decoration" : "rejected-hunk-decoration",
-          inlineClassName: accepted ? "accepted-hunk-inline-decoration" : "rejected-hunk-inline-decoration",
-          zIndex: accepted ? 20 : 10,
-        },
-      };
-    });
-  modifiedDecisionDecorations = modEditor.deltaDecorations(modifiedDecisionDecorations, modifiedDecorations);
-
-  if (origEditor) {
-    const originalDecorations = allHunks.value
-      .filter((h) => effectiveDecision(h) !== "pending" && h.originalStart > 0)
-      .map((h) => {
-        const accepted = effectiveDecision(h) === "accepted";
-        const startLine = Math.max(h.originalStart, 1);
-        const endLine = Math.max(h.originalEnd, h.originalStart, 1);
-        return {
-          range: { startLineNumber: startLine, startColumn: 1, endLineNumber: endLine, endColumn: Number.MAX_SAFE_INTEGER },
-          options: {
-            isWholeLine: true,
-            className: accepted ? "accepted-hunk-decoration" : "rejected-hunk-decoration",
-            inlineClassName: accepted ? "accepted-hunk-inline-decoration" : "rejected-hunk-inline-decoration",
-            zIndex: accepted ? 20 : 10,
-          },
-        };
-      });
-    originalDecisionDecorations = origEditor.deltaDecorations(originalDecisionDecorations, originalDecorations);
-  } else if (originalDecisionDecorations.length > 0) {
-    originalDecisionDecorations = [];
-  }
-}
-
-/**
- * Mutate the DiffEditor's original model so accepted hunks have identical text
- * on both sides. Monaco's diff engine recalculates and no longer highlights
- * those ranges, naturally removing red/green diff coloring.
- */
-function collapseAcceptedHunks() {
-  if (!diffContent.value) return;
-  const accepted = diffContent.value.hunks.filter(
-    (h) => effectiveDecision(h) === "accepted",
-  );
-  if (accepted.length === 0) return;
-
-  const currentHashes = new Set(accepted.map((h) => h.hash));
-  if (
-    currentHashes.size === lastCollapsedHashes.size &&
-    [...currentHashes].every((h) => lastCollapsedHashes.has(h))
-  ) {
-    return; // already collapsed this exact set — avoid onDidUpdateDiff loop
-  }
-  lastCollapsedHashes = currentHashes;
-
-  const origModel = diffEditorRef.value?.getOriginalEditor()?.getModel();
-  if (!origModel) return;
-
-  // Rebuild original content with accepted hunks replaced by their modified text.
-  // Use server content for stable line numbers (model may have been mutated before).
-  const origLines = diffContent.value.original.split("\n");
-  const modLines = diffContent.value.modified.split("\n");
-
-  // Process bottom-to-top so earlier splices don't shift later hunks' indices.
-  const sorted = [...accepted].sort((a, b) => b.originalStart - a.originalStart);
-  for (const hunk of sorted) {
-    const replacement =
-      hunk.modifiedStart > 0 && hunk.modifiedEnd > 0
-        ? modLines.slice(hunk.modifiedStart - 1, hunk.modifiedEnd)
-        : [];
-
-    if (hunk.originalStart === 0 && hunk.originalEnd === 0) {
-      // Pure addition (new file): replace entire original with modified content.
-      // Can't just prepend — "".split("\n") yields [""], leaving a phantom empty line.
-      origLines.splice(0, origLines.length, ...replacement);
-    } else {
-      origLines.splice(
-        hunk.originalStart - 1,
-        hunk.originalEnd - hunk.originalStart + 1,
-        ...replacement,
-      );
-    }
-  }
-
-  // Flag onHunksReady to skip zone clear+reinject for this model mutation.
-  // collapseAcceptedHunks operates on the original model only to remove red/green
-  // diff colors; hunk bars are managed separately via removeZoneForHash.
-  collapsingHunks = true;
-  origModel.setValue(origLines.join("\n"));
-}
-
-function injectViewZones(lineChanges: ILineChange[]) {
-  // Changes mode shows a clean read-only diff — no action bars needed
-  if (reviewStore.mode === "changes") return;
-
-  const editor = diffEditorRef.value?.getEditor();
-  if (!editor || !diffContent.value) return;
-
-  const undecidedHunks = getVisibleUndecidedHunks();
-  const modEditor = editor.getModifiedEditor();
-  const origEditor = sideBySide.value ? editor.getOriginalEditor() : null;
-
-  // Build the injection list: one entry per bar to inject.
-  // Strategy: map each Monaco ILineChange to the best-matching undecided git hunk so that
-  // every colored diff region gets its own action bar.  Git's -U3 context merging can make
-  // one git hunk span multiple Monaco ILineChanges; each Monaco ILineChange gets its own bar
-  // but they share the same git hunk hash (so accepting/rejecting any bar decides the whole hunk).
-  // Falls back to git-hunk-based injection for hunks not covered by any Monaco ILineChange
-  // (e.g. pure-deletion hunks that only appear in the original editor).
-  const injectionList: { hunk: HunkWithDecisions; afterLineNumber: number }[] = [];
-  const hunksCoveredByMonaco = new Set<string>();
-
-  if (lineChanges.length > 0 && undecidedHunks.length > 0) {
-    for (const lc of lineChanges) {
-      const modEnd = lc.modifiedEndLineNumber;
-      const modStart = lc.modifiedStartLineNumber;
-      // Find undecided git hunk whose modified range overlaps this Monaco ILineChange.
-      const matchingHunk = undecidedHunks.find((h) => {
-        const hStart = Math.min(h.modifiedStart, h.modifiedContentStart ?? h.modifiedStart);
-        const hEnd = Math.max(h.modifiedEnd, h.modifiedContentEnd ?? h.modifiedEnd);
-        return modStart <= hEnd && modEnd >= hStart;
-      });
-      if (matchingHunk) {
-        hunksCoveredByMonaco.add(matchingHunk.hash);
-        injectionList.push({
-          hunk: matchingHunk,
-          afterLineNumber: modEnd > 0 ? modEnd : Math.max(modStart, 1),
-        });
-      }
-    }
-  }
-
-  // Include undecided hunks not matched by any Monaco ILineChange (e.g. pure-deletion hunks).
-  for (const hunk of undecidedHunks) {
-    if (!hunksCoveredByMonaco.has(hunk.hash)) {
-      const afterLineNumber = hunk.modifiedEnd > 0 ? hunk.modifiedEnd : Math.max(hunk.modifiedStart, 1);
-      injectionList.push({ hunk, afterLineNumber });
-    }
-  }
-
-  for (const { hunk, afterLineNumber } of injectionList) {
-    const zoneKey = `${hunk.hash}:${afterLineNumber}`;
-    if (hunkZones.has(zoneKey)) continue; // deduplicate
-
-    const domNode = document.createElement("div");
-    // Ensure pointer events reach Vue-mounted content
-    domNode.style.pointerEvents = "auto";
-    // Lift above Monaco's .view-lines layer which sits on top of .view-zones in the DOM
-    // and would otherwise intercept real mouse clicks (confirmed via elementFromPoint).
-    domNode.style.position = "relative";
-    domNode.style.zIndex = "1";
-    // Prevent Monaco from seeing mousedown/pointerdown from our zone.
-    // Monaco's _onMouseDown runs in bubble phase and may call setPointerCapture
-    // (redirecting pointerup away from our buttons) or e.preventDefault()
-    // (suppressing click in WebKit) if it misidentifies the coordinate target.
-    domNode.addEventListener("mousedown", (e) => e.stopPropagation());
-    domNode.addEventListener("pointerdown", (e) => e.stopPropagation());
-    const app = createApp(HunkActionBar, {
-      hunk,
-      mode: reviewStore.mode,
-      onDecide: onDecideHunk,
-      onHeightChange: () => layoutZone(hunk.hash),
-    });
-    app.mount(domNode);
-    diffEditorRef.value?.registerApp(app);
-
-    let zoneId = "";
-    let spacerZoneId = "";
-    const initialHeight = 108;
-
-    const zoneDescriptor: ZoneDescriptor = { afterLineNumber, heightInPx: initialHeight, domNode };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    modEditor.changeViewZones((accessor: any) => {
-      zoneId = accessor.addZone(zoneDescriptor);
-    });
-
-    let spacerDescriptor: ZoneDescriptor | undefined;
-    if (origEditor) {
-      const spacerNode = document.createElement("div");
-      spacerDescriptor = { afterLineNumber, heightInPx: initialHeight, domNode: spacerNode };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      origEditor.changeViewZones((accessor: any) => {
-        spacerZoneId = accessor.addZone(spacerDescriptor!);
-      });
-    }
-
-    // ResizeObserver keeps Monaco's line offsets in sync as the textarea grows.
-    // Watch the inner hunk-bar element (not domNode) because Monaco sets an explicit
-    // height on domNode — observing it would never detect content growing beyond 108px.
-    const observer = new ResizeObserver(() => layoutZone(hunk.hash));
-    const observeTarget = (domNode.firstElementChild as HTMLElement) ?? domNode;
-    observer.observe(observeTarget);
-
-    hunkZones.set(zoneKey, {
-      zoneId,
-      spacerZoneId: spacerZoneId || undefined,
-      domNode,
-      zoneDescriptor,
-      spacerDescriptor,
-      app,
-      hash: hunk.hash,
-      afterLineNumber,
-      observer,
-    });
-  }
-}
-
-// ——— Monaco diff ready → inject ViewZones and decorations ────────────────
-
-function onHunksReady(lineChanges: ILineChange[]) {
-  lastLineChanges.value = lineChanges;
-
-  // collapseAcceptedHunks sets this flag before calling origModel.setValue so
-  // the resulting onDidUpdateDiff event does not wipe and re-inject zones with
-  // Monaco's shifted ILCs. The bars for pending hunks are already correct from
-  // the earlier injectViewZones call; only the model was mutated to strip accepted diff colors.
-  if (collapsingHunks) {
-    collapsingHunks = false;
-    // Monaco clears decorations when the model is mutated; re-apply them.
-    nextTick(() => applyDecisionDecorations());
-    return;
-  }
-
-  clearHunkZones();
-  injectViewZones(lineChanges);
-
-  // Force layout for all injected zones. Zones placed below the visible viewport
-  // (e.g. the entire content of a new file) may not trigger ResizeObserver in
-  // WKWebView, leaving their Monaco container at height:0. A forced layout pass
-  // immediately after injection corrects this.
-  nextTick(() => {
-    layoutAllZones();
-    applyDecisionDecorations();
-    collapseAcceptedHunks();
-  });
+function onHunksRendered() {
+  reviewStore.bumpVersion();
 
   // After cross-file navigation, scroll to the first or last pending hunk in the new file.
   if (pendingNavTarget.value !== null) {
@@ -725,8 +342,8 @@ function onHunksReady(lineChanges: ILineChange[]) {
     return;
   }
 
-  // Scroll Monaco to the first pending hunk on every fresh load (initial file load or after reject).
-  if (hunkZones.size > 0) {
+  // On initial file load: scroll to first pending hunk
+  if (pendingHunks.value.length > 0) {
     nextTick(() => {
       currentPendingIdx.value = 0;
       scrollToPendingHunk();
@@ -747,19 +364,16 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
 
   try {
     if (decision === "rejected") {
-      // Reject also reverts the file on disk; new diff load triggers onHunksReady.
+      // Reject also reverts the file on disk; reload the diff entirely.
       const newDiff = await electroview.rpc!.request["tasks.rejectHunk"]({
         taskId: reviewStore.taskId,
         filePath: reviewStore.selectedFile,
         hunkIndex: hunk.hunkIndex,
       });
       diffContent.value = newDiff;
-      // Clear stale bars immediately so the UI doesn't show orphaned action bars.
-      // Do NOT call injectViewZones here — lastLineChanges holds pre-reject line
-      // positions which no longer match the new diff. Monaco will fire onHunksReady
-      // with correct new ILCs after it re-computes the updated diff.
-      clearHunkZones();
-      applyDecisionDecorations();
+      // InlineReviewEditor will re-render via hunks prop change + hunksRendered event.
+      inlineEditorRef.value?.setContent(newDiff.modified);
+      inlineEditorRef.value?.renderHunks(newDiff.hunks);
     } else {
       await electroview.rpc!.request["tasks.setHunkDecision"]({
         taskId: reviewStore.taskId,
@@ -786,64 +400,70 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
         humanComment: comment,
       };
     }
+    reviewStore.bumpVersion();
+    updateCurrentFileAggregateState();
 
     if (decision === "accepted") {
-      // Remove the action bar zone for this hunk; apply accepted decoration.
-      removeZoneForHash(hash);
-      applyDecisionDecorations();
-      // Mutate the original model so Monaco's diff engine sees no difference
-      // for accepted hunks — their red/green coloring disappears naturally.
-      collapseAcceptedHunks();
+      // Remove this hunk's visual elements (deletion zone, insertion decorations, action bar).
+      // No model mutation needed — editor already shows the accepted content.
+      inlineEditorRef.value?.clearHunkVisuals(hash);
       const remainingPendingInFile = diffContent.value.hunks.filter((candidate) => effectiveDecision(candidate) === "pending").length;
       if (remainingPendingInFile > 0) {
         currentPendingIdx.value = Math.min(currentPendingIdx.value, remainingPendingInFile - 1);
-        nextTick(() => scrollToPendingHunk());
       } else {
-        // All hunks in this file decided — track it and advance to the next pending file.
+        // All hunks in this file decided — track it.
         if (reviewStore.selectedFile) fullyDecidedFiles.add(reviewStore.selectedFile);
-        navigateToNextFile();
       }
     } else if (decision === "change_request") {
-      // Diff stays visible — clear and re-inject zones so visibility filter applies.
-      clearHunkZones();
-      injectViewZones(lastLineChanges.value);
-      applyDecisionDecorations();
+      // Re-render hunks so visibility filter applies.
+      inlineEditorRef.value?.renderHunks(diffContent.value.hunks);
     }
 
     if (reviewStore.taskId) {
       await taskStore.refreshChangedFiles(reviewStore.taskId);
     }
-  } catch {
+  } catch (err) {
+    console.error("[onDecideHunk] RPC error for decision='" + decision + "' hash='" + hash + "':", err);
     reviewStore.optimisticUpdates.delete(hash);
   }
 }
 
 // ——— Line comment lifecycle ————————————————————————————————————————————————
 
-function injectCommentZone(
-  commentId: number,
-  lineStart: number,
-  lineEnd: number,
-  state: "open" | "posted",
-  initialComment?: string,
-) {
-  const editor = diffEditorRef.value?.getEditor();
-  if (!editor) return;
-  const modEditor = editor.getModifiedEditor();
+async function handleDeleteComment(commentId: number) {
+  if (!reviewStore.taskId) return;
+  try {
+    await electroview.rpc!.request["tasks.deleteLineComment"]({
+      taskId: reviewStore.taskId,
+      commentId,
+    });
+    inlineEditorRef.value?.removeCommentZone(commentId);
+    inlineEditorRef.value?.removeCommentHighlight(commentId);
+  } catch { /* ignore */ }
+}
 
-  const afterLineNumber = Math.max(lineEnd, 1);
-  const domNode = document.createElement("div");
-  domNode.style.pointerEvents = "auto";
-  domNode.style.position = "relative";
-  domNode.style.zIndex = "1";
-  domNode.addEventListener("mousedown", (e) => e.stopPropagation());
-  domNode.addEventListener("pointerdown", (e) => e.stopPropagation());
+async function loadLineComments(filePath: string) {
+  if (!reviewStore.taskId) return;
+  try {
+    const comments = await electroview.rpc!.request["tasks.getLineComments"]({
+      taskId: reviewStore.taskId,
+    });
+    // Filter to this file and inject posted zones via InlineReviewEditor
+    for (const lc of comments.filter((c: LineComment) => c.filePath === filePath)) {
+      inlineEditorRef.value?.injectCommentZone(lc.id, lc.lineStart, lc.lineEnd, "posted", lc.comment, {
+        onDelete: async () => { await handleDeleteComment(lc.id); },
+      }, lc.colStart, lc.colEnd);
+      // Add inline amber highlight for column-precise comments
+      if (lc.colStart > 0 && lc.colEnd > 0) {
+        inlineEditorRef.value?.addCommentHighlight(lc.id, lc.lineStart, lc.lineEnd, lc.colStart, lc.colEnd);
+      }
+    }
+  } catch { /* ignore */ }
+}
 
-  const app = createApp(LineCommentBar, {
-    lineStart,
-    lineEnd,
-    state,
-    initialComment,
+function onRequestLineComment(lineStart: number, lineEnd: number, colStart?: number, colEnd?: number) {
+  const tempId = nextTempCommentId--;
+  inlineEditorRef.value?.injectCommentZone(tempId, lineStart, lineEnd, "open", undefined, {
     onPost: async (comment: string) => {
       if (!reviewStore.taskId || !reviewStore.selectedFile) return;
       const modifiedLines = diffContent.value?.modified.split("\n") ?? [];
@@ -856,118 +476,28 @@ function injectCommentZone(
         filePath: reviewStore.selectedFile,
         lineStart,
         lineEnd,
+        colStart: colStart ?? 0,
+        colEnd: colEnd ?? 0,
         lineText,
         contextLines,
         comment,
       });
-      // Remap old temp zone to the persisted comment ID
-      const oldRecord = commentZones.get(commentId);
-      if (oldRecord) {
-        commentZones.delete(commentId);
-        commentZones.set(saved.id, { ...oldRecord, commentId: saved.id });
-      }
-      // Re-mount with posted state (update app props)
-      app.unmount();
-      domNode.innerHTML = "";
-      const postedApp = createApp(LineCommentBar, {
-        lineStart,
-        lineEnd,
-        state: "posted" as const,
-        initialComment: comment,
-        onPost: () => {},
-        onCancel: () => {},
-        onDelete: async () => { await handleDeleteComment(saved.id); },
+      // Remount as posted state with the persisted comment ID
+      inlineEditorRef.value?.remountCommentZone(tempId, saved.id, lineStart, lineEnd, comment, async () => {
+        await handleDeleteComment(saved.id);
       });
-      postedApp.mount(domNode);
-      diffEditorRef.value?.registerApp(postedApp);
-      nextTick(() => layoutCommentZone(saved.id));
+      // Add inline amber highlight for column-precise comments
+      if ((colStart ?? 0) > 0 && (colEnd ?? 0) > 0) {
+        inlineEditorRef.value?.addCommentHighlight(saved.id, lineStart, lineEnd, colStart!, colEnd!);
+      }
     },
     onCancel: () => {
-      removeCommentZone(commentId);
+      inlineEditorRef.value?.removeCommentZone(tempId);
     },
     onDelete: async () => {
-      await handleDeleteComment(commentId);
+      await handleDeleteComment(tempId);
     },
-    onHeightChange: () => layoutCommentZone(commentId),
-  });
-  app.mount(domNode);
-  diffEditorRef.value?.registerApp(app);
-
-  const initialHeight = 80;
-  const zoneDescriptor: ZoneDescriptor = { afterLineNumber, heightInPx: initialHeight, domNode };
-  let zoneId = "";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  modEditor.changeViewZones((accessor: any) => { zoneId = accessor.addZone(zoneDescriptor); });
-
-  const observer = new ResizeObserver(() => layoutCommentZone(commentId));
-  observer.observe((domNode.firstElementChild as HTMLElement) ?? domNode);
-
-  commentZones.set(commentId, {
-    zoneId,
-    domNode,
-    zoneDescriptor,
-    app,
-    hash: `comment:${commentId}`,
-    afterLineNumber,
-    observer,
-    commentId,
-    lineStart,
-    lineEnd,
-  });
-}
-
-function layoutCommentZone(commentId: number) {
-  const record = commentZones.get(commentId);
-  if (!record) return;
-  const editor = diffEditorRef.value?.getEditor();
-  if (!editor) return;
-  const innerEl = (record.domNode.firstElementChild as HTMLElement) ?? record.domNode;
-  const actualHeight = Math.max(innerEl.scrollHeight, innerEl.offsetHeight) || FALLBACK_ZONE_HEIGHT_PX;
-  if (actualHeight > 0) record.zoneDescriptor.heightInPx = actualHeight;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  editor.getModifiedEditor().changeViewZones((accessor: any) => accessor.layoutZone(record.zoneId));
-}
-
-function removeCommentZone(commentId: number) {
-  const record = commentZones.get(commentId);
-  if (!record) return;
-  record.observer?.disconnect();
-  record.app.unmount();
-  const editor = diffEditorRef.value?.getEditor();
-  if (editor) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    editor.getModifiedEditor().changeViewZones((accessor: any) => accessor.removeZone(record.zoneId));
-  }
-  commentZones.delete(commentId);
-}
-
-async function handleDeleteComment(commentId: number) {
-  if (!reviewStore.taskId) return;
-  try {
-    await electroview.rpc!.request["tasks.deleteLineComment"]({
-      taskId: reviewStore.taskId,
-      commentId,
-    });
-    removeCommentZone(commentId);
-  } catch { /* ignore */ }
-}
-
-async function loadLineComments(filePath: string) {
-  if (!reviewStore.taskId) return;
-  try {
-    const comments = await electroview.rpc!.request["tasks.getLineComments"]({
-      taskId: reviewStore.taskId,
-    });
-    // Filter to this file and inject posted zones
-    for (const lc of comments.filter((c: LineComment) => c.filePath === filePath)) {
-      injectCommentZone(lc.id, lc.lineStart, lc.lineEnd, "posted", lc.comment);
-    }
-  } catch { /* ignore */ }
-}
-
-function onRequestLineComment(lineStart: number, lineEnd: number) {
-  const tempId = nextTempCommentId--;
-  injectCommentZone(tempId, lineStart, lineEnd, "open");
+  }, colStart, colEnd);
 }
 
 // ——— Navigation ——————————————————————————————————————————————————————————
@@ -1021,53 +551,14 @@ function navigatePrev() {
 function scrollToPendingHunk() {
   const hunk = pendingHunks.value[currentPendingIdx.value];
   if (!hunk) return;
-  const editor = diffEditorRef.value?.getEditor();
-  if (!editor) return;
-  // Zones are keyed by `${hash}:${afterLineNumber}`; find the first (topmost) one for this hunk.
-  let record: ZoneRecord | undefined;
-  for (const [, r] of hunkZones) {
-    if (r.hash !== hunk.hash) continue;
-    if (!record || r.afterLineNumber < record.afterLineNumber) record = r;
-  }
-  // Fall back to the hunk's own start line when no ViewZone has been injected for it
-  const line = record?.afterLineNumber ?? hunk.modifiedStart;
-  editor.getModifiedEditor().revealLineInCenter(line);
-
-  // After Monaco scrolls, check if the zone domNode is clipped above the editor
-  // viewport (this happens for hunks near the top of the file where Monaco can't
-  // center without going above its minimum scroll). Compensate by scrolling down.
-  if (record) {
-    requestAnimationFrame(() => {
-      const domNode = record.domNode;
-      const editorScrollable = domNode.closest(".monaco-scrollable-element");
-      if (!editorScrollable) return;
-      const editorRect = editorScrollable.getBoundingClientRect();
-      const zoneRect = domNode.getBoundingClientRect();
-      const clipAmount = editorRect.top - zoneRect.top;
-      if (clipAmount > 0) {
-        // Zone is partially above the editor — scroll Monaco down by clipAmount
-        const modEditor = editor.getModifiedEditor();
-        modEditor.setScrollTop(modEditor.getScrollTop() - clipAmount);
-      }
-      domNode.classList.add("hunk-bar--highlight");
-      setTimeout(() => domNode.classList.remove("hunk-bar--highlight"), 600);
-    });
-  }
-}
-
-// ——— View mode toggle ————————————————————————————————————————————————————
-
-async function toggleViewMode() {
-  sideBySide.value = !sideBySide.value;
-  clearHunkZones();
-  await nextTick();
-  // Monaco may or may not re-fire onDidUpdateDiff after updateOptions;
-  // if zones are still empty after 120ms we inject manually
-  setTimeout(() => {
-    if (hunkZones.size === 0 && lastLineChanges.value.length > 0) {
-      injectViewZones(lastLineChanges.value);
-    }
-  }, 120);
+  // Scroll to the hunk's modified line range and highlight the action bar.
+  const line = hunk.modifiedContentEnd > 0
+    ? hunk.modifiedContentEnd
+    : hunk.modifiedEnd > 0
+      ? hunk.modifiedEnd
+      : Math.max(hunk.modifiedStart, 1);
+  inlineEditorRef.value?.revealLine(line);
+  nextTick(() => inlineEditorRef.value?.highlightActionBar(hunk.hash));
 }
 
 // ——— File loading ————————————————————————————————————————————————————————
@@ -1080,8 +571,6 @@ async function onSelectFile(path: string) {
 async function loadDiff(path: string | null) {
   if (!path || !reviewStore.taskId) return;
   await flushPendingWrite();
-  lastCollapsedHashes = new Set();
-  collapsingHunks = false;
   clearAllZones();
   currentPendingIdx.value = 0;
   diffLoading.value = true;
@@ -1095,23 +584,15 @@ async function loadDiff(path: string | null) {
     if (!editBaseContent.value.has(path) || !editedFiles.value.has(path)) {
       editBaseContent.value.set(path, diffContent.value.modified);
     }
-    // Monaco prop watcher fires → applyModels → onDidUpdateDiff → onHunksReady
-    // Load line comments for this file (injected as posted ViewZones)
+    // Wait for Vue to propagate new props (original, modified, hunks) to InlineReviewEditor,
+    // then update the Monaco model and render zones.
+    await nextTick();
+    inlineEditorRef.value?.setContent(diffContent.value.modified);
+    inlineEditorRef.value?.renderHunks(diffContent.value.hunks);
+    // Load line comments for this file (injected as posted ViewZones).
     await loadLineComments(path);
-    // WKWebView occasionally misses Monaco's initial onDidUpdateDiff event on fresh app boot.
-    // Fall back to git-hunk-based bar injection so review mode remains usable.
-    setTimeout(() => {
-      if (
-        reviewStore.isOpen &&
-        reviewStore.mode === "review" &&
-        diffContent.value?.hunks.length &&
-        hunkZones.size === 0
-      ) {
-        clearHunkZones();
-        injectViewZones([]);
-        applyDecisionDecorations();
-      }
-    }, 180);
+    // Update aggregate state for file list dots.
+    updateCurrentFileAggregateState();
   } catch {
     diffError.value = "Could not load diff for this file.";
   } finally {
@@ -1123,6 +604,44 @@ async function loadDiff(path: string | null) {
 
 async function onSubmit() {
   if (!reviewStore.taskId || !canSubmit.value) return;
+
+  const manualEdits = buildManualEdits();
+  const hasEdits = manualEdits.length > 0;
+
+  // Compute pending/rejected/change_request state from local aggregate states.
+  // Files not in fileAggregateStates are unvisited = pending.
+  const allFiles = reviewStore.files;
+  let pendingFileCount = 0;
+  let hasRejections = false;
+  let hasChangeRequests = false;
+  for (const f of allFiles) {
+    const path = typeof f === "string" ? f : f.path;
+    const state = fileAggregateStates.value[path];
+    if (!state || state === "pending") pendingFileCount++;
+    if (state === "rejected") hasRejections = true;
+    if (state === "change_request") hasChangeRequests = true;
+  }
+
+  // Silent close: every file fully accepted, no comments, no edits, no rejections.
+  if (pendingFileCount === 0 && !hasEdits && !hasChangeRequests && !hasRejections) {
+    reviewStore.closeReview();
+    return;
+  }
+
+  // If pending files remain, show confirmation dialog.
+  if (pendingFileCount > 0) {
+    pendingDialogCount.value = pendingFileCount;
+    showPendingDialog.value = true;
+    return;
+  }
+
+  // All files decided (some rejected/change_request) or has edits — submit normally.
+  await doSubmit();
+}
+
+async function doSubmit() {
+  if (!reviewStore.taskId) return;
+  showPendingDialog.value = false;
   submitting.value = true;
   try {
     await flushPendingWrite();
@@ -1169,6 +688,32 @@ watch(
       } catch {
         checkpointRef.value = null;
       }
+      // Initialize file list aggregate states.
+      // Start with ALL review files as pending, then refine with DB data.
+      try {
+        const states: Record<string, HunkDecision | "pending"> = {};
+        // Default all review files to pending.
+        for (const f of reviewStore.files) {
+          const path = typeof f === "string" ? f : f.path;
+          states[path] = "pending";
+        }
+        // Refine with the summary of files that have any decisions.
+        const summary = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({
+          taskId: reviewStore.taskId,
+        });
+        for (const { filePath, pendingCount } of summary) {
+          states[filePath] = pendingCount > 0 ? "pending" : "accepted";
+        }
+        fileAggregateStates.value = states;
+      } catch {
+        // On error, default ALL files to pending.
+        const states: Record<string, HunkDecision | "pending"> = {};
+        for (const f of reviewStore.files) {
+          const path = typeof f === "string" ? f : f.path;
+          states[path] = "pending";
+        }
+        fileAggregateStates.value = states;
+      }
       if (reviewStore.selectedFile) await loadDiff(reviewStore.selectedFile);
     }
     if (!open) {
@@ -1181,6 +726,7 @@ watch(
       editedFiles.value.clear();
       editBaseContent.value.clear();
       checkpointRef.value = null;
+      fileAggregateStates.value = {};
     }
   },
 );
@@ -1198,16 +744,18 @@ watch(
 watch(
   () => reviewStore.filter,
   () => {
-    clearHunkZones();
-    injectViewZones(lastLineChanges.value);
+    if (diffContent.value) {
+      inlineEditorRef.value?.renderHunks(diffContent.value.hunks);
+    }
   },
 );
 
 watch(
   () => reviewStore.mode,
   () => {
-    clearHunkZones();
-    injectViewZones(lastLineChanges.value);
+    if (diffContent.value) {
+      inlineEditorRef.value?.renderHunks(diffContent.value.hunks);
+    }
   },
 );
 

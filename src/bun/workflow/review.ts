@@ -100,13 +100,26 @@ function formatDiffBlock(hunk: CodeReviewHunk): string {
 }
 
 function formatLineComment(filePath: string, lc: LineComment): string {
-  const rangeLabel = lc.lineStart === lc.lineEnd
-    ? `line ${lc.lineStart}`
-    : `lines ${lc.lineStart}–${lc.lineEnd}`;
+  let rangeLabel: string;
+  if (lc.colStart > 0 && lc.colEnd > 0) {
+    rangeLabel = lc.lineStart === lc.lineEnd
+      ? `L${lc.lineStart}:C${lc.colStart}–C${lc.colEnd}`
+      : `L${lc.lineStart}:C${lc.colStart}–L${lc.lineEnd}:C${lc.colEnd}`;
+  } else {
+    rangeLabel = lc.lineStart === lc.lineEnd
+      ? `line ${lc.lineStart}`
+      : `lines ${lc.lineStart}–${lc.lineEnd}`;
+  }
   const contextLines = lc.contextLines ?? [];
   const commentedLines = lc.lineText ?? [];
 
   const blockLines: string[] = [`  • ${filePath}, ${rangeLabel}\n    → "${lc.comment}"`];
+
+  // When column-precise, include the selected text as a backtick-quoted snippet.
+  if (lc.colStart > 0 && lc.colEnd > 0 && commentedLines.length > 0) {
+    const selectedText = commentedLines.join("\n");
+    blockLines.push(`    Selected: \`${selectedText}\``);
+  }
 
   if (contextLines.length > 0 || commentedLines.length > 0) {
     blockLines.push("    ```");

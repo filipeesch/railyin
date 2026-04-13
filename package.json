@@ -30,6 +30,7 @@
     "electrobun": "latest",
     "js-yaml": "^4.1.0",
     "marked": "^17.0.5",
+    "monaco-editor": "^0.55.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {

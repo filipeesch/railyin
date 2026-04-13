@@ -10,6 +10,7 @@
  */
 
 import type { ExecutionEngine, EngineEvent, ExecutionParams, NativeExecutionType } from "./types.ts";
+import { NativeEngine } from "./native/engine.ts";
 import type { LoadedConfig } from "../config/index.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
@@ -87,7 +88,7 @@ export class Orchestrator implements ExecutionCoordinator {
   // ─── Engine type check ──────────────────────────────────────────────────────
 
   private isNativeEngine(engine: ExecutionEngine): boolean {
-    return engine.constructor.name === "NativeEngine";
+    return engine instanceof NativeEngine;
   }
 
   private getEngineForWorkspace(workspaceId: number): { config: LoadedConfig; engine: ExecutionEngine } {

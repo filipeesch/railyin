@@ -374,14 +374,14 @@ console.log("\x1b[1mTest 6: Each action bar aligns with its diff highlight (≤ 
     }>(`
       var bars = Array.from(document.querySelectorAll('.hunk-bar'));
       var visBar = null;
-      var diffEditor = document.querySelector('.monaco-diff-editor');
+      var diffEditor = document.querySelector('.inline-review-editor');
       var editorTop = diffEditor ? diffEditor.getBoundingClientRect().top : 0;
       for (var i = 0; i < bars.length; i++) {
         var r = bars[i].getBoundingClientRect();
         if (r.width > 0 && r.height > 0 && r.top > editorTop) { visBar = bars[i]; break; }
       }
-      var inserts = Array.from(document.querySelectorAll('.line-insert'));
-      var deleteds = Array.from(document.querySelectorAll('.line-delete'));
+      var inserts = Array.from(document.querySelectorAll('.inline-review-insertion'));
+      var deleteds = Array.from(document.querySelectorAll('.inline-review-deletion-zone'));
       var barTop = visBar ? Math.round(visBar.getBoundingClientRect().top) : -1;
       var barH   = visBar ? Math.round(visBar.getBoundingClientRect().height) : 0;
       // Find the closest insert or delete bottom that is above the bar
@@ -474,7 +474,7 @@ console.log("\n\x1b[1mTest 7: Reject hunk — hunk removed, remaining bars stay 
 
   // Count visible hunk bars before reject
   const hunksBefore = await webEval<number>(`
-    var diffEditor = document.querySelector('.monaco-diff-editor');
+    var diffEditor = document.querySelector('.inline-review-editor');
     var editorTop = diffEditor ? diffEditor.getBoundingClientRect().top : 0;
     return Array.from(document.querySelectorAll('.hunk-bar')).filter(function(el) {
       var r = el.getBoundingClientRect();
@@ -488,7 +488,7 @@ console.log("\n\x1b[1mTest 7: Reject hunk — hunk removed, remaining bars stay 
 
   // Count visible hunk bars after reject — should be one fewer
   const hunksAfter = await webEval<number>(`
-    var diffEditor = document.querySelector('.monaco-diff-editor');
+    var diffEditor = document.querySelector('.inline-review-editor');
     var editorTop = diffEditor ? diffEditor.getBoundingClientRect().top : 0;
     return Array.from(document.querySelectorAll('.hunk-bar')).filter(function(el) {
       var r = el.getBoundingClientRect();
@@ -506,15 +506,15 @@ console.log("\n\x1b[1mTest 7: Reject hunk — hunk removed, remaining bars stay 
   const alignResult = await webEval<{ hasBar: boolean; barTop: number; gap: number; insertBottom: number }>(`
     var bars = Array.from(document.querySelectorAll('.hunk-bar'));
     var visBar = null;
-    var diffEditor = document.querySelector('.monaco-diff-editor');
+    var diffEditor = document.querySelector('.inline-review-editor');
     var editorTop = diffEditor ? diffEditor.getBoundingClientRect().top : 0;
     for (var i = 0; i < bars.length; i++) {
       var r = bars[i].getBoundingClientRect();
       if (r.width > 0 && r.height > 0 && r.top > editorTop) { visBar = bars[i]; break; }
     }
     var barTop = visBar ? Math.round(visBar.getBoundingClientRect().top) : -1;
-    var inserts = Array.from(document.querySelectorAll('.line-insert'));
-    var deleteds = Array.from(document.querySelectorAll('.line-delete'));
+    var inserts = Array.from(document.querySelectorAll('.inline-review-insertion'));
+    var deleteds = Array.from(document.querySelectorAll('.inline-review-deletion-zone'));
     var nearBot = -1, minGap = 1e9;
     inserts.concat(deleteds).forEach(function(el) {
       var bot = Math.round(el.getBoundingClientRect().bottom);

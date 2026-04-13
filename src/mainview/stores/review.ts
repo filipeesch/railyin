@@ -13,6 +13,11 @@ export const useReviewStore = defineStore("review", () => {
   const taskId = ref<number | null>(null);
   const files = ref<string[]>([]); // ordered list of changed file paths
 
+  // Monotonically increasing version counter for deterministic UI-test waits.
+  // Incremented on: selectFile, zone injection complete, hunk decision applied.
+  const reviewVersion = ref(0);
+  function bumpVersion() { reviewVersion.value++; }
+
   // Optimistic updates: hunk hash → pending decision (in-flight write)
   const optimisticUpdates = ref(new Map<string, { decision: HunkDecision; comment: string | null }>());
 
@@ -24,6 +29,7 @@ export const useReviewStore = defineStore("review", () => {
     filter.value = "all";
     optimisticUpdates.value.clear();
     selectedFile.value = filePaths[0] ?? null;
+    bumpVersion();
   }
 
   function closeReview() {
@@ -42,6 +48,7 @@ export const useReviewStore = defineStore("review", () => {
 
   function selectFile(filePath: string) {
     selectedFile.value = filePath;
+    bumpVersion();
   }
 
   return {
@@ -52,6 +59,8 @@ export const useReviewStore = defineStore("review", () => {
     taskId,
     files,
     optimisticUpdates,
+    reviewVersion,
+    bumpVersion,
     openReview,
     closeReview,
     resetSession,

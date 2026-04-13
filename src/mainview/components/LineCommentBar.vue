@@ -45,6 +45,8 @@ import { ref, computed, nextTick } from "vue";
 const props = defineProps<{
   lineStart: number;
   lineEnd: number;
+  colStart?: number;
+  colEnd?: number;
   state: "open" | "posted";
   initialComment?: string;
   onPost: (comment: string) => void;
@@ -59,11 +61,11 @@ const emit = defineEmits<{
 const textareaEl = ref<HTMLTextAreaElement | null>(null);
 const draftComment = ref(props.initialComment ?? "");
 
-const rangeLabel = computed(() =>
-  props.lineStart === props.lineEnd
+const rangeLabel = computed(() => {
+  return props.lineStart === props.lineEnd
     ? `Line ${props.lineStart}`
-    : `Lines ${props.lineStart}–${props.lineEnd}`,
-);
+    : `Lines ${props.lineStart}–${props.lineEnd}`;
+});
 
 function onPost() {
   if (!draftComment.value.trim()) return;

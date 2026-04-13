@@ -316,6 +316,13 @@ const migrations: Array<{ id: string; sql: string }> = [
       -- (for fresh DB, it will be in 018; for existing DB, this migration adds it)
     `,
   },
+  {
+    id: "020_line_comment_columns",
+    sql: `
+      ALTER TABLE task_line_comments ADD COLUMN col_start INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE task_line_comments ADD COLUMN col_end   INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 function hasColumn(tableName: string, columnName: string): boolean {
@@ -355,6 +362,13 @@ function applyMigration(id: string, sql: string): void {
     } else if (id === "019_add_parent_block_id") {
       if (!hasColumn("stream_events", "parent_block_id")) {
         db.exec("ALTER TABLE stream_events ADD COLUMN parent_block_id TEXT");
+      }
+    } else if (id === "020_line_comment_columns") {
+      if (!hasColumn("task_line_comments", "col_start")) {
+        db.exec("ALTER TABLE task_line_comments ADD COLUMN col_start INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!hasColumn("task_line_comments", "col_end")) {
+        db.exec("ALTER TABLE task_line_comments ADD COLUMN col_end INTEGER NOT NULL DEFAULT 0");
       }
     } else {
       db.exec(sql);

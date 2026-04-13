@@ -18,6 +18,8 @@ const PROJECT_DIR = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const testTarget = process.argv[2] as string | undefined;
 const devMode = testTarget === undefined;
 const MAX_WAIT_MS = 60_000;
+// Global timeout for the entire test run (10 minutes). Prevents infinite blocking.
+const TEST_GLOBAL_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -28,28 +30,40 @@ function sleep(ms: number): Promise<void> {
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 let appProc: ReturnType<typeof Bun.spawn> | null = null;
+let testProc: ReturnType<typeof Bun.spawn> | null = null;
 let bridgePort = 0;
 let cleaningUp = false;
 
 async function shutdown(): Promise<void> {
   if (cleaningUp) return;
   cleaningUp = true;
-  process.stdout.write("\n→ Shutting down app...\n");
+  process.stdout.write("\n→ Shutting down...\n");
+
+  // Kill test process first (if running)
+  try { testProc?.kill("SIGTERM"); } catch { /* ignore */ }
+
+  // Graceful shutdown via bridge
   if (bridgePort) {
     await fetch(`http://localhost:${bridgePort}/shutdown`, {
       signal: AbortSignal.timeout(2000),
-    }).catch(() => {});
+    }).catch(() => { });
     await sleep(400);
   }
-  try { appProc?.kill("SIGTERM"); } catch { /* ignore */ }
+
+  // Kill app process (SIGTERM first, then SIGKILL after 2s if stubborn)
+  if (appProc) {
+    try { appProc.kill("SIGTERM"); } catch { /* ignore */ }
+    await sleep(2000);
+    try { appProc.kill("SIGKILL"); } catch { /* already dead */ }
+  }
 }
 
-function shutdownAndExit(): void {
-  shutdown().finally(() => process.exit(0));
+function shutdownAndExit(code = 0): void {
+  shutdown().finally(() => process.exit(code));
 }
 
-process.on("SIGINT",  shutdownAndExit);
-process.on("SIGTERM", shutdownAndExit);
+process.on("SIGINT", () => shutdownAndExit(130));
+process.on("SIGTERM", () => shutdownAndExit(143));
 
 // ─── Banner ───────────────────────────────────────────────────────────────────
 
@@ -79,10 +93,11 @@ if (build.exitCode !== 0) {
 // ─── 2. Spawn app with --test-mode ────────────────────────────────────────────
 // --test-mode bakes __RAILYN_FORCE_DEBUG__ + __RAILYN_FORCE_MEMORY_DB__ at compile time.
 // Debug server binds to OS-assigned port 0 and announces DEBUG_PORT=N on stdout.
+// No --watch in test mode: file changes during tests would restart the app and nuke WebView state.
 
 process.stdout.write("→ Starting app (--test-mode)...\n");
 appProc = Bun.spawn(
-  ["electrobun", "dev", "--watch", "--test-mode"],
+  ["electrobun", "dev", "--test-mode"],
   {
     cwd: PROJECT_DIR,
     env: { ...process.env, RAILYN_CLI: "1" },
@@ -92,39 +107,34 @@ appProc = Bun.spawn(
 );
 
 // ─── 3. Parse DEBUG_PORT=N from stdout ────────────────────────────────────────
+// Drain stdout in a background async loop so the pipe never blocks the child.
+// The main flow polls `buffer` until it finds the port or times out.
+
+let buffer = "";
+let stdoutDone = false;
+
+// Background drain — runs independently, never awaited in the main flow.
+(async () => {
+  try {
+    for await (const chunk of appProc!.stdout as ReadableStream<Uint8Array>) {
+      buffer += new TextDecoder().decode(chunk);
+    }
+  } catch { /* stream closed */ }
+  stdoutDone = true;
+})();
 
 process.stdout.write("→ Waiting for debug port");
 const deadline = Date.now() + MAX_WAIT_MS;
 
-// Read stdout chunks and scan for DEBUG_PORT=N
-const reader = appProc.stdout!.getReader();
-let buffer = "";
-
-outer:
-while (Date.now() < deadline) {
-  const timeLeft = deadline - Date.now();
-  const readPromise = reader.read();
-  const timeoutPromise = sleep(Math.min(timeLeft, 1000)).then(() => ({ done: false, value: undefined }));
-
-  const result = await Promise.race([readPromise, timeoutPromise]) as ReadableStreamReadResult<Uint8Array>;
-
-  if (result.value) {
-    const chunk = new TextDecoder().decode(result.value);
-    buffer += chunk;
-    // Check for DEBUG_PORT=N in accumulated output
-    const match = buffer.match(/DEBUG_PORT=(\d+)/);
-    if (match) {
-      bridgePort = parseInt(match[1]!, 10);
-      break outer;
-    }
+while (Date.now() < deadline && !stdoutDone) {
+  const match = buffer.match(/DEBUG_PORT=(\d+)/);
+  if (match) {
+    bridgePort = parseInt(match[1]!, 10);
+    break;
   }
-
-  if (result.done) break;
   process.stdout.write(".");
+  await sleep(500);
 }
-
-// Release the reader so stdout keeps flowing (app stays alive)
-try { reader.releaseLock(); } catch { /* ignore */ }
 
 if (!bridgePort) {
   process.stderr.write(`\n✗ App did not announce DEBUG_PORT after ${MAX_WAIT_MS / 1000}s.\n`);
@@ -137,7 +147,8 @@ console.log(` ✓ port ${bridgePort}`);
 // ─── 4. Poll until bridge responds ────────────────────────────────────────────
 
 process.stdout.write("→ Waiting for bridge");
-while (Date.now() < deadline) {
+const bridgeDeadline = Date.now() + MAX_WAIT_MS;
+while (Date.now() < bridgeDeadline) {
   try {
     const r = await fetch(`http://localhost:${bridgePort}/`, {
       signal: AbortSignal.timeout(1000),
@@ -166,13 +177,13 @@ console.log(`  taskId=${setupData.taskId} ✓`);
 if (devMode) {
   console.log(`\n✓ App ready.  Bridge: http://localhost:${bridgePort}  (--debug=${bridgePort})`);
   console.log("  Press Ctrl+C to stop.\n");
-  await new Promise<never>(() => {});
+  await new Promise<never>(() => { });
 }
 
-// ─── 6b. Test mode: run tests then kill ───────────────────────────────────────
+// ─── 6b. Test mode: async spawn with global timeout ──────────────────────────
 
 console.log(`\n→ Running tests: ${testTarget}\n`);
-const testRun = Bun.spawnSync(
+testProc = Bun.spawn(
   ["bun", "test", testTarget!, "--timeout", "120000", "--", `--debug=${bridgePort}`],
   {
     cwd: PROJECT_DIR,
@@ -181,8 +192,17 @@ const testRun = Bun.spawnSync(
   },
 );
 
+// Race the test process against a global timeout
+const testExited = testProc.exited;  // Promise<number>
+const globalTimeout = sleep(TEST_GLOBAL_TIMEOUT_MS).then(() => {
+  process.stderr.write(`\n✗ Global timeout (${TEST_GLOBAL_TIMEOUT_MS / 1000}s) reached. Killing tests.\n`);
+  try { testProc?.kill("SIGTERM"); } catch { /* ignore */ }
+  return 124;  // timeout exit code (same as GNU timeout)
+});
+
+const exitCode = await Promise.race([testExited, globalTimeout]);
+
 await shutdown();
 
-const exitCode = testRun.exitCode ?? 1;
 console.log(exitCode === 0 ? "\n✓ All tests passed." : `\n✗ Tests failed (exit ${exitCode}).`);
 process.exit(exitCode);

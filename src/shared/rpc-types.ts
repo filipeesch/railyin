@@ -168,6 +168,10 @@ export interface LineComment {
   filePath: string;
   lineStart: number;
   lineEnd: number;
+  /** Column start within lineStart (0 = full-line comment). */
+  colStart: number;
+  /** Column end within lineEnd (0 = full-line comment). */
+  colEnd: number;
   /** The annotated lines at comment creation time. */
   lineText: string[];
   /** ±3 surrounding context lines captured at creation time. */
@@ -575,6 +579,8 @@ export type RailynRPCType = {
           filePath: string;
           lineStart: number;
           lineEnd: number;
+          colStart?: number;
+          colEnd?: number;
           lineText: string[];
           contextLines: string[];
           comment: string;
