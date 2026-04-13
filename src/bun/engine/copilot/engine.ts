@@ -113,6 +113,7 @@ export class CopilotEngine implements ExecutionEngine {
         return { kind: "approved" as const };
       },
       workingDirectory,
+      streaming: true,
     };
 
     // Deterministic session ID — always derived from taskId so context survives

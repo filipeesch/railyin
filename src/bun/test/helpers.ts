@@ -57,6 +57,7 @@ export function initDb(): Database {
       model                     TEXT,
       shell_auto_approve        INTEGER NOT NULL DEFAULT 0,
       approved_commands         TEXT    NOT NULL DEFAULT '[]',
+      position                  REAL NOT NULL DEFAULT 0,
       created_at                TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS task_git_context (

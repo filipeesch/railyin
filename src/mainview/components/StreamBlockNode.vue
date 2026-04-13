@@ -5,7 +5,18 @@
       v-if="block.type === 'reasoning_chunk' || block.type === 'reasoning'"
       :content="block.content"
       :streaming="!block.done && block.type === 'reasoning_chunk'"
-    />
+    >
+      <div v-if="block.children.length > 0" class="rb__children">
+        <StreamBlockNode
+          v-for="childId in block.children"
+          :key="childId"
+          :blockId="childId"
+          :blocks="blocks"
+          :renderMd="renderMd"
+          :version="version"
+        />
+      </div>
+    </ReasoningBubble>
 
     <!-- Text (live chunk or persisted assistant) -->
     <div
@@ -13,12 +24,12 @@
       class="msg msg--assistant"
     >
       <div
-        :class="['msg__bubble', 'prose', { streaming: isLiveText }]"
+        :class="['msg__bubble', 'prose', { streaming: !block.done && block.type === 'text_chunk' }]"
         v-html="renderMd(block.content)"
       />
       <div class="msg__meta">
         AI
-        <span v-if="isLiveText" class="cursor">▌</span>
+        <span v-if="!block.done && block.type === 'text_chunk'" class="cursor">▌</span>
       </div>
     </div>
 
@@ -77,8 +88,8 @@
       <div class="msg__bubble prose" v-html="renderMd(block.content)" />
     </div>
 
-    <!-- Children for non-tool blocks (tool_call renders children in its body) -->
-    <template v-if="block.type !== 'tool_call' && block.children.length > 0">
+    <!-- Children for non-tool, non-reasoning blocks (those render children in their own body) -->
+    <template v-if="block.type !== 'tool_call' && block.type !== 'reasoning_chunk' && block.type !== 'reasoning' && block.children.length > 0">
       <StreamBlockNode
         v-for="childId in block.children"
         :key="childId"
@@ -111,12 +122,10 @@ const open = ref(false);
 const block = computed(() => {
   void props.version;
   const b = props.blocks.get(props.blockId);
+  if (b && (b.type === "text_chunk" || b.type === "reasoning_chunk")) {
+    console.log(`[stream-diag] BlockNode recompute id=${props.blockId.slice(0, 20)} len=${b.content.length} ver=${props.version}`);
+  }
   return b ? { ...b } : undefined;
-});
-
-const isLiveText = computed(() => {
-  const b = block.value;
-  return b ? !b.done && b.type === "text_chunk" : false;
 });
 
 // Tool call helpers
@@ -163,6 +172,7 @@ const toolResultBlock = computed(() => {
 
 const toolResultContent = computed(() => {
   const r = toolResultBlock.value;
+  // Store already extracts plain text from the JSON envelope
   return r?.resultContent ?? "";
 });
 

@@ -11,6 +11,7 @@
 
     <div v-if="open" class="rb__body">
       <div class="rb__content" :class="{ 'rb__content--streaming': streaming }">{{ content }}</div>
+      <slot />
     </div>
   </div>
 </template>
@@ -41,7 +42,7 @@ function toggle() {
 
 <style scoped>
 .rb {
-  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 8px;
   overflow: hidden;
   font-size: 0.82rem;
@@ -96,7 +97,7 @@ function toggle() {
 
 .rb__body {
   background: var(--p-surface-0, #fff);
-  border-top: 1px solid var(--p-surface-200, #e2e8f0);
+  border-top: 1px solid var(--p-content-border-color);
   padding: 8px 10px;
   max-height: 320px;
   overflow-y: auto;
@@ -134,5 +135,17 @@ html.dark-mode .rb__header:hover {
 html.dark-mode .rb__body {
   background: var(--p-surface-900, #0f172a);
   border-top-color: var(--p-surface-700, #334155);
+}
+</style>
+
+<style>
+/* Children slotted inside the reasoning bubble body */
+.rb__children {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--p-content-border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 </style>

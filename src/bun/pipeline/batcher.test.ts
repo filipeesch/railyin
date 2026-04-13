@@ -74,11 +74,14 @@ describe("StreamBatcher", () => {
   test("tool_call uses explicit blockId and resets text block", () => {
     batcher.push({ type: "text_chunk", content: "preamble" });
     batcher.push({ type: "tool_call", content: "{}", blockId: "call_abc" });
+    // tool_call triggers immediate flush — batch 0 has preamble + tool_call
+    expect(batches).toHaveLength(1);
+    expect(batches[0][0].blockId).toMatch(/^100-t1$/);
+    expect(batches[0][1].blockId).toBe("call_abc");
+    // Next text_chunk goes into a new buffer
     batcher.push({ type: "text_chunk", content: "summary" });
     batcher.flush();
-    const events = batches[0];
-    expect(events[0].blockId).toMatch(/^100-t1$/);
-    expect(events[1].blockId).toBe("call_abc");
-    expect(events[2].blockId).toMatch(/^100-t2$/); // new text block after tool
+    expect(batches).toHaveLength(2);
+    expect(batches[1][0].blockId).toMatch(/^100-t2$/); // new text block after tool
   });
 });
