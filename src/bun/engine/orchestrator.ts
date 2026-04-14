@@ -1180,8 +1180,67 @@ export class Orchestrator implements ExecutionCoordinator {
     toolName: string,
     argsJson: string,
   ): Promise<void> {
-    const WRITE_TOOLS = new Set(["write_file", "edit_file", "patch_file", "multi_replace"]);
+    const WRITE_TOOLS = new Set(["write_file", "edit_file", "patch_file", "multi_replace", "create", "edit", "apply_patch"]);
     if (!WRITE_TOOLS.has(toolName)) return;
+
+    // apply_patch arguments is a raw string (the patch content), not a JSON object
+    // Extract all touched file paths from the patch header lines
+    if (toolName === "apply_patch") {
+      let patchText: string;
+      try {
+        patchText = JSON.parse(argsJson) as string;
+        if (typeof patchText !== "string") return;
+      } catch {
+        return;
+      }
+      const patchFilePaths = [...patchText.matchAll(/^\*\*\* (?:Add File|Update File|Delete File): (.+)$/gm)].map(
+        (m) => m[1].trim(),
+      );
+      if (patchFilePaths.length === 0) return;
+
+      const db = getDb();
+      const gitRow = db
+        .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
+          "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+        )
+        .get(taskId);
+      const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
+      if (!worktreePath) return;
+
+      for (const fp of patchFilePaths) {
+        try {
+          const proc = Bun.spawn(["git", "diff", "HEAD", "--", fp], {
+            cwd: worktreePath,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          await proc.exited;
+          const diffOut = await new Response(proc.stdout).text();
+          if (!diffOut.trim()) continue;
+
+          const diffMeta = { tool_call_id: callId };
+          const diffContent = JSON.stringify({
+            operation: "patch_file" as const,
+            path: fp,
+            rawDiff: diffOut,
+          });
+          const diffId = appendMessage(taskId, conversationId, "file_diff", null, diffContent, diffMeta);
+          this.onNewMessage({
+            id: diffId,
+            taskId,
+            conversationId,
+            type: "file_diff",
+            role: null,
+            content: diffContent,
+            metadata: diffMeta,
+            createdAt: new Date().toISOString(),
+          });
+        } catch {
+          // git diff failure is non-fatal — silently ignore
+        }
+      }
+      return;
+    }
 
     let filePath: string | undefined;
     try {
