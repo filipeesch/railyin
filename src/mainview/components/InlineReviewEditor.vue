@@ -843,7 +843,6 @@ defineExpose({
   font-size: var(--vscode-editor-font-size, 13px);
   line-height: var(--vscode-editor-line-height, 19px);
   white-space: pre;
-  text-decoration: line-through;
   opacity: 0.7;
   color: var(--p-text-color, #374151);
 }
