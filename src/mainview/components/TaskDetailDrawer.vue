@@ -311,19 +311,19 @@
               filter-placeholder="Search models…"
               size="small"
               class="input-model-select"
-              @change="(e: { value: string }) => onModelChange(e.value)"
+              @change="(e: { value: string | null }) => onModelChange(e.value)"
             >
               <template #value="{ value, placeholder }">
-                <span v-if="value" class="model-select__value" :title="selectedModelOption?.description ?? selectedModelOption?.id">
-                  {{ selectedModelOption?.label ?? value }}
+                <span v-if="selectedModelOption" class="model-select__value" :title="selectedModelOption.description ?? selectedModelOption.id ?? undefined">
+                  {{ selectedModelOption.label }}
                 </span>
                 <span v-else class="p-select-label p-placeholder">{{ placeholder }}</span>
               </template>
               <template #option="{ option }">
-                <div class="model-select__option" :title="option.description ?? option.id">
+                <div class="model-select__option" :title="option.description ?? option.id ?? undefined">
                   <div class="model-select__option-title">{{ option.label }}</div>
                   <div v-if="option.description" class="model-select__option-description">{{ option.description }}</div>
-                  <div class="model-select__option-id">{{ option.id }}</div>
+                  <div v-if="option.id" class="model-select__option-id">{{ option.id }}</div>
                 </div>
               </template>
               <template #footer>
@@ -501,14 +501,15 @@ async function onManageModelsClosed() {
 }
 
 const groupedModels = computed(() => {
-  const groups: Record<string, Array<{ id: string; label: string; description?: string; contextWindow: number | null }>> = {};
+  const groups: Record<string, Array<{ id: string | null; label: string; description?: string; contextWindow: number | null }>> = {};
   for (const model of taskStore.availableModels) {
-    const slash = model.id.indexOf("/");
-    const provider = slash !== -1 ? model.id.slice(0, slash) : "other";
+    const provider = model.id == null
+      ? "copilot"
+      : (model.id.includes("/") ? model.id.slice(0, model.id.indexOf("/")) : "other");
     if (!groups[provider]) groups[provider] = [];
     groups[provider].push({
       id: model.id,
-      label: model.displayName ?? model.id,
+      label: model.displayName ?? model.id ?? "Auto",
       description: model.description,
       contextWindow: model.contextWindow,
     });
@@ -517,8 +518,7 @@ const groupedModels = computed(() => {
 });
 
 const selectedModelOption = computed(() => {
-  const selectedId = task.value?.model ?? taskStore.availableModels[0]?.id ?? null;
-  if (!selectedId) return null;
+  const selectedId = task.value ? task.value.model : (taskStore.availableModels[0]?.id ?? null);
   for (const group of groupedModels.value) {
     const found = group.items.find((item) => item.id === selectedId);
     if (found) return found;
@@ -900,7 +900,7 @@ async function cancel() {
   }
 }
 
-async function onModelChange(model: string) {
+async function onModelChange(model: string | null) {
   if (!task.value) return;
   await taskStore.setModel(task.value.id, model);
 }

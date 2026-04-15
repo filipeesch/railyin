@@ -74,8 +74,11 @@
     </div>
 
     <!-- File diff -->
-    <div v-else-if="block.type === 'file_diff'" class="msg msg--system">
-      <span>📄 File changed</span>
+    <div v-else-if="block.type === 'file_diff'" class="tcg">
+      <div class="tcg__body tcg__body--flush">
+        <FileDiff v-if="fileDiffPayload" :payload="fileDiffPayload" />
+        <pre v-else class="tcg__output">{{ truncate(block.content) }}</pre>
+      </div>
     </div>
 
     <!-- System message -->
@@ -104,8 +107,10 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import type { FileDiffPayload, Hunk } from "@shared/rpc-types";
 import type { StreamBlock } from "../stores/task";
 import ReasoningBubble from "./ReasoningBubble.vue";
+import FileDiff from "./FileDiff.vue";
 
 const props = defineProps<{
   blockId: string;
@@ -122,10 +127,21 @@ const open = ref(false);
 const block = computed(() => {
   void props.version;
   const b = props.blocks.get(props.blockId);
-  if (b && (b.type === "text_chunk" || b.type === "reasoning_chunk")) {
-    console.log(`[stream-diag] BlockNode recompute id=${props.blockId.slice(0, 20)} len=${b.content.length} ver=${props.version}`);
-  }
   return b ? { ...b } : undefined;
+});
+
+const fileDiffPayload = computed<FileDiffPayload | null>(() => {
+  const b = block.value;
+  if (!b || b.type !== "file_diff") return null;
+  try {
+    const parsed = JSON.parse(b.content) as FileDiffPayload & { rawDiff?: string };
+    if (typeof parsed.rawDiff === "string") {
+      return parseUnifiedDiff(parsed.rawDiff, parsed.path, parsed.operation);
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
 });
 
 // Tool call helpers
@@ -202,6 +218,77 @@ function truncate(text: string, max = 800): string {
 
 function tryParseJson(s: string): Record<string, unknown> | null {
   try { return JSON.parse(s); } catch { return null; }
+}
+
+function parseUnifiedDiff(
+  diffText: string,
+  fallbackPath: string,
+  operation: FileDiffPayload["operation"],
+): FileDiffPayload {
+  const lines = diffText.split("\n");
+  const hunks: Hunk[] = [];
+  let currentHunk: Hunk | null = null;
+  let oldLine = 0;
+  let newLine = 0;
+  let path = fallbackPath;
+  let toPath: string | undefined;
+  let added = 0;
+  let removed = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("--- ")) {
+      path = normalizeDiffPath(line.slice(4).trim(), fallbackPath);
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      toPath = normalizeDiffPath(line.slice(4).trim(), fallbackPath);
+      continue;
+    }
+    const header = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (header) {
+      currentHunk = {
+        old_start: Number(header[1]),
+        new_start: Number(header[2]),
+        lines: [],
+      };
+      hunks.push(currentHunk);
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      continue;
+    }
+    if (!currentHunk) continue;
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      currentHunk.lines.push({ type: "added", new_line: newLine, content: line.slice(1) });
+      newLine += 1;
+      added += 1;
+      continue;
+    }
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      currentHunk.lines.push({ type: "removed", old_line: oldLine, content: line.slice(1) });
+      oldLine += 1;
+      removed += 1;
+      continue;
+    }
+    if (line.startsWith(" ")) {
+      currentHunk.lines.push({ type: "context", old_line: oldLine, new_line: newLine, content: line.slice(1) });
+      oldLine += 1;
+      newLine += 1;
+    }
+  }
+
+  return {
+    operation,
+    path,
+    ...(toPath && toPath !== path ? { to_path: toPath } : {}),
+    added,
+    removed,
+    ...(hunks.length > 0 ? { hunks } : {}),
+  };
+}
+
+function normalizeDiffPath(path: string, fallbackPath: string): string {
+  const cleaned = path.replace(/^a\//, "").replace(/^b\//, "");
+  return cleaned === "/dev/null" ? fallbackPath : cleaned;
 }
 </script>
 

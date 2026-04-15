@@ -18,7 +18,6 @@ import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 
 export class CopilotEngine implements ExecutionEngine {
-  private readonly defaultModel: string | undefined;
   private readonly sdkAdapter: CopilotSdkAdapter;
 
   /** Active sessions keyed by executionId. */
@@ -29,14 +28,12 @@ export class CopilotEngine implements ExecutionEngine {
   }>();
 
   constructor(
-    defaultModel: string | undefined,
     _onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: CopilotSdkAdapter = createDefaultCopilotSdkAdapter(),
     // cliPath is only used when constructing the default adapter above;
     // when a custom sdkAdapter is injected (tests) this parameter is unused.
   ) {
-    this.defaultModel = defaultModel;
     this.sdkAdapter = sdkAdapter;
   }
 
@@ -68,10 +65,10 @@ export class CopilotEngine implements ExecutionEngine {
       }
     };
 
-    // Resolve model: prefer execution-specific model, fall back to engine default.
+    // Resolve model from execution params only.
     // Strip the "copilot/" namespace prefix — it's our internal qualifier, the SDK
     // expects the bare model name (e.g. "claude-sonnet-4.6", not "copilot/claude-sonnet-4.6").
-    const rawModel = model || this.defaultModel;
+    const rawModel = model;
     const resolvedModel = rawModel?.startsWith("copilot/") ? rawModel.slice("copilot/".length) : rawModel;
 
     // Build tool context for common task-management tools
@@ -171,7 +168,21 @@ export class CopilotEngine implements ExecutionEngine {
         let paused = false;
         let terminal = false;
 
-        for await (const event of translateCopilotStream(session, combinedController.signal, sendPromise, onWatchdogFire)) {
+        for await (const event of translateCopilotStream(
+          session,
+          combinedController.signal,
+          sendPromise,
+          onWatchdogFire,
+          (rawEvent) => {
+            params.onRawModelMessage?.({
+              engine: "copilot",
+              sessionId: sdkSessionId,
+              direction: "inbound",
+              eventType: rawEvent.type,
+              payload: rawEvent as unknown as Record<string, unknown>,
+            });
+          },
+        )) {
           yield event;
 
           if (event.type === "ask_user" || event.type === "shell_approval") {
@@ -265,12 +276,23 @@ export class CopilotEngine implements ExecutionEngine {
         { cause: err },
       );
     }
-    return sdkModels.map((m) => ({
-      qualifiedId: `copilot/${m.id}`,
-      displayName: m.name ?? m.id,
-      contextWindow: m.capabilities.limits.max_context_window_tokens,
-      supportsThinking: m.capabilities.supports.reasoningEffort,
-    }));
+    const autoModel: EngineModelInfo = {
+      qualifiedId: null,
+      displayName: "Auto",
+      description: "Copilot will automatically choose the best available model for your request.",
+      contextWindow: undefined,
+      supportsThinking: false,
+    };
+
+    return [
+      autoModel,
+      ...sdkModels.map((m) => ({
+        qualifiedId: `copilot/${m.id}`,
+        displayName: m.name ?? m.id,
+        contextWindow: m.capabilities.limits.max_context_window_tokens,
+        supportsThinking: m.capabilities.supports.reasoningEffort,
+      })),
+    ];
   }
 
   private waitForResume(executionId: number, signal?: AbortSignal): Promise<EngineResumeInput> {

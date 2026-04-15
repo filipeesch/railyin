@@ -29,6 +29,7 @@ import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { getDb } from "../db/index.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
+import { getProjectById } from "../project-store.ts";
 import { runWithConfig } from "../config/index.ts";
 import { resolveEngine } from "./resolver.ts";
 import { getBoardWorkspaceId, getDefaultWorkspaceId, getTaskWorkspaceId, getWorkspaceConfigById } from "../workspace-context.ts";
@@ -45,6 +46,8 @@ export class Orchestrator implements ExecutionCoordinator {
 
   /** Map of executionId → AbortController for managing cancellation */
   private readonly abortControllers = new Map<number, AbortController>();
+  /** Per-execution sequence counter for raw model message ordering. */
+  private readonly rawMessageSeq = new Map<number, number>();
 
   setOnStreamEvent(cb: OnStreamEvent): void {
     this.onStreamEvent = cb;
@@ -136,8 +139,9 @@ export class Orchestrator implements ExecutionCoordinator {
 
     const column = this._getColumnConfig(config, task.board_id, toState);
 
-    // Resolve model
-    const resolvedModel = column?.model ?? task.model ?? config.workspace.default_model ?? "";
+    // Resolve model from explicit task/column settings only.
+    // Do not apply workspace default_model for non-native engines.
+    const resolvedModel = column?.model ?? task.model ?? "";
     if (column?.model != null) {
       db.run("UPDATE tasks SET model = ? WHERE id = ?", [column.model, taskId]);
     } else if (resolvedModel) {
@@ -152,12 +156,6 @@ export class Orchestrator implements ExecutionCoordinator {
     }
 
     // Resolve on_enter_prompt
-    const gitRow = db
-      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
-        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-    const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
     const resolvedPrompt = column.on_enter_prompt;
     appendMessage(
       taskId,
@@ -184,7 +182,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       resolvedPrompt,
       column.stage_instructions,
-      worktreePath,
+      this._getProjectDirectory(updatedRow),
       "transition",
       toState,
     );
@@ -253,19 +251,12 @@ export class Orchestrator implements ExecutionCoordinator {
         );
         this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
 
-        const gitRow = db
-          .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
-            "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-          )
-          .get(taskId);
-        const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
-
         const execParams = this._buildExecutionParams(
           task,
           newExecutionId,
           content,
           column?.stage_instructions,
-          worktreePath,
+          this._getProjectDirectory(task),
           "human_turn",
         );
         this._runNonNative(taskId, newExecutionId, engine, execParams);
@@ -291,12 +282,6 @@ export class Orchestrator implements ExecutionCoordinator {
     );
     this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
 
-    const gitRow = db
-      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
-        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-    const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
     const resolvedPrompt = content;
     const msgId = appendMessage(
       taskId,
@@ -311,7 +296,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       resolvedPrompt,
       column?.stage_instructions,
-      worktreePath,
+      this._getProjectDirectory(task),
       "human_turn",
     );
     this._runNonNative(taskId, executionId, engine, execParams);
@@ -354,12 +339,6 @@ export class Orchestrator implements ExecutionCoordinator {
 
     const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
 
-    const gitRow = db
-      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
-        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-    const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
     const retryPrompt = column?.on_enter_prompt ?? "Please continue with the task.";
 
     const execParams = this._buildExecutionParams(
@@ -367,7 +346,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       retryPrompt,
       column?.stage_instructions,
-      worktreePath,
+      this._getProjectDirectory(updatedRow),
       "retry",
     );
     this._runNonNative(taskId, executionId, engine, execParams);
@@ -547,7 +526,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       reviewText,
       column?.stage_instructions,
-      worktreePath,
+      this._getProjectDirectory(task),
       "code_review",
     );
     this._runNonNative(taskId, executionId, engine, execParams);
@@ -637,12 +616,23 @@ export class Orchestrator implements ExecutionCoordinator {
     return template?.columns.find((c) => c.id === columnId) ?? null;
   }
 
+  private _getProjectDirectory(task: TaskRow): string {
+    const projectDirectory = getProjectById(task.project_id)?.projectPath?.trim() ?? "";
+    if (!projectDirectory) {
+      throw new Error(`Project directory not found for project_id=${task.project_id}`);
+    }
+
+    console.log(`[orchestrator] Resolved project directory for task ${task.id}: ${projectDirectory}`);
+
+    return projectDirectory;
+  }
+
   private _buildExecutionParams(
     task: TaskRow,
     executionId: number,
     prompt: string,
     systemInstructions: string | undefined,
-    workingDirectory: string,
+    projectDirectory: string,
     nativeExecType: NativeExecutionType,
     toState?: string,
     signal?: AbortSignal,
@@ -666,12 +656,46 @@ export class Orchestrator implements ExecutionCoordinator {
       boardId: task.board_id,
       prompt,
       systemInstructions: fullSystemInstructions,
-      workingDirectory,
+      workingDirectory: projectDirectory,
       model: task.model ?? "",
       signal: signal ?? controller.signal,
+      onRawModelMessage: (raw) => this._persistRawModelMessage(task.id, executionId, raw),
       nativeExecType,
       toState,
     };
+  }
+
+  private _persistRawModelMessage(
+    taskId: number,
+    executionId: number,
+    raw: import("./types.ts").RawModelMessage,
+  ): void {
+    const db = getDb();
+    const seq = (this.rawMessageSeq.get(executionId) ?? 0) + 1;
+    this.rawMessageSeq.set(executionId, seq);
+
+    const payloadJson = JSON.stringify(raw.payload);
+    db.run(
+      `INSERT INTO model_raw_messages
+         (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        taskId,
+        executionId,
+        raw.engine,
+        raw.sessionId ?? null,
+        seq,
+        raw.direction,
+        raw.eventType,
+        raw.eventSubtype ?? null,
+        payloadJson,
+      ],
+    );
+
+    // Retention policy: enforce inline at insert time.
+    db.run(
+      "DELETE FROM model_raw_messages WHERE created_at < datetime('now', '-1 day')",
+    );
   }
 
   private _runNonNative(
@@ -747,8 +771,6 @@ export class Orchestrator implements ExecutionCoordinator {
     let tokenAccum = "";
     let reasoningAccum = "";
     let hadOutput = false; // true once any visible output (tokens, tools, prompts) is produced
-    // Track tool_start arguments by callId so tool_result can access them for file_diff
-    const toolArgsByCallId = new Map<string, string>();
     // Orchestrator context stack: callIds of open (non-internal) tool_start events.
     // Tokens/reasoning emitted while this is non-empty get parentBlockId = callStack.at(-1).
     const callStack: string[] = [];
@@ -873,8 +895,6 @@ export class Orchestrator implements ExecutionCoordinator {
             const toolMeta = {
               parent_tool_call_id: event.parentCallId ?? null,
             };
-            // Track arguments for later file_diff emission in tool_result
-            toolArgsByCallId.set(callId, event.arguments ?? "{}");
             const msgId = appendMessage(
               taskId,
               conversationId,
@@ -921,6 +941,7 @@ export class Orchestrator implements ExecutionCoordinator {
               detailedContent: event.detailedResult,
               contents: event.contentBlocks,
               is_error: event.isError,
+              writtenFiles: event.writtenFiles,
             });
             const resultMeta = {
               tool_call_id: event.callId ?? null,
@@ -952,15 +973,18 @@ export class Orchestrator implements ExecutionCoordinator {
             const resultParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: resultCallId, type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), parentBlockId: resultParentBlockId, done: false });
 
-            // Emit UI-only file_diff for write tools (never forwarded to LLM)
+            // Emit UI-only file_diff messages for structured writtenFiles.
             if (!event.isError && event.callId) {
-              await this._emitFileDiffIfWrite(
-                taskId,
-                conversationId,
-                event.callId,
-                event.name,
-                toolArgsByCallId.get(event.callId) ?? "{}",
-              );
+              const writtenFiles = event.writtenFiles ?? [];
+              if (writtenFiles.length > 0) {
+                await this._emitFileDiffFromWrittenFiles(
+                  taskId,
+                  conversationId,
+                  executionId,
+                  event.callId,
+                  writtenFiles,
+                );
+              }
             }
             break;
           }
@@ -1159,6 +1183,7 @@ export class Orchestrator implements ExecutionCoordinator {
     } finally {
       // Task 5.3: Clean up AbortController
       this.abortControllers.delete(executionId);
+      this.rawMessageSeq.delete(executionId);
 
       // Relay updated task to UI
       const finalRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -1168,89 +1193,13 @@ export class Orchestrator implements ExecutionCoordinator {
     }
   }
 
-  /**
-   * After a write-tool result from the Copilot engine, run `git diff HEAD -- <path>`
-   * and emit a UI-only `file_diff` message linked to the originating tool_call by ID.
-   * This mirrors the file_diff emission in engine.ts for the direct Anthropic/OpenAI path.
-   */
-  private async _emitFileDiffIfWrite(
+  private async _emitFileDiffFromWrittenFiles(
     taskId: number,
     conversationId: number,
+    executionId: number,
     callId: string,
-    toolName: string,
-    argsJson: string,
+    writtenFiles: Array<import("../../shared/rpc-types.ts").FileDiffPayload>,
   ): Promise<void> {
-    const WRITE_TOOLS = new Set(["write_file", "edit_file", "patch_file", "multi_replace", "create", "edit", "apply_patch"]);
-    if (!WRITE_TOOLS.has(toolName)) return;
-
-    // apply_patch arguments is a raw string (the patch content), not a JSON object
-    // Extract all touched file paths from the patch header lines
-    if (toolName === "apply_patch") {
-      let patchText: string;
-      try {
-        patchText = JSON.parse(argsJson) as string;
-        if (typeof patchText !== "string") return;
-      } catch {
-        return;
-      }
-      const patchFilePaths = [...patchText.matchAll(/^\*\*\* (?:Add File|Update File|Delete File): (.+)$/gm)].map(
-        (m) => m[1].trim(),
-      );
-      if (patchFilePaths.length === 0) return;
-
-      const db = getDb();
-      const gitRow = db
-        .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
-          "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-        )
-        .get(taskId);
-      const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
-      if (!worktreePath) return;
-
-      for (const fp of patchFilePaths) {
-        try {
-          const proc = Bun.spawn(["git", "diff", "HEAD", "--", fp], {
-            cwd: worktreePath,
-            stdout: "pipe",
-            stderr: "pipe",
-          });
-          await proc.exited;
-          const diffOut = await new Response(proc.stdout).text();
-          if (!diffOut.trim()) continue;
-
-          const diffMeta = { tool_call_id: callId };
-          const diffContent = JSON.stringify({
-            operation: "patch_file" as const,
-            path: fp,
-            rawDiff: diffOut,
-          });
-          const diffId = appendMessage(taskId, conversationId, "file_diff", null, diffContent, diffMeta);
-          this.onNewMessage({
-            id: diffId,
-            taskId,
-            conversationId,
-            type: "file_diff",
-            role: null,
-            content: diffContent,
-            metadata: diffMeta,
-            createdAt: new Date().toISOString(),
-          });
-        } catch {
-          // git diff failure is non-fatal — silently ignore
-        }
-      }
-      return;
-    }
-
-    let filePath: string | undefined;
-    try {
-      const args = JSON.parse(argsJson) as Record<string, unknown>;
-      filePath = typeof args.path === "string" ? args.path : undefined;
-    } catch {
-      return;
-    }
-    if (!filePath) return;
-
     const db = getDb();
     const gitRow = db
       .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
@@ -1258,24 +1207,29 @@ export class Orchestrator implements ExecutionCoordinator {
       )
       .get(taskId);
     const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
-    if (!worktreePath) return;
 
-    try {
-      const proc = Bun.spawn(["git", "diff", "HEAD", "--", filePath], {
-        cwd: worktreePath,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      await proc.exited;
-      const diffOut = await new Response(proc.stdout).text();
-      if (!diffOut.trim()) return;
+    for (const file of writtenFiles) {
+      const payload: Record<string, unknown> = { ...file };
+
+      if (worktreePath && file.path) {
+        try {
+          const proc = Bun.spawn(["git", "diff", "HEAD", "--", file.path], {
+            cwd: worktreePath,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          await proc.exited;
+          const diffOut = await new Response(proc.stdout).text();
+          if (diffOut.trim()) {
+            payload.rawDiff = diffOut;
+          }
+        } catch {
+          // git diff failure is non-fatal — keep structured payload as-is
+        }
+      }
 
       const diffMeta = { tool_call_id: callId };
-      const diffContent = JSON.stringify({
-        operation: toolName as "write_file" | "edit_file" | "patch_file",
-        path: filePath,
-        rawDiff: diffOut,
-      });
+      const diffContent = JSON.stringify(payload);
       const diffId = appendMessage(taskId, conversationId, "file_diff", null, diffContent, diffMeta);
       this.onNewMessage({
         id: diffId,
@@ -1287,8 +1241,18 @@ export class Orchestrator implements ExecutionCoordinator {
         metadata: diffMeta,
         createdAt: new Date().toISOString(),
       });
-    } catch {
-      // git diff failure is non-fatal — silently ignore
+      this.onStreamEvent?.({
+        taskId,
+        executionId,
+        seq: 0,
+        blockId: `${callId}-diff-${file.path}`,
+        type: "file_diff",
+        content: diffContent,
+        metadata: JSON.stringify(diffMeta),
+        parentBlockId: callId,
+        done: false,
+      });
     }
   }
+
 }

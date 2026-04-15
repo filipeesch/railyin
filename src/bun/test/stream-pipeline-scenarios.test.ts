@@ -22,6 +22,8 @@
  *   S-7  [model-reasoning] Bubble auto-collapses when round ends — IPC done signals end
  *   S-8  [model-reasoning] Cancel mid-stream — reasoning flushed to DB, done on IPC
  *   S-9  [task-detail]     Chunks (text_chunk, reasoning_chunk) are IPC-only, never in DB
+ *   S-10 [file-diff]       file_diff is emitted only from structured writtenFiles payloads
+ *   S-11 [file-diff]       Cancel/retry nested tool calls keep file_diff parent association per execution
  */
 
 import { describe, it, expect, afterEach } from "bun:test";
@@ -33,6 +35,7 @@ import {
     scriptStatus,
     scriptToolStart,
     scriptToolResult,
+    scriptToolResultWithOptions,
     scriptDone,
     scriptWaitForAbort,
     scriptCheckpoint,
@@ -406,5 +409,122 @@ describe("S-9 [task-detail]: ephemeral chunks on IPC only; persisted events in b
         expect(db.some((e) => e.type === "text_chunk")).toBe(false);
         expect(db.some((e) => e.type === "reasoning")).toBe(true);
         expect(db.some((e) => e.type === "assistant")).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S-10: [file-diff] structured-only file change emission
+// Validation target: file_diff emission is driven exclusively by structured
+// writtenFiles; legacy inference paths are disabled.
+// ---------------------------------------------------------------------------
+
+describe("S-10 [file-diff]: file_diff emission is structured-only", () => {
+    it("ignores legacy-style tool results when writtenFiles is absent", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            scriptToolStart("c-structured", "create", { path: "src/new.ts", file_text: "export const n = 1;" }),
+            scriptToolResultWithOptions("c-structured", "create", "created", {
+                writtenFiles: [{
+                    operation: "write_file",
+                    path: "src/new.ts",
+                    added: 1,
+                    removed: 0,
+                    is_new: true,
+                }],
+            }),
+            scriptToolStart("c-legacy", "edit", { path: "src/legacy.ts" }),
+            scriptToolResult(
+                "c-legacy",
+                "edit",
+                "--- a/src/legacy.ts\n+++ b/src/legacy.ts\n@@ -1 +1 @@\n-old\n+new",
+            ),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "mix history" });
+
+        await runtime.recorder.waitForStreamDone(executionId);
+
+        const db = runtime.getDbStreamEvents(executionId);
+        const fileDiffs = db.filter((e) => e.type === "file_diff");
+
+        expect(fileDiffs).toHaveLength(1);
+
+        const structured = JSON.parse(fileDiffs[0]!.content) as { operation: string; path: string; added: number; removed: number };
+
+        expect(structured).toEqual({ operation: "write_file", path: "src/new.ts", added: 1, removed: 0, is_new: true });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S-11: [file-diff] Cancel/retry + nested tool calls preserve association
+// Validation target (task 6.3): nested call file_diff events remain linked to
+// their child tool call block in each execution and do not cross-contaminate
+// after cancellation and retry.
+// ---------------------------------------------------------------------------
+
+describe("S-11 [file-diff]: cancel/retry preserves nested file_diff parent association", () => {
+    it("emits nested file_diff with parentBlockId set to child call ID in both cancelled and retried runs", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            scriptToolStart("parent-call", "spawn_agent", { prompt: "first" }),
+            scriptToolStart("child-call", "edit_file", { path: "src/child-a.ts" }, { parentCallId: "parent-call" }),
+            scriptToolResultWithOptions("child-call", "edit_file", "updated child a", {
+                writtenFiles: [{
+                    operation: "patch_file",
+                    path: "src/child-a.ts",
+                    added: 2,
+                    removed: 1,
+                }],
+            }),
+            scriptWaitForAbort(),
+        ]);
+        engine.queueTurn([
+            scriptToolStart("parent-call-2", "spawn_agent", { prompt: "retry" }),
+            scriptToolStart("child-call-2", "edit_file", { path: "src/child-b.ts" }, { parentCallId: "parent-call-2" }),
+            scriptToolResultWithOptions("child-call-2", "edit_file", "updated child b", {
+                writtenFiles: [{
+                    operation: "patch_file",
+                    path: "src/child-b.ts",
+                    added: 3,
+                    removed: 0,
+                }],
+            }),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+
+        const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "run 1" });
+        await sleep(100);
+        await runtime.handlers["tasks.cancel"]({ taskId });
+        await runtime.recorder.waitForStreamDone(first.executionId, 5_000);
+
+        const second = await runtime.handlers["tasks.retry"]({ taskId });
+        await runtime.recorder.waitForStreamDone(second.executionId);
+
+        expect(second.executionId).not.toBe(first.executionId);
+
+        const firstIpcDiff = runtime.getIpcEvents(first.executionId).find((e) => e.type === "file_diff");
+        const secondIpcDiff = runtime.getIpcEvents(second.executionId).find((e) => e.type === "file_diff");
+
+        expect(firstIpcDiff?.parentBlockId).toBe("child-call");
+        expect(secondIpcDiff?.parentBlockId).toBe("child-call-2");
+
+        const firstIpcPayload = firstIpcDiff ? JSON.parse(firstIpcDiff.content) as { path: string } : null;
+        const secondIpcPayload = secondIpcDiff ? JSON.parse(secondIpcDiff.content) as { path: string } : null;
+        expect(firstIpcPayload?.path).toBe("src/child-a.ts");
+        expect(secondIpcPayload?.path).toBe("src/child-b.ts");
+
+        const firstDbDiffs = runtime.getDbStreamEvents(first.executionId).filter((e) => e.type === "file_diff");
+        const secondDbDiffs = runtime.getDbStreamEvents(second.executionId).filter((e) => e.type === "file_diff");
+
+        expect(firstDbDiffs.at(0)?.parentBlockId).toBe("child-call");
+        if (secondDbDiffs.length > 0) {
+            expect(secondDbDiffs.every((event) => event.parentBlockId === "child-call-2")).toBe(true);
+        }
     });
 });

@@ -1,8 +1,6 @@
 ## Purpose
 Defines the typed `StreamEvent` protocol that `AIProvider.stream()` yields. This shared protocol decouples provider implementations from the engine's tool loop and ensures all events — text tokens, structured tool calls, and stream termination — are handled uniformly.
-
 ## Requirements
-
 ### Requirement: Unified AI stream event protocol
 The system SHALL define a `StreamEvent` discriminated union type for all events yielded by `AIProvider.stream()`:
 
@@ -30,7 +28,7 @@ Providers that do not support reasoning (e.g. `FakeAIProvider`) SHALL never emit
 - **THEN** the provider yields `{ type: "reasoning"; content }` events for each chunk
 
 ### Requirement: Orchestrator associates tool calls with preceding reasoning context
-The orchestrator's `consumeStream()` SHALL track a `reasoningBlockId` when reasoning is flushed due to a `tool_start` event. Subsequent `tool_call` StreamEvents emitted in the same reasoning-to-text phase SHALL have their `parentBlockId` set to the reasoning block's ID, so the UI can render tool calls as children of the reasoning bubble. The `reasoningBlockId` SHALL be cleared when `token` events arrive (indicating the reasoning phase ended and assistant text is beginning).
+The orchestrator's `consumeStream()` SHALL keep stable parent linkage for tool-related events. Tool calls and their associated tool results/file-change visualization SHALL remain correlated by tool call identity while preserving explicit parent call relationships for nesting.
 
 #### Scenario: Tool calls after reasoning are grouped under the reasoning block
 - **WHEN** the orchestrator receives reasoning events followed by tool_start events before any token events
@@ -43,3 +41,8 @@ The orchestrator's `consumeStream()` SHALL track a `reasoningBlockId` when reaso
 #### Scenario: Reasoning block ID clears when text tokens arrive
 - **WHEN** the orchestrator emits a reasoning block, then tool calls, then receives token events
 - **THEN** tool calls emitted after the token events do not reference the earlier reasoning block
+
+#### Scenario: File-change stream nodes stay linked to originating tool call
+- **WHEN** the execution emits tool-level file-change data for a tool result
+- **THEN** stream nodes for those file changes are emitted with parent linkage that keeps them associated with the originating tool call in the stream tree
+

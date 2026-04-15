@@ -321,11 +321,6 @@ export const useTaskStore = defineStore("task", () => {
   function onStreamEvent(event: StreamEvent) {
     // Bump version so watchers (e.g. autoscroll) fire on every event
     streamVersion.value++;
-
-    // ── Diagnostic: verify events arrive incrementally ──
-    if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
-      console.log(`[stream-diag] ${event.type} len=${event.content.length} ver=${streamVersion.value} t=${performance.now().toFixed(1)}`);
-    }
     if (event.type === "file_diff") {
       refreshChangedFiles(event.taskId);
     }

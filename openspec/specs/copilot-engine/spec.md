@@ -1,8 +1,6 @@
 ## Purpose
 Defines the CopilotEngine implementation that wraps the GitHub Copilot SDK as an ExecutionEngine. Manages session lifecycle, event translation, authentication, tool registration, and model listing for the Copilot engine type.
-
 ## Requirements
-
 ### Requirement: CopilotEngine wraps the Copilot SDK as an ExecutionEngine
 The system SHALL implement `CopilotEngine` conforming to the `ExecutionEngine` interface. It SHALL use `@github/copilot-sdk` to create agentic sessions, translate SDK events to `EngineEvent` types, and manage session lifecycle.
 
@@ -23,7 +21,7 @@ The system SHALL translate Copilot SDK streaming events to the `EngineEvent` dis
 - `assistant.message_delta` → `{ type: "token" }`
 - `assistant.thinking_delta` → `{ type: "reasoning" }`
 - `tool.execution_start` → `{ type: "tool_start" }`
-- `tool.execution_complete` → `{ type: "tool_result" }`
+- `tool.execution_complete` → `{ type: "tool_result" }`, including structured `writtenFiles` when the tool changed files
 - `tool.execution_partial_result` → `{ type: "status" }` only for non-internal tools, with truncated content
 - `tool.execution_progress` → `{ type: "status" }` only for non-internal tools, with truncated content
 - `session.complete` → `{ type: "done" }`
@@ -70,6 +68,10 @@ The `translateEvent()` function SHALL look up `toolCallId` from `tool.execution_
 #### Scenario: Session error translated to error event
 - **WHEN** the SDK emits `session.error` with message "Rate limited"
 - **THEN** the engine yields `{ type: "error", message: "Rate limited" }`
+
+#### Scenario: Copilot write tool completion emits structured written files
+- **WHEN** a Copilot write-oriented tool completes successfully
+- **THEN** the translated `tool_result` includes `writtenFiles` entries for the files changed by that tool call
 
 ### Requirement: Copilot engine authenticates via environment or CLI credentials
 The system SHALL NOT require any authentication token in `workspace.yaml`. Authentication SHALL be handled entirely by the Copilot SDK's built-in auth chain: `COPILOT_GITHUB_TOKEN` env var, `GH_TOKEN` env var, `GITHUB_TOKEN` env var, stored OAuth from `copilot` CLI login, or `gh auth` credentials.
@@ -143,15 +145,25 @@ The system SHALL handle Copilot SDK's `onPermissionRequest` callback by translat
 - **THEN** the engine signals the SDK to deny and the SDK returns a tool error to the model
 
 ### Requirement: Copilot engine lists models available through GitHub Copilot
-The `CopilotEngine.listModels()` method SHALL return the list of models available through the user's Copilot subscription. If the SDK provides a model listing API, it SHALL be used. Otherwise, a static list of known Copilot models SHALL be returned.
+The `CopilotEngine.listModels()` method SHALL return the list of models available through the user's Copilot subscription. For Copilot model selection, the returned list SHALL prepend a synthetic `Auto` entry at index 0. The `Auto` entry SHALL use null model identity (`qualifiedId: null`) and SHALL include a description indicating that Copilot chooses the best available model based on task context, availability, and subscription access. If the SDK provides a model listing API, it SHALL be used for concrete models.
 
 #### Scenario: Models returned from Copilot engine
 - **WHEN** `listModels()` is called on the Copilot engine
 - **THEN** it returns an array of `EngineModelInfo` with at least one model entry
 
-#### Scenario: Model list includes model ID and display name
-- **WHEN** `listModels()` returns results
-- **THEN** each entry includes at minimum an `id` field and a `name` field
+#### Scenario: Auto entry is first and nullable
+- **WHEN** `listModels()` returns results for Copilot
+- **THEN** entry index 0 is `Auto`
+- **AND** the entry has `qualifiedId = null`
+- **AND** concrete models continue to use `qualifiedId` values prefixed with `copilot/`
+
+#### Scenario: Auto entry includes behavior description
+- **WHEN** `listModels()` returns the synthetic `Auto` entry
+- **THEN** the entry includes description text explaining Copilot-managed model selection behavior
+
+#### Scenario: Concrete model list includes model ID and display name
+- **WHEN** `listModels()` returns concrete Copilot model results
+- **THEN** each concrete entry includes at minimum a model-qualified ID and display name
 
 ### Requirement: Copilot engine config is minimal
 The `engine.type: copilot` config block SHALL support an optional `model` field (string) for the default model to use. No other fields are required. The config SHALL NOT include API keys, base URLs, or provider lists.
@@ -215,3 +227,4 @@ The system SHALL track a per-execution silence counter that increments each time
 #### Scenario: Silence counter resets between executions
 - **WHEN** a new `execute()` call starts for the same task
 - **THEN** the silence counter begins at 0 for that execution
+

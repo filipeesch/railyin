@@ -1,8 +1,6 @@
 ## Purpose
 Defines the Claude-backed execution engine, including Claude Code mode behavior, shared tool registration, resumable interactive pauses, and Claude model discovery.
-
 ## Requirements
-
 ### Requirement: ClaudeEngine wraps the Claude Agent SDK as an ExecutionEngine
 The system SHALL implement `ClaudeEngine` conforming to the shared `ExecutionEngine` contract. It SHALL use `@anthropic-ai/claude-agent-sdk` through an engine-specific adapter that can be replaced in tests. The engine SHALL create or resume Claude sessions, translate SDK messages into `EngineEvent` values, and manage session lifecycle for Claude-backed executions.
 
@@ -34,7 +32,7 @@ The Claude engine SHALL use the Agent SDK in Claude Code mode so Claude-managed 
 - **THEN** the Claude engine appends those instructions on top of Claude Code mode instead of replacing the Claude Code baseline behavior
 
 ### Requirement: Claude engine uses Claude built-in tools plus Railyin common tools
-The Claude engine SHALL rely on Claude's built-in tools for file, shell, search, edit, and agent operations. Railyin SHALL register only its engine-agnostic task-management tools with the Claude engine.
+The Claude engine SHALL rely on Claude's built-in tools for file, shell, search, edit, and agent operations. Railyin SHALL register only its engine-agnostic task-management tools with the Claude engine. Tool results emitted by the Claude engine SHALL include structured `writtenFiles` metadata when file changes can be determined reliably from Claude tool activity.
 
 #### Scenario: Common task-management tools are available in Claude engine
 - **WHEN** the Claude engine starts an execution
@@ -43,6 +41,14 @@ The Claude engine SHALL rely on Claude's built-in tools for file, shell, search,
 #### Scenario: File and shell tools are not shadowed by Railyin duplicates
 - **WHEN** the Claude engine is active
 - **THEN** Railyin does NOT register duplicate `read_file`, `write_file`, `run_command`, or search tools because Claude's built-in tools already provide those capabilities
+
+#### Scenario: Claude tool result includes structured written files when available
+- **WHEN** Claude tool activity provides enough information to identify changed files
+- **THEN** the emitted `tool_result` includes `writtenFiles` for those changes
+
+#### Scenario: Claude tool result remains valid when only partial file detail is available
+- **WHEN** Claude tool activity confirms file changes but does not include deterministic hunk detail
+- **THEN** the emitted `writtenFiles` omits unavailable optional fields while still identifying changed files
 
 ### Requirement: Claude interactive pauses are surfaced through engine events and resumed in place
 When the Claude SDK requests user input or tool permission during a live execution, the Claude engine SHALL surface that pause through the shared non-native interaction contract and SHALL resume the same execution after the orchestrator returns the user's decision.
@@ -69,3 +75,4 @@ When the Claude SDK requests user input or tool permission during a live executi
 #### Scenario: Claude model IDs are qualified for UI grouping
 - **WHEN** Claude models are returned to the product
 - **THEN** they are qualified in a way that keeps model-selection grouping and persistence consistent with other engines
+

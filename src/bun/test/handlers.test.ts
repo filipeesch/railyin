@@ -268,11 +268,11 @@ describe("tasks.delete", () => {
 // Tests the engine-agnostic context window resolution introduced in task 1.1.
 // resolveContextWindow is private; tested through the tasks.contextUsage handler.
 
-function makeMockOrchestrator(models: Array<{ qualifiedId: string; contextWindow?: number }>): ExecutionCoordinator {
+function makeMockOrchestrator(models: Array<{ qualifiedId: string | null; contextWindow?: number }>): ExecutionCoordinator {
   return {
     listModels: async () => models.map((m) => ({
       qualifiedId: m.qualifiedId,
-      displayName: m.qualifiedId,
+      displayName: m.qualifiedId ?? "Auto",
       contextWindow: m.contextWindow,
     })),
     executeTransition: async () => { throw new Error("not implemented"); },
@@ -335,6 +335,40 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
+  });
+});
+
+describe("models.listEnabled — Copilot Auto option", () => {
+  it("always returns Auto first with null id", async () => {
+    const orchestrator = makeMockOrchestrator([
+      { qualifiedId: null },
+      { qualifiedId: "copilot/mock-model", contextWindow: 64_000 },
+    ]);
+    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+
+    const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
+
+    expect(enabled.length).toBeGreaterThan(0);
+    expect(enabled[0].id).toBeNull();
+    expect(enabled[0].displayName).toBe("Auto");
+  });
+
+  it("keeps Auto when no concrete enabled_models rows match", async () => {
+    db.run(
+      "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, ?)",
+      [1, "copilot/non-existent"],
+    );
+
+    const orchestrator = makeMockOrchestrator([
+      { qualifiedId: null },
+      { qualifiedId: "copilot/mock-model", contextWindow: 64_000 },
+    ]);
+    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+
+    const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
+
+    expect(enabled.some((m) => m.id === null)).toBe(true);
+    expect(enabled.some((m) => m.id === "copilot/mock-model")).toBe(true);
   });
 });
 

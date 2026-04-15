@@ -30,7 +30,6 @@ export function resolveEngine(
 
   if (engine.type === "copilot") {
     return new CopilotEngine(
-      engine.model,
       onTaskUpdated,
       onNewMessage,
       createDefaultCopilotSdkAdapter(),

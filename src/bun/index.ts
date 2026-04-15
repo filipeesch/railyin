@@ -753,6 +753,7 @@ if (process.env.RAILYN_DEBUG) {
           const makeResult = (
             callId: string,
             content: string,
+            extra: Record<string, unknown> = {},
             metadata?: Record<string, unknown>,
           ) => {
             appendMessage(
@@ -766,19 +767,9 @@ if (process.env.RAILYN_DEBUG) {
                 content,
                 detailedContent: content,
                 is_error: false,
+                ...extra,
               }),
               { tool_call_id: callId, ...(metadata ?? {}) },
-            );
-          };
-
-          const makeDiff = (callId: string, payload: Record<string, unknown>) => {
-            appendMessage(
-              taskId,
-              conversationId,
-              "file_diff",
-              null,
-              JSON.stringify(payload),
-              { tool_call_id: callId },
             );
           };
 
@@ -792,18 +783,25 @@ if (process.env.RAILYN_DEBUG) {
 
             case "copilot-diff": {
               makeCall("call_edit", "edit_file", { path: "partial-x.ts" });
-              makeResult("call_edit", "Updated partial-x.ts");
-              makeDiff("call_edit", {
-                operation: "edit_file",
-                path: "partial-x.ts",
-                rawDiff: [
-                  "--- a/partial-x.ts",
-                  "+++ b/partial-x.ts",
-                  "@@ -1,2 +1,2 @@",
-                  "-export function alpha() { return 1; }",
-                  "+export function alpha() { return 'alpha'; }",
-                ].join("\n"),
-              });
+              makeResult(
+                "call_edit",
+                "Updated partial-x.ts",
+                {
+                  writtenFiles: [
+                    {
+                      operation: "edit_file",
+                      path: "partial-x.ts",
+                      rawDiff: [
+                        "--- a/partial-x.ts",
+                        "+++ b/partial-x.ts",
+                        "@@ -1,2 +1,2 @@",
+                        "-export function alpha() { return 1; }",
+                        "+export function alpha() { return 'alpha'; }",
+                      ].join("\n"),
+                    },
+                  ],
+                },
+              );
               break;
             }
 

@@ -28,6 +28,7 @@ Don't change my code or files without my explicit instruction!
 | `task_git_context` | Worktree state — `task_id, branch_name, worktree_path, worktree_status` |
 | `task_todos` | Sub-todos — `id, task_id, title, status, result` |
 | `pending_messages` | Queued user messages — `id, task_id, content` |
+| `model_raw_messages` | Raw Claude/Copilot model events (always-on; 1-day retention) — `task_id, execution_id, engine, stream_seq, direction, event_type, event_subtype, payload_json, created_at` |
 
 **Commonly useful queries:**
 
@@ -52,6 +53,19 @@ SELECT task_id, level, message, data, created_at FROM logs WHERE level IN ('erro
 
 -- 7. Worktrees with non-ready status
 SELECT task_id, worktree_status, branch_name, worktree_path FROM task_git_context WHERE worktree_status != 'ready';
+
+-- 8. Raw model events for the discovered task (newest first)
+SELECT execution_id, engine, stream_seq, direction, event_type, event_subtype, created_at
+FROM model_raw_messages
+WHERE task_id = (SELECT id FROM tasks WHERE title LIKE '%<fragment>%' ORDER BY created_at DESC LIMIT 1)
+ORDER BY id DESC
+LIMIT 200;
+
+-- 9. Raw payload timeline for a specific execution (ordered stream)
+SELECT stream_seq, engine, direction, event_type, event_subtype, payload_json, created_at
+FROM model_raw_messages
+WHERE execution_id = <execution_id>
+ORDER BY stream_seq ASC;
 ```
 
 ### Logs

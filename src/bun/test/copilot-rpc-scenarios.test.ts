@@ -47,7 +47,7 @@ function createCopilotRuntime(adapter: MockCopilotSdkAdapter): BackendRpcRuntime
     const runtime = createBackendRpcRuntime({
         taskModel: "copilot/mock-model",
         createEngine: ({ onTaskUpdated, onNewMessage }) =>
-            new CopilotEngine("copilot/mock-model", onTaskUpdated, onNewMessage, adapter),
+            new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
     });
     runtimes.push(runtime);
     return runtime;
@@ -126,6 +126,11 @@ describe("Copilot backend RPC scenarios", () => {
 
         await runFatalFailureScenario(runtime);
         await runModelListingScenario(runtime);
+
+        const enabled = await runtime.handlers["models.listEnabled"]();
+        expect(enabled[0]?.id).toBeNull();
+        expect(enabled[0]?.displayName).toBe("Auto");
+        expect(enabled[0]?.description ?? "").toContain("Copilot will automatically choose");
     });
 
     it("uses the resume path when a task session already exists", async () => {
@@ -250,5 +255,65 @@ describe("Copilot backend RPC scenarios", () => {
         expect(toolResultPayload.content).toBe("");
         expect(toolResultPayload.detailedContent).toContain("@@ -1 +1 @@");
         expect(toolResultPayload.contents).toEqual([{ type: "text", text: "Applied patch to app.ts" }]);
+    });
+
+    it("emits structured writtenFiles and file_diff events for create/edit/apply_patch flows", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({
+                steps: [
+                    toolStart("call-tool-1", "create", { path: "src/new-file.ts", file_text: "export const x = 1;" }),
+                    toolResult("call-tool-1", "created"),
+                    toolStart("call-tool-2", "edit", { path: "src/new-file.ts", old_string: "x = 1", new_string: "x = 2" }),
+                    toolResult("call-tool-2", "edited"),
+                    toolStart("call-tool-3", "apply_patch", "*** Begin Patch\n*** Add File: src/added.ts\n+export const added = true;\n*** Update File: src/new-file.ts\n@@\n-export const x = 2;\n+export const x = 3;\n*** End Patch"),
+                    toolResult("call-tool-3", "patched"),
+                    token("done"),
+                    done(),
+                ],
+            }));
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Edit files" });
+        await runtime.recorder.waitForTokenDone(result.executionId);
+
+        const toolResults = runtime.db
+            .query<{ content: string }, [number]>(
+                "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'tool_result' ORDER BY id ASC",
+            )
+            .all(taskId)
+            .map((row) => JSON.parse(row.content) as { writtenFiles?: Array<{ operation: string; path: string }> });
+
+        expect(toolResults).toHaveLength(3);
+        expect(toolResults[0]?.writtenFiles?.[0]).toEqual({
+            operation: "write_file",
+            path: "src/new-file.ts",
+            added: 0,
+            removed: 0,
+        });
+        expect(toolResults[1]?.writtenFiles?.[0]).toEqual({
+            operation: "edit_file",
+            path: "src/new-file.ts",
+            added: 0,
+            removed: 0,
+        });
+        expect(toolResults[2]?.writtenFiles?.map((f) => `${f.operation}:${f.path}`)).toEqual([
+            "write_file:src/added.ts",
+            "patch_file:src/new-file.ts",
+        ]);
+
+        const fileDiffs = runtime.getDbStreamEvents(result.executionId)
+            .filter((event) => event.type === "file_diff")
+            .map((event) => JSON.parse(event.content) as { operation: string; path: string; added?: number; removed?: number });
+
+        expect(fileDiffs.map((diff) => `${diff.operation}:${diff.path}`)).toEqual([
+            "write_file:src/new-file.ts",
+            "edit_file:src/new-file.ts",
+            "write_file:src/added.ts",
+            "patch_file:src/new-file.ts",
+        ]);
+        expect(fileDiffs.every((diff) => typeof diff.added === "number" && typeof diff.removed === "number")).toBe(true);
     });
 });

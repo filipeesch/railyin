@@ -1927,24 +1927,32 @@ async function runExecution(
           ? llmContent.slice(0, toolLimit) + "\n\n[truncated]"
           : llmContent;
 
+        const diffsToEmit = diffs ?? (diff ? [diff] : []);
+        const resultMsg = JSON.stringify({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: storedResult,
+          is_error: false,
+          writtenFiles: diffsToEmit,
+        });
+
         const resultMeta = { tool_call_id: call.id, name: fnName };
         const resultId = appendMessage(
           taskId,
           task.conversation_id ?? 0,
           "tool_result",
           null,
-          storedResult,
+          resultMsg,
           resultMeta,
         );
         onNewMessage({
           id: resultId, taskId, conversationId: task.conversation_id ?? 0,
-          type: "tool_result", role: null, content: storedResult, metadata: resultMeta,
+          type: "tool_result", role: null, content: resultMsg, metadata: resultMeta,
           createdAt: new Date().toISOString(),
         });
-        onStreamEvent?.({ taskId, executionId, seq: 0, blockId: call.id ?? resultId.toString(), type: "tool_result", content: storedResult, metadata: JSON.stringify(resultMeta), subagentId: null, done: false });
+        onStreamEvent?.({ taskId, executionId, seq: 0, blockId: call.id ?? resultId.toString(), type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), subagentId: null, done: false });
 
         // Emit UI-only file_diff message (never forwarded to LLM)
-        const diffsToEmit = diffs ?? (diff ? [diff] : []);
         for (const d of diffsToEmit) {
           const diffContent = JSON.stringify(d);
           const diffMeta = { tool_call_id: call.id };

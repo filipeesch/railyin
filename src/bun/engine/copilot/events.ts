@@ -12,11 +12,13 @@
 
 import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
 import type { EngineEvent } from "../types.ts";
+import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 
 type ToolEventMeta = {
   name: string;
   parentCallId?: string;
   isInternal: boolean;
+  arguments?: unknown;
 };
 
 /**
@@ -31,6 +33,7 @@ export async function* translateCopilotStream(
   signal?: AbortSignal,
   sendPromise?: Promise<unknown>,
   onWatchdogFire?: () => Promise<boolean>,
+  onRawEvent?: (event: CopilotSdkEvent) => void,
 ): AsyncGenerator<EngineEvent> {
   // Use a queue + promise to bridge the callback-based session.on() API
   // into an async generator.
@@ -85,16 +88,18 @@ export async function* translateCopilotStream(
   let toolsInFlight = 0;
 
   const unsubscribe: () => void = session.on((event: CopilotSdkEvent) => {
+    onRawEvent?.(event);
     silenceCount = 0; // CLI is active; reset the consecutive-silence counter
     if (event.type === "assistant.message_delta") receivedTokenDelta = true;
     if (event.type === "assistant.reasoning_delta") receivedReasoningDelta = true;
     if (event.type === "tool.execution_start") {
       toolsInFlight++;
-      const data = event.data as { toolCallId: string; toolName: string; parentToolCallId?: string };
+      const data = event.data as { toolCallId: string; toolName: string; parentToolCallId?: string; arguments?: unknown };
       toolMetaByCallId.set(data.toolCallId, {
         name: data.toolName,
         parentCallId: data.parentToolCallId,
         isInternal: isInternalCopilotEvent(event, data.toolName, data.parentToolCallId),
+        arguments: data.arguments,
       });
     }
     if (event.type === "tool.execution_complete") {
@@ -255,6 +260,7 @@ function translateEvent(
         isInternal: meta?.isInternal ?? false,
         detailedResult: data.result?.detailedContent,
         contentBlocks: data.result?.contents,
+        writtenFiles: extractWrittenFilesFromCopilotTool(meta?.name, meta?.arguments),
       };
     }
 
@@ -300,11 +306,81 @@ function isInternalCopilotEvent(
   toolName?: string,
   parentToolCallId?: string,
 ): boolean {
-  if (event.source?.startsWith("skill-")) return true;
+  const source = (event as { source?: string }).source;
+  if (source?.startsWith("skill-")) return true;
   if (parentToolCallId) return true;
   if (!toolName) return false;
   if (toolName === "report_intent") return true;
   return toolName.startsWith("internal_") || toolName.startsWith("copilot_");
+}
+
+function extractWrittenFilesFromCopilotTool(
+  toolName?: string,
+  rawArguments?: unknown,
+): FileDiffPayload[] | undefined {
+  if (!toolName) return undefined;
+  if (toolName === "create" || toolName === "edit") {
+    if (!rawArguments || typeof rawArguments !== "object") return undefined;
+    const args = rawArguments as Record<string, unknown>;
+    const path = typeof args.path === "string" ? args.path : null;
+    if (!path) return undefined;
+    return [{
+      operation: toolName === "edit" ? "edit_file" : "write_file",
+      path,
+      added: 0,
+      removed: 0,
+    }];
+  }
+
+  if (toolName === "apply_patch") {
+    const patchText = normalizeApplyPatchText(rawArguments);
+    if (!patchText) return undefined;
+    const files: FileDiffPayload[] = [];
+    for (const line of patchText.split("\n")) {
+      if (!line.startsWith("*** ")) continue;
+      const addMatch = line.match(/^\*\*\* Add File: (.+)$/);
+      if (addMatch) {
+        files.push({ operation: "write_file", path: addMatch[1].trim(), added: 0, removed: 0, is_new: true });
+        continue;
+      }
+      const delMatch = line.match(/^\*\*\* Delete File: (.+)$/);
+      if (delMatch) {
+        files.push({ operation: "delete_file", path: delMatch[1].trim(), added: 0, removed: 0 });
+        continue;
+      }
+      const updMatch = line.match(/^\*\*\* Update File: (.+)$/);
+      if (updMatch) {
+        const rawPath = updMatch[1].trim();
+        const renameParts = rawPath.split(" -> ").map((v) => v.trim()).filter(Boolean);
+        if (renameParts.length === 2 && renameParts[0] !== renameParts[1]) {
+          files.push({
+            operation: "rename_file",
+            path: renameParts[0],
+            to_path: renameParts[1],
+            added: 0,
+            removed: 0,
+          });
+        } else {
+          files.push({ operation: "patch_file", path: rawPath, added: 0, removed: 0 });
+        }
+      }
+    }
+    return files.length > 0 ? files : undefined;
+  }
+
+  return undefined;
+}
+
+function normalizeApplyPatchText(rawArguments: unknown): string | null {
+  if (typeof rawArguments === "string") return rawArguments;
+  if (rawArguments && typeof rawArguments === "object") {
+    const args = rawArguments as Record<string, unknown>;
+    if (typeof args.patch === "string") return args.patch;
+    if (typeof args.input === "string") return args.input;
+    // Some transports wrap the patch payload in a nested `arguments` field.
+    if (typeof args.arguments === "string") return args.arguments;
+  }
+  return null;
 }
 
 

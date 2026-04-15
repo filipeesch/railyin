@@ -22,6 +22,7 @@ export type EngineEvent =
       isInternal?: boolean;
       detailedResult?: string;
       contentBlocks?: Array<Record<string, unknown>>;
+      writtenFiles?: Array<import("../../shared/rpc-types.ts").FileDiffPayload>;
     }
   | { type: "ask_user"; payload: string /* serialised AskUserPrompt JSON */ }
   | { type: "interview_me"; payload: string /* serialised InterviewPayload JSON */ }
@@ -58,6 +59,12 @@ export interface ExecutionParams {
   /** AbortSignal — abort to cancel this execution. */
   signal: AbortSignal;
 
+  /**
+   * Optional sink for raw model events/messages (provider-native payloads).
+   * Used for debugging and incident forensics.
+   */
+  onRawModelMessage?: (message: RawModelMessage) => void;
+
   // ── Native engine discriminator (ignored by CopilotEngine) ────────────────
   /** Which flavour of native execution to run. */
   nativeExecType?: NativeExecutionType;
@@ -67,11 +74,20 @@ export interface ExecutionParams {
   reviewDecisions?: Record<string, unknown>;
 }
 
+export interface RawModelMessage {
+  engine: "claude" | "copilot";
+  sessionId?: string;
+  direction: "inbound" | "outbound" | "control";
+  eventType: string;
+  eventSubtype?: string;
+  payload: Record<string, unknown>;
+}
+
 // ─── Engine model info ────────────────────────────────────────────────────────
 
 export interface EngineModelInfo {
   /** Fully-qualified model ID (e.g. "anthropic/claude-opus-4-1"). */
-  qualifiedId: string;
+  qualifiedId: string | null;
   /** Human-readable display name. */
   displayName: string;
   /** Optional detail text shown in richer model pickers. */

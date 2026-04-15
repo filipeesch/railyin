@@ -40,6 +40,16 @@ export class ClaudeEngine implements ExecutionEngine {
         onCancel: (id) => this.cancel(id),
       },
       waitForResume: (request) => this.waitForResume(executionId, request, signal),
+      onRawMessage: (message) => {
+        params.onRawModelMessage?.({
+          engine: "claude",
+          sessionId: claudeSessionIdForTask(taskId),
+          direction: "inbound",
+          eventType: String(message.type ?? "unknown"),
+          eventSubtype: typeof message.subtype === "string" ? message.subtype : undefined,
+          payload: message,
+        });
+      },
     };
 
     return this.sdkAdapter.run(runConfig);

@@ -1,5 +1,6 @@
 import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../common-tools.ts";
 import type { CommonToolContext, EngineEvent } from "../types.ts";
+import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 
 type ZodLike = {
   string: () => { optional: () => unknown };
@@ -73,11 +74,13 @@ export function buildClaudeToolServer(
 
       try {
         const result = await executeCommonTool(def.name, toToolArgs(args ?? {}), context);
+        const writtenFiles = extractWrittenFilesFromResult(result);
         emit({
           type: "tool_result",
           name: def.name,
           result,
           callId,
+          writtenFiles,
         });
         return {
           content: [{ type: "text", text: result }],
@@ -104,4 +107,16 @@ export function buildClaudeToolServer(
     version: "0.1.0",
     tools,
   });
+}
+
+export function extractWrittenFilesFromResult(result: string): FileDiffPayload[] | undefined {
+  try {
+    const parsed = JSON.parse(result) as { writtenFiles?: unknown };
+    if (!Array.isArray(parsed.writtenFiles)) return undefined;
+    return parsed.writtenFiles.filter((entry): entry is FileDiffPayload => {
+      return !!entry && typeof entry === "object" && typeof (entry as { path?: unknown }).path === "string";
+    });
+  } catch {
+    return undefined;
+  }
 }

@@ -23,7 +23,7 @@ const mockConfig: Partial<LoadedConfig> = {
 // Type-check isNativeEngine logic
 const engines: ExecutionEngine[] = [
   new NativeEngine(),
-  new CopilotEngine(undefined, () => {}, () => {}),
+  new CopilotEngine(() => {}, () => {}),
 ];
 
 for (const engine of engines) {

@@ -1,8 +1,6 @@
 ## Purpose
 File diff visualization allows the UI to display structured change information from write tool calls. When an agent creates, modifies, deletes, or renames a file, the resulting `file_diff` message is rendered inline inside the tool call group as a unified diff view.
-
 ## Requirements
-
 ### Requirement: file_diff is a first-class message type
 The system SHALL define `"file_diff"` as a valid `MessageType` in `rpc-types.ts`. The `FileDiffPayload` type SHALL be exported for use by both backend and frontend.
 
@@ -84,14 +82,14 @@ The system SHALL display a `@@ -oldStart +newStart @@` header for each hunk grou
 - **THEN** the `@@` header shows the line numbers of the first visible line in that hunk portion, not the original `old_start`/`new_start`
 
 ### Requirement: ToolCallGroup.vue shows +N/-N stat badges for write operations
-The system SHALL render green `+N` and red `-N` count badges in the `ToolCallGroup` header for any tool entry that has an associated `file_diff` payload. Tool rows SHALL also support richer Copilot-originated edit results by rendering line-level added/removed changes when structured diff data or equivalent detailed tool result content is available.
+The system SHALL render green `+N` and red `-N` count badges in the `ToolCallGroup` header for any tool entry that has associated file-change data. Tool rows SHALL consume structured `tool_result.writtenFiles` as the canonical source and MAY fall back to legacy `file_diff` payloads for backward compatibility during migration.
 
 #### Scenario: Header shows added/removed counts
-- **WHEN** a tool entry has a `file_diff` with `added > 0` or `removed > 0`
+- **WHEN** a tool entry has file-change data with `added > 0` or `removed > 0`
 - **THEN** the header row shows a green `+N` badge and/or a red `-N` badge
 
 #### Scenario: No badge when counts are zero
-- **WHEN** a tool entry has a `file_diff` with `added: 0` and `removed: 0` (e.g. rename)
+- **WHEN** a tool entry has file-change data with `added: 0` and `removed: 0` (e.g. rename)
 - **THEN** no stat badges appear in the header
 
 #### Scenario: Copilot file edit shows line-level changes
@@ -101,6 +99,10 @@ The system SHALL render green `+N` and red `-N` count badges in the `ToolCallGro
 #### Scenario: Fallback placeholder shown when no visible diff or output exists
 - **WHEN** a write-oriented tool result contains no renderable diff detail and no readable output text
 - **THEN** the expanded row renders the explicit no-output placeholder rather than an empty collapsible body
+
+#### Scenario: Structured tool result takes precedence over legacy file_diff
+- **WHEN** both structured `writtenFiles` and legacy `file_diff` are present for the same tool call
+- **THEN** the UI renders the structured `writtenFiles` representation as the primary source
 
 ### Requirement: code_review is a first-class message type
 The system SHALL define `"code_review"` as a valid `MessageType` in `rpc-types.ts`. The content of a `code_review` message SHALL be a JSON-serialized `CodeReviewPayload` containing the full set of hunk decisions submitted by the reviewer.
@@ -126,3 +128,4 @@ The system SHALL render `code_review` messages in the conversation timeline as a
 #### Scenario: Card shows decision summary
 - **WHEN** a code_review card is rendered
 - **THEN** the collapsed state shows counts of rejected, change_requested, and accepted hunks across all files
+

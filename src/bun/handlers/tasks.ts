@@ -308,6 +308,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         // Group models by provider (first part of the qualified ID before slash)
         const byProvider = new Map<string, typeof engineModels>();
         for (const model of engineModels) {
+          if (model.qualifiedId == null) continue;
           const [providerId] = model.qualifiedId.split("/");
           if (!byProvider.has(providerId)) byProvider.set(providerId, []);
           byProvider.get(providerId)!.push(model);
@@ -372,14 +373,18 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           .all(workspaceId),
       ]);
 
-      const engineIds = new Set(engineModels.map((m) => m.qualifiedId));
-      const enabledIds = dbRows.map((r) => r.qualified_model_id).filter((id) => engineIds.has(id));
+      const concreteEngineIds = new Set(
+        engineModels
+          .map((m) => m.qualifiedId)
+          .filter((id): id is string => id != null),
+      );
+      const enabledIds = dbRows.map((r) => r.qualified_model_id).filter((id) => concreteEngineIds.has(id));
 
       // No overlap → engine switched or first use; treat all engine models as enabled.
-      const activeIds = enabledIds.length > 0 ? enabledIds : [...engineIds];
+      const activeIds = enabledIds.length > 0 ? enabledIds : [...concreteEngineIds];
 
       return engineModels
-        .filter((m) => activeIds.includes(m.qualifiedId))
+        .filter((m) => m.qualifiedId == null || activeIds.includes(m.qualifiedId))
         .map((m) => ({
           id: m.qualifiedId,
           displayName: m.displayName,

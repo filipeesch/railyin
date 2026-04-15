@@ -137,6 +137,25 @@ export function scriptToolResult(callId: string, name: string, result: string, i
     return { type: "tool_result", callId, name, result, isError };
 }
 
+export function scriptToolResultWithOptions(
+    callId: string,
+    name: string,
+    result: string,
+    options: {
+        isError?: boolean;
+        writtenFiles?: Array<import("../../../shared/rpc-types.ts").FileDiffPayload>;
+    } = {},
+): EngineEvent {
+    return {
+        type: "tool_result",
+        callId,
+        name,
+        result,
+        isError: options.isError ?? false,
+        writtenFiles: options.writtenFiles,
+    };
+}
+
 export function scriptDone(): EngineEvent {
     return { type: "done" };
 }

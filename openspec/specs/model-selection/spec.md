@@ -1,41 +1,42 @@
 ## Purpose
 Allows the user to select the AI model used for a task from the chat drawer, and allows workflow columns to declare a preferred model in YAML.
-
 ## Requirements
-
 ### Requirement: User can select the AI model for a task from the chat drawer
-The system SHALL allow the user to select an AI model from a searchable dropdown in the task detail drawer. The dropdown SHALL show models returned by the active engine's `listModels()`. The selected model SHALL be persisted on the task and used for all subsequent executions of that task.
+The system SHALL allow the user to select an AI model from a searchable dropdown in the task detail drawer. The dropdown SHALL show models returned by the active engine's `listModels()`. For Copilot, the dropdown SHALL always include `Auto` as the first selectable option, and that option SHALL represent a null model identity (no pinned model). The selected model SHALL be persisted on the task and used for all subsequent executions of that task.
 
 #### Scenario: Searchable model dropdown shows engine models grouped by provider
 - **WHEN** the task detail drawer opens and `models.listEnabled` returns a non-empty list
 - **THEN** a searchable model-selection dropdown is shown, pre-selected to the task's current model, with models grouped under their provider name
 
+#### Scenario: Copilot dropdown includes Auto as first option
+- **WHEN** the active engine is Copilot and the model selector is rendered
+- **THEN** the first option is `Auto`
+- **AND** its model identity is `null`
+- **AND** its description explains that Copilot chooses the best available model based on task context, availability, and subscription access
+
 #### Scenario: User can filter models by typing
 - **WHEN** the user opens the model dropdown and types a search string
 - **THEN** only models whose id contains the typed string (case-insensitive) are shown
 
-#### Scenario: Empty state shown when no models are available
-- **WHEN** `models.listEnabled` returns an empty array
-- **THEN** the dropdown shows a single disabled option "No models available"
-
 #### Scenario: Model selection persisted to task
 - **WHEN** the user selects a different model from the dropdown
 - **THEN** the task's `model` field is updated via `tasks.setModel` and all subsequent executions use that model
+
+#### Scenario: Auto selection persists as null task model
+- **WHEN** the user selects `Auto` in the Copilot model dropdown
+- **THEN** `tasks.setModel` persists `task.model = null`
+- **AND** subsequent executions run without a pinned Copilot model
 
 #### Scenario: Model resets to column default on column transition
 - **WHEN** a task is moved to a new workflow column
 - **THEN** the task's `model` is set to the column's configured `model` field, or the workspace default if the column has none
 
 ### Requirement: Workflow column can declare a preferred model as a fully-qualified ID
-The system SHALL allow each workflow column to declare an optional `model` field in the workflow YAML. This value SHALL be a fully-qualified model ID for the native engine, and a plain engine-native model name for non-native engines such as Copilot and Claude. Column model takes precedence over the engine's default model.
+The system SHALL allow each workflow column to declare an optional `model` field in the workflow YAML. This value SHALL be a fully-qualified model ID for the native engine, and a plain engine-native model name for non-native engines such as Copilot and Claude. Column model takes precedence over the engine default model.
 
-#### Scenario: Column model applied on entry as fully-qualified ID (native)
-- **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` and the active engine is native
+#### Scenario: Column model applied on entry as fully-qualified ID
+- **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` defined
 - **THEN** the task's `model` is updated to `"anthropic/claude-opus-4-5"` before any execution is started
-
-#### Scenario: Column model applied on entry (copilot)
-- **WHEN** a task transitions into a column that has `model: "gpt-5"` and the active engine is copilot
-- **THEN** the task's `model` is updated to `"gpt-5"` and passed to the CopilotSession
 
 #### Scenario: Column model applied on entry (Claude)
 - **WHEN** a task transitions into a column that has `model: "claude-sonnet-4-6"` and the active engine is Claude
@@ -43,52 +44,48 @@ The system SHALL allow each workflow column to declare an optional `model` field
 
 #### Scenario: Task model set to null when column has no model
 - **WHEN** a task transitions into a column with no `model` field
-- **THEN** the task's `model` is set to `null`, and on the next execution attempt the engine uses its default model or moves the task to `waiting_user`
+- **THEN** the task's `model` is set to `null`, and on the next execution attempt the engine moves the task to `waiting_user`
 
-#### Scenario: Column model takes precedence over engine default model
-- **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` and the engine has a different default
+#### Scenario: Column model takes precedence over workspace default_model
+- **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` defined and workspace has `default_model: "openrouter/gpt-4o"`
 - **THEN** the task's `model` is set to `"anthropic/claude-opus-4-5"` (column wins)
 
 ### Requirement: Available models are fetched dynamically from the provider
-The system SHALL expose a `models.list` RPC that delegates to the active engine's `listModels()` method. For the native engine, this calls `GET {base_url}/v1/models` on each configured provider. For the Copilot engine, this returns models available through the Copilot subscription. For the Claude engine, this returns models available through the Claude Agent SDK in the same provider-grouped shape used by the rest of the product, with a single Claude provider group. Results are returned in provider-grouped format including per-model enabled flags and context window sizes where known.
+The system SHALL expose a `models.list` RPC that delegates to the active engine's `listModels()` method. For the native engine, this calls `GET {base_url}/v1/models` on each configured provider. For the Copilot engine, this returns models available through the Copilot subscription. For the Claude engine, this returns models available through the Claude Agent SDK in the same provider-grouped shape used by the rest of the product, with a single Claude provider group.
 
-#### Scenario: Models returned grouped by provider with enabled flags (native engine)
-- **WHEN** all configured native engine providers respond with valid model lists
+#### Scenario: Models returned grouped by provider with enabled flags
+- **WHEN** all configured providers respond with valid model lists
 - **THEN** `models.list` returns `ProviderModelList[]` — one entry per provider — each containing the provider `id`, a `models` array of `{ id: string, contextWindow: number | null, enabled: boolean }`, and no `error` field
 
 #### Scenario: Failed provider included with error, not omitted
-- **WHEN** one native engine provider's `/v1/models` request fails and another succeeds
+- **WHEN** one provider's `/v1/models` request fails and another succeeds
 - **THEN** `models.list` returns one entry per provider: the failed provider has `error` set and an empty `models` array; the successful provider has its full model list
-
-#### Scenario: Copilot engine returns available models
-- **WHEN** the active engine is Copilot and `models.list` is called
-- **THEN** the engine returns models available through the Copilot subscription in the same `ProviderModelList[]` format with a single "copilot" provider group
 
 #### Scenario: Claude engine returns available models
 - **WHEN** the active engine is Claude and `models.list` is called
 - **THEN** the engine returns models available through the Claude SDK in the shared grouped model format with a single `claude` provider group
 
 ### Requirement: Workspace AI model is optional in configuration
-The system SHALL NOT require a default model to be set in the engine config. For the native engine, `default_model` under the `engine:` block is optional. For the Copilot engine, `model` is optional. For the Claude engine, `engine.model` is optional and the SDK may use its own default behavior when no task or column model is set. When absent, task execution SHALL use the model set on the task itself. If neither is set, the engine uses its own default behavior.
+The system SHALL NOT require a default model to be set in engine config. For the native engine, `default_model` under the `engine:` block is optional. For non-native engines such as Copilot and Claude, `engine.model` is optional. When absent, task execution SHALL use the model set on the task itself. If neither is set, the engine uses its own default behavior.
 
 #### Scenario: Workspace starts without default_model set
-- **WHEN** the engine config has no default model field
+- **WHEN** `workspace.yaml` has no `default_model` field
 - **THEN** the system loads without a configuration error
 
-#### Scenario: Task model used when engine default model absent
-- **WHEN** a task has a model set and the engine config default is absent
-- **THEN** the task's model is used for executions
+#### Scenario: Task model used when workspace model absent
+- **WHEN** a task has a model set and `default_model` is absent from workspace config
+- **THEN** the task's model is used for AI calls
 
 #### Scenario: Claude engine starts without default model
 - **WHEN** `workspace.yaml` has `engine: { type: claude }` and a task has no explicit model
 - **THEN** the system loads successfully and the Claude engine uses SDK-default model behavior until a task or column model is chosen
 
-#### Scenario: Column default falls back to engine default_model when column has no model
-- **WHEN** a task transitions into a column with no `model` field and the engine config has a default model
-- **THEN** the task's model is set to the engine's default model value
+#### Scenario: Column default falls back to workspace default_model when column has no model
+- **WHEN** a task transitions into a column with no `model` field and `default_model` is set in workspace config
+- **THEN** the task's model is set to the workspace `default_model` value
 
-#### Scenario: Column default falls back to null when neither column nor engine specifies a model
-- **WHEN** a task transitions into a column with no `model` field and the engine config has no default model
+#### Scenario: Column default falls back to null when neither column nor workspace specifies a model
+- **WHEN** a task transitions into a column with no `model` field and `default_model` is not set in workspace config
 - **THEN** the task's model is left unchanged (not overridden)
 
 ### Requirement: New tasks inherit engine default_model on creation
@@ -120,30 +117,6 @@ The `context_window_tokens` field, if present in a provider config entry, SHALL 
 #### Scenario: Default used when both API and config are absent
 - **WHEN** the selected model's `contextWindow` is `null` and no `context_window_tokens` is set
 - **THEN** 128,000 tokens is used as the default context window
-
-#### Scenario: Searchable model dropdown shows enabled models grouped by provider
-- **WHEN** the task detail drawer opens and `models.listEnabled` returns a non-empty list
-- **THEN** a searchable model-selection dropdown (PrimeVue `Select` with `filter` enabled) is shown, pre-selected to the task's current model, with models grouped under their provider name via `optionGroupLabel`
-
-#### Scenario: User can filter models by typing
-- **WHEN** the user opens the model dropdown and types a search string
-- **THEN** only models whose id contains the typed string (case-insensitive) are shown; groups with no matching models are hidden
-
-#### Scenario: Empty state shown when no models are enabled
-- **WHEN** `models.listEnabled` returns an empty array
-- **THEN** the dropdown shows a single disabled option "No models enabled" and a "⚙ Manage models" button that opens `ManageModelsModal`
-
-#### Scenario: Manage models button opens modal
-- **WHEN** the user clicks the "⚙ Manage models" button at the bottom of the open dropdown (or in the empty state)
-- **THEN** `ManageModelsModal` opens as an overlay; the dropdown closes
-
-#### Scenario: Model selection persisted to task
-- **WHEN** the user selects a different model from the dropdown
-- **THEN** the task's `model` field is updated via `tasks.setModel` and all subsequent executions use that model
-
-#### Scenario: Model resets to column default on column transition
-- **WHEN** a task is moved to a new workflow column
-- **THEN** the task's `model` is set to the column's configured `model` field, or the workspace default if the column has none
 
 ### Requirement: Workflow column can declare a preferred model as a fully-qualified ID
 The system SHALL allow each workflow column to declare an optional `model` field in the workflow YAML. This value SHALL be a fully-qualified model ID for the native engine, and a plain engine-native model name for non-native engines such as Copilot and Claude. Column model takes precedence over the engine default model.
@@ -231,3 +204,4 @@ The `context_window_tokens` field, if present in a provider config entry, SHALL 
 #### Scenario: Default used when both API and config are absent
 - **WHEN** the selected model's `contextWindow` is `null` and no `context_window_tokens` is set
 - **THEN** 128,000 tokens is used as the default context window
+

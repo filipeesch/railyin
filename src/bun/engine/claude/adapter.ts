@@ -35,6 +35,7 @@ export interface ClaudeRunConfig {
   sessionId: string;
   commonToolContext: CommonToolContext;
   waitForResume: (request: ClaudeResumeRequest | ClaudeShellApprovalRequest) => Promise<EngineResumeInput>;
+  onRawMessage?: (message: Record<string, unknown>) => void;
 }
 
 export interface ClaudeSdkAdapter {
@@ -324,6 +325,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           prompt: config.prompt,
           options: {
             cwd: config.workingDirectory,
+            additionalDirectories: [config.workingDirectory],
             abortController,
             pathToClaudeCodeExecutable: cliPath,
             ...(normalizeClaudeModel(config.model) ? { model: normalizeClaudeModel(config.model) } : {}),
@@ -386,6 +388,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         });
 
         for await (const message of query) {
+          config.onRawMessage?.(message as Record<string, unknown>);
           for (const event of translateClaudeMessage(message as { type: string })) {
             emit(event);
           }

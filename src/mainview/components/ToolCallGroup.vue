@@ -9,12 +9,18 @@
         <i class="pi pi-sitemap tcg__badge-icon" />
         {{ entry.children.length }}
       </span>
-      <span v-if="effectiveDiffPayload && effectiveDiffPayload.added > 0" class="tcg__stat tcg__stat--added">+{{ effectiveDiffPayload.added }}</span>
-      <span v-if="effectiveDiffPayload && effectiveDiffPayload.removed > 0" class="tcg__stat tcg__stat--removed">-{{ effectiveDiffPayload.removed }}</span>
+      <span v-if="totalAdded > 0" class="tcg__stat tcg__stat--added">+{{ totalAdded }}</span>
+      <span v-if="totalRemoved > 0" class="tcg__stat tcg__stat--removed">-{{ totalRemoved }}</span>
     </button>
 
-    <div v-if="open" :class="['tcg__body', (effectiveDiffPayload || toolName === 'read_file') ? 'tcg__body--flush' : '']">
-      <FileDiff v-if="effectiveDiffPayload" :payload="effectiveDiffPayload" />
+    <div v-if="open" :class="['tcg__body', (effectiveDiffPayloads.length > 0 || toolName === 'read_file') ? 'tcg__body--flush' : '']">
+      <template v-if="effectiveDiffPayloads.length > 0">
+        <FileDiff
+          v-for="(payload, idx) in effectiveDiffPayloads"
+          :key="`${payload.path}-${payload.to_path ?? ''}-${idx}`"
+          :payload="payload"
+        />
+      </template>
       <ReadView v-else-if="toolName === 'read_file'" :content="displayContent" :startLine="readFileStartLine" />
       <div v-else-if="entry.result && displayBlocks.length > 0" class="tcg__blocks">
         <section v-for="block in displayBlocks" :key="block.key" class="tcg__block">
@@ -83,6 +89,7 @@ const parsedResult = computed(() => {
       detailedContent?: string;
       contents?: Array<Record<string, unknown>>;
       is_error?: boolean;
+      writtenFiles?: Array<FileDiffPayload & { rawDiff?: string }>;
     };
   } catch {
     return null;
@@ -177,56 +184,28 @@ const displayBlocks = computed<DisplayBlock[]>(() => {
 
 const hasOutput = computed(() => displayContent.value.length > 0);
 
-const diffPayload = computed<FileDiffPayload | null>(() => {
-  if (!props.entry.diff) return null;
-  try {
-    const parsed = JSON.parse(props.entry.diff.content) as FileDiffPayload & {
-      rawDiff?: string;
-    };
-    if (typeof parsed.rawDiff === "string") {
-      return parseUnifiedDiff(parsed.rawDiff, parsed.path, parsed.operation);
+const structuredWrittenFiles = computed<FileDiffPayload[]>(() => {
+  const wf = parsedResult.value?.writtenFiles;
+  if (!Array.isArray(wf)) return [];
+  return wf.map((entry) => {
+    if (typeof entry.rawDiff === "string") {
+      return parseUnifiedDiff(entry.rawDiff, entry.path, entry.operation);
     }
-    return parsed;
-  } catch {
-    return { operation: "write_file", path: "unknown", added: 0, removed: 0 };
-  }
+    return entry;
+  });
 });
 
-const effectiveDiffPayload = computed<FileDiffPayload | null>(() => {
-  return diffPayload.value ?? inferDiffPayload(displayContent.value, toolName.value, parsedCall.value.args);
+const effectiveDiffPayloads = computed<FileDiffPayload[]>(() => {
+  return structuredWrittenFiles.value;
 });
 
-function inferDiffPayload(
-  text: string,
-  rawToolName: string,
-  args: Record<string, unknown>,
-): FileDiffPayload | null {
-  const diffText = extractUnifiedDiff(text);
-  if (!diffText) return null;
-  const path = String(args.path ?? args.filePath ?? args.target_file ?? args.from_path ?? "unknown");
-  const operation = inferOperation(rawToolName, args);
-  const parsed = parseUnifiedDiff(diffText, path, operation);
-  return (parsed.hunks?.length ?? 0) > 0 || parsed.operation === "rename_file" ? parsed : null;
-}
+const totalAdded = computed(() => {
+  return effectiveDiffPayloads.value.reduce((sum, payload) => sum + (payload.added ?? 0), 0);
+});
 
-function extractUnifiedDiff(text: string): string | null {
-  const fenced = text.match(/```diff\s*([\s\S]*?)```/i)?.[1];
-  const candidate = (fenced ?? text).trim();
-  if (!candidate.includes("@@") && !candidate.includes("--- ") && !candidate.includes("+++ ")) {
-    return null;
-  }
-  return candidate;
-}
-
-function inferOperation(toolName: string, args: Record<string, unknown>): FileDiffPayload["operation"] {
-  const normalized = toolName.toLowerCase();
-  if (normalized.includes("rename")) return "rename_file";
-  if (normalized.includes("delete")) return "delete_file";
-  if (normalized.includes("patch")) return "patch_file";
-  if (normalized.includes("edit")) return "edit_file";
-  if (args.from_path && args.to_path) return "rename_file";
-  return "write_file";
-}
+const totalRemoved = computed(() => {
+  return effectiveDiffPayloads.value.reduce((sum, payload) => sum + (payload.removed ?? 0), 0);
+});
 
 function parseUnifiedDiff(
   diffText: string,

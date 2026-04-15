@@ -72,7 +72,7 @@ export type MessageType =
   | "code_review";
 
 export interface ModelInfo {
-  id: string;
+  id: string | null;
   displayName?: string;
   description?: string;
   contextWindow: number | null;
