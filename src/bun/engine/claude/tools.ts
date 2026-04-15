@@ -1,5 +1,5 @@
 import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../common-tools.ts";
-import type { CommonToolContext, EngineEvent } from "../types.ts";
+import type { CommonToolContext } from "../types.ts";
 import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 
 type ZodLike = {
@@ -57,43 +57,19 @@ export function buildClaudeToolServer(
   sdk: ClaudeSdkRuntime,
   z: ZodLike,
   context: CommonToolContext,
-  emit: (event: EngineEvent) => void,
 ): unknown {
   const tools = COMMON_TOOL_DEFINITIONS.map((def) => sdk.tool(
     def.name,
     def.description,
     jsonSchemaToZodShape(z, def.parameters as Record<string, unknown>),
     async (args: Record<string, unknown>) => {
-      const callId = `claude_tool_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      emit({
-        type: "tool_start",
-        name: def.name,
-        arguments: JSON.stringify(args ?? {}),
-        callId,
-      });
-
       try {
         const result = await executeCommonTool(def.name, toToolArgs(args ?? {}), context);
-        const writtenFiles = extractWrittenFilesFromResult(result);
-        emit({
-          type: "tool_result",
-          name: def.name,
-          result,
-          callId,
-          writtenFiles,
-        });
         return {
           content: [{ type: "text", text: result }],
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        emit({
-          type: "tool_result",
-          name: def.name,
-          result: message,
-          callId,
-          isError: true,
-        });
         return {
           content: [{ type: "text", text: message }],
           isError: true,

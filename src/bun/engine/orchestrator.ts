@@ -891,6 +891,7 @@ export class Orchestrator implements ExecutionCoordinator {
               type: "function",
               function: { name: event.name, arguments: event.arguments },
               id: callId,
+              display: event.display,
             });
             const toolMeta = {
               parent_tool_call_id: event.parentCallId ?? null,

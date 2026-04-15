@@ -11,8 +11,9 @@
  */
 
 import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
-import type { EngineEvent } from "../types.ts";
+import type { EngineEvent, ToolCallDisplay } from "../types.ts";
 import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
+import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 
 type ToolEventMeta = {
   name: string;
@@ -234,6 +235,9 @@ function translateEvent(
         callId: data.toolCallId,
         parentCallId: meta?.parentCallId,
         isInternal: meta?.isInternal ?? false,
+        display: COMMON_TOOL_NAMES.has(data.toolName)
+          ? buildCommonToolDisplay(data.toolName, data.arguments ?? {})
+          : buildCopilotNativeDisplay(data.toolName, data.arguments ?? {}),
       };
     }
 
@@ -298,6 +302,47 @@ function translateEvent(
 
     default:
       return null;
+  }
+}
+
+function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>): ToolCallDisplay {
+  const str = (v: unknown): string => (v != null ? String(v) : "");
+  switch (name) {
+    case "read_file":
+      return {
+        label: "read",
+        subject: str(args.path) || undefined,
+        contentType: "file",
+        startLine: typeof args.startLine === "number" && args.startLine > 0 ? args.startLine : undefined,
+      };
+    case "view":
+      return {
+        label: "read",
+        subject: str(args.path) || undefined,
+        contentType: "file",
+      };
+    case "bash":
+      return { label: "run", subject: str(args.command) || undefined, contentType: "terminal" };
+    case "create":
+    case "write_file":
+      return { label: "write", subject: str(args.path) || undefined, contentType: "file" };
+    case "edit":
+      return { label: "edit", subject: str(args.path) || undefined, contentType: "file" };
+    case "apply_patch":
+      return { label: "patch" };
+    case "run_in_terminal":
+      return { label: "run", subject: str(args.command) || undefined, contentType: "terminal" };
+    case "grep_search":
+      return { label: "search", subject: str(args.query || args.pattern) || undefined };
+    case "find_files":
+    case "find":
+      return { label: "find", subject: str(args.pattern || args.path) || undefined };
+    case "delete_file":
+      return { label: "delete", subject: str(args.path) || undefined };
+    case "rename_file":
+      return { label: "rename", subject: str(args.path) || undefined };
+    default:
+      return { label: name };
   }
 }
 
@@ -382,5 +427,3 @@ function normalizeApplyPatchText(rawArguments: unknown): string | null {
   }
   return null;
 }
-
-

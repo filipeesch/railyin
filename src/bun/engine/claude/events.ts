@@ -1,4 +1,5 @@
-import type { EngineEvent } from "../types.ts";
+import type { EngineEvent, ToolCallDisplay } from "../types.ts";
+import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 
 interface ClaudeContentBlock {
   type: string;
@@ -41,7 +42,7 @@ export interface ToolMetadata {
   arguments?: unknown;
 }
 
-type ClaudeSdkMessage = ClaudeAssistantMessage | ClaudeResultMessage | ClaudeSystemMessage | { type: string; [key: string]: unknown };
+type ClaudeSdkMessage = ClaudeAssistantMessage | ClaudeResultMessage | ClaudeSystemMessage | { type: string;[key: string]: unknown };
 
 export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCallId?: Map<string, ToolMetadata>): EngineEvent[] {
   const raw = message as Record<string, unknown>;
@@ -77,6 +78,9 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
             name: block.name,
             arguments: JSON.stringify(block.input ?? {}),
             isInternal: isInternalClaudeToolName(block.name),
+            display: COMMON_TOOL_NAMES.has(block.name)
+              ? buildCommonToolDisplay(block.name, block.input ?? {})
+              : buildClaudeBuiltinDisplay(block.name, block.input ?? {}),
           });
         }
       }
@@ -86,7 +90,7 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
     case "result": {
       const result = message as ClaudeResultMessage;
       const events: EngineEvent[] = [];
-      
+
       // Check for rate limit event
       if (result.subtype === "rate_limit_event") {
         events.push({
@@ -94,7 +98,7 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
           message: "Claude API rate limited. Retrying...",
         });
       }
-      
+
       if (result.usage) {
         events.push({
           type: "usage",
@@ -133,24 +137,24 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
       }
       return [];
     }
-    
+
     case "user": {
       // Handle user messages that may contain tool_result blocks
       const user = message as any;
       const events: EngineEvent[] = [];
       const content = user.message?.content ?? user.content ?? [];
       const blocks = Array.isArray(content) ? content : [content];
-      
+
       for (const block of blocks) {
         if (block?.type === "tool_result" && block.tool_use_id) {
           // Look up tool metadata stored from preceding tool_use
           const meta = toolMetaByCallId?.get(block.tool_use_id);
           const toolName = meta?.name ?? "unknown";
-          
+
           if (!meta) {
             console.warn(`[claude-events] tool_result references unknown tool_use_id: ${block.tool_use_id}`);
           }
-          
+
           // Emit tool_result event
           events.push({
             type: "tool_result",
@@ -159,7 +163,7 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
             result: block.content ?? "",
             isError: block.is_error ?? false,
           });
-          
+
           // Clean up from map
           if (toolMetaByCallId) {
             toolMetaByCallId.delete(block.tool_use_id);
@@ -171,6 +175,51 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
 
     default:
       return [];
+  }
+}
+
+function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>): ToolCallDisplay {
+  const str = (v: unknown): string => (v != null ? String(v) : "");
+  switch (name.toLowerCase()) {
+    case "bash":
+      return { label: "run", subject: str(input.command || input.cmd) || undefined, contentType: "terminal" };
+    case "read":
+      return {
+        label: "read",
+        subject: str(input.file_path || input.path) || undefined,
+        contentType: "file",
+        startLine: typeof input.start_line === "number" && input.start_line > 0 ? input.start_line : undefined,
+      };
+    case "write":
+      return { label: "write", subject: str(input.file_path) || undefined, contentType: "file" };
+    case "edit":
+    case "multiedit":
+      return { label: "edit", subject: str(input.file_path) || undefined, contentType: "file" };
+    case "glob":
+      return { label: "glob", subject: str(input.pattern) || undefined };
+    case "grep":
+    case "rg":
+      return { label: "search", subject: str(input.pattern) || undefined };
+    case "ls":
+    case "view":
+      return { label: "ls", subject: str(input.path) || undefined };
+    case "webfetch":
+    case "web_fetch":
+      return { label: "fetch", subject: str(input.url) || undefined };
+    case "task":
+      return { label: "task", subject: str(input.description) || undefined };
+    case "todowrite":
+      return { label: "update todos" };
+    case "apply_patch":
+      return { label: "patch" };
+    case "create":
+      return { label: "create", subject: str(input.path || input.name) || undefined };
+    case "skill":
+      return { label: "skill", subject: str(input.name) || undefined };
+    case "store_memory":
+      return { label: "store memory" };
+    default:
+      return { label: name };
   }
 }
 

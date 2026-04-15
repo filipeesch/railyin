@@ -14,10 +14,6 @@ import type { Tool } from "@github/copilot-sdk";
 import type { CommonToolContext } from "../types.ts";
 import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../common-tools.ts";
 
-import type { Tool } from "@github/copilot-sdk";
-import type { CommonToolContext } from "../types.ts";
-import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../common-tools.ts";
-
 /**
  * Build the list of SDK Tool objects for a given execution context.
  * All common task-management tools are registered with JSON-schema parameters

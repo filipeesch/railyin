@@ -1,3 +1,16 @@
+// ─── Tool call display metadata ───────────────────────────────────────────────
+
+export interface ToolCallDisplay {
+  /** Human-readable verb shown in the tool call header: "read", "run", "move task" */
+  label: string;
+  /** What the tool operates on: "migrations.ts:42", "#5 → done" */
+  subject?: string;
+  /** Semantic hint for which result renderer the UI should use */
+  contentType?: "file" | "terminal";
+  /** Line offset passed to ReadView when contentType === "file" */
+  startLine?: number;
+}
+
 // ─── AskUser option ───────────────────────────────────────────────────────────
 
 export interface AskUserOption {
@@ -11,19 +24,19 @@ export interface AskUserOption {
 export type EngineEvent =
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
-  | { type: "tool_start"; name: string; arguments: string; callId?: string; parentCallId?: string; isInternal?: boolean }
+  | { type: "tool_start"; name: string; arguments: string; callId?: string; parentCallId?: string; isInternal?: boolean; display?: ToolCallDisplay }
   | {
-      type: "tool_result";
-      name: string;
-      result: string;
-      callId?: string;
-      isError?: boolean;
-      parentCallId?: string;
-      isInternal?: boolean;
-      detailedResult?: string;
-      contentBlocks?: Array<Record<string, unknown>>;
-      writtenFiles?: Array<import("../../shared/rpc-types.ts").FileDiffPayload>;
-    }
+    type: "tool_result";
+    name: string;
+    result: string;
+    callId?: string;
+    isError?: boolean;
+    parentCallId?: string;
+    isInternal?: boolean;
+    detailedResult?: string;
+    contentBlocks?: Array<Record<string, unknown>>;
+    writtenFiles?: Array<import("../../shared/rpc-types.ts").FileDiffPayload>;
+  }
   | { type: "ask_user"; payload: string /* serialised AskUserPrompt JSON */ }
   | { type: "interview_me"; payload: string /* serialised InterviewPayload JSON */ }
   | { type: "shell_approval"; command: string; executionId: number }

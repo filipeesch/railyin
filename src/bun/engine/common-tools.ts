@@ -166,7 +166,40 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
 
 export const COMMON_TOOL_NAMES = new Set(COMMON_TOOL_DEFINITIONS.map((t) => t.name));
 
-// ─── Handler ──────────────────────────────────────────────────────────────────
+// ─── Display builder ──────────────────────────────────────────────────────────
+
+import type { ToolCallDisplay } from "./types.ts";
+
+export function buildCommonToolDisplay(name: string, args: Record<string, unknown>): ToolCallDisplay {
+  const str = (v: unknown): string => (v != null ? String(v) : "");
+  switch (name) {
+    case "get_task":
+      return { label: "get task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
+    case "list_tasks":
+      return { label: "list tasks", subject: str(args.workflow_state || args.query) || undefined };
+    case "get_board_summary":
+      return { label: "board summary" };
+    case "create_task":
+      return { label: "create task", subject: str(args.title) || undefined };
+    case "edit_task":
+      return { label: "edit task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
+    case "delete_task":
+      return { label: "delete task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
+    case "move_task": {
+      const id = args.task_id != null ? `#${args.task_id}` : null;
+      const to = str(args.workflow_state) || null;
+      return { label: "move task", subject: id && to ? `${id} → ${to}` : id ?? to ?? undefined };
+    }
+    case "message_task":
+      return { label: "message task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
+    case "interview_me":
+      return { label: "interview me" };
+    default:
+      return { label: name };
+  }
+}
+
+
 
 /**
  * Execute a common task-management tool by name.

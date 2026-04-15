@@ -320,7 +320,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
     (async () => {
       try {
         const [sdk, zod, cliPath] = await Promise.all([loadClaudeRuntime(), loadZodRuntime(), ensureClaudeCliJs()]);
-        const toolServer = buildClaudeToolServer(sdk, zod.z, config.commonToolContext, emit);
+        const toolServer = buildClaudeToolServer(sdk, zod.z, config.commonToolContext);
         const hasExistingSession = await sdk.getSessionInfo?.(config.sessionId, { dir: config.workingDirectory }).catch(() => undefined);
         const query = sdk.query({
           prompt: config.prompt,

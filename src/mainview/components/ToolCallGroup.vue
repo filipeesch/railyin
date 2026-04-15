@@ -3,8 +3,8 @@
     <button class="tcg__header" @click="open = !open">
       <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right', 'tcg__chevron']" />
       <i :class="['pi', statusIcon, 'tcg__tool-icon']" :style="statusIconStyle" />
-      <code class="tcg__tool-name">{{ toolName }}</code>
-      <span v-if="primaryArg" class="tcg__primary-arg">{{ primaryArg }}</span>
+      <code class="tcg__tool-name">{{ display?.label }}</code>
+      <span v-if="primaryArg" class="tcg__primary-arg" :title="fullSubject">{{ primaryArg }}</span>
       <span v-if="hasChildren" class="tcg__badge">
         <i class="pi pi-sitemap tcg__badge-icon" />
         {{ entry.children.length }}
@@ -13,7 +13,7 @@
       <span v-if="totalRemoved > 0" class="tcg__stat tcg__stat--removed">-{{ totalRemoved }}</span>
     </button>
 
-    <div v-if="open" :class="['tcg__body', (effectiveDiffPayloads.length > 0 || toolName === 'read_file') ? 'tcg__body--flush' : '']">
+    <div v-if="open" :class="['tcg__body', (effectiveDiffPayloads.length > 0 || display?.contentType === 'file') ? 'tcg__body--flush' : '']">
       <template v-if="effectiveDiffPayloads.length > 0">
         <FileDiff
           v-for="(payload, idx) in effectiveDiffPayloads"
@@ -21,7 +21,7 @@
           :payload="payload"
         />
       </template>
-      <ReadView v-else-if="toolName === 'read_file'" :content="displayContent" :startLine="readFileStartLine" />
+      <ReadView v-else-if="display?.contentType === 'file'" :content="displayContent" :startLine="readFileStartLine" />
       <div v-else-if="entry.result && displayBlocks.length > 0" class="tcg__blocks">
         <section v-for="block in displayBlocks" :key="block.key" class="tcg__block">
           <div class="tcg__block-label">{{ block.label }}</div>
@@ -59,23 +59,15 @@ let timeoutId: ReturnType<typeof setTimeout> | null = null;
 const parsedCall = computed(() => {
   try {
     const p = JSON.parse(props.entry.call.content) as {
-      name?: string;
-      function?: { name?: string; arguments?: string | Record<string, unknown> };
-      arguments?: string | Record<string, unknown>;
+      display?: { label: string; subject?: string; contentType?: "file" | "terminal"; startLine?: number };
     };
-    const name = p?.name ?? p?.function?.name ?? "tool";
-    const rawArgs = p?.function?.arguments ?? p?.arguments;
-    const args: Record<string, unknown> =
-      typeof rawArgs === "string"
-        ? JSON.parse(rawArgs)
-        : (rawArgs ?? {});
-    return { name, args };
+    return { display: p?.display };
   } catch {
-    return { name: "tool", args: {} as Record<string, unknown> };
+    return { display: undefined };
   }
 });
 
-const toolName = computed(() => parsedCall.value.name);
+const display = computed(() => parsedCall.value.display);
 const hasChildren = computed(() => props.entry.children.length > 0);
 
 // Outcome icon: spinner while running, check on success, times on error
@@ -114,19 +106,15 @@ const statusIconStyle = computed(() => {
   return { color: parsedResult.value?.is_error ? "#dc2626" : "#16a34a" };
 });
 
+const fullSubject = computed(() => parsedCall.value.display?.subject ?? "");
+
 const primaryArg = computed(() => {
-  const { args } = parsedCall.value;
-  const val = String(
-    args.path ?? args.from_path ?? args.pattern ?? args.url ?? args.command ?? "",
-  );
-  return val.length > 60 ? "…" + val.slice(-57) : val;
+  const s = fullSubject.value;
+  if (s.length <= 80) return s;
+  return s.slice(0, 45) + "\u2026" + s.slice(-34);
 });
 
-const readFileStartLine = computed(() => {
-  const { args } = parsedCall.value;
-  const sl = Number(args.startLine ?? args.start_line ?? 0);
-  return sl > 0 ? sl : undefined;
-});
+const readFileStartLine = computed(() => parsedCall.value.display?.startLine);
 
 const truncated = computed(() => {
   const c = displayContent.value;
