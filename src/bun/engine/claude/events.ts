@@ -1,5 +1,6 @@
 import type { EngineEvent, ToolCallDisplay } from "../types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
+import { canonicalToolDisplayLabel } from "../tool-display.ts";
 
 interface ClaudeContentBlock {
   type: string;
@@ -182,38 +183,39 @@ function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>)
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name.toLowerCase()) {
     case "bash":
-      return { label: "run", subject: str(input.command || input.cmd) || undefined, contentType: "terminal" };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.command || input.cmd) || undefined, contentType: "terminal" };
     case "read":
       return {
-        label: "read",
+        label: canonicalToolDisplayLabel(name),
         subject: str(input.file_path || input.path) || undefined,
         contentType: "file",
         startLine: typeof input.start_line === "number" && input.start_line > 0 ? input.start_line : undefined,
       };
     case "write":
-      return { label: "write", subject: str(input.file_path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.file_path) || undefined, contentType: "file" };
     case "edit":
     case "multiedit":
-      return { label: "edit", subject: str(input.file_path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.file_path) || undefined, contentType: "file" };
     case "glob":
-      return { label: "glob", subject: str(input.pattern) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.pattern) || undefined };
     case "grep":
     case "rg":
-      return { label: "search", subject: str(input.pattern) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.pattern) || undefined };
     case "ls":
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.path) || undefined };
     case "view":
-      return { label: "ls", subject: str(input.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.path) || undefined, contentType: "file" };
     case "webfetch":
     case "web_fetch":
-      return { label: "fetch", subject: str(input.url) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.url) || undefined };
     case "task":
       return { label: "task", subject: str(input.description) || undefined };
     case "todowrite":
-      return { label: "update todos" };
+      return { label: canonicalToolDisplayLabel(name) };
     case "apply_patch":
-      return { label: "patch" };
+      return { label: canonicalToolDisplayLabel(name) };
     case "create":
-      return { label: "create", subject: str(input.path || input.name) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.path || input.name) || undefined, contentType: "file" };
     case "skill":
       return { label: "skill", subject: str(input.name) || undefined };
     case "store_memory":

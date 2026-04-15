@@ -14,6 +14,7 @@ import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
 import type { EngineEvent, ToolCallDisplay } from "../types.ts";
 import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
+import { canonicalToolDisplayLabel } from "../tool-display.ts";
 
 type ToolEventMeta = {
   name: string;
@@ -310,33 +311,33 @@ function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>):
   switch (name) {
     case "read_file":
       return {
-        label: "read",
+        label: canonicalToolDisplayLabel(name),
         subject: str(args.path) || undefined,
         contentType: "file",
         startLine: typeof args.startLine === "number" && args.startLine > 0 ? args.startLine : undefined,
       };
     case "view":
       return {
-        label: "read",
+        label: canonicalToolDisplayLabel(name),
         subject: str(args.path) || undefined,
         contentType: "file",
       };
     case "bash":
-      return { label: "run", subject: str(args.command) || undefined, contentType: "terminal" };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.command) || undefined, contentType: "terminal" };
     case "create":
     case "write_file":
-      return { label: "write", subject: str(args.path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined, contentType: "file" };
     case "edit":
-      return { label: "edit", subject: str(args.path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined, contentType: "file" };
     case "apply_patch":
-      return { label: "patch" };
+      return { label: canonicalToolDisplayLabel(name) };
     case "run_in_terminal":
-      return { label: "run", subject: str(args.command) || undefined, contentType: "terminal" };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.command) || undefined, contentType: "terminal" };
     case "grep_search":
-      return { label: "search", subject: str(args.query || args.pattern) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.query || args.pattern) || undefined };
     case "find_files":
     case "find":
-      return { label: "find", subject: str(args.pattern || args.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.pattern || args.path) || undefined };
     case "delete_file":
       return { label: "delete", subject: str(args.path) || undefined };
     case "rename_file":
