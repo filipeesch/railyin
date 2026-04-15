@@ -38,15 +38,16 @@
       <button class="tcg__header" @click="open = !open">
         <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right', 'tcg__chevron']" />
         <i :class="['pi', toolStatusIcon, 'tcg__tool-icon']" :style="toolStatusStyle" />
-        <code class="tcg__tool-name">{{ toolName }}</code>
-        <span v-if="toolPrimaryArg" class="tcg__primary-arg">{{ toolPrimaryArg }}</span>
+        <code class="tcg__tool-name">{{ toolDisplay?.label }}</code>
+        <span v-if="toolPrimaryArg" class="tcg__primary-arg" :title="fullSubject">{{ toolPrimaryArg }}</span>
         <span v-if="block.children.length > 0" class="tcg__badge">
           <i class="pi pi-sitemap tcg__badge-icon" />
           {{ block.children.length }}
         </span>
       </button>
-      <div v-if="open" class="tcg__body">
-        <pre v-if="toolResultContent" class="tcg__output">{{ toolResultTruncated }}</pre>
+      <div v-if="open" :class="['tcg__body', toolDisplay?.contentType === 'file' ? 'tcg__body--flush' : '']">
+        <ReadView v-if="toolDisplay?.contentType === 'file' && toolResultContent" :content="toolResultContent" :startLine="toolDisplay?.startLine" />
+        <pre v-else-if="toolResultContent" class="tcg__output">{{ toolResultTruncated }}</pre>
         <div v-if="block.children.length > 0" class="tcg__children">
           <StreamBlockNode
             v-for="childId in block.children"
@@ -107,10 +108,12 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { FileDiffPayload, Hunk } from "@shared/rpc-types";
+import type { FileDiffPayload, Hunk, ToolCallDisplay } from "@shared/rpc-types";
 import type { StreamBlock } from "../stores/task";
+import { formatToolSubject, parseToolCallDisplay } from "../utils/toolCallDisplay";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import FileDiff from "./FileDiff.vue";
+import ReadView from "./ReadView.vue";
 
 const props = defineProps<{
   blockId: string;
@@ -147,30 +150,22 @@ const fileDiffPayload = computed<FileDiffPayload | null>(() => {
 // Tool call helpers
 const parsedToolCall = computed(() => {
   const b = block.value;
-  if (!b || b.type !== "tool_call") return { name: "tool", args: {} as Record<string, unknown> };
-  try {
-    const p = JSON.parse(b.content) as {
-      name?: string;
-      function?: { name?: string; arguments?: string | Record<string, unknown> };
-      arguments?: string | Record<string, unknown>;
+  if (!b || b.type !== "tool_call") {
+    return {
+      display: undefined as ToolCallDisplay | undefined,
     };
-    const name = p?.name ?? p?.function?.name ?? "tool";
-    const rawArgs = p?.function?.arguments ?? p?.arguments;
-    const args: Record<string, unknown> =
-      typeof rawArgs === "string" ? JSON.parse(rawArgs) : (rawArgs ?? {});
-    return { name, args };
-  } catch {
-    return { name: "tool", args: {} as Record<string, unknown> };
   }
+  return { display: parseToolCallDisplay(b.content) };
 });
 
-const toolName = computed(() => parsedToolCall.value.name);
+const toolDisplay = computed(() => parsedToolCall.value.display);
 
 const toolPrimaryArg = computed(() => {
-  const { args } = parsedToolCall.value;
-  const val = String(args.path ?? args.from_path ?? args.pattern ?? args.url ?? args.command ?? "");
-  return val.length > 60 ? "…" + val.slice(-57) : val;
+  const s = fullSubject.value;
+  return formatToolSubject(s, 80);
 });
+
+const fullSubject = computed(() => toolDisplay.value?.subject ?? "");
 
 // Find the matching tool_result (same blockId in the parent's children or roots)
 const toolResultBlock = computed(() => {

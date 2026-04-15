@@ -30,6 +30,18 @@ export function canonicalToolDisplayLabel(name: string): string {
             return "fetch";
         case "apply_patch":
             return "patch";
+        case "delete_file":
+        case "delete":
+            return "delete";
+        case "rename_file":
+        case "rename":
+            return "rename";
+        case "task":
+            return "task";
+        case "skill":
+            return "skill";
+        case "store_memory":
+            return "store memory";
         case "todowrite":
             return "todo";
         default:

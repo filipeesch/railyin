@@ -1,15 +1,4 @@
-// ─── Tool call display metadata ───────────────────────────────────────────────
-
-export interface ToolCallDisplay {
-  /** Human-readable verb shown in the tool call header: "read", "run", "move task" */
-  label: string;
-  /** What the tool operates on: "migrations.ts:42", "#5 → done" */
-  subject?: string;
-  /** Semantic hint for which result renderer the UI should use */
-  contentType?: "file" | "terminal";
-  /** Line offset passed to ReadView when contentType === "file" */
-  startLine?: number;
-}
+import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
 

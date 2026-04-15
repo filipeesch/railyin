@@ -44,8 +44,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, watch } from "vue";
-import type { FileDiffPayload, Hunk } from "@shared/rpc-types";
+import type { FileDiffPayload, Hunk, ToolCallDisplay } from "@shared/rpc-types";
 import type { ToolEntry } from "../utils/pairToolMessages";
+import { formatToolSubject, parseToolCallDisplay } from "../utils/toolCallDisplay";
 import FileDiff from "./FileDiff.vue";
 import ReadView from "./ReadView.vue";
 
@@ -57,14 +58,8 @@ const hasTimedOut = ref(false);
 let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
 const parsedCall = computed(() => {
-  try {
-    const p = JSON.parse(props.entry.call.content) as {
-      display?: { label: string; subject?: string; contentType?: "file" | "terminal"; startLine?: number };
-    };
-    return { display: p?.display };
-  } catch {
-    return { display: undefined };
-  }
+  const display = parseToolCallDisplay(props.entry.call.content);
+  return { display };
 });
 
 const display = computed(() => parsedCall.value.display);
@@ -110,11 +105,13 @@ const fullSubject = computed(() => parsedCall.value.display?.subject ?? "");
 
 const primaryArg = computed(() => {
   const s = fullSubject.value;
-  if (s.length <= 80) return s;
-  return s.slice(0, 45) + "\u2026" + s.slice(-34);
+  return formatToolSubject(s, 80);
 });
 
-const readFileStartLine = computed(() => parsedCall.value.display?.startLine);
+const readFileStartLine = computed(() => {
+  const startLine = parsedCall.value.display?.startLine;
+  return typeof startLine === "number" && startLine > 0 ? startLine : undefined;
+});
 
 const truncated = computed(() => {
   const c = displayContent.value;

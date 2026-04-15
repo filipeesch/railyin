@@ -117,6 +117,19 @@ export interface FileDiffPayload {
   hunks?: Hunk[];
 }
 
+// ─── Tool call display metadata ───────────────────────────────────────────────
+
+export interface ToolCallDisplay {
+  /** Human-readable verb shown in tool call headers: "read", "run", "move task". */
+  label: string;
+  /** What the tool operates on: path, URL, command, or task target. */
+  subject?: string;
+  /** Semantic hint for result rendering behavior. */
+  contentType?: "file" | "terminal";
+  /** Optional line offset for file-oriented renderers. */
+  startLine?: number;
+}
+
 // ─── Ask user prompt types ───────────────────────────────────────────────────
 
 export interface AskUserOption {

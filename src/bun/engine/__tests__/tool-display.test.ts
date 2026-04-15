@@ -19,4 +19,12 @@ describe("tool display normalization", () => {
         expect(canonicalToolDisplayLabel("rg")).toBe("search");
         expect(canonicalToolDisplayLabel("grep_search")).toBe("search");
     });
+
+    it("normalizes operation aliases", () => {
+        expect(canonicalToolDisplayLabel("delete_file")).toBe("delete");
+        expect(canonicalToolDisplayLabel("rename_file")).toBe("rename");
+        expect(canonicalToolDisplayLabel("task")).toBe("task");
+        expect(canonicalToolDisplayLabel("skill")).toBe("skill");
+        expect(canonicalToolDisplayLabel("store_memory")).toBe("store memory");
+    });
 });

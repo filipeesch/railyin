@@ -1,4 +1,5 @@
-import type { EngineEvent, ToolCallDisplay } from "../types.ts";
+import type { EngineEvent } from "../types.ts";
+import type { ToolCallDisplay } from "../../../shared/rpc-types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { canonicalToolDisplayLabel } from "../tool-display.ts";
 
@@ -209,7 +210,7 @@ function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>)
     case "web_fetch":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.url) || undefined };
     case "task":
-      return { label: "task", subject: str(input.description) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.description) || undefined };
     case "todowrite":
       return { label: canonicalToolDisplayLabel(name) };
     case "apply_patch":
@@ -217,9 +218,9 @@ function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>)
     case "create":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.path || input.name) || undefined, contentType: "file" };
     case "skill":
-      return { label: "skill", subject: str(input.name) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(input.name) || undefined };
     case "store_memory":
-      return { label: "store memory" };
+      return { label: canonicalToolDisplayLabel(name) };
     default:
       return { label: name };
   }

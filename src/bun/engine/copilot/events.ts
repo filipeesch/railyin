@@ -11,8 +11,8 @@
  */
 
 import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
-import type { EngineEvent, ToolCallDisplay } from "../types.ts";
-import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
+import type { EngineEvent } from "../types.ts";
+import type { FileDiffPayload, ToolCallDisplay } from "../../../shared/rpc-types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { canonicalToolDisplayLabel } from "../tool-display.ts";
 
@@ -339,9 +339,9 @@ function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>):
     case "find":
       return { label: canonicalToolDisplayLabel(name), subject: str(args.pattern || args.path) || undefined };
     case "delete_file":
-      return { label: "delete", subject: str(args.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined };
     case "rename_file":
-      return { label: "rename", subject: str(args.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined };
     default:
       return { label: name };
   }
