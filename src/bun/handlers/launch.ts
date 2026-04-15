@@ -1,22 +1,27 @@
 import { getDb } from "../db/index.ts";
 import { mapTask } from "../db/mappers.ts";
-import type { TaskRow } from "../db/row-types.ts";
+import type { TaskRow, BoardRow } from "../db/row-types.ts";
 import type { LaunchConfig } from "../../shared/rpc-types.ts";
 import { readLaunchConfig } from "../launch/config.ts";
 import { launchInTerminal, launchApp } from "../launch/launcher.ts";
-import { getProjectById } from "../project-store.ts";
+import { getProjectByKey } from "../project-store.ts";
 
 export function launchHandlers() {
   return {
     "launch.getConfig": async (params: { taskId: number }): Promise<LaunchConfig | null> => {
       const db = getDb();
 
-      const taskRow = db
-        .query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?")
+      const row = db
+        .query<{ project_key: string; workspace_key: string }, [number]>(
+          `SELECT t.project_key, b.workspace_key
+           FROM tasks t
+           JOIN boards b ON b.id = t.board_id
+           WHERE t.id = ?`,
+        )
         .get(params.taskId);
-      if (!taskRow) return null;
+      if (!row) return null;
 
-      const project = getProjectById(taskRow.project_id);
+      const project = getProjectByKey(row.workspace_key, row.project_key);
       if (!project) return null;
       return readLaunchConfig(project.projectPath);
     },
@@ -29,10 +34,11 @@ export function launchHandlers() {
       const db = getDb();
 
       const taskRow = db
-        .query<TaskRow, [number]>(
-          `SELECT t.*, gc.worktree_path
+        .query<TaskRow & { worktree_path: string | null; workspace_key: string }, [number]>(
+          `SELECT t.*, gc.worktree_path, b.workspace_key
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
+           JOIN boards b ON b.id = t.board_id
            WHERE t.id = ?`,
         )
         .get(params.taskId);
@@ -44,7 +50,7 @@ export function launchHandlers() {
       if (task.worktreePath) {
         cwd = task.worktreePath;
       } else {
-        const project = getProjectById(taskRow.project_id);
+        const project = getProjectByKey(taskRow.workspace_key, taskRow.project_key);
         if (!project) return { ok: false, error: "Project not found" };
         cwd = project.projectPath;
       }

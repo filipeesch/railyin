@@ -55,12 +55,20 @@ Each workspace SHALL store its own engine and AI provider settings in that works
 - **WHEN** a workspace defines a value in its own `workspace.yaml` that is also present in `config.yaml`
 - **THEN** the workspace-local value is used for that workspace's executions
 
-### Requirement: Workspace schema includes workspace_id for future tenancy
-The database schema SHALL include a `workspace_id` foreign key on boards and projects to support future multi-user deployments without schema migration.
+### Requirement: Workspace schema includes workspace_key for board and model association
+The database schema SHALL store `workspace_key TEXT` (the file-derived string key, e.g. `"default"`) on `boards` and `enabled_models` instead of a hash-derived integer `workspace_id`. The key directly identifies the owning workspace without indirection.
 
-#### Scenario: workspace_id is always set
-- **WHEN** a board or project is created
-- **THEN** it is assigned the current workspace ID (default: 1 for single-user installations)
+#### Scenario: Board row carries workspace_key
+- **WHEN** a board is created or queried
+- **THEN** the `workspace_key` column contains the string key of the owning workspace (e.g. `"default"`)
+
+#### Scenario: Enabled model row carries workspace_key
+- **WHEN** model preferences are stored or queried for a workspace
+- **THEN** the `workspace_key` column identifies the owning workspace
+
+#### Scenario: No hash-derived integer needed
+- **WHEN** the runtime resolves which workspace a board belongs to
+- **THEN** it reads `workspace_key` directly without reversing a numeric hash
 
 ### Requirement: Workspace config is hot-reloaded on demand
 The system SHALL re-read `workspace.yaml` from disk and update all AI provider settings without restarting the application.

@@ -2,30 +2,12 @@
 // These are INTERNAL to the bun process only. Handlers map these to the
 // camelCase shared types in rpc-types.ts before sending over IPC.
 
-export interface WorkspaceRow {
-  id: number;
-  name: string;
-  config_key?: string | null;
-}
-
 export interface BoardRow {
   id: number;
-  workspace_id: number;
+  workspace_key: string;
   name: string;
   workflow_template_id: string;
-  project_ids: string; // JSON-serialized number[]
-  created_at: string;
-}
-
-export interface ProjectRow {
-  id: number;
-  workspace_id: number;
-  name: string;
-  project_path: string;
-  git_root_path: string;
-  default_branch: string;
-  slug: string | null;
-  description: string | null;
+  project_keys: string; // JSON-serialized string[]
   created_at: string;
 }
 
@@ -37,7 +19,7 @@ export interface ConversationRow {
 export interface TaskRow {
   id: number;
   board_id: number;
-  project_id: number;
+  project_key: string;
   title: string;
   description: string;
   workflow_state: string;

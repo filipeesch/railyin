@@ -4,8 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { Database } from "bun:sqlite";
 import { _resetForTests as resetDbSingleton, getDb } from "../db/index.ts";
-import { runMigrations, syncConfiguredProjects, syncConfiguredWorkspaces } from "../db/migrations.ts";
-import { getProjectIdForKey, getWorkspaceIdForKey } from "../config/index.ts";
+import { runMigrations } from "../db/migrations.ts";
 
 let tempDir: string;
 let dbPath: string;
@@ -59,69 +58,41 @@ describe("runMigrations", () => {
     const db = getDb();
     const applied = db.query<{ id: string }, [string]>("SELECT id FROM schema_migrations WHERE id = ?").get("015_workspace_config_key");
     expect(applied?.id).toBe("015_workspace_config_key");
-    const row = db.query<{ config_key: string | null }, [number]>("SELECT config_key FROM workspaces WHERE id = ?").get(1);
-    expect(row?.config_key).toBe("default");
   });
 
-  it("syncs file-backed workspaces into the compatibility workspaces table with stable ids", () => {
+  it("boards and tasks have no FK constraints after migration — arbitrary workspace/project keys are accepted", () => {
     runMigrations();
 
-    syncConfiguredWorkspaces([
-      { key: "default", name: "My Workspace" },
-      { key: "work", name: "Work" },
-    ]);
-
     const db = getDb();
-    const rows = db
-      .query<{ id: number; name: string; config_key: string }, []>(
-        "SELECT id, name, config_key FROM workspaces ORDER BY config_key",
-      )
-      .all();
 
-    expect(rows).toEqual([
-      { id: 1, name: "My Workspace", config_key: "default" },
-      { id: getWorkspaceIdForKey("work"), name: "Work", config_key: "work" },
-    ]);
-  });
-
-  it("syncs file-backed projects into the compatibility projects table so FK-dependent writes succeed", () => {
-    runMigrations();
-
-    const workWorkspaceId = getWorkspaceIdForKey("work");
-    const workProjectId = getProjectIdForKey("work", "backend");
-
-    syncConfiguredWorkspaces([
-      { key: "default", name: "My Workspace" },
-      { key: "work", name: "Work" },
-    ]);
-    syncConfiguredProjects([
-      {
-        id: workProjectId,
-        key: "backend",
-        workspaceId: workWorkspaceId,
-        workspaceKey: "work",
-        name: "Backend",
-        projectPath: "/tmp/backend",
-        gitRootPath: "/tmp/backend",
-        defaultBranch: "main",
-      },
-    ]);
-
-    const db = getDb();
+    // Insert a board with an arbitrary workspace_key — no compat row required
     expect(() =>
       db.run(
-        "INSERT INTO boards (workspace_id, name, workflow_template_id, project_ids) VALUES (?, 'Work Board', 'delivery', '[]')",
-        [workWorkspaceId],
+        "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES ('nonexistent-ws', 'FK-Free Board', 'delivery', '[]')",
       )
     ).not.toThrow();
     const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+
     db.run("INSERT INTO conversations (task_id) VALUES (0)");
-    const conversationId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    const convId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+
+    // Insert a task with an arbitrary project_key — no compat row required
     expect(() =>
       db.run(
-        "INSERT INTO tasks (board_id, project_id, title, workflow_state, execution_state, conversation_id) VALUES (?, ?, 'Compat Task', 'backlog', 'idle', ?)",
-        [boardId, workProjectId, conversationId],
+        "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state, conversation_id) VALUES (?, 'nonexistent-proj', 'FK-Free Task', 'backlog', 'idle', ?)",
+        [boardId, convId],
       )
     ).not.toThrow();
+  });
+
+  it("workspaces and projects tables do not exist after migration", () => {
+    runMigrations();
+
+    const db = getDb();
+    const tables = db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('workspaces', 'projects')")
+      .all()
+      .map((r) => r.name);
+    expect(tables).toEqual([]);
   });
 });

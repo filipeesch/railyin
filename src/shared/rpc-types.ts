@@ -4,16 +4,14 @@ import type { RPCSchema } from "electrobun/bun";
 
 export interface Board {
   id: number;
-  workspaceId: number;
+  workspaceKey: string;
   name: string;
   workflowTemplateId: string;
-  projectIds: number[];
+  projectKeys: string[];
 }
 
 export interface Project {
-  id: number;
   key: string;
-  workspaceId: number;
   workspaceKey: string;
   name: string;
   projectPath: string;
@@ -37,7 +35,7 @@ export type ExecutionState =
 export interface Task {
   id: number;
   boardId: number;
-  projectId: number;
+  projectKey: string;
   title: string;
   description: string;
   workflowState: WorkflowState;
@@ -323,7 +321,6 @@ export interface WorkspaceConfig {
 }
 
 export interface WorkspaceSummary {
-  id: number;
   key: string;
   name: string;
 }
@@ -416,7 +413,7 @@ export type RailynRPCType = {
     requests: {
       // Workspace
       "workspace.getConfig": {
-        params: { workspaceId?: number };
+        params: { workspaceKey?: string };
         response: WorkspaceConfig;
       };
       "workspace.list": {
@@ -424,7 +421,7 @@ export type RailynRPCType = {
         response: WorkspaceSummary[];
       };
       "workspace.setThinking": {
-        params: { workspaceId?: number; enabled: boolean };
+        params: { workspaceKey?: string; enabled: boolean };
         response: Record<string, never>;
       };
 
@@ -434,7 +431,7 @@ export type RailynRPCType = {
         response: Array<Board & { template: WorkflowTemplate }>;
       };
       "boards.create": {
-        params: { workspaceId: number; name: string; projectIds: number[]; workflowTemplateId: string };
+        params: { workspaceKey: string; name: string; projectKeys: string[]; workflowTemplateId: string };
         response: Board;
       };
 
@@ -445,7 +442,7 @@ export type RailynRPCType = {
       };
       "projects.register": {
         params: {
-          workspaceId: number;
+          workspaceKey: string;
           name: string;
           projectPath: string;
           gitRootPath: string;
@@ -464,7 +461,7 @@ export type RailynRPCType = {
       "tasks.create": {
         params: {
           boardId: number;
-          projectId: number;
+          projectKey: string;
           title: string;
           description: string;
         };
@@ -499,15 +496,15 @@ export type RailynRPCType = {
 
       // Models
       "models.list": {
-        params: { workspaceId?: number };
+        params: { workspaceKey?: string };
         response: ProviderModelList[];
       };
       "models.setEnabled": {
-        params: { workspaceId?: number; qualifiedModelId: string; enabled: boolean };
+        params: { workspaceKey?: string; qualifiedModelId: string; enabled: boolean };
         response: Record<string, never>;
       };
       "models.listEnabled": {
-        params: { workspaceId?: number };
+        params: { workspaceKey?: string };
         response: ModelInfo[];
       };
 
@@ -611,11 +608,11 @@ export type RailynRPCType = {
 
       // Workflow
       "workflow.getYaml": {
-        params: { workspaceId?: number; templateId: string };
+        params: { workspaceKey?: string; templateId: string };
         response: { yaml: string };
       };
       "workflow.saveYaml": {
-        params: { workspaceId?: number; templateId: string; yaml: string };
+        params: { workspaceKey?: string; templateId: string; yaml: string };
         response: { ok: true };
       };
       "tasks.sessionMemory": {

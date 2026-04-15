@@ -31,11 +31,11 @@ export const useBoardStore = defineStore("board", () => {
     }
   }
 
-  async function createBoard(workspaceId: number, name: string, workflowTemplateId: string) {
+  async function createBoard(workspaceKey: string, name: string, workflowTemplateId: string) {
     const board = await electroview.rpc.request["boards.create"]({
-      workspaceId,
+      workspaceKey,
       name,
-      projectIds: [],
+      projectKeys: [],
       workflowTemplateId,
     });
     await loadBoards();
@@ -47,8 +47,8 @@ export const useBoardStore = defineStore("board", () => {
     activeBoardId.value = id;
   }
 
-  function selectFirstBoardInWorkspace(workspaceId: number) {
-    activeBoardId.value = findFirstBoardInWorkspace(boards.value, workspaceId);
+  function selectFirstBoardInWorkspace(workspaceKey: string) {
+    activeBoardId.value = findFirstBoardInWorkspace(boards.value, workspaceKey);
   }
 
   return {

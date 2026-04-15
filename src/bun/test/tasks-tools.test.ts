@@ -10,7 +10,7 @@ let db: Database;
 let cfg: ReturnType<typeof setupTestConfig>;
 let taskId: number;
 let boardId: number;
-let projectId: number;
+let projectKey: string;
 let conversationId: number;
 
 /** No-op callbacks (most tests don't need real engine integration) */
@@ -32,7 +32,7 @@ const ctx = (overrides: { taskId?: number; boardId?: number; callbacks?: TaskToo
 beforeEach(() => {
     cfg = setupTestConfig();
     db = initDb();
-    ({ taskId, boardId, projectId, conversationId } = seedProjectAndTask(db, "/tmp/test-git"));
+    ({ projectKey, boardId, taskId, conversationId } = seedProjectAndTask(db, "/tmp/test-git"));
 });
 
 afterEach(() => {
@@ -205,7 +205,7 @@ describe("executeTool / create_task", () => {
     it("creates a task and returns it in backlog state", async () => {
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_id: projectId, title: "New task", description: "Do something" }),
+            JSON.stringify({ project_key: projectKey, title: "New task", description: "Do something" }),
             ctx(),
         );
         const task = JSON.parse(result as string);
@@ -218,26 +218,26 @@ describe("executeTool / create_task", () => {
     it("creates a task with a model override", async () => {
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_id: projectId, title: "Modeled task", description: "", model: "fake/qwq" }),
+            JSON.stringify({ project_key: projectKey, title: "Modeled task", description: "", model: "fake/qwq" }),
             ctx(),
         );
         const task = JSON.parse(result as string);
         expect(task.model).toBe("fake/qwq");
     });
 
-    it("returns error when project_id is missing", async () => {
+    it("returns error when project_key is missing", async () => {
         const result = await executeTool(
             "create_task",
             JSON.stringify({ title: "No project", description: "" }),
             ctx(),
         );
-        expect(result).toContain("Error: project_id is required");
+        expect(result).toContain("Error: project_key is required");
     });
 
     it("returns error when title is missing", async () => {
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_id: projectId, title: "", description: "" }),
+            JSON.stringify({ project_key: projectKey, title: "", description: "" }),
             ctx(),
         );
         expect(result).toContain("Error: title is required");
@@ -246,7 +246,7 @@ describe("executeTool / create_task", () => {
     it("returns error when board_id is missing from both arg and ctx", async () => {
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_id: projectId, title: "X", description: "" }),
+            JSON.stringify({ project_key: projectKey, title: "X", description: "" }),
             { worktreePath: "" },
         );
         expect(result).toContain("Error: board_id is required");
@@ -255,10 +255,10 @@ describe("executeTool / create_task", () => {
     it("returns error for nonexistent project", async () => {
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_id: 999999, title: "X", description: "" }),
+            JSON.stringify({ project_key: "nonexistent-proj", title: "X", description: "" }),
             ctx(),
         );
-        expect(result).toContain("Error: project 999999 not found");
+        expect(result).toContain("Error: project nonexistent-proj not found");
     });
 
     it("inherits workspace default_model when no model arg is given", async () => {
@@ -266,7 +266,7 @@ describe("executeTool / create_task", () => {
         cfg = setupTestConfig("default_model: fake/workspace-default");
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_id: projectId, title: "Default model task", description: "" }),
+            JSON.stringify({ project_key: projectKey, title: "Default model task", description: "" }),
             ctx(),
         );
         const task = JSON.parse(result as string);
@@ -278,7 +278,7 @@ describe("executeTool / create_task", () => {
         cfg = setupTestConfig("default_model: fake/workspace-default");
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_id: projectId, title: "Override model task", description: "", model: "fake/explicit" }),
+            JSON.stringify({ project_key: projectKey, title: "Override model task", description: "", model: "fake/explicit" }),
             ctx(),
         );
         const task = JSON.parse(result as string);
@@ -288,7 +288,7 @@ describe("executeTool / create_task", () => {
     it("model is null when no model arg and no workspace default_model", async () => {
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_id: projectId, title: "No model task", description: "" }),
+            JSON.stringify({ project_key: projectKey, title: "No model task", description: "" }),
             ctx(),
         );
         const task = JSON.parse(result as string);

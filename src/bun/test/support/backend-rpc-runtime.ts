@@ -153,7 +153,7 @@ export function createBackendRpcRuntime(options: {
             );
             db.run("UPDATE tasks SET model = ?, workflow_state = 'plan', execution_state = 'idle' WHERE id = ?", [model, taskId]);
             db.run(
-                "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (1, ?)",
+                "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ('default', ?)",
                 [model],
             );
             return { taskId, conversationId };

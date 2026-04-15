@@ -1,41 +1,34 @@
 import { getDb } from "./db/index.ts";
 import { getConfig, getWorkspaceRegistry, loadConfig, runWithConfig, type LoadedConfig } from "./config/index.ts";
 
-export function getDefaultWorkspaceId(): number {
-  return getWorkspaceRegistry()[0]?.id ?? 1;
+export function getDefaultWorkspaceKey(): string {
+  return getWorkspaceRegistry()[0]?.key ?? "default";
 }
 
-export function getWorkspaceKeyById(workspaceId: number): string {
-  return getWorkspaceRegistry().find((entry) => entry.id === workspaceId)?.key
-    ?? getWorkspaceRegistry()[0]?.key
-    ?? "default";
+export function getWorkspaceConfig(workspaceKey: string): LoadedConfig {
+  const loaded = loadConfig(workspaceKey).config;
+  return loaded ?? getConfig(workspaceKey);
 }
 
-export function getWorkspaceConfigById(workspaceId: number): LoadedConfig {
-  const key = getWorkspaceKeyById(workspaceId);
-  const loaded = loadConfig(key).config;
-  return loaded ?? getConfig(key);
+export function runWithWorkspaceKey<T>(workspaceKey: string, fn: () => T): T {
+  return runWithConfig(getWorkspaceConfig(workspaceKey), fn);
 }
 
-export function runWithWorkspaceId<T>(workspaceId: number, fn: () => T): T {
-  return runWithConfig(getWorkspaceConfigById(workspaceId), fn);
-}
-
-export function getBoardWorkspaceId(boardId: number): number {
+export function getBoardWorkspaceKey(boardId: number): string {
   const db = getDb();
   return db
-    .query<{ workspace_id: number }, [number]>("SELECT workspace_id FROM boards WHERE id = ?")
-    .get(boardId)?.workspace_id ?? getDefaultWorkspaceId();
+    .query<{ workspace_key: string }, [number]>("SELECT workspace_key FROM boards WHERE id = ?")
+    .get(boardId)?.workspace_key ?? getDefaultWorkspaceKey();
 }
 
-export function getTaskWorkspaceId(taskId: number): number {
+export function getTaskWorkspaceKey(taskId: number): string {
   const db = getDb();
   return db
-    .query<{ workspace_id: number }, [number]>(
-      `SELECT b.workspace_id
+    .query<{ workspace_key: string }, [number]>(
+      `SELECT b.workspace_key
        FROM tasks t
        JOIN boards b ON b.id = t.board_id
        WHERE t.id = ?`,
     )
-    .get(taskId)?.workspace_id ?? getDefaultWorkspaceId();
+    .get(taskId)?.workspace_key ?? getDefaultWorkspaceKey();
 }

@@ -1,7 +1,6 @@
 import type {
   Task,
   Board,
-  Project,
   ConversationMessage,
   ExecutionState,
   MessageType,
@@ -9,7 +8,6 @@ import type {
 import type {
   TaskRow,
   BoardRow,
-  ProjectRow,
   ConversationMessageRow,
 } from "./row-types.ts";
 
@@ -17,7 +15,7 @@ export function mapTask(row: TaskRow): Task {
   return {
     id: row.id,
     boardId: row.board_id,
-    projectId: row.project_id,
+    projectKey: row.project_key,
     title: row.title,
     description: row.description,
     workflowState: row.workflow_state,
@@ -39,33 +37,18 @@ export function mapTask(row: TaskRow): Task {
 }
 
 export function mapBoard(row: BoardRow): Board {
-  let projectIds: number[] = [];
+  let projectKeys: string[] = [];
   try {
-    projectIds = JSON.parse(row.project_ids);
+    projectKeys = JSON.parse(row.project_keys);
   } catch {
-    projectIds = [];
+    projectKeys = [];
   }
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
+    workspaceKey: row.workspace_key,
     name: row.name,
     workflowTemplateId: row.workflow_template_id,
-    projectIds,
-  };
-}
-
-export function mapProject(row: ProjectRow): Project {
-  return {
-    id: row.id,
-    key: row.slug ?? row.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-"),
-    workspaceId: row.workspace_id,
-    workspaceKey: row.workspace_id === 1 ? "default" : `legacy-${row.workspace_id}`,
-    name: row.name,
-    projectPath: row.project_path,
-    gitRootPath: row.git_root_path,
-    defaultBranch: row.default_branch,
-    slug: row.slug ?? undefined,
-    description: row.description ?? undefined,
+    projectKeys,
   };
 }
 

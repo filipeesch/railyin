@@ -3,7 +3,7 @@ import { electroview } from "../rpc";
 import type { LaunchConfig } from "@shared/rpc-types";
 
 export const useLaunchStore = defineStore("launch", () => {
-  async function getConfig(taskId: number, _projectId: number): Promise<LaunchConfig | null> {
+  async function getConfig(taskId: number, _projectKey: string | null | undefined): Promise<LaunchConfig | null> {
     return electroview.rpc!.request["launch.getConfig"]({ taskId }).catch(() => null);
   }
 

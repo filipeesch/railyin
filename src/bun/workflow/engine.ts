@@ -1,5 +1,6 @@
 import { getDb } from "../db/index.ts";
-import { getProjectById } from "../project-store.ts";
+import { getProjectByKey } from "../project-store.ts";
+import { getBoardWorkspaceKey } from "../workspace-context.ts";
 import { getConfig } from "../config/index.ts";
 import { log } from "../logger.ts";
 import { resolveProvider, UnresolvableProviderError, listOpenAICompatibleModels, retryStream, retryTurn } from "../ai/index.ts";
@@ -1196,7 +1197,8 @@ async function runExecution(
       .get(taskId);
     let gitContext: { git_root_path: string; worktree_path: string | null; worktree_status: string; project_path: string } | undefined;
     if (gitRow?.worktree_status === "ready") {
-      const project = getProjectById(task.project_id);
+      const workspaceKey = getBoardWorkspaceKey(task.board_id);
+      const project = getProjectByKey(workspaceKey, task.project_key);
       if (project) {
         gitContext = {
           git_root_path: gitRow.git_root_path,

@@ -6,15 +6,15 @@
         <div v-if="workspaceStore.workspaces.length > 0" class="workspace-tabs">
           <button
             v-for="workspace in workspaceStore.workspaces"
-            :key="workspace.id"
+            :key="workspace.key"
             type="button"
             class="workspace-tab"
-            :class="{ 'is-active': workspaceStore.activeWorkspaceId === workspace.id }"
-            @click="onWorkspaceChange(workspace.id)"
+            :class="{ 'is-active': workspaceStore.activeWorkspaceKey === workspace.key }"
+            @click="onWorkspaceChange(workspace.key)"
           >
             <span>{{ workspace.name }}</span>
             <span
-              v-if="taskStore.workspaceHasUnread(workspace.id, boardStore.boards)"
+              v-if="taskStore.workspaceHasUnread(workspace.key, boardStore.boards)"
               class="workspace-tab__unread-dot"
               aria-label="Unread workspace activity"
             />
@@ -119,7 +119,7 @@
     <WorkflowEditorOverlay
       v-if="workflowEditor.templateId"
       :visible="workflowEditor.visible"
-      :workspace-id="workspaceStore.activeWorkspaceId ?? undefined"
+      :workspace-key="workspaceStore.activeWorkspaceKey ?? undefined"
       :template-id="workflowEditor.templateId"
       :template-name="workflowEditor.templateName"
       :initial-yaml="workflowEditor.yaml"
@@ -180,9 +180,9 @@ const workflowEditor = ref({
 });
 
 const visibleBoards = computed(() => {
-  const workspaceId = workspaceStore.activeWorkspaceId;
-  if (workspaceId == null) return boardStore.boards;
-  return boardStore.boards.filter((board) => board.workspaceId === workspaceId);
+  const workspaceKey = workspaceStore.activeWorkspaceKey;
+  if (workspaceKey == null) return boardStore.boards;
+  return boardStore.boards.filter((board) => board.workspaceKey === workspaceKey);
 });
 
 async function onEditWorkflow() {
@@ -190,7 +190,7 @@ async function onEditWorkflow() {
   if (!board) return;
   try {
     const { yaml } = await electroview.rpc.request["workflow.getYaml"]({
-      workspaceId: workspaceStore.activeWorkspaceId ?? undefined,
+      workspaceKey: workspaceStore.activeWorkspaceKey ?? undefined,
       templateId: board.workflowTemplateId,
     });
     workflowEditor.value = {
@@ -239,8 +239,8 @@ watch(
 
 onMounted(async () => {
   await projectStore.loadProjects();
-  if (workspaceStore.activeWorkspaceId != null && !boardStore.activeBoard) {
-    boardStore.selectFirstBoardInWorkspace(workspaceStore.activeWorkspaceId);
+  if (workspaceStore.activeWorkspaceKey != null && !boardStore.activeBoard) {
+    boardStore.selectFirstBoardInWorkspace(workspaceStore.activeWorkspaceKey);
   }
 });
 
@@ -258,9 +258,9 @@ async function onBoardChange() {
   if (id != null) await taskStore.loadTasks(id);
 }
 
-async function onWorkspaceChange(workspaceId: number) {
-  await workspaceStore.selectWorkspace(workspaceId);
-  boardStore.selectFirstBoardInWorkspace(workspaceId);
+async function onWorkspaceChange(workspaceKey: string) {
+  await workspaceStore.selectWorkspace(workspaceKey);
+  boardStore.selectFirstBoardInWorkspace(workspaceKey);
 }
 
 function onCardPointerDown(event: PointerEvent, taskId: number) {

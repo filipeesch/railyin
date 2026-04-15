@@ -12,7 +12,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: 1,
     boardId: 10,
-    projectId: 100,
+    projectKey: "test-project",
     title: "Test task",
     description: "Task description",
     workflowState: "backlog",
@@ -36,15 +36,15 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 describe("frontend workspace behavior", () => {
   it("selects the first board in the active workspace", () => {
     expect(findFirstBoardInWorkspace([
-      { id: 10, workspaceId: 1 },
-      { id: 20, workspaceId: 2 },
-    ], 2)).toBe(20);
+      { id: 10, workspaceKey: 'ws-1' },
+      { id: 20, workspaceKey: 'ws-2' },
+    ], 'ws-2')).toBe(20);
   });
 
   it("aggregates unread state from tasks to the owning workspace tab", () => {
     expect(workspaceHasUnreadTasks(
-      1,
-      [{ id: 10, workspaceId: 1 }, { id: 20, workspaceId: 2 }],
+      'ws-1',
+      [{ id: 10, workspaceKey: 'ws-1' }, { id: 20, workspaceKey: 'ws-2' }],
       {
         1: { boardId: 10 },
         2: { boardId: 20 },
@@ -53,8 +53,8 @@ describe("frontend workspace behavior", () => {
     )).toBe(true);
 
     expect(workspaceHasUnreadTasks(
-      2,
-      [{ id: 10, workspaceId: 1 }, { id: 20, workspaceId: 2 }],
+      'ws-2',
+      [{ id: 10, workspaceKey: 'ws-1' }, { id: 20, workspaceKey: 'ws-2' }],
       {
         1: { boardId: 10 },
         2: { boardId: 20 },

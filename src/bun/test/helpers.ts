@@ -13,28 +13,12 @@ export function initDb(): Database {
   const db = getDb();
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(`
-    CREATE TABLE IF NOT EXISTS workspaces (
-      id   INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      config_key TEXT
-    );
-    CREATE TABLE IF NOT EXISTS projects (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      workspace_id    INTEGER NOT NULL REFERENCES workspaces(id),
-      name            TEXT NOT NULL,
-      project_path    TEXT NOT NULL,
-      git_root_path   TEXT NOT NULL,
-      default_branch  TEXT NOT NULL DEFAULT 'main',
-      slug            TEXT,
-      description     TEXT,
-      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-    );
     CREATE TABLE IF NOT EXISTS boards (
       id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-      workspace_id         INTEGER NOT NULL REFERENCES workspaces(id),
+      workspace_key        TEXT NOT NULL DEFAULT 'default',
       name                 TEXT NOT NULL,
       workflow_template_id TEXT NOT NULL,
-      project_ids          TEXT NOT NULL DEFAULT '[]',
+      project_keys         TEXT NOT NULL DEFAULT '[]',
       created_at           TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS conversations (
@@ -44,7 +28,7 @@ export function initDb(): Database {
     CREATE TABLE IF NOT EXISTS tasks (
       id                        INTEGER PRIMARY KEY AUTOINCREMENT,
       board_id                  INTEGER NOT NULL REFERENCES boards(id),
-      project_id                INTEGER NOT NULL REFERENCES projects(id),
+      project_key               TEXT NOT NULL DEFAULT '',
       title                     TEXT NOT NULL,
       description               TEXT NOT NULL DEFAULT '',
       workflow_state            TEXT NOT NULL DEFAULT 'backlog',
@@ -140,9 +124,9 @@ export function initDb(): Database {
     );
     CREATE INDEX IF NOT EXISTS idx_task_line_comments_task ON task_line_comments(task_id);
     CREATE TABLE IF NOT EXISTS enabled_models (
-      workspace_id        INTEGER NOT NULL,
+      workspace_key       TEXT    NOT NULL DEFAULT 'default',
       qualified_model_id  TEXT    NOT NULL,
-      PRIMARY KEY (workspace_id, qualified_model_id)
+      PRIMARY KEY (workspace_key, qualified_model_id)
     );
     CREATE TABLE IF NOT EXISTS pending_messages (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,8 +160,23 @@ export function initDb(): Database {
       UNIQUE (task_id, seq)
     );
     CREATE INDEX IF NOT EXISTS idx_stream_events_task ON stream_events (task_id, seq);
+    CREATE TABLE IF NOT EXISTS model_raw_messages (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      execution_id    INTEGER NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+      engine          TEXT    NOT NULL,
+      session_id      TEXT,
+      stream_seq      INTEGER NOT NULL,
+      direction       TEXT    NOT NULL,
+      event_type      TEXT    NOT NULL,
+      event_subtype   TEXT,
+      payload_json    TEXT    NOT NULL,
+      created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_execution_seq ON model_raw_messages (execution_id, stream_seq);
+    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_task_created ON model_raw_messages (task_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_engine_type ON model_raw_messages (engine, event_type);
   `);
-  db.run("INSERT INTO workspaces (id, name, config_key) VALUES (1, 'test-workspace', 'default')");
   return db;
 }
 
@@ -192,33 +191,29 @@ export function makeTempDir(): { dir: string; cleanup: () => void } {
 
 export function seedProjectAndTask(
   db: Database,
-  gitRootPath: string,
-): { projectId: number; boardId: number; taskId: number; conversationId: number } {
-  db.run(
-    "INSERT INTO projects (workspace_id, name, project_path, git_root_path, default_branch) VALUES (1, 'test', ?, ?, 'main')",
-    [gitRootPath, gitRootPath],
-  );
-  const projectId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+  _gitRootPath: string,
+): { projectKey: string; boardId: number; taskId: number; conversationId: number } {
+  const projectKey = "test-project";
 
-  db.run("INSERT INTO boards (workspace_id, name, workflow_template_id) VALUES (1, 'test-board', 'delivery')");
+  db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery')");
   const boardId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
 
   db.run("INSERT INTO conversations (task_id) VALUES (0)");
   const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
 
   db.run(
-    "INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, ?, 'Test task', 'A test task', 'plan', 'idle', ?, 'fake/fake')",
-    [boardId, projectId, conversationId],
+    "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, ?, 'Test task', 'A test task', 'plan', 'idle', ?, 'fake/fake')",
+    [boardId, projectKey, conversationId],
   );
   const taskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
   db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
 
-  return { projectId, boardId, taskId, conversationId };
+  return { projectKey, boardId, taskId, conversationId };
 }
 
 // ─── Minimal config for tests (provider: fake) ───────────────────────────────
 
-export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: () => void } {
+export function setupTestConfig(extraYaml = "", gitRootPath = "/tmp/test-git"): { configDir: string; cleanup: () => void } {
   const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
 
   writeFileSync(
@@ -228,8 +223,8 @@ export function setupTestConfig(extraYaml = ""): { configDir: string; cleanup: (
       "projects:",
       "  - key: test-project",
       "    name: Test Project",
-      "    project_path: /tmp/test-git",
-      "    git_root_path: /tmp/test-git",
+      `    project_path: ${gitRootPath}`,
+      `    git_root_path: ${gitRootPath}`,
       "    default_branch: main",
       "providers:",
       "  - id: fake",

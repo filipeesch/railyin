@@ -60,7 +60,7 @@ const isUnread = computed(() => taskStore.hasUnread(props.task.id));
 const launchConfig = ref<LaunchConfig | null>(null);
 
 onMounted(async () => {
-  launchConfig.value = await launchStore.getConfig(props.task.id, props.task.projectId);
+  launchConfig.value = await launchStore.getConfig(props.task.id, props.task.projectKey);
 });
 
 async function runLaunch(command: string, mode: "terminal" | "app") {

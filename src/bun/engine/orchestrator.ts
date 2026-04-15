@@ -29,10 +29,10 @@ import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { getDb } from "../db/index.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
-import { getProjectById } from "../project-store.ts";
+import { getProjectByKey } from "../project-store.ts";
 import { runWithConfig } from "../config/index.ts";
 import { resolveEngine } from "./resolver.ts";
-import { getBoardWorkspaceId, getDefaultWorkspaceId, getTaskWorkspaceId, getWorkspaceConfigById } from "../workspace-context.ts";
+import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { MessageType } from "../../shared/rpc-types.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
@@ -94,8 +94,8 @@ export class Orchestrator implements ExecutionCoordinator {
     return engine instanceof NativeEngine;
   }
 
-  private getEngineForWorkspace(workspaceId: number): { config: LoadedConfig; engine: ExecutionEngine } {
-    const config = getWorkspaceConfigById(workspaceId);
+  private getEngineForWorkspace(workspaceKey: string): { config: LoadedConfig; engine: ExecutionEngine } {
+    const config = getWorkspaceConfig(workspaceKey);
     if (this.injectedEngine) {
       return { config, engine: this.injectedEngine };
     }
@@ -116,7 +116,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const { config, engine } = this.getEngineForWorkspace(getBoardWorkspaceId(task.board_id));
+    const { config, engine } = this.getEngineForWorkspace(getBoardWorkspaceKey(task.board_id));
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
@@ -198,7 +198,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceId(taskId));
+    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
@@ -313,7 +313,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceId(taskId));
+    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
@@ -361,7 +361,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceId(taskId));
+    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
     if (this.isNativeEngine(engine)) {
       return runWithConfig(
         config,
@@ -555,7 +555,7 @@ export class Orchestrator implements ExecutionCoordinator {
     }
 
     if (!execRow) return;
-    const { engine } = this.getEngineForWorkspace(getTaskWorkspaceId(execRow.task_id));
+    const { engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(execRow.task_id));
     if (!this.isNativeEngine(engine) && execRow.status === "running" && execRow.finished_at == null) {
       db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
       db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [execRow.task_id]);
@@ -569,8 +569,8 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Model listing ─────────────────────────────────────────────────────────
 
-  listModels(workspaceId?: number) {
-    const { config, engine } = this.getEngineForWorkspace(workspaceId ?? getDefaultWorkspaceId());
+  listModels(workspaceKey?: string) {
+    const { config, engine } = this.getEngineForWorkspace(workspaceKey ?? getDefaultWorkspaceKey());
     return runWithConfig(config, () => engine.listModels());
   }
 
@@ -586,7 +586,7 @@ export class Orchestrator implements ExecutionCoordinator {
       .get(taskId);
     if (!task?.current_execution_id) return;
 
-    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceId(taskId));
+    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
     if (this.isNativeEngine(engine)) {
       runWithConfig(config, () => resolveShellApproval(taskId, decision, this.onTaskUpdated));
       return;
@@ -617,9 +617,10 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   private _getProjectDirectory(task: TaskRow): string {
-    const projectDirectory = getProjectById(task.project_id)?.projectPath?.trim() ?? "";
+    const workspaceKey = getTaskWorkspaceKey(task.id);
+    const projectDirectory = getProjectByKey(workspaceKey, task.project_key)?.projectPath?.trim() ?? "";
     if (!projectDirectory) {
-      throw new Error(`Project directory not found for project_id=${task.project_id}`);
+      throw new Error(`Project directory not found for project_key=${task.project_key}`);
     }
 
     console.log(`[orchestrator] Resolved project directory for task ${task.id}: ${projectDirectory}`);

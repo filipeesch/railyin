@@ -9,10 +9,10 @@
       <div v-if="workspaceStore.workspaces.length > 0" class="setup-workspace-picker">
         <span class="setup-workspace-picker__label">Workspace</span>
         <Select
-          :modelValue="workspaceStore.activeWorkspaceId"
+          :modelValue="workspaceStore.activeWorkspaceKey"
           :options="workspaceStore.workspaces"
           option-label="name"
-          option-value="id"
+          option-value="key"
           class="setup-workspace-picker__select"
           @update:modelValue="onWorkspaceSelected"
         />
@@ -223,21 +223,21 @@ const boardSaving = ref(false);
 const boardError = ref<string | null>(null);
 const workflowOptions = ref<Array<{ label: string; value: string }>>([]);
 const workflowOptionsKey = computed(() =>
-  `${workspaceStore.activeWorkspaceId ?? "none"}:${workflowOptions.value.map((entry) => entry.value).join(",")}`,
+  `${workspaceStore.activeWorkspaceKey ?? "none"}:${workflowOptions.value.map((entry) => entry.value).join(",")}`,
 );
 const hasAnyBoards = computed(() => boardStore.boards.length > 0);
 
 const visibleProjects = computed(() =>
-  projectStore.projects.filter((project) => project.workspaceId === workspaceStore.activeWorkspaceId),
+  projectStore.projects.filter((project) => project.workspaceKey === workspaceStore.activeWorkspaceKey),
 );
 const visibleBoards = computed(() =>
-  boardStore.boards.filter((board) => board.workspaceId === workspaceStore.activeWorkspaceId),
+  boardStore.boards.filter((board) => board.workspaceKey === workspaceStore.activeWorkspaceKey),
 );
 
 onMounted(async () => {
   await workspaceStore.loadWorkspaces();
   await Promise.all([projectStore.loadProjects(), boardStore.loadBoards(), workspaceStore.load()]);
-  await loadWorkflowOptions(workspaceStore.activeWorkspaceId);
+  await loadWorkflowOptions(workspaceStore.activeWorkspaceKey);
 
   // Navigate to the tab most relevant for first-run
   if (!visibleProjects.value.length) activeTab.value = 0;
@@ -258,20 +258,20 @@ function setWorkflowOptions(workflows: WorkflowTemplate[]) {
   }
 }
 
-async function loadWorkflowOptions(workspaceId: number | null) {
+async function loadWorkflowOptions(workspaceKey: string | null) {
   boardWorkflowTemplateId.value = "";
-  if (workspaceId == null) {
+  if (workspaceKey == null) {
     workflowOptions.value = [];
     return;
   }
-  const config = await electroview.rpc.request["workspace.getConfig"]({ workspaceId });
+  const config = await electroview.rpc.request["workspace.getConfig"]({ workspaceKey });
   setWorkflowOptions(config.workflows);
 }
 
 watch(
-  () => workspaceStore.activeWorkspaceId,
-  async (workspaceId) => {
-    await loadWorkflowOptions(workspaceId);
+  () => workspaceStore.activeWorkspaceKey,
+  async (workspaceKey) => {
+    await loadWorkflowOptions(workspaceKey);
   },
   { immediate: true },
 );
@@ -282,7 +282,7 @@ async function registerProject() {
   try {
     const registeredPath = proj.projectPath.trim();
     await projectStore.registerProject({
-      workspaceId: workspaceStore.activeWorkspaceId ?? 1,
+      workspaceKey: workspaceStore.activeWorkspaceKey ?? "default",
       name: proj.name.trim(),
       projectPath: registeredPath,
       gitRootPath: proj.gitRootPath.trim() || registeredPath,
@@ -323,7 +323,7 @@ async function createBoard() {
       throw new Error("Select a workflow template");
     }
     await boardStore.createBoard(
-      workspaceStore.activeWorkspaceId ?? 1,
+      workspaceStore.activeWorkspaceKey ?? "default",
       boardName.value.trim(),
       boardWorkflowTemplateId.value,
     );
@@ -335,27 +335,27 @@ async function createBoard() {
   }
 }
 
-async function onWorkspaceSelected(workspaceId: number | string) {
-  await workspaceStore.selectWorkspace(workspaceId);
-  await loadWorkflowOptions(workspaceStore.activeWorkspaceId);
+async function onWorkspaceSelected(workspaceKey: string) {
+  await workspaceStore.selectWorkspace(workspaceKey);
+  await loadWorkflowOptions(workspaceStore.activeWorkspaceKey);
 }
 
 async function reloadWorkspaceConfig() {
   await workspaceStore.load();
-  await loadWorkflowOptions(workspaceStore.activeWorkspaceId);
+  await loadWorkflowOptions(workspaceStore.activeWorkspaceKey);
 }
 
 async function goToBoard() {
   if (!boardStore.activeBoardId) {
     const currentWorkspaceBoard = boardStore.boards.find(
-      (board) => board.workspaceId === workspaceStore.activeWorkspaceId,
+      (board) => board.workspaceKey === workspaceStore.activeWorkspaceKey,
     );
     if (currentWorkspaceBoard) {
       boardStore.selectBoard(currentWorkspaceBoard.id);
     } else {
       const firstBoard = boardStore.boards[0];
       if (firstBoard) {
-        await workspaceStore.selectWorkspace(firstBoard.workspaceId);
+        await workspaceStore.selectWorkspace(firstBoard.workspaceKey);
         boardStore.selectBoard(firstBoard.id);
       }
     }

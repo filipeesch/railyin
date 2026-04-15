@@ -110,12 +110,12 @@ import ToggleSwitch from "primevue/toggleswitch";
 import { useTaskStore } from "../stores/task";
 import { useWorkspaceStore } from "../stores/workspace";
 
-const props = withDefaults(defineProps<{ workspaceId?: number }>(), { workspaceId: undefined });
+const props = withDefaults(defineProps<{ workspaceKey?: string }>(), { workspaceKey: undefined });
 
 const taskStore = useTaskStore();
 const workspaceStore = useWorkspaceStore();
 
-const effectiveWorkspaceId = computed(() => props.workspaceId ?? workspaceStore.activeWorkspaceId ?? undefined);
+const effectiveWorkspaceKey = computed(() => props.workspaceKey ?? workspaceStore.activeWorkspaceKey ?? undefined);
 
 const loading = ref(false);
 const collapsed = ref(new Set<string>());
@@ -159,17 +159,17 @@ onMounted(async () => {
       workspaceStore.loadWorkspaces(),
       workspaceStore.load(),
     ]);
-    await taskStore.loadAllModels(effectiveWorkspaceId.value);
+    await taskStore.loadAllModels(effectiveWorkspaceKey.value);
   } finally {
     loading.value = false;
   }
 });
 
 watch(
-  effectiveWorkspaceId,
-  async (workspaceId) => {
-    if (workspaceId == null) return;
-    await taskStore.loadAllModels(workspaceId);
+  effectiveWorkspaceKey,
+  async (workspaceKey) => {
+    if (workspaceKey == null) return;
+    await taskStore.loadAllModels(workspaceKey);
   },
 );
 
@@ -184,14 +184,14 @@ function toggleProvider(id: string) {
 async function refresh(providerId: string) {
   refreshing.value.add(providerId);
   try {
-    await taskStore.loadAllModels(effectiveWorkspaceId.value);
+    await taskStore.loadAllModels(effectiveWorkspaceKey.value);
   } finally {
     refreshing.value.delete(providerId);
   }
 }
 
 async function onToggle(qualifiedModelId: string, enabled: boolean) {
-  await taskStore.setModelEnabled(qualifiedModelId, enabled, effectiveWorkspaceId.value);
+  await taskStore.setModelEnabled(qualifiedModelId, enabled, effectiveWorkspaceKey.value);
 }
 
 function modelLabel(model: { id: string; displayName?: string }): string {

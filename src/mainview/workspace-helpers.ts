@@ -5,20 +5,20 @@ export type TaskActivityEvent =
   | { kind: "workflow"; task: Task; previousState: string; nextState: string };
 
 export function findFirstBoardInWorkspace(
-  boards: Array<{ id: number; workspaceId: number }>,
-  workspaceId: number,
+  boards: Array<{ id: number; workspaceKey: string }>,
+  workspaceKey: string,
 ): number | null {
-  return boards.find((board) => board.workspaceId === workspaceId)?.id ?? null;
+  return boards.find((board) => board.workspaceKey === workspaceKey)?.id ?? null;
 }
 
 export function workspaceHasUnreadTasks(
-  workspaceId: number,
-  boards: Array<{ id: number; workspaceId: number }>,
+  workspaceKey: string,
+  boards: Array<{ id: number; workspaceKey: string }>,
   taskIndex: Record<number, { boardId: number }>,
   unreadTaskIds: Set<number>,
 ): boolean {
   const boardIds = new Set(
-    boards.filter((board) => board.workspaceId === workspaceId).map((board) => board.id),
+    boards.filter((board) => board.workspaceKey === workspaceKey).map((board) => board.id),
   );
   for (const taskId of unreadTaskIds) {
     const task = taskIndex[taskId];

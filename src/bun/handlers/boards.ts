@@ -3,8 +3,7 @@ import { getConfig } from "../config/index.ts";
 import type { Board, WorkflowTemplate } from "../../shared/rpc-types.ts";
 import type { BoardRow } from "../db/row-types.ts";
 import { mapBoard } from "../db/mappers.ts";
-import { getWorkspaceConfigById } from "../workspace-context.ts";
-import { syncFileBackedCompatibilityState } from "../db/migrations.ts";
+import { getWorkspaceConfig } from "../workspace-context.ts";
 
 function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"][0]): WorkflowTemplate {
   return {
@@ -28,7 +27,7 @@ export function boardHandlers() {
 
       return rows.map((row) => {
         const board = mapBoard(row);
-        const workspaceConfig = getWorkspaceConfigById(row.workspace_id);
+        const workspaceConfig = getWorkspaceConfig(row.workspace_key);
         const rawTemplate = workspaceConfig.workflows.find((w) => w.id === row.workflow_template_id)
           ?? workspaceConfig.workflows[0]!;
         return { ...board, template: templateToWorkflowTemplate(rawTemplate) };
@@ -36,22 +35,21 @@ export function boardHandlers() {
     },
 
     "boards.create": async (params: {
-      workspaceId: number;
+      workspaceKey: string;
       name: string;
-      projectIds: number[];
+      projectKeys: string[];
       workflowTemplateId: string;
     }): Promise<Board> => {
-      syncFileBackedCompatibilityState();
       const db = getDb();
-      const config = getWorkspaceConfigById(params.workspaceId);
+      const config = getWorkspaceConfig(params.workspaceKey);
 
       // Validate that the workflow template exists; fall back to first available
       const template = config.workflows.find((w) => w.id === params.workflowTemplateId);
       const templateId = template?.id ?? config.workflows[0]?.id ?? "delivery";
 
       const result = db.run(
-        "INSERT INTO boards (workspace_id, name, workflow_template_id, project_ids) VALUES (?, ?, ?, ?)",
-        [params.workspaceId, params.name.trim(), templateId, JSON.stringify(params.projectIds ?? [])],
+        "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES (?, ?, ?, ?)",
+        [params.workspaceKey, params.name.trim(), templateId, JSON.stringify(params.projectKeys ?? [])],
       );
 
       const row = db

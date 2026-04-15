@@ -3,7 +3,6 @@ import { createHash } from "crypto";
 import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, ReviewerDecision, FileDiffContent, LineComment, ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
-import { syncFileBackedCompatibilityState } from "../db/migrations.ts";
 import {
   appendMessage,
   estimateContextWarning,
@@ -15,8 +14,8 @@ import { runWithConfig } from "../config/index.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
-import { getBoardWorkspaceId, getDefaultWorkspaceId, getTaskWorkspaceId, getWorkspaceConfigById } from "../workspace-context.ts";
-import { getProjectById } from "../project-store.ts";
+import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
+import { getProjectByKey } from "../project-store.ts";
 
 // ─── Helper: resolve model context window across all engine types ─────────────
 // Resolution order:
@@ -26,12 +25,12 @@ import { getProjectById } from "../project-store.ts";
 
 async function resolveContextWindow(
   taskModel: string,
-  workspaceId: number,
+  workspaceKey: string,
   orchestrator: ExecutionCoordinator | null,
 ): Promise<number> {
   if (orchestrator) {
     try {
-      const models = await orchestrator.listModels(workspaceId);
+      const models = await orchestrator.listModels(workspaceKey);
       const found = models.find((m) => m.qualifiedId === taskModel);
       if (found?.contextWindow != null) return found.contextWindow;
     } catch { /* fall through */ }
@@ -86,19 +85,15 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     "tasks.create": async (params: {
       boardId: number;
-      projectId: number;
+      projectKey: string;
       title: string;
       description: string;
     }): Promise<Task> => {
-      syncFileBackedCompatibilityState();
       const db = getDb();
-      const project = getProjectById(params.projectId);
+      const workspaceKey = getBoardWorkspaceKey(params.boardId);
+      const project = getProjectByKey(workspaceKey, params.projectKey);
       if (!project) {
-        throw new Error(`Project ${params.projectId} not found`);
-      }
-      const boardWorkspaceId = getBoardWorkspaceId(params.boardId);
-      if (project.workspaceId !== boardWorkspaceId) {
-        throw new Error("Project does not belong to the selected workspace");
+        throw new Error(`Project ${params.projectKey} not found in workspace ${workspaceKey}`);
       }
 
       // Create conversation first with placeholder task_id=0
@@ -107,12 +102,12 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
       const taskResult = db.run(
         `INSERT INTO tasks
-           (board_id, project_id, title, description, workflow_state, execution_state, conversation_id, position)
+           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position)
          VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
            COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000)`,
         [
           params.boardId,
-          params.projectId,
+          params.projectKey,
           params.title.trim(),
           params.description.trim(),
           conversationId,
@@ -162,8 +157,8 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       }
 
       const taskRow = db
-        .query<{ project_id: number; conversation_id: number }, [number]>(
-          "SELECT project_id, conversation_id FROM tasks WHERE id = ?",
+        .query<{ project_key: string; conversation_id: number }, [number]>(
+          "SELECT project_key, conversation_id FROM tasks WHERE id = ?",
         )
         .get(params.taskId);
 
@@ -177,7 +172,8 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         }
 
         // Backfill git context for tasks created before this was wired up
-        const project = getProjectById(taskRow.project_id);
+        const wsKey = getTaskWorkspaceKey(params.taskId);
+        const project = getProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
           registerProjectGitContext(params.taskId, project.gitRootPath);
         }
@@ -225,10 +221,10 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         return orchestrator.executeCodeReview(params.taskId, parsed.manualEdits);
       }
 
-      const taskWorkspaceId = getTaskWorkspaceId(params.taskId);
+      const taskWorkspaceKey = getTaskWorkspaceKey(params.taskId);
       const taskRow2 = getDb().query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
       const resolvedCtxWindow = taskRow2?.model
-        ? await resolveContextWindow(taskRow2.model, taskWorkspaceId, orchestrator)
+        ? await resolveContextWindow(taskRow2.model, taskWorkspaceKey, orchestrator)
         : 128_000;
       const warning = estimateContextWarning(params.taskId, resolvedCtxWindow);
       if (warning) {
@@ -245,8 +241,8 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
       // Retry worktree setup if it previously failed — same logic as tasks.transition
       const taskRow = db
-        .query<{ project_id: number; conversation_id: number }, [number]>(
-          "SELECT project_id, conversation_id FROM tasks WHERE id = ?",
+        .query<{ project_key: string; conversation_id: number }, [number]>(
+          "SELECT project_key, conversation_id FROM tasks WHERE id = ?",
         )
         .get(params.taskId);
 
@@ -259,7 +255,8 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [retryConvId, params.taskId]);
         }
 
-        const project = getProjectById(taskRow.project_id);
+        const wsKey = getTaskWorkspaceKey(params.taskId);
+        const project = getProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
           registerProjectGitContext(params.taskId, project.gitRootPath);
         }
@@ -288,23 +285,23 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     // ─── models.list ─────────────────────────────────────────────────────────
-    "models.list": async (params: { workspaceId?: number } = {}): Promise<ProviderModelList[]> => {
+    "models.list": async (params: { workspaceKey?: string } = {}): Promise<ProviderModelList[]> => {
       const db = getDb();
-      const workspaceId = params.workspaceId ?? getDefaultWorkspaceId();
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
 
       if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
 
       const enabledSet = new Set(
         db
-          .query<{ qualified_model_id: string }, [number]>(
-            "SELECT qualified_model_id FROM enabled_models WHERE workspace_id = ?",
+          .query<{ qualified_model_id: string }, [string]>(
+            "SELECT qualified_model_id FROM enabled_models WHERE workspace_key = ?",
           )
-          .all(workspaceId)
+          .all(workspaceKey)
           .map((r) => r.qualified_model_id),
       );
 
       try {
-        const engineModels = await orchestrator.listModels(workspaceId);
+        const engineModels = await orchestrator.listModels(workspaceKey);
         // Group models by provider (first part of the qualified ID before slash)
         const byProvider = new Map<string, typeof engineModels>();
         for (const model of engineModels) {
@@ -337,18 +334,18 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     // ─── models.setEnabled ───────────────────────────────────────────────────
-    "models.setEnabled": async (params: { workspaceId?: number; qualifiedModelId: string; enabled: boolean }): Promise<Record<string, never>> => {
+    "models.setEnabled": async (params: { workspaceKey?: string; qualifiedModelId: string; enabled: boolean }): Promise<Record<string, never>> => {
       const db = getDb();
-      const workspaceId = params.workspaceId ?? getDefaultWorkspaceId();
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       if (params.enabled) {
         db.run(
-          "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, ?)",
-          [workspaceId, params.qualifiedModelId],
+          "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)",
+          [workspaceKey, params.qualifiedModelId],
         );
       } else {
         db.run(
-          "DELETE FROM enabled_models WHERE workspace_id = ? AND qualified_model_id = ?",
-          [workspaceId, params.qualifiedModelId],
+          "DELETE FROM enabled_models WHERE workspace_key = ? AND qualified_model_id = ?",
+          [workspaceKey, params.qualifiedModelId],
         );
       }
       return {};
@@ -359,18 +356,18 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     // from previous engine configurations are silently dropped. If none of the
     // enabled DB entries match the current engine, all engine models are returned
     // (default-all-enabled behaviour on first use / engine switch).
-    "models.listEnabled": async (params: { workspaceId?: number } = {}): Promise<ModelInfo[]> => {
+    "models.listEnabled": async (params: { workspaceKey?: string } = {}): Promise<ModelInfo[]> => {
       const db = getDb();
-      const workspaceId = params.workspaceId ?? getDefaultWorkspaceId();
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       if (!orchestrator) return [];
 
       const [engineModels, dbRows] = await Promise.all([
-        orchestrator.listModels(workspaceId),
+        orchestrator.listModels(workspaceKey),
         db
-          .query<{ qualified_model_id: string }, [number]>(
-            "SELECT qualified_model_id FROM enabled_models WHERE workspace_id = ? ORDER BY qualified_model_id",
+          .query<{ qualified_model_id: string }, [string]>(
+            "SELECT qualified_model_id FROM enabled_models WHERE workspace_key = ? ORDER BY qualified_model_id",
           )
-          .all(workspaceId),
+          .all(workspaceKey),
       ]);
 
       const concreteEngineIds = new Set(
@@ -407,11 +404,11 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       const db = getDb();
       const task = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
       const taskModel = task?.model ?? null;
-      const workspaceId = getTaskWorkspaceId(params.taskId);
-      const workspaceConfig = getWorkspaceConfigById(workspaceId);
+      const workspaceKey = getTaskWorkspaceKey(params.taskId);
+      const workspaceConfig = getWorkspaceConfig(workspaceKey);
       const maxTokens = await runWithConfig(workspaceConfig, async () => (
         taskModel
-          ? resolveContextWindow(taskModel, workspaceId, orchestrator)
+          ? resolveContextWindow(taskModel, workspaceKey, orchestrator)
           : Promise.resolve(128_000)
       ));
       return estimateContextUsage(params.taskId, maxTokens);

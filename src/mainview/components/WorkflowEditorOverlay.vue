@@ -61,7 +61,7 @@ import { useDarkMode } from "../composables/useDarkMode";
 
 const props = defineProps<{
   visible: boolean;
-  workspaceId?: number;
+  workspaceKey?: string;
   templateId: string;
   templateName: string;
   initialYaml: string;
@@ -148,7 +148,7 @@ async function onSave() {
   try {
     const content = editor?.getValue() ?? props.initialYaml;
     await electroview.rpc.request["workflow.saveYaml"]({
-      workspaceId: props.workspaceId,
+      workspaceKey: props.workspaceKey,
       templateId: props.templateId,
       yaml: content,
     });

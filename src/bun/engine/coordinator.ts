@@ -8,5 +8,5 @@ export interface ExecutionCoordinator {
     respondShellApproval(taskId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void>;
     executeCodeReview(taskId: number, manualEdits?: ManualEdit[]): Promise<{ message: ConversationMessage; executionId: number }>;
     cancel(executionId: number): void;
-    listModels(workspaceId?: number): Promise<EngineModelInfo[]>;
+    listModels(workspaceKey?: string): Promise<EngineModelInfo[]>;
 }

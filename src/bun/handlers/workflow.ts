@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import * as yaml from "js-yaml";
 import { getConfigDir, resetConfig, loadConfig } from "../config/index.ts";
-import { getDefaultWorkspaceId, getWorkspaceKeyById } from "../workspace-context.ts";
+import { getDefaultWorkspaceKey } from "../workspace-context.ts";
 
 function resolveWorkflowFilePath(workspaceKey: string, templateId: string): string | null {
   const workflowsDir = join(getConfigDir(workspaceKey), "workflows");
@@ -25,8 +25,8 @@ function resolveWorkflowFilePath(workspaceKey: string, templateId: string): stri
 
 export function workflowHandlers(notifyReloaded: () => void) {
   return {
-    "workflow.getYaml": async (params: { workspaceId?: number; templateId: string }): Promise<{ yaml: string }> => {
-      const workspaceKey = getWorkspaceKeyById(params.workspaceId ?? getDefaultWorkspaceId());
+    "workflow.getYaml": async (params: { workspaceKey?: string; templateId: string }): Promise<{ yaml: string }> => {
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const filePath = resolveWorkflowFilePath(workspaceKey, params.templateId);
       if (!filePath) {
         throw new Error(`Workflow template not found: ${params.templateId}`);
@@ -35,8 +35,8 @@ export function workflowHandlers(notifyReloaded: () => void) {
       return { yaml: content };
     },
 
-    "workflow.saveYaml": async (params: { workspaceId?: number; templateId: string; yaml: string }): Promise<{ ok: true }> => {
-      const workspaceKey = getWorkspaceKeyById(params.workspaceId ?? getDefaultWorkspaceId());
+    "workflow.saveYaml": async (params: { workspaceKey?: string; templateId: string; yaml: string }): Promise<{ ok: true }> => {
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       // Validate YAML before writing
       try {
         yaml.load(params.yaml);

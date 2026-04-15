@@ -22,8 +22,7 @@ import { getConfig } from "../config/index.ts";
 import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { removeWorktree } from "../git/worktree.ts";
-import { getProjectById } from "../project-store.ts";
-import { syncFileBackedCompatibilityState } from "../db/migrations.ts";
+import { getProjectByKey } from "../project-store.ts";
 import {
   createTodo,
   updateTodo as dbUpdateTodo,
@@ -729,7 +728,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
     description:
       "List tasks on a board with optional filters.\n\n" +
       "Usage:\n" +
-      "- Filter by workflow_state, execution_state, project_id\n" +
+      "- Filter by workflow_state, execution_state, project_key\n" +
       "- Use query for case-insensitive text search across title and description\n" +
       "- Omit board_id to search the current task's board; default limit 50 (max 200)",
     parameters: {
@@ -747,8 +746,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
           type: "string",
           description: "Filter by execution state (e.g. 'idle', 'running', 'failed').",
         },
-        project_id: {
-          type: "number",
+        project_key: {
+          type: "string",
           description: "Filter tasks belonging to a specific project.",
         },
         query: {
@@ -775,8 +774,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
     parameters: {
       type: "object",
       properties: {
-        project_id: {
-          type: "number",
+        project_key: {
+          type: "string",
           description: "The project this task belongs to.",
         },
         title: {
@@ -796,7 +795,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
           description: "Optional model override for this task (e.g. 'lmstudio/qwen3-8b').",
         },
       },
-      required: ["project_id", "title", "description"],
+      required: ["project_key", "title", "description"],
     },
   },
   {
@@ -1821,7 +1820,7 @@ export async function executeTool(
       const params: (string | number)[] = [boardId];
       if (args.workflow_state) { conditions.push("t.workflow_state = ?"); params.push(args.workflow_state); }
       if (args.execution_state) { conditions.push("t.execution_state = ?"); params.push(args.execution_state); }
-      if (args.project_id) { conditions.push("t.project_id = ?"); params.push(parseInt(args.project_id, 10)); }
+      if (args.project_key) { conditions.push("t.project_key = ?"); params.push(args.project_key); }
       if (args.query) {
         conditions.push("(t.title LIKE ? OR t.description LIKE ?)");
         const q = `%${args.query}%`;
@@ -1842,31 +1841,27 @@ export async function executeTool(
     // ── tasks_write group ────────────────────────────────────────────────────
 
     case "create_task": {
-      const projectId = args.project_id ? parseInt(args.project_id, 10) : NaN;
-      if (!projectId || isNaN(projectId)) return "Error: project_id is required";
+      const projectKey = (args.project_key ?? "").trim();
+      if (!projectKey) return "Error: project_key is required";
       const title = (args.title ?? "").trim();
       if (!title) return "Error: title is required";
       const description = (args.description ?? "").trim();
       const boardId = args.board_id ? parseInt(args.board_id, 10) : (ctx.boardId ?? 0);
       if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
-      syncFileBackedCompatibilityState();
       const db = getDb();
-      // Validate board exists
-      const boardRow = db.query<{ id: number }, [number]>("SELECT id FROM boards WHERE id = ?").get(boardId);
+      const boardRow = db.query<{ id: number; workspace_key: string }, [number]>("SELECT id, workspace_key FROM boards WHERE id = ?").get(boardId);
       if (!boardRow) return `Error: board ${boardId} not found`;
-      // Validate project exists
-      const project = getProjectById(projectId);
-      if (!project) return `Error: project ${projectId} not found`;
-      // Create conversation first
+      const project = getProjectByKey(boardRow.workspace_key, projectKey);
+      if (!project) return `Error: project ${projectKey} not found`;
       const convRes = db.run("INSERT INTO conversations (task_id) VALUES (0)");
       const convId = convRes.lastInsertRowid as number;
       const effectiveModel = args.model || getConfig()?.workspace.default_model || null;
       const taskRes = db.run(
-        `INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, conversation_id${effectiveModel ? ", model" : ""})
+        `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id${effectiveModel ? ", model" : ""})
          VALUES (?, ?, ?, ?, 'backlog', 'idle', ?${effectiveModel ? ", ?" : ""})`,
         effectiveModel
-          ? [boardId, projectId, title, description, convId, effectiveModel]
-          : [boardId, projectId, title, description, convId],
+          ? [boardId, projectKey, title, description, convId, effectiveModel]
+          : [boardId, projectKey, title, description, convId],
       );
       const newTaskId = taskRes.lastInsertRowid as number;
       db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [newTaskId, convId]);

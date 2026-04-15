@@ -14,16 +14,16 @@ let gitDir: string;
 let configCleanup: () => void;
 
 beforeEach(() => {
-  db = initDb();
-  const cfg = setupTestConfig();
-  configCleanup = cfg.cleanup;
-
   gitDir = mkdtempSync(join(tmpdir(), "railyn-hdl-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
   execSync('git config user.name "T"', { cwd: gitDir });
   writeFileSync(join(gitDir, "README.md"), "hello");
   execSync("git add . && git commit -m init", { cwd: gitDir });
+
+  db = initDb();
+  const cfg = setupTestConfig("", gitDir);
+  configCleanup = cfg.cleanup;
 });
 
 afterEach(() => {
@@ -49,12 +49,12 @@ function makeHandlers() {
 
 describe("tasks.create", () => {
   it("creates a task and seeds git context row", async () => {
-    const { projectId, boardId } = seedProjectAndTask(db, gitDir);
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
     const { handlers } = makeHandlers();
 
     const task = await handlers["tasks.create"]({
       boardId,
-      projectId,
+      projectKey,
       title: "Add dark mode",
       description: "Implement dark mode support",
     });
@@ -76,12 +76,12 @@ describe("tasks.create", () => {
   });
 
   it("seeds system message with task description", async () => {
-    const { projectId, boardId } = seedProjectAndTask(db, gitDir);
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
     const { handlers } = makeHandlers();
 
     const task = await handlers["tasks.create"]({
       boardId,
-      projectId,
+      projectKey,
       title: "My task",
       description: "My description",
     });
@@ -103,21 +103,25 @@ describe("tasks.create", () => {
 
 describe("tasks.transition / worktree failure", () => {
   it("fails task and appends error message when git_root_path is invalid", async () => {
-    // Seed project with a bad git root path
-    db.run(
-      "INSERT INTO projects (workspace_id, name, project_path, git_root_path, default_branch) VALUES (1, 'bad', '/nonexistent', '/nonexistent', 'main')",
-    );
-    const projectId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run("INSERT INTO boards (workspace_id, name, workflow_template_id) VALUES (1, 'b', 'delivery')");
+    // Create board and task with a project that has a bad git root path.
+    // After the projects table was removed, we seed task_git_context directly
+    // with the invalid path to simulate a task whose worktree setup will fail.
+    const projectKey = "test-project";
+    db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'b', 'delivery')");
     const boardId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run("INSERT INTO conversations (task_id) VALUES (0)");
     const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run(
-      "INSERT INTO tasks (board_id, project_id, title, workflow_state, execution_state, conversation_id) VALUES (?, ?, 'Broken', 'backlog', 'idle', ?)",
-      [boardId, projectId, conversationId],
+      "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state, conversation_id) VALUES (?, ?, 'Broken', 'backlog', 'idle', ?)",
+      [boardId, projectKey, conversationId],
     );
     const taskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
+    // Seed git context with an invalid path so the worktree creation fails
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_status) VALUES (?, '/nonexistent', 'not_created')",
+      [taskId],
+    );
 
     const { handlers, updates } = makeHandlers();
 
@@ -142,7 +146,7 @@ describe("tasks.transition / worktree failure", () => {
 describe("tasks.transition / git context backfill", () => {
   it("backfills git context row on transition even if create missed it", async () => {
     // Create task WITHOUT calling tasks.create (simulates old data)
-    const { projectId, boardId, taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    const { projectKey, boardId, taskId, conversationId } = seedProjectAndTask(db, gitDir);
     // No task_git_context row exists yet
 
     const { handlers } = makeHandlers();
@@ -166,12 +170,12 @@ describe("tasks.transition / git context backfill", () => {
 
 describe("tasks.delete", () => {
   it("removes task, messages, git context, and conversation from DB", async () => {
-    const { projectId, boardId } = seedProjectAndTask(db, gitDir);
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
     const { handlers } = makeHandlers();
 
     const task = await handlers["tasks.create"]({
       boardId,
-      projectId,
+      projectKey,
       title: "To be deleted",
       description: "Temporary task",
     });
@@ -216,15 +220,15 @@ describe("tasks.delete", () => {
   });
 
   it("returns success even when task has no git context row", async () => {
-    const { boardId, projectId } = seedProjectAndTask(db, gitDir);
+    const { boardId, projectKey } = seedProjectAndTask(db, gitDir);
     const { handlers } = makeHandlers();
 
     // Insert a bare task without git context
     db.run("INSERT INTO conversations (task_id) VALUES (0)");
     const convId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run(
-      "INSERT INTO tasks (board_id, project_id, title, workflow_state, execution_state, conversation_id) VALUES (?, ?, 'Bare', 'backlog', 'idle', ?)",
-      [boardId, projectId, convId],
+      "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state, conversation_id) VALUES (?, ?, 'Bare', 'backlog', 'idle', ?)",
+      [boardId, projectKey, convId],
     );
     const bareTaskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [bareTaskId, convId]);
@@ -237,12 +241,12 @@ describe("tasks.delete", () => {
   });
 
   it("returns a warning (not an error) when git_root_path no longer exists on disk", async () => {
-    const { projectId, boardId } = seedProjectAndTask(db, gitDir);
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
     const { handlers } = makeHandlers();
 
     const task = await handlers["tasks.create"]({
       boardId,
-      projectId,
+      projectKey,
       title: "Orphaned task",
       description: "Has a missing git root",
     });

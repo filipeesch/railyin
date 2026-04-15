@@ -1,5 +1,5 @@
 import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
-import { runMigrations, seedDefaultWorkspace, syncFileBackedCompatibilityState } from "./db/migrations.ts";
+import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
 import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
 import { StreamBatcher } from "./pipeline/batcher.ts";
@@ -89,7 +89,6 @@ await getResolvedShellEnv();
 
 // 1. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
 runMigrations();
-syncFileBackedCompatibilityState();
 seedDefaultWorkspace();
 
 // 2. Load default workspace config (YAML files)
@@ -478,60 +477,38 @@ if (process.env.RAILYN_DEBUG) {
             })();
           }
 
-          // Resolve board + project IDs — either from an existing task (real DB mode)
-          // or by creating the minimal workspace/project/board rows needed for a
-          // clean in-memory UI-test boot. This keeps /setup-test-env self-contained
-          // instead of depending on startup seed order.
+          // Resolve board + project keys — either from an existing task (real DB mode)
+          // or by resolving from the file-backed workspace/project registry
+          // (in-memory / clean test DB, i.e. RAILYN_DB=:memory:).
           let boardId: number;
-          let projectId: number;
-          const existingTask = db.query<{ board_id: number; project_id: number }, []
-          >("SELECT board_id, project_id FROM tasks WHERE title != 'UI Test Task' LIMIT 1").get();
+          let projectKey: string;
+          const existingTask = db.query<{ board_id: number; project_key: string }, []
+          >("SELECT board_id, project_key FROM tasks WHERE title != 'UI Test Task' LIMIT 1").get();
           if (existingTask) {
             boardId = existingTask.board_id;
-            projectId = existingTask.project_id;
+            projectKey = existingTask.project_key;
           } else {
             const workspaceRegistry = getWorkspaceRegistry();
             const defaultWorkspace = workspaceRegistry[0];
-            const workspaceId = defaultWorkspace?.id ?? 1;
             const workspaceKey = defaultWorkspace?.key ?? "default";
-            const workspaceName = defaultWorkspace?.name ?? "My Workspace";
-
-            db.run(
-              "INSERT OR IGNORE INTO workspaces (id, name, config_key) VALUES (?, ?, ?)",
-              [workspaceId, workspaceName, workspaceKey],
-            );
-
-            const existingProject = db
-              .query<{ id: number }, [number]>(
-                "SELECT id FROM projects WHERE workspace_id = ? ORDER BY id LIMIT 1",
-              )
-              .get(workspaceId);
-            if (existingProject) {
-              projectId = existingProject.id;
-            } else {
-              db.run(
-                `INSERT INTO projects
-                 (workspace_id, name, project_path, git_root_path, default_branch, slug, description)
-               VALUES (?, 'Test Project', '/tmp/railyn-test-project', '/tmp/railyn-test-project', 'main', 'test-project', 'Seeded project for UI tests')`,
-                [workspaceId],
-              );
-              projectId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
-            }
 
             const boardRow = db
-              .query<{ id: number }, [number]>(
-                "SELECT id FROM boards WHERE workspace_id = ? ORDER BY id LIMIT 1",
+              .query<{ id: number }, [string]>(
+                "SELECT id FROM boards WHERE workspace_key = ? ORDER BY id LIMIT 1",
               )
-              .get(workspaceId);
+              .get(workspaceKey);
             if (boardRow) {
               boardId = boardRow.id;
             } else {
               db.run(
-                "INSERT INTO boards (workspace_id, name, workflow_template_id, project_ids) VALUES (?, 'Test Board', 'delivery', ?)",
-                [workspaceId, JSON.stringify([projectId])],
+                "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES (?, 'Test Board', 'delivery', '[]')",
+                [workspaceKey],
               );
               boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
             }
+
+            const projects = listProjects();
+            projectKey = projects[0]?.key ?? "default";
           }
 
           // Create a temp git repo with known test files.
@@ -671,28 +648,28 @@ if (process.env.RAILYN_DEBUG) {
           // Insert the test task — model is explicitly set to 'fake/test' so the
           // FakeAI provider resolves correctly in handleHumanTurn (avoids UnresolvableProviderError).
           db.run(
-            "INSERT INTO tasks (board_id, project_id, title, description, workflow_state, execution_state, model, conversation_id) VALUES (?, ?, 'UI Test Task', 'Auto-created by test suite', 'backlog', 'idle', 'fake/test', ?)",
-            [boardId, projectId, conversationId],
+            "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, model, conversation_id) VALUES (?, ?, 'UI Test Task', 'Auto-created by test suite', 'backlog', 'idle', 'fake/test', ?)",
+            [boardId, projectKey, conversationId],
           );
           const taskRow = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!;
           const taskId = taskRow.id;
           const boardWorkspace = db
-            .query<{ workspace_id: number }, [number]>("SELECT workspace_id FROM boards WHERE id = ?")
+            .query<{ workspace_key: string }, [number]>("SELECT workspace_key FROM boards WHERE id = ?")
             .get(boardId);
-          const workspaceId = boardWorkspace?.workspace_id ?? 1;
+          const workspaceKey = boardWorkspace?.workspace_key ?? "default";
 
           // Fix up the conversation → task back-link
           db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
 
           // Ensure the fake model is listed in enabled_models so the UI shows it.
           db.run(
-            "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, 'fake/test')",
-            [workspaceId],
+            "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, 'fake/test')",
+            [workspaceKey],
           );
           // Register a second fake model so model-switching tests can change the selection.
           db.run(
-            "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, 'fake/v2')",
-            [workspaceId],
+            "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, 'fake/v2')",
+            [workspaceKey],
           );
 
           db.run(

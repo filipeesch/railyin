@@ -173,7 +173,7 @@ export const useTaskStore = defineStore("task", () => {
 
   async function createTask(params: {
     boardId: number;
-    projectId: number;
+    projectKey: string;
     title: string;
     description: string;
   }) {
@@ -636,25 +636,25 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── Load enabled models (for chat dropdown) ──────────────────────────────────
 
-  async function loadEnabledModels(workspaceId?: number) {
-    availableModels.value = await electroview.rpc.request["models.listEnabled"]({ workspaceId });
+  async function loadEnabledModels(workspaceKey?: string) {
+    availableModels.value = await electroview.rpc.request["models.listEnabled"]({ workspaceKey });
   }
 
   // Keep loadModels as an alias for backward compat (called from App.vue etc.)
-  async function loadModels(workspaceId?: number) {
-    await loadEnabledModels(workspaceId);
+  async function loadModels(workspaceKey?: string) {
+    await loadEnabledModels(workspaceKey);
   }
 
   // ─── Load all provider models (for tree view) ─────────────────────────────────
 
-  async function loadAllModels(workspaceId?: number) {
-    allProviderModels.value = await electroview.rpc.request["models.list"]({ workspaceId });
+  async function loadAllModels(workspaceKey?: string) {
+    allProviderModels.value = await electroview.rpc.request["models.list"]({ workspaceKey });
   }
 
   // ─── Toggle model enabled state ─────────────────────────────────────────────────
 
-  async function setModelEnabled(qualifiedModelId: string, enabled: boolean, workspaceId?: number) {
-    await electroview.rpc.request["models.setEnabled"]({ workspaceId, qualifiedModelId, enabled });
+  async function setModelEnabled(qualifiedModelId: string, enabled: boolean, workspaceKey?: string) {
+    await electroview.rpc.request["models.setEnabled"]({ workspaceKey, qualifiedModelId, enabled });
     // Optimistic update in allProviderModels
     for (const provider of allProviderModels.value) {
       const model = provider.models.find((m) => m.id === qualifiedModelId);
@@ -747,10 +747,10 @@ export const useTaskStore = defineStore("task", () => {
   }
 
   function workspaceHasUnread(
-    workspaceId: number,
-    boards: Array<{ id: number; workspaceId: number }>,
+    workspaceKey: string,
+    boards: Array<{ id: number; workspaceKey: string }>,
   ): boolean {
-    return workspaceHasUnreadTasks(workspaceId, boards, taskIndex.value, unreadTaskIds.value);
+    return workspaceHasUnreadTasks(workspaceKey, boards, taskIndex.value, unreadTaskIds.value);
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────────────

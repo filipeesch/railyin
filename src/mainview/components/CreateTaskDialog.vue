@@ -22,10 +22,10 @@
         <label for="ct-project">Project</label>
         <Select
           id="ct-project"
-          v-model="form.projectId"
+          v-model="form.projectKey"
           :options="visibleProjects"
           option-label="name"
-          option-value="id"
+          option-value="key"
           placeholder="Select project"
           class="w-full"
         />
@@ -47,7 +47,7 @@
       <Button label="Cancel" severity="secondary" text @click="show = false" />
       <Button
         label="Create"
-        :disabled="!form.title.trim() || !form.projectId"
+        :disabled="!form.title.trim() || !form.projectKey"
         :loading="saving"
         @click="submit"
       />
@@ -76,24 +76,24 @@ const taskStore = useTaskStore();
 const workspaceStore = useWorkspaceStore();
 const saving = ref(false);
 const visibleProjects = computed(() =>
-  projectStore.projects.filter((project) => project.workspaceId === workspaceStore.activeWorkspaceId),
+  projectStore.projects.filter((project) => project.workspaceKey === workspaceStore.activeWorkspaceKey),
 );
 
-const form = reactive({ title: "", description: "", projectId: null as number | null });
+const form = reactive({ title: "", description: "", projectKey: null as string | null });
 
 function reset() {
   form.title = "";
   form.description = "";
-  form.projectId = null;
+  form.projectKey = null;
 }
 
 async function submit() {
-  if (!form.title.trim() || !form.projectId) return;
+  if (!form.title.trim() || !form.projectKey) return;
   saving.value = true;
   try {
     await taskStore.createTask({
       boardId: props.boardId,
-      projectId: form.projectId,
+      projectKey: form.projectKey,
       title: form.title.trim(),
       description: form.description.trim(),
     });

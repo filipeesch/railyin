@@ -406,7 +406,7 @@
   <!-- Manage models modal -->
   <ManageModelsModal
     v-model="manageModelsOpen"
-    :workspace-id="taskWorkspaceId"
+    :workspace-key="taskWorkspaceKey"
     @close="onManageModelsClosed"
   />
 
@@ -497,7 +497,7 @@ async function runLaunch(command: string, mode: "terminal" | "app") {
 const manageModelsOpen = ref(false);
 
 async function onManageModelsClosed() {
-  await taskStore.loadEnabledModels(taskWorkspaceId.value);
+  await taskStore.loadEnabledModels(taskWorkspaceKey.value);
 }
 
 const groupedModels = computed(() => {
@@ -686,8 +686,8 @@ const open = computed({
 });
 
 const task = computed(() => taskStore.activeTask);
-const taskWorkspaceId = computed(() =>
-  task.value ? (boardStore.boards.find((b) => b.id === task.value!.boardId)?.workspaceId ?? undefined) : undefined,
+const taskWorkspaceKey = computed(() =>
+  task.value ? (boardStore.boards.find((b) => b.id === task.value!.boardId)?.workspaceKey ?? undefined) : undefined,
 );
 const inputText = ref("");
 const transitioning = ref(false);
@@ -980,7 +980,7 @@ watch(
     sessionMemoryContent.value = null;
     launchConfig.value = null;
     if (!id) return;
-    taskStore.loadEnabledModels(taskWorkspaceId.value);
+    taskStore.loadEnabledModels(taskWorkspaceKey.value);
     const t = taskStore.activeTask;
     if (t?.worktreeStatus === "ready") {
       numstat.value = await taskStore.getGitStat(id);
@@ -993,9 +993,9 @@ watch(
       const { content } = await electroview.rpc!.request["tasks.sessionMemory"]({ taskId: id });
       sessionMemoryContent.value = content;
     } catch { /* non-fatal */ }
-    // Load launch config (deduped in store by projectId)
+    // Load launch config (deduped in store by projectKey)
     if (t) {
-      launchConfig.value = await launchStore.getConfig(id, t.projectId);
+      launchConfig.value = await launchStore.getConfig(id, t.projectKey);
     }
   },
   { immediate: true },

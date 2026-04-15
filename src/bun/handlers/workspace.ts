@@ -1,14 +1,13 @@
 import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml } from "../config/index.ts";
 import { clearProviderCache } from "../ai/index.ts";
 import type { WorkspaceConfig, WorkspaceSummary } from "../../shared/rpc-types.ts";
-import { getDefaultWorkspaceId, getWorkspaceKeyById } from "../workspace-context.ts";
+import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 
 export function workspaceHandlers() {
   return {
-    "workspace.getConfig": async (params: { workspaceId?: number }): Promise<WorkspaceConfig> => {
+    "workspace.getConfig": async (params: { workspaceKey?: string }): Promise<WorkspaceConfig> => {
       resetConfig();
-      const workspaceId = params.workspaceId ?? getDefaultWorkspaceId();
-      const workspaceKey = getWorkspaceKeyById(workspaceId);
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const { error } = loadConfig(workspaceKey);
       if (error) throw new Error(error);
       const config = getConfig(workspaceKey);
@@ -18,7 +17,6 @@ export function workspaceHandlers() {
       const firstProvider = config.providers[0];
 
       return {
-        id: config.workspaceId,
         key: config.workspaceKey,
         name: config.workspaceName,
         workflows: config.workflows.map((workflow) => ({
@@ -45,15 +43,14 @@ export function workspaceHandlers() {
     "workspace.list": async (): Promise<WorkspaceSummary[]> => {
       resetConfig();
       return getWorkspaceRegistry().map((workspace) => ({
-        id: workspace.id,
         key: workspace.key,
         name: workspace.name,
       }));
     },
 
-    "workspace.setThinking": async (params: { workspaceId?: number; enabled: boolean }): Promise<Record<string, never>> => {
+    "workspace.setThinking": async (params: { workspaceKey?: string; enabled: boolean }): Promise<Record<string, never>> => {
       resetConfig();
-      const workspaceKey = getWorkspaceKeyById(params.workspaceId ?? getDefaultWorkspaceId());
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       patchWorkspaceYaml({ anthropic: { enable_thinking: params.enabled } }, workspaceKey);
       // Clear provider cache so the next execution picks up the new setting
       clearProviderCache();

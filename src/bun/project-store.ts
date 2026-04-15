@@ -1,4 +1,3 @@
-import { getDb } from "./db/index.ts";
 import {
   getConfig,
   getWorkspaceRegistry,
@@ -8,9 +7,8 @@ import {
   type LoadedProject,
   type WorkspaceProjectYaml,
 } from "./config/index.ts";
-import { getWorkspaceConfigById } from "./workspace-context.ts";
+import { getWorkspaceConfig } from "./workspace-context.ts";
 import type { Project } from "../shared/rpc-types.ts";
-import type { ProjectRow } from "./db/row-types.ts";
 
 function sanitizeProjectKey(raw: string | undefined, fallback: string): string {
   const key = (raw ?? fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
@@ -19,9 +17,7 @@ function sanitizeProjectKey(raw: string | undefined, fallback: string): string {
 
 function toProject(project: LoadedProject): Project {
   return {
-    id: project.id,
     key: project.key,
-    workspaceId: project.workspaceId,
     workspaceKey: project.workspaceKey,
     name: project.name,
     projectPath: project.projectPath,
@@ -40,61 +36,25 @@ export function listFileBackedProjects(): Project[] {
   return loadAllWorkspaceConfigs().flatMap((config) => config.projects.map(toProject));
 }
 
-function legacyProjectRowToProject(row: ProjectRow): Project {
-  return {
-    id: row.id,
-    key: sanitizeProjectKey(row.slug ?? undefined, row.name),
-    workspaceId: row.workspace_id,
-    workspaceKey: row.workspace_id === 1 ? "default" : `legacy-${row.workspace_id}`,
-    name: row.name,
-    projectPath: row.project_path,
-    gitRootPath: row.git_root_path,
-    defaultBranch: row.default_branch,
-    ...(row.slug ? { slug: row.slug } : {}),
-    ...(row.description ? { description: row.description } : {}),
-  };
-}
-
-function getLegacyProjectById(projectId: number): Project | null {
-  const db = getDb();
-  try {
-    const row = db.query<ProjectRow, [number]>("SELECT * FROM projects WHERE id = ?").get(projectId);
-    return row ? legacyProjectRowToProject(row) : null;
-  } catch {
-    return null;
-  }
-}
-
 export function listProjects(): Project[] {
-  const fileBackedProjects = listFileBackedProjects();
-  const ids = new Set(fileBackedProjects.map((project) => project.id));
-  const db = getDb();
-  try {
-    const legacyRows = db.query<ProjectRow, []>("SELECT * FROM projects ORDER BY created_at ASC").all();
-    for (const row of legacyRows) {
-      if (ids.has(row.id)) continue;
-      fileBackedProjects.push(legacyProjectRowToProject(row));
-    }
-  } catch {
-    // Legacy table may not exist in newer DBs.
-  }
-  return fileBackedProjects;
+  return listFileBackedProjects();
 }
 
-export function listProjectsForWorkspace(workspaceId: number): Project[] {
-  return listProjects().filter((project) => project.workspaceId === workspaceId);
+export function listProjectsForWorkspace(workspaceKey: string): Project[] {
+  return listProjects().filter((project) => project.workspaceKey === workspaceKey);
 }
 
-export function getProjectById(projectId: number): Project | null {
+export function getProjectByKey(workspaceKey: string, projectKey: string): Project | null {
   for (const config of loadAllWorkspaceConfigs()) {
-    const project = config.projects.find((entry) => entry.id === projectId);
+    if (config.workspaceKey !== workspaceKey) continue;
+    const project = config.projects.find((entry) => entry.key === projectKey);
     if (project) return toProject(project);
   }
-  return getLegacyProjectById(projectId);
+  return null;
 }
 
 export function registerProject(params: {
-  workspaceId: number;
+  workspaceKey: string;
   name: string;
   projectPath: string;
   gitRootPath: string;
@@ -102,7 +62,7 @@ export function registerProject(params: {
   slug?: string;
   description?: string;
 }): Project {
-  const workspaceConfig = getWorkspaceConfigById(params.workspaceId);
+  const workspaceConfig = getWorkspaceConfig(params.workspaceKey);
   const currentProjects = workspaceConfig.workspace.projects ?? [];
   const keyBase = params.slug?.trim() || params.name;
   const key = sanitizeProjectKey(keyBase, params.name);

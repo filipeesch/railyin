@@ -1,6 +1,5 @@
 import type { Project } from "../../shared/rpc-types.ts";
 import { listProjects, registerProject } from "../project-store.ts";
-import { syncFileBackedCompatibilityState } from "../db/migrations.ts";
 
 export function projectHandlers() {
   return {
@@ -10,7 +9,7 @@ export function projectHandlers() {
     },
 
     "projects.register": async (params: {
-      workspaceId: number;
+      workspaceKey: string;
       name: string;
       projectPath: string;
       gitRootPath: string;
@@ -19,7 +18,6 @@ export function projectHandlers() {
       description?: string;
     }): Promise<Project> => {
       const project = registerProject(params);
-      syncFileBackedCompatibilityState();
       return project;
     },
   };
