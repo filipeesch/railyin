@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types.ts";
 import { buildClaudeToolServer } from "./tools.ts";
-import { translateClaudeMessage } from "./events.ts";
+import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
 import { extractCommandBinaries } from "../../workflow/tools.ts";
 import { appendApprovedCommands, getApprovedCommands } from "../../workflow/engine.ts";
 import { getDb } from "../../db/index.ts";
@@ -36,6 +36,7 @@ export interface ClaudeRunConfig {
   commonToolContext: CommonToolContext;
   waitForResume: (request: ClaudeResumeRequest | ClaudeShellApprovalRequest) => Promise<EngineResumeInput>;
   onRawMessage?: (message: Record<string, unknown>) => void;
+  toolMetaByCallId?: Map<string, ToolMetadata>;
 }
 
 export interface ClaudeSdkAdapter {
@@ -389,7 +390,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
 
         for await (const message of query) {
           config.onRawMessage?.(message as Record<string, unknown>);
-          for (const event of translateClaudeMessage(message as { type: string })) {
+          for (const event of translateClaudeMessage(message as { type: string }, config.toolMetaByCallId)) {
             emit(event);
           }
         }

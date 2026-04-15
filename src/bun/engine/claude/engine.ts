@@ -2,6 +2,7 @@ import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, En
 import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
 import { claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
+import type { ToolMetadata } from "./events.ts";
 
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -23,6 +24,10 @@ export class ClaudeEngine implements ExecutionEngine {
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
     const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions } = params;
+    
+    // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
+    const toolMetaByCallId = new Map<string, ToolMetadata>();
+    
     const runConfig: ClaudeRunConfig = {
       executionId,
       taskId,
@@ -50,9 +55,22 @@ export class ClaudeEngine implements ExecutionEngine {
           payload: message,
         });
       },
+      toolMetaByCallId,
     };
 
-    return this.sdkAdapter.run(runConfig);
+    // Wrap the adapter execution to ensure cleanup happens
+    return this.createManagedExecution(runConfig, toolMetaByCallId);
+  }
+
+  private async *createManagedExecution(config: ClaudeRunConfig, toolMetaByCallId: Map<string, any>): AsyncGenerator<EngineEvent> {
+    try {
+      for await (const event of this.sdkAdapter.run(config)) {
+        yield event;
+      }
+    } finally {
+      // Clean up tool metadata map on execution end
+      toolMetaByCallId.clear();
+    }
   }
 
   async resume(executionId: number, input: EngineResumeInput): Promise<void> {
