@@ -164,6 +164,7 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
             name: toolName,
             result: block.content ?? "",
             isError: block.is_error ?? false,
+            writtenFiles: extractWrittenFilesFromClaudeToolArgs(toolName, meta?.arguments),
           });
 
           // Clean up from map
@@ -178,6 +179,19 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
     default:
       return [];
   }
+}
+
+function extractWrittenFilesFromClaudeToolArgs(
+  toolName: string,
+  args?: unknown,
+): import("../../../shared/rpc-types.ts").FileDiffPayload[] | undefined {
+  const input = args as Record<string, unknown> | undefined;
+  const filePath = typeof input?.file_path === "string" ? input.file_path : null;
+  if (!filePath) return undefined;
+  const lower = toolName.toLowerCase();
+  if (lower === "write") return [{ operation: "write_file", path: filePath, added: 0, removed: 0 }];
+  if (lower === "edit" || lower === "multiedit") return [{ operation: "edit_file", path: filePath, added: 0, removed: 0 }];
+  return undefined;
 }
 
 function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>): ToolCallDisplay {

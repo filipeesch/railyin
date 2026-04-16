@@ -44,7 +44,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, watch } from "vue";
-import type { FileDiffPayload, Hunk, ToolCallDisplay } from "@shared/rpc-types";
+import type { FileDiffPayload, ToolCallDisplay } from "@shared/rpc-types";
 import type { ToolEntry } from "../utils/pairToolMessages";
 import { formatToolSubject, parseToolCallDisplay } from "../utils/toolCallDisplay";
 import FileDiff from "./FileDiff.vue";
@@ -76,7 +76,7 @@ const parsedResult = computed(() => {
       detailedContent?: string;
       contents?: Array<Record<string, unknown>>;
       is_error?: boolean;
-      writtenFiles?: Array<FileDiffPayload & { rawDiff?: string }>;
+      writtenFiles?: FileDiffPayload[];
     };
   } catch {
     return null;
@@ -169,19 +169,8 @@ const displayBlocks = computed<DisplayBlock[]>(() => {
 
 const hasOutput = computed(() => displayContent.value.length > 0);
 
-const structuredWrittenFiles = computed<FileDiffPayload[]>(() => {
-  const wf = parsedResult.value?.writtenFiles;
-  if (!Array.isArray(wf)) return [];
-  return wf.map((entry) => {
-    if (typeof entry.rawDiff === "string") {
-      return parseUnifiedDiff(entry.rawDiff, entry.path, entry.operation);
-    }
-    return entry;
-  });
-});
-
 const effectiveDiffPayloads = computed<FileDiffPayload[]>(() => {
-  return structuredWrittenFiles.value;
+  return parsedResult.value?.writtenFiles ?? [];
 });
 
 const totalAdded = computed(() => {
@@ -191,77 +180,6 @@ const totalAdded = computed(() => {
 const totalRemoved = computed(() => {
   return effectiveDiffPayloads.value.reduce((sum, payload) => sum + (payload.removed ?? 0), 0);
 });
-
-function parseUnifiedDiff(
-  diffText: string,
-  fallbackPath: string,
-  operation: FileDiffPayload["operation"],
-): FileDiffPayload {
-  const lines = diffText.split("\n");
-  const hunks: Hunk[] = [];
-  let currentHunk: Hunk | null = null;
-  let oldLine = 0;
-  let newLine = 0;
-  let path = fallbackPath;
-  let toPath: string | undefined;
-  let added = 0;
-  let removed = 0;
-
-  for (const line of lines) {
-    if (line.startsWith("--- ")) {
-      path = normalizeDiffPath(line.slice(4).trim(), fallbackPath);
-      continue;
-    }
-    if (line.startsWith("+++ ")) {
-      toPath = normalizeDiffPath(line.slice(4).trim(), fallbackPath);
-      continue;
-    }
-    const header = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (header) {
-      currentHunk = {
-        old_start: Number(header[1]),
-        new_start: Number(header[2]),
-        lines: [],
-      };
-      hunks.push(currentHunk);
-      oldLine = Number(header[1]);
-      newLine = Number(header[2]);
-      continue;
-    }
-    if (!currentHunk) continue;
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      currentHunk.lines.push({ type: "added", new_line: newLine, content: line.slice(1) });
-      newLine += 1;
-      added += 1;
-      continue;
-    }
-    if (line.startsWith("-") && !line.startsWith("---")) {
-      currentHunk.lines.push({ type: "removed", old_line: oldLine, content: line.slice(1) });
-      oldLine += 1;
-      removed += 1;
-      continue;
-    }
-    if (line.startsWith(" ")) {
-      currentHunk.lines.push({ type: "context", old_line: oldLine, new_line: newLine, content: line.slice(1) });
-      oldLine += 1;
-      newLine += 1;
-    }
-  }
-
-  return {
-    operation,
-    path,
-    ...(toPath && toPath !== path ? { to_path: toPath } : {}),
-    added,
-    removed,
-    ...(hunks.length > 0 ? { hunks } : {}),
-  };
-}
-
-function normalizeDiffPath(path: string, fallbackPath: string): string {
-  const cleaned = path.replace(/^a\//, "").replace(/^b\//, "");
-  return cleaned === "/dev/null" ? fallbackPath : cleaned;
-}
 
 function clearTimeoutHandle() {
   if (timeoutId) {

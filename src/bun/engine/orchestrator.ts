@@ -182,7 +182,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       resolvedPrompt,
       column.stage_instructions,
-      this._getProjectDirectory(updatedRow),
+      this._resolveWorkingDirectory(updatedRow),
       "transition",
       toState,
     );
@@ -256,7 +256,7 @@ export class Orchestrator implements ExecutionCoordinator {
           newExecutionId,
           content,
           column?.stage_instructions,
-          this._getProjectDirectory(task),
+          this._resolveWorkingDirectory(task),
           "human_turn",
         );
         this._runNonNative(taskId, newExecutionId, engine, execParams);
@@ -296,7 +296,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       resolvedPrompt,
       column?.stage_instructions,
-      this._getProjectDirectory(task),
+      this._resolveWorkingDirectory(task),
       "human_turn",
     );
     this._runNonNative(taskId, executionId, engine, execParams);
@@ -346,7 +346,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       retryPrompt,
       column?.stage_instructions,
-      this._getProjectDirectory(updatedRow),
+      this._resolveWorkingDirectory(updatedRow),
       "retry",
     );
     this._runNonNative(taskId, executionId, engine, execParams);
@@ -526,7 +526,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       reviewText,
       column?.stage_instructions,
-      this._getProjectDirectory(task),
+      this._resolveWorkingDirectory(task),
       "code_review",
     );
     this._runNonNative(taskId, executionId, engine, execParams);
@@ -638,15 +638,21 @@ export class Orchestrator implements ExecutionCoordinator {
     return template?.columns.find((c) => c.id === columnId) ?? null;
   }
 
-  private _getProjectDirectory(task: TaskRow): string {
+  private _resolveWorkingDirectory(task: TaskRow): string {
+    const db = getDb();
+    const gitRow = db
+      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
+        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+      )
+      .get(task.id);
+    if (gitRow?.worktree_status === "ready" && gitRow.worktree_path) {
+      return gitRow.worktree_path;
+    }
     const workspaceKey = getTaskWorkspaceKey(task.id);
     const projectDirectory = getProjectByKey(workspaceKey, task.project_key)?.projectPath?.trim() ?? "";
     if (!projectDirectory) {
       throw new Error(`Project directory not found for project_key=${task.project_key}`);
     }
-
-    console.log(`[orchestrator] Resolved project directory for task ${task.id}: ${projectDirectory}`);
-
     return projectDirectory;
   }
 
@@ -655,7 +661,7 @@ export class Orchestrator implements ExecutionCoordinator {
     executionId: number,
     prompt: string,
     systemInstructions: string | undefined,
-    projectDirectory: string,
+    workingDirectory: string,
     nativeExecType: NativeExecutionType,
     toState?: string,
     signal?: AbortSignal,
@@ -679,7 +685,7 @@ export class Orchestrator implements ExecutionCoordinator {
       boardId: task.board_id,
       prompt,
       systemInstructions: fullSystemInstructions,
-      workingDirectory: projectDirectory,
+      workingDirectory,
       model: task.model ?? "",
       signal: signal ?? controller.signal,
       onRawModelMessage: (raw) => this._persistRawModelMessage(task.id, executionId, raw),

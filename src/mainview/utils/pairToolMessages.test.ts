@@ -40,19 +40,6 @@ function makeResult(callId: string): ConversationMessage {
   };
 }
 
-function makeDiff(callId: string): ConversationMessage {
-  return {
-    id: _id++,
-    taskId: 1,
-    conversationId: 1,
-    type: "file_diff",
-    role: null,
-    content: JSON.stringify({ operation: "write_file", path: "foo.ts" }),
-    metadata: { tool_call_id: callId },
-    createdAt: new Date().toISOString(),
-  };
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("pairToolMessages", () => {
@@ -64,13 +51,12 @@ describe("pairToolMessages", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].call).toBe(call);
     expect(entries[0].result).toBe(result);
-    expect(entries[0].diff).toBeNull();
     expect(entries[0].children).toHaveLength(0);
   });
 
   // 3.3 Batched: 4 calls then 4 results (task-32 pattern)
   test("batched — 4 calls followed by 4 results all pair correctly", () => {
-    const calls   = ["A", "B", "C", "D"].map((id) => makeCall(`call_${id}`));
+    const calls = ["A", "B", "C", "D"].map((id) => makeCall(`call_${id}`));
     const results = ["A", "B", "C", "D"].map((id) => makeResult(`call_${id}`));
     const msgs = [...calls, ...results];
     const entries = pairToolMessages(msgs);
@@ -79,17 +65,6 @@ describe("pairToolMessages", () => {
       expect(entries[i].call).toBe(calls[i]);
       expect(entries[i].result).toBe(results[i]);
     }
-  });
-
-  // 3.4 Batched with file_diff
-  test("batched with file_diff — each call paired with correct result and diff", () => {
-    const calls   = ["A", "B"].map((id) => makeCall(`call_${id}`));
-    const results = ["A", "B"].map((id) => makeResult(`call_${id}`));
-    const diffs   = ["A", "B"].map((id) => makeDiff(`call_${id}`));
-    const entries = pairToolMessages([...calls, ...results, ...diffs]);
-    expect(entries).toHaveLength(2);
-    expect(entries[0].diff).toBe(diffs[0]);
-    expect(entries[1].diff).toBe(diffs[1]);
   });
 
   // 3.5 Orphaned result (no matching call)
@@ -107,7 +82,6 @@ describe("pairToolMessages", () => {
     const entries = pairToolMessages([call]);
     expect(entries).toHaveLength(1);
     expect(entries[0].result).toBeNull();
-    expect(entries[0].diff).toBeNull();
   });
 
   // 3.7 Subagent nesting
@@ -147,6 +121,5 @@ describe("pairToolMessages", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].call).toBe(badCall);
     expect(entries[0].result).toBeNull();
-    expect(entries[0].diff).toBeNull();
   });
 });

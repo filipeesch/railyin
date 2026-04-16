@@ -45,9 +45,9 @@
           {{ block.children.length }}
         </span>
       </button>
-      <div v-if="open" :class="['tcg__body', toolDisplay?.contentType === 'file' ? 'tcg__body--flush' : '']">
-        <ReadView v-if="toolDisplay?.contentType === 'file' && toolResultContent" :content="toolResultContent" :startLine="toolDisplay?.startLine" />
-        <pre v-else-if="toolResultContent" class="tcg__output">{{ toolResultTruncated }}</pre>
+      <div v-if="open" :class="['tcg__body', (toolDisplay?.contentType === 'file' && !hasFileDiffChildren) ? 'tcg__body--flush' : '']">
+        <ReadView v-if="toolDisplay?.contentType === 'file' && !hasFileDiffChildren && toolResultContent" :content="toolResultContent" :startLine="toolDisplay?.startLine" />
+        <pre v-else-if="!hasFileDiffChildren && toolResultContent" class="tcg__output">{{ toolResultTruncated }}</pre>
         <div v-if="block.children.length > 0" class="tcg__children">
           <StreamBlockNode
             v-for="childId in block.children"
@@ -195,6 +195,14 @@ const toolHasResult = computed(() => {
   // tool_result overwrites the tool_call in the block map if same blockId,
   // but our store skips duplicates. Check metadata or done flag.
   return b.done;
+});
+
+// True when at least one child block is a file_diff — those already render
+// FileDiff directly, so the ReadView / pre fallback should be suppressed.
+const hasFileDiffChildren = computed(() => {
+  const b = block.value;
+  if (!b) return false;
+  return b.children.some((id) => props.blocks.get(id)?.type === "file_diff");
 });
 
 const toolStatusIcon = computed(() => {

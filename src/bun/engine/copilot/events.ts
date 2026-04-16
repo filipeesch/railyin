@@ -12,7 +12,7 @@
 
 import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
 import type { EngineEvent } from "../types.ts";
-import type { FileDiffPayload, ToolCallDisplay } from "../../../shared/rpc-types.ts";
+import type { FileDiffPayload, Hunk, ToolCallDisplay } from "../../../shared/rpc-types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { canonicalToolDisplayLabel } from "../tool-display.ts";
 
@@ -265,7 +265,7 @@ function translateEvent(
         isInternal: meta?.isInternal ?? false,
         detailedResult: data.result?.detailedContent,
         contentBlocks: data.result?.contents,
-        writtenFiles: extractWrittenFilesFromCopilotTool(meta?.name, meta?.arguments),
+        writtenFiles: extractWrittenFilesFromCopilotTool(meta?.name, meta?.arguments, data.result?.detailedContent),
       };
     }
 
@@ -337,7 +337,7 @@ function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>):
       return { label: canonicalToolDisplayLabel(name), subject: str(args.query || args.pattern) || undefined };
     case "find_files":
     case "find":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.pattern || args.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: str(args.pattern || args.path as string) || undefined };
     case "delete_file":
       return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined };
     case "rename_file":
@@ -363,6 +363,7 @@ function isInternalCopilotEvent(
 function extractWrittenFilesFromCopilotTool(
   toolName?: string,
   rawArguments?: unknown,
+  detailedContent?: string,
 ): FileDiffPayload[] | undefined {
   if (!toolName) return undefined;
   if (toolName === "create" || toolName === "edit") {
@@ -370,12 +371,12 @@ function extractWrittenFilesFromCopilotTool(
     const args = rawArguments as Record<string, unknown>;
     const path = typeof args.path === "string" ? args.path : null;
     if (!path) return undefined;
-    return [{
-      operation: toolName === "edit" ? "edit_file" : "write_file",
-      path,
-      added: 0,
-      removed: 0,
-    }];
+    const operation: FileDiffPayload["operation"] = toolName === "edit" ? "edit_file" : "write_file";
+    // Parse the unified diff from detailedContent to get real hunk data.
+    if (detailedContent && detailedContent.includes("@@")) {
+      return [parseCopilotUnifiedDiff(detailedContent, path, operation)];
+    }
+    return [{ operation, path, added: 0, removed: 0 }];
   }
 
   if (toolName === "apply_patch") {
@@ -399,13 +400,7 @@ function extractWrittenFilesFromCopilotTool(
         const rawPath = updMatch[1].trim();
         const renameParts = rawPath.split(" -> ").map((v) => v.trim()).filter(Boolean);
         if (renameParts.length === 2 && renameParts[0] !== renameParts[1]) {
-          files.push({
-            operation: "rename_file",
-            path: renameParts[0],
-            to_path: renameParts[1],
-            added: 0,
-            removed: 0,
-          });
+          files.push({ operation: "rename_file", path: renameParts[0], to_path: renameParts[1], added: 0, removed: 0 });
         } else {
           files.push({ operation: "patch_file", path: rawPath, added: 0, removed: 0 });
         }
@@ -415,6 +410,74 @@ function extractWrittenFilesFromCopilotTool(
   }
 
   return undefined;
+}
+
+/**
+ * Parse a unified diff string (from Copilot SDK detailedContent) into a FileDiffPayload.
+ * Private to this module — diff parsing belongs in the engine layer, not UI/shared.
+ */
+function parseCopilotUnifiedDiff(
+  diffText: string,
+  fallbackPath: string,
+  operation: FileDiffPayload["operation"],
+): FileDiffPayload {
+  const lines = diffText.split("\n");
+  const hunks: Hunk[] = [];
+  let currentHunk: Hunk | null = null;
+  let oldLine = 0;
+  let newLine = 0;
+  let path = fallbackPath;
+  let toPath: string | undefined;
+  let added = 0;
+  let removed = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("--- ")) {
+      const raw = line.slice(4).trim().replace(/^[ab]\//, "");
+      if (raw !== "/dev/null") path = raw;
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      const raw = line.slice(4).trim().replace(/^[ab]\//, "");
+      if (raw !== "/dev/null") toPath = raw;
+      continue;
+    }
+    const header = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (header) {
+      currentHunk = { old_start: Number(header[1]), new_start: Number(header[2]), lines: [] };
+      hunks.push(currentHunk);
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      continue;
+    }
+    if (!currentHunk) continue;
+    if (line.startsWith("+") && !line.startsWith("++")) {
+      currentHunk.lines.push({ type: "added", new_line: newLine, content: line.slice(1) });
+      newLine++;
+      added++;
+      continue;
+    }
+    if (line.startsWith("-") && !line.startsWith("--")) {
+      currentHunk.lines.push({ type: "removed", old_line: oldLine, content: line.slice(1) });
+      oldLine++;
+      removed++;
+      continue;
+    }
+    if (line.startsWith(" ")) {
+      currentHunk.lines.push({ type: "context", old_line: oldLine, new_line: newLine, content: line.slice(1) });
+      oldLine++;
+      newLine++;
+    }
+  }
+
+  return {
+    operation,
+    path,
+    ...(toPath && toPath !== path ? { to_path: toPath } : {}),
+    added,
+    removed,
+    ...(hunks.length > 0 ? { hunks } : {}),
+  };
 }
 
 function normalizeApplyPatchText(rawArguments: unknown): string | null {
