@@ -24,10 +24,10 @@ export class ClaudeEngine implements ExecutionEngine {
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
     const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions } = params;
-    
+
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
-    
+
     const runConfig: ClaudeRunConfig = {
       executionId,
       taskId,
@@ -74,6 +74,7 @@ export class ClaudeEngine implements ExecutionEngine {
   }
 
   async resume(executionId: number, input: EngineResumeInput): Promise<void> {
+    this.sdkAdapter.touchExecutionLease?.(executionId, "running");
     const pending = this.pendingResumes.get(executionId);
     if (!pending) {
       throw new Error(`Execution ${executionId} is not waiting for resume input`);
@@ -99,6 +100,10 @@ export class ClaudeEngine implements ExecutionEngine {
       description: model.description,
       supportsThinking: model.supportsEffort || model.supportsAdaptiveThinking,
     }));
+  }
+
+  async shutdown(options: import("../types.ts").EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
+    await this.sdkAdapter.shutdownAll?.(options);
   }
 
   private waitForResume(

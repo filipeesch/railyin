@@ -98,6 +98,8 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
         abortCalls: 0,
         disconnectCalls: 0,
         listModelsCalls: 0,
+        shutdownCalls: 0,
+        touchLeaseCalls: [] as Array<{ sessionId: string; state?: import("../../engine/types.ts").EngineLeaseState }>,
     };
 
     queueResumeSuccess(session: MockCopilotSession): this {
@@ -162,6 +164,18 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
 
     async releaseClient(_sessionId: string): Promise<void> {
         // no-op in mock — no real CLI to release
+    }
+
+    touchLease(sessionId: string, state?: import("../../engine/types.ts").EngineLeaseState): void {
+        this.trace.touchLeaseCalls.push({ sessionId, state });
+    }
+
+    setLeaseState(_sessionId: string, _state: import("../../engine/types.ts").EngineLeaseState): void {
+        // no-op for mock adapter
+    }
+
+    async shutdownAll(): Promise<void> {
+        this.trace.shutdownCalls += 1;
     }
 
     onStatus(listener: (message: string) => void): () => void {

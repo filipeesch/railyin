@@ -16,6 +16,8 @@ import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { removeWorktree } from "../git/worktree.ts";
 import { getProjectByKey } from "../project-store.ts";
+import { createTodo, editTodo, getTodo, listTodos, reprioritizeTodos } from "../db/todos.ts";
+import { INTERVIEW_ME_TOOL_DEFINITION } from "./interview-tool-definition.ts";
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
 
@@ -161,6 +163,134 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["task_id", "message"],
     },
   },
+  INTERVIEW_ME_TOOL_DEFINITION,
+  // ── todo tools ───────────────────────────────────────────────────────────────
+  {
+    name: "create_todo",
+    description:
+      "Create a new todo subtask to help track complex multi-step work without losing context across compactions.\n\n" +
+      "ALWAYS use create_todo when:\n" +
+      "- Starting a task with 3 or more steps that need to be tracked\n" +
+      "- Breaking down complex implementations where context might be lost\n" +
+      "- Recording task context that must survive conversation compaction\n\n" +
+      "NEVER use create_todo when:\n" +
+      "- The work can be done in a single step\n" +
+      "- You already have todos covering this work (call list_todos first)\n\n" +
+      "The `description` field is a rich markdown memory. Write it as if explaining to yourself after a compaction — include WHY, WHAT to do, files involved, constraints, acceptance criteria. Be comprehensive.",
+    parameters: {
+      type: "object",
+      properties: {
+        number: {
+          type: "number",
+          description: "Execution order (float). Use sparse values like 10, 20, 30 to allow inserting between items later.",
+        },
+        title: {
+          type: "string",
+          description: "Short label for the todo item (one line).",
+        },
+        description: {
+          type: "string",
+          description: "Rich markdown specification: what to do, why, files involved, constraints, acceptance criteria. This is a context memory — be comprehensive.",
+        },
+      },
+      required: ["number", "title", "description"],
+    },
+  },
+  {
+    name: "edit_todo",
+    description:
+      "Update one or more fields of a todo item by ID (number, title, or description).\n\n" +
+      "ALWAYS call get_todo before editing to see the current content.\n" +
+      "NEVER call edit_todo without knowing the current todo content — always get_todo first.\n" +
+      "NEVER use edit_todo to change status — use update_todo_status instead.\n\n" +
+      "At least one field must be provided.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "The todo item id." },
+        number: { type: "number", description: "New execution order (float)." },
+        title: { type: "string", description: "New short label." },
+        description: { type: "string", description: "Updated markdown specification." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "list_todos",
+    description:
+      "List all active todo items for the current task. Returns id, number, title, and status only (no description).\n\n" +
+      "ALWAYS call list_todos before creating todos to avoid duplicates.\n" +
+      "ALWAYS call list_todos at the start of a session to understand what work remains.\n" +
+      "NEVER use list_todos to read descriptions — use get_todo for full content.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "get_todo",
+    description:
+      "Get all fields of a todo item including the full markdown description.\n\n" +
+      "ALWAYS call get_todo before editing a todo's description to see its current content.\n" +
+      "ALWAYS call get_todo when you need to recall the full specification of a step.\n" +
+      "If the todo was deleted, the tool returns a plain-text message telling you to skip it — treat that as a signal to move on, not an error.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "The todo item id." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "reorganize_todos",
+    description:
+      "Atomically update the execution order of multiple todo items in a single call.\n\n" +
+      "ALWAYS use reorganize_todos instead of multiple edit_todo calls when reordering.\n" +
+      "Use sparse float numbers (e.g. 10, 20, 30) to leave room for future insertions.\n" +
+      "Returns the updated list of all active todos.",
+    parameters: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          description: "Array of {id, number} pairs to update.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "number", description: "Todo item id." },
+              number: { type: "number", description: "New execution order." },
+            },
+            required: ["id", "number"],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
+    name: "update_todo_status",
+    description:
+      "Update the status of a todo item.\n\n" +
+      "ALWAYS use update_todo_status (not edit_todo) when changing status.\n" +
+      "ALWAYS set status to 'in-progress' when starting a todo.\n" +
+      "ALWAYS set status to 'done' when a todo is complete.\n" +
+      "ALWAYS set status to 'blocked' if a todo cannot proceed.\n" +
+      "ALWAYS set status to 'deleted' to soft-delete a todo that is no longer relevant or was created in error.\n" +
+      "NEVER skip updating status — it is the primary way to track progress.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "The todo item id." },
+        status: {
+          type: "string",
+          description: "New status: 'pending', 'in-progress', 'done', 'blocked', or 'deleted' (soft-delete).",
+        },
+      },
+      required: ["id", "status"],
+    },
+  },
 ];
 
 export const COMMON_TOOL_NAMES = new Set(COMMON_TOOL_DEFINITIONS.map((t) => t.name));
@@ -193,6 +323,22 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
       return { label: "message task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
     case "interview_me":
       return { label: "interview me" };
+    case "create_todo":
+    case "edit_todo": {
+      const num = args.number != null ? String(args.number) : null;
+      const title = args.title != null ? String(args.title) : null;
+      const subject = num && title ? `${num}. ${title}` : title ?? num ?? undefined;
+      const content = args.description != null ? String(args.description) : undefined;
+      return { label: name === "create_todo" ? "create todo" : "edit todo", subject, content };
+    }
+    case "list_todos":
+      return { label: "todo list" };
+    case "reorganize_todos":
+      return { label: "todo list" };
+    case "update_todo_status":
+      return { label: "todo status", subject: args.id != null ? `#${args.id} → ${args.status ?? ""}` : undefined };
+    case "get_todo":
+      return { label: "get todo", subject: args.id != null ? `#${args.id}` : undefined };
     default:
       return { label: name };
   }
@@ -431,6 +577,93 @@ export async function executeCommonTool(
       }
       ctx.onHumanTurn(taskId, message);
       return JSON.stringify({ status: "delivered", task_id: taskId });
+    }
+
+    case "interview_me": {
+      if (!ctx.onInterviewMe) {
+        return "Error: interview_me is not available in this engine context";
+      }
+
+      const context = (args.context ?? "").trim();
+      let questions: unknown;
+      try {
+        questions = args.questions ? JSON.parse(args.questions) : undefined;
+      } catch {
+        return "Error: questions must be a valid JSON array";
+      }
+
+      if (!Array.isArray(questions) || questions.length === 0) {
+        return "Error: questions is required";
+      }
+
+      const payload: Record<string, unknown> = { questions };
+      if (context) payload.context = context;
+      ctx.onInterviewMe(JSON.stringify(payload));
+      return "Interview suspended - awaiting user response.";
+    }
+
+    case "create_todo": {
+      if (!ctx.taskId) return "Error: create_todo is only available within a task execution";
+      const number = args.number ? parseFloat(args.number) : NaN;
+      if (isNaN(number)) return "Error: number is required";
+      const title = (args.title ?? "").trim();
+      if (!title) return "Error: title is required";
+      const description = (args.description ?? "").trim();
+      if (!description) return "Error: description is required";
+      const item = createTodo(ctx.taskId, number, title, description);
+      return JSON.stringify(item);
+    }
+
+    case "edit_todo": {
+      if (!ctx.taskId) return "Error: edit_todo is only available within a task execution";
+      const id = args.id ? parseInt(args.id, 10) : NaN;
+      if (!id || isNaN(id)) return "Error: id is required";
+      const update: Parameters<typeof editTodo>[2] = {};
+      if (args.number !== undefined) update.number = parseFloat(args.number);
+      if (args.title !== undefined) update.title = args.title.trim();
+      if (args.description !== undefined) update.description = args.description;
+      const result = editTodo(ctx.taskId, id, update);
+      if (!result) return `Error: todo ${id} not found`;
+      return JSON.stringify(result);
+    }
+
+    case "list_todos": {
+      if (!ctx.taskId) return "Error: list_todos is only available within a task execution";
+      const todos = listTodos(ctx.taskId);
+      return JSON.stringify(todos);
+    }
+
+    case "get_todo": {
+      if (!ctx.taskId) return "Error: get_todo is only available within a task execution";
+      const id = args.id ? parseInt(args.id, 10) : NaN;
+      if (!id || isNaN(id)) return "Error: id is required";
+      const todo = getTodo(ctx.taskId, id);
+      if (!todo) return `Error: todo ${id} not found`;
+      if ("deleted" in todo) return todo.message;
+      return JSON.stringify(todo);
+    }
+
+    case "reorganize_todos": {
+      if (!ctx.taskId) return "Error: reorganize_todos is only available within a task execution";
+      let items: Array<{ id: number; number: number }>;
+      try {
+        items = typeof args.items === "string" ? JSON.parse(args.items) : (args.items as Array<{ id: number; number: number }>);
+      } catch {
+        return "Error: items must be a valid JSON array of {id, number} pairs";
+      }
+      const updated = reprioritizeTodos(ctx.taskId, items);
+      return JSON.stringify(updated);
+    }
+
+    case "update_todo_status": {
+      if (!ctx.taskId) return "Error: update_todo_status is only available within a task execution";
+      const id = args.id ? parseInt(args.id, 10) : NaN;
+      if (!id || isNaN(id)) return "Error: id is required";
+      const status = (args.status ?? "").trim();
+      if (!status) return "Error: status is required";
+      const result = editTodo(ctx.taskId, id, { status: status as import("../db/todos.ts").TodoStatus });
+      if (!result) return `Error: todo ${id} not found`;
+      return JSON.stringify(result);
     }
 
     default:

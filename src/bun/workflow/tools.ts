@@ -23,12 +23,7 @@ import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { removeWorktree } from "../git/worktree.ts";
 import { getProjectByKey } from "../project-store.ts";
-import {
-  createTodo,
-  updateTodo as dbUpdateTodo,
-  deleteTodo as dbDeleteTodo,
-  listTodos,
-} from "../db/todos.ts";
+import { INTERVIEW_ME_TOOL_DEFINITION } from "../engine/interview-tool-definition.ts";
 
 // ─── Myers diff algorithm ─────────────────────────────────────────────────────
 
@@ -370,82 +365,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["questions"],
     },
   },
-  {
-    name: "interview_me",
-    description:
-      "Conduct a structured interview to gather direction on complex, high-stakes decisions.\n\n" +
-      "ALWAYS use this tool — never plain prose — when the conversation requires architectural choices, technology selection, design tradeoffs, or any decision where the implications are non-trivial and the user needs to understand what they are committing to.\n\n" +
-      "How to write great questions:\n" +
-      "- Ask one clear, focused question per item. Avoid compound questions.\n" +
-      "- The 'question' field supports markdown — use **bold** to highlight the key decision.\n" +
-      "- Set 'weight' honestly: 'critical' = hard to change later (data model, engine choice), 'medium' = requires effort to change, 'easy' = easily revisited.\n" +
-      "- Set 'model_lean' to your recommended option title and explain WHY in 'model_lean_reason'. Be transparent, not neutral.\n" +
-      "- Set 'answers_affect_followup: true' when the answer to this question should change what you ask next.\n\n" +
-      "How to write great options:\n" +
-      "- Every option MUST have a 'title' (short, scannable) and a 'description' (rich markdown).\n" +
-      "- The 'description' is the most important field. It should explain: what this choice means in practice, its concrete pros and cons, when it's the right fit, and what it forecloses. Write at least 3–5 sentences. Use bullet lists for pros/cons.\n" +
-      "- Always include an 'Other' option implicitly — the UI adds it automatically.\n" +
-      "- Avoid listing more than 4–5 options. Fewer, well-explained options beat a long list.\n\n" +
-      "Use 'context' to set the stage: why is this decision being made now, what constraints exist, what has already been decided. Keep it concise but complete.\n\n" +
-      "Use 'non_exclusive' when the user can reasonably combine multiple options (e.g. testing strategies, feature flags). Use 'exclusive' when options are mutually incompatible.\n\n" +
-      "Use 'freetext' for open-ended questions where no preset options make sense — e.g. 'Any additional constraints?' or 'What is your target timeline?'.\n\n" +
-      "ALWAYS batch all related decisions into one call. Do not call interview_me multiple times in a row.",
-    parameters: {
-      type: "object",
-      properties: {
-        context: {
-          type: "string",
-          description: "Markdown preamble setting the stage: why this decision is being made now, relevant constraints, and what has already been decided. Be concise but complete. Supports markdown.",
-        },
-        questions: {
-          type: "array",
-          description: "One or more questions. Batch all related decisions into a single call — do not call interview_me multiple times in sequence.",
-          items: {
-            type: "object",
-            properties: {
-              question: { type: "string", description: "The question text. Be specific and focused — one decision per question. Markdown supported; use **bold** for the key decision point." },
-              type: {
-                type: "string",
-                enum: ["exclusive", "non_exclusive", "freetext"],
-                description: "'exclusive' for mutually exclusive single choice. 'non_exclusive' for multi-select (user can pick several). 'freetext' for open-ended input with no preset options.",
-              },
-              weight: {
-                type: "string",
-                enum: ["critical", "medium", "easy"],
-                description: "Reversibility signal. 'critical' = foundational, hard to change (e.g. DB schema, engine choice). 'medium' = changeable but requires significant effort. 'easy' = easily revisited.",
-              },
-              model_lean: {
-                type: "string",
-                description: "The exact title of the option you recommend. Must match one of the option titles exactly. Be transparent — do not leave blank if you have a clear preference.",
-              },
-              model_lean_reason: {
-                type: "string",
-                description: "One sentence explaining WHY you lean toward that option. Be specific, not generic (e.g. 'Already used throughout the codebase, no new dependency' not 'It is a good fit').",
-              },
-              answers_affect_followup: {
-                type: "boolean",
-                description: "Set true when the answer to this question should shape what you ask or recommend next.",
-              },
-              options: {
-                type: "array",
-                description: "Options to present. Required for 'exclusive' and 'non_exclusive'. Aim for 2–5 options. Quality over quantity — fewer, well-explained options are better.",
-                items: {
-                  type: "object",
-                  properties: {
-                    title: { type: "string", description: "Short, scannable option title (e.g. 'SQLite WAL', 'Redis Pub/Sub'). 2–5 words." },
-                    description: { type: "string", description: "THE KEY FIELD. Rich markdown explaining: what this choice means in practice, concrete pros and cons (use bullet lists), when it is the right fit, what it forecloses or makes harder. Write at least 3–5 substantive sentences. The user will read this to understand what they are committing to." },
-                  },
-                  required: ["title", "description"],
-                },
-              },
-            },
-            required: ["question", "type"],
-          },
-        },
-      },
-      required: ["questions"],
-    },
-  },
+  INTERVIEW_ME_TOOL_DEFINITION,
   // ── write group ────────────────────────────────────────────────────────────
   {
     name: "write_file",
@@ -887,81 +807,6 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["task_id", "message"],
     },
   },
-  // ── todos group ────────────────────────────────────────────────────────────
-  {
-    name: "create_todo",
-    description:
-      "Create a new todo item scoped to the current task.\n\n" +
-      "Usage:\n" +
-      "- Returns the stable integer ID of the created item\n" +
-      "- Use todos to track multi-step work — update status as you progress",
-    parameters: {
-      type: "object",
-      properties: {
-        title: {
-          type: "string",
-          description: "Short label for the todo item.",
-        },
-      },
-      required: ["title"],
-    },
-  },
-  {
-    name: "update_todo",
-    description:
-      "Update one or more fields of a todo item by ID.\n\n" +
-      "Usage:\n" +
-      "- Set status to 'in-progress' when starting, 'completed' when done\n" +
-      "- Use result field to record outcome — persists across compactions for parent agent\n" +
-      "- At least one of title, status, or result must be provided",
-    parameters: {
-      type: "object",
-      properties: {
-        id: {
-          type: "number",
-          description: "The todo item id.",
-        },
-        title: {
-          type: "string",
-          description: "New title for the todo.",
-        },
-        status: {
-          type: "string",
-          description: "New status: 'not-started', 'in-progress', or 'completed'.",
-        },
-        result: {
-          type: "string",
-          description: "Outcome summary — written when completing the item so the parent agent can read it after compaction.",
-        },
-      },
-      required: ["id"],
-    },
-  },
-  {
-    name: "delete_todo",
-    description:
-      "Permanently remove a todo item by ID. Use when no longer relevant or created in error.",
-    parameters: {
-      type: "object",
-      properties: {
-        id: {
-          type: "number",
-          description: "The todo item id to delete.",
-        },
-      },
-      required: ["id"],
-    },
-  },
-  {
-    name: "list_todos",
-    description:
-      "List all todo items for the current task. Returns ID, title, and status for each item.",
-    parameters: {
-      type: "object",
-      properties: {},
-      required: [],
-    },
-  },
 
   // ── lsp group ───────────────────────────────────────────────────────────────
   {
@@ -1025,7 +870,7 @@ export const TOOL_GROUPS: Map<string, string[]> = new Map([
   ["web", ["fetch_url", "search_internet"]],
   ["tasks_read", ["get_task", "get_board_summary", "list_tasks"]],
   ["tasks_write", ["create_task", "edit_task", "delete_task", "move_task", "message_task"]],
-  ["todos", ["create_todo", "update_todo", "delete_todo", "list_todos"]],
+  ["todos", ["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"]],
   ["lsp", ["lsp"]],
 ]);
 
@@ -1063,11 +908,13 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["delete_task", "delete_task(task_id): permanently delete a task and all its data. Git branch is preserved."],
   ["move_task", "move_task(task_id, to_state): move a task to a different workflow column. Triggers on_enter_prompt if configured."],
   ["message_task", "message_task(task_id, message): send a message to another task's conversation and trigger its AI model."],
-  // todos
-  ["create_todo", "create_todo(title): create a new todo item for the current task. Returns stable integer ID."],
-  ["update_todo", "update_todo(id, status?, title?, result?): update todo status ('in-progress'/'completed'), title, or result summary."],
-  ["delete_todo", "delete_todo(id): permanently remove a todo item."],
-  ["list_todos", "list_todos(): list all todos for this task (id, title, status)."],
+  // todos (handled via common-tools)
+  ["create_todo", "create_todo(number, title, description): create a todo subtask with rich markdown description for context memory."],
+  ["edit_todo", "edit_todo(id, number?, title?, description?): update number, title, or description of a todo. Use update_todo_status to change status."],
+  ["list_todos", "list_todos(): list active todos for this task (id, number, title, status). Call before creating todos."],
+  ["get_todo", "get_todo(id): get full details including description for a todo item."],
+  ["reorganize_todos", "reorganize_todos(items): atomically update execution order of multiple todos in one call."],
+  ["update_todo_status", "update_todo_status(id, status): update a todo's status (pending/in-progress/done/blocked/deleted). Use 'deleted' to soft-delete. ALWAYS use this instead of edit_todo for status changes."],
   // lsp
   ["lsp", "lsp(operation, file_path, line?, character?, query?): code intelligence — goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Requires lsp.servers in workspace.yaml."],
 ]);
@@ -1991,48 +1838,6 @@ export async function executeTool(
         ctx.taskCallbacks.handleHumanTurn(taskId, message);
       }
       return JSON.stringify({ status: "delivered", task_id: taskId });
-    }
-
-    // ── todos group ───────────────────────────────────────────────────────────
-
-    case "create_todo": {
-      const taskId = ctx.taskId;
-      if (!taskId) return "Error: create_todo is only available within a task execution";
-      const title = (args.title ?? "").trim();
-      if (!title) return "Error: title is required";
-      const id = createTodo(taskId, title);
-      return JSON.stringify({ id });
-    }
-
-    case "update_todo": {
-      const taskId = ctx.taskId;
-      if (!taskId) return "Error: update_todo is only available within a task execution";
-      const id = args.id ? parseInt(args.id, 10) : NaN;
-      if (!id || isNaN(id)) return "Error: id is required";
-      const update: { title?: string; status?: string; result?: string } = {};
-      if (args.title !== undefined) update.title = String(args.title).trim();
-      if (args.status !== undefined) update.status = String(args.status);
-      if (args.result !== undefined) update.result = String(args.result);
-      const ok = dbUpdateTodo(taskId, id, update);
-      if (!ok) return `Error: todo ${id} not found`;
-      return JSON.stringify({ success: true, id });
-    }
-
-    case "delete_todo": {
-      const taskId = ctx.taskId;
-      if (!taskId) return "Error: delete_todo is only available within a task execution";
-      const id = args.id ? parseInt(args.id, 10) : NaN;
-      if (!id || isNaN(id)) return "Error: id is required";
-      const ok = dbDeleteTodo(taskId, id);
-      if (!ok) return `Error: todo ${id} not found`;
-      return JSON.stringify({ success: true, id });
-    }
-
-    case "list_todos": {
-      const taskId = ctx.taskId;
-      if (!taskId) return "Error: list_todos is only available within a task execution";
-      const todos = listTodos(taskId);
-      return JSON.stringify(todos);
     }
 
     case "lsp": {

@@ -574,6 +574,28 @@ export class Orchestrator implements ExecutionCoordinator {
     return runWithConfig(config, () => engine.listModels());
   }
 
+  async shutdownNonNativeEngines(
+    options: import("./types.ts").EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 },
+  ): Promise<void> {
+    const targets = new Set<ExecutionEngine>();
+    if (this.injectedEngine) targets.add(this.injectedEngine);
+    for (const engine of this.engines.values()) targets.add(engine);
+
+    const shutdowns: Array<Promise<void>> = [];
+    for (const engine of targets) {
+      if (this.isNativeEngine(engine)) continue;
+      if (!engine.shutdown) continue;
+      shutdowns.push(engine.shutdown(options).catch((err) => {
+        console.warn("[orchestrator] Non-native shutdown failed", {
+          reason: options.reason,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }));
+    }
+
+    await Promise.all(shutdowns);
+  }
+
   // ─── Shell approval ─────────────────────────────────────────────────────────
 
   async respondShellApproval(

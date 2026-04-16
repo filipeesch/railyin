@@ -405,6 +405,10 @@ const migrations: Array<{ id: string; sql: string }> = [
     id: "023_text_keys",
     sql: "", // handled programmatically in applyMigration
   },
+  {
+    id: "024_todo_v2",
+    sql: "", // handled programmatically in applyMigration
+  },
 ];
 
 function hasColumn(tableName: string, columnName: string): boolean {
@@ -672,6 +676,18 @@ function applyMigration(id: string, sql: string): void {
       }
       if (hasTable("task_line_comments") && !hasColumn("task_line_comments", "col_end")) {
         db.exec("ALTER TABLE task_line_comments ADD COLUMN col_end INTEGER NOT NULL DEFAULT 0");
+      }
+    } else if (id === "024_todo_v2") {
+      if (hasTable("task_todos")) {
+        if (!hasColumn("task_todos", "number")) {
+          db.exec("ALTER TABLE task_todos ADD COLUMN number REAL NOT NULL DEFAULT 0");
+          db.exec("UPDATE task_todos SET number = id");
+        }
+        if (!hasColumn("task_todos", "description")) {
+          db.exec("ALTER TABLE task_todos ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+        }
+        db.exec("UPDATE task_todos SET status = 'pending' WHERE status = 'not-started'");
+        db.exec("UPDATE task_todos SET status = 'done' WHERE status = 'completed'");
       }
     } else {
       db.exec(sql);

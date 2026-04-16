@@ -24,7 +24,7 @@ let gitDir: string;
 let configCleanup: () => void;
 let orchestrator: Orchestrator;
 
-function noop() {}
+function noop() { }
 
 const tokens: string[] = [];
 const taskUpdates: Task[] = [];
@@ -183,8 +183,8 @@ describe("Orchestrator.executeHumanTurn", () => {
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
-      cancel(_executionId: number): void {}
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+      cancel(_executionId: number): void { }
       async listModels() { return []; }
     }
 
@@ -221,7 +221,7 @@ describe("Orchestrator.respondShellApproval", () => {
       async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {
         throw new Error(`Execution ${seededExecutionId} is not waiting for resume input`);
       }
-      cancel(_executionId: number): void {}
+      cancel(_executionId: number): void { }
       async listModels() { return []; }
     }
 
@@ -314,8 +314,8 @@ describe("Orchestrator.cancel", () => {
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
-      cancel(_executionId: number): void {}
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+      cancel(_executionId: number): void { }
       async listModels() { return []; }
     }
 
@@ -368,5 +368,55 @@ describe("Orchestrator.listModels", () => {
       expect(m.qualifiedId.length).toBeGreaterThan(0);
       expect(m.contextWindow === null || typeof m.contextWindow === "number").toBe(true);
     }
+  });
+});
+
+// ─── shutdownNonNativeEngines ──────────────────────────────────────────────
+
+describe("Orchestrator.shutdownNonNativeEngines", () => {
+  it("invokes shutdown on injected non-native engine", async () => {
+    let shutdownCalls = 0;
+
+    class ShutdownStubEngine implements ExecutionEngine {
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        yield { type: "done" };
+      }
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+      cancel(_executionId: number): void { }
+      async listModels() { return []; }
+      async shutdown(): Promise<void> { shutdownCalls += 1; }
+    }
+
+    const nonNative = new Orchestrator(
+      new ShutdownStubEngine(),
+      noop,
+      noop,
+      (task) => taskUpdates.push(task),
+      (msg) => newMessages.push(msg),
+    );
+
+    await nonNative.shutdownNonNativeEngines({ reason: "app-exit", deadlineMs: 100 });
+    expect(shutdownCalls).toBe(1);
+  });
+
+  it("ignores engines without shutdown hook", async () => {
+    class NoShutdownEngine implements ExecutionEngine {
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        yield { type: "done" };
+      }
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+      cancel(_executionId: number): void { }
+      async listModels() { return []; }
+    }
+
+    const nonNative = new Orchestrator(
+      new NoShutdownEngine(),
+      noop,
+      noop,
+      (task) => taskUpdates.push(task),
+      (msg) => newMessages.push(msg),
+    );
+
+    await expect(nonNative.shutdownNonNativeEngines({ reason: "app-exit", deadlineMs: 100 })).resolves.toBeUndefined();
   });
 });

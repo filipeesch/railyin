@@ -1,100 +1,150 @@
 ## Purpose
-Defines the model-controlled, DB-persisted todo list scoped to a task. Provides structured working memory that survives context compaction and enables context-rich handoffs to sub-agents.
+Defines the model-controlled, DB-persisted todo list scoped to a task. Provides structured working memory that survives context compaction and enables context-rich handoffs across executions.
 
 ## Requirements
 
-### Requirement: Model can create todos
-The system SHALL expose a `create_todo` tool that allows the model to create a new todo item scoped to the current task. The tool SHALL accept a required `title` and optional `context` field, and SHALL return a stable integer `id` for the created item.
+### Requirement: Todo schema includes number, description, and extended status values
+The system SHALL store todos in `task_todos` with columns: `id` (INTEGER PK), `task_id` (FK), `number` (REAL, float ordering), `title` (TEXT), `description` (TEXT, required), `status` (TEXT), `created_at`, `updated_at`. Status values SHALL be: `pending`, `in-progress`, `done`, `blocked`, `deleted`. The `deleted` status SHALL serve as soft-delete.
 
-#### Scenario: Create todo without context
-- **WHEN** the model calls `create_todo` with a title only
-- **THEN** a new todo is persisted in `task_todos` with status `not-started` and a stable integer id is returned
+#### Scenario: Todo created with all required fields
+- **WHEN** a todo is created via `create_todo` with title, description, and number
+- **THEN** a row is persisted in `task_todos` with the provided values, `status = 'pending'`, and the integer `id` is returned
 
-#### Scenario: Create todo with context
-- **WHEN** the model calls `create_todo` with a title and a context string
-- **THEN** the todo is persisted with the context field populated, retrievable via `get_todo`
+#### Scenario: List todos excludes deleted items by default
+- **WHEN** `list_todos` is called and some todos have `status = 'deleted'`
+- **THEN** deleted todos are excluded from the returned list
 
-### Requirement: Model can retrieve a todo by id
-The system SHALL expose a `get_todo` tool that returns the full todo record for a given id, including `id`, `title`, `status`, `context`, and `result`.
+#### Scenario: Get todo for deleted item returns skip message
+- **WHEN** `get_todo` is called with the id of a deleted todo
+- **THEN** a plain-text message is returned indicating the todo was removed and the model should skip it
+
+### Requirement: Model can create todos with rich description
+The system SHALL expose a `create_todo` tool. It SHALL accept: `number` (REAL, required), `title` (TEXT, required), `description` (TEXT, required — rich markdown spec). The tool description SHALL use ALWAYS/NEVER statements to enforce thorough descriptions. The tool SHALL return the created todo's `id`, `number`, and `title`.
+
+#### Scenario: Create todo with full fields
+- **WHEN** the model calls `create_todo` with number=2.0, title="Refactor auth", description="## What to do\n..."
+- **THEN** the todo is persisted and `{ id, number, title }` is returned
+
+#### Scenario: Create todo missing description
+- **WHEN** the model calls `create_todo` without a description field
+- **THEN** a validation error is returned indicating description is required
+
+### Requirement: Model can retrieve a single todo with full fields
+The system SHALL expose a `get_todo` tool accepting an `id`. For a live todo it SHALL return all fields: `id`, `number`, `title`, `description`, `status`. For a deleted todo it SHALL return a plain-text message (e.g. `Todo #2 "..." has been removed. Skip it and move to the next task.`) — the model MUST skip that item and not treat it as an error.
 
 #### Scenario: Get existing todo
-- **WHEN** the model calls `get_todo` with a valid id
-- **THEN** the full todo record is returned including context and result fields (null if not set)
+- **WHEN** the model calls `get_todo` with a valid id scoped to the current task
+- **THEN** all fields are returned including the full description markdown
+
+#### Scenario: Get deleted todo
+- **WHEN** the model calls `get_todo` with the id of a deleted todo
+- **THEN** a plain-text message is returned indicating the todo was removed and instructing the model to skip it
 
 #### Scenario: Get non-existent todo
 - **WHEN** the model calls `get_todo` with an id that does not exist for the current task
-- **THEN** an error string is returned indicating the todo was not found
+- **THEN** an error string is returned
 
-### Requirement: Model can update a todo
-The system SHALL expose an `update_todo` tool that allows the model to update any combination of `title`, `status`, `context`, and `result` fields by id. Status values SHALL be: `not-started`, `in-progress`, `completed`.
+### Requirement: Model can edit todo content fields
+The system SHALL expose an `edit_todo` tool accepting `id` and any combination of: `number`, `title`, `description`. Status is NOT a field of `edit_todo` — use `update_todo_status` instead. At least one field besides `id` SHALL be required. The tool SHALL return the updated `{ id, number, title }`.
 
-#### Scenario: Update status to in-progress
-- **WHEN** the model calls `update_todo` with a valid id and `status: "in-progress"`
-- **THEN** the todo's status is updated in the DB and the next injected system block reflects the new status
+#### Scenario: Update description after discovering new context
+- **WHEN** the model calls `edit_todo` with an updated `description`
+- **THEN** the new description replaces the old one and is returned by subsequent `get_todo` calls
 
-#### Scenario: Write result after completion
-- **WHEN** the model or a sub-agent calls `update_todo` with a `result` string and `status: "completed"`
-- **THEN** the result is persisted and readable via `get_todo`, surviving future compaction cycles
+#### Scenario: Edit non-existent todo
+- **WHEN** the model calls `edit_todo` with an id not belonging to the current task
+- **THEN** an error string is returned
 
-#### Scenario: Update non-existent todo
-- **WHEN** the model calls `update_todo` with an id that does not exist for the current task
-- **THEN** an error string is returned indicating the todo was not found
+### Requirement: Model can update todo status with a dedicated tool
+The system SHALL expose an `update_todo_status` tool accepting `id` and `status`. Valid status values are `pending`, `in-progress`, `done`, `blocked`, and `deleted`. Setting status to `deleted` is the soft-delete mechanism — the item will be hidden from `list_todos` results. The tool SHALL return the updated `{ id, number, title, status }`. This is the ONLY tool that should be used for status changes and for soft-deleting todos.
 
-### Requirement: Model can delete a todo
-The system SHALL expose a `delete_todo` tool that permanently removes a todo by id.
+#### Scenario: Soft-delete a todo via deleted status
+- **WHEN** the model calls `update_todo_status` with `status: "deleted"`
+- **THEN** the todo's status is set to `deleted` and it no longer appears in `list_todos` results
 
-#### Scenario: Delete completed todo
-- **WHEN** the model calls `delete_todo` with a valid id
-- **THEN** the todo is removed from `task_todos` and no longer appears in the injected system block
+### Requirement: Model can list todos with id, number, and title
+The system SHALL expose a `list_todos` tool that returns all non-deleted todos for the current task ordered by `number ASC, id ASC`. Each item SHALL include only `id`, `number`, and `title` — not the full description. The tool result SHALL render as a list in the tool call display.
 
-### Requirement: Model can list todos
-The system SHALL expose a `list_todos` tool that returns all todos for the current task as an array of `{ id, title, status }` objects. This tool is the primary entry point for sub-agents that do not receive the system injection.
-
-#### Scenario: List todos during active run
-- **WHEN** the model or a sub-agent calls `list_todos`
-- **THEN** all todos for the current task are returned with id, title, and status only
+#### Scenario: List todos returns ordered non-deleted items
+- **WHEN** the model calls `list_todos` with todos at numbers 1.0, 2.5, 3.0 (one of which is deleted)
+- **THEN** the two non-deleted todos are returned in number order
 
 #### Scenario: List todos when none exist
 - **WHEN** the model calls `list_todos` and no todos have been created
 - **THEN** an empty array is returned
 
-### Requirement: Todos are injected as a system block on every API call
-The system SHALL inject all current todos for the task as a system message block before the conversation history on every AI API call. The injection SHALL include only `id`, `title`, and `status` — not `context` or `result`. The block SHALL be omitted entirely when the task has no todos.
+### Requirement: Model can bulk-reorder todos
+The system SHALL expose a `reorganize_todos` tool accepting an array of `{ id: number, number: number }` objects. It SHALL update all provided todos' `number` values atomically in a single transaction. The tool result SHALL render as the updated list (id, number, title) in the tool call display.
+
+#### Scenario: Reorganize reorders todos atomically
+- **WHEN** the model calls `reorganize_todos` with `[{id:1, number:3.0}, {id:2, number:1.0}]`
+- **THEN** todo 1 gets number=3.0 and todo 2 gets number=1.0 in a single transaction, and `list_todos` reflects the new order
+
+#### Scenario: Reorganize with unknown id
+- **WHEN** the model calls `reorganize_todos` with an id not belonging to the current task
+- **THEN** an error is returned and no updates are applied
+
+### Requirement: Todo tools have ALWAYS/NEVER guidance in tool descriptions
+The tool descriptions for `create_todo`, `edit_todo`, `update_todo_status`, `list_todos`, `get_todo`, and `reorganize_todos` SHALL include explicit ALWAYS and NEVER statements guiding model behavior. These SHALL specify: when to create todos (multi-step work), that description is memory and must be thorough, when to use blocked vs deleted vs done, and how to use `get_todo` before editing.
+
+#### Scenario: Tool description contains ALWAYS statement for create_todo
+- **WHEN** the model receives the `create_todo` tool definition
+- **THEN** the description contains at least one ALWAYS statement referencing description quality
+
+### Requirement: Todo tool call results render with structured display
+The system SHALL render todo tool results in the chat timeline with structured display:
+- `create_todo` and `edit_todo`: header shows `#<number> · <title>`, content shows description as markdown preview
+- `update_todo_status`: header shows `#<id> → <status>`, no content body
+- `list_todos` and `reorganize_todos`: header shows tool label, content shows each item as `<number>  <title>` per line
+
+#### Scenario: create_todo renders with number and description preview
+- **WHEN** a `create_todo` tool result is displayed in the timeline
+- **THEN** the header shows the number and title, and the content area shows the description as markdown
+
+#### Scenario: list_todos renders as numbered list
+- **WHEN** a `list_todos` tool result is displayed in the timeline
+- **THEN** each todo appears as a line with its number and title
+
+### Requirement: Todos are injected into the system message on every execution
+The system SHALL inject all active (non-deleted) todos for the task into the system/developer message on every AI execution. The injection SHALL include `id`, `number`, `title`, and `status`. The block SHALL be omitted entirely when the task has no todos. This applies to all engines (native, Claude, Copilot).
 
 #### Scenario: Injection when todos exist
-- **WHEN** an AI API call is assembled and the task has one or more todos
-- **THEN** a system message block listing todos (id, title, status) is prepended before conversation history
-
-#### Scenario: Injection survives compaction
-- **WHEN** a compaction has occurred and a subsequent AI call is assembled
-- **THEN** the todo system block is still injected fresh from the DB, unaffected by the compaction summary
+- **WHEN** an AI execution is assembled and the task has one or more non-deleted todos
+- **THEN** an `## Active Todos` block listing todos is included in the system message
 
 #### Scenario: No injection when todos list is empty
-- **WHEN** an AI API call is assembled and the task has no todos
-- **THEN** no todo system block is included in the assembled messages
+- **WHEN** an AI execution is assembled and the task has no todos
+- **THEN** no todo block is included in the system message
 
-### Requirement: Todos tool group is available to sub-agents
-The system SHALL include the `todos` tool group in the list of available tool groups that can be granted to sub-agents. Sub-agents SHALL be able to call `list_todos` and `get_todo` to discover and retrieve todo context, and `update_todo` to write results.
+### Requirement: User can view and edit todo details via UI overlay
+The system SHALL provide a `TodoDetailOverlay` component (non-fullscreen) that opens when a user clicks a todo item in the `TodoPanel`. The overlay SHALL show: number + title in the header (both editable), description as markdown preview with toggle to edit mode (textarea). A delete button in the header SHALL soft-delete the todo (set status=deleted via RPC). Save and Cancel buttons SHALL persist or discard changes.
 
-#### Scenario: Sub-agent retrieves context for delegated todo
-- **WHEN** a sub-agent is spawned with access to the `todos` group
-- **THEN** the sub-agent can call `list_todos` to discover todo IDs and `get_todo(id)` to retrieve the context field for its delegated item
+#### Scenario: User opens overlay and sees description preview
+- **WHEN** the user clicks a todo item in the TodoPanel
+- **THEN** the TodoDetailOverlay opens showing the number, title, and description as rendered markdown
 
-#### Scenario: Sub-agent writes result on completion
-- **WHEN** a sub-agent completes its work
-- **THEN** the sub-agent can call `update_todo` to set the `result` field and status to `completed`
+#### Scenario: User edits todo description via overlay
+- **WHEN** the user clicks Edit in the overlay, modifies the description, and clicks Save
+- **THEN** the updated description is persisted via RPC and the overlay shows the new content
 
-### Requirement: Todo progress is visible in the chat UI
-The system SHALL display a collapsible todo panel above the chat message input. The panel SHALL show `{completed} / {total}` progress in its collapsed state and the full list (title + status indicator) in its expanded state. The panel SHALL be hidden when no todos exist.
+#### Scenario: User deletes todo from overlay
+- **WHEN** the user clicks the delete button in the overlay
+- **THEN** the todo's status is set to `deleted` and it disappears from the TodoPanel list
 
-#### Scenario: Collapsed panel shows progress
-- **WHEN** todos exist and the panel is collapsed
-- **THEN** the panel header shows a count like "2 / 4 · Todos" indicating completed vs. total
+### Requirement: User can create todos from the UI
+The system SHALL provide a way for the user to create todos directly in the UI (not only via AI tool calls). A "+" button in the `TodoPanel` header SHALL open the `TodoDetailOverlay` in create mode with empty fields.
 
-#### Scenario: Expanded panel shows full list
-- **WHEN** the user expands the panel
-- **THEN** each todo is displayed with a status icon (✓ completed, ● in-progress, ○ not-started) and its title
+#### Scenario: User creates todo via UI
+- **WHEN** the user clicks "+" in the TodoPanel, fills in number, title, and description, and clicks Save
+- **THEN** a new todo is created via RPC and appears in the TodoPanel list
 
-#### Scenario: Panel is hidden with no todos
-- **WHEN** the task has no todos
-- **THEN** the todo panel is not rendered in the UI
+### Requirement: RPC handlers support todo CRUD from UI
+The system SHALL expose RPC handlers for: `todos.list` (existing, updated), `todos.get`, `todos.create`, `todos.edit`. These SHALL be used by the UI overlay. The `todos.list` handler SHALL include `number` and `status` in its response. Deletion from the UI is performed via `todos.edit` with `status: "deleted"` — there is no separate `todos.delete` RPC.
+
+#### Scenario: todos.get returns full todo record
+- **WHEN** the UI calls `todos.get` with a valid todoId and taskId
+- **THEN** all fields (id, number, title, description, status) are returned
+
+#### Scenario: todos.create persists a new todo
+- **WHEN** the UI calls `todos.create` with taskId, number, title, description
+- **THEN** the todo is created and the new id is returned

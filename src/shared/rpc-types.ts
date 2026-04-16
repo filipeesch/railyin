@@ -284,10 +284,25 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+export type TodoStatus = "pending" | "in-progress" | "done" | "blocked" | "deleted";
+
 export interface TodoItem {
   id: number;
+  taskId: number;
+  number: number;
   title: string;
-  status: string; // 'not-started' | 'in-progress' | 'completed'
+  description: string;
+  status: TodoStatus;
+  result: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TodoListItem {
+  id: number;
+  number: number;
+  title: string;
+  status: TodoStatus;
 }
 
 // ─── Launch types ─────────────────────────────────────────────────────────────
@@ -628,8 +643,24 @@ export type RailynRPCType = {
         response: Task;
       };
       "todos.list": {
-        params: { taskId: number };
-        response: TodoItem[];
+        params: { taskId: number; includeDeleted?: boolean };
+        response: TodoListItem[];
+      };
+      "todos.get": {
+        params: { taskId: number; todoId: number };
+        response: TodoItem | null;
+      };
+      "todos.create": {
+        params: { taskId: number; number: number; title: string; description: string };
+        response: TodoListItem;
+      };
+      "todos.edit": {
+        params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: TodoStatus };
+        response: TodoListItem | null;
+      };
+      "todos.delete": {
+        params: { taskId: number; todoId: number };
+        response: TodoListItem | null;
       };
 
       // Launch

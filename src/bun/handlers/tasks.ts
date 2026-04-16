@@ -895,10 +895,31 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       return updated;
     },
 
-    // ─── todos.list ───────────────────────────────────────────────────────────
-    "todos.list": async (params: { taskId: number }) => {
+    // ─── todos ────────────────────────────────────────────────────────────────
+    "todos.list": async (params: { taskId: number; includeDeleted?: boolean }) => {
       const { listTodos } = await import("../db/todos.ts");
-      return listTodos(params.taskId);
+      return listTodos(params.taskId, params.includeDeleted ?? false);
+    },
+    "todos.get": async (params: { taskId: number; todoId: number }) => {
+      const { getTodo } = await import("../db/todos.ts");
+      return getTodo(params.taskId, params.todoId);
+    },
+    "todos.create": async (params: { taskId: number; number: number; title: string; description: string }) => {
+      const { createTodo } = await import("../db/todos.ts");
+      return createTodo(params.taskId, params.number, params.title, params.description);
+    },
+    "todos.edit": async (params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: string }) => {
+      const { editTodo } = await import("../db/todos.ts");
+      return editTodo(params.taskId, params.todoId, {
+        number: params.number,
+        title: params.title,
+        description: params.description,
+        status: params.status as import("../db/todos.ts").TodoStatus | undefined,
+      });
+    },
+    "todos.delete": async (params: { taskId: number; todoId: number }) => {
+      const { deleteTodo } = await import("../db/todos.ts");
+      return deleteTodo(params.taskId, params.todoId);
     },
   };
 }

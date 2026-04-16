@@ -1,60 +1,31 @@
-## Purpose
-Defines the shared task management tools (common tools) available across all engine implementations. Common tools handle board and task operations and are engine-agnostic — each engine adapter wraps them in its native tool format.
-
 ## Requirements
 
 ### Requirement: Common tools are task management handlers shared across all engines
-The system SHALL extract board/task management tool handlers into a shared module (`src/bun/engine/common-tools.ts`). These tools SHALL be the only tools registered across all engines. The common tools are: `create_task`, `edit_task`, `delete_task`, `move_task`, `message_task`, `get_task`, `list_tasks`, and `get_board_summary`. For the Claude engine, those tools SHALL be registered through the Claude SDK while Claude's own built-in tools continue to own file, shell, search, edit, and agent operations.
+The system SHALL extract shared tool handlers into a common module at src/bun/engine/common-tools.ts and SHALL register those tools uniformly across all engines. The shared tools SHALL include task tools create_task, edit_task, delete_task, move_task, message_task, get_task, list_tasks, and get_board_summary; todo tools create_todo, edit_todo, update_todo_status, list_todos, get_todo, and reorganize_todos; and interaction tool interview_me. Note: `delete_todo` and `reprioritize_todos` have been removed — deletion is handled via `update_todo_status(..., 'deleted')` and reordering via `reorganize_todos`. For the Claude engine, those tools SHALL be registered through the Claude SDK while Claude built-in tools continue to own file, shell, search, edit, and agent operations.
 
 #### Scenario: Common tools are available in native engine
-- **WHEN** the native engine runs an execution in a column that includes `interactions` in its tools config
-- **THEN** the common tools are offered to the model alongside the native engine's own tools
+- **WHEN** the native engine runs an execution in a column that includes interactions in its tools config
+- **THEN** shared tools including interview_me are offered alongside native engine tools
 
 #### Scenario: Common tools are available in Copilot engine
 - **WHEN** the Copilot engine runs an execution
-- **THEN** the common tools are registered via `defineTool()` and available for the model to call
+- **THEN** shared tools including interview_me are registered via mapped common tool definitions without engine-exclusive duplicates
 
 #### Scenario: Common tools are available in Claude engine
 - **WHEN** the Claude engine runs an execution
-- **THEN** the shared task-management tools are registered with the SDK and available for the model to call
+- **THEN** shared tools including interview_me are registered with the SDK and available for model calls
 
 #### Scenario: Common tool execution returns consistent results across engines
-- **WHEN** `create_task` is called with `{ title: "Fix bug", board_id: 1 }` from any engine
-- **THEN** the same task is created in the database and the same result format is returned
-
-### Requirement: Common tool metadata includes name, description, and input schema
-Each common tool SHALL export metadata containing: `name` (string), `description` (string), and `inputSchema` (JSON Schema object). This metadata SHALL be engine-agnostic — each engine adapter wraps it in its native tool format.
-
-#### Scenario: Native engine uses metadata for tool definitions
-- **WHEN** the native engine constructs tool definitions for an AI request
-- **THEN** it uses the common tool metadata to build `AIToolDefinition` objects
-
-#### Scenario: Copilot engine uses metadata for defineTool
-- **WHEN** the Copilot engine registers common tools with the SDK
-- **THEN** it converts the JSON Schema from metadata into Zod schemas for `defineTool()`
+- **WHEN** interview_me is called with questions and optional context from any engine
+- **THEN** shared execution invokes a common interview callback contract and produces equivalent waiting-user behavior across engines
 
 ### Requirement: Common tool handlers receive a context object
-Each common tool handler function SHALL receive a `CommonToolContext` containing: `taskId` (number), `boardId` (number), `projectId` (number | null), and database access. This context is populated by the engine adapter before calling the handler.
-
-#### Scenario: Context populated by native engine
-- **WHEN** the native engine intercepts a `create_task` tool call
-- **THEN** it constructs `CommonToolContext` from the current execution's task and passes it to the handler
+Each common tool handler SHALL receive a CommonToolContext containing taskId, boardId, and execution callbacks required for shared behavior. The context SHALL include transition, human-turn, cancellation, and interview suspension callbacks so shared tools can trigger consistent orchestration outcomes across engines.
 
 #### Scenario: Context populated by Copilot engine
-- **WHEN** the Copilot engine receives a `create_task` tool call via SDK callback
-- **THEN** it constructs `CommonToolContext` from the execution params and passes it to the handler
+- **WHEN** the Copilot engine executes a common tool call
+- **THEN** it passes CommonToolContext including interview suspension callback to shared tool execution
 
-### Requirement: All non-common tools remain engine-internal
-Tools not in the common tools set (file ops, shell, search, LSP, todos, ask_me, spawn_agent, fetch_url, search_internet) SHALL remain internal to the engine that defines them. The native engine SHALL continue to own all 30+ tools. The Copilot engine SHALL rely on the SDK's built-in tools for file, shell, git, and search operations. The Claude engine SHALL rely on Claude's built-in toolset for file-system, shell, search, editing, and agent behavior instead of re-registering Railyin-native equivalents.
-
-#### Scenario: Native engine retains all its tools
-- **WHEN** the native engine constructs tool definitions
-- **THEN** all existing tools (read_file, write_file, patch_file, run_command, etc.) are available as before
-
-#### Scenario: Copilot engine does not register native-only tools
-- **WHEN** the Copilot engine creates a session
-- **THEN** it does NOT register `read_file`, `write_file`, `run_command`, or other file/shell tools — the SDK provides equivalents
-
-#### Scenario: Claude engine does not register native-only file and shell tools
-- **WHEN** the Claude engine creates a session/query
-- **THEN** it does NOT register duplicate `read_file`, `write_file`, `patch_file`, `run_command`, or search tools because Claude Code mode already provides those capabilities
+#### Scenario: Context populated by Claude engine
+- **WHEN** the Claude engine executes a common tool call
+- **THEN** it passes CommonToolContext including interview suspension callback to shared tool execution

@@ -5,6 +5,8 @@ import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
 import { extractCommandBinaries } from "../../workflow/tools.ts";
 import { appendApprovedCommands, getApprovedCommands } from "../../workflow/engine.ts";
 import { getDb } from "../../db/index.ts";
+import { LeaseRegistry } from "../lease-registry.ts";
+import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
 
 export interface ClaudeSdkModelInfo {
   value: string;
@@ -43,11 +45,14 @@ export interface ClaudeSdkAdapter {
   run(config: ClaudeRunConfig): AsyncIterable<EngineEvent>;
   cancel(executionId: number): Promise<void>;
   listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]>;
+  touchExecutionLease?(executionId: number, state?: EngineLeaseState): void;
+  shutdownAll?(options?: EngineShutdownOptions): Promise<void>;
 }
 
 interface ActiveClaudeQuery {
   interrupt?: () => Promise<void>;
   close?: () => void;
+  sessionId: string;
 }
 
 type ClaudeSdkRuntime = {
@@ -290,7 +295,17 @@ export function claudeSessionIdForTask(taskId: number): string {
 }
 
 class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
+  private readonly idleTimeoutMs = Number(process.env.RAILYN_ENGINE_IDLE_TIMEOUT_MS ?? 10 * 60 * 1000);
   private readonly activeQueries = new Map<number, ActiveClaudeQuery>();
+  private readonly executionToSession = new Map<number, string>();
+  private readonly leaseExecutions = new Map<string, Set<number>>();
+  private readonly leases = new LeaseRegistry(
+    "claude",
+    this.idleTimeoutMs,
+    async (leaseKey) => {
+      await this.closeLeaseExecutions(leaseKey, "timeout-expiry");
+    },
+  );
 
   run(config: ClaudeRunConfig): AsyncIterable<EngineEvent> {
     return this._run(config);
@@ -359,10 +374,12 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
                 command,
                 executionId: config.executionId,
               });
+              this.leases.touch(config.sessionId, "waiting_user");
               const resumeInput = await config.waitForResume({
                 type: "shell_approval",
                 command,
               });
+              this.leases.touch(config.sessionId, "running");
               if (resumeInput.type === "shell_approval" && resumeInput.decision === "approve_all") {
                 appendApprovedCommands(config.taskId, unapproved);
               }
@@ -371,7 +388,9 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             onElicitation: async (request: { message: string; requestedSchema?: Record<string, unknown> }) => {
               const payload = buildAskUserPayload(request.message, request.requestedSchema);
               emit({ type: "ask_user", payload });
+              this.leases.touch(config.sessionId, "waiting_user");
               const resumeInput = await config.waitForResume({ type: "ask_user", payload });
+              this.leases.touch(config.sessionId, "running");
               if (resumeInput.type !== "ask_user") {
                 return { action: "decline" };
               }
@@ -383,12 +402,16 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           },
         });
 
+        this.trackExecutionLease(config.executionId, config.sessionId);
+        this.leases.touch(config.sessionId, "running");
         this.activeQueries.set(config.executionId, {
           interrupt: query.interrupt ? () => query.interrupt!() : undefined,
           close: query.close ? () => query.close!() : undefined,
+          sessionId: config.sessionId,
         });
 
         for await (const message of query) {
+          this.leases.touch(config.sessionId, "running");
           config.onRawMessage?.(message as Record<string, unknown>);
           for (const event of translateClaudeMessage(message as { type: string }, config.toolMetaByCallId)) {
             emit(event);
@@ -405,6 +428,9 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
       } finally {
         this.activeQueries.get(config.executionId)?.close?.();
         this.activeQueries.delete(config.executionId);
+        this.untrackExecutionLease(config.executionId);
+        this.leases.setState(config.sessionId, "idle");
+        this.leases.touch(config.sessionId, "idle");
         done = true;
         wake();
       }
@@ -426,6 +452,19 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
     await query?.interrupt?.().catch(() => { });
     query?.close?.();
     this.activeQueries.delete(executionId);
+    this.untrackExecutionLease(executionId);
+  }
+
+  touchExecutionLease(executionId: number, state: EngineLeaseState = "running"): void {
+    const sessionId = this.executionToSession.get(executionId);
+    if (!sessionId) return;
+    this.leases.touch(sessionId, state);
+  }
+
+  async shutdownAll(options: EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
+    await this.leases.shutdownAll(async (leaseKey) => {
+      await this.closeLeaseExecutions(leaseKey, "engine-shutdown");
+    }, options);
   }
 
   async listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]> {
@@ -459,6 +498,45 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
       await query.interrupt?.().catch(() => { });
       query.close?.();
     }
+  }
+
+  private trackExecutionLease(executionId: number, sessionId: string): void {
+    this.executionToSession.set(executionId, sessionId);
+    let executions = this.leaseExecutions.get(sessionId);
+    if (!executions) {
+      executions = new Set<number>();
+      this.leaseExecutions.set(sessionId, executions);
+    }
+    executions.add(executionId);
+  }
+
+  private untrackExecutionLease(executionId: number): void {
+    const sessionId = this.executionToSession.get(executionId);
+    if (!sessionId) return;
+    this.executionToSession.delete(executionId);
+    const executions = this.leaseExecutions.get(sessionId);
+    if (!executions) return;
+    executions.delete(executionId);
+    if (executions.size === 0) {
+      this.leaseExecutions.delete(sessionId);
+      this.leases.setState(sessionId, "idle");
+    }
+  }
+
+  private async closeLeaseExecutions(sessionId: string, reason: string): Promise<void> {
+    const executions = this.leaseExecutions.get(sessionId);
+    if (!executions || executions.size === 0) return;
+
+    console.log("[claude] Closing lease executions", { sessionId, reason, count: executions.size });
+    await Promise.all(
+      [...executions].map(async (executionId) => {
+        const query = this.activeQueries.get(executionId);
+        await query?.interrupt?.().catch(() => { });
+        query?.close?.();
+        this.activeQueries.delete(executionId);
+        this.untrackExecutionLease(executionId);
+      }),
+    );
   }
 }
 

@@ -22,6 +22,7 @@ export class CopilotEngine implements ExecutionEngine {
 
   /** Active sessions keyed by executionId. */
   private readonly sessions = new Map<number, CopilotSdkSession>();
+  private readonly executionSessionIds = new Map<number, string>();
   private readonly pendingResumes = new Map<number, {
     resolve: (input: EngineResumeInput) => void;
     reject: (error: Error) => void;
@@ -42,6 +43,8 @@ export class CopilotEngine implements ExecutionEngine {
   }
 
   async resume(executionId: number, input: EngineResumeInput): Promise<void> {
+    const sdkSessionId = this.executionSessionIds.get(executionId);
+    if (sdkSessionId) this.sdkAdapter.touchLease(sdkSessionId, "running");
     const pending = this.pendingResumes.get(executionId);
     if (!pending) {
       throw new Error(`Execution ${executionId} is not waiting for resume input`);
@@ -132,6 +135,8 @@ export class CopilotEngine implements ExecutionEngine {
       }
 
       this.sessions.set(executionId, session);
+      this.executionSessionIds.set(executionId, sdkSessionId);
+      this.sdkAdapter.touchLease(sdkSessionId, "running");
 
       // Bail early if the execution was cancelled while we were creating the session
       // (user clicked stop before session creation completed).
@@ -183,6 +188,11 @@ export class CopilotEngine implements ExecutionEngine {
             });
           },
         )) {
+          if (event.type === "ask_user" || event.type === "shell_approval") {
+            this.sdkAdapter.touchLease(sdkSessionId, "waiting_user");
+          } else {
+            this.sdkAdapter.touchLease(sdkSessionId, "running");
+          }
           yield event;
 
           if (event.type === "ask_user" || event.type === "shell_approval") {
@@ -238,12 +248,12 @@ export class CopilotEngine implements ExecutionEngine {
         pending.reject(new Error(`Execution ${executionId} was closed before resuming`));
       }
       this.sessions.delete(executionId);
+      this.executionSessionIds.delete(executionId);
       if (session) {
         await this.sdkAdapter.disconnectSession(session).catch(() => { });
       }
-      // Release the dedicated CLI process for this session now that the execution
-      // is complete. Avoids orphaned CLI processes piling up between runs.
-      await this.sdkAdapter.releaseClient(sdkSessionId).catch(() => { });
+      // Keep the task lease warm until inactivity timeout. Do not release immediately.
+      this.sdkAdapter.setLeaseState(sdkSessionId, "idle");
     }
   }
 
@@ -254,6 +264,7 @@ export class CopilotEngine implements ExecutionEngine {
       pending.reject(new Error(`Execution ${executionId} cancelled`));
     }
     const session = this.sessions.get(executionId);
+    const sdkSessionId = this.executionSessionIds.get(executionId);
     if (session) {
       // Abort the in-progress turn first so the model stops cleanly and the
       // session state on disk stays consistent for future resumption.
@@ -261,7 +272,13 @@ export class CopilotEngine implements ExecutionEngine {
         .catch(() => { })
         .finally(() => this.sdkAdapter.disconnectSession(session).catch(() => { }));
     }
+    if (sdkSessionId) this.sdkAdapter.setLeaseState(sdkSessionId, "idle");
     this.sessions.delete(executionId);
+    this.executionSessionIds.delete(executionId);
+  }
+
+  async shutdown(options: import("../types.ts").EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
+    await this.sdkAdapter.shutdownAll(options).catch(() => { });
   }
 
   async listModels(): Promise<EngineModelInfo[]> {

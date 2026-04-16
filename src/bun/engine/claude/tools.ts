@@ -21,7 +21,15 @@ type ClaudeSdkRuntime = {
 
 function toToolArgs(args: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(args).map(([key, value]) => [key, value == null ? "" : String(value)]),
+    Object.entries(args).map(([key, value]) => {
+      if (typeof value === "string") return [key, value];
+      if (value == null) return [key, ""];
+      try {
+        return [key, JSON.stringify(value)];
+      } catch {
+        return [key, String(value)];
+      }
+    }),
   );
 }
 

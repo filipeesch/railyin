@@ -215,11 +215,32 @@ win = new BrowserWindow({
   rpc: mainWebviewRPC,
 });
 
+// Product policy: on macOS, closing the app window should quit the app.
+if (process.platform === "darwin") {
+  const winWithEvents = win as unknown as { on?: (event: string, listener: () => void) => void };
+  winWithEvents.on?.("close", () => {
+    const app = Electrobun as unknown as { quit?: () => void };
+    app.quit?.();
+  });
+}
+
 // When the window is closed, kill the entire process group so the
 // 'electrobun dev --watch' node watcher also terminates.
 // forceExit() only kills this bun subprocess; the watcher parent stays
 // alive (and would restart the app) otherwise.
-Electrobun.events.on("before-quit", () => {
+const SHUTDOWN_GRACE_MS = Number(process.env.RAILYN_SHUTDOWN_GRACE_MS ?? 3_000);
+let _shutdownStarted = false;
+
+Electrobun.events.on("before-quit", async () => {
+  if (_shutdownStarted) return;
+  _shutdownStarted = true;
+
+  try {
+    await orchestrator?.shutdownNonNativeEngines?.({ reason: "app-exit", deadlineMs: SHUTDOWN_GRACE_MS });
+  } catch (err) {
+    console.warn("[shutdown] Graceful non-native shutdown failed", err instanceof Error ? err.message : String(err));
+  }
+
   try {
     const result = Bun.spawnSync(["bash", "-c", `ps -o pgid= -p ${process.pid}`]);
     const pgid = parseInt(result.stdout.toString().trim(), 10);

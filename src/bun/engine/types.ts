@@ -102,6 +102,20 @@ export interface EngineModelInfo {
   enabled?: boolean;
 }
 
+export type EngineLeaseState = "running" | "waiting_user" | "idle" | "closing";
+
+export interface EngineLeaseMetadata {
+  leaseKey: string;
+  engine: "copilot" | "claude";
+  lastActivityAt: number;
+  state: EngineLeaseState;
+}
+
+export interface EngineShutdownOptions {
+  reason: "app-exit" | "workspace-reload" | "lifecycle-timeout";
+  deadlineMs?: number;
+}
+
 // ─── ExecutionEngine interface ────────────────────────────────────────────────
 
 export interface ExecutionEngine {
@@ -127,6 +141,11 @@ export interface ExecutionEngine {
    * List available models for this engine.
    */
   listModels(): Promise<EngineModelInfo[]>;
+
+  /**
+   * Optional engine-wide graceful shutdown hook for non-execution lifecycle cleanup.
+   */
+  shutdown?(options?: EngineShutdownOptions): Promise<void>;
 }
 
 // ─── Common tool context ──────────────────────────────────────────────────────

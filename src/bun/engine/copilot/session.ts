@@ -28,22 +28,22 @@ export type CopilotSdkEvent =
   | { type: "assistant.reasoning"; data: { content?: string }; source?: string }
   | { type: "session.ask_user"; data: { payload: string } }
   | {
-      type: "tool.execution_start";
-      data: { toolCallId: string; toolName: string; arguments?: unknown; parentToolCallId?: string };
-      source?: string;
-    }
+    type: "tool.execution_start";
+    data: { toolCallId: string; toolName: string; arguments?: unknown; parentToolCallId?: string };
+    source?: string;
+  }
   | { type: "tool.execution_partial_result"; data: { toolCallId: string; partialOutput: string }; source?: string }
   | { type: "tool.execution_progress"; data: { toolCallId: string; progressMessage: string }; source?: string }
   | {
-      type: "tool.execution_complete";
-      data: {
-        toolCallId: string;
-        success: boolean;
-        result?: CopilotSdkToolResultPayload;
-        isUserRequested?: boolean;
-      };
-      source?: string;
-    }
+    type: "tool.execution_complete";
+    data: {
+      toolCallId: string;
+      success: boolean;
+      result?: CopilotSdkToolResultPayload;
+      isUserRequested?: boolean;
+    };
+    source?: string;
+  }
   | { type: "assistant.usage"; data: { inputTokens?: number; outputTokens?: number } }
   | { type: "session.task_complete" }
   | { type: "session.idle" }
@@ -76,6 +76,12 @@ export interface CopilotSdkAdapter {
   pingClient(sessionId: string): Promise<boolean>;
   /** Release (evict) the CLI process associated with the given session, stopping it if idle. */
   releaseClient(sessionId: string): Promise<void>;
+  /** Refresh lease activity timestamp for the given session. */
+  touchLease(sessionId: string, state?: import("../types.ts").EngineLeaseState): void;
+  /** Update lease state without resetting activity timeout. */
+  setLeaseState(sessionId: string, state: import("../types.ts").EngineLeaseState): void;
+  /** Gracefully close all active leases for app-level shutdown. */
+  shutdownAll(options?: import("../types.ts").EngineShutdownOptions): Promise<void>;
   /** Register a callback for setup progress (e.g. "Downloading engine..."). */
   onStatus(listener: (message: string) => void): () => void;
 }
@@ -102,12 +108,21 @@ let _sharedClientPromise: Promise<LoadedCopilotClient> | undefined;
 // Per-task CLI pool — each session gets its own isolated CLI process.
 type PoolEntry = {
   clientPromise: Promise<LoadedCopilotClient>;
-  idleTimer: ReturnType<typeof setTimeout>;
   /** Number of SDK sessions currently active on this pool entry. Eviction is suppressed while > 0. */
   activeSessions: number;
 };
 const _taskCliPool = new Map<string, PoolEntry>();
-const POOL_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+import { LeaseRegistry } from "../lease-registry.ts";
+import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
+
+const POOL_IDLE_TIMEOUT_MS = Number(process.env.RAILYN_ENGINE_IDLE_TIMEOUT_MS ?? 10 * 60 * 1000);
+const _leaseRegistry = new LeaseRegistry(
+  "copilot",
+  POOL_IDLE_TIMEOUT_MS,
+  async (leaseKey) => {
+    await evictPoolEntry(leaseKey);
+  },
+);
 
 // Status listeners waiting for progress updates from ensureCliBinary / getClient.
 let _statusListeners: Set<(message: string) => void> = new Set();
@@ -320,21 +335,9 @@ function getSharedClient(): Promise<LoadedCopilotClient> {
   return _sharedClientPromise;
 }
 
-function scheduleEviction(sessionId: string): ReturnType<typeof setTimeout> {
-  const timer = setTimeout(async () => {
-    const entry = _taskCliPool.get(sessionId);
-    if (!entry || entry.idleTimer !== timer) return; // entry was refreshed before timer fired
-    if (entry.activeSessions > 0) return; // in active use — don't evict
-    _taskCliPool.delete(sessionId);
-    entry.clientPromise.then((c) => c.stop()).catch(() => { });
-  }, POOL_IDLE_TIMEOUT_MS);
-  return timer;
-}
-
 async function evictPoolEntry(sessionId: string): Promise<void> {
   const entry = _taskCliPool.get(sessionId);
   if (!entry) return;
-  clearTimeout(entry.idleTimer);
   _taskCliPool.delete(sessionId);
   try {
     const client = await entry.clientPromise;
@@ -345,8 +348,7 @@ async function evictPoolEntry(sessionId: string): Promise<void> {
 async function getOrCreatePoolEntry(sessionId: string): Promise<LoadedCopilotClient> {
   const existing = _taskCliPool.get(sessionId);
   if (existing) {
-    clearTimeout(existing.idleTimer);
-    existing.idleTimer = scheduleEviction(sessionId);
+    _leaseRegistry.touch(sessionId, "running");
     return existing.clientPromise;
   }
 
@@ -364,12 +366,15 @@ async function getOrCreatePoolEntry(sessionId: string): Promise<LoadedCopilotCli
 
   const entry: PoolEntry = {
     clientPromise,
-    idleTimer: scheduleEviction(sessionId),
     activeSessions: 0,
   };
   _taskCliPool.set(sessionId, entry);
+  _leaseRegistry.touch(sessionId, "running");
   // Remove entry on spawn failure so the next call retries cleanly
-  clientPromise.catch(() => { _taskCliPool.delete(sessionId); });
+  clientPromise.catch(() => {
+    _taskCliPool.delete(sessionId);
+    _leaseRegistry.release(sessionId);
+  });
   return clientPromise;
 }
 
@@ -407,11 +412,7 @@ class DefaultCopilotSdkSession implements CopilotSdkSession {
     const entry = _taskCliPool.get(this.sessionId);
     if (entry && entry.activeSessions > 0) {
       entry.activeSessions--;
-      if (entry.activeSessions === 0) {
-        // Restart the idle countdown now that no sessions are active.
-        clearTimeout(entry.idleTimer);
-        entry.idleTimer = scheduleEviction(this.sessionId);
-      }
+      if (entry.activeSessions === 0) _leaseRegistry.setState(this.sessionId, "idle");
     }
     return this.session.disconnect();
   }
@@ -427,6 +428,7 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
     const client = await getOrCreatePoolEntry(config.sessionId);
     const entry = _taskCliPool.get(config.sessionId);
     if (entry) entry.activeSessions++;
+    _leaseRegistry.touch(config.sessionId, "running");
     const session = await client.createSession(config);
     return new DefaultCopilotSdkSession(session, config.sessionId);
   }
@@ -435,6 +437,7 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
     const client = await getOrCreatePoolEntry(sessionId);
     const entry = _taskCliPool.get(sessionId);
     if (entry) entry.activeSessions++;
+    _leaseRegistry.touch(sessionId, "running");
     const session = await client.resumeSession(sessionId, config);
     return new DefaultCopilotSdkSession(session, sessionId);
   }
@@ -468,7 +471,22 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
   }
 
   async releaseClient(sessionId: string): Promise<void> {
+    _leaseRegistry.release(sessionId, "manual");
     await evictPoolEntry(sessionId);
+  }
+
+  touchLease(sessionId: string, state: EngineLeaseState = "running"): void {
+    _leaseRegistry.touch(sessionId, state);
+  }
+
+  setLeaseState(sessionId: string, state: EngineLeaseState): void {
+    _leaseRegistry.setState(sessionId, state);
+  }
+
+  async shutdownAll(options: EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
+    await _leaseRegistry.shutdownAll(async (leaseKey) => {
+      await evictPoolEntry(leaseKey);
+    }, options);
   }
 
   async listModels(): Promise<CopilotSdkModelInfo[]> {

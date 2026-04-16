@@ -2,7 +2,7 @@
 Defines the Claude-backed execution engine, including Claude Code mode behavior, shared tool registration, resumable interactive pauses, and Claude model discovery.
 ## Requirements
 ### Requirement: ClaudeEngine wraps the Claude Agent SDK as an ExecutionEngine
-The system SHALL implement `ClaudeEngine` conforming to the shared `ExecutionEngine` contract. It SHALL use `@anthropic-ai/claude-agent-sdk` through an engine-specific adapter that can be replaced in tests. The engine SHALL create or resume Claude sessions, translate SDK messages into `EngineEvent` values (including tool calls and results), and manage session lifecycle for Claude-backed executions.
+The system SHALL implement `ClaudeEngine` conforming to the shared `ExecutionEngine` contract. It SHALL use `@anthropic-ai/claude-agent-sdk` through an engine-specific adapter that can be replaced in tests. The engine SHALL create or resume Claude sessions, translate SDK messages into `EngineEvent` values (including tool calls and results), and manage task-scoped runtime lease lifecycle for Claude-backed executions.
 
 The message translator SHALL handle all content block types emitted by the Claude SDK:
 - **text blocks** → `{ type: "token", content: block.text }`
@@ -43,6 +43,28 @@ The message translator SHALL handle all content block types emitted by the Claud
 #### Scenario: Compaction summary is surfaced to provide transparency
 - **WHEN** the Claude SDK emits a system message with subtype="compaction_summary"
 - **THEN** the engine yields a `status` event showing users that context window management occurred (e.g., "Context window compacted. Conversation summary created to reduce tokens.")
+
+### Requirement: Claude runtime leases SHALL expire after 10 minutes of task inactivity
+The Claude adapter SHALL track task lease activity and gracefully release Claude runtime resources after 10 minutes without activity. This inactivity policy SHALL apply during running and waiting-user states.
+
+#### Scenario: Waiting-user Claude lease expires
+- **WHEN** a task is waiting for user input and no lease activity occurs for 10 minutes
+- **THEN** the Claude runtime lease is gracefully released
+
+#### Scenario: Active Claude lease remains while activity is observed
+- **WHEN** lease activity is observed within each 10-minute window
+- **THEN** the Claude runtime lease remains active
+
+### Requirement: Claude leases SHALL be gracefully closed during app exit
+On app exit flow, all active Claude leases SHALL be asked to gracefully close before hard termination fallback.
+
+#### Scenario: App exit closes all active Claude leases
+- **WHEN** app quit flow begins
+- **THEN** the Claude adapter attempts graceful closure for all active Claude leases within a bounded deadline
+
+#### Scenario: Startup does not kill Claude runtimes
+- **WHEN** the app starts
+- **THEN** no startup path terminates Claude runtimes as part of this capability
 
 ### Requirement: Claude engine runs in Claude Code mode for project-local features
 The Claude engine SHALL use the Agent SDK in Claude Code mode so Claude-managed project features are loaded natively from the worktree. At minimum, the engine SHALL use the Claude Code system/tool presets and project setting sources so project-local `CLAUDE.md`, skills, and slash commands are available during execution.
@@ -103,4 +125,3 @@ When the Claude SDK requests user input or tool permission during a live executi
 #### Scenario: Claude model IDs are qualified for UI grouping
 - **WHEN** Claude models are returned to the product
 - **THEN** they are qualified in a way that keeps model-selection grouping and persistence consistent with other engines
-

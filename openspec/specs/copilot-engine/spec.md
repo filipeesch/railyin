@@ -114,20 +114,20 @@ The system SHALL pass column `stage_instructions` to the Copilot SDK via `system
 - **WHEN** `ExecutionParams.systemInstructions` is undefined
 - **THEN** the CopilotSession uses the default Copilot system prompt without modification
 
-### Requirement: Copilot engine session lifecycle is one session per execution
-The system SHALL create a new `CopilotSession` for each `execute()` call. The session SHALL be disconnected when the execution completes, fails, or is cancelled. Copilot's `infiniteSessions` feature handles compaction within the session. Railyin SHALL NOT perform any compaction for the Copilot engine.
+### Requirement: Copilot engine session lifecycle is one session per active task lease
+The system SHALL maintain a dedicated Copilot runtime lease per active task session identity. The lease SHALL be reused across resumable turns for the same task and SHALL be gracefully released when no task activity is observed for the configured inactivity window.
 
-#### Scenario: New session created per execution
-- **WHEN** `execute()` is called twice for the same task
-- **THEN** each call creates a separate CopilotSession
+#### Scenario: Active task reuses same lease
+- **WHEN** multiple resumable turns execute for the same task session ID
+- **THEN** the engine reuses the same Copilot lease/runtime while the task remains active
 
-#### Scenario: Session disconnected on completion
-- **WHEN** the execution completes normally
-- **THEN** the CopilotSession is disconnected and resources are released
+#### Scenario: Inactive task lease is released
+- **WHEN** no lease activity is observed for 10 consecutive minutes
+- **THEN** the engine gracefully disconnects and releases that task's Copilot runtime lease
 
-#### Scenario: Session disconnected on cancellation
-- **WHEN** `cancel(executionId)` is called
-- **THEN** the CopilotSession for that execution is disconnected
+#### Scenario: Waiting-user lease still expires on inactivity
+- **WHEN** a task is in waiting-user state with no lease activity for 10 minutes
+- **THEN** the Copilot runtime lease is gracefully released
 
 ### Requirement: Copilot engine handles permission requests via events
 The system SHALL handle Copilot SDK's `onPermissionRequest` callback by translating permission requests into `shell_approval` EngineEvents for shell commands. The orchestrator handles the approval flow — the engine resumes the session when approval is granted.
@@ -192,15 +192,26 @@ The system SHALL maintain a pool of Copilot CLI processes, one per active sessio
 - **THEN** the engine spawns a new CLI process, reconnects, and resumes from disk session state
 
 ### Requirement: Copilot engine recycles idle CLI processes to conserve resources
-The system SHALL start a 10-minute idle timer when a pool entry is created or reused. If no session activity occurs for 10 minutes, the CLI process SHALL be stopped and the pool entry removed. The idle timer SHALL be reset each time the pool entry is accessed via a `createSession` or `resumeSession` call.
+The system SHALL evaluate Copilot lease inactivity against a 10-minute timeout based on task activity timestamps. The timeout SHALL apply uniformly to running and waiting-user task leases. Access and runtime events for a lease SHALL refresh its activity timestamp.
 
-#### Scenario: Idle CLI process is stopped after 10 minutes
-- **WHEN** no task creates or resumes a session for a given session ID for 10 consecutive minutes
-- **THEN** the CLI process for that session ID is stopped and the pool entry is removed
+#### Scenario: Idle Copilot runtime is stopped after 10 minutes without activity
+- **WHEN** no activity is observed for a task lease for 10 consecutive minutes
+- **THEN** the Copilot CLI process for that lease is stopped and lease resources are removed
 
-#### Scenario: Pool entry survives while task is active
-- **WHEN** a task periodically accesses its pool entry within the 10-minute window
-- **THEN** the pool entry is never evicted while the task remains active
+#### Scenario: Lease remains while activity continues
+- **WHEN** task activity is observed within each 10-minute window
+- **THEN** the Copilot lease remains active and is not evicted
+
+### Requirement: Copilot leases SHALL be gracefully closed during app exit
+On app exit flow, all active Copilot task leases SHALL be asked to gracefully close before fallback hard termination.
+
+#### Scenario: App exit closes all active Copilot leases
+- **WHEN** app quit flow begins
+- **THEN** the Copilot adapter attempts graceful closure for all active Copilot leases within a bounded deadline
+
+#### Scenario: Startup does not kill Copilot runtimes
+- **WHEN** the app starts
+- **THEN** no startup path terminates Copilot runtimes as part of this capability
 
 ### Requirement: Copilot engine detects CLI process crashes and fails fast
 The system SHALL verify CLI process health on each watchdog timeout by racing `client.ping()` against a 5-second timeout. If `ping()` fails or the 5-second timeout is reached, the execution SHALL fail immediately with a fatal error describing the CLI crash. It SHALL NOT wait for the next 120-second watchdog interval.
@@ -227,4 +238,3 @@ The system SHALL track a per-execution silence counter that increments each time
 #### Scenario: Silence counter resets between executions
 - **WHEN** a new `execute()` call starts for the same task
 - **THEN** the silence counter begins at 0 for that execution
-
