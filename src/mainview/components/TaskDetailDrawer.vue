@@ -265,6 +265,8 @@
         v-if="task"
         :task-id="task.id"
         :refresh-trigger="todoRefreshTrigger"
+        :board-id="task.boardId"
+        :workflow-state="task.workflowState"
       />
       <div class="task-detail__input">
         <div class="task-detail__input-row">
@@ -640,7 +642,7 @@ function handleOutsideClick(e: MouseEvent) {
   if (!open.value) return;
   // Skip if the click is inside any PrimeVue overlay panel teleported to body
   const target = e.target as Element | null;
-  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay')) return;
+  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay, .todo-overlay-backdrop')) return;
   // Skip if our own dialogs are open
   if (editDialogVisible.value || deleteDialogVisible.value) return;
   // PrimeVue Drawer teleports its panel to document.body, so $el is a comment

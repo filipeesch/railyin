@@ -176,7 +176,8 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
       "NEVER use create_todo when:\n" +
       "- The work can be done in a single step\n" +
       "- You already have todos covering this work (call list_todos first)\n\n" +
-      "The `description` field is a rich markdown memory. Write it as if explaining to yourself after a compaction — include WHY, WHAT to do, files involved, constraints, acceptance criteria. Be comprehensive.",
+      "The `description` field is a rich markdown memory. Write it as if explaining to yourself after a compaction — include WHY, WHAT to do, files involved, constraints, acceptance criteria. Be comprehensive.\n\n" +
+      "The optional `phase` field scopes this todo to a specific board column (workflow state id, e.g. 'review', 'in-progress'). Todos scoped to a phase are only injected into the system context when the task is in that column — omit phase to make the todo always active regardless of the current column.",
     parameters: {
       type: "object",
       properties: {
@@ -192,6 +193,10 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
           type: "string",
           description: "Rich markdown specification: what to do, why, files involved, constraints, acceptance criteria. This is a context memory — be comprehensive.",
         },
+        phase: {
+          type: "string",
+          description: "Optional. The workflow state id (board column) this todo belongs to (e.g. 'review', 'in-progress'). When set, the todo is only injected into the system context while the task is in that column. Omit to make the todo always active.",
+        },
       },
       required: ["number", "title", "description"],
     },
@@ -203,7 +208,8 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
       "ALWAYS call get_todo before editing to see the current content.\n" +
       "NEVER call edit_todo without knowing the current todo content — always get_todo first.\n" +
       "NEVER use edit_todo to change status — use update_todo_status instead.\n\n" +
-      "At least one field must be provided.",
+      "At least one field must be provided.\n\n" +
+      "The optional `phase` field scopes the todo to a specific board column. Pass null to clear the phase and make the todo always active.",
     parameters: {
       type: "object",
       properties: {
@@ -211,6 +217,10 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
         number: { type: "number", description: "New execution order (float)." },
         title: { type: "string", description: "New short label." },
         description: { type: "string", description: "Updated markdown specification." },
+        phase: {
+          type: "string",
+          description: "Optional. New phase (workflow state id). Pass null to clear the phase and make the todo always active.",
+        },
       },
       required: ["id"],
     },
@@ -218,10 +228,11 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "list_todos",
     description:
-      "List all active todo items for the current task. Returns id, number, title, and status only (no description).\n\n" +
+      "List all active todo items for the current task. Returns id, number, title, status, and phase for each item.\n\n" +
       "ALWAYS call list_todos before creating todos to avoid duplicates.\n" +
       "ALWAYS call list_todos at the start of a session to understand what work remains.\n" +
-      "NEVER use list_todos to read descriptions — use get_todo for full content.",
+      "NEVER use list_todos to read descriptions — use get_todo for full content.\n\n" +
+      "Note: this tool returns ALL non-deleted todos including those scoped to other phases. The system context only injects phase-active todos automatically.",
     parameters: {
       type: "object",
       properties: {},
@@ -611,7 +622,8 @@ export async function executeCommonTool(
       if (!title) return "Error: title is required";
       const description = (args.description ?? "").trim();
       if (!description) return "Error: description is required";
-      const item = createTodo(ctx.taskId, number, title, description);
+      const phase = args.phase != null ? String(args.phase) : undefined;
+      const item = createTodo(ctx.taskId, number, title, description, phase);
       return JSON.stringify(item);
     }
 
@@ -623,6 +635,7 @@ export async function executeCommonTool(
       if (args.number !== undefined) update.number = parseFloat(args.number);
       if (args.title !== undefined) update.title = args.title.trim();
       if (args.description !== undefined) update.description = args.description;
+      if ("phase" in args) update.phase = args.phase === "null" || args.phase == null ? null : String(args.phase);
       const result = editTodo(ctx.taskId, id, update);
       if (!result) return `Error: todo ${id} not found`;
       return JSON.stringify(result);

@@ -905,18 +905,20 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       const { getTodo } = await import("../db/todos.ts");
       return getTodo(params.taskId, params.todoId);
     },
-    "todos.create": async (params: { taskId: number; number: number; title: string; description: string }) => {
+    "todos.create": async (params: { taskId: number; number: number; title: string; description: string; phase?: string }) => {
       const { createTodo } = await import("../db/todos.ts");
-      return createTodo(params.taskId, params.number, params.title, params.description);
+      return createTodo(params.taskId, params.number, params.title, params.description, params.phase);
     },
-    "todos.edit": async (params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: string }) => {
+    "todos.edit": async (params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: string; phase?: string | null }) => {
       const { editTodo } = await import("../db/todos.ts");
-      return editTodo(params.taskId, params.todoId, {
+      const update: Parameters<typeof editTodo>[2] = {
         number: params.number,
         title: params.title,
         description: params.description,
         status: params.status as import("../db/todos.ts").TodoStatus | undefined,
-      });
+      };
+      if ("phase" in params) update.phase = params.phase;
+      return editTodo(params.taskId, params.todoId, update);
     },
     "todos.delete": async (params: { taskId: number; todoId: number }) => {
       const { deleteTodo } = await import("../db/todos.ts");

@@ -294,6 +294,7 @@ export interface TodoItem {
   description: string;
   status: TodoStatus;
   result: string | null;
+  phase: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -303,6 +304,7 @@ export interface TodoListItem {
   number: number;
   title: string;
   status: TodoStatus;
+  phase: string | null;
 }
 
 // ─── Launch types ─────────────────────────────────────────────────────────────
@@ -651,11 +653,11 @@ export type RailynRPCType = {
         response: TodoItem | null;
       };
       "todos.create": {
-        params: { taskId: number; number: number; title: string; description: string };
+        params: { taskId: number; number: number; title: string; description: string; phase?: string };
         response: TodoListItem;
       };
       "todos.edit": {
-        params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: TodoStatus };
+        params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: TodoStatus; phase?: string | null };
         response: TodoListItem | null;
       };
       "todos.delete": {
