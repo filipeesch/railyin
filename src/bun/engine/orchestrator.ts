@@ -1156,6 +1156,7 @@ export class Orchestrator implements ExecutionCoordinator {
               "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
               [executionId],
             );
+            this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
             this.onToken(taskId, executionId, "", true);
             return;
           }

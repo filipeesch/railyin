@@ -17,6 +17,7 @@ import {
     toolStartWithOptions,
     usage,
     waitForAbort,
+    toolCall,
 } from "./support/copilot-sdk-mock.ts";
 import {
     runAskUserScenario,
@@ -183,29 +184,7 @@ describe("Copilot backend RPC scenarios", () => {
     });
 
     it("transitions to waiting_user when interview_me is triggered via shared tool handler", async () => {
-        const adapter = new MockCopilotSdkAdapter();
-        adapter
-            .queueResumeFailure(new Error("no session"))
-            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [waitForAbort()] }));
-        const runtime = createCopilotRuntime(adapter);
-        const { taskId } = await runtime.createTask();
-
-        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need architecture input" });
-
-        const deadline = Date.now() + 2_000;
-        while (adapter.trace.createCalls.length === 0 && Date.now() < deadline) {
-            await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        expect(adapter.trace.createCalls.length).toBeGreaterThan(0);
-
-        const tools = adapter.trace.createCalls[0]!.config.tools as Array<{
-            name: string;
-            handler: (args: unknown) => Promise<string>;
-        }>;
-        const interviewTool = tools.find((tool) => tool.name === "interview_me");
-        expect(interviewTool).toBeDefined();
-
-        const handlerResult = await interviewTool!.handler({
+        const interviewArgs = {
             questions: [
                 {
                     question: "Choose architecture",
@@ -213,8 +192,17 @@ describe("Copilot backend RPC scenarios", () => {
                     options: [{ title: "Option A", description: "Tradeoffs" }],
                 },
             ],
-        });
-        expect(handlerResult).toContain("Interview suspended");
+        };
+        const adapter = new MockCopilotSdkAdapter();
+        adapter
+            .queueResumeFailure(new Error("no session"))
+            .queueCreateSuccess(
+                new MockCopilotSession().queueTurn({ steps: [toolCall("interview_me", interviewArgs)] }),
+            );
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need architecture input" });
 
         await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
         expect(runtime.getTaskState(taskId)).toBe("waiting_user");

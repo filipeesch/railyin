@@ -9,7 +9,8 @@ import type {
 
 type MockTurnStep =
     | { kind: "emit"; event: CopilotSdkEvent }
-    | { kind: "waitForAbort" };
+    | { kind: "waitForAbort" }
+    | { kind: "callTool"; toolName: string; args: unknown };
 
 export interface MockTurnScript {
     sendError?: Error;
@@ -24,9 +25,14 @@ export class MockCopilotSession implements CopilotSdkSession {
     private readonly turns: MockTurnScript[] = [];
     private abortWaiters: Array<() => void> = [];
     private aborted = false;
+    private tools: Array<{ name: string; handler: (args: unknown) => Promise<string> }> = [];
     readonly prompts: string[] = [];
     disconnectCalls = 0;
     abortCalls = 0;
+
+    setTools(tools: Array<{ name: string; handler: (args: unknown) => Promise<string> }>): void {
+        this.tools = tools;
+    }
 
     queueTurn(script: MockTurnScript): this {
         this.turns.push(script);
@@ -48,6 +54,12 @@ export class MockCopilotSession implements CopilotSdkSession {
                 if (this.aborted) return;
                 if (step.kind === "emit") {
                     this.emit(step.event);
+                    continue;
+                }
+                if (step.kind === "callTool") {
+                    const tool = this.tools.find((t) => t.name === step.toolName);
+                    if (!tool) throw new Error(`Mock tool not found: ${step.toolName}`);
+                    await tool.handler(step.args);
                     continue;
                 }
                 await new Promise<void>((resolve) => {
@@ -132,6 +144,9 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
         const outcome = this.createOutcomes.shift();
         if (!outcome) throw new Error("No mock createSession outcome queued");
         if (outcome.kind === "error") throw outcome.error;
+        if (config.tools) {
+            outcome.session.setTools(config.tools as Array<{ name: string; handler: (args: unknown) => Promise<string> }>);
+        }
         return outcome.session;
     }
 
@@ -246,6 +261,10 @@ export function usage(inputTokens: number, outputTokens: number): MockTurnStep {
 
 export function done(): MockTurnStep {
     return { kind: "emit", event: { type: "session.task_complete" } };
+}
+
+export function toolCall(toolName: string, args: unknown = {}): MockTurnStep {
+    return { kind: "callTool", toolName, args };
 }
 
 export function askUser(payload = '{"question":"Need input"}'): MockTurnStep {

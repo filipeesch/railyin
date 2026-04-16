@@ -74,6 +74,11 @@ export class CopilotEngine implements ExecutionEngine {
     const rawModel = model;
     const resolvedModel = rawModel?.startsWith("copilot/") ? rawModel.slice("copilot/".length) : rawModel;
 
+    // Signal for interview_me interception: when the model calls interview_me,
+    // store the payload and abort the session so the engine can emit the event.
+    let pendingInterviewPayload: string | null = null;
+    const interviewAbortController = new AbortController();
+
     // Build tool context for common task-management tools
     const toolContext = {
       taskId,
@@ -87,17 +92,13 @@ export class CopilotEngine implements ExecutionEngine {
       onCancel: (_execId: number) => {
         this.cancel(_execId);
       },
+      onInterviewMe: (payload: string) => {
+        pendingInterviewPayload = payload;
+        interviewAbortController.abort();
+      },
     };
 
-    // Signal for interview_me interception: when the model calls interview_me,
-    // store the payload and abort the session so the engine can emit the event.
-    let pendingInterviewPayload: string | null = null;
-    const interviewAbortController = new AbortController();
-
-    const tools = buildCopilotTools(toolContext, (payload: string) => {
-      pendingInterviewPayload = payload;
-      interviewAbortController.abort();
-    });
+    const tools = buildCopilotTools(toolContext);
 
     // Build system message — append stage_instructions to SDK's managed prompt
     const systemMessage = systemInstructions
