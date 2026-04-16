@@ -4,12 +4,6 @@
       <span class="todo-panel__toggle">{{ expanded ? '▼' : '▶' }}</span>
       <span v-if="!expanded" class="todo-panel__summary">{{ doneCount }} / {{ todos.length }} · Todos</span>
       <span v-else class="todo-panel__summary">Todos</span>
-      <button
-        v-if="expanded"
-        class="todo-panel__add-btn"
-        @click.stop="openCreate"
-        title="New todo"
-      >+</button>
     </button>
     <ul v-if="expanded" class="todo-panel__list">
       <li
@@ -20,10 +14,10 @@
         @click="openEdit(todo)"
       >
         <span class="todo-panel__icon">{{ statusIcon(todo.status) }}</span>
-        <span class="todo-panel__num">{{ todo.number }}</span>
         <span class="todo-panel__title">{{ todo.title }}</span>
         <span v-if="isMuted(todo)" class="todo-panel__phase-badge">{{ todo.phase }}</span>
         <button
+          v-if="todo.status === 'pending'"
           class="todo-panel__delete-btn"
           @click.stop="deleteTodoItem(todo)"
           title="Delete"

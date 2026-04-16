@@ -910,7 +910,13 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       return createTodo(params.taskId, params.number, params.title, params.description, params.phase);
     },
     "todos.edit": async (params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: string; phase?: string | null }) => {
-      const { editTodo } = await import("../db/todos.ts");
+      const { getTodo, editTodo } = await import("../db/todos.ts");
+      const todo = getTodo(params.taskId, params.todoId);
+      if (!todo) return { error: "Todo not found" };
+      if ("deleted" in todo) return { error: "Cannot edit deleted todo" };
+      if (todo.status !== "pending") {
+        return { error: "Can only edit description of pending todos" };
+      }
       const update: Parameters<typeof editTodo>[2] = {
         number: params.number,
         title: params.title,
