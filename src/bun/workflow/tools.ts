@@ -1772,6 +1772,7 @@ export async function executeTool(
       try {
         await removeWorktree(taskId);
       } catch { /* log only; deletion continues */ }
+      db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [taskId]);
       db.run("DELETE FROM conversation_messages WHERE task_id = ?", [taskId]);
       db.run("DELETE FROM executions WHERE task_id = ?", [taskId]);
       db.run("DELETE FROM task_git_context WHERE task_id = ?", [taskId]);

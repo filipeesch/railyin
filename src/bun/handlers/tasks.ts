@@ -473,6 +473,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       const { warning } = await removeWorktree(params.taskId);
 
       // Cascade delete — tasks must be deleted before conversations (FK ref)
+      db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [params.taskId]);
       db.run("DELETE FROM conversation_messages WHERE task_id = ?", [params.taskId]);
       db.run("DELETE FROM executions WHERE task_id = ?", [params.taskId]);
       db.run("DELETE FROM task_git_context WHERE task_id = ?", [params.taskId]);
