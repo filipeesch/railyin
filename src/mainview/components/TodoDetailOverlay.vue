@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="todo-overlay-backdrop" @click.self="onClose">
-      <div class="todo-overlay" @keydown.esc="onClose">
+    <div v-if="visible" class="todo-overlay-backdrop" @mousedown.self="onClose">
+      <div class="todo-overlay" @mousedown.stop @keydown.esc="onClose">
         <!-- Header -->
         <div class="todo-overlay__header">
           <div class="todo-overlay__meta">
@@ -26,6 +26,10 @@
               <option value="in-progress">in-progress</option>
               <option value="done">done</option>
               <option value="blocked">blocked</option>
+            </select>
+            <select v-model="form.phase" class="todo-overlay__status-select">
+              <option :value="null">— any phase —</option>
+              <option v-for="col in boardColumns" :key="col.id" :value="col.id">{{ col.label }}</option>
             </select>
             <button
               v-if="props.todoId != null"
@@ -92,6 +96,7 @@ const props = defineProps<{
   visible: boolean;
   taskId: number;
   todoId: number | null;
+  boardId: number;
 }>();
 
 const emit = defineEmits<{
@@ -103,12 +108,14 @@ const emit = defineEmits<{
 const editMode = ref(true);
 const saving = ref(false);
 const error = ref<string | null>(null);
+const boardColumns = ref<Array<{ id: string; label: string }>>([]);
 
 const form = reactive({
   number: 10,
   title: "",
   description: "",
   status: "pending" as TodoStatus,
+  phase: null as string | null,
 });
 
 const renderedDescription = computed(() => {
@@ -122,6 +129,7 @@ async function loadTodo() {
     form.title = "";
     form.description = "";
     form.status = "pending";
+    form.phase = null;
     editMode.value = true;
     return;
   }
@@ -132,10 +140,23 @@ async function loadTodo() {
       form.title = todo.title;
       form.description = todo.description;
       form.status = todo.status;
+      form.phase = todo.phase ?? null;
       editMode.value = false;
     }
   } catch {
     error.value = "Failed to load todo";
+  }
+}
+
+async function fetchBoardColumns() {
+  try {
+    const boards = await electroview.rpc!.request["boards.list"]();
+    const board = boards.find((b) => b.id === props.boardId);
+    if (board) {
+      boardColumns.value = board.template.columns;
+    }
+  } catch {
+    // silently ignore
   }
 }
 
@@ -150,6 +171,7 @@ async function onSave() {
         number: form.number,
         title: form.title.trim(),
         description: form.description,
+        phase: form.phase || null,
       });
     } else {
       await electroview.rpc!.request["todos.edit"]({
@@ -159,6 +181,7 @@ async function onSave() {
         title: form.title.trim(),
         description: form.description,
         status: form.status,
+        phase: form.phase || null,
       });
     }
     emit("saved");
@@ -193,6 +216,7 @@ watch(
     if (visible) {
       error.value = null;
       loadTodo();
+      fetchBoardColumns();
     }
   },
   { immediate: true },
@@ -211,12 +235,11 @@ watch(
 }
 
 .todo-overlay {
-  background: var(--p-surface-0, #fff);
+  background: var(--p-content-background);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
-  width: 620px;
-  max-width: 95vw;
-  max-height: 80vh;
+  width: 80vw;
+  height: 80vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -229,8 +252,8 @@ watch(
   justify-content: space-between;
   gap: 8px;
   padding: 10px 14px;
-  background: var(--p-surface-50, #f8fafc);
-  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-content-background);
+  border-bottom: 1px solid var(--p-content-border-color);
   flex-shrink: 0;
 }
 
@@ -246,10 +269,10 @@ watch(
   width: 60px;
   font-size: 0.8rem;
   padding: 3px 6px;
-  border: 1px solid var(--p-surface-300, #cbd5e1);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 4px;
-  background: var(--p-surface-0, #fff);
-  color: var(--p-text-color, #374151);
+  background: var(--p-content-background);
+  color: var(--p-text-color);
   flex-shrink: 0;
 }
 
@@ -258,17 +281,17 @@ watch(
   font-size: 0.9rem;
   font-weight: 600;
   padding: 3px 8px;
-  border: 1px solid var(--p-surface-300, #cbd5e1);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 4px;
-  background: var(--p-surface-0, #fff);
-  color: var(--p-text-color, #1e293b);
+  background: var(--p-content-background);
+  color: var(--p-text-color);
   min-width: 0;
 }
 
 .todo-overlay__title-input:focus,
 .todo-overlay__number-input:focus {
   outline: none;
-  border-color: var(--p-primary-color, #6366f1);
+  border-color: var(--p-primary-color);
 }
 
 .todo-overlay__header-actions {
@@ -281,10 +304,10 @@ watch(
 .todo-overlay__status-select {
   font-size: 0.75rem;
   padding: 3px 6px;
-  border: 1px solid var(--p-surface-300, #cbd5e1);
+  border: 1px solid var(--p-content-border-color);
   border-radius: 4px;
-  background: var(--p-surface-0, #fff);
-  color: var(--p-text-color, #374151);
+  background: var(--p-content-background);
+  color: var(--p-text-color);
 }
 
 .todo-overlay__icon-btn {
@@ -292,14 +315,14 @@ watch(
   border: none;
   cursor: pointer;
   font-size: 0.75rem;
-  color: var(--p-text-muted-color, #9ca3af);
+  color: var(--p-text-muted-color);
   padding: 4px 6px;
   border-radius: 4px;
 }
 
 .todo-overlay__icon-btn:hover {
-  background: var(--p-surface-100, #f1f5f9);
-  color: var(--p-text-color, #374151);
+  background: var(--p-content-hover-background);
+  color: var(--p-text-color);
 }
 
 .todo-overlay__icon-btn--danger:hover {
@@ -319,7 +342,7 @@ watch(
 .todo-overlay__toolbar {
   display: flex;
   gap: 0;
-  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  border-bottom: 1px solid var(--p-content-border-color);
   flex-shrink: 0;
 }
 
@@ -330,13 +353,13 @@ watch(
   padding: 6px 14px;
   font-size: 0.8rem;
   cursor: pointer;
-  color: var(--p-text-muted-color, #6b7280);
+  color: var(--p-text-muted-color);
   margin-bottom: -1px;
 }
 
 .todo-overlay__tab--active {
-  border-bottom-color: var(--p-primary-color, #6366f1);
-  color: var(--p-primary-color, #6366f1);
+  border-bottom-color: var(--p-primary-color);
+  color: var(--p-primary-color);
   font-weight: 500;
 }
 
@@ -354,8 +377,8 @@ watch(
   font-size: 0.85rem;
   font-family: var(--p-font-family-mono, ui-monospace, monospace);
   line-height: 1.5;
-  background: var(--p-surface-0, #fff);
-  color: var(--p-text-color, #374151);
+  background: var(--p-content-background);
+  color: var(--p-text-color);
 }
 
 .todo-overlay__textarea:focus {
@@ -368,7 +391,7 @@ watch(
   padding: 12px 16px;
   font-size: 0.85rem;
   line-height: 1.6;
-  color: var(--p-text-color, #374151);
+  color: var(--p-text-color);
 }
 
 /* Footer */
@@ -378,8 +401,8 @@ watch(
   justify-content: flex-end;
   gap: 8px;
   padding: 10px 14px;
-  border-top: 1px solid var(--p-surface-200, #e2e8f0);
-  background: var(--p-surface-50, #f8fafc);
+  border-top: 1px solid var(--p-content-border-color);
+  background: var(--p-content-background);
   flex-shrink: 0;
 }
 
@@ -409,16 +432,16 @@ watch(
 
 .todo-overlay__btn--secondary {
   background: none;
-  border-color: var(--p-surface-300, #cbd5e1);
-  color: var(--p-text-color, #374151);
+  border-color: var(--p-content-border-color);
+  color: var(--p-text-color);
 }
 
 .todo-overlay__btn--secondary:hover:not(:disabled) {
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background);
 }
 
 .todo-overlay__btn--primary {
-  background: var(--p-primary-color, #6366f1);
+  background: var(--p-primary-color);
   color: white;
 }
 
@@ -447,13 +470,13 @@ watch(
 .markdown-content :deep(code) {
   font-family: var(--p-font-family-mono, ui-monospace, monospace);
   font-size: 0.85em;
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background);
   padding: 1px 4px;
   border-radius: 3px;
 }
 
 .markdown-content :deep(pre) {
-  background: var(--p-surface-100, #f1f5f9);
+  background: var(--p-content-hover-background);
   border-radius: 4px;
   padding: 10px 12px;
   overflow-x: auto;

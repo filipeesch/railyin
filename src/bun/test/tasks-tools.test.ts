@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { executeTool, TOOL_GROUPS } from "../workflow/tools.ts";
+import { executeCommonTool } from "../engine/common-tools.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import type { TaskToolCallbacks } from "../workflow/tools.ts";
+import type { CommonToolContext } from "../engine/types.ts";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -27,6 +29,15 @@ const ctx = (overrides: { taskId?: number; boardId?: number; callbacks?: TaskToo
     taskId: overrides.taskId ?? taskId,
     boardId: overrides.boardId ?? boardId,
     taskCallbacks: overrides.callbacks ?? callbacks,
+});
+
+/** Build a CommonToolContext wired to the test task (for todo tools) */
+const commonCtx = (overrides: { taskId?: number; boardId?: number } = {}): CommonToolContext => ({
+    taskId: overrides.taskId ?? taskId,
+    boardId: overrides.boardId ?? boardId,
+    onTransition: noop,
+    onHumanTurn: noop,
+    onCancel: noop,
 });
 
 beforeEach(() => {
@@ -538,5 +549,124 @@ describe("executeTool / message_task", () => {
             ctx(),
         );
         expect(result).toContain("Error: task_id is required");
+    });
+});
+
+// ─── create_todo ──────────────────────────────────────────────────────────────
+
+describe("executeCommonTool / create_todo", () => {
+    it("creates a todo and returns item with phase null by default", async () => {
+        const result = await executeCommonTool(
+            "create_todo",
+            { number: "10", title: "My todo", description: "Do the thing" },
+            commonCtx(),
+        );
+        const item = JSON.parse(result);
+        expect(item.title).toBe("My todo");
+        expect(item.number).toBe(10);
+        expect(item.phase).toBeNull();
+    });
+
+    it("creates a todo with a phase", async () => {
+        const result = await executeCommonTool(
+            "create_todo",
+            { number: "10", title: "Phased todo", description: "Do the thing", phase: "backlog" },
+            commonCtx(),
+        );
+        const item = JSON.parse(result);
+        expect(item.phase).toBe("backlog");
+    });
+
+    it("returns error when number is missing", async () => {
+        const result = await executeCommonTool(
+            "create_todo",
+            { title: "No number", description: "Oops" },
+            commonCtx(),
+        );
+        expect(result).toContain("Error: number is required");
+    });
+
+    it("returns error when title is missing", async () => {
+        const result = await executeCommonTool(
+            "create_todo",
+            { number: "10", description: "No title" },
+            commonCtx(),
+        );
+        expect(result).toContain("Error: title is required");
+    });
+});
+
+// ─── edit_todo ────────────────────────────────────────────────────────────────
+
+describe("executeCommonTool / edit_todo", () => {
+    it("sets phase on an existing todo", async () => {
+        const created = JSON.parse(await executeCommonTool(
+            "create_todo",
+            { number: "10", title: "My todo", description: "Do it" },
+            commonCtx(),
+        ));
+
+        const result = await executeCommonTool(
+            "edit_todo",
+            { id: String(created.id), phase: "in-progress" },
+            commonCtx(),
+        );
+        const item = JSON.parse(result);
+        expect(item.phase).toBe("in-progress");
+    });
+
+    it("clears phase when null string is passed", async () => {
+        const created = JSON.parse(await executeCommonTool(
+            "create_todo",
+            { number: "10", title: "My todo", description: "Do it", phase: "backlog" },
+            commonCtx(),
+        ));
+
+        const result = await executeCommonTool(
+            "edit_todo",
+            { id: String(created.id), phase: "null" },
+            commonCtx(),
+        );
+        const item = JSON.parse(result);
+        expect(item.phase).toBeNull();
+    });
+
+    it("does not change phase when phase key is absent", async () => {
+        const created = JSON.parse(await executeCommonTool(
+            "create_todo",
+            { number: "10", title: "My todo", description: "Do it", phase: "backlog" },
+            commonCtx(),
+        ));
+
+        const result = await executeCommonTool(
+            "edit_todo",
+            { id: String(created.id), title: "Updated title" },
+            commonCtx(),
+        );
+        const item = JSON.parse(result);
+        expect(item.phase).toBe("backlog");
+    });
+});
+
+// ─── list_todos ───────────────────────────────────────────────────────────────
+
+describe("executeCommonTool / list_todos", () => {
+    it("returns all todos including phase field", async () => {
+        await executeCommonTool(
+            "create_todo",
+            { number: "10", title: "No phase", description: "Always active" },
+            commonCtx(),
+        );
+        await executeCommonTool(
+            "create_todo",
+            { number: "20", title: "Backlog only", description: "Scoped", phase: "backlog" },
+            commonCtx(),
+        );
+
+        const result = await executeCommonTool("list_todos", {}, commonCtx());
+        const items = JSON.parse(result);
+        expect(items).toHaveLength(2);
+        expect(items.find((t: { title: string }) => t.title === "No phase").phase).toBeNull();
+        expect(items.find((t: { title: string }) => t.title === "Backlog only").phase).toBe("backlog");
     });
 });

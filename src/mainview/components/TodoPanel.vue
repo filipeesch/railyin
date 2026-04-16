@@ -16,12 +16,13 @@
         v-for="todo in todos"
         :key="todo.id"
         class="todo-panel__item"
-        :class="`todo-panel__item--${todo.status}`"
+        :class="[`todo-panel__item--${todo.status}`, { 'todo-panel__item--muted': isMuted(todo) }]"
         @click="openEdit(todo)"
       >
         <span class="todo-panel__icon">{{ statusIcon(todo.status) }}</span>
         <span class="todo-panel__num">{{ todo.number }}</span>
         <span class="todo-panel__title">{{ todo.title }}</span>
+        <span v-if="isMuted(todo)" class="todo-panel__phase-badge">{{ todo.phase }}</span>
         <button
           class="todo-panel__delete-btn"
           @click.stop="deleteTodoItem(todo)"
@@ -35,6 +36,7 @@
       :visible="overlayVisible"
       :task-id="props.taskId"
       :todo-id="overlayTodoId"
+      :board-id="boardId"
       @close="overlayVisible = false"
       @saved="onSaved"
       @deleted="onDeleted"
@@ -48,13 +50,17 @@ import { electroview } from "../rpc";
 import type { TodoListItem } from "@shared/rpc-types";
 import TodoDetailOverlay from "./TodoDetailOverlay.vue";
 
-const props = defineProps<{ taskId: number; refreshTrigger?: number }>();
+const props = defineProps<{ taskId: number; refreshTrigger?: number; boardId: number; workflowState: string }>();
 
 const todos = ref<TodoListItem[]>([]);
 const expanded = ref(false);
 const overlayVisible = ref(false);
 const overlayTodoId = ref<number | null>(null);
 const doneCount = computed(() => todos.value.filter((t) => t.status === "done").length);
+
+function isMuted(todo: TodoListItem): boolean {
+  return !!(todo.phase && todo.phase !== props.workflowState);
+}
 
 function statusIcon(status: string): string {
   if (status === "done") return "✓";
@@ -239,5 +245,22 @@ watch(() => props.refreshTrigger, fetchTodos);
 
 .todo-panel__item--blocked .todo-panel__icon {
   color: #ef4444;
+}
+
+.todo-panel__item--muted {
+  opacity: 0.45;
+}
+.todo-panel__item--muted .todo-panel__title {
+  font-style: italic;
+}
+.todo-panel__phase-badge {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  color: var(--p-text-muted-color, #9ca3af);
+  background: var(--p-content-hover-background);
+  border: 1px solid var(--p-content-border-color);
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
 }
 </style>

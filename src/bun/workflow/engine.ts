@@ -381,9 +381,10 @@ function assembleMessages(
   }
 
   // Active todos — inject as a system block so the list survives compaction.
+  // Only phase-active todos (phase IS NULL OR phase = current column) are injected.
   // Only id/title/status are injected.
   if (taskId) {
-    const todos = listTodos(taskId);
+    const todos = listTodos(taskId, false, task.workflow_state);
     if (todos.length > 0) {
       const STATUS_ICON: Record<string, string> = {
         "completed": "✓",

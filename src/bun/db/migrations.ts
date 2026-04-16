@@ -409,6 +409,10 @@ const migrations: Array<{ id: string; sql: string }> = [
     id: "024_todo_v2",
     sql: "", // handled programmatically in applyMigration
   },
+  {
+    id: "025_todo_phase",
+    sql: "", // handled programmatically in applyMigration
+  },
 ];
 
 function hasColumn(tableName: string, columnName: string): boolean {
@@ -688,6 +692,10 @@ function applyMigration(id: string, sql: string): void {
         }
         db.exec("UPDATE task_todos SET status = 'pending' WHERE status = 'not-started'");
         db.exec("UPDATE task_todos SET status = 'done' WHERE status = 'completed'");
+      }
+    } else if (id === "025_todo_phase") {
+      if (hasTable("task_todos") && !hasColumn("task_todos", "phase")) {
+        db.exec("ALTER TABLE task_todos ADD COLUMN phase TEXT NULL;");
       }
     } else {
       db.exec(sql);
