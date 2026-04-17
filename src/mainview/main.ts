@@ -30,6 +30,12 @@ app.use(PrimeVue, {
       cssLayer: false,
     },
   },
+  zIndex: {
+    overlay: 1300,
+    menu: 1300,
+    modal: 1100,
+    tooltip: 1100,
+  },
 });
 app.use(ToastService);
 app.use(ConfirmationService);

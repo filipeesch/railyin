@@ -34,26 +34,15 @@
           :loading="syncingChanges"
           @click="syncChangedFiles"
         />
-        <!-- Edit button: visible only when worktree not yet created -->
+        <!-- Edit button: always available to open task overlay -->
         <Button
-          v-if="!task.worktreeStatus || task.worktreeStatus === 'not_created'"
           icon="pi pi-pencil"
           text
           rounded
           size="small"
           class="ml-auto"
           v-tooltip="'Edit title & description'"
-          @click="openEditDialog"
-        />
-        <Button
-          v-else
-          icon="pi pi-pencil"
-          text
-          rounded
-          size="small"
-          class="ml-auto"
-          disabled
-          v-tooltip="'Cannot edit after worktree is created'"
+          @click="openTaskOverlay"
         />
         <!-- Delete button -->
         <Button
@@ -412,24 +401,6 @@
     @close="onManageModelsClosed"
   />
 
-  <!-- Edit task dialog -->
-  <Dialog v-model:visible="editDialogVisible" header="Edit task" :modal="true" :style="{ width: '480px' }">
-    <div class="edit-form">
-      <label class="edit-label">Title</label>
-      <InputText v-model="editTitle" class="w-full" />
-      <label class="edit-label mt-2">Description</label>
-      <Textarea v-model="editDescription" rows="5" class="w-full" autoResize />
-    </div>
-    <div v-if="saveError" class="dialog-error">
-      <i class="pi pi-exclamation-circle" />
-      {{ saveError }}
-    </div>
-    <template #footer>
-      <Button label="Cancel" text @click="editDialogVisible = false; saveError = null" />
-      <Button label="Save" :loading="editSaving" :disabled="!editTitle.trim()" @click="saveEdit" />
-    </template>
-  </Dialog>
-
   <!-- Delete confirm dialog -->
   <Dialog v-model:visible="deleteDialogVisible" header="Delete task" :modal="true" :style="{ width: '420px' }">
     <p>Are you sure you want to delete <strong>{{ task?.title }}</strong>?</p>
@@ -447,6 +418,17 @@
       <Button label="Delete" severity="danger" :loading="deleteLoading" :disabled="!!deleteWarning" @click="deleteTask" />
     </template>
   </Dialog>
+
+  <!-- Task Detail Overlay -->
+  <TaskDetailOverlay
+    v-if="task"
+    :visible="taskOverlayVisible"
+    :task-id="task.id"
+    :board-id="task.boardId"
+    @close="taskOverlayVisible = false"
+    @saved="onTaskSaved"
+    @deleted="onTaskDeleted"
+  />
 </template>
 
 <script setup lang="ts">
@@ -472,6 +454,7 @@ import ManageModelsModal from "./ManageModelsModal.vue";
 import TodoPanel from "./TodoPanel.vue";
 import ChangedFilesPanel from "./ChangedFilesPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
+import TaskDetailOverlay from "./TaskDetailOverlay.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
 import { useToast } from "primevue/usetoast";
@@ -642,9 +625,9 @@ function handleOutsideClick(e: MouseEvent) {
   if (!open.value) return;
   // Skip if the click is inside any PrimeVue overlay panel teleported to body
   const target = e.target as Element | null;
-  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay, .todo-overlay-backdrop')) return;
+  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay, .todo-overlay-backdrop, .task-overlay')) return;
   // Skip if our own dialogs are open
-  if (editDialogVisible.value || deleteDialogVisible.value) return;
+  if (deleteDialogVisible.value) return;
   // PrimeVue Drawer teleports its panel to document.body, so $el is a comment
   // node — not the visible panel. Query the rendered panel by its CSS class instead.
   const drawerPanel = document.querySelector('.p-drawer');
@@ -762,20 +745,14 @@ const pendingByFile = ref<{ filePath: string; pendingCount: number }[]>([]);
 // Session memory notes (fetched on drawer open)
 const sessionMemoryContent = ref<string | null>(null);
 
-// Edit dialog state
-const editDialogVisible = ref(false);
-const editTitle = ref("");
-const editDescription = ref("");
-const editSaving = ref(false);
+// Task overlay state
+const taskOverlayVisible = ref(false);
 
 // Delete dialog state
 const deleteDialogVisible = ref(false);
 const deleteLoading = ref(false);
 const deleteError = ref<string | null>(null);
 const deleteWarning = ref<string | null>(null);
-
-// Edit error state
-const saveError = ref<string | null>(null);
 
 // Columns from the active board template
 const columns = computed(() => {
@@ -925,25 +902,9 @@ async function compactConversation() {
   }
 }
 
-function openEditDialog() {
+function openTaskOverlay() {
   if (!task.value) return;
-  editTitle.value = task.value.title;
-  editDescription.value = task.value.description;
-  editDialogVisible.value = true;
-}
-
-async function saveEdit() {
-  if (!task.value || !editTitle.value.trim()) return;
-  editSaving.value = true;
-  saveError.value = null;
-  try {
-    await taskStore.updateTask(task.value.id, editTitle.value.trim(), editDescription.value.trim());
-    editDialogVisible.value = false;
-  } catch (err) {
-    saveError.value = err instanceof Error ? err.message : 'Failed to save changes';
-  } finally {
-    editSaving.value = false;
-  }
+  taskOverlayVisible.value = true;
 }
 
 function confirmDelete() {
@@ -1019,6 +980,18 @@ watch(
     }
   },
 );
+
+function onTaskSaved() {
+  if (!task.value) return;
+  taskOverlayVisible.value = false;
+  taskStore.loadTasks(task.value.boardId);
+}
+
+function onTaskDeleted() {
+  if (!task.value) return;
+  taskOverlayVisible.value = false;
+  taskStore.closeTask();
+}
 </script>
 
 <style scoped>

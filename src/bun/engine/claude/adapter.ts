@@ -332,10 +332,18 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
     const abortController = new AbortController();
     config.signal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
+    let pendingInterviewPayload: string | null = null;
+
     (async () => {
       try {
         const [sdk, zod, cliPath] = await Promise.all([loadClaudeRuntime(), loadZodRuntime(), ensureClaudeCliJs()]);
-        const toolServer = buildClaudeToolServer(sdk, zod.z, config.commonToolContext);
+        const toolContext = {
+          ...config.commonToolContext,
+          onInterviewMe: (payload: string) => {
+            pendingInterviewPayload = payload;
+          },
+        };
+        const toolServer = buildClaudeToolServer(sdk, zod.z, toolContext);
         const hasExistingSession = await sdk.getSessionInfo?.(config.sessionId, { dir: config.workingDirectory }).catch(() => undefined);
         const query = sdk.query({
           prompt: config.prompt,
@@ -348,6 +356,13 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             ...(hasExistingSession ? { resume: config.sessionId } : { sessionId: config.sessionId }),
             tools: { type: "preset", preset: "claude_code" },
             settingSources: ["project"],
+            hooks: {
+              onPostToolUse: (input: Record<string, unknown>) => {
+                if (input.toolName === "mcp__railyin__interview_me") {
+                  return { continue: false };
+                }
+              },
+            },
             systemPrompt: config.systemInstructions
               ? { type: "preset", preset: "claude_code", append: config.systemInstructions }
               : { type: "preset", preset: "claude_code" },
@@ -416,6 +431,10 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           for (const event of translateClaudeMessage(message as { type: string }, config.toolMetaByCallId)) {
             emit(event);
           }
+        }
+
+        if (pendingInterviewPayload !== null) {
+          emit({ type: "interview_me", payload: pendingInterviewPayload });
         }
       } catch (err) {
         if (!abortController.signal.aborted) {

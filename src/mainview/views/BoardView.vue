@@ -56,12 +56,7 @@
           aria-label="Settings"
           @click="router.push('/setup')"
         />
-        <Button
-          v-if="boardStore.activeBoard"
-          label="New Task"
-          icon="pi pi-plus"
-          @click="showCreateTask = true"
-        />
+
       </div>
     </div>
 
@@ -81,6 +76,18 @@
           <Badge
             :value="columnTasks(column.id).length"
             severity="secondary"
+          />
+        </div>
+
+        <!-- Create Task button (only for backlog column) -->
+        <div
+          v-if="column.id === 'backlog'"
+          class="board-column__create-task"
+        >
+          <Button
+            label="New Task"
+            icon="pi pi-plus"
+            @click="openCreateOverlay"
           />
         </div>
 
@@ -127,12 +134,15 @@
       @saved="onWorkflowSaved"
     />
 
-    <!-- Create task dialog -->
-    <CreateTaskDialog
+    <!-- Task Detail Overlay (for both create and edit) -->
+    <TaskDetailOverlay
       v-if="boardStore.activeBoardId"
-      v-model:visible="showCreateTask"
+      :visible="showCreateTask || activeTaskForOverlay !== null"
+      :task-id="activeTaskForOverlay"
       :board-id="boardStore.activeBoardId"
-      @created="onTaskCreated"
+      @close="handleOverlayClose"
+      @saved="handleOverlaySaved"
+      @deleted="handleOverlayDeleted"
     />
   </div>
 </template>
@@ -152,7 +162,7 @@ import { useReviewStore } from "../stores/review";
 import { useWorkspaceStore } from "../stores/workspace";
 import TaskCard from "../components/TaskCard.vue";
 import TaskDetailDrawer from "../components/TaskDetailDrawer.vue";
-import CreateTaskDialog from "../components/CreateTaskDialog.vue";
+import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 
@@ -165,6 +175,7 @@ const reviewStore = useReviewStore();
 const { isDark, toggle: toggleDark } = useDarkMode();
 
 const showCreateTask = ref(false);
+const activeTaskForOverlay = ref<number | null>(null);
 const dragOverColumnId = ref<string | null>(null);
 const dropIndex = ref<number | null>(null);
 const dropIndicatorY = ref<number>(0);
@@ -436,6 +447,31 @@ async function onTaskCreated() {
   const id = boardStore.activeBoardId;
   if (id != null) await taskStore.loadTasks(id);
 }
+
+function openCreateOverlay() {
+  activeTaskForOverlay.value = null; // null means create new task
+  showCreateTask.value = true;
+}
+
+// Handler functions for TaskDetailOverlay
+function handleOverlayClose() {
+  showCreateTask.value = false;
+  activeTaskForOverlay.value = null;
+}
+
+function handleOverlaySaved() {
+  showCreateTask.value = false;
+  activeTaskForOverlay.value = null;
+  const id = boardStore.activeBoardId;
+  if (id != null) taskStore.loadTasks(id);
+}
+
+function handleOverlayDeleted() {
+  showCreateTask.value = false;
+  activeTaskForOverlay.value = null;
+  const id = boardStore.activeBoardId;
+  if (id != null) taskStore.loadTasks(id);
+}
 </script>
 
 <style scoped>
@@ -530,6 +566,11 @@ async function onTaskCreated() {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
+}
+
+.board-column__create-task {
+  padding: 0 4px 12px 4px;
+  margin-bottom: 8px;
 }
 
 .board-column__name {

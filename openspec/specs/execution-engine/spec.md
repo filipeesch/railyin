@@ -53,7 +53,7 @@ The `ExecutionParams` type SHALL include: `executionId` (number), `taskId` (numb
 The `EngineEvent` type SHALL remain the shared event contract for all engines, including non-native interactive pauses. It SHALL be a discriminated union on the `type` field with the following variants:
 - `token` — streamed text content
 - `reasoning` — model reasoning/thinking content
-- `tool_start` — a tool call is beginning (name + arguments)
+- `tool_start` — a tool call is beginning; carries `name`, `arguments` (JSON string), and an optional `display: ToolCallDisplay` field populated by the emitting engine
 - `tool_result` — a tool call completed (name + result + optional isError), and MAY include `writtenFiles` for structured file changes produced by that tool call
 - `ask_user` — execution is pausing to ask the user a question
 - `shell_approval` — execution is pausing for shell command approval
@@ -85,6 +85,14 @@ The `EngineEvent` type SHALL remain the shared event contract for all engines, i
 #### Scenario: Tool result includes structured file-change metadata
 - **WHEN** an engine yields `tool_result` with `writtenFiles`
 - **THEN** the orchestrator and UI can correlate file changes to that same tool call without tool-name heuristics
+
+#### Scenario: tool_start event carries display metadata when available
+- **WHEN** an engine emits a `tool_start` event with a `display` field
+- **THEN** the orchestrator includes `display` in the serialized `tool_call` conversation message JSON without modifying it
+
+#### Scenario: tool_start event without display is still valid
+- **WHEN** an engine emits a `tool_start` event with no `display` field
+- **THEN** the orchestrator serializes the `tool_call` message without a `display` field and the UI falls back to showing the raw tool name
 
 ### Requirement: Engine resolver instantiates the correct engine from workspace config
 The system SHALL resolve the execution engine from the workspace that owns the task being executed, not from a single global workspace config. Supported engine types SHALL include `native`, `copilot`, and `claude`.
