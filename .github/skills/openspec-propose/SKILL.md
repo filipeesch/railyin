@@ -79,7 +79,66 @@ When ready to implement, run /opsx:apply
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Show final status**
+5. **ALWAYS `create_todo` for each pending task before showing final status. Skip only if the `create_todo` tool is not available in this environment.**
+
+   The design.md and all specs are still in context — use them now to write rich descriptions.
+
+   First, call `list_todos` to avoid duplicates. Then scan `e2e/ui/` to understand existing test coverage (needed for the test todo below).
+
+   **Implementation tasks** — for each `- [ ]` task in tasks.md (sparse numbers: 10, 20, 30…):
+   ```
+   create_todo(
+     number: <sparse order>,
+     title: <exact task title>,
+     description: |
+       ## Goal
+       <one sentence: what this task accomplishes>
+
+       ## Files
+       - `path/to/file.ts` — <what changes>
+
+       ## Constraints
+       - <hard constraint from design.md or specs>
+
+       ## Done when
+       - <concrete acceptance criterion>
+   )
+   ```
+
+   **Test todo** — after all implementation todos, always create one test todo per logical feature area (number = last implementation number + 10). Also append `- [ ] Write and run e2e tests for <feature>` to tasks.md.
+   ```
+   create_todo(
+     number: <last + 10>,
+     title: "Write and run e2e tests for <feature>",
+     description: |
+       ## Goal
+       Write and run Playwright e2e tests for <feature>.
+
+       ## Spec source
+       openspec/specs/<capability>/spec.md — requirements that need coverage
+
+       ## Existing coverage
+       e2e/ui/<relevant>.spec.ts — check for overlapping tests before adding
+
+       ## File
+       e2e/ui/<relevant>.spec.ts — add suite <next letter> (next available)
+
+       ## Test cases
+       - <ID>-1: <what to verify>
+       - <ID>-2: <what to verify>
+
+       ## Run with
+       bun run test:ui:run
+
+       ## Done when
+       - All test cases pass
+       - No existing tests broken
+   )
+   ```
+
+   Write all descriptions as if briefing a fresh agent post-compaction — include WHY, files, and clear acceptance criteria. Be comprehensive but direct.
+
+6. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```

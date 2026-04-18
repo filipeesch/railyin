@@ -72,7 +72,16 @@ When ready to implement, run /opsx:apply
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Show final status**
+5. **Write tasks to TodoWrite**
+
+   After all artifacts are complete, read tasks.md and write all pending tasks to **TodoWrite** with status `pending` — including a test task at the end.
+
+   If the change has any UI surface, also append to tasks.md:
+   `- [ ] Write and run e2e tests for <feature>`
+
+   Then write all tasks (implementation + test) to **TodoWrite** so the full work queue is visible before apply starts.
+
+6. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```
