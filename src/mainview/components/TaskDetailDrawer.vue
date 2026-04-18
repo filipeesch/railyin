@@ -408,16 +408,7 @@
     @deleted="onTaskDeleted"
   />
 
-  <!-- PTY Terminal Dialog -->
-  <Dialog
-    v-model:visible="ptyDialogVisible"
-    header="Terminal"
-    :modal="true"
-    :style="{ width: '900px', height: '600px' }"
-    :content-style="{ padding: 0, height: 'calc(100% - 56px)', display: 'flex', flexDirection: 'column' }"
-  >
-    <PtyTerminal v-if="ptySessionId" :session-id="ptySessionId" style="flex: 1; min-height: 0;" />
-  </Dialog>
+  <!-- PTY terminal is now shown in the bottom terminal panel -->
 </template>
 
 <script setup lang="ts">
@@ -442,7 +433,6 @@ import ManageModelsModal from "./ManageModelsModal.vue";
 import TodoPanel from "./TodoPanel.vue";
 import ChangedFilesPanel from "./ChangedFilesPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
-import PtyTerminal from "./PtyTerminal.vue";
 import TaskDetailOverlay from "./TaskDetailOverlay.vue";
 import TaskInfoTab from "./TaskInfoTab.vue";
 import { useTaskStore } from "../stores/task";
@@ -450,6 +440,7 @@ import { useBoardStore } from "../stores/board";
 import { useToast } from "primevue/usetoast";
 import { useReviewStore } from "../stores/review";
 import { useLaunchStore } from "../stores/launch";
+import { useTerminalStore } from "../stores/terminal";
 import { api } from "../rpc";
 import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat } from "@shared/rpc-types";
 
@@ -458,6 +449,7 @@ const boardStore = useBoardStore();
 const toast = useToast();
 const reviewStore = useReviewStore();
 const launchStore = useLaunchStore();
+const terminalStore = useTerminalStore();
 
 const activeTab = ref<'chat' | 'info'>('chat');
 
@@ -466,8 +458,6 @@ const currentBoard = computed(() =>
 );
 
 const launchConfig = ref<LaunchConfig | null>(null);
-const ptySessionId = ref<string | null>(null);
-const ptyDialogVisible = ref(false);
 
 async function runLaunch(command: string, mode: "terminal" | "app") {
   if (!task.value) return;
@@ -475,8 +465,7 @@ async function runLaunch(command: string, mode: "terminal" | "app") {
   if (!result.ok) {
     toast.add({ severity: "error", summary: "Launch failed", detail: result.error, life: 5000 });
   } else if (result.sessionId) {
-    ptySessionId.value = result.sessionId;
-    ptyDialogVisible.value = true;
+    terminalStore.addSession(result.sessionId, task.value.title, task.value.worktreePath ?? "");
   }
 }
 
@@ -899,10 +888,9 @@ async function compactConversation() {
 
 async function openTerminal() {
   if (!task.value?.worktreePath) return;
-  const result = await launchStore.run(task.value.id, '$SHELL', 'external-terminal');
-  if (!result.ok) {
-    toast.add({ severity: 'error', summary: 'Terminal failed', detail: result.error, life: 5000 });
-  }
+  const cwd = task.value.worktreePath;
+  const result = await api("launch.shell", { cwd });
+  terminalStore.addSession(result.sessionId, task.value.title, cwd);
 }
 
 function openTaskOverlay() {

@@ -673,6 +673,14 @@ export type RailynAPI = {
     params: { taskId: number; command: string; mode: "terminal" | "external-terminal" | "app" };
     response: { ok: true; sessionId?: string } | { ok: false; error: string };
   };
+  "launch.shell": {
+    params: { cwd: string };
+    response: { sessionId: string };
+  };
+  "launch.kill": {
+    params: { sessionId: string };
+    response: { ok: true } | { ok: false; error: string };
+  };
 
   // LSP setup
   "lsp.detectLanguages": {

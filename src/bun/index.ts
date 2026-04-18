@@ -10,6 +10,7 @@ type WsData = { type: "push" } | { type: "pty"; sessionId: string };
 
 // Track per-WS data listener functions so we can remove them on WS close
 const ptyDataListeners = new WeakMap<ServerWebSocket<WsData>, (chunk: string) => void>();
+const ptyExitListeners = new WeakMap<ServerWebSocket<WsData>, (code: number) => void>();
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 {
@@ -272,19 +273,28 @@ const server = Bun.serve({
         // Attach PTY output to this WebSocket
         const session = getPtySession(data.sessionId);
         if (!session) {
-          ws.send("\r\n[Session not found]\r\n");
-          ws.close();
+          ws.close(4404, "session-not-found");
+          return;
+        }
+        // Replay buffered output so the terminal catches up on reconnect
+        if (session.scrollback) {
+          try { ws.send(session.scrollback); } catch { /* ignore */ }
+        }
+        if (session.exited) {
+          // Process already exited — scrollback already contains the exit message.
+          // Keep the WS open so PtyTerminal doesn't enter a reconnect loop.
           return;
         }
         const listener = (chunk: string) => {
           try { ws.send(chunk); } catch { /* ws closed */ }
         };
+        const exitListener = (_code: number) => {
+          try { ws.close(4000, "process-exited"); } catch { /* ignore */ }
+        };
         session.dataListeners.add(listener);
+        session.exitListeners.add(exitListener);
         ptyDataListeners.set(ws, listener);
-        // Replay buffered output so the terminal catches up on reconnect
-        if (session.scrollback) {
-          try { ws.send(session.scrollback); } catch { /* ignore */ }
-        }
+        ptyExitListeners.set(ws, exitListener);
       } else {
         clients.add(ws);
       }
@@ -293,11 +303,14 @@ const server = Bun.serve({
       if (ws.data.type === "push") {
         clients.delete(ws);
       } else {
-        // Remove the data listener so it doesn't fire against a closed socket
+        // Remove the data and exit listeners so they don't fire against a closed socket
         const session = getPtySession((ws.data as { type: "pty"; sessionId: string }).sessionId);
         const listener = ptyDataListeners.get(ws);
+        const exitListener = ptyExitListeners.get(ws);
         if (session && listener) session.dataListeners.delete(listener);
+        if (session && exitListener) session.exitListeners.delete(exitListener);
         ptyDataListeners.delete(ws);
+        ptyExitListeners.delete(ws);
       }
     },
     message(ws: ServerWebSocket<WsData>, msg: string | Buffer) {
