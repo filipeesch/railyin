@@ -1,6 +1,6 @@
 import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
-import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
+import { getWorkspaceRegistry, loadConfig, loadMcpConfig } from "./config/index.ts";
 import { StreamBatcher } from "./pipeline/batcher.ts";
 import * as path from "path";
 import type { ServerWebSocket } from "bun";
@@ -64,6 +64,8 @@ import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
 import { launchHandlers } from "./handlers/launch.ts";
 import { lspHandlers } from "./handlers/lsp.ts";
+import { mcpHandlers } from "./handlers/mcp.ts";
+import { initMcpRegistry, getMcpRegistry } from "./mcp/registry.ts";
 import { mapTask } from "./db/mappers.ts";
 import { appendMessage, compactConversation } from "./workflow/engine.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
@@ -108,6 +110,15 @@ const { error: configError } = loadConfig();
 }
 
 // ─── WebSocket push: connected browser clients ────────────────────────────────
+
+// 4. Initialize MCP registry on startup
+{
+  const mcpConfig = loadMcpConfig();
+  if (mcpConfig.servers.length > 0) {
+    const mcpReg = initMcpRegistry(mcpConfig);
+    void mcpReg.startAll().catch(err => console.warn("[mcp] Startup failed:", err));
+  }
+}
 
 const clients = new Set<ServerWebSocket<WsData>>();
 
@@ -194,6 +205,7 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...workflowHandlers(notifyWorkflowReloaded),
   ...launchHandlers(),
   ...lspHandlers(),
+  ...mcpHandlers(),
 };
 
 // ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
@@ -353,6 +365,11 @@ async function shutdown(): Promise<void> {
     console.warn("[shutdown] Graceful non-native shutdown failed", err instanceof Error ? err.message : String(err));
   }
   killAllPtySessions();
+  try {
+    await getMcpRegistry()?.shutdown();
+  } catch (err) {
+    console.warn("[shutdown] MCP shutdown failed", err instanceof Error ? err.message : String(err));
+  }
   process.exit(0);
 }
 

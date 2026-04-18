@@ -7,6 +7,7 @@ import { appendApprovedCommands, getApprovedCommands } from "../../workflow/engi
 import { getDb } from "../../db/index.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
+import { getMcpRegistry } from "../../mcp/registry.ts";
 
 export interface ClaudeSdkModelInfo {
   value: string;
@@ -295,6 +296,52 @@ export function claudeSessionIdForTask(taskId: number): string {
   return raw.join("-");
 }
 
+function buildExternalMcpServers(taskId: number): Record<string, unknown> {
+  const registry = getMcpRegistry();
+  if (!registry) return {};
+
+  let enabledFilter: string[] | null = null;
+  try {
+    const db = getDb();
+    const taskRow = db.query<{ enabled_mcp_tools: string | null }, [number]>(
+      "SELECT enabled_mcp_tools FROM tasks WHERE id = ?"
+    ).get(taskId);
+    if (taskRow?.enabled_mcp_tools) {
+      enabledFilter = JSON.parse(taskRow.enabled_mcp_tools) as string[];
+    }
+  } catch {
+    // DB unavailable — treat as all tools enabled
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const status of registry.getStatus()) {
+    if (status.state !== "running") continue;
+    const config = registry.getServerConfig(status.name);
+    if (!config) continue;
+    if (enabledFilter) {
+      const filter = enabledFilter;
+      const hasEnabled = status.tools.some(t => filter.includes(`${status.name}:${t.name}`));
+      if (!hasEnabled) continue;
+    }
+    const transport = config.transport;
+    if (transport.type === "stdio") {
+      result[status.name] = {
+        type: "stdio",
+        command: transport.command,
+        args: transport.args ?? [],
+        env: transport.env ?? {},
+      };
+    } else if (transport.type === "http") {
+      result[status.name] = {
+        type: "http",
+        url: transport.url,
+        headers: transport.headers ?? {},
+      };
+    }
+  }
+  return result;
+}
+
 class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   private readonly idleTimeoutMs = Number(process.env.RAILYN_ENGINE_IDLE_TIMEOUT_MS ?? 10 * 60 * 1000);
   private readonly activeQueries = new Map<number, ActiveClaudeQuery>();
@@ -397,7 +444,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             systemPrompt: config.systemInstructions
               ? { type: "preset", preset: "claude_code", append: config.systemInstructions }
               : { type: "preset", preset: "claude_code" },
-            mcpServers: { railyin: toolServer },
+            mcpServers: { railyin: toolServer, ...buildExternalMcpServers(config.taskId) },
             canUseTool: async (
               toolName: string,
               input: Record<string, unknown>,

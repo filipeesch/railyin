@@ -15,6 +15,7 @@ import type { Task, ConversationMessage, MessageType } from "../../shared/rpc-ty
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { resolveToolsForColumn, getToolDescriptionBlock, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
+import { getMcpRegistry } from "../mcp/registry.ts";
 import { LSPServerManager } from "../lsp/manager.ts";
 import { formatReviewMessageForLLM } from "./review.ts";
 import { resolvePrompt } from "../engine/dialects/copilot-prompt-resolver.ts";
@@ -352,6 +353,8 @@ function assembleMessages(
   sessionNotes?: string | null,
   taskId?: number,
   columnTools?: string[],
+  mcpRegistry?: import("../mcp/registry.ts").McpClientRegistry | null,
+  enabledMcpTools?: string[] | null,
 ): AIMessage[] {
   const messages: AIMessage[] = [];
 
@@ -375,7 +378,7 @@ function assembleMessages(
       `- git_root_path: ${gitContext.git_root_path}`,
       `- project_path:  ${gitContext.project_path}`,
       "",
-      getToolDescriptionBlock(columnTools),
+      getToolDescriptionBlock(columnTools, mcpRegistry, enabledMcpTools),
     ];
     messages.push({ role: "system", content: lines.join("\n") });
   }
@@ -820,6 +823,11 @@ export async function handleTransition(
   const templateId = getBoardTemplateId(task.board_id);
   const column = getColumnConfig(templateId, toState);
 
+  // Reset MCP tool selection when column has explicit tools config (D5)
+  if (column?.tools != null) {
+    db.run("UPDATE tasks SET enabled_mcp_tools = NULL WHERE id = ?", [taskId]);
+  }
+
   // Resolve and persist model — column model takes precedence, workspace default is fallback
   if (column?.model != null) {
     db.run("UPDATE tasks SET model = ? WHERE id = ?", [column.model, taskId]);
@@ -1251,9 +1259,15 @@ async function runExecution(
     }
     resolvedStageInstructions = stageInstructions;
 
+    const mcpRegistry = getMcpRegistry();
+    const enabledMcpTools: string[] | null = (() => {
+      if (!task.enabled_mcp_tools) return null;
+      try { return JSON.parse(task.enabled_mcp_tools) as string[]; } catch { return null; }
+    })();
+
     // Task 5.3: Assemble full execution payload as messages
     const sessionNotes = readSessionMemory(taskId);
-    const messages = assembleMessages(task, resolvedStageInstructions, history, resolvedPrompt, gitContext, sessionNotes, taskId, column?.tools);
+    const messages = assembleMessages(task, resolvedStageInstructions, history, resolvedPrompt, gitContext, sessionNotes, taskId, column?.tools, mcpRegistry, enabledMcpTools);
 
     // Log the full message payload for debugging (stored in DB only, not printed to stdout).
     log("debug", "Messages assembled for AI call", { taskId, executionId, data: { messageCount: messages.length, messages } });
@@ -1367,9 +1381,10 @@ async function runExecution(
       approvedCommands: approvedCommandsSet,
       mtimeCache: new Map<string, number>(),
       lspManager,
+      mcpRegistry,
     };
 
-    let tools = resolveToolsForColumn(column?.tools);
+    let tools = resolveToolsForColumn(column?.tools, mcpRegistry, enabledMcpTools);
     log("debug", `Tools resolved: ${tools.length} tools`, { taskId, executionId, data: { tools: tools.map(t => t.name), worktreePath: toolCtx.worktreePath } });
     const liveMessages: AIMessage[] = [...messages];
 

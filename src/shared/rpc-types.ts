@@ -51,6 +51,7 @@ export interface Task {
   worktreePath: string | null;
   executionCount: number;
   position: number;
+  enabledMcpTools: string[] | null;
 }
 
 export interface Attachment {
@@ -356,6 +357,15 @@ export interface WorkflowTemplate {
   id: string;
   name: string;
   columns: WorkflowColumn[];
+}
+
+// ─── MCP types ───────────────────────────────────────────────────────────────
+
+export interface McpServerStatus {
+  name: string;
+  state: "idle" | "starting" | "running" | "error" | "disabled";
+  tools: Array<{ name: string; serverName: string; qualifiedName: string; description?: string }>;
+  error?: string;
 }
 
 // ─── LSP setup types ─────────────────────────────────────────────────────────
@@ -700,6 +710,28 @@ export type RailynAPI = {
   "lsp.runInstall": {
     params: { command: string; projectPath: string };
     response: { success: boolean; output: string };
+  };
+
+  // MCP
+  "mcp.getStatus": {
+    params: Record<string, never>;
+    response: McpServerStatus[];
+  };
+  "mcp.reload": {
+    params: { serverName?: string };
+    response: McpServerStatus[];
+  };
+  "mcp.getConfig": {
+    params: Record<string, never>;
+    response: { path: string; content: string };
+  };
+  "mcp.saveConfig": {
+    params: { content: string };
+    response: { ok: true };
+  };
+  "mcp.setTaskTools": {
+    params: { taskId: number; enabledTools: string[] | null };
+    response: Task;
   };
 };
 

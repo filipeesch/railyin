@@ -387,8 +387,37 @@
             />
             <span class="shell-autoapprove-label">Auto-approve shell</span>
           </div>
+          <!-- MCP Tools button -->
+          <Button
+            v-if="mcpStatus.length > 0"
+            v-tooltip="'MCP Tools'"
+            icon="pi pi-wrench"
+            :severity="mcpHasWarning ? 'danger' : 'secondary'"
+            text
+            rounded
+            size="small"
+            class="task-detail__mcp-btn"
+            @click="onMcpBtnClick"
+          />
+          <McpToolsPopover
+            v-if="mcpStatus.length > 0"
+            ref="mcpPopoverRef"
+            :task-id="task.id"
+            :enabled-mcp-tools="task.enabledMcpTools ?? null"
+            @edit-config="onMcpEditConfig"
+            @tools-changed="onMcpToolsChanged"
+          />
         </div>
       </div>
+      <FileEditorOverlay
+        :visible="mcpEditorVisible"
+        title="Edit mcp.json"
+        :content="mcpConfigContent"
+        language="json"
+        note="Editing global MCP server configuration (~/.railyn/mcp.json). Save to reload servers."
+        @close="mcpEditorVisible = false"
+        @save="onMcpConfigSave"
+      />
       </div><!-- end task-tab-chat -->
 
       <!-- Info tab -->
@@ -473,7 +502,9 @@ import { useReviewStore } from "../stores/review";
 import { useLaunchStore } from "../stores/launch";
 import { useTerminalStore } from "../stores/terminal";
 import { api } from "../rpc";
-import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, Attachment } from "@shared/rpc-types";
+import McpToolsPopover from "./McpToolsPopover.vue";
+import FileEditorOverlay from "./FileEditorOverlay.vue";
+import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, Attachment, McpServerStatus, Task } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
@@ -501,6 +532,41 @@ async function runLaunch(command: string, mode: "terminal" | "app") {
 }
 
 const manageModelsOpen = ref(false);
+
+// ─── MCP Tools state ──────────────────────────────────────────────────────────
+
+const mcpStatus = ref<McpServerStatus[]>([]);
+const mcpPopoverRef = ref<InstanceType<typeof McpToolsPopover> | null>(null);
+const mcpEditorVisible = ref(false);
+const mcpConfigContent = ref("{}");
+
+const mcpHasWarning = computed(() => mcpStatus.value.some(s => s.state === "error"));
+
+function onMcpBtnClick(event: MouseEvent) {
+  mcpPopoverRef.value?.toggle(event);
+}
+
+async function onMcpEditConfig() {
+  try {
+    const result = await api("mcp.getConfig", {});
+    mcpConfigContent.value = result.content;
+    mcpEditorVisible.value = true;
+  } catch (err) {
+    console.error("Failed to load mcp config", err);
+  }
+}
+
+async function onMcpConfigSave(content: string) {
+  await api("mcp.saveConfig", { content });
+  mcpEditorVisible.value = false;
+  try {
+    mcpStatus.value = await api("mcp.getStatus", {});
+  } catch { /* ignore */ }
+}
+
+function onMcpToolsChanged(updatedTask: Task) {
+  console.log("[TaskDetailDrawer] MCP tools changed for task", updatedTask.id);
+}
 
 async function onManageModelsClosed() {
   await taskStore.loadEnabledModels(taskWorkspaceKey.value);
@@ -660,6 +726,8 @@ function handleOutsideClick(e: MouseEvent) {
 
 onMounted(() => {
   document.addEventListener('mousedown', handleOutsideClick);
+  // Load MCP server status
+  api("mcp.getStatus", {}).then(s => { mcpStatus.value = s; }).catch(() => { /* MCP may not be configured */ });
 });
 
 onUnmounted(() => {
@@ -1277,6 +1345,10 @@ function onTaskDeleted() {
   font-size: 0.75rem;
   color: var(--p-text-muted-color);
   white-space: nowrap;
+}
+
+.task-detail__mcp-btn {
+  flex-shrink: 0;
 }
 
 .input-model-select {

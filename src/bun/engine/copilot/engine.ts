@@ -19,6 +19,8 @@ import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getMcpRegistry } from "../../mcp/registry.ts";
+import { getDb } from "../../db/index.ts";
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
@@ -101,7 +103,20 @@ export class CopilotEngine implements ExecutionEngine {
       },
     };
 
-    const tools = buildCopilotTools(toolContext);
+    const mcpRegistryForTask = getMcpRegistry();
+    let enabledMcpToolsForTask: string[] | null = null;
+    try {
+      const taskRow = getDb().query<{ enabled_mcp_tools: string | null }, [number]>(
+        "SELECT enabled_mcp_tools FROM tasks WHERE id = ?"
+      ).get(taskId);
+      if (taskRow?.enabled_mcp_tools) {
+        enabledMcpToolsForTask = JSON.parse(taskRow.enabled_mcp_tools) as string[];
+      }
+    } catch {
+      // DB unavailable or column missing — treat as all tools enabled
+    }
+
+    const tools = buildCopilotTools(toolContext, mcpRegistryForTask, enabledMcpToolsForTask);
 
     // Build system message — append stage_instructions to SDK's managed prompt
     const systemMessage = systemInstructions
