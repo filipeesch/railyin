@@ -59,15 +59,11 @@ Implement tasks from an OpenSpec change.
 
 6. **Implement tasks (loop until done or blocked)**
 
-   Before starting, write all pending tasks to **TodoWrite** with status `pending`.
-
    For each pending task:
-   - Update **TodoWrite**: mark this task `in_progress`, all others as `pending` or `completed`
    - Show which task is being worked on
    - Make the code changes required
    - Keep changes minimal and focused
    - Mark task complete in the tasks file: `- [ ]` → `- [x]`
-   - Update **TodoWrite**: mark this task `completed`
    - Continue to next task
 
    **Pause if:**

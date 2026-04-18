@@ -79,38 +79,7 @@ When ready to implement, run /opsx:apply
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Create todos for each task (Railyin only)**
-
-   After all artifacts are complete, read the tasks file and create a todo for each pending task.
-   The design.md and all specs are still in context — use them now to write rich descriptions.
-
-   For each `- [ ]` task (assign sparse numbers: 10, 20, 30…):
-   ```
-   create_todo(
-     number: <sparse order>,
-     title: <exact task title from tasks.md>,
-     description: <structured template below>
-   )
-   ```
-
-   **Todo description format** (machine-consumable, no prose):
-   ```
-   ## Goal
-   <one sentence: what this task accomplishes>
-
-   ## Files
-   - `path/to/file.ts` — <what changes>
-
-   ## Constraints
-   - <hard constraint from design.md or specs>
-
-   ## Done when
-   - <concrete acceptance criterion>
-   ```
-
-   Write descriptions as if briefing a fresh agent with no prior context — include the WHY, the files, and clear acceptance criteria. Be comprehensive but direct.
-
-6. **Show final status**
+5. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```

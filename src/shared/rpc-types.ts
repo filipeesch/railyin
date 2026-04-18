@@ -670,7 +670,7 @@ export type RailynAPI = {
     response: LaunchConfig | null;
   };
   "launch.run": {
-    params: { taskId: number; command: string; mode: "terminal" | "app" };
+    params: { taskId: number; command: string; mode: "terminal" | "external-terminal" | "app" };
     response: { ok: true; sessionId?: string } | { ok: false; error: string };
   };
 

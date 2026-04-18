@@ -1,10 +1,10 @@
 import { existsSync } from "fs";
 import { getDb } from "../db/index.ts";
 import { mapTask } from "../db/mappers.ts";
-import type { TaskRow, BoardRow } from "../db/row-types.ts";
+import type { TaskRow } from "../db/row-types.ts";
 import type { LaunchConfig } from "../../shared/rpc-types.ts";
 import { readLaunchConfig } from "../launch/config.ts";
-import { launchApp } from "../launch/launcher.ts";
+import { launchApp, launchInTerminal } from "../launch/launcher.ts";
 import { createPtySession } from "../launch/pty.ts";
 import { getProjectByKey } from "../project-store.ts";
 
@@ -31,7 +31,7 @@ export function launchHandlers() {
     "launch.run": async (params: {
       taskId: number;
       command: string;
-      mode: "terminal" | "app";
+      mode: "terminal" | "external-terminal" | "app";
     }): Promise<{ ok: true; sessionId?: string } | { ok: false; error: string }> => {
       const db = getDb();
 
@@ -67,7 +67,11 @@ export function launchHandlers() {
         if (params.mode === "app") {
           await launchApp(params.command, cwd);
           return { ok: true };
+        } else if (params.mode === "external-terminal") {
+          await launchInTerminal(params.command, cwd);
+          return { ok: true };
         } else {
+          // mode === "terminal" — inline PTY session
           const session = createPtySession(params.command, cwd);
           return { ok: true, sessionId: session.id };
         }

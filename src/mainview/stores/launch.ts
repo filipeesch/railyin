@@ -7,7 +7,7 @@ export const useLaunchStore = defineStore("launch", () => {
     return api("launch.getConfig", { taskId }).catch(() => null);
   }
 
-  async function run(taskId: number, command: string, mode: "terminal" | "app" = "terminal"): Promise<{ ok: true } | { ok: false; error: string }> {
+  async function run(taskId: number, command: string, mode: "terminal" | "external-terminal" | "app" = "terminal"): Promise<{ ok: true; sessionId?: string } | { ok: false; error: string }> {
     return api("launch.run", { taskId, command, mode });
   }
 
