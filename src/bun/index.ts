@@ -199,9 +199,12 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
 
 const DIST_DIR = path.join(import.meta.dir, "../../dist");
 
+const portArg = process.argv.find(a => a.startsWith("--port="));
+const serverPort = portArg ? Number(portArg.split("=")[1]) : 3000;
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
-  port: Number(process.env.PORT ?? 3000),
+  port: serverPort,
   idleTimeout: 30,
 
   async fetch(req, srv) {
