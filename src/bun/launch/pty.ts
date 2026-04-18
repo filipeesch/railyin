@@ -13,9 +13,32 @@ export interface PtySession {
     scrollback: string;
     /** Active per-WS data listeners */
     dataListeners: Set<(chunk: string) => void>;
+    /** Called once when the process exits, so WS connections can be closed */
+    exitListeners: Set<(exitCode: number) => void>;
+    /** True once the underlying process has exited */
+    exited: boolean;
 }
 
 const sessions = new Map<string, PtySession>();
+
+function markExited(session: PtySession, exitCode: number) {
+    if (session.exited) return; // already handled
+    session.exited = true;
+    const msg = `\r\n\x1b[2m[Process exited with code ${exitCode}]\x1b[0m\r\n`;
+    session.scrollback += msg;
+    if (session.scrollback.length > MAX_SCROLLBACK) {
+        session.scrollback = session.scrollback.slice(session.scrollback.length - MAX_SCROLLBACK);
+    }
+    // Notify any open WebSocket listeners (writes exit text to the terminal)
+    for (const cb of session.dataListeners) {
+        try { cb(msg); } catch { /* ignore */ }
+    }
+    // Tell each WS connection the process is done so the frontend can close the session
+    for (const cb of session.exitListeners) {
+        try { cb(exitCode); } catch { /* ignore */ }
+    }
+    session.exitListeners.clear();
+}
 
 export function createPtySession(command: string, cwd: string): PtySession {
     const id = randomUUID();
@@ -24,6 +47,8 @@ export function createPtySession(command: string, cwd: string): PtySession {
     const session: PtySession = {
         id, cwd, command, scrollback: "",
         dataListeners: new Set(),
+        exitListeners: new Set(),
+        exited: false,
         terminal: undefined,
         proc: undefined!,
     };
@@ -45,13 +70,12 @@ export function createPtySession(command: string, cwd: string): PtySession {
                     try { cb(chunk); } catch { /* ignore */ }
                 }
             },
-            exit(_terminal, _exitCode) {
-                sessions.delete(id);
+            exit(_terminal, exitCode) {
+                markExited(session, exitCode ?? 0);
             },
         },
-        onExit() {
-            // Belt-and-suspenders removal when subprocess exits
-            sessions.delete(id);
+        onExit(proc) {
+            markExited(session, proc.exitCode ?? 0);
         },
     });
 
@@ -62,6 +86,16 @@ export function createPtySession(command: string, cwd: string): PtySession {
 
 export function getPtySession(id: string): PtySession | undefined {
     return sessions.get(id);
+}
+
+export function killPtySession(id: string): boolean {
+    const session = sessions.get(id);
+    if (!session) return false;
+    if (!session.exited) {
+        try { session.proc.kill(); } catch { /* ignore */ }
+    }
+    sessions.delete(id);
+    return true;
 }
 
 export function killAllPtySessions(): void {

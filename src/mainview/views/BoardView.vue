@@ -145,21 +145,31 @@
       @saved="handleOverlaySaved"
       @deleted="handleOverlayDeleted"
     />
-    <!-- PTY Terminal Dialog -->
-    <Dialog
-      v-model:visible="ptyDialogVisible"
-      header="Terminal"
-      :modal="true"
-      :style="{ width: '900px', height: '600px' }"
-      :content-style="{ padding: 0, height: 'calc(100% - 56px)', display: 'flex', flexDirection: 'column' }"
-    >
-      <PtyTerminal v-if="ptySessionId" :session-id="ptySessionId" style="flex: 1; min-height: 0;" />
-    </Dialog>
+    <!-- Terminal Panel -->
+    <TerminalPanel
+      v-if="terminalStore.isPanelOpen"
+      :style="{ height: terminalStore.panelHeight + 'px' }"
+    />
+
+    <!-- Footer strip -->
+    <div class="terminal-footer" @click="onFooterClick">
+      <template v-if="terminalStore.sessions.length === 0">
+        <i class="pi pi-terminal" style="font-size: 11px;" />
+        <span>Terminal</span>
+        <kbd>Ctrl+`</kbd>
+      </template>
+      <template v-else>
+        <span class="terminal-footer__dot" />
+        <span>{{ terminalStore.sessions.length }} session{{ terminalStore.sessions.length > 1 ? 's' : '' }}</span>
+        <span class="terminal-footer__sep">·</span>
+        <span>{{ terminalStore.sessions.find(s => s.sessionId === terminalStore.activeSessionId)?.label ?? '' }}</span>
+      </template>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useDarkMode } from "../composables/useDarkMode";
 import { api, onWorkflowReloaded } from "../rpc";
@@ -171,13 +181,13 @@ import { useTaskStore } from "../stores/task";
 import { useProjectStore } from "../stores/project";
 import { useReviewStore } from "../stores/review";
 import { useWorkspaceStore } from "../stores/workspace";
+import { useTerminalStore } from "../stores/terminal";
 import TaskCard from "../components/TaskCard.vue";
 import TaskDetailDrawer from "../components/TaskDetailDrawer.vue";
 import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
-import Dialog from "primevue/dialog";
-import PtyTerminal from "../components/PtyTerminal.vue";
+import TerminalPanel from "../components/TerminalPanel.vue";
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
@@ -185,6 +195,7 @@ const boardStore = useBoardStore();
 const taskStore = useTaskStore();
 const projectStore = useProjectStore();
 const reviewStore = useReviewStore();
+const terminalStore = useTerminalStore();
 const { isDark, toggle: toggleDark } = useDarkMode();
 
 const showCreateTask = ref(false);
@@ -193,14 +204,21 @@ const dragOverColumnId = ref<string | null>(null);
 const dropIndex = ref<number | null>(null);
 const dropIndicatorY = ref<number>(0);
 let lastDragEndTime = 0;
-const ptySessionId = ref<string | null>(null);
-const ptyDialogVisible = ref(false);
 
-function onOpenTerminal(sessionId: string) {
-  ptySessionId.value = sessionId;
-  ptyDialogVisible.value = true;
+function onOpenTerminal(sessionId: string, label: string, cwd: string) {
+  terminalStore.addSession(sessionId, label, cwd);
 }
 
+async function onFooterClick() {
+  if (terminalStore.sessions.length === 0) {
+    // No sessions yet — create one in the workspace root
+    const cwd = workspaceStore.config?.worktreeBasePath ?? ".";
+    const result = await api("launch.shell", { cwd });
+    terminalStore.addSession(result.sessionId, "bash", cwd);
+  } else {
+    terminalStore.togglePanel();
+  }
+}
 // ─── Workflow editor state ────────────────────────────────────────────────────
 
 const workflowEditor = ref({
@@ -268,11 +286,26 @@ watch(
   { immediate: true },
 );
 
+function onKeyDown(e: KeyboardEvent) {
+  if (e.ctrlKey && e.key === "`") {
+    // Don't fire if focus is inside the terminal panel
+    const panel = document.querySelector(".terminal-panel");
+    if (panel && panel.contains(document.activeElement)) return;
+    e.preventDefault();
+    terminalStore.togglePanel();
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener("keydown", onKeyDown);
   await projectStore.loadProjects();
   if (workspaceStore.activeWorkspaceKey != null && !boardStore.activeBoard) {
     boardStore.selectFirstBoardInWorkspace(workspaceStore.activeWorkspaceKey);
   }
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeyDown);
 });
 
 function columnTasks(columnId: string) {
@@ -628,5 +661,45 @@ function handleOverlayDeleted() {
   justify-content: center;
   gap: 12px;
   color: var(--p-text-muted-color, #94a3b8);
+}
+
+.terminal-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 22px;
+  flex-shrink: 0;
+  background: #007acc;
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.terminal-footer:hover {
+  background: #1a8cd8;
+}
+
+.terminal-footer kbd {
+  opacity: 0.7;
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: 4px;
+}
+
+.terminal-footer__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4caf50;
+  flex-shrink: 0;
+}
+
+.terminal-footer__sep {
+  opacity: 0.5;
 }
 </style>

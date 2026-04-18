@@ -5,7 +5,7 @@ import type { TaskRow } from "../db/row-types.ts";
 import type { LaunchConfig } from "../../shared/rpc-types.ts";
 import { readLaunchConfig } from "../launch/config.ts";
 import { launchApp, launchInTerminal } from "../launch/launcher.ts";
-import { createPtySession } from "../launch/pty.ts";
+import { createPtySession, killPtySession } from "../launch/pty.ts";
 import { getProjectByKey } from "../project-store.ts";
 
 export function launchHandlers() {
@@ -79,6 +79,18 @@ export function launchHandlers() {
         const message = err instanceof Error ? err.message : String(err);
         return { ok: false, error: message };
       }
+    },
+
+    "launch.shell": async (params: { cwd: string }): Promise<{ sessionId: string }> => {
+      const shell = process.env.SHELL ?? "/bin/bash";
+      const session = createPtySession(shell, params.cwd);
+      return { sessionId: session.id };
+    },
+
+    "launch.kill": async (params: { sessionId: string }): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const killed = killPtySession(params.sessionId);
+      if (!killed) return { ok: false, error: "Session not found" };
+      return { ok: true };
     },
   };
 }

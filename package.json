@@ -5,7 +5,7 @@
   "description": "AI-assisted delivery orchestration for software teams",
   "scripts": {
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true",
-    "dev": "concurrently -n vite,bun -c cyan,magenta \"vite build --watch\" \"bun --watch --define __RAILYN_FORCE_DEBUG__=false --define __RAILYN_FORCE_MEMORY_DB__=false --define __RAILYN_DEV_CONFIG_DIR__=\\\"$PWD/config\\\" src/bun/index.ts\"",
+    "dev": "bun scripts/dev.ts",
     "dev:kill": "pkill -f 'src/bun/index.ts' || true",
     "build": "vite build",
     "test": "bun test src/bun/test",

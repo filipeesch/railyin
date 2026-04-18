@@ -49,7 +49,7 @@ import { useTaskStore } from "../stores/task";
 import { useLaunchStore } from "../stores/launch";
 
 const props = defineProps<{ task: Task }>();
-const emit = defineEmits<{ click: []; openReview: []; openTerminal: [sessionId: string] }>();
+const emit = defineEmits<{ click: []; openReview: []; openTerminal: [sessionId: string, label: string, cwd: string] }>();
 const taskStore = useTaskStore();
 const launchStore = useLaunchStore();
 const toast = useToast();
@@ -67,7 +67,7 @@ async function runLaunch(command: string, mode: "terminal" | "app") {
   if (!result.ok) {
     toast.add({ severity: "error", summary: "Launch failed", detail: result.error, life: 5000 });
   } else if (result.sessionId) {
-    emit("openTerminal", result.sessionId);
+    emit("openTerminal", result.sessionId, props.task.title, props.task.worktreePath ?? "");
   }
 }
 
