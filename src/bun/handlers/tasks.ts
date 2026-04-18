@@ -211,6 +211,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "tasks.sendMessage": async (params: {
       taskId: number;
       content: string;
+      attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       // Check if content is a code review trigger
       let parsed: { _type?: string; manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[] } | null = null;
@@ -232,7 +233,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
       if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-      return orchestrator.executeHumanTurn(params.taskId, params.content);
+      return orchestrator.executeHumanTurn(params.taskId, params.content, params.attachments);
     },
 
     "tasks.retry": async (params: {

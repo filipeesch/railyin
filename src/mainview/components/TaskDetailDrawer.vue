@@ -225,6 +225,26 @@
           :workflow-state="task.workflowState"
         />
       <div class="task-detail__input">
+        <!-- Pending attachment chips -->
+        <div v-if="pendingAttachments.length > 0" class="task-detail__attachments">
+          <span
+            v-for="(att, idx) in pendingAttachments"
+            :key="idx"
+            class="attachment-chip"
+          >
+            📎 {{ att.label }}
+            <button class="attachment-chip__remove" @click="pendingAttachments.splice(idx, 1)" aria-label="Remove attachment">✕</button>
+          </span>
+        </div>
+        <!-- Hidden file input -->
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept="*"
+          multiple
+          style="display: none"
+          @change="onFileInputChange"
+        />
         <div class="task-detail__input-row">
           <Textarea
             v-model="inputText"
@@ -234,6 +254,17 @@
             autoResize
             :disabled="task.executionState === 'running' || compacting"
             @keydown.enter.exact.prevent="send"
+            @paste="onPaste"
+          />
+          <!-- Attach button — only shown when not running/compacting -->
+          <Button
+            v-if="task.executionState !== 'running' && !compacting"
+            icon="pi pi-paperclip"
+            text
+            rounded
+            size="small"
+            v-tooltip="'Attach image'"
+            @click="fileInputRef?.click()"
           />
           <!-- Context-aware send / cancel / compacting button -->
           <Button
@@ -442,7 +473,7 @@ import { useReviewStore } from "../stores/review";
 import { useLaunchStore } from "../stores/launch";
 import { useTerminalStore } from "../stores/terminal";
 import { api } from "../rpc";
-import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat } from "@shared/rpc-types";
+import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, Attachment } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
@@ -666,6 +697,8 @@ const taskWorkspaceKey = computed(() =>
   task.value ? (boardStore.boards.find((b) => b.id === task.value!.boardId)?.workspaceKey ?? undefined) : undefined,
 );
 const inputText = ref("");
+const pendingAttachments = ref<Attachment[]>([]);
+const fileInputRef = ref<HTMLInputElement | null>(null);
 const transitioning = ref(false);
 const retrying = ref(false);
 const cancelling = ref(false);
@@ -826,11 +859,82 @@ const execSeverity = computed(() => {
   return task.value ? (map[task.value.executionState] ?? "secondary") : "secondary";
 });
 
+function readAsBase64(file: File | Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // Strip the data URL prefix: "data:image/png;base64,XXXX" → "XXXX"
+      resolve(result.split(",")[1]);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function inferMediaType(filename: string, reportedType: string): string {
+  if (reportedType && reportedType !== "application/octet-stream") return reportedType;
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  const map: Record<string, string> = {
+    md: "text/markdown", txt: "text/plain", json: "application/json",
+    js: "text/javascript", ts: "text/typescript", py: "text/x-python",
+    html: "text/html", css: "text/css", csv: "text/csv",
+    xml: "text/xml", yaml: "text/yaml", yml: "text/yaml",
+    sh: "text/x-shellscript", pdf: "application/pdf",
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+    gif: "image/gif", webp: "image/webp",
+  };
+  return map[ext] ?? reportedType ?? "application/octet-stream";
+}
+
+async function addAttachment(file: File | Blob, label: string, mediaType: string) {
+  if (pendingAttachments.value.length >= 3) {
+    toast.add({ severity: "warn", summary: "Too many attachments", detail: "Maximum 3 attachments per message", life: 4000 });
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    toast.add({ severity: "warn", summary: "File too large", detail: "Attachments must be under 5 MB", life: 4000 });
+    return;
+  }
+  const data = await readAsBase64(file);
+  pendingAttachments.value.push({ label, mediaType, data });
+}
+
+async function onPaste(event: ClipboardEvent) {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.kind === "file") {
+      event.preventDefault();
+      const blob = item.getAsFile();
+      if (blob) {
+        const inferredType = inferMediaType(`pasted-file`, item.type || "");
+        const ext = inferredType.split("/")[1] ?? "bin";
+        await addAttachment(blob, `pasted-file.${ext}`, inferredType);
+      }
+      break;
+    }
+  }
+}
+
+async function onFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = input.files;
+  if (!files) return;
+  for (const file of files) {
+    await addAttachment(file, file.name, inferMediaType(file.name, file.type));
+  }
+  // Reset so the same file can be selected again
+  input.value = "";
+}
+
 async function send() {
   if (!inputText.value.trim() || !task.value) return;
   const content = inputText.value.trim();
   inputText.value = "";
-  await taskStore.sendMessage(task.value.id, content);
+  const attachments = pendingAttachments.value.length ? [...pendingAttachments.value] : undefined;
+  pendingAttachments.value = [];
+  await taskStore.sendMessage(task.value.id, content, attachments);
 }
 
 async function transition(toState: string) {
@@ -1118,6 +1222,43 @@ function onTaskDeleted() {
   resize: none;
 }
 
+.task-detail__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px 2px 8px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--p-surface-100, #f3f4f6);
+  border: 1px solid var(--p-surface-300, #d1d5db);
+  border-radius: 12px;
+  font-size: 12px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip__remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--p-text-muted-color, #6b7280);
+  flex-shrink: 0;
+}
+
+.attachment-chip__remove:hover {
+  color: var(--p-text-color, #374151);
+}
+
 .task-detail__model-row {
   display: flex;
   align-items: center;
@@ -1323,6 +1464,10 @@ html.dark-mode .dialog-warning {
 }
 html.dark-mode .task-detail__input {
   border-top-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .attachment-chip {
+  background: var(--p-surface-800, #1f2937);
+  border-color: var(--p-surface-600, #4b5563);
 }
 html.dark-mode .context-ring__track {
   stroke: var(--p-surface-700, #334155);

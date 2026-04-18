@@ -2,9 +2,13 @@
 // Any OpenAI-compatible endpoint (OpenRouter, Ollama, LM Studio) uses
 // OpenAICompatibleProvider. FakeAIProvider is used for UI development.
 
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; mediaType: string; data: string };
+
 export interface AIMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | null | ContentBlock[];
   // Present on assistant messages that issued tool calls
   tool_calls?: AIToolCall[];
   // Present on tool result messages

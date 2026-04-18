@@ -23,7 +23,7 @@ export class ClaudeEngine implements ExecutionEngine {
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
-    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions } = params;
+    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, attachments } = params;
 
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
@@ -56,6 +56,7 @@ export class ClaudeEngine implements ExecutionEngine {
         });
       },
       toolMetaByCallId,
+      attachments,
     };
 
     // Wrap the adapter execution to ensure cleanup happens

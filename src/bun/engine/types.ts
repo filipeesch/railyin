@@ -72,6 +72,7 @@ export interface ExecutionParams {
   nativeExecType?: NativeExecutionType;
   /** Target workflow column (required when nativeExecType === "transition"). */
   toState?: string;
+  attachments?: import("../../shared/rpc-types.ts").Attachment[];
   /** Code-review hunk decisions (required when nativeExecType === "code_review"). */
   reviewDecisions?: Record<string, unknown>;
 }

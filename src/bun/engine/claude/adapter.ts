@@ -39,6 +39,7 @@ export interface ClaudeRunConfig {
   waitForResume: (request: ClaudeResumeRequest | ClaudeShellApprovalRequest) => Promise<EngineResumeInput>;
   onRawMessage?: (message: Record<string, unknown>) => void;
   toolMetaByCallId?: Map<string, ToolMetadata>;
+  attachments?: import("../../../shared/rpc-types.ts").Attachment[];
 }
 
 export interface ClaudeSdkAdapter {
@@ -345,8 +346,38 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         };
         const toolServer = buildClaudeToolServer(sdk, zod.z, toolContext);
         const hasExistingSession = await sdk.getSessionInfo?.(config.sessionId, { dir: config.workingDirectory }).catch(() => undefined);
+
+        // Build prompt with content blocks if attachments are present
+        const promptInput: unknown = config.attachments?.length
+          ? (async function* () {
+              const content: Array<Record<string, unknown>> = [
+                ...config.attachments!.flatMap(a => {
+                  if (a.mediaType.startsWith("image/")) {
+                    return [{ type: "image", source: { type: "base64", media_type: a.mediaType, data: a.data } }];
+                  }
+                  if (a.mediaType === "application/pdf") {
+                    return [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data }, title: a.label }];
+                  }
+                  // Text-based files: inline as a text block (most compatible with Claude Code SDK)
+                  if (
+                    a.mediaType.startsWith("text/") ||
+                    a.mediaType === "application/json" ||
+                    a.mediaType === "application/yaml"
+                  ) {
+                    const decoded = Buffer.from(a.data, "base64").toString("utf-8");
+                    return [{ type: "text", text: `[Attached file: ${a.label}]\n\`\`\`\n${decoded}\n\`\`\`` }];
+                  }
+                  // Unsupported type — skip silently
+                  return [];
+                }),
+                { type: "text", text: config.prompt },
+              ];
+              yield { type: "user", message: { role: "user", content }, parent_tool_use_id: null };
+            })()
+          : config.prompt;
+
         const query = sdk.query({
-          prompt: config.prompt,
+          prompt: promptInput as string,
           options: {
             cwd: config.workingDirectory,
             additionalDirectories: [config.workingDirectory],
