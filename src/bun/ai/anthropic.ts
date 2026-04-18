@@ -139,7 +139,7 @@ export function adaptMessages(messages: AIMessage[], cacheTtl?: "5m" | "1h"): {
       const block: AnthropicUserContentBlock = {
         type: "tool_result" as const,
         tool_use_id: msg.tool_call_id ?? "",
-        content: msg.content ?? "",
+        content: (typeof msg.content === "string" ? msg.content : null) ?? "",
       };
       const last = adapted[adapted.length - 1];
       if (

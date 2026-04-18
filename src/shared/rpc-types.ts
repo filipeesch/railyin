@@ -53,6 +53,12 @@ export interface Task {
   position: number;
 }
 
+export interface Attachment {
+  label: string;      // filename or "pasted-image.png"
+  mediaType: string;  // "image/png", "image/jpeg", etc.
+  data: string;       // base64 encoded bytes (NOT stored in DB)
+}
+
 export type MessageType =
   | "user"
   | "assistant"
@@ -496,7 +502,7 @@ export type RailynAPI = {
     response: { task: Task; executionId: number };
   };
   "tasks.sendMessage": {
-    params: { taskId: number; content: string };
+    params: { taskId: number; content: string; attachments?: Attachment[] };
     response: { message: ConversationMessage; executionId: number };
   };
 

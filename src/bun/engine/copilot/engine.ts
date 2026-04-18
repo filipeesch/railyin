@@ -16,6 +16,9 @@ import { copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./sessi
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
+import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
@@ -169,7 +172,38 @@ export class CopilotEngine implements ExecutionEngine {
           combinedController.abort();
         }, { once: true });
 
-        const sendPromise = session.send({ prompt: nextPrompt });
+        const isTextType = (mediaType: string) =>
+          mediaType.startsWith("text/") ||
+          mediaType === "application/json" ||
+          mediaType === "application/yaml";
+
+        const firstTurn = nextPrompt === resolvedInitialPrompt;
+        const attachments = firstTurn ? (params.attachments ?? []) : [];
+
+        // Write text attachments to temp files so the CLI can read them via
+        // the "file" attachment type (the CLI resolves filePath on disk).
+        const tmpFiles: string[] = [];
+        const mappedAttachments = attachments.map(a => {
+          if (isTextType(a.mediaType)) {
+            const tmpDir = join(tmpdir(), "railyin-attachments");
+            mkdirSync(tmpDir, { recursive: true });
+            const tmpPath = join(tmpDir, `${Date.now()}-${a.label}`);
+            writeFileSync(tmpPath, Buffer.from(a.data, "base64"));
+            tmpFiles.push(tmpPath);
+            return { type: "file" as const, path: tmpPath, displayName: a.label };
+          }
+          return {
+            type: "blob" as const,
+            data: a.data,
+            mimeType: a.mediaType,
+            displayName: a.label,
+          };
+        });
+
+        const sendPromise = session.send({
+          prompt: nextPrompt,
+          ...(mappedAttachments.length ? { attachments: mappedAttachments } : {}),
+        });
         const onWatchdogFire = () => this.sdkAdapter.pingClient(sdkSessionId);
         let paused = false;
         let terminal = false;
@@ -212,14 +246,20 @@ export class CopilotEngine implements ExecutionEngine {
 
         if (pendingInterviewPayload !== null) {
           yield { type: "interview_me", payload: pendingInterviewPayload };
+          // Clean up temp files before returning
+          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 
         if (params.signal?.aborted || terminal) {
+          // Clean up temp files before returning
+          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 
         if (!paused) {
+          // Clean up temp files before returning
+          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 

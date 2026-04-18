@@ -6,6 +6,11 @@
 
   <div v-else-if="chunk.type === 'user'" class="msg msg--user">
     <div class="msg__bubble">{{ displayContent }}</div>
+    <div v-if="userAttachments.length > 0" class="msg__attachments">
+      <span v-for="(att, idx) in userAttachments" :key="idx" class="msg__attachment-chip">
+        📎 {{ att.label }}
+      </span>
+    </div>
     <div class="msg__meta">You</div>
   </div>
 
@@ -95,6 +100,13 @@ function renderMd(content: string): string {
 }
 
 const displayContent = computed(() => props.chunk.content);
+
+const userAttachments = computed<Array<{ label: string }>>(() => {
+  if (props.chunk.type !== "user" || !props.chunk.metadata) return [];
+  const meta = props.chunk.metadata as Record<string, unknown>;
+  if (!Array.isArray(meta.attachments)) return [];
+  return meta.attachments as Array<{ label: string }>;
+});
 
 /** True when an assistant message was generated in XML <tool_call> format instead of the JSON API format. These should be silently hidden. */
 const isXmlToolCall = computed(() =>
@@ -230,6 +242,22 @@ async function onInterviewSubmit(answer: string) {
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 0.92rem;
+}
+
+.msg__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.msg__attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  background: rgba(0,0,0,0.06);
+  border-radius: 8px;
+  font-size: 11px;
 }
 
 .msg--assistant {
