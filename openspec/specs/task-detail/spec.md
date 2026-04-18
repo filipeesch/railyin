@@ -253,3 +253,15 @@ The system SHALL NOT display toast notifications for task state changes when the
 #### Scenario: Toast fires for active task errors
 - **WHEN** the currently active task encounters a stream error (via `onStreamError`)
 - **THEN** the error toast IS still displayed (error toasts are not suppressed)
+
+
+### Requirement: Task detail drawer body uses a full-width single-column layout
+The system SHALL render the task detail drawer body as a single full-width column containing the active tab content. The two-column layout (conversation + side panel) SHALL be removed.
+
+#### Scenario: Chat tab body is full width
+- **WHEN** the Chat tab is active
+- **THEN** the conversation timeline occupies the full drawer width with no side panel
+
+#### Scenario: Side panel is not rendered
+- **WHEN** the task detail drawer is open
+- **THEN** no side panel is rendered alongside the conversation timeline

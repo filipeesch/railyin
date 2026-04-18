@@ -30,19 +30,10 @@
           text
           rounded
           size="small"
+          class="ml-auto"
           v-tooltip="'Sync changed files'"
           :loading="syncingChanges"
           @click="syncChangedFiles"
-        />
-        <!-- Edit button: always available to open task overlay -->
-        <Button
-          icon="pi pi-pencil"
-          text
-          rounded
-          size="small"
-          class="ml-auto"
-          v-tooltip="'Edit title & description'"
-          @click="openTaskOverlay"
         />
         <!-- Delete button -->
         <Button
@@ -58,17 +49,64 @@
     </template>
 
     <div v-if="task" class="task-detail">
-      <!-- Launch controls bar: outside scroll, just below header -->
-      <div v-if="launchConfig" class="launch-bar">
-        <LaunchButtons
-          :profiles="launchConfig.profiles"
-          :tools="launchConfig.tools"
-          @run="runLaunch"
-        />
+      <!-- Persistent toolbar: tabs (left) + action cluster (right) -->
+      <div class="drawer-toolbar">
+        <div class="tab-switcher">
+          <button
+            :class="['tab-btn', { 'tab-btn--active': activeTab === 'chat' }]"
+            @click="activeTab = 'chat'"
+          >
+            <i class="pi pi-comments" />
+            Chat
+          </button>
+          <button
+            :class="['tab-btn', { 'tab-btn--active': activeTab === 'info' }]"
+            @click="activeTab = 'info'"
+          >
+            <i class="pi pi-info-circle" />
+            Info
+          </button>
+        </div>
+        <div class="toolbar-actions">
+          <Select
+            v-if="columns.length"
+            :model-value="task.workflowState"
+            :options="columns"
+            option-label="label"
+            option-value="id"
+            size="small"
+            class="workflow-select"
+            :disabled="transitioning"
+            @change="(e: { value: string }) => transition(e.value)"
+          />
+          <Button
+            v-if="task.worktreePath"
+            icon="pi pi-desktop"
+            text
+            size="small"
+            v-tooltip="'Open terminal at worktree'"
+            @click="openTerminal"
+          />
+          <Button
+            v-if="task.executionState === 'failed'"
+            label="Retry"
+            icon="pi pi-replay"
+            severity="warn"
+            size="small"
+            :loading="retrying"
+            @click="retry"
+          />
+          <LaunchButtons
+            v-if="launchConfig"
+            :profiles="launchConfig.profiles"
+            :tools="launchConfig.tools"
+            @run="runLaunch"
+          />
+        </div>
       </div>
 
-      <!-- Two-column layout: conversation + side panel -->
-      <div class="task-detail__body">
+      <!-- Chat tab -->
+      <div v-if="activeTab === 'chat'" class="task-tab-chat">
 
         <!-- Conversation timeline -->
         <div class="task-detail__conversation" ref="scrollEl" @scroll.passive="onScroll">
@@ -169,94 +207,23 @@
           </div>
         </div>
 
-        <!-- Side panel (9.6) -->
-        <div class="task-detail__side">
-          <div class="side-section">
-            <div class="side-label">Workflow state</div>
-            <div class="side-value">{{ task.workflowState }}</div>
-          </div>
-          <div class="side-section">
-            <div class="side-label">Execution</div>
-            <div class="side-value">{{ execLabel }}</div>
-          </div>
-          <div class="side-section" v-if="task.retryCount > 0">
-            <div class="side-label">Retries</div>
-            <div class="side-value">{{ task.retryCount }}</div>
-          </div>
-          <div class="side-section" v-if="task.executionCount > 0">
-            <div class="side-label">Executions</div>
-            <div class="side-value">{{ task.executionCount }}</div>
-          </div>
+        <!-- Changed files panel — visible when task has git changes -->
+        <ChangedFilesPanel
+          v-if="task && numstat"
+          :task-id="task.id"
+          :numstat="numstat"
+          :pending-by-file="pendingByFile"
+          @open-review="onOpenReview"
+        />
 
-          <!-- Branch / worktree info -->
-          <div class="side-section" v-if="task.branchName">
-            <div class="side-label">Branch</div>
-            <div class="side-value side-value--mono">{{ task.branchName }}</div>
-          </div>
-          <div class="side-section" v-if="task.worktreeStatus">
-            <div class="side-label">Worktree</div>
-            <div class="side-value">{{ task.worktreeStatus }}</div>
-          </div>
-          <div class="side-section" v-if="task.worktreePath">
-            <div class="side-label">Worktree path</div>
-            <div class="side-value side-value--mono side-value--break">{{ task.worktreePath }}</div>
-          </div>
-
-          <!-- Session notes -->
-          <div class="side-section" v-if="sessionMemoryContent">
-            <div class="side-label">Session Notes</div>
-            <pre class="side-session-notes">{{ sessionMemoryContent }}</pre>
-          </div>
-
-          <!-- Transition buttons -->
-          <div class="side-section" v-if="columns.length">
-            <div class="side-label">Move to</div>
-            <div class="side-transitions">
-              <Button
-                v-for="col in otherColumns"
-                :key="col.id"
-                :label="col.label"
-                size="small"
-                severity="secondary"
-                :disabled="transitioning"
-                @click="transition(col.id)"
-              />
-            </div>
-          </div>
-
-          <!-- Retry button -->
-          <div
-            class="side-section"
-            v-if="task.executionState === 'failed'"
-          >
-            <Button
-              label="Retry"
-              icon="pi pi-replay"
-              severity="warn"
-              :loading="retrying"
-              @click="retry"
-            />
-          </div>
-        </div>
-      </div>
-
-      <!-- Changed files panel — visible when task has git changes -->
-      <ChangedFilesPanel
-        v-if="task && numstat"
-        :task-id="task.id"
-        :numstat="numstat"
-        :pending-by-file="pendingByFile"
-        @open-review="onOpenReview"
-      />
-
-      <!-- Chat input (9.4) -->
-      <TodoPanel
-        v-if="task"
-        :task-id="task.id"
-        :refresh-trigger="todoRefreshTrigger"
-        :board-id="task.boardId"
-        :workflow-state="task.workflowState"
-      />
+        <!-- Todo panel -->
+        <TodoPanel
+          v-if="task"
+          :task-id="task.id"
+          :refresh-trigger="todoRefreshTrigger"
+          :board-id="task.boardId"
+          :workflow-state="task.workflowState"
+        />
       <div class="task-detail__input">
         <div class="task-detail__input-row">
           <Textarea
@@ -391,6 +358,17 @@
           </div>
         </div>
       </div>
+      </div><!-- end task-tab-chat -->
+
+      <!-- Info tab -->
+      <div v-else-if="activeTab === 'info'" class="task-tab-info">
+        <TaskInfoTab
+          :task="task"
+          :board="currentBoard"
+          @edit="openTaskOverlay"
+        />
+      </div>
+
     </div>
   </Drawer>
 
@@ -451,7 +429,6 @@ import Dialog from "primevue/dialog";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Textarea from "primevue/textarea";
-import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import ProgressSpinner from "primevue/progressspinner";
 import ToggleSwitch from "primevue/toggleswitch";
@@ -467,6 +444,7 @@ import ChangedFilesPanel from "./ChangedFilesPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
 import PtyTerminal from "./PtyTerminal.vue";
 import TaskDetailOverlay from "./TaskDetailOverlay.vue";
+import TaskInfoTab from "./TaskInfoTab.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
 import { useToast } from "primevue/usetoast";
@@ -480,6 +458,12 @@ const boardStore = useBoardStore();
 const toast = useToast();
 const reviewStore = useReviewStore();
 const launchStore = useLaunchStore();
+
+const activeTab = ref<'chat' | 'info'>('chat');
+
+const currentBoard = computed(() =>
+  task.value ? (boardStore.boards.find(b => b.id === task.value!.boardId) ?? null) : null
+);
 
 const launchConfig = ref<LaunchConfig | null>(null);
 const ptySessionId = ref<string | null>(null);
@@ -628,6 +612,7 @@ const MAX_WIDTH = 1400;
 
 function onHide() {
   drawerWidth.value = Math.round(window.innerWidth * 0.7);
+  activeTab.value = 'chat';
   taskStore.closeTask();
 }
 
@@ -759,8 +744,6 @@ const numstat = ref<GitNumstat | null>(null);
 // Pending hunks per file (awaiting human review)
 const pendingByFile = ref<{ filePath: string; pendingCount: number }[]>([]);
 
-// Session memory notes (fetched on drawer open)
-const sessionMemoryContent = ref<string | null>(null);
 
 // Task overlay state
 const taskOverlayVisible = ref(false);
@@ -774,11 +757,6 @@ const deleteWarning = ref<string | null>(null);
 // Columns from the active board template
 const columns = computed(() => {
   return boardStore.activeBoard?.template.columns ?? [];
-});
-
-const otherColumns = computed(() => {
-  if (!task.value) return columns.value;
-  return columns.value.filter((c) => c.id !== task.value!.workflowState);
 });
 
 // ─── Smart auto-scroll ───────────────────────────────────────────────────────
@@ -919,6 +897,14 @@ async function compactConversation() {
   }
 }
 
+async function openTerminal() {
+  if (!task.value?.worktreePath) return;
+  const result = await launchStore.run(task.value.id, '$SHELL', 'external-terminal');
+  if (!result.ok) {
+    toast.add({ severity: 'error', summary: 'Terminal failed', detail: result.error, life: 5000 });
+  }
+}
+
 function openTaskOverlay() {
   if (!task.value) return;
   taskOverlayVisible.value = true;
@@ -957,7 +943,6 @@ watch(
   async (id) => {
     numstat.value = null;
     pendingByFile.value = [];
-    sessionMemoryContent.value = null;
     launchConfig.value = null;
     if (!id) return;
     taskStore.loadEnabledModels(taskWorkspaceKey.value);
@@ -969,10 +954,6 @@ watch(
         pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: id });
       } catch { /* non-fatal */ }
     }
-    try {
-      const { content } = await api("tasks.sessionMemory", { taskId: id });
-      sessionMemoryContent.value = content;
-    } catch { /* non-fatal */ }
     // Load launch config (deduped in store by projectKey)
     if (t) {
       launchConfig.value = await launchStore.getConfig(id, t.projectKey);
@@ -1051,11 +1032,68 @@ function onTaskDeleted() {
   height: 100%;
 }
 
-.task-detail__body {
+.drawer-toolbar {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  flex-shrink: 0;
+}
+
+.tab-switcher {
+  display: flex;
+  gap: 2px;
+}
+
+.tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--p-text-muted-color, #94a3b8);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.tab-btn:hover {
+  background: var(--p-content-hover-background, #f1f5f9);
+  color: var(--p-text-color, #1e293b);
+}
+
+.tab-btn--active {
+  background: var(--p-content-hover-background, #f1f5f9);
+  color: var(--p-primary-color, #6366f1);
+  font-weight: 600;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workflow-select {
+  min-width: 120px;
+  max-width: 160px;
+}
+
+.task-tab-chat {
+  display: flex;
+  flex-direction: column;
   flex: 1;
-  gap: 16px;
   overflow: hidden;
+}
+
+.task-tab-info {
+  flex: 1;
+  overflow-y: auto;
 }
 
 .task-detail__conversation {
@@ -1063,63 +1101,13 @@ function onTaskDeleted() {
   overflow-y: auto;
   padding: 8px 4px 8px 0;
   will-change: scroll-position;
-  /* Disable browser scroll anchoring — it fights TanStack's own scroll
-     compensation when items above the viewport change size, causing a
-     double-correction flicker. TanStack handles this itself. */
   overflow-anchor: none;
-}
-
-.launch-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 0;
-  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
-  margin-bottom: 8px;
 }
 
 .conversation-inner {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.task-detail__side {
-  width: 180px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 8px 0;
-  border-left: 1px solid var(--p-surface-200, #e2e8f0);
-  padding-left: 16px;
-}
-
-.side-label {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--p-text-muted-color, #94a3b8);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 2px;
-}
-
-.side-value {
-  font-size: 0.85rem;
-  color: var(--p-text-color, #1e293b);
-}
-
-.side-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.side-transitions {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
 .task-detail__input {
@@ -1306,31 +1294,6 @@ function onTaskDeleted() {
   padding: 4px 0;
 }
 
-.side-value--mono {
-  font-family: ui-monospace, monospace;
-  font-size: 0.78rem;
-}
-
-.side-value--break {
-  word-break: break-all;
-}
-
-.edit-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.edit-label {
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--p-text-muted-color, #94a3b8);
-}
-
-.mt-2 {
-  margin-top: 8px;
-}
-
 .delete-warn {
   font-size: 0.85rem;
   color: var(--p-text-muted-color, #94a3b8);
@@ -1369,12 +1332,6 @@ html.dark-mode .dialog-warning {
   color: var(--p-orange-400);
   background: color-mix(in srgb, var(--p-orange-500) 15%, transparent);
   border-color: color-mix(in srgb, var(--p-orange-500) 35%, transparent);
-}
-html.dark-mode .launch-bar {
-  border-bottom-color: var(--p-surface-700, #334155);
-}
-html.dark-mode .task-detail__side {
-  border-left-color: var(--p-surface-700, #334155);
 }
 html.dark-mode .task-detail__input {
   border-top-color: var(--p-surface-700, #334155);

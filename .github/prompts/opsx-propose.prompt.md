@@ -72,11 +72,7 @@ When ready to implement, run /opsx:apply
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Write tasks to TodoWrite**
-
-   After all artifacts are complete, read the tasks file and write all pending tasks to **TodoWrite** with status `pending`. This gives visibility into the work queue before implementation starts.
-
-6. **Show final status**
+5. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```
