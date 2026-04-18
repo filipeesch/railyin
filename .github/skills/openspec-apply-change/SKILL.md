@@ -66,14 +66,25 @@ Implement tasks from an OpenSpec change.
 
 6. **Implement tasks (loop until done or blocked)**
 
-   For each pending task:
+   **First, check for existing todos:**
+   ```
+   list_todos
+   ```
+
+   **Rich path (todos exist):** Use todos as the live work queue.
+   For each pending todo (ordered by `number`):
+   - `update_todo_status` → `in-progress`
+   - `get_todo` to read the full description before starting
    - Show which task is being worked on
    - Make the code changes required
    - Keep changes minimal and focused
    - Mark task complete in the tasks file: `- [ ]` → `- [x]`
-   - Continue to next task
+   - `update_todo_status` → `done`
+   - Continue to next todo
 
-   **Pause if:**
+   **Fallback path (no todos):** Proceed with tasks.md only (checkbox tracking, no status updates). This handles old changes created before todo support.
+
+   **Pause if (both paths):**
    - Task is unclear → ask for clarification
    - Implementation reveals a design issue → suggest updating artifacts
    - Error or blocker encountered → report and wait for guidance
