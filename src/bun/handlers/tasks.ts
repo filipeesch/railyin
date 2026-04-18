@@ -10,6 +10,7 @@ import {
   compactConversation,
   resolveModelContextWindow,
 } from "../workflow/engine.ts";
+import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";

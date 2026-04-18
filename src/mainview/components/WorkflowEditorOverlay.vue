@@ -56,7 +56,7 @@ import * as monaco from "monaco-editor";
 loader.config({ monaco });
 import * as jsYaml from "js-yaml";
 import Button from "primevue/button";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import { useDarkMode } from "../composables/useDarkMode";
 
 const props = defineProps<{
@@ -147,7 +147,7 @@ async function onSave() {
 
   try {
     const content = editor?.getValue() ?? props.initialYaml;
-    await electroview.rpc.request["workflow.saveYaml"]({
+    await api("workflow.saveYaml", {
       workspaceKey: props.workspaceKey,
       templateId: props.templateId,
       yaml: content,

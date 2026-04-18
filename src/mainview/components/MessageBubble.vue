@@ -80,7 +80,7 @@ import InterviewMe from "./InterviewMe.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
 import { useTaskStore } from "../stores/task";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 
 const props = defineProps<{
   chunk: ConversationMessage;
@@ -180,7 +180,7 @@ const shellApprovalPayload = computed<ShellApprovalPayload | null>(() => {
 async function onShellApprovalRespond(decision: "approve_once" | "approve_all" | "deny") {
   const taskId = taskStore.activeTaskId;
   if (taskId === null) return;
-  await electroview.rpc!.request["tasks.respondShellApproval"]({ taskId, decision });
+  await api("tasks.respondShellApproval", { taskId, decision });
 }
 
 // ─── interview_prompt support ─────────────────────────────────────────────────

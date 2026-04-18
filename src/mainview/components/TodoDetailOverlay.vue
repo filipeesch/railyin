@@ -74,7 +74,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from "vue";
 import { marked } from "marked";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { TodoStatus } from "@shared/rpc-types";
 import Button from "primevue/button";
 
@@ -121,7 +121,7 @@ async function loadTodo() {
     return;
   }
   try {
-    const todo = await electroview.rpc!.request["todos.get"]({ taskId: props.taskId, todoId: props.todoId });
+    const todo = await api("todos.get", { taskId: props.taskId, todoId: props.todoId });
     if (todo) {
       form.number = todo.number;
       form.title = todo.title;
@@ -141,7 +141,7 @@ async function onSave() {
   error.value = null;
   try {
     if (props.todoId == null) {
-      await electroview.rpc!.request["todos.create"]({
+      await api("todos.create", {
         taskId: props.taskId,
         number: form.number,
         title: form.title.trim(),
@@ -149,7 +149,7 @@ async function onSave() {
         phase: form.phase || null,
       });
     } else {
-      await electroview.rpc!.request["todos.edit"]({
+      await api("todos.edit", {
         taskId: props.taskId,
         todoId: props.todoId,
         number: form.number,
@@ -171,7 +171,7 @@ async function onDelete() {
   saving.value = true;
   error.value = null;
   try {
-    await electroview.rpc!.request["todos.delete"]({ taskId: props.taskId, todoId: props.todoId });
+    await api("todos.delete", { taskId: props.taskId, todoId: props.todoId });
     emit("deleted");
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to delete";

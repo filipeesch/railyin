@@ -1,9 +1,11 @@
+import { existsSync } from "fs";
 import { getDb } from "../db/index.ts";
 import { mapTask } from "../db/mappers.ts";
 import type { TaskRow, BoardRow } from "../db/row-types.ts";
 import type { LaunchConfig } from "../../shared/rpc-types.ts";
 import { readLaunchConfig } from "../launch/config.ts";
-import { launchInTerminal, launchApp } from "../launch/launcher.ts";
+import { launchApp } from "../launch/launcher.ts";
+import { createPtySession } from "../launch/pty.ts";
 import { getProjectByKey } from "../project-store.ts";
 
 export function launchHandlers() {
@@ -30,7 +32,7 @@ export function launchHandlers() {
       taskId: number;
       command: string;
       mode: "terminal" | "app";
-    }): Promise<{ ok: true } | { ok: false; error: string }> => {
+    }): Promise<{ ok: true; sessionId?: string } | { ok: false; error: string }> => {
       const db = getDb();
 
       const taskRow = db
@@ -48,20 +50,27 @@ export function launchHandlers() {
 
       let cwd: string;
       if (task.worktreePath) {
+        if (!existsSync(task.worktreePath)) {
+          return { ok: false, error: `Worktree directory no longer exists: ${task.worktreePath}` };
+        }
         cwd = task.worktreePath;
       } else {
         const project = getProjectByKey(taskRow.workspace_key, taskRow.project_key);
         if (!project) return { ok: false, error: "Project not found" };
+        if (!existsSync(project.projectPath)) {
+          return { ok: false, error: `Project directory does not exist: ${project.projectPath}` };
+        }
         cwd = project.projectPath;
       }
 
       try {
         if (params.mode === "app") {
           await launchApp(params.command, cwd);
+          return { ok: true };
         } else {
-          await launchInTerminal(params.command, cwd);
+          const session = createPtySession(params.command, cwd);
+          return { ok: true, sessionId: session.id };
         }
-        return { ok: true };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { ok: false, error: message };

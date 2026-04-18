@@ -40,7 +40,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { TodoListItem } from "@shared/rpc-types";
 import TodoDetailOverlay from "./TodoDetailOverlay.vue";
 
@@ -65,7 +65,7 @@ function statusIcon(status: string): string {
 
 async function fetchTodos() {
   try {
-    todos.value = await electroview.rpc!.request["todos.list"]({ taskId: props.taskId });
+    todos.value = await api("todos.list", { taskId: props.taskId });
   } catch {
     // silently ignore — todos are non-critical
   }
@@ -83,7 +83,7 @@ function openEdit(todo: TodoListItem) {
 
 async function deleteTodoItem(todo: TodoListItem) {
   try {
-    await electroview.rpc!.request["todos.edit"]({ taskId: props.taskId, todoId: todo.id, status: "deleted" });
+    await api("todos.edit", { taskId: props.taskId, todoId: todo.id, status: "deleted" });
     await fetchTodos();
   } catch {
     // silently ignore

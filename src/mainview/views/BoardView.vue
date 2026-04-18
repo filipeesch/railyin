@@ -100,6 +100,7 @@
             @pointerdown="onCardPointerDown($event, task.id)"
             @click="onCardClick(task.id)"
             @open-review="onOpenReview(task.id)"
+            @open-terminal="onOpenTerminal"
           />
           <div
             v-if="dragOverColumnId === column.id"
@@ -144,6 +145,16 @@
       @saved="handleOverlaySaved"
       @deleted="handleOverlayDeleted"
     />
+    <!-- PTY Terminal Dialog -->
+    <Dialog
+      v-model:visible="ptyDialogVisible"
+      header="Terminal"
+      :modal="true"
+      :style="{ width: '900px', height: '600px' }"
+      :content-style="{ padding: 0, height: 'calc(100% - 56px)', display: 'flex', flexDirection: 'column' }"
+    >
+      <PtyTerminal v-if="ptySessionId" :session-id="ptySessionId" style="flex: 1; min-height: 0;" />
+    </Dialog>
   </div>
 </template>
 
@@ -151,7 +162,7 @@
 import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useDarkMode } from "../composables/useDarkMode";
-import { electroview, onWorkflowReloaded } from "../rpc";
+import { api, onWorkflowReloaded } from "../rpc";
 import Select from "primevue/select";
 import Button from "primevue/button";
 import Badge from "primevue/badge";
@@ -165,6 +176,8 @@ import TaskDetailDrawer from "../components/TaskDetailDrawer.vue";
 import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
+import Dialog from "primevue/dialog";
+import PtyTerminal from "../components/PtyTerminal.vue";
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
@@ -180,6 +193,13 @@ const dragOverColumnId = ref<string | null>(null);
 const dropIndex = ref<number | null>(null);
 const dropIndicatorY = ref<number>(0);
 let lastDragEndTime = 0;
+const ptySessionId = ref<string | null>(null);
+const ptyDialogVisible = ref(false);
+
+function onOpenTerminal(sessionId: string) {
+  ptySessionId.value = sessionId;
+  ptyDialogVisible.value = true;
+}
 
 // ─── Workflow editor state ────────────────────────────────────────────────────
 
@@ -200,7 +220,7 @@ async function onEditWorkflow() {
   const board = boardStore.activeBoard;
   if (!board) return;
   try {
-    const { yaml } = await electroview.rpc.request["workflow.getYaml"]({
+    const { yaml } = await api("workflow.getYaml", {
       workspaceKey: workspaceStore.activeWorkspaceKey ?? undefined,
       templateId: board.workflowTemplateId,
     });
@@ -377,6 +397,9 @@ async function onPointerUp(event: PointerEvent) {
   document.removeEventListener('pointerup', onPointerUp);
   document.removeEventListener('pointercancel', onPointerUp);
   if (!activeDrag) return;
+  // Always restore user-select regardless of whether a real drag occurred
+  document.body.style.userSelect = '';
+  document.documentElement.style.userSelect = '';
   if (activeDrag.active) {
     lastDragEndTime = Date.now();
     const dragSnapshot = activeDrag;
@@ -424,8 +447,6 @@ async function onPointerUp(event: PointerEvent) {
       if (dragSnapshot.ghostEl) document.body.removeChild(dragSnapshot.ghostEl);
       if (dragSnapshot.sourceEl) dragSnapshot.sourceEl.style.opacity = '';
       document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      document.documentElement.style.userSelect = '';
       dragOverColumnId.value = null;
       dropIndex.value = null;
     }
@@ -439,7 +460,7 @@ function onCardClick(taskId: number) {
 }
 
 async function onOpenReview(taskId: number) {
-  const files = await electroview.rpc.request["tasks.getChangedFiles"]({ taskId });
+  const files = await api("tasks.getChangedFiles", { taskId });
   reviewStore.openReview(taskId, files);
 }
 

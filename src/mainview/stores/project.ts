@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { Project } from "@shared/rpc-types";
 
 export const useProjectStore = defineStore("project", () => {
@@ -10,7 +10,7 @@ export const useProjectStore = defineStore("project", () => {
   async function loadProjects() {
     loading.value = true;
     try {
-      projects.value = await electroview.rpc.request["projects.list"]({});
+      projects.value = await api("projects.list", {});
     } finally {
       loading.value = false;
     }
@@ -25,7 +25,7 @@ export const useProjectStore = defineStore("project", () => {
     slug?: string;
     description?: string;
   }) {
-    const project = await electroview.rpc.request["projects.register"](params);
+    const project = await api("projects.register", params);
     projects.value.push(project);
     return project;
   }

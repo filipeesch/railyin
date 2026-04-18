@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { WorkspaceConfig, WorkspaceSummary } from "@shared/rpc-types";
 
 export const useWorkspaceStore = defineStore("workspace", () => {
@@ -11,7 +11,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const error = ref<string | null>(null);
 
   async function loadWorkspaces() {
-    workspaces.value = await electroview.rpc.request["workspace.list"]({});
+    workspaces.value = await api("workspace.list", {});
     if (!activeWorkspaceKey.value && workspaces.value.length > 0) {
       activeWorkspaceKey.value = workspaces.value[0].key;
     }
@@ -25,7 +25,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         await loadWorkspaces();
       }
       const workspaceKey = activeWorkspaceKey.value ?? undefined;
-      config.value = await electroview.rpc.request["workspace.getConfig"]({
+      config.value = await api("workspace.getConfig", {
         workspaceKey,
       });
     } catch (e) {
@@ -36,7 +36,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function setThinking(enabled: boolean) {
-    await electroview.rpc.request["workspace.setThinking"]({
+    await api("workspace.setThinking", {
       workspaceKey: activeWorkspaceKey.value ?? undefined,
       enabled,
     });

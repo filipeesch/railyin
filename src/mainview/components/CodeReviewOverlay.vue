@@ -127,7 +127,7 @@ import Select from "primevue/select";
 import Dialog from "primevue/dialog";
 import { useReviewStore } from "../stores/review";
 import { useTaskStore } from "../stores/task";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import { useDarkMode } from "../composables/useDarkMode";
 import ReviewFileList from "./ReviewFileList.vue";
 import InlineReviewEditor from "./InlineReviewEditor.vue";
@@ -236,7 +236,7 @@ function onContentChange(value: string) {
 async function flushWrite(filePath: string, content: string) {
   if (!reviewStore.taskId) return;
   try {
-    await electroview.rpc!.request["tasks.writeFile"]({
+    await api("tasks.writeFile", {
       taskId: reviewStore.taskId,
       filePath,
       content,
@@ -365,7 +365,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
   try {
     if (decision === "rejected") {
       // Reject also reverts the file on disk; reload the diff entirely.
-      const newDiff = await electroview.rpc!.request["tasks.rejectHunk"]({
+      const newDiff = await api("tasks.rejectHunk", {
         taskId: reviewStore.taskId,
         filePath: reviewStore.selectedFile,
         hunkIndex: hunk.hunkIndex,
@@ -375,7 +375,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
       inlineEditorRef.value?.setContent(newDiff.modified);
       inlineEditorRef.value?.renderHunks(newDiff.hunks);
     } else {
-      await electroview.rpc!.request["tasks.setHunkDecision"]({
+      await api("tasks.setHunkDecision", {
         taskId: reviewStore.taskId,
         hunkHash: hash,
         filePath: reviewStore.selectedFile,
@@ -433,7 +433,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
 async function handleDeleteComment(commentId: number) {
   if (!reviewStore.taskId) return;
   try {
-    await electroview.rpc!.request["tasks.deleteLineComment"]({
+    await api("tasks.deleteLineComment", {
       taskId: reviewStore.taskId,
       commentId,
     });
@@ -445,7 +445,7 @@ async function handleDeleteComment(commentId: number) {
 async function loadLineComments(filePath: string) {
   if (!reviewStore.taskId) return;
   try {
-    const comments = await electroview.rpc!.request["tasks.getLineComments"]({
+    const comments = await api("tasks.getLineComments", {
       taskId: reviewStore.taskId,
     });
     // Filter to this file and inject posted zones via InlineReviewEditor
@@ -471,7 +471,7 @@ function onRequestLineComment(lineStart: number, lineEnd: number, colStart?: num
       const contextStart = Math.max(0, lineStart - 4);
       const contextEnd = Math.min(modifiedLines.length, lineEnd + 3);
       const contextLines = modifiedLines.slice(contextStart, contextEnd);
-      const saved = await electroview.rpc!.request["tasks.addLineComment"]({
+      const saved = await api("tasks.addLineComment", {
         taskId: reviewStore.taskId,
         filePath: reviewStore.selectedFile,
         lineStart,
@@ -576,7 +576,7 @@ async function loadDiff(path: string | null) {
   diffLoading.value = true;
   diffError.value = null;
   try {
-    diffContent.value = await electroview.rpc!.request["tasks.getFileDiff"]({
+    diffContent.value = await api("tasks.getFileDiff", {
       taskId: reviewStore.taskId,
       filePath: path,
       ...(checkpointRef.value ? { checkpointRef: checkpointRef.value } : {}),
@@ -646,7 +646,7 @@ async function doSubmit() {
   try {
     await flushPendingWrite();
     const manualEdits = buildManualEdits();
-    await electroview.rpc!.request["tasks.sendMessage"]({
+    await api("tasks.sendMessage", {
       taskId: reviewStore.taskId,
       content: JSON.stringify({ _type: "code_review", manualEdits }),
     });
@@ -662,7 +662,7 @@ async function onRefresh() {
   if (!reviewStore.taskId) return;
   refreshing.value = true;
   try {
-    const newFiles = await electroview.rpc!.request["tasks.getChangedFiles"]({
+    const newFiles = await api("tasks.getChangedFiles", {
       taskId: reviewStore.taskId,
     });
     reviewStore.openReview(reviewStore.taskId, newFiles);
@@ -682,7 +682,7 @@ watch(
       fullyDecidedFiles.clear();
       // Fetch the latest checkpoint ref so diffs are scoped to pending hunks.
       try {
-        checkpointRef.value = await electroview.rpc!.request["tasks.getCheckpointRef"]({
+        checkpointRef.value = await api("tasks.getCheckpointRef", {
           taskId: reviewStore.taskId,
         });
       } catch {
@@ -698,7 +698,7 @@ watch(
           states[path] = "pending";
         }
         // Refine with the summary of files that have any decisions.
-        const summary = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({
+        const summary = await api("tasks.getPendingHunkSummary", {
           taskId: reviewStore.taskId,
         });
         for (const { filePath, pendingCount } of summary) {

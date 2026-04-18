@@ -15,7 +15,4 @@ export default defineConfig({
       "@shared": resolve(__dirname, "src/shared"),
     },
   },
-  server: {
-    port: 5173,
-  },
 });

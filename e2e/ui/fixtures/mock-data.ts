@@ -1,0 +1,128 @@
+/**
+ * mock-data.ts — Shared factory functions for realistic mock API responses.
+ *
+ * All tests import from here to get consistent baseline data, then override
+ * specific fields as needed for their scenario.
+ */
+
+import type {
+    Board,
+    Task,
+    ConversationMessage,
+    WorkflowTemplate,
+    WorkspaceConfig,
+} from "@shared/rpc-types";
+
+export const BOARD_ID = 1;
+export const WORKSPACE_KEY = "test-workspace";
+
+export function makeWorkspace(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
+    return {
+        id: 1,
+        key: WORKSPACE_KEY,
+        name: "Test Workspace",
+        workflows: [makeWorkflowTemplate()],
+        ai: {
+            baseUrl: "http://localhost",
+            apiKey: "fake",
+            model: "fake/test",
+            provider: "fake",
+        },
+        worktreeBasePath: "/tmp/railyn-test",
+        enableThinking: false,
+        ...overrides,
+    };
+}
+
+export function makeWorkflowTemplate(): WorkflowTemplate {
+    return {
+        id: "default",
+        name: "Default",
+        columns: [
+            { id: "backlog", label: "Backlog" },
+            { id: "plan", label: "Plan" },
+            { id: "in_progress", label: "In Progress" },
+            { id: "in_review", label: "In Review" },
+            { id: "done", label: "Done" },
+        ],
+    } as WorkflowTemplate;
+}
+
+export function makeBoard(overrides?: Partial<Board>): Board & { template: WorkflowTemplate } {
+    return {
+        id: BOARD_ID,
+        workspaceKey: WORKSPACE_KEY,
+        name: "Test Board",
+        workflowTemplateId: "default",
+        projectKeys: [],
+        template: makeWorkflowTemplate(),
+        ...overrides,
+    };
+}
+
+let _nextTaskId = 100;
+
+export function makeTask(overrides?: Partial<Task>): Task {
+    const id = overrides?.id ?? _nextTaskId++;
+    return {
+        id,
+        boardId: BOARD_ID,
+        projectKey: "test-project",
+        title: `Task ${id}`,
+        description: "",
+        workflowState: "backlog",
+        executionState: "idle",
+        conversationId: id,
+        currentExecutionId: null,
+        retryCount: 0,
+        createdFromTaskId: null,
+        createdFromExecutionId: null,
+        model: "fake/test",
+        shellAutoApprove: false,
+        approvedCommands: [],
+        worktreeStatus: null,
+        branchName: null,
+        worktreePath: null,
+        executionCount: 0,
+        position: 0,
+        ...overrides,
+    };
+}
+
+let _nextMsgId = 1000;
+
+export function makeUserMessage(
+    taskId: number,
+    content: string,
+    overrides?: Partial<ConversationMessage>,
+): ConversationMessage {
+    return {
+        id: _nextMsgId++,
+        taskId,
+        conversationId: taskId,
+        type: "user",
+        role: "user",
+        content,
+        metadata: null,
+        createdAt: new Date().toISOString(),
+        ...overrides,
+    };
+}
+
+export function makeAssistantMessage(
+    taskId: number,
+    content: string,
+    overrides?: Partial<ConversationMessage>,
+): ConversationMessage {
+    return {
+        id: _nextMsgId++,
+        taskId,
+        conversationId: taskId,
+        type: "assistant",
+        role: "assistant",
+        content,
+        metadata: null,
+        createdAt: new Date().toISOString(),
+        ...overrides,
+    };
+}

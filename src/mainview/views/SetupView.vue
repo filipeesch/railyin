@@ -188,7 +188,7 @@ import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import Button from "primevue/button";
 import Message from "primevue/message";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useBoardStore } from "../stores/board";
 import { useProjectStore } from "../stores/project";
@@ -264,7 +264,7 @@ async function loadWorkflowOptions(workspaceKey: string | null) {
     workflowOptions.value = [];
     return;
   }
-  const config = await electroview.rpc.request["workspace.getConfig"]({ workspaceKey });
+  const config = await api("workspace.getConfig", { workspaceKey });
   setWorkflowOptions(config.workflows);
 }
 
@@ -295,7 +295,7 @@ async function registerProject() {
 
     // Detect languages and offer LSP setup if any were found
     try {
-      const detected = await electroview.rpc.request["lsp.detectLanguages"]({ projectPath: registeredPath });
+      const detected = await api("lsp.detectLanguages", { projectPath: registeredPath });
       if (detected.length > 0) {
         lastRegisteredPath.value = registeredPath;
         lspLanguages.value = detected;

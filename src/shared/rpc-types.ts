@@ -1,5 +1,3 @@
-import type { RPCSchema } from "electrobun/bun";
-
 // ─── Domain types ───────────────────────────────────────────────────────────
 
 export interface Board {
@@ -425,291 +423,278 @@ export interface StreamError {
 
 // ─── RPC schema ──────────────────────────────────────────────────────────────
 
-export type RailynRPCType = {
-  bun: RPCSchema<{
-    requests: {
-      // Workspace
-      "workspace.getConfig": {
-        params: { workspaceKey?: string };
-        response: WorkspaceConfig;
-      };
-      "workspace.list": {
-        params: Record<string, never>;
-        response: WorkspaceSummary[];
-      };
-      "workspace.setThinking": {
-        params: { workspaceKey?: string; enabled: boolean };
-        response: Record<string, never>;
-      };
+// ─── RPC schema ──────────────────────────────────────────────────────────────
+// RailynAPI maps every method name to its { params, response } types.
+// Used by api() in rpc.ts for type-safe fetch calls.
 
-      // Boards
-      "boards.list": {
-        params: Record<string, never>;
-        response: Array<Board & { template: WorkflowTemplate }>;
-      };
-      "boards.create": {
-        params: { workspaceKey: string; name: string; projectKeys: string[]; workflowTemplateId: string };
-        response: Board;
-      };
+export type RailynAPI = {
+  "workspace.getConfig": {
+    params: { workspaceKey?: string };
+    response: WorkspaceConfig;
+  };
+  "workspace.list": {
+    params: Record<string, never>;
+    response: WorkspaceSummary[];
+  };
+  "workspace.setThinking": {
+    params: { workspaceKey?: string; enabled: boolean };
+    response: Record<string, never>;
+  };
 
-      // Projects
-      "projects.list": {
-        params: Record<string, never>;
-        response: Project[];
-      };
-      "projects.register": {
-        params: {
-          workspaceKey: string;
-          name: string;
-          projectPath: string;
-          gitRootPath: string;
-          defaultBranch: string;
-          slug?: string;
-          description?: string;
-        };
-        response: Project;
-      };
+  // Boards
+  "boards.list": {
+    params: Record<string, never>;
+    response: Array<Board & { template: WorkflowTemplate }>;
+  };
+  "boards.create": {
+    params: { workspaceKey: string; name: string; projectKeys: string[]; workflowTemplateId: string };
+    response: Board;
+  };
 
-      // Tasks
-      "tasks.list": {
-        params: { boardId: number };
-        response: Task[];
-      };
-      "tasks.create": {
-        params: {
-          boardId: number;
-          projectKey: string;
-          title: string;
-          description: string;
-        };
-        response: Task;
-      };
-      "tasks.reorder": {
-        params: { taskId: number; position: number };
-        response: Task;
-      };
-      "tasks.transition": {
-        params: { taskId: number; toState: WorkflowState; targetPosition?: number };
-        response: { task: Task; executionId: number | null };
-      };
-      "tasks.retry": {
-        params: { taskId: number };
-        response: { task: Task; executionId: number };
-      };
-      "tasks.sendMessage": {
-        params: { taskId: number; content: string };
-        response: { message: ConversationMessage; executionId: number };
-      };
-
-      // Conversations
-      "conversations.getMessages": {
-        params: { taskId: number };
-        response: ConversationMessage[];
-      };
-      "conversations.getStreamEvents": {
-        params: { taskId: number };
-        response: import("../bun/db/stream-events").PersistedStreamEvent[];
-      };
-
-      // Models
-      "models.list": {
-        params: { workspaceKey?: string };
-        response: ProviderModelList[];
-      };
-      "models.setEnabled": {
-        params: { workspaceKey?: string; qualifiedModelId: string; enabled: boolean };
-        response: Record<string, never>;
-      };
-      "models.listEnabled": {
-        params: { workspaceKey?: string };
-        response: ModelInfo[];
-      };
-
-      // Context usage
-      "tasks.contextUsage": {
-        params: { taskId: number };
-        response: { usedTokens: number; maxTokens: number; fraction: number };
-      };
-
-      // Conversation compaction
-      "tasks.compact": {
-        params: { taskId: number };
-        response: ConversationMessage;
-      };
-
-      // Task management (edit / delete / cancel / model / git stat)
-      "tasks.setModel": {
-        params: { taskId: number; model: string | null };
-        response: Task;
-      };
-      "tasks.cancel": {
-        params: { taskId: number };
-        response: Task;
-      };
-      "tasks.update": {
-        params: { taskId: number; title: string; description: string };
-        response: Task;
-      };
-      "tasks.delete": {
-        params: { taskId: number };
-        response: { success: boolean; warning?: string };
-      };
-      "tasks.getGitStat": {
-        params: { taskId: number };
-        response: GitNumstat | null;
-      };
-      "tasks.getChangedFiles": {
-        params: { taskId: number };
-        response: string[];
-      };
-      "tasks.getFileDiff": {
-        params: { taskId: number; filePath: string; checkpointRef?: string };
-        response: FileDiffContent;
-      };
-      "tasks.writeFile": {
-        params: { taskId: number; filePath: string; content: string };
-        response: void;
-      };
-      "tasks.getPendingHunkSummary": {
-        params: { taskId: number };
-        response: { filePath: string; pendingCount: number }[];
-      };
-      "tasks.getCheckpointRef": {
-        params: { taskId: number };
-        response: string | null;
-      };
-      "tasks.rejectHunk": {
-        params: { taskId: number; filePath: string; hunkIndex: number };
-        response: FileDiffContent;
-      };
-      "tasks.decideAllHunks": {
-        params: { taskId: number; decision: "accepted" | "rejected" };
-        response: { decided: number };
-      };
-      "tasks.setHunkDecision": {
-        params: {
-          taskId: number;
-          hunkHash: string;
-          filePath: string;
-          decision: HunkDecision;
-          comment: string | null;
-          originalStart: number;
-          originalEnd: number;
-          modifiedStart: number;
-          modifiedEnd: number;
-        };
-        response: void;
-      };
-      "tasks.addLineComment": {
-        params: {
-          taskId: number;
-          filePath: string;
-          lineStart: number;
-          lineEnd: number;
-          colStart?: number;
-          colEnd?: number;
-          lineText: string[];
-          contextLines: string[];
-          comment: string;
-        };
-        response: LineComment;
-      };
-      "tasks.getLineComments": {
-        params: { taskId: number; filePath: string };
-        response: LineComment[];
-      };
-      "tasks.deleteLineComment": {
-        params: { taskId: number; commentId: number };
-        response: void;
-      };
-
-      // Workflow
-      "workflow.getYaml": {
-        params: { workspaceKey?: string; templateId: string };
-        response: { yaml: string };
-      };
-      "workflow.saveYaml": {
-        params: { workspaceKey?: string; templateId: string; yaml: string };
-        response: { ok: true };
-      };
-      "tasks.sessionMemory": {
-        params: { taskId: number };
-        response: { content: string | null };
-      };
-      "tasks.respondShellApproval": {
-        params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" };
-        response: { ok: boolean };
-      };
-      "tasks.setShellAutoApprove": {
-        params: { taskId: number; enabled: boolean };
-        response: Task;
-      };
-      "todos.list": {
-        params: { taskId: number; includeDeleted?: boolean };
-        response: TodoListItem[];
-      };
-      "todos.get": {
-        params: { taskId: number; todoId: number };
-        response: TodoItem | null;
-      };
-      "todos.create": {
-        params: { taskId: number; number: number; title: string; description: string; phase?: string };
-        response: TodoListItem;
-      };
-      "todos.edit": {
-        params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: TodoStatus; phase?: string | null };
-        response: TodoListItem | null;
-      };
-      "todos.delete": {
-        params: { taskId: number; todoId: number };
-        response: TodoListItem | null;
-      };
-
-      // Launch
-      "launch.getConfig": {
-        params: { taskId: number };
-        response: LaunchConfig | null;
-      };
-      "launch.run": {
-        params: { taskId: number; command: string; mode: "terminal" | "app" };
-        response: { ok: true } | { ok: false; error: string };
-      };
-
-      // LSP setup
-      "lsp.detectLanguages": {
-        params: { projectPath: string };
-        response: LspDetectedLanguage[];
-      };
-      "lsp.addToConfig": {
-        params: { projectPath: string; languageServerName: string };
-        response: { ok: boolean };
-      };
-      "lsp.runInstall": {
-        params: { command: string; projectPath: string };
-        response: { success: boolean; output: string };
-      };
+  // Projects
+  "projects.list": {
+    params: Record<string, never>;
+    response: Project[];
+  };
+  "projects.register": {
+    params: {
+      workspaceKey: string;
+      name: string;
+      projectPath: string;
+      gitRootPath: string;
+      defaultBranch: string;
+      slug?: string;
+      description?: string;
     };
-    messages: Record<string, never>;
-  }>;
+    response: Project;
+  };
 
-  webview: RPCSchema<{
-    requests: Record<string, never>;
-    messages: {
-      "stream.token": StreamToken;
-      "stream.event": StreamEvent;
-      "stream.error": StreamError;
-      "task.updated": Task;
-      "message.new": ConversationMessage;
-      "workflow.reloaded": Record<string, never>;
-      "debug.log": { level: string; args: string };
+  // Tasks
+  "tasks.list": {
+    params: { boardId: number };
+    response: Task[];
+  };
+  "tasks.create": {
+    params: {
+      boardId: number;
+      projectKey: string;
+      title: string;
+      description: string;
     };
-  }>;
+    response: Task;
+  };
+  "tasks.reorder": {
+    params: { taskId: number; position: number };
+    response: Task;
+  };
+  "tasks.transition": {
+    params: { taskId: number; toState: WorkflowState; targetPosition?: number };
+    response: { task: Task; executionId: number | null };
+  };
+  "tasks.retry": {
+    params: { taskId: number };
+    response: { task: Task; executionId: number };
+  };
+  "tasks.sendMessage": {
+    params: { taskId: number; content: string };
+    response: { message: ConversationMessage; executionId: number };
+  };
 
-  // webview → bun one-way debug log forwarding (dev only)
-  debugLog: RPCSchema<{
-    requests: Record<string, never>;
-    messages: {
-      "debug.log": { level: string; args: string };
+  // Conversations
+  "conversations.getMessages": {
+    params: { taskId: number };
+    response: ConversationMessage[];
+  };
+  "conversations.getStreamEvents": {
+    params: { taskId: number };
+    response: import("../bun/db/stream-events").PersistedStreamEvent[];
+  };
+
+  // Models
+  "models.list": {
+    params: { workspaceKey?: string };
+    response: ProviderModelList[];
+  };
+  "models.setEnabled": {
+    params: { workspaceKey?: string; qualifiedModelId: string; enabled: boolean };
+    response: Record<string, never>;
+  };
+  "models.listEnabled": {
+    params: { workspaceKey?: string };
+    response: ModelInfo[];
+  };
+
+  // Context usage
+  "tasks.contextUsage": {
+    params: { taskId: number };
+    response: { usedTokens: number; maxTokens: number; fraction: number };
+  };
+
+  // Conversation compaction
+  "tasks.compact": {
+    params: { taskId: number };
+    response: ConversationMessage;
+  };
+
+  // Task management
+  "tasks.setModel": {
+    params: { taskId: number; model: string | null };
+    response: Task;
+  };
+  "tasks.cancel": {
+    params: { taskId: number };
+    response: Task;
+  };
+  "tasks.update": {
+    params: { taskId: number; title: string; description: string };
+    response: Task;
+  };
+  "tasks.delete": {
+    params: { taskId: number };
+    response: { success: boolean; warning?: string };
+  };
+  "tasks.getGitStat": {
+    params: { taskId: number };
+    response: GitNumstat | null;
+  };
+  "tasks.getChangedFiles": {
+    params: { taskId: number };
+    response: string[];
+  };
+  "tasks.getFileDiff": {
+    params: { taskId: number; filePath: string; checkpointRef?: string };
+    response: FileDiffContent;
+  };
+  "tasks.writeFile": {
+    params: { taskId: number; filePath: string; content: string };
+    response: void;
+  };
+  "tasks.getPendingHunkSummary": {
+    params: { taskId: number };
+    response: { filePath: string; pendingCount: number }[];
+  };
+  "tasks.getCheckpointRef": {
+    params: { taskId: number };
+    response: string | null;
+  };
+  "tasks.rejectHunk": {
+    params: { taskId: number; filePath: string; hunkIndex: number };
+    response: FileDiffContent;
+  };
+  "tasks.decideAllHunks": {
+    params: { taskId: number; decision: "accepted" | "rejected" };
+    response: { decided: number };
+  };
+  "tasks.setHunkDecision": {
+    params: {
+      taskId: number;
+      hunkHash: string;
+      filePath: string;
+      decision: HunkDecision;
+      comment: string | null;
+      originalStart: number;
+      originalEnd: number;
+      modifiedStart: number;
+      modifiedEnd: number;
     };
-  }>;
+    response: void;
+  };
+  "tasks.addLineComment": {
+    params: {
+      taskId: number;
+      filePath: string;
+      lineStart: number;
+      lineEnd: number;
+      colStart?: number;
+      colEnd?: number;
+      lineText: string[];
+      contextLines: string[];
+      comment: string;
+    };
+    response: LineComment;
+  };
+  "tasks.getLineComments": {
+    params: { taskId: number; filePath: string };
+    response: LineComment[];
+  };
+  "tasks.deleteLineComment": {
+    params: { taskId: number; commentId: number };
+    response: void;
+  };
+
+  // Workflow
+  "workflow.getYaml": {
+    params: { workspaceKey?: string; templateId: string };
+    response: { yaml: string };
+  };
+  "workflow.saveYaml": {
+    params: { workspaceKey?: string; templateId: string; yaml: string };
+    response: { ok: true };
+  };
+  "tasks.sessionMemory": {
+    params: { taskId: number };
+    response: { content: string | null };
+  };
+  "tasks.respondShellApproval": {
+    params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" };
+    response: { ok: boolean };
+  };
+  "tasks.setShellAutoApprove": {
+    params: { taskId: number; enabled: boolean };
+    response: Task;
+  };
+  "todos.list": {
+    params: { taskId: number; includeDeleted?: boolean };
+    response: TodoListItem[];
+  };
+  "todos.get": {
+    params: { taskId: number; todoId: number };
+    response: TodoItem | null;
+  };
+  "todos.create": {
+    params: { taskId: number; number: number; title: string; description: string; phase?: string };
+    response: TodoListItem;
+  };
+  "todos.edit": {
+    params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: TodoStatus; phase?: string | null };
+    response: TodoListItem | null;
+  };
+  "todos.delete": {
+    params: { taskId: number; todoId: number };
+    response: TodoListItem | null;
+  };
+
+  // Launch
+  "launch.getConfig": {
+    params: { taskId: number };
+    response: LaunchConfig | null;
+  };
+  "launch.run": {
+    params: { taskId: number; command: string; mode: "terminal" | "app" };
+    response: { ok: true; sessionId?: string } | { ok: false; error: string };
+  };
+
+  // LSP setup
+  "lsp.detectLanguages": {
+    params: { projectPath: string };
+    response: LspDetectedLanguage[];
+  };
+  "lsp.addToConfig": {
+    params: { projectPath: string; languageServerName: string };
+    response: { ok: boolean };
+  };
+  "lsp.runInstall": {
+    params: { command: string; projectPath: string };
+    response: { success: boolean; output: string };
+  };
 };
+
+// ─── Push message types (WebSocket server → browser) ─────────────────────────
+
+export type PushMessage =
+  | { type: "stream.token"; payload: StreamToken }
+  | { type: "stream.event"; payload: StreamEvent }
+  | { type: "stream.error"; payload: StreamError }
+  | { type: "task.updated"; payload: Task }
+  | { type: "message.new"; payload: ConversationMessage }
+  | { type: "workflow.reloaded"; payload: Record<string, never> };

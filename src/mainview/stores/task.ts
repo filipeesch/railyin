@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { Task, ConversationMessage, StreamToken, StreamError, StreamEvent, StreamEventType, ModelInfo, ProviderModelList, GitNumstat } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 
@@ -159,7 +159,7 @@ export const useTaskStore = defineStore("task", () => {
   async function loadTasks(boardId: number) {
     loading.value = true;
     try {
-      const tasks = await electroview.rpc.request["tasks.list"]({ boardId });
+      const tasks = await api("tasks.list", { boardId });
       tasksByBoard.value[boardId] = tasks;
       for (const task of tasks) {
         taskIndex.value[task.id] = task;
@@ -177,7 +177,7 @@ export const useTaskStore = defineStore("task", () => {
     title: string;
     description: string;
   }) {
-    const task = await electroview.rpc.request["tasks.create"](params);
+    const task = await api("tasks.create", params);
     if (!tasksByBoard.value[params.boardId]) tasksByBoard.value[params.boardId] = [];
     tasksByBoard.value[params.boardId].push(task);
     taskIndex.value[task.id] = task;
@@ -190,7 +190,7 @@ export const useTaskStore = defineStore("task", () => {
     const prior = Object.values(tasksByBoard.value).flat().find((t) => t.id === taskId);
     if (prior) _replaceTask({ ...prior, position });
     try {
-      const task = await electroview.rpc.request["tasks.reorder"]({ taskId, position });
+      const task = await api("tasks.reorder", { taskId, position });
       _replaceTask(task);
       return task;
     } catch (err) {
@@ -214,7 +214,7 @@ export const useTaskStore = defineStore("task", () => {
     }
 
     try {
-      const { task } = await electroview.rpc.request["tasks.transition"]({
+      const { task } = await api("tasks.transition", {
         taskId,
         toState,
         ...(targetPosition != null ? { targetPosition } : {}),
@@ -231,7 +231,7 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Retry ────────────────────────────────────────────────────────────────
 
   async function retryTask(taskId: number) {
-    const { task } = await electroview.rpc.request["tasks.retry"]({ taskId });
+    const { task } = await api("tasks.retry", { taskId });
     onTaskUpdated(task);
     return task;
   }
@@ -239,7 +239,7 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Send message ─────────────────────────────────────────────────────────
 
   async function sendMessage(taskId: number, content: string) {
-    const { message, executionId } = await electroview.rpc.request["tasks.sendMessage"]({
+    const { message, executionId } = await api("tasks.sendMessage", {
       taskId,
       content,
     });
@@ -260,7 +260,7 @@ export const useTaskStore = defineStore("task", () => {
       streamingToken.value = "";
     }
     try {
-      messages.value = await electroview.rpc.request["conversations.getMessages"]({ taskId });
+      messages.value = await api("conversations.getMessages", { taskId });
       sortMessagesInPlace();
       // If there is an active stream state for this task, merge DB messages into it
       // to avoid showing duplicates from both sources
@@ -637,7 +637,7 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Load enabled models (for chat dropdown) ──────────────────────────────────
 
   async function loadEnabledModels(workspaceKey?: string) {
-    availableModels.value = await electroview.rpc.request["models.listEnabled"]({ workspaceKey });
+    availableModels.value = await api("models.listEnabled", { workspaceKey });
   }
 
   // Keep loadModels as an alias for backward compat (called from App.vue etc.)
@@ -648,13 +648,13 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Load all provider models (for tree view) ─────────────────────────────────
 
   async function loadAllModels(workspaceKey?: string) {
-    allProviderModels.value = await electroview.rpc.request["models.list"]({ workspaceKey });
+    allProviderModels.value = await api("models.list", { workspaceKey });
   }
 
   // ─── Toggle model enabled state ─────────────────────────────────────────────────
 
   async function setModelEnabled(qualifiedModelId: string, enabled: boolean, workspaceKey?: string) {
-    await electroview.rpc.request["models.setEnabled"]({ workspaceKey, qualifiedModelId, enabled });
+    await api("models.setEnabled", { workspaceKey, qualifiedModelId, enabled });
     // Optimistic update in allProviderModels
     for (const provider of allProviderModels.value) {
       const model = provider.models.find((m) => m.id === qualifiedModelId);
@@ -669,7 +669,7 @@ export const useTaskStore = defineStore("task", () => {
 
   async function fetchContextUsage(taskId: number) {
     try {
-      contextUsage.value = await electroview.rpc.request["tasks.contextUsage"]({ taskId });
+      contextUsage.value = await api("tasks.contextUsage", { taskId });
     } catch {
       contextUsage.value = null;
     }
@@ -678,7 +678,7 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Set model on task ────────────────────────────────────────────────────
 
   async function setModel(taskId: number, model: string | null) {
-    const task = await electroview.rpc.request["tasks.setModel"]({ taskId, model });
+    const task = await api("tasks.setModel", { taskId, model });
     _replaceTask(task);
     return task;
   }
@@ -686,7 +686,7 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Cancel running execution ─────────────────────────────────────────────
 
   async function cancelTask(taskId: number) {
-    const task = await electroview.rpc.request["tasks.cancel"]({ taskId });
+    const task = await api("tasks.cancel", { taskId });
     _replaceTask(task);
     return task;
   }
@@ -694,7 +694,7 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Update task title/description ───────────────────────────────────────
 
   async function updateTask(taskId: number, title: string, description: string) {
-    const task = await electroview.rpc.request["tasks.update"]({ taskId, title, description });
+    const task = await api("tasks.update", { taskId, title, description });
     _replaceTask(task);
     return task;
   }
@@ -702,7 +702,7 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Delete task ──────────────────────────────────────────────────────────
 
   async function deleteTask(taskId: number): Promise<{ warning?: string }> {
-    const result = await electroview.rpc.request["tasks.delete"]({ taskId });
+    const result = await api("tasks.delete", { taskId });
     for (const [boardId, tasks] of Object.entries(tasksByBoard.value)) {
       const idx = tasks.findIndex((t) => t.id === taskId);
       if (idx !== -1) {
@@ -722,20 +722,20 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Compact conversation ─────────────────────────────────────────────────
 
   async function compactTask(taskId: number) {
-    await electroview.rpc.request["tasks.compact"]({ taskId });
+    await api("tasks.compact", { taskId });
     await loadMessages(taskId);
     await fetchContextUsage(taskId);
   }
 
   async function getGitStat(taskId: number): Promise<GitNumstat | null> {
-    return electroview.rpc.request["tasks.getGitStat"]({ taskId });
+    return api("tasks.getGitStat", { taskId });
   }
 
   // ─── Get changed files (for badge) ───────────────────────────────────────
 
   async function refreshChangedFiles(taskId: number) {
     try {
-      const files = await electroview.rpc.request["tasks.getChangedFiles"]({ taskId });
+      const files = await api("tasks.getChangedFiles", { taskId });
       changedFileCounts.value[taskId] = files.length;
     } catch {
       // ignore — badge stays stale

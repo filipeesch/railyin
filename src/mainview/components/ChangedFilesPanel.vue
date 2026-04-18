@@ -98,7 +98,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import type { GitNumstat } from "@shared/rpc-types";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 
 const props = defineProps<{
   taskId: number;
@@ -187,7 +187,7 @@ async function decideAll(decision: "accepted" | "rejected") {
   if (deciding.value) return;
   deciding.value = true;
   try {
-    await electroview.rpc!.request["tasks.decideAllHunks"]({ taskId: props.taskId, decision });
+    await api("tasks.decideAllHunks", { taskId: props.taskId, decision });
   } finally {
     deciding.value = false;
   }

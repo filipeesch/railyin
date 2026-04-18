@@ -110,7 +110,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted } from "vue";
 import { marked } from "marked";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { Task } from "@shared/rpc-types";
 import Button from "primevue/button";
 import InputText from "primevue/inputtext";
@@ -169,7 +169,7 @@ async function loadTask() {
   } else {
     // Existing Task Loading Logic
     try {
-      const tasks = await electroview.rpc.request["tasks.list"]({
+      const tasks = await api("tasks.list", {
         boardId: props.boardId,
       });
       const foundTask = tasks.find((t) => t.id === props.taskId);
@@ -197,7 +197,7 @@ async function onSave() {
       await taskStore.updateTask(props.taskId, form.title.trim(), form.description);
     } else {
       // Create new task
-      await electroview.rpc.request["tasks.create"]({
+      await api("tasks.create", {
         boardId: props.boardId,
         title: form.title.trim(),
         description: form.description,
@@ -217,7 +217,7 @@ async function onDelete() {
   saving.value = true;
   error.value = null;
   try {
-    await electroview.rpc.request["tasks.delete"]({ taskId: props.taskId });
+    await api("tasks.delete", { taskId: props.taskId });
     emit("deleted");
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to delete";

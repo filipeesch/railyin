@@ -1,8 +1,15 @@
-import Electrobun, { BrowserWindow, BrowserView } from "electrobun/bun";
 import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
 import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
 import { StreamBatcher } from "./pipeline/batcher.ts";
+import * as path from "path";
+import type { ServerWebSocket } from "bun";
+import { getPtySession, killAllPtySessions } from "./launch/pty.ts";
+
+type WsData = { type: "push" } | { type: "pty"; sessionId: string };
+
+// Track per-WS data listener functions so we can remove them on WS close
+const ptyDataListeners = new WeakMap<ServerWebSocket<WsData>, (chunk: string) => void>();
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 {
@@ -40,29 +47,13 @@ process.on("uncaughtException", (err) => {
 });
 
 // ─── CLI flags (must run before any module reads process.env) ─────────────────
-// --debug[=PORT]  → enables the debug HTTP server; PORT defaults to 9229, 0 = OS-assigned
 // --memory-db     → uses an in-memory SQLite database (same as RAILYN_DB=:memory:)
 declare const __RAILYN_FORCE_DEBUG__: boolean | undefined;
 declare const __RAILYN_FORCE_MEMORY_DB__: boolean | undefined;
-declare const __RAILYN_FORCE_DEBUG_PORT__: number | undefined;
 
 const argv = process.argv.slice(2);
 if (__RAILYN_FORCE_DEBUG__) process.env.RAILYN_DEBUG = "1";
 if (__RAILYN_FORCE_MEMORY_DB__) process.env.RAILYN_DB = ":memory:";
-const debugArg = argv.find(a => a === "--debug" || a.startsWith("--debug="));
-if (debugArg) process.env.RAILYN_DEBUG = "1";
-// Port 0 means OS-assigned (for parallel test sessions). Defaults to 9229 for backward compat.
-// Priority: runtime --debug=N arg → baked __RAILYN_FORCE_DEBUG_PORT__ → 9229
-const debugPort: number = (() => {
-  if (debugArg?.includes("=")) {
-    const n = parseInt(debugArg.split("=")[1]!, 10);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  if (typeof __RAILYN_FORCE_DEBUG_PORT__ === "number" && __RAILYN_FORCE_DEBUG_PORT__ >= 0) {
-    return __RAILYN_FORCE_DEBUG_PORT__;
-  }
-  return 9229;
-})();
 if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 import { workspaceHandlers } from "./handlers/workspace.ts";
 import { boardHandlers } from "./handlers/boards.ts";
@@ -77,7 +68,7 @@ import { appendMessage, compactConversation } from "./workflow/engine.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
 import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
-import type { RailynRPCType, StreamEvent } from "../shared/rpc-types.ts";
+import type { StreamEvent } from "../shared/rpc-types.ts";
 import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -115,28 +106,37 @@ const { error: configError } = loadConfig();
   }
 }
 
-// ─── IPC streaming callbacks (capture win lazily — only called after win is created) ──
+// ─── WebSocket push: connected browser clients ────────────────────────────────
 
-let win!: BrowserWindow;
+const clients = new Set<ServerWebSocket<WsData>>();
+
+function broadcast(msg: object): void {
+  const text = JSON.stringify(msg);
+  for (const ws of clients) {
+    try { ws.send(text); } catch { /* client disconnected — will be removed on close */ }
+  }
+}
+
+// ─── Push callbacks ───────────────────────────────────────────────────────────
 
 function onToken(taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean): void {
-  win.webview.rpc.send["stream.token"]({ taskId, executionId, token, done, isReasoning, isStatus });
+  broadcast({ type: "stream.token", payload: { taskId, executionId, token, done, isReasoning, isStatus } });
 }
 
 function onError(taskId: number, executionId: number, error: string): void {
-  win.webview.rpc.send["stream.error"]({ taskId, executionId, error });
+  broadcast({ type: "stream.error", payload: { taskId, executionId, error } });
 }
 
 function notifyTaskUpdated(task: Task): void {
-  win.webview.rpc.send["task.updated"](task);
+  broadcast({ type: "task.updated", payload: task });
 }
 
 function notifyNewMessage(message: ConversationMessage): void {
-  win.webview.rpc.send["message.new"](message);
+  broadcast({ type: "message.new", payload: message });
 }
 
 function notifyWorkflowReloaded(): void {
-  win.webview.rpc.send["workflow.reloaded"]({});
+  broadcast({ type: "workflow.reloaded", payload: {} });
 }
 
 // ─── Per-execution stream batchers ───────────────────────────────────────────
@@ -160,8 +160,8 @@ function onStreamEvent(event: StreamEvent): void {
   if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
     console.log(`[stream-diag-bun] ${event.type} len=${event.content.length} t=${performance.now().toFixed(1)}`);
   }
-  // ALL events go to IPC immediately — no 500ms delay for any event type.
-  win.webview.rpc.send["stream.event"](event);
+  // ALL events go to push immediately — no 500ms delay for any event type.
+  broadcast({ type: "stream.event", payload: event });
   batcher.push(event);
   if (event.done) {
     batchers.delete(event.executionId);
@@ -184,54 +184,150 @@ if (orchestrator) {
   orchestrator.setOnStreamEvent(onStreamEvent);
 }
 
-const mainWebviewRPC = BrowserView.defineRPC<RailynRPCType>({
-  maxRequestTime: 30_000, // 30s — Electrobun default is 1s; WebView may be slow during init
-  handlers: {
-    requests: {
-      ...workspaceHandlers(),
-      ...boardHandlers(),
-      ...projectHandlers(),
-      ...taskHandlers(orchestrator, notifyTaskUpdated, notifyNewMessage),
-      ...conversationHandlers(),
-      ...workflowHandlers(notifyWorkflowReloaded),
-      ...launchHandlers(),
-      ...lspHandlers(),
+const allHandlers: Record<string, (params: unknown) => unknown> = {
+  ...workspaceHandlers(),
+  ...boardHandlers(),
+  ...projectHandlers(),
+  ...taskHandlers(orchestrator, notifyTaskUpdated, notifyNewMessage),
+  ...conversationHandlers(),
+  ...workflowHandlers(notifyWorkflowReloaded),
+  ...launchHandlers(),
+  ...lspHandlers(),
+};
+
+// ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
+
+const DIST_DIR = path.join(import.meta.dir, "../../dist");
+
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: Number(process.env.PORT ?? 3000),
+  idleTimeout: 30,
+
+  async fetch(req, srv) {
+    const url = new URL(req.url);
+
+    // WebSocket upgrade for push channel
+    if (url.pathname === "/ws") {
+      const upgraded = srv.upgrade<WsData>(req, { data: { type: "push" } });
+      if (!upgraded) return new Response("WS upgrade failed", { status: 500 });
+      return undefined as unknown as Response; // upgraded — no response needed
+    }
+
+    // WebSocket upgrade for PTY terminal sessions
+    if (url.pathname.startsWith("/ws/pty/")) {
+      const sessionId = url.pathname.slice(8); // "/ws/pty/".length === 8
+      const upgraded = srv.upgrade<WsData>(req, { data: { type: "pty", sessionId } });
+      if (!upgraded) return new Response("WS upgrade failed", { status: 500 });
+      return undefined as unknown as Response;
+    }
+
+    // API: POST /api/<method>
+    if (req.method === "POST" && url.pathname.startsWith("/api/")) {
+      const method = url.pathname.slice(5); // strip leading "/api/"
+      const handler = allHandlers[method];
+      if (!handler) {
+        return new Response(JSON.stringify({ error: `Unknown method: ${method}` }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      try {
+        const params = await req.json();
+        const result = await handler(params);
+        return new Response(JSON.stringify(result), {
+          headers: { "content-type": "application/json" },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[api] ${method} error:`, msg);
+        return new Response(JSON.stringify({ error: msg }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
+    // Static file serving — serve from dist/, SPA fallback to index.html
+    let filePath = path.join(DIST_DIR, url.pathname === "/" ? "index.html" : url.pathname);
+    let file = Bun.file(filePath);
+    if (!(await file.exists())) {
+      // SPA fallback: unknown paths → index.html
+      filePath = path.join(DIST_DIR, "index.html");
+      file = Bun.file(filePath);
+    }
+    if (!(await file.exists())) {
+      return new Response("Not found", { status: 404 });
+    }
+    return new Response(file);
+  },
+
+  websocket: {
+    open(ws: ServerWebSocket<WsData>) {
+      const data = ws.data;
+      if (data.type === "pty") {
+        // Attach PTY output to this WebSocket
+        const session = getPtySession(data.sessionId);
+        if (!session) {
+          ws.send("\r\n[Session not found]\r\n");
+          ws.close();
+          return;
+        }
+        const listener = (chunk: string) => {
+          try { ws.send(chunk); } catch { /* ws closed */ }
+        };
+        session.dataListeners.add(listener);
+        ptyDataListeners.set(ws, listener);
+        // Replay buffered output so the terminal catches up on reconnect
+        if (session.scrollback) {
+          try { ws.send(session.scrollback); } catch { /* ignore */ }
+        }
+      } else {
+        clients.add(ws);
+      }
     },
-    messages: {
-      "debug.log": ({ level, args }) => {
-        const prefix = level === "error" ? "[WebView ERROR]" : level === "warn" ? "[WebView WARN]" : "[WebView LOG]";
-        console.log(prefix, args);
-      },
+    close(ws: ServerWebSocket<WsData>) {
+      if (ws.data.type === "push") {
+        clients.delete(ws);
+      } else {
+        // Remove the data listener so it doesn't fire against a closed socket
+        const session = getPtySession((ws.data as { type: "pty"; sessionId: string }).sessionId);
+        const listener = ptyDataListeners.get(ws);
+        if (session && listener) session.dataListeners.delete(listener);
+        ptyDataListeners.delete(ws);
+      }
+    },
+    message(ws: ServerWebSocket<WsData>, msg: string | Buffer) {
+      if (ws.data.type === "pty") {
+        const session = getPtySession(ws.data.sessionId);
+        if (session) {
+          const text = typeof msg === "string" ? msg : msg.toString("utf8");
+          // Intercept resize control messages; everything else is stdin
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed?.type === "resize" && typeof parsed.cols === "number" && typeof parsed.rows === "number") {
+              session.terminal?.resize(parsed.cols, parsed.rows);
+              return;
+            }
+          } catch { /* not JSON — treat as raw input */ }
+          session.terminal?.write(text);
+        }
+      }
+      // push channel: no client→server messages currently
     },
   },
 });
 
-// ─── App window ──────────────────────────────────────────────────────────────
+// Write the actual port for external tooling and the frontend to discover
+await Bun.write("/tmp/railyn.port", String(server.port)).catch(() => { });
+console.log(`Railyn server listening on http://127.0.0.1:${server.port}`);
 
-win = new BrowserWindow({
-  url: "views://mainview/index.html",
-  title: "Railyn",
-  frame: { width: 1400, height: 900 },
-  rpc: mainWebviewRPC,
-});
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
 
-// Product policy: on macOS, closing the app window should quit the app.
-if (process.platform === "darwin") {
-  const winWithEvents = win as unknown as { on?: (event: string, listener: () => void) => void };
-  winWithEvents.on?.("close", () => {
-    const app = Electrobun as unknown as { quit?: () => void };
-    app.quit?.();
-  });
-}
-
-// When the window is closed, kill the entire process group so the
-// 'electrobun dev --watch' node watcher also terminates.
-// forceExit() only kills this bun subprocess; the watcher parent stays
-// alive (and would restart the app) otherwise.
 const SHUTDOWN_GRACE_MS = Number(process.env.RAILYN_SHUTDOWN_GRACE_MS ?? 3_000);
 let _shutdownStarted = false;
 
-Electrobun.events.on("before-quit", async () => {
+async function shutdown(): Promise<void> {
   if (_shutdownStarted) return;
   _shutdownStarted = true;
 
@@ -240,85 +336,28 @@ Electrobun.events.on("before-quit", async () => {
   } catch (err) {
     console.warn("[shutdown] Graceful non-native shutdown failed", err instanceof Error ? err.message : String(err));
   }
+  killAllPtySessions();
+  process.exit(0);
+}
 
-  try {
-    const result = Bun.spawnSync(["bash", "-c", `ps -o pgid= -p ${process.pid}`]);
-    const pgid = parseInt(result.stdout.toString().trim(), 10);
-    if (pgid > 1) {
-      process.kill(-pgid, "SIGTERM");
-    }
-  } catch {
-    try { process.kill(process.ppid, "SIGTERM"); } catch { /* ignore */ }
-  }
-});
+process.on("SIGTERM", () => { void shutdown(); });
+process.on("SIGINT", () => { void shutdown(); });
 
-// ─── Debug HTTP server (dev only, --debug flag) ──────────────────────────────
-// Enable with: bun run dev:debug  (fixed port 9229)
-//         or: electrobun dev -- --debug=0  (OS-assigned port, announced as DEBUG_PORT=N)
-// Port is written to /tmp/railyn-debug.port for bridge.ts and debug-cli.ts to discover.
-// curl "http://localhost:$(cat /tmp/railyn-debug.port)/inspect?script=return+JSON.stringify(document.querySelector('.hunk-btn--accept')?.getBoundingClientRect())"
-// curl "http://localhost:$(cat /tmp/railyn-debug.port)/click?selector=.hunk-btn--accept"
+// ─── Debug / test server (only when RAILYN_DEBUG=1) ───────────────────────────
+// Port 0 = OS-assigned. Port is written to /tmp/railyn-debug.port for bridge.ts.
+// Endpoints here are test-only helpers that reach directly into the DB and orchestrator.
+// WebView-specific endpoints (/inspect, /click, /screenshot) have been removed
+// because there is no WebView in the web-app architecture.
 
 // Module-level cache of the test worktree path so /reset-decisions can restore it.
 let _testWorktreePath = "";
 
 if (process.env.RAILYN_DEBUG) {
   const debugServer = Bun.serve({
-    port: debugPort,
-    idleTimeout: 30, // seconds — prevent premature disconnects for long bridge evals
+    port: 0, // always OS-assigned for test parallelism
+    idleTimeout: 30,
     async fetch(req: Request) {
       const url = new URL(req.url);
-
-      if (url.pathname === "/inspect") {
-        // Accept script from POST body (for long scripts) or query param
-        let script = url.searchParams.get("script");
-        if (!script && req.method === "POST") {
-          script = await req.text();
-        }
-        script ??= "return document.title";
-        // Wrap in try/catch so JS errors are returned as {"__error":"..."} instead of silently failing
-        const safe = `try { ${script} } catch (__err) { return JSON.stringify({__error: String(__err)}); }`;
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const result = await (win.webview as any).rpc.request["evaluateJavascriptWithResponse"]({ script: safe });
-          return new Response(JSON.stringify(result, null, 2), {
-            headers: { "content-type": "application/json" },
-          });
-        } catch (e) {
-          return new Response(JSON.stringify({ __error: String(e) }), {
-            status: 500,
-            headers: { "content-type": "application/json" },
-          });
-        }
-      }
-
-      if (url.pathname === "/click") {
-        const selector = url.searchParams.get("selector") ?? "";
-        const script = `
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return 'NOT FOUND';
-        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-        el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
-        el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
-        return 'clicked: ' + el.outerHTML.slice(0, 200);
-      `;
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const result = await (win.webview as any).rpc.request["evaluateJavascriptWithResponse"]({ script });
-          return new Response(JSON.stringify(result), { headers: { "content-type": "application/json" } });
-        } catch (e) {
-          return new Response(String(e), { status: 500 });
-        }
-      }
-
-      if (url.pathname === "/screenshot") {
-        const dest = url.searchParams.get("path") ?? `/tmp/railyn-debug-${Date.now()}.png`;
-        const proc = Bun.spawnSync(["screencapture", "-T", "0", "-a", dest]);
-        if (proc.exitCode !== 0) {
-          return new Response(JSON.stringify({ __error: proc.stderr.toString() }), { status: 500, headers: { "content-type": "application/json" } });
-        }
-        return new Response(JSON.stringify({ path: dest }), { headers: { "content-type": "application/json" } });
-      }
 
       // Test-only: delete all hunk decisions (and line comments) for a task so tests start from a clean state.
       // Also cancels any running execution and ensures the git context is intact.
@@ -381,7 +420,6 @@ if (process.env.RAILYN_DEBUG) {
       }
 
       // Test-only: query line comments from the DB for a task.
-      // Returns all rows from task_line_comments for the given taskId.
       if (url.pathname === "/query-line-comments") {
         const taskId = url.searchParams.get("taskId");
         if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
@@ -414,7 +452,7 @@ if (process.env.RAILYN_DEBUG) {
         return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
       }
 
-      // Test-only: directly call tasks.rejectHunk via HTTP for diagnostic testing.
+      // Test-only: diagnostic for reject-hunk test path.
       if (url.pathname === "/test-reject-hunk") {
         const taskId = url.searchParams.get("taskId");
         const filePath = url.searchParams.get("filePath");
@@ -429,7 +467,6 @@ if (process.env.RAILYN_DEBUG) {
           const fileExists = worktreePath ? await Bun.file(`${worktreePath}/${filePath}`).exists() : false;
           const fileSize = fileExists ? (await Bun.file(`${worktreePath}/${filePath}`).text()).length : 0;
 
-          // Check git status
           let gitStatus = "";
           let gitDiff = "";
           let gitShowExitCode = -1;
@@ -452,10 +489,7 @@ if (process.env.RAILYN_DEBUG) {
           }
 
           return new Response(JSON.stringify({
-            worktreePath,
-            baseSha,
-            fileExists,
-            fileSize,
+            worktreePath, baseSha, fileExists, fileSize,
             gitStatus: gitStatus.trim(),
             gitDiffLen: gitDiff.length,
             gitDiffPreview: gitDiff.slice(0, 200),
@@ -467,11 +501,7 @@ if (process.env.RAILYN_DEBUG) {
       }
 
       // Test-only: create a self-contained test task in a temp git worktree with
-      // known files. Returns { taskId, files, worktreePath } so tests are not
-      // coupled to any pre-existing app data.
-      //
-      // The worktree is a fresh git repo where 3 files are created as new untracked
-      // additions, matching the simplest test scenario (each file = 1 hunk = 1 bar).
+      // known files. Returns { taskId, files, worktreePath }.
       if (url.pathname === "/setup-test-env") {
         try {
           const db = getDb();
@@ -498,9 +528,7 @@ if (process.env.RAILYN_DEBUG) {
             })();
           }
 
-          // Resolve board + project keys — either from an existing task (real DB mode)
-          // or by resolving from the file-backed workspace/project registry
-          // (in-memory / clean test DB, i.e. RAILYN_DB=:memory:).
+          // Resolve board + project keys
           let boardId: number;
           let projectKey: string;
           const existingTask = db.query<{ board_id: number; project_key: string }, []
@@ -545,18 +573,6 @@ if (process.env.RAILYN_DEBUG) {
           run(["git", "config", "user.email", "test@railyn.internal"]);
           run(["git", "config", "user.name", "Railyn Test"]);
 
-          // Commit the base content for the partial-change files so HEAD exists
-          // and diffs can be computed via `git diff HEAD`.
-          //
-          // File mix in the test worktree:
-          //   Untracked / new:   feature-a.ts, feature-b.vue, feature-c.md
-          //     → appear as entirely new additions (1 hunk each = "new file" diff)
-          //   Tracked / partial: partial-x.ts, partial-y.ts
-          //     → committed base content first, then modified — produces ≥2 disjoint
-          //       hunks per file so the multi-hunk acceptance / precision tests have
-          //       real data to work with.
-
-          // --- Step 1: write and commit base content for the partial-change files ---
           const partialXBase = [
             "// partial-x.ts: committed base",
             "export function alpha() { return 1; }",
@@ -604,12 +620,11 @@ if (process.env.RAILYN_DEBUG) {
           run(["git", "add", "partial-x.ts", "partial-y.ts"]);
           run(["git", "commit", "-m", "add partial base files"]);
 
-          // --- Step 2: modify only the top and bottom sections (two disjoint hunks) ---
           const partialXModified = [
             "// partial-x.ts: worktree modifications",
-            "export function alpha() { return 'alpha'; }",  // changed return type
-            "export function beta()  { return 'beta'; }",   // changed return type
-            "export function gamma() { return 'gamma'; }",  // changed return type
+            "export function alpha() { return 'alpha'; }",
+            "export function beta()  { return 'beta'; }",
+            "export function gamma() { return 'gamma'; }",
             "",
             "// middle section — unchanged (must be ≥7 lines so git produces two separate hunks)",
             "export const VERSION = '1.0.0';",
@@ -620,16 +635,16 @@ if (process.env.RAILYN_DEBUG) {
             "export const STABLE2 = true;",
             "export const STABLE3 = true;",
             "",
-            "export function delta()   { return 'delta'; }",    // changed
-            "export function epsilon() { return 'epsilon'; }",  // changed
-            "export function zeta()    { return 'zeta'; }",     // changed
+            "export function delta()   { return 'delta'; }",
+            "export function epsilon() { return 'epsilon'; }",
+            "export function zeta()    { return 'zeta'; }",
           ].join("\n");
 
           const partialYModified = [
             "// partial-y.ts: worktree modifications",
             "export class ServiceA {",
-            "  greet() { return 'hi there'; }",   // changed
-            "  run()   { return 'active'; }",      // changed
+            "  greet() { return 'hi there'; }",
+            "  run()   { return 'active'; }",
             "}",
             "",
             "// stable section — unchanged (must be ≥7 lines so git produces two separate hunks)",
@@ -642,16 +657,14 @@ if (process.env.RAILYN_DEBUG) {
             "export const STABLE_Y    = true;",
             "",
             "export class ServiceB {",
-            "  stop()  { return 'halted'; }",    // changed
-            "  reset() { return 'cleared'; }",   // changed
+            "  stop()  { return 'halted'; }",
+            "  reset() { return 'cleared'; }",
             "}",
           ].join("\n");
 
           await Bun.write(`${worktreePath}/partial-x.ts`, partialXModified);
           await Bun.write(`${worktreePath}/partial-y.ts`, partialYModified);
-          // Files are now modified but NOT staged — git diff HEAD will show them as modified.
 
-          // --- Step 3: create the 3 untracked new-file additions ---
           const newFiles: [string, string][] = [
             ["feature-a.ts", Array.from({ length: 20 }, (_, i) => `export const lineA${i + 1} = ${i + 1};`).join("\n")],
             ["feature-b.vue", ["<template>", "  <div class=\"feature-b\">", "    <h1>Feature B</h1>", "    <p>Test component</p>", "  </div>", "</template>", "", "<script setup lang=\"ts\">", "const msg = 'hello from B';", "</script>"].join("\n")],
@@ -661,13 +674,9 @@ if (process.env.RAILYN_DEBUG) {
             await Bun.write(`${worktreePath}/${name}`, content);
           }
 
-          // Create a conversation first (tasks.create always does this — handleHumanTurn
-          // will throw/deadlock if conversation_id is NULL on the task).
           const convResult = db.run("INSERT INTO conversations (task_id) VALUES (0)");
           const conversationId = convResult.lastInsertRowid as number;
 
-          // Insert the test task — model is explicitly set to 'fake/test' so the
-          // FakeAI provider resolves correctly in handleHumanTurn (avoids UnresolvableProviderError).
           db.run(
             "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, model, conversation_id) VALUES (?, ?, 'UI Test Task', 'Auto-created by test suite', 'backlog', 'idle', 'fake/test', ?)",
             [boardId, projectKey, conversationId],
@@ -679,15 +688,12 @@ if (process.env.RAILYN_DEBUG) {
             .get(boardId);
           const workspaceKey = boardWorkspace?.workspace_key ?? "default";
 
-          // Fix up the conversation → task back-link
           db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
 
-          // Ensure the fake model is listed in enabled_models so the UI shows it.
           db.run(
             "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, 'fake/test')",
             [workspaceKey],
           );
-          // Register a second fake model so model-switching tests can change the selection.
           db.run(
             "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, 'fake/v2')",
             [workspaceKey],
@@ -698,7 +704,6 @@ if (process.env.RAILYN_DEBUG) {
             [taskId, worktreePath, worktreePath],
           );
 
-          // Return all files: tracked-modified first (for partial-change suites), then new.
           const files = ["partial-x.ts", "partial-y.ts", ...newFiles.map(([name]) => name)];
           return new Response(JSON.stringify({ taskId, files, worktreePath }), { headers: { "content-type": "application/json" } });
         } catch (e) {
@@ -947,9 +952,8 @@ if (process.env.RAILYN_DEBUG) {
         }
       }
 
-      // Test-only: push synthetic stream events directly to the frontend via IPC.
+      // Test-only: push synthetic stream events directly to connected browser clients via WS.
       // Accepts a JSON body: { events: StreamEvent[] }
-      // Events are sent immediately via win.webview.rpc.send["stream.event"].
       if (url.pathname === "/queue-stream-events") {
         try {
           const body = await req.json() as { events?: unknown[] };
@@ -960,7 +964,7 @@ if (process.env.RAILYN_DEBUG) {
             });
           }
           for (const event of body.events) {
-            win.webview.rpc.send["stream.event"](event as StreamEvent);
+            broadcast({ type: "stream.event", payload: event });
           }
           return new Response(JSON.stringify({ ok: true, count: body.events.length }), {
             headers: { "content-type": "application/json" },
@@ -978,25 +982,26 @@ if (process.env.RAILYN_DEBUG) {
         return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
       }
 
-      return new Response("paths: /inspect?script=, /click?selector=, /screenshot?path=, /reset-decisions?taskId=, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=, /queue-stream-events, /shutdown", { status: 200 });
+      return new Response("paths: /reset-decisions?taskId=, /query-line-comments?taskId=, /query-hunk-decisions?taskId=, /query-messages?taskId=, /test-reject-hunk?taskId=&filePath=, /setup-test-env, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=, /queue-stream-events, /shutdown", { status: 200 });
     },
   });
-  // Announce the actual port (may differ from requested when debugPort=0).
-  // bridge.ts and debug-cli.ts read /tmp/railyn-debug.port for discovery.
-  // run-ui-tests.sh tails the log for the DEBUG_PORT= line.
+  // Announce the actual port. bridge.ts and run-ui-tests.sh read /tmp/railyn-debug.port for discovery.
   Bun.write("/tmp/railyn-debug.port", String(debugServer.port)).catch(() => { });
   console.log(`DEBUG_PORT=${debugServer.port}`);
 }
 
-// ─── Config error: surface to UI ──────────────────────────────────────────────
+// ─── Config error: push to connected clients ──────────────────────────────────
 
 if (configError) {
-  // Delay to give WebView time to display the error overlay
+  // Delay to give the browser time to connect before receiving the error push
   setTimeout(() => {
-    win.webview.rpc.send["stream.error"]({
-      taskId: -1,
-      executionId: -1,
-      error: `Config error: ${configError}`,
+    broadcast({
+      type: "stream.error",
+      payload: {
+        taskId: -1,
+        executionId: -1,
+        error: `Config error: ${configError}`,
+      },
     });
   }, 2000);
 }

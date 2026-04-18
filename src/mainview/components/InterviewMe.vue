@@ -10,7 +10,7 @@
   </div>
 
   <!-- Interactive -->
-  <div v-else class="interview">
+  <div v-else ref="interviewEl" class="interview">
     <!-- Context preamble -->
     <div v-if="context" class="interview__context prose" v-html="renderMd(context)" />
 
@@ -121,12 +121,28 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import { marked } from "marked";
+import { ref, computed, watch, nextTick } from "vue";
+import { Marked } from "marked";
+import mermaid from "mermaid";
 import type { InterviewQuestion } from "@shared/rpc-types";
 
+mermaid.initialize({ startOnLoad: false, theme: "dark" });
+
+const mermaidMarked = new Marked({
+  gfm: true,
+  breaks: true,
+  renderer: {
+    code({ text, lang }: { text: string; lang?: string }) {
+      if (lang === "mermaid") {
+        return `<pre class="mermaid">${text}</pre>`;
+      }
+      return false;
+    },
+  },
+});
+
 function renderMd(content: string): string {
-  return marked.parse(content, { async: false, gfm: true, breaks: true }) as string;
+  return mermaidMarked.parse(content, { async: false }) as string;
 }
 
 const props = defineProps<{
@@ -141,8 +157,20 @@ const emit = defineEmits<{
 
 const answered = computed(() => props.answeredText !== undefined);
 
+const interviewEl = ref<HTMLElement>();
+
 // Per-question state
 const focusedOption = ref<string[]>(props.questions.map(() => ""));
+
+watch(
+  focusedOption,
+  async () => {
+    await nextTick();
+    const nodes = interviewEl.value?.querySelectorAll<Element>(".mermaid");
+    if (nodes?.length) await mermaid.run({ nodes });
+  },
+  { deep: true, flush: "post" },
+);
 const singleSelected = ref<string[]>(props.questions.map(() => ""));
 const multiSelected = ref<string[][]>(props.questions.map(() => []));
 const otherValues = ref<string[]>(props.questions.map(() => ""));

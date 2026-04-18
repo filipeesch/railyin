@@ -6,13 +6,30 @@
     "strict": true,
     "skipLibCheck": true,
     "jsx": "preserve",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["bun-types"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "bun-types"
+    ],
     "paths": {
-      "@shared/*": ["./src/shared/*"],
-      "@bun/*": ["./src/bun/*"],
-      "@/*": ["./src/mainview/*"]
+      "@shared/*": [
+        "./src/shared/*"
+      ],
+      "@bun/*": [
+        "./src/bun/*"
+      ],
+      "@/*": [
+        "./src/mainview/*"
+      ]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "electrobun.config.ts", "vite.config.ts", "env.d.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "vite.config.ts",
+    "env.d.ts"
+  ]
 }

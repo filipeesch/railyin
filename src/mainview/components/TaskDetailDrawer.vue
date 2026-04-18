@@ -429,6 +429,17 @@
     @saved="onTaskSaved"
     @deleted="onTaskDeleted"
   />
+
+  <!-- PTY Terminal Dialog -->
+  <Dialog
+    v-model:visible="ptyDialogVisible"
+    header="Terminal"
+    :modal="true"
+    :style="{ width: '900px', height: '600px' }"
+    :content-style="{ padding: 0, height: 'calc(100% - 56px)', display: 'flex', flexDirection: 'column' }"
+  >
+    <PtyTerminal v-if="ptySessionId" :session-id="ptySessionId" style="flex: 1; min-height: 0;" />
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -454,13 +465,14 @@ import ManageModelsModal from "./ManageModelsModal.vue";
 import TodoPanel from "./TodoPanel.vue";
 import ChangedFilesPanel from "./ChangedFilesPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
+import PtyTerminal from "./PtyTerminal.vue";
 import TaskDetailOverlay from "./TaskDetailOverlay.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
 import { useToast } from "primevue/usetoast";
 import { useReviewStore } from "../stores/review";
 import { useLaunchStore } from "../stores/launch";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
@@ -470,12 +482,17 @@ const reviewStore = useReviewStore();
 const launchStore = useLaunchStore();
 
 const launchConfig = ref<LaunchConfig | null>(null);
+const ptySessionId = ref<string | null>(null);
+const ptyDialogVisible = ref(false);
 
 async function runLaunch(command: string, mode: "terminal" | "app") {
   if (!task.value) return;
   const result = await launchStore.run(task.value.id, command, mode);
   if (!result.ok) {
     toast.add({ severity: "error", summary: "Launch failed", detail: result.error, life: 5000 });
+  } else if (result.sessionId) {
+    ptySessionId.value = result.sessionId;
+    ptyDialogVisible.value = true;
   }
 }
 
@@ -516,7 +533,7 @@ const syncingChanges = ref(false);
 
 async function openReviewOverlay(filePath?: string | null, mode: "review" | "changes" = "review") {
   if (!task.value) return;
-  const files = await electroview.rpc!.request["tasks.getChangedFiles"]({ taskId: task.value.id });
+  const files = await api("tasks.getChangedFiles", { taskId: task.value.id });
   reviewStore.openReview(task.value.id, files);
   reviewStore.mode = mode;
   if (filePath) reviewStore.selectFile(filePath);
@@ -527,7 +544,7 @@ async function onOpenReview(filePath: string | null, mode: "review" | "changes")
   // Refresh pending summary after reviewing
   if (task.value) {
     try {
-      pendingByFile.value = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({ taskId: task.value.id });
+      pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });
     } catch { /* non-fatal */ }
   }
 }
@@ -538,7 +555,7 @@ async function syncChangedFiles() {
   try {
     await taskStore.refreshChangedFiles(task.value.id);
     numstat.value = await taskStore.getGitStat(task.value.id);
-    pendingByFile.value = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({ taskId: task.value.id });
+    pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });
   } finally {
     syncingChanges.value = false;
   }
@@ -887,7 +904,7 @@ async function onModelChange(model: string | null) {
 async function toggleShellAutoApprove() {
   if (!task.value) return;
   const newValue = !task.value.shellAutoApprove;
-  await electroview.rpc!.request["tasks.setShellAutoApprove"]({ taskId: task.value.id, enabled: newValue });
+  await api("tasks.setShellAutoApprove", { taskId: task.value.id, enabled: newValue });
 }
 
 async function compactConversation() {
@@ -949,11 +966,11 @@ watch(
       numstat.value = await taskStore.getGitStat(id);
       taskStore.refreshChangedFiles(id);
       try {
-        pendingByFile.value = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({ taskId: id });
+        pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: id });
       } catch { /* non-fatal */ }
     }
     try {
-      const { content } = await electroview.rpc!.request["tasks.sessionMemory"]({ taskId: id });
+      const { content } = await api("tasks.sessionMemory", { taskId: id });
       sessionMemoryContent.value = content;
     } catch { /* non-fatal */ }
     // Load launch config (deduped in store by projectKey)
@@ -974,7 +991,7 @@ watch(
       if (task.value) {
         numstat.value = await taskStore.getGitStat(task.value.id);
         try {
-          pendingByFile.value = await electroview.rpc!.request["tasks.getPendingHunkSummary"]({ taskId: task.value.id });
+          pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });
         } catch { /* non-fatal */ }
       }
     }

@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { Board, WorkflowTemplate } from "@shared/rpc-types";
 import { findFirstBoardInWorkspace } from "../workspace-helpers";
 
@@ -20,7 +20,7 @@ export const useBoardStore = defineStore("board", () => {
     loading.value = true;
     error.value = null;
     try {
-      boards.value = await electroview.rpc.request["boards.list"]({});
+      boards.value = await api("boards.list", {});
       if (!activeBoardId.value && boards.value.length > 0) {
         activeBoardId.value = boards.value[0].id;
       }
@@ -32,7 +32,7 @@ export const useBoardStore = defineStore("board", () => {
   }
 
   async function createBoard(workspaceKey: string, name: string, workflowTemplateId: string) {
-    const board = await electroview.rpc.request["boards.create"]({
+    const board = await api("boards.create", {
       workspaceKey,
       name,
       projectKeys: [],

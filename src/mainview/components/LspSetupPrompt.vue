@@ -124,7 +124,7 @@ import { reactive, computed } from "vue";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Select from "primevue/select";
-import { electroview } from "../rpc";
+import { api } from "../rpc";
 import type { LspDetectedLanguage, LspInstallOption } from "../../shared/rpc-types";
 
 // ─── Props / Emits ─────────────────────────────────────────────────────────
@@ -184,7 +184,7 @@ async function install(lang: LspDetectedLanguage) {
   outputs[key] = "";
 
   try {
-    const result = await electroview.rpc.request["lsp.runInstall"]({
+    const result = await api("lsp.runInstall", {
       command: option.command,
       projectPath: props.projectPath,
     });
@@ -208,7 +208,7 @@ async function addToConfig(lang: LspDetectedLanguage) {
   states[key].adding = true;
 
   try {
-    await electroview.rpc.request["lsp.addToConfig"]({
+    await api("lsp.addToConfig", {
       projectPath: props.projectPath,
       languageServerName: key,
     });

@@ -225,14 +225,14 @@ let _configError: string | null = null;
 let _workspaceRegistry: WorkspaceRegistryEntry[] | null = null;
 const configContext = new AsyncLocalStorage<LoadedConfig>();
 
-// Injected at build time by electrobun.config.ts for dev builds (via Bun define).
+// Injected at build time via --define in package.json scripts for dev builds.
 // In production builds this is undefined and the fallback to ~/.railyn/config is used.
 declare const __RAILYN_DEV_CONFIG_DIR__: string | undefined;
 
 function getDefaultConfigDir(): string {
   // 1. Explicit env override (used by tests and CI)
   if (process.env.RAILYN_CONFIG_DIR) return process.env.RAILYN_CONFIG_DIR;
-  // 2. Dev build: absolute path baked in at bundle time by electrobun.config.ts
+  // 2. Dev build: absolute path baked in at bundle time via --define
   if (typeof __RAILYN_DEV_CONFIG_DIR__ !== "undefined" && existsSync(__RAILYN_DEV_CONFIG_DIR__)) {
     return __RAILYN_DEV_CONFIG_DIR__;
   }
