@@ -126,3 +126,18 @@ export function makeAssistantMessage(
         ...overrides,
     };
 }
+
+export function makeMcpStatus(overrides?: {
+    name?: string;
+    state?: "idle" | "starting" | "running" | "error" | "disabled";
+    tools?: { name: string; qualifiedName: string; serverName: string; description?: string; inputSchema: { type: "object" } }[];
+    error?: string;
+}) {
+    const name = overrides?.name ?? "test-server";
+    const state = overrides?.state ?? "running";
+    const tools = overrides?.tools ?? [
+        { name: "toolA", qualifiedName: `mcp__${name}__toolA`, serverName: name, description: "Tool A", inputSchema: { type: "object" as const } },
+        { name: "toolB", qualifiedName: `mcp__${name}__toolB`, serverName: name, description: "Tool B", inputSchema: { type: "object" as const } },
+    ];
+    return { name, state, tools, error: overrides?.error };
+}

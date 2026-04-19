@@ -241,7 +241,7 @@ function getDefaultConfigDir(): string {
   return join(dataDir, "config");
 }
 
-function getDataDir(): string {
+export function getDataDir(): string {
   return process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
 }
 

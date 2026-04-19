@@ -60,7 +60,8 @@ export const test = base.extend<Fixtures>({
             .returns("tasks.getGitStat", null)
             .returns("tasks.getPendingHunkSummary", [])
             .returns("projects.list", [])
-            .returns("tasks.sessionMemory", { content: null });
+            .returns("tasks.sessionMemory", { content: null })
+            .returns("mcp.getStatus", []);
 
         await api.install();
         await use(api);

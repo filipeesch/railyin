@@ -66,6 +66,7 @@ import { workflowHandlers } from "./handlers/workflow.ts";
 import { launchHandlers } from "./handlers/launch.ts";
 import { lspHandlers } from "./handlers/lsp.ts";
 import { codeServerHandlers } from "./handlers/code-server.ts";
+import { mcpHandlers } from "./handlers/mcp.ts";
 import { mapTask } from "./db/mappers.ts";
 import { appendMessage, compactConversation } from "./workflow/engine.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
@@ -204,6 +205,7 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...launchHandlers(),
   ...lspHandlers(),
   ...codeServerHandlers(broadcast, serverPort),
+  ...mcpHandlers(),
 };
 
 const server = Bun.serve({

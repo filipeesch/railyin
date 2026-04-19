@@ -3,10 +3,28 @@ import { join, dirname } from "path";
 import { getDb } from "../db/index.ts";
 import { mapTask } from "../db/mappers.ts";
 import type { TaskRow } from "../db/row-types.ts";
-import { getDataDir, loadMcpConfig } from "../config/index.ts";
+import { getDataDir } from "../config/index.ts";
 import { getMcpRegistry, initMcpRegistry } from "../mcp/registry.ts";
-import type { McpServerStatus } from "../mcp/types.ts";
+import type { McpConfig, McpServerConfig, McpServerStatus } from "../mcp/types.ts";
 import type { Task } from "../../shared/rpc-types.ts";
+
+// Support both VS Code format ({ servers: { name: {...} } }) and internal format ({ servers: [...] })
+function normalizeToMcpConfig(parsed: unknown): McpConfig {
+  const p = parsed as Record<string, unknown>;
+  if (!p || typeof p !== "object" || !p.servers) return { servers: [] };
+  if (Array.isArray(p.servers)) return { servers: p.servers as McpServerConfig[] };
+  // VS Code object-map format
+  const servers: McpServerConfig[] = Object.entries(p.servers as Record<string, unknown>).map(
+    ([name, entry]) => {
+      const e = entry as Record<string, unknown>;
+      const transport = e.url
+        ? { type: "http" as const, url: e.url as string, headers: e.headers as Record<string, string> | undefined }
+        : { type: "stdio" as const, command: e.command as string, args: e.args as string[] | undefined, env: e.env as Record<string, string> | undefined };
+      return { name, transport };
+    }
+  );
+  return { servers };
+}
 
 export function mcpHandlers() {
   return {
@@ -39,8 +57,9 @@ export function mcpHandlers() {
       // Validate JSON before saving
       JSON.parse(params.content); // throws if invalid
       writeFileSync(globalPath, params.content, "utf-8");
-      // Reload registry with new config
-      const newConfig = loadMcpConfig();
+      // Parse and reload registry with new config
+      const parsed = JSON.parse(params.content);
+      const newConfig: McpConfig = normalizeToMcpConfig(parsed);
       const registry = initMcpRegistry(newConfig);
       await registry.startAll();
       return { ok: true };

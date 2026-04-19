@@ -88,14 +88,6 @@
             @click="openTerminal"
           />
           <Button
-            v-if="task.worktreePath"
-            icon="pi pi-code"
-            text
-            size="small"
-            v-tooltip="'Open code editor'"
-            @click="codeServerStore.openEditor(task.id)"
-          />
-          <Button
             v-if="task.executionState === 'failed'"
             label="Retry"
             icon="pi pi-replay"
@@ -233,14 +225,26 @@
           :workflow-state="task.workflowState"
         />
       <div class="task-detail__input">
-        <!-- Code reference chips -->
-        <div v-if="pendingRefs.length" class="code-refs">
-          <div v-for="(ref, i) in pendingRefs" :key="i" class="code-ref-chip">
-            <i class="pi pi-paperclip code-ref-chip__icon" />
-            <span class="code-ref-chip__label">{{ refLabel(ref) }}</span>
-            <button class="code-ref-chip__dismiss" @click="codeServerStore.removeRef(task.id, i)" title="Remove reference">×</button>
-          </div>
+        <!-- Pending attachment chips -->
+        <div v-if="pendingAttachments.length > 0" class="task-detail__attachments">
+          <span
+            v-for="(att, idx) in pendingAttachments"
+            :key="idx"
+            class="attachment-chip"
+          >
+            📎 {{ att.label }}
+            <button class="attachment-chip__remove" @click="pendingAttachments.splice(idx, 1)" aria-label="Remove attachment">✕</button>
+          </span>
         </div>
+        <!-- Hidden file input -->
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept="*"
+          multiple
+          style="display: none"
+          @change="onFileInputChange"
+        />
         <div class="task-detail__input-row">
           <Textarea
             v-model="inputText"
@@ -250,6 +254,17 @@
             autoResize
             :disabled="task.executionState === 'running' || compacting"
             @keydown.enter.exact.prevent="send"
+            @paste="onPaste"
+          />
+          <!-- Attach button — only shown when not running/compacting -->
+          <Button
+            v-if="task.executionState !== 'running' && !compacting"
+            icon="pi pi-paperclip"
+            text
+            rounded
+            size="small"
+            v-tooltip="'Attach image'"
+            @click="fileInputRef?.click()"
           />
           <!-- Context-aware send / cancel / compacting button -->
           <Button
@@ -266,7 +281,7 @@
           <Button
             v-else
             icon="pi pi-send"
-            :disabled="!inputText.trim() && pendingRefs.length === 0"
+            :disabled="!inputText.trim()"
             @click="send"
           />
         </div>
@@ -363,6 +378,24 @@
             :loading="compacting"
             @click="compactConversation"
           />
+          <!-- MCP Tools button -->
+          <Button
+            v-tooltip="'MCP Tools'"
+            icon="pi pi-wrench"
+            :severity="mcpHasWarning ? 'danger' : 'secondary'"
+            text
+            rounded
+            size="small"
+            class="task-detail__mcp-btn"
+            @click="onMcpBtnClick"
+          />
+          <McpToolsPopover
+            ref="mcpPopoverRef"
+            :task-id="task.id"
+            :enabled-mcp-tools="task.enabledMcpTools ?? null"
+            @edit-config="onMcpEditConfig"
+            @tools-changed="onMcpToolsChanged"
+          />
           <!-- Shell auto-approve toggle -->
           <div class="shell-autoapprove-toggle" :title="task.shellAutoApprove ? 'Shell auto-approve ON — commands run without prompting' : 'Shell auto-approve OFF — commands require approval'">
             <ToggleSwitch
@@ -374,6 +407,15 @@
           </div>
         </div>
       </div>
+      <FileEditorOverlay
+        :visible="mcpEditorVisible"
+        title="Edit mcp.json"
+        :content="mcpConfigContent"
+        language="json"
+        note="Editing global MCP server configuration (~/.railyn/mcp.json). Save to reload servers."
+        @close="mcpEditorVisible = false"
+        @save="onMcpConfigSave"
+      />
       </div><!-- end task-tab-chat -->
 
       <!-- Info tab -->
@@ -457,9 +499,10 @@ import { useToast } from "primevue/usetoast";
 import { useReviewStore } from "../stores/review";
 import { useLaunchStore } from "../stores/launch";
 import { useTerminalStore } from "../stores/terminal";
-import { useCodeServerStore } from "../stores/codeServer";
 import { api } from "../rpc";
-import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, CodeRef } from "@shared/rpc-types";
+import McpToolsPopover from "./McpToolsPopover.vue";
+import FileEditorOverlay from "./FileEditorOverlay.vue";
+import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, Attachment, McpServerStatus, Task } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
@@ -467,7 +510,6 @@ const toast = useToast();
 const reviewStore = useReviewStore();
 const launchStore = useLaunchStore();
 const terminalStore = useTerminalStore();
-const codeServerStore = useCodeServerStore();
 
 const activeTab = ref<'chat' | 'info'>('chat');
 
@@ -488,6 +530,41 @@ async function runLaunch(command: string, mode: "terminal" | "app") {
 }
 
 const manageModelsOpen = ref(false);
+
+// ─── MCP Tools state ──────────────────────────────────────────────────────────
+
+const mcpStatus = ref<McpServerStatus[]>([]);
+const mcpPopoverRef = ref<InstanceType<typeof McpToolsPopover> | null>(null);
+const mcpEditorVisible = ref(false);
+const mcpConfigContent = ref("{}");
+
+const mcpHasWarning = computed(() => mcpStatus.value.some(s => s.state === "error"));
+
+function onMcpBtnClick(event: MouseEvent) {
+  mcpPopoverRef.value?.toggle(event);
+}
+
+async function onMcpEditConfig() {
+  try {
+    const result = await api("mcp.getConfig", {});
+    mcpConfigContent.value = result.content;
+    mcpEditorVisible.value = true;
+  } catch (err) {
+    console.error("Failed to load mcp config", err);
+  }
+}
+
+async function onMcpConfigSave(content: string) {
+  await api("mcp.saveConfig", { content });
+  mcpEditorVisible.value = false;
+  try {
+    mcpStatus.value = await api("mcp.getStatus", {});
+  } catch { /* ignore */ }
+}
+
+function onMcpToolsChanged(updatedTask: Task) {
+  console.log("[TaskDetailDrawer] MCP tools changed for task", updatedTask.id);
+}
 
 async function onManageModelsClosed() {
   await taskStore.loadEnabledModels(taskWorkspaceKey.value);
@@ -634,7 +711,9 @@ function handleOutsideClick(e: MouseEvent) {
   if (!open.value) return;
   // Skip if the click is inside any PrimeVue overlay panel teleported to body
   const target = e.target as Element | null;
-  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay, .todo-overlay-backdrop, .task-overlay')) return;
+  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay, .todo-overlay-backdrop, .task-overlay, .p-popover, .file-editor-overlay')) return;
+  // Also check MCP popover via direct container reference (teleported to body)
+  if (mcpPopoverRef.value?.getContainer()?.contains(e.target as Node)) return;
   // Skip if our own dialogs are open
   if (deleteDialogVisible.value) return;
   // PrimeVue Drawer teleports its panel to document.body, so $el is a comment
@@ -647,6 +726,8 @@ function handleOutsideClick(e: MouseEvent) {
 
 onMounted(() => {
   document.addEventListener('mousedown', handleOutsideClick);
+  // Load MCP server status
+  api("mcp.getStatus", {}).then(s => { mcpStatus.value = s; }).catch(() => { /* MCP may not be configured */ });
 });
 
 onUnmounted(() => {
@@ -684,17 +765,9 @@ const taskWorkspaceKey = computed(() =>
   task.value ? (boardStore.boards.find((b) => b.id === task.value!.boardId)?.workspaceKey ?? undefined) : undefined,
 );
 const inputText = ref("");
+const pendingAttachments = ref<Attachment[]>([]);
+const fileInputRef = ref<HTMLInputElement | null>(null);
 const transitioning = ref(false);
-
-const pendingRefs = computed(() => {
-  if (!task.value) return [];
-  return codeServerStore.pendingRefs.get(task.value.id) ?? [];
-});
-
-function refLabel(ref: CodeRef): string {
-  const filename = ref.file.split("/").pop() ?? ref.file;
-  return `${filename} L${ref.startLine}–L${ref.endLine}`;
-}
 const retrying = ref(false);
 const cancelling = ref(false);
 const scrollEl = ref<HTMLElement | null>(null);
@@ -854,15 +927,82 @@ const execSeverity = computed(() => {
   return task.value ? (map[task.value.executionState] ?? "secondary") : "secondary";
 });
 
+function readAsBase64(file: File | Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // Strip the data URL prefix: "data:image/png;base64,XXXX" → "XXXX"
+      resolve(result.split(",")[1]);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function inferMediaType(filename: string, reportedType: string): string {
+  if (reportedType && reportedType !== "application/octet-stream") return reportedType;
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  const map: Record<string, string> = {
+    md: "text/markdown", txt: "text/plain", json: "application/json",
+    js: "text/javascript", ts: "text/typescript", py: "text/x-python",
+    html: "text/html", css: "text/css", csv: "text/csv",
+    xml: "text/xml", yaml: "text/yaml", yml: "text/yaml",
+    sh: "text/x-shellscript", pdf: "application/pdf",
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+    gif: "image/gif", webp: "image/webp",
+  };
+  return map[ext] ?? reportedType ?? "application/octet-stream";
+}
+
+async function addAttachment(file: File | Blob, label: string, mediaType: string) {
+  if (pendingAttachments.value.length >= 3) {
+    toast.add({ severity: "warn", summary: "Too many attachments", detail: "Maximum 3 attachments per message", life: 4000 });
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    toast.add({ severity: "warn", summary: "File too large", detail: "Attachments must be under 5 MB", life: 4000 });
+    return;
+  }
+  const data = await readAsBase64(file);
+  pendingAttachments.value.push({ label, mediaType, data });
+}
+
+async function onPaste(event: ClipboardEvent) {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.kind === "file") {
+      event.preventDefault();
+      const blob = item.getAsFile();
+      if (blob) {
+        const inferredType = inferMediaType(`pasted-file`, item.type || "");
+        const ext = inferredType.split("/")[1] ?? "bin";
+        await addAttachment(blob, `pasted-file.${ext}`, inferredType);
+      }
+      break;
+    }
+  }
+}
+
+async function onFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = input.files;
+  if (!files) return;
+  for (const file of files) {
+    await addAttachment(file, file.name, inferMediaType(file.name, file.type));
+  }
+  // Reset so the same file can be selected again
+  input.value = "";
+}
+
 async function send() {
-  if (!task.value) return;
-  const typed = inputText.value.trim();
-  const serialized = codeServerStore.serializeRefs(task.value.id);
-  if (!typed && !serialized) return;
-  const content = serialized ? (typed ? `${serialized}\n\n${typed}` : serialized) : typed;
+  if (!inputText.value.trim() || !task.value) return;
+  const content = inputText.value.trim();
   inputText.value = "";
-  codeServerStore.clearRefs(task.value.id);
-  await taskStore.sendMessage(task.value.id, content);
+  const attachments = pendingAttachments.value.length ? [...pendingAttachments.value] : undefined;
+  pendingAttachments.value = [];
+  await taskStore.sendMessage(task.value.id, content, attachments);
 }
 
 async function transition(toState: string) {
@@ -1139,52 +1279,6 @@ function onTaskDeleted() {
   flex-shrink: 0;
 }
 
-.code-refs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 0 2px;
-}
-
-.code-ref-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px 2px 6px;
-  background: var(--p-primary-50, #e0f2fe);
-  border: 1px solid var(--p-primary-200, #7dd3fc);
-  border-radius: 4px;
-  font-size: 0.75rem;
-  color: var(--p-primary-800, #075985);
-  max-width: 280px;
-}
-
-.code-ref-chip__icon {
-  font-size: 0.7rem;
-  flex-shrink: 0;
-}
-
-.code-ref-chip__label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.code-ref-chip__dismiss {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--p-primary-600, #0284c7);
-  font-size: 0.85rem;
-  line-height: 1;
-  padding: 0 0 0 2px;
-  flex-shrink: 0;
-}
-
-.code-ref-chip__dismiss:hover {
-  color: var(--p-red-500, #ef4444);
-}
-
 .task-detail__input-row {
   display: flex;
   gap: 8px;
@@ -1194,6 +1288,43 @@ function onTaskDeleted() {
 .task-detail__input-row .flex-1 {
   flex: 1;
   resize: none;
+}
+
+.task-detail__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px 2px 8px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--p-surface-100, #f3f4f6);
+  border: 1px solid var(--p-surface-300, #d1d5db);
+  border-radius: 12px;
+  font-size: 12px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip__remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--p-text-muted-color, #6b7280);
+  flex-shrink: 0;
+}
+
+.attachment-chip__remove:hover {
+  color: var(--p-text-color, #374151);
 }
 
 .task-detail__model-row {
@@ -1214,6 +1345,10 @@ function onTaskDeleted() {
   font-size: 0.75rem;
   color: var(--p-text-muted-color);
   white-space: nowrap;
+}
+
+.task-detail__mcp-btn {
+  flex-shrink: 0;
 }
 
 .input-model-select {
@@ -1401,6 +1536,10 @@ html.dark-mode .dialog-warning {
 }
 html.dark-mode .task-detail__input {
   border-top-color: var(--p-surface-700, #334155);
+}
+html.dark-mode .attachment-chip {
+  background: var(--p-surface-800, #1f2937);
+  border-color: var(--p-surface-600, #4b5563);
 }
 html.dark-mode .context-ring__track {
   stroke: var(--p-surface-700, #334155);

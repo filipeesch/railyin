@@ -113,6 +113,9 @@ async function initEditor() {
     wordWrap: "on",
   });
 
+  // Expose editor instance for E2E tests (used by waitForMonaco / getValue / setValue)
+  (window as any).__mcpJsonEditor = editor;
+
   editor.onDidChangeModelContent(() => {
     validate(editor.getValue());
   });
@@ -126,6 +129,7 @@ function disposeEditor() {
   editor?.dispose();
   editor = null;
   monacoInstance = null;
+  delete (window as any).__mcpJsonEditor;
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────

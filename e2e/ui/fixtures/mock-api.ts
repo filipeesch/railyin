@@ -47,6 +47,24 @@ export class ApiMock {
     }
 
     /**
+     * Install a handler that records all calls and returns a fixed value.
+     * Returns a live array that is populated as requests arrive.
+     *
+     * Usage:
+     *   const calls = api.capture("mcp.saveConfig", undefined as unknown as void);
+     *   await page.locator("button").click();
+     *   expect(calls).toHaveLength(1);
+     */
+    capture<M extends keyof RailynAPI>(method: M, returnValue: RailynAPI[M]["response"]): RailynAPI[M]["params"][] {
+        const calls: RailynAPI[M]["params"][] = [];
+        this.handle(method, (params) => {
+            calls.push(params as RailynAPI[M]["params"]);
+            return returnValue;
+        });
+        return calls;
+    }
+
+    /**
      * Install a single page.route() that dispatches all /api/* calls.
      * Safe to call multiple times — unroutes and re-installs.
      */
