@@ -123,6 +123,9 @@
     <!-- Code review overlay -->
     <CodeReviewOverlay />
 
+    <!-- Code server overlay (z-index: 800, behind chat drawer) -->
+    <CodeServerOverlay />
+
     <!-- Workflow YAML editor overlay -->
     <WorkflowEditorOverlay
       v-if="workflowEditor.templateId"
@@ -188,6 +191,7 @@ import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
+import CodeServerOverlay from "../components/CodeServerOverlay.vue";
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();

@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "fs";
 import { join } from "path";
-import type { McpConfig, McpServerConfig } from "../mcp/types.ts";
 import { createHash } from "crypto";
 import yaml from "js-yaml";
 
@@ -242,7 +241,7 @@ function getDefaultConfigDir(): string {
   return join(dataDir, "config");
 }
 
-export function getDataDir(): string {
+function getDataDir(): string {
   return process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
 }
 
@@ -790,42 +789,4 @@ export function getDefaultTemplate(): WorkflowTemplateConfig {
       },
     ],
   };
-}
-
-// ─── MCP config loading ───────────────────────────────────────────────────────
-
-/**
- * Load MCP server config by merging:
- *   1. Global: ~/.railyn/mcp.json
- *   2. Project-local: <projectPath>/.railyin/mcp.json
- * Project-local entries override global entries with the same name.
- * Supports $ENV_VAR interpolation in string values.
- */
-export function loadMcpConfig(projectPath?: string): McpConfig {
-  const global = loadMcpFile(join(getDataDir(), "mcp.json"));
-  const local = projectPath ? loadMcpFile(join(projectPath, ".railyin", "mcp.json")) : { servers: [] };
-
-  const merged = new Map<string, McpServerConfig>();
-  for (const s of [...(global.servers ?? []), ...(local.servers ?? [])]) {
-    merged.set(s.name, s);
-  }
-
-  return { servers: [...merged.values()] };
-}
-
-function loadMcpFile(filePath: string): { servers: McpServerConfig[] } {
-  if (!existsSync(filePath)) return { servers: [] };
-  try {
-    const raw = readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(interpolateEnvVars(raw)) as { servers?: unknown[] };
-    if (!Array.isArray(parsed?.servers)) return { servers: [] };
-    return { servers: parsed.servers as McpServerConfig[] };
-  } catch (err) {
-    console.warn(`[mcp] Failed to load ${filePath}:`, err instanceof Error ? err.message : String(err));
-    return { servers: [] };
-  }
-}
-
-function interpolateEnvVars(text: string): string {
-  return text.replace(/\$\{([^}]+)\}/g, (_, name) => process.env[name] ?? "");
 }

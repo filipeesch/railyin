@@ -51,13 +51,6 @@ export interface Task {
   worktreePath: string | null;
   executionCount: number;
   position: number;
-  enabledMcpTools: string[] | null;
-}
-
-export interface Attachment {
-  label: string;      // filename or "pasted-image.png"
-  mediaType: string;  // "image/png", "image/jpeg", etc.
-  data: string;       // base64 encoded bytes (NOT stored in DB)
 }
 
 export type MessageType =
@@ -291,6 +284,17 @@ export interface ConversationMessage {
 
 export type TodoStatus = "pending" | "in-progress" | "done" | "blocked" | "deleted";
 
+export interface CodeRef {
+  taskId: number;
+  file: string;
+  startLine: number;
+  startChar: number;
+  endLine: number;
+  endChar: number;
+  text: string;
+  language: string;
+}
+
 export interface TodoItem {
   id: number;
   taskId: number;
@@ -357,15 +361,6 @@ export interface WorkflowTemplate {
   id: string;
   name: string;
   columns: WorkflowColumn[];
-}
-
-// ─── MCP types ───────────────────────────────────────────────────────────────
-
-export interface McpServerStatus {
-  name: string;
-  state: "idle" | "starting" | "running" | "error" | "disabled";
-  tools: Array<{ name: string; serverName: string; qualifiedName: string; description?: string }>;
-  error?: string;
 }
 
 // ─── LSP setup types ─────────────────────────────────────────────────────────
@@ -512,7 +507,7 @@ export type RailynAPI = {
     response: { task: Task; executionId: number };
   };
   "tasks.sendMessage": {
-    params: { taskId: number; content: string; attachments?: Attachment[] };
+    params: { taskId: number; content: string };
     response: { message: ConversationMessage; executionId: number };
   };
 
@@ -712,26 +707,22 @@ export type RailynAPI = {
     response: { success: boolean; output: string };
   };
 
-  // MCP
-  "mcp.getStatus": {
-    params: Record<string, never>;
-    response: McpServerStatus[];
+  // Code server
+  "codeServer.start": {
+    params: { taskId: number };
+    response: { port: number } | { error: string };
   };
-  "mcp.reload": {
-    params: { serverName?: string };
-    response: McpServerStatus[];
+  "codeServer.status": {
+    params: { taskId: number };
+    response: { port: number; status: "starting" | "ready" | "error" } | null;
   };
-  "mcp.getConfig": {
-    params: Record<string, never>;
-    response: { path: string; content: string };
+  "codeServer.stop": {
+    params: { taskId: number };
+    response: { ok: boolean };
   };
-  "mcp.saveConfig": {
-    params: { content: string };
-    response: { ok: true };
-  };
-  "mcp.setTaskTools": {
-    params: { taskId: number; enabledTools: string[] | null };
-    response: Task;
+  "codeServer.sendRef": {
+    params: CodeRef;
+    response: { ok: boolean };
   };
 };
 
@@ -743,4 +734,5 @@ export type PushMessage =
   | { type: "stream.error"; payload: StreamError }
   | { type: "task.updated"; payload: Task }
   | { type: "message.new"; payload: ConversationMessage }
-  | { type: "workflow.reloaded"; payload: Record<string, never> };
+  | { type: "workflow.reloaded"; payload: Record<string, never> }
+  | { type: "code.ref"; payload: CodeRef };

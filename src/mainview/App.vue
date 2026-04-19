@@ -13,14 +13,16 @@ import Toast from "primevue/toast";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
-import { onStreamToken, onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage } from "./rpc";
+import { onStreamToken, onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef } from "./rpc";
 import { getTaskActivityToast } from "./task-activity";
+import { useCodeServerStore } from "./stores/codeServer";
 
 const router = useRouter();
 const toast = useToast();
 const workspaceStore = useWorkspaceStore();
 const boardStore = useBoardStore();
 const taskStore = useTaskStore();
+const codeServerStore = useCodeServerStore();
 
 function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) {
   if (!activity) return;
@@ -59,6 +61,10 @@ onMounted(async () => {
 
   onNewMessage((message) => {
     taskStore.onNewMessage(message);
+  });
+
+  onCodeRef((ref) => {
+    codeServerStore.addRef(ref);
   });
 
   // Boot: load workspace config

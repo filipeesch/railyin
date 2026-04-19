@@ -194,7 +194,6 @@ export class Orchestrator implements ExecutionCoordinator {
   async executeHumanTurn(
     taskId: number,
     content: string,
-    attachments?: import("../../shared/rpc-types.ts").Attachment[],
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -210,10 +209,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const conversationId = ensureTaskConversation(taskId, task.conversation_id);
 
     if (task.execution_state === "waiting_user" && task.current_execution_id != null) {
-      const msgId = appendMessage(taskId, conversationId, "user", "user", content,
-        attachments?.length
-          ? { attachments: attachments.map(a => ({ label: a.label, type: a.mediaType })) }
-          : undefined);
+      const msgId = appendMessage(taskId, conversationId, "user", "user", content);
       db.run(
         "UPDATE tasks SET execution_state = 'running' WHERE id = ?",
         [taskId],
@@ -263,7 +259,6 @@ export class Orchestrator implements ExecutionCoordinator {
           this._resolveWorkingDirectory(task),
           "human_turn",
         );
-        execParams.attachments = attachments;
         this._runNonNative(taskId, newExecutionId, engine, execParams);
 
         const msgRow = db
@@ -294,9 +289,6 @@ export class Orchestrator implements ExecutionCoordinator {
       "user",
       "user",
       content,
-      attachments?.length
-        ? { attachments: attachments.map(a => ({ label: a.label, type: a.mediaType })) }
-        : undefined,
     );
 
     const execParams = this._buildExecutionParams(
@@ -307,7 +299,6 @@ export class Orchestrator implements ExecutionCoordinator {
       this._resolveWorkingDirectory(task),
       "human_turn",
     );
-    execParams.attachments = attachments;
     this._runNonNative(taskId, executionId, engine, execParams);
 
     const msgRow = db

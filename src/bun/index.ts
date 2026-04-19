@@ -1,10 +1,11 @@
 import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
-import { getWorkspaceRegistry, loadConfig, loadMcpConfig } from "./config/index.ts";
+import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
 import { StreamBatcher } from "./pipeline/batcher.ts";
 import * as path from "path";
 import type { ServerWebSocket } from "bun";
 import { getPtySession, killAllPtySessions } from "./launch/pty.ts";
+import { stopAllCodeServers } from "./launch/code-server.ts";
 
 type WsData = { type: "push" } | { type: "pty"; sessionId: string };
 
@@ -64,8 +65,7 @@ import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
 import { launchHandlers } from "./handlers/launch.ts";
 import { lspHandlers } from "./handlers/lsp.ts";
-import { mcpHandlers } from "./handlers/mcp.ts";
-import { initMcpRegistry, getMcpRegistry } from "./mcp/registry.ts";
+import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mapTask } from "./db/mappers.ts";
 import { appendMessage, compactConversation } from "./workflow/engine.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
@@ -110,15 +110,6 @@ const { error: configError } = loadConfig();
 }
 
 // ─── WebSocket push: connected browser clients ────────────────────────────────
-
-// 4. Initialize MCP registry on startup
-{
-  const mcpConfig = loadMcpConfig();
-  if (mcpConfig.servers.length > 0) {
-    const mcpReg = initMcpRegistry(mcpConfig);
-    void mcpReg.startAll().catch(err => console.warn("[mcp] Startup failed:", err));
-  }
-}
 
 const clients = new Set<ServerWebSocket<WsData>>();
 
@@ -196,6 +187,13 @@ if (orchestrator) {
   orchestrator.setOnStreamEvent(onStreamEvent);
 }
 
+// ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
+
+const DIST_DIR = path.join(import.meta.dir, "../../dist");
+
+const portArg = process.argv.find(a => a.startsWith("--port="));
+const serverPort = portArg ? Number(portArg.split("=")[1]) : 3000;
+
 const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...workspaceHandlers(),
   ...boardHandlers(),
@@ -205,15 +203,8 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...workflowHandlers(notifyWorkflowReloaded),
   ...launchHandlers(),
   ...lspHandlers(),
-  ...mcpHandlers(),
+  ...codeServerHandlers(broadcast, serverPort),
 };
-
-// ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
-
-const DIST_DIR = path.join(import.meta.dir, "../../dist");
-
-const portArg = process.argv.find(a => a.startsWith("--port="));
-const serverPort = portArg ? Number(portArg.split("=")[1]) : 3000;
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -365,11 +356,7 @@ async function shutdown(): Promise<void> {
     console.warn("[shutdown] Graceful non-native shutdown failed", err instanceof Error ? err.message : String(err));
   }
   killAllPtySessions();
-  try {
-    await getMcpRegistry()?.shutdown();
-  } catch (err) {
-    console.warn("[shutdown] MCP shutdown failed", err instanceof Error ? err.message : String(err));
-  }
+  stopAllCodeServers();
   process.exit(0);
 }
 

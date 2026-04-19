@@ -7,7 +7,6 @@ import { appendApprovedCommands, getApprovedCommands } from "../../workflow/engi
 import { getDb } from "../../db/index.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
-import { getMcpRegistry } from "../../mcp/registry.ts";
 
 export interface ClaudeSdkModelInfo {
   value: string;
@@ -40,7 +39,6 @@ export interface ClaudeRunConfig {
   waitForResume: (request: ClaudeResumeRequest | ClaudeShellApprovalRequest) => Promise<EngineResumeInput>;
   onRawMessage?: (message: Record<string, unknown>) => void;
   toolMetaByCallId?: Map<string, ToolMetadata>;
-  attachments?: import("../../../shared/rpc-types.ts").Attachment[];
 }
 
 export interface ClaudeSdkAdapter {
@@ -296,52 +294,6 @@ export function claudeSessionIdForTask(taskId: number): string {
   return raw.join("-");
 }
 
-function buildExternalMcpServers(taskId: number): Record<string, unknown> {
-  const registry = getMcpRegistry();
-  if (!registry) return {};
-
-  let enabledFilter: string[] | null = null;
-  try {
-    const db = getDb();
-    const taskRow = db.query<{ enabled_mcp_tools: string | null }, [number]>(
-      "SELECT enabled_mcp_tools FROM tasks WHERE id = ?"
-    ).get(taskId);
-    if (taskRow?.enabled_mcp_tools) {
-      enabledFilter = JSON.parse(taskRow.enabled_mcp_tools) as string[];
-    }
-  } catch {
-    // DB unavailable — treat as all tools enabled
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const status of registry.getStatus()) {
-    if (status.state !== "running") continue;
-    const config = registry.getServerConfig(status.name);
-    if (!config) continue;
-    if (enabledFilter) {
-      const filter = enabledFilter;
-      const hasEnabled = status.tools.some(t => filter.includes(`${status.name}:${t.name}`));
-      if (!hasEnabled) continue;
-    }
-    const transport = config.transport;
-    if (transport.type === "stdio") {
-      result[status.name] = {
-        type: "stdio",
-        command: transport.command,
-        args: transport.args ?? [],
-        env: transport.env ?? {},
-      };
-    } else if (transport.type === "http") {
-      result[status.name] = {
-        type: "http",
-        url: transport.url,
-        headers: transport.headers ?? {},
-      };
-    }
-  }
-  return result;
-}
-
 class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   private readonly idleTimeoutMs = Number(process.env.RAILYN_ENGINE_IDLE_TIMEOUT_MS ?? 10 * 60 * 1000);
   private readonly activeQueries = new Map<number, ActiveClaudeQuery>();
@@ -393,38 +345,8 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         };
         const toolServer = buildClaudeToolServer(sdk, zod.z, toolContext);
         const hasExistingSession = await sdk.getSessionInfo?.(config.sessionId, { dir: config.workingDirectory }).catch(() => undefined);
-
-        // Build prompt with content blocks if attachments are present
-        const promptInput: unknown = config.attachments?.length
-          ? (async function* () {
-              const content: Array<Record<string, unknown>> = [
-                ...config.attachments!.flatMap(a => {
-                  if (a.mediaType.startsWith("image/")) {
-                    return [{ type: "image", source: { type: "base64", media_type: a.mediaType, data: a.data } }];
-                  }
-                  if (a.mediaType === "application/pdf") {
-                    return [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data }, title: a.label }];
-                  }
-                  // Text-based files: inline as a text block (most compatible with Claude Code SDK)
-                  if (
-                    a.mediaType.startsWith("text/") ||
-                    a.mediaType === "application/json" ||
-                    a.mediaType === "application/yaml"
-                  ) {
-                    const decoded = Buffer.from(a.data, "base64").toString("utf-8");
-                    return [{ type: "text", text: `[Attached file: ${a.label}]\n\`\`\`\n${decoded}\n\`\`\`` }];
-                  }
-                  // Unsupported type — skip silently
-                  return [];
-                }),
-                { type: "text", text: config.prompt },
-              ];
-              yield { type: "user", message: { role: "user", content }, parent_tool_use_id: null };
-            })()
-          : config.prompt;
-
         const query = sdk.query({
-          prompt: promptInput as string,
+          prompt: config.prompt,
           options: {
             cwd: config.workingDirectory,
             additionalDirectories: [config.workingDirectory],
@@ -444,7 +366,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             systemPrompt: config.systemInstructions
               ? { type: "preset", preset: "claude_code", append: config.systemInstructions }
               : { type: "preset", preset: "claude_code" },
-            mcpServers: { railyin: toolServer, ...buildExternalMcpServers(config.taskId) },
+            mcpServers: { railyin: toolServer },
             canUseTool: async (
               toolName: string,
               input: Record<string, unknown>,

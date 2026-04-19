@@ -13,14 +13,13 @@
 import type { Tool } from "@github/copilot-sdk";
 import type { CommonToolContext } from "../types.ts";
 import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../common-tools.ts";
-import type { McpClientRegistry } from "../../mcp/registry.ts";
 
 /**
  * Build the list of SDK Tool objects for a given execution context.
  * All common task-management tools are registered with JSON-schema parameters
  * and a handler that delegates to executeCommonTool().
  */
-export function buildCopilotTools(context: CommonToolContext, mcpRegistry?: McpClientRegistry | null, enabledMcpTools?: string[] | null): Tool[] {
+export function buildCopilotTools(context: CommonToolContext): Tool[] {
   const toToolArgs = (args: unknown): Record<string, string> => {
     if (!args || typeof args !== "object") return {};
     return Object.fromEntries(
@@ -51,21 +50,5 @@ export function buildCopilotTools(context: CommonToolContext, mcpRegistry?: McpC
     },
   }));
 
-  const mcpTools: Tool[] = [];
-  if (mcpRegistry) {
-    for (const tool of mcpRegistry.listTools(enabledMcpTools)) {
-      mcpTools.push({
-        name: tool.qualifiedName,
-        description: tool.description ?? `MCP tool: ${tool.name}`,
-        parameters: tool.inputSchema as Record<string, unknown>,
-        skipPermission: true,
-        handler: async (args: unknown) => {
-          const argsObj = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
-          return await mcpRegistry.callTool(tool.serverName, tool.name, argsObj);
-        },
-      });
-    }
-  }
-
-  return [...commonTools, ...mcpTools];
+  return commonTools;
 }

@@ -4,7 +4,7 @@
   "type": "module",
   "description": "AI-assisted delivery orchestration for software teams",
   "scripts": {
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true && (cd node_modules/code-server && FORCE_NODE_VERSION=20 npm_config_user_agent=\"npm/10 node/v20.0.0 darwin arm64\" sh ./postinstall.sh) 2>/dev/null || true",
     "dev": "bun scripts/dev.ts",
     "dev:kill": "pkill -f 'src/bun/index.ts' || true",
     "build": "vite build",
@@ -20,7 +20,8 @@
     "refine:mock": "bun refinement/runner.ts --mode mock",
     "refine:local": "bun refinement/runner.ts --mode local",
     "refine:live": "bun refinement/runner.ts --mode live",
-    "test:ui:run": "bun scripts/run-ui-tests.ts src/ui-tests"
+    "test:ui:run": "bun scripts/run-ui-tests.ts src/ui-tests",
+    "build:ext": "cd extensions/railyin-ref && npm install && npm run compile && npm run package"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.98",
@@ -28,6 +29,7 @@
     "@iconify/vue": "^5.0.0",
     "@monaco-editor/loader": "^1.4.0",
     "@tanstack/vue-virtual": "^3.13.23",
+    "code-server": "^4.116.0",
     "diff": "^8.0.4",
     "js-yaml": "^4.1.0",
     "marked": "^17.0.5",

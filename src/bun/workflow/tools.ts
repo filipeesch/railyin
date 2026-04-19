@@ -6,7 +6,6 @@ import { lookup as dnsLookup } from "dns/promises";
 import type { AIToolDefinition } from "../ai/types.ts";
 import type { FileDiffPayload, Hunk, HunkLine } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
-import type { McpClientRegistry } from "../mcp/registry.ts";
 import type { CallHierarchyItem } from "../lsp/types.ts";
 import {
   formatDefinition,
@@ -940,7 +939,7 @@ const TOOL_GROUP_LABELS: Array<[groupName: string, label: string]> = [
  * Only includes tools present in `columnTools` (expanded from group names).
  * Returns an empty string if no tools are available or no worktree context is needed.
  */
-export function getToolDescriptionBlock(columnTools: string[] | undefined, mcpRegistry?: McpClientRegistry | null, enabledMcpTools?: string[] | null): string {
+export function getToolDescriptionBlock(columnTools: string[] | undefined): string {
   const names = columnTools ?? DEFAULT_TOOL_NAMES;
 
   // Expand group names to individual tool names
@@ -972,17 +971,6 @@ export function getToolDescriptionBlock(columnTools: string[] | undefined, mcpRe
     lines.push("Always read before you write. Use edit_file for targeted edits to existing files.", "");
   }
 
-  if (mcpRegistry) {
-    const mcpTools = mcpRegistry.listTools(enabledMcpTools);
-    if (mcpTools.length > 0) {
-      lines.push("**MCP tools:**");
-      for (const tool of mcpTools) {
-        lines.push(`- ${tool.qualifiedName}(${Object.keys(tool.inputSchema.properties ?? {}).join(", ")}): ${tool.description ?? tool.name}`);
-      }
-      lines.push("");
-    }
-  }
-
   lines.push(
     "CRITICAL: Always invoke tools using the API tool_call mechanism. NEVER write tool calls as XML (`<tool_call>`), JSON, or any other text format in your response — those formats are silently ignored and the tool will not run.",
   );
@@ -997,7 +985,7 @@ export function getToolDescriptionBlock(columnTools: string[] | undefined, mcpRe
  * expanded to their constituent tools. Duplicates are deduplicated. Unknown
  * names (neither a group nor a known tool) are skipped with a warning.
  */
-export function resolveToolsForColumn(columnTools: string[] | undefined, mcpRegistry?: McpClientRegistry | null, enabledMcpTools?: string[] | null): AIToolDefinition[] {
+export function resolveToolsForColumn(columnTools: string[] | undefined): AIToolDefinition[] {
   const names = columnTools ?? DEFAULT_TOOL_NAMES;
   const byName = new Map(TOOL_DEFINITIONS.map((t) => [t.name, t]));
 
@@ -1015,7 +1003,7 @@ export function resolveToolsForColumn(columnTools: string[] | undefined, mcpRegi
     }
   }
 
-  const result = expanded.flatMap((name) => {
+  return expanded.flatMap((name) => {
     const def = byName.get(name);
     if (!def) {
       console.warn(`[tools] Unknown tool "${name}" in column config — skipping`);
@@ -1023,19 +1011,6 @@ export function resolveToolsForColumn(columnTools: string[] | undefined, mcpRegi
     }
     return [def];
   });
-
-  if (mcpRegistry) {
-    const mcpTools = mcpRegistry.listTools(enabledMcpTools);
-    for (const tool of mcpTools) {
-      result.push({
-        name: tool.qualifiedName,
-        description: tool.description ?? `MCP tool: ${tool.name}`,
-        parameters: tool.inputSchema,
-      });
-    }
-  }
-
-  return result;
 }
 
 // ─── Shell command binary extraction ─────────────────────────────────────────
@@ -1097,8 +1072,6 @@ export interface ToolContext {
   mtimeCache?: Map<string, number>;
   /** LSP server manager for code intelligence operations. */
   lspManager?: LSPServerManager;
-  /** MCP client registry for external tool dispatch */
-  mcpRegistry?: McpClientRegistry | null;
 }
 
 export async function executeTool(
@@ -1111,22 +1084,6 @@ export async function executeTool(
     args = JSON.parse(rawArgs) as Record<string, string>;
   } catch {
     return `Error: could not parse tool arguments: ${rawArgs}`;
-  }
-
-  // Dispatch MCP tools by qualified name prefix
-  if (name.startsWith("mcp__")) {
-    const parts = name.split("__");
-    if (parts.length >= 3) {
-      const serverName = parts[1];
-      const toolName = parts.slice(2).join("__");
-      if (!ctx.mcpRegistry) return "Error: MCP registry not available";
-      try {
-        return await ctx.mcpRegistry.callTool(serverName, toolName, args as Record<string, unknown>);
-      } catch (err) {
-        return `Error calling MCP tool ${name}: ${err instanceof Error ? err.message : String(err)}`;
-      }
-    }
-    return `Error: invalid MCP tool name format: ${name}`;
   }
 
   switch (name) {
