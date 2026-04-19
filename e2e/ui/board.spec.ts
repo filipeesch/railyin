@@ -5,6 +5,7 @@
  *   S — Board structure (columns render, task card appears, initial state)
  *   T — Task transitions (card moves between columns)
  *   U — Execution state visuals (CSS class and badge update live)
+ *   P — Card placement on column transition (moved card lands at top)
  */
 
 import { test, expect } from "./fixtures";
@@ -209,5 +210,55 @@ test.describe("U — execution state visuals on task card", () => {
 
         const badge = page.locator(`[data-task-id="${task.id}"] .task-card__footer .p-tag`);
         await expect(badge).toContainText("Done", { timeout: 5_000 });
+    });
+});
+
+// ─── Suite P — Card placement on column transition ────────────────────────────
+
+test.describe("P — card placement on column transition", () => {
+    test("P-17: card moved to non-empty column appears first in that column", async ({ page, api, ws }) => {
+        // task1 lands in in_progress with position 250, below existing task2 at position 1000
+        const task2 = makeTask({ id: 2, workflowState: "in_progress", position: 1000 });
+        const task1 = makeTask({ id: 1, workflowState: "backlog", position: 500 });
+        api.handle("tasks.list", () => [task1, task2]);
+
+        await navigateToBoard(page);
+
+        // Verify initial layout: task2 is in in_progress, task1 is in backlog
+        await expect(page.locator("[data-column-id='in_progress']").locator(`[data-task-id="${task2.id}"]`)).toBeVisible();
+        await expect(page.locator("[data-column-id='backlog']").locator(`[data-task-id="${task1.id}"]`)).toBeVisible();
+
+        // Simulate transition: task1 moves to in_progress with position 250 (top, since 250 < 1000)
+        const movedTask1: Task = { ...task1, workflowState: "in_progress", position: 250 };
+        ws.push({ type: "task.updated", payload: movedTask1 });
+
+        const inProgressColumn = page.locator("[data-column-id='in_progress']");
+        await expect(inProgressColumn.locator(`[data-task-id="${task1.id}"]`)).toBeVisible({ timeout: 5_000 });
+
+        // task1 (position 250) must appear before task2 (position 1000) in DOM order
+        const cardIds = await inProgressColumn.locator("[data-task-id]").evaluateAll(
+            (els) => els.map((el) => Number(el.getAttribute("data-task-id")))
+        );
+        expect(cardIds.indexOf(task1.id)).toBeLessThan(cardIds.indexOf(task2.id));
+    });
+
+    test("P-18: card moved to empty column lands as sole card", async ({ page, api, ws, task }) => {
+        await navigateToBoard(page);
+
+        // Verify in_progress is initially empty
+        await expect(page.locator("[data-column-id='in_progress']").locator("[data-task-id]")).toHaveCount(0);
+
+        // Simulate transition to the empty in_progress column (position 500 — default for empty)
+        const movedTask: Task = { ...task, workflowState: "in_progress", position: 500 };
+        ws.push({ type: "task.updated", payload: movedTask });
+
+        const inProgressColumn = page.locator("[data-column-id='in_progress']");
+        await expect(inProgressColumn.locator(`[data-task-id="${task.id}"]`)).toBeVisible({ timeout: 5_000 });
+
+        const cardIds = await inProgressColumn.locator("[data-task-id]").evaluateAll(
+            (els) => els.map((el) => el.getAttribute("data-task-id"))
+        );
+        expect(cardIds).toHaveLength(1);
+        expect(cardIds[0]).toBe(String(task.id));
     });
 });

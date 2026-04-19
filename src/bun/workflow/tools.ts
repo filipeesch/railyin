@@ -1805,8 +1805,15 @@ export async function executeTool(
         const valid = template?.columns.map((c) => c.id).join(", ") ?? "(unknown)";
         return `Error: workflow_state "${targetState}" not found in board template. Valid columns: ${valid}`;
       }
-      // Update workflow_state immediately
-      db.run("UPDATE tasks SET workflow_state = ? WHERE id = ?", [targetState, taskId]);
+      // Compute top-of-column position (MIN / 2, or 500 when column is empty)
+      const minRow = db
+        .query<{ min_pos: number | null }, [number, string]>(
+          "SELECT MIN(position) as min_pos FROM tasks WHERE board_id = ? AND workflow_state = ?",
+        )
+        .get(taskRow.board_id, targetState);
+      const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
+      // Update workflow_state and position atomically
+      db.run("UPDATE tasks SET workflow_state = ?, position = ? WHERE id = ?", [targetState, topPos, taskId]);
       // Fire-and-forget transition (triggers on_enter_prompt asynchronously)
       if (ctx.taskCallbacks) {
         ctx.taskCallbacks.handleTransition(taskId, targetState);

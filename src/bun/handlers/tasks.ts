@@ -152,9 +152,19 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     }): Promise<{ task: Task; executionId: number | null }> => {
       const db = getDb();
 
-      // Update position before transition so the orchestrator sees it immediately
+      // Update position before transition so the orchestrator sees it immediately.
+      // When no targetPosition is provided, default to the top of the target column
+      // (MIN(position) / 2, or 500 when the column is empty).
       if (params.targetPosition != null) {
         db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.targetPosition, params.taskId]);
+      } else {
+        const minRow = db
+          .query<{ min_pos: number | null }, [string, number]>(
+            "SELECT MIN(position) as min_pos FROM tasks WHERE board_id = (SELECT board_id FROM tasks WHERE id = ?) AND workflow_state = ?",
+          )
+          .get(params.taskId, params.toState);
+        const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
+        db.run("UPDATE tasks SET position = ? WHERE id = ?", [topPos, params.taskId]);
       }
 
       const taskRow = db

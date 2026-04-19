@@ -1009,7 +1009,13 @@ async function transition(toState: string) {
   if (!task.value) return;
   transitioning.value = true;
   try {
-    await taskStore.transitionTask(task.value.id, toState);
+    const boardId = boardStore.activeBoardId;
+    const allTasks = boardId != null ? (taskStore.tasksByBoard[boardId] ?? []) : [];
+    const minPos = allTasks
+      .filter((t) => t.workflowState === toState)
+      .reduce((min, t) => Math.min(min, t.position), Infinity);
+    const topPosition = isFinite(minPos) ? minPos / 2 : 500;
+    await taskStore.transitionTask(task.value.id, toState, topPosition);
   } finally {
     transitioning.value = false;
   }

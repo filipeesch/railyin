@@ -67,7 +67,7 @@ The system SHALL display each task as a card in its current workflow column, sho
 - **THEN** each task card shows title, project badge, and execution state badge — not the full conversation
 
 ### Requirement: Board supports task transitions
-The system SHALL allow a user to move a task from one workflow column to another by interacting with the board. The task's workflow state SHALL update immediately upon transition.
+The system SHALL allow a user to move a task from one workflow column to another by interacting with the board. The task's workflow state SHALL update immediately upon transition. When moved via the Select dropdown or agent `move_task` tool, the task SHALL appear at the **top** of the target column.
 
 #### Scenario: Task moves to target column immediately
 - **WHEN** a user moves a task to a different column
@@ -76,6 +76,10 @@ The system SHALL allow a user to move a task from one workflow column to another
 #### Scenario: Transition triggers execution
 - **WHEN** a task is moved to a column that has an `on_enter_prompt` configured
 - **THEN** a new execution is created and the prompt begins running after the task moves
+
+#### Scenario: Task moved via Select appears at top of target column
+- **WHEN** a user selects a different column from the workflow Select in the Task Detail Drawer
+- **THEN** the task card is placed at the top of the target column, above all existing cards
 
 ### Requirement: Board drag-and-drop uses pointer events for cursor control
 The system SHALL implement task card dragging using pointer events (not HTML5 Drag-and-Drop) so that the operating system DnD protocol is never invoked. During a drag, the cursor SHALL be `grabbing` and text selection SHALL be suppressed.
