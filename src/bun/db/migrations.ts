@@ -413,10 +413,6 @@ const migrations: Array<{ id: string; sql: string }> = [
     id: "025_todo_phase",
     sql: "", // handled programmatically in applyMigration
   },
-  {
-    id: "026_enabled_mcp_tools",
-    sql: `ALTER TABLE tasks ADD COLUMN enabled_mcp_tools TEXT;`,
-  },
 ];
 
 function hasColumn(tableName: string, columnName: string): boolean {

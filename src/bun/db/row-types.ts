@@ -39,7 +39,6 @@ export interface TaskRow {
   worktree_path?: string | null;
   execution_count?: number | null;
   position: number;
-  enabled_mcp_tools?: string | null;
 }
 
 export interface TaskGitContextRow {

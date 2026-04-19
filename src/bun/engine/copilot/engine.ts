@@ -16,11 +16,6 @@ import { copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./sessi
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
-import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { getMcpRegistry } from "../../mcp/registry.ts";
-import { getDb } from "../../db/index.ts";
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
@@ -103,20 +98,7 @@ export class CopilotEngine implements ExecutionEngine {
       },
     };
 
-    const mcpRegistryForTask = getMcpRegistry();
-    let enabledMcpToolsForTask: string[] | null = null;
-    try {
-      const taskRow = getDb().query<{ enabled_mcp_tools: string | null }, [number]>(
-        "SELECT enabled_mcp_tools FROM tasks WHERE id = ?"
-      ).get(taskId);
-      if (taskRow?.enabled_mcp_tools) {
-        enabledMcpToolsForTask = JSON.parse(taskRow.enabled_mcp_tools) as string[];
-      }
-    } catch {
-      // DB unavailable or column missing — treat as all tools enabled
-    }
-
-    const tools = buildCopilotTools(toolContext, mcpRegistryForTask, enabledMcpToolsForTask);
+    const tools = buildCopilotTools(toolContext);
 
     // Build system message — append stage_instructions to SDK's managed prompt
     const systemMessage = systemInstructions
@@ -187,38 +169,7 @@ export class CopilotEngine implements ExecutionEngine {
           combinedController.abort();
         }, { once: true });
 
-        const isTextType = (mediaType: string) =>
-          mediaType.startsWith("text/") ||
-          mediaType === "application/json" ||
-          mediaType === "application/yaml";
-
-        const firstTurn = nextPrompt === resolvedInitialPrompt;
-        const attachments = firstTurn ? (params.attachments ?? []) : [];
-
-        // Write text attachments to temp files so the CLI can read them via
-        // the "file" attachment type (the CLI resolves filePath on disk).
-        const tmpFiles: string[] = [];
-        const mappedAttachments = attachments.map(a => {
-          if (isTextType(a.mediaType)) {
-            const tmpDir = join(tmpdir(), "railyin-attachments");
-            mkdirSync(tmpDir, { recursive: true });
-            const tmpPath = join(tmpDir, `${Date.now()}-${a.label}`);
-            writeFileSync(tmpPath, Buffer.from(a.data, "base64"));
-            tmpFiles.push(tmpPath);
-            return { type: "file" as const, path: tmpPath, displayName: a.label };
-          }
-          return {
-            type: "blob" as const,
-            data: a.data,
-            mimeType: a.mediaType,
-            displayName: a.label,
-          };
-        });
-
-        const sendPromise = session.send({
-          prompt: nextPrompt,
-          ...(mappedAttachments.length ? { attachments: mappedAttachments } : {}),
-        });
+        const sendPromise = session.send({ prompt: nextPrompt });
         const onWatchdogFire = () => this.sdkAdapter.pingClient(sdkSessionId);
         let paused = false;
         let terminal = false;
@@ -261,20 +212,14 @@ export class CopilotEngine implements ExecutionEngine {
 
         if (pendingInterviewPayload !== null) {
           yield { type: "interview_me", payload: pendingInterviewPayload };
-          // Clean up temp files before returning
-          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 
         if (params.signal?.aborted || terminal) {
-          // Clean up temp files before returning
-          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 
         if (!paused) {
-          // Clean up temp files before returning
-          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 
