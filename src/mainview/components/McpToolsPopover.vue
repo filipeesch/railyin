@@ -16,7 +16,8 @@
       </div>
 
       <div v-if="servers.length === 0" class="mcp-tools-popover__empty">
-        No MCP servers configured.
+        No MCP servers configured.<br>
+        <small>Click "Edit mcp.json" below to get started.</small>
       </div>
 
       <div v-for="server in servers" :key="server.name" class="mcp-tools-popover__server">

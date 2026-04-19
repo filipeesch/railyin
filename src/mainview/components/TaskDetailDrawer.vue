@@ -389,7 +389,6 @@
           </div>
           <!-- MCP Tools button -->
           <Button
-            v-if="mcpStatus.length > 0"
             v-tooltip="'MCP Tools'"
             icon="pi pi-wrench"
             :severity="mcpHasWarning ? 'danger' : 'secondary'"
@@ -400,7 +399,6 @@
             @click="onMcpBtnClick"
           />
           <McpToolsPopover
-            v-if="mcpStatus.length > 0"
             ref="mcpPopoverRef"
             :task-id="task.id"
             :enabled-mcp-tools="task.enabledMcpTools ?? null"
