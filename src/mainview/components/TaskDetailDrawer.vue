@@ -711,7 +711,7 @@ function handleOutsideClick(e: MouseEvent) {
   if (!open.value) return;
   // Skip if the click is inside any PrimeVue overlay panel teleported to body
   const target = e.target as Element | null;
-  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay, .todo-overlay-backdrop, .task-overlay')) return;
+  if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay, .todo-overlay-backdrop, .task-overlay, .p-popover')) return;
   // Skip if our own dialogs are open
   if (deleteDialogVisible.value) return;
   // PrimeVue Drawer teleports its panel to document.body, so $el is a comment
