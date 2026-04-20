@@ -97,12 +97,55 @@ export class LSPServerManager {
     return instance.client.sendRequest<T>(method, params);
   }
 
+  /**
+   * workspace/symbol is not file-scoped — route to any running (or lazyly-started) server.
+   * Prefer a server whose extension map includes `anchorPath`'s extension; fall back
+   * to the first configured server so workspace-wide queries always work even without
+   * a file path hint.
+   */
+  async requestWorkspaceSymbol<T = unknown>(anchorPath: string, query: string): Promise<T> {
+    const ext = extname(anchorPath).toLowerCase();
+    const preferredName = this.extensionMap.get(ext);
+    const serverName = preferredName ?? [...this.servers.keys()][0];
+
+    if (!serverName) throw new Error("No LSP server configured");
+
+    const instance = this.servers.get(serverName)!;
+
+    if (instance.state === "disabled") {
+      throw new Error(`LSP server "${serverName}" is disabled after ${MAX_CONSECUTIVE_FAILURES} consecutive failures.`);
+    }
+
+    if (instance.state === "idle" || (instance.state === "error" && instance.consecutiveFailures < MAX_CONSECUTIVE_FAILURES)) {
+      await this.startServer(instance);
+    }
+
+    if (instance.state !== "running" || !instance.client) {
+      throw new Error(`LSP server "${serverName}" failed to start.`);
+    }
+
+    return instance.client.sendRequest<T>("workspace/symbol", { query });
+  }
+
   async shutdown(): Promise<void> {
     await Promise.allSettled(
       [...this.servers.values()]
         .filter((s) => s.state === "running" && s.client)
         .map((s) => s.client!.shutdown()),
     );
+  }
+
+  /**
+   * Mark a file as stale so the next request forces a fresh didClose + didOpen.
+   * Call this after writing a file to disk (e.g. after applyWorkspaceEdit)
+   * to ensure the LSP server sees updated content on the very next request.
+   */
+  markStale(absPath: string): void {
+    const uri = pathToFileURL(absPath).toString();
+    for (const instance of this.servers.values()) {
+      instance.openedUris.delete(uri);
+      instance.openedMtimes.delete(uri);
+    }
   }
 
   // ─── Server lifecycle ────────────────────────────────────────────────────────

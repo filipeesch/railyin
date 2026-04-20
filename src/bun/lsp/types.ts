@@ -51,6 +51,9 @@ export interface ClientCapabilities {
     documentSymbol?: { hierarchicalDocumentSymbolSupport?: boolean };
     implementation?: { linkSupport?: boolean };
     callHierarchy?: {};
+    rename?: {};
+    typeDefinition?: { linkSupport?: boolean };
+    formatting?: {};
   };
   workspace?: {
     symbol?: {};
@@ -154,3 +157,25 @@ export const SYMBOL_KIND_NAMES: Record<number, string> = {
   20: "Key", 21: "Null", 22: "EnumMember", 23: "Struct", 24: "Event",
   25: "Operator", 26: "TypeParameter",
 };
+
+// ─── WorkspaceEdit (rename, format, codeAction) ───────────────────────────────
+
+export interface TextEdit {
+  range: Range;
+  newText: string;
+}
+
+export interface TextDocumentEdit {
+  textDocument: { uri: string; version?: number | null };
+  edits: TextEdit[];
+}
+
+export interface WorkspaceEdit {
+  changes?: { [uri: string]: TextEdit[] };
+  documentChanges?: TextDocumentEdit[];
+}
+
+export interface PrepareRenameResult {
+  range: Range;
+  placeholder?: string;
+}

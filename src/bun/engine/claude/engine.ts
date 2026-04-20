@@ -3,6 +3,8 @@ import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
 import { claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
 import type { ToolMetadata } from "./events.ts";
+import { taskLspRegistry } from "../../lsp/task-registry.ts";
+import { getConfig } from "../../config/index.ts";
 
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -28,6 +30,13 @@ export class ClaudeEngine implements ExecutionEngine {
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
 
+    const config = getConfig();
+    const lspManager = taskLspRegistry.getManager(
+      taskId,
+      config.workspace.lsp?.servers ?? [],
+      workingDirectory,
+    );
+
     const runConfig: ClaudeRunConfig = {
       executionId,
       taskId,
@@ -43,6 +52,8 @@ export class ClaudeEngine implements ExecutionEngine {
         onTransition: () => { },
         onHumanTurn: () => { },
         onCancel: (id) => this.cancel(id),
+        lspManager,
+        worktreePath: workingDirectory,
       },
       waitForResume: (request) => this.waitForResume(executionId, request, signal),
       onRawMessage: (message) => {

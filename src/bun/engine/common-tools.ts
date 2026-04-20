@@ -18,6 +18,9 @@ import { removeWorktree } from "../git/worktree.ts";
 import { getProjectByKey } from "../project-store.ts";
 import { createTodo, editTodo, getTodo, listTodos, reprioritizeTodos } from "../db/todos.ts";
 import { INTERVIEW_ME_TOOL_DEFINITION } from "./interview-tool-definition.ts";
+import { LSP_TOOL_DEFINITION } from "./lsp-tool-definition.ts";
+import { executeLspTool } from "../workflow/tools.ts";
+import { taskLspRegistry } from "../lsp/task-registry.ts";
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
 
@@ -302,6 +305,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["id", "status"],
     },
   },
+  LSP_TOOL_DEFINITION,
 ];
 
 export const COMMON_TOOL_NAMES = new Set(COMMON_TOOL_DEFINITIONS.map((t) => t.name));
@@ -540,6 +544,7 @@ export async function executeCommonTool(
       if (row.conversation_id) {
         db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
       }
+      taskLspRegistry.releaseTask(taskId).catch(() => {});
       return JSON.stringify({ success: true, deleted_task_id: taskId });
     }
 
@@ -678,6 +683,16 @@ export async function executeCommonTool(
       const result = editTodo(ctx.taskId, id, { status: status as import("../db/todos.ts").TodoStatus });
       if (!result) return `Error: todo ${id} not found`;
       return JSON.stringify(result);
+    }
+
+    case "lsp": {
+      if (!ctx.lspManager) {
+        return "Error: LSP is not configured. Add lsp.servers to workspace.yaml.";
+      }
+      if (!ctx.worktreePath) {
+        return "Error: worktreePath is not set in tool context";
+      }
+      return executeLspTool(args as Record<string, string | number>, ctx.lspManager, ctx.worktreePath);
     }
 
     default:

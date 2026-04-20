@@ -16,6 +16,7 @@ import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../db/r
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { resolveToolsForColumn, getToolDescriptionBlock, executeTool, type WriteResult, type TaskToolCallbacks } from "./tools.ts";
 import { LSPServerManager } from "../lsp/manager.ts";
+import { taskLspRegistry } from "../lsp/task-registry.ts";
 import { formatReviewMessageForLLM } from "./review.ts";
 import { resolvePrompt } from "../engine/dialects/copilot-prompt-resolver.ts";
 import { listTodos } from "../db/todos.ts";
@@ -955,10 +956,11 @@ async function runSubExecution({
     }
   }
 
-  const subLspManager = new LSPServerManager(
-    config.workspace.lsp?.servers ?? [],
-    worktreePath,
-  );
+  const lspServerConfigs = config.workspace.lsp?.servers ?? [];
+  const subLspManager = taskId != null
+    ? taskLspRegistry.getManager(taskId, lspServerConfigs, worktreePath)
+    : new LSPServerManager(lspServerConfigs, worktreePath);
+  const subLspOwned = taskId == null; // only shut down if not registry-managed
   const toolCtx = { worktreePath, searchConfig: config.workspace.search, mtimeCache: new Map<string, number>(), lspManager: subLspManager };
   // Child's own tool names — used as execution whitelist
   const childToolDefs = resolveToolsForColumn(tools).sort((a, b) => a.name.localeCompare(b.name));
@@ -1032,11 +1034,11 @@ async function runSubExecution({
     emitSub("status_chunk", agentLabel ? `${agentLabel} thinking…` : "Sub-agent thinking…");
   }
 
+  try {
   while (toolRounds < MAX_SUB_ROUNDS) {
     const turn = await retryTurn(provider, liveMessages, { tools: apiToolDefs, effort: "low", signal, agentLabel, maxTokens: 16384 }, undefined, {}, "foreground", fallbackProvider);
 
     if (turn.type === "text") {
-      subLspManager.shutdown();
       const result = (turn.content && turn.content.length > 0) ? turn.content : "(no response)";
       if (subagentId) {
         emitSub("assistant", result);
@@ -1112,8 +1114,12 @@ async function runSubExecution({
     }
   }
   const actionSummary = lastActions.length > 0 ? `last actions: ${lastActions.join(", ")}` : "no tool calls recorded";
-  subLspManager.shutdown();
   return `(sub-agent reached tool limit after ${MAX_SUB_ROUNDS} rounds — ${actionSummary})`;
+  } finally {
+    if (subLspOwned) {
+      subLspManager.shutdown().catch(() => {});
+    }
+  }
 }
 
 // ─── Task 5.2 + 5.3: Execute prompt ──────────────────────────────────────────
@@ -1147,7 +1153,6 @@ async function runExecution(
     onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, subagentId: null, done: true });
   }
 
-  let lspManager: LSPServerManager | undefined;
   try {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
 
@@ -1353,7 +1358,8 @@ async function runExecution(
         appendApprovedCommands(tId, binaries);
       },
     };
-    lspManager = new LSPServerManager(
+    const lspManager = taskLspRegistry.getManager(
+      taskId,
       config.workspace.lsp?.servers ?? [],
       worktreePath,
     );
@@ -2126,8 +2132,6 @@ async function runExecution(
     onError(taskId, executionId, errMsg);
     const outerFailedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (outerFailedRow) onTaskUpdated(mapTask(outerFailedRow));
-  } finally {
-    lspManager?.shutdown();
   }
 }
 // ─── Task 5.7: Human turn ─────────────────────────────────────────────────────

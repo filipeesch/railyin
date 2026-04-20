@@ -1,4 +1,5 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
+import type { LSPServerManager } from "../lsp/manager.ts";
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
 
@@ -160,4 +161,6 @@ export interface CommonToolContext {
   onTransition: (taskId: number, toState: string) => void;
   onHumanTurn: (taskId: number, message: string) => void;
   onCancel: (executionId: number) => void;
+  lspManager?: LSPServerManager;
+  worktreePath?: string;
 }

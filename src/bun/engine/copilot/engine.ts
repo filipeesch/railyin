@@ -16,6 +16,8 @@ import { copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./sessi
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
+import { taskLspRegistry } from "../../lsp/task-registry.ts";
+import { getConfig } from "../../config/index.ts";
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
@@ -80,6 +82,12 @@ export class CopilotEngine implements ExecutionEngine {
     const interviewAbortController = new AbortController();
 
     // Build tool context for common task-management tools
+    const config = getConfig();
+    const lspManager = taskLspRegistry.getManager(
+      taskId,
+      config.workspace.lsp?.servers ?? [],
+      workingDirectory,
+    );
     const toolContext = {
       taskId,
       boardId: boardId ?? 0,
@@ -96,6 +104,8 @@ export class CopilotEngine implements ExecutionEngine {
         pendingInterviewPayload = payload;
         interviewAbortController.abort();
       },
+      lspManager,
+      worktreePath: workingDirectory,
     };
 
     const tools = buildCopilotTools(toolContext);

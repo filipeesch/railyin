@@ -13,6 +13,7 @@ import {
 import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
+import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
@@ -492,6 +493,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       if (row?.conversation_id) {
         db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
       }
+      taskLspRegistry.releaseTask(params.taskId).catch(() => {});
 
       return { success: true, ...(warning ? { warning } : {}) };
     },

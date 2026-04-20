@@ -7,6 +7,7 @@ import type { AIToolDefinition } from "../ai/types.ts";
 import type { FileDiffPayload, Hunk, HunkLine } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
 import type { CallHierarchyItem } from "../lsp/types.ts";
+import { applyWorkspaceEdit } from "../lsp/apply-edits.ts";
 import {
   formatDefinition,
   formatReferences,
@@ -24,6 +25,7 @@ import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { removeWorktree } from "../git/worktree.ts";
 import { getProjectByKey } from "../project-store.ts";
 import { INTERVIEW_ME_TOOL_DEFINITION } from "../engine/interview-tool-definition.ts";
+import { LSP_TOOL_DEFINITION } from "../engine/lsp-tool-definition.ts";
 
 // ─── Myers diff algorithm ─────────────────────────────────────────────────────
 
@@ -809,53 +811,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
 
   // ── lsp group ───────────────────────────────────────────────────────────────
-  {
-    name: "lsp",
-    description:
-      "Query a language server for code intelligence.\n\n" +
-      "Usage:\n" +
-      "- Operations: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls\n" +
-      "- Position-based operations require file_path, line, and character (all 1-based)\n" +
-      "- Use documentSymbol to find symbol positions before calling position-based operations\n" +
-      "- Use hover for type info, workspaceSymbol for project-wide symbol search",
-    parameters: {
-      type: "object",
-      properties: {
-        operation: {
-          type: "string",
-          enum: [
-            "goToDefinition",
-            "findReferences",
-            "hover",
-            "documentSymbol",
-            "workspaceSymbol",
-            "goToImplementation",
-            "prepareCallHierarchy",
-            "incomingCalls",
-            "outgoingCalls",
-          ],
-          description: "The LSP operation to perform.",
-        },
-        file_path: {
-          type: "string",
-          description: "Relative path to the file from the worktree root.",
-        },
-        line: {
-          type: "number",
-          description: "1-based line number. Required for operations that need a cursor position.",
-        },
-        character: {
-          type: "number",
-          description: "1-based character offset. Required for position-based operations.",
-        },
-        query: {
-          type: "string",
-          description: "Symbol name query string. Required for workspaceSymbol.",
-        },
-      },
-      required: ["operation", "file_path"],
-    },
-  },
+  LSP_TOOL_DEFINITION,
 ];
 
 /** Built-in tool groups. A column's `tools` array may use group names, individual
@@ -916,7 +872,7 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["reorganize_todos", "reorganize_todos(items): atomically update execution order of multiple todos in one call."],
   ["update_todo_status", "update_todo_status(id, status): update a todo's status (pending/in-progress/done/blocked/deleted). Use 'deleted' to soft-delete. ALWAYS use this instead of edit_todo for status changes."],
   // lsp
-  ["lsp", "lsp(operation, file_path, line?, character?, query?): code intelligence — goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Requires lsp.servers in workspace.yaml."],
+  ["lsp", "lsp(operation, file_path?, line?, character?, query?, new_name?): code intelligence — goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls, typeDefinition, rename. ALWAYS call documentSymbol first to get positions. workspaceSymbol: file_path optional."],
 ]);
 
 /** Ordered group definitions for the worktree context tool description block. */
@@ -1852,88 +1808,102 @@ export async function executeTool(
       if (!ctx.lspManager) {
         return "Error: LSP is not configured. Add lsp.servers to workspace.yaml.";
       }
-      const abs = safePath(ctx.worktreePath, args.file_path ?? "");
-      if (!abs) return "Error: file_path is outside the worktree";
-
-      const op = args.operation ?? "";
-      const line0 = args.line !== undefined ? Number(args.line) - 1 : 0;
-      const char0 = args.character !== undefined ? Number(args.character) - 1 : 0;
-      const docUri = pathToFileURL(abs).toString();
-      const pos = { line: line0, character: char0 };
-
-      switch (op) {
-        case "goToDefinition": {
-          const result = await ctx.lspManager.request(abs, "textDocument/definition", {
-            textDocument: { uri: docUri },
-            position: pos,
-          });
-          return formatDefinition(result, ctx.worktreePath);
-        }
-        case "findReferences": {
-          const result = await ctx.lspManager.request(abs, "textDocument/references", {
-            textDocument: { uri: docUri },
-            position: pos,
-            context: { includeDeclaration: true },
-          });
-          return formatReferences(result, ctx.worktreePath);
-        }
-        case "hover": {
-          const result = await ctx.lspManager.request(abs, "textDocument/hover", {
-            textDocument: { uri: docUri },
-            position: pos,
-          });
-          return formatHover(result);
-        }
-        case "documentSymbol": {
-          const result = await ctx.lspManager.request(abs, "textDocument/documentSymbol", {
-            textDocument: { uri: docUri },
-          });
-          return formatDocumentSymbols(result, ctx.worktreePath);
-        }
-        case "workspaceSymbol": {
-          const query = args.query ?? "";
-          const result = await ctx.lspManager.request(abs, "workspace/symbol", { query });
-          return formatWorkspaceSymbols(result, ctx.worktreePath);
-        }
-        case "goToImplementation": {
-          const result = await ctx.lspManager.request(abs, "textDocument/implementation", {
-            textDocument: { uri: docUri },
-            position: pos,
-          });
-          return formatDefinition(result, ctx.worktreePath, "Implemented");
-        }
-        case "prepareCallHierarchy": {
-          const result = await ctx.lspManager.request(abs, "textDocument/prepareCallHierarchy", {
-            textDocument: { uri: docUri },
-            position: pos,
-          });
-          return formatCallHierarchyItems(result as CallHierarchyItem[] | null, ctx.worktreePath);
-        }
-        case "incomingCalls": {
-          const items = (await ctx.lspManager.request(abs, "textDocument/prepareCallHierarchy", {
-            textDocument: { uri: docUri },
-            position: pos,
-          })) as CallHierarchyItem[] | null;
-          if (!items || items.length === 0) return "No call hierarchy item found at that position";
-          const result = await ctx.lspManager.request(abs, "callHierarchy/incomingCalls", { item: items[0] });
-          return formatIncomingCalls(result, ctx.worktreePath);
-        }
-        case "outgoingCalls": {
-          const items = (await ctx.lspManager.request(abs, "textDocument/prepareCallHierarchy", {
-            textDocument: { uri: docUri },
-            position: pos,
-          })) as CallHierarchyItem[] | null;
-          if (!items || items.length === 0) return "No call hierarchy item found at that position";
-          const result = await ctx.lspManager.request(abs, "callHierarchy/outgoingCalls", { item: items[0] });
-          return formatOutgoingCalls(result, ctx.worktreePath);
-        }
-        default:
-          return `Error: unknown lsp operation "${op}"`;
-      }
+      return executeLspTool(args as Record<string, string | number>, ctx.lspManager, ctx.worktreePath);
     }
 
     default:
       return `Error: unknown tool "${name}"`;
+  }
+}
+
+/**
+ * Execute the `lsp` tool with explicit context. Can be called from any engine.
+ */
+export async function executeLspTool(
+  args: Record<string, string | number>,
+  lspManager: LSPServerManager,
+  worktreePath: string,
+): Promise<string> {
+  const op = (args.operation as string) ?? "";
+
+  // workspaceSymbol is a workspace-level request — route via a representative file
+  // if provided, otherwise use worktree root directly (extension lookup not needed).
+  const filePath = (args.file_path as string) ?? "";
+  const abs = filePath
+    ? safePath(worktreePath, filePath)
+    : resolve(worktreePath);
+  if (!abs) return "Error: file_path is outside the worktree";
+
+  const line0 = args.line !== undefined ? Number(args.line) - 1 : 0;
+  const char0 = args.character !== undefined ? Number(args.character) - 1 : 0;
+  const docUri = pathToFileURL(abs).toString();
+  const pos = { line: line0, character: char0 };
+
+  switch (op) {
+    case "goToDefinition": {
+      const result = await lspManager.request(abs, "textDocument/definition", { textDocument: { uri: docUri }, position: pos });
+      return formatDefinition(result, worktreePath);
+    }
+    case "findReferences": {
+      const result = await lspManager.request(abs, "textDocument/references", { textDocument: { uri: docUri }, position: pos, context: { includeDeclaration: true } });
+      return formatReferences(result, worktreePath);
+    }
+    case "hover": {
+      const result = await lspManager.request(abs, "textDocument/hover", { textDocument: { uri: docUri }, position: pos });
+      return formatHover(result);
+    }
+    case "documentSymbol": {
+      const result = await lspManager.request(abs, "textDocument/documentSymbol", { textDocument: { uri: docUri } });
+      return formatDocumentSymbols(result, worktreePath);
+    }
+    case "workspaceSymbol": {
+      const query = (args.query as string) ?? "";
+      // workspace/symbol is not file-scoped — use any running server (pick via file_path extension, or first available)
+      const anchorPath = filePath ? abs : resolve(worktreePath);
+      const result = await lspManager.requestWorkspaceSymbol(anchorPath, query);
+      return formatWorkspaceSymbols(result, worktreePath);
+    }
+    case "goToImplementation": {
+      const result = await lspManager.request(abs, "textDocument/implementation", { textDocument: { uri: docUri }, position: pos });
+      return formatDefinition(result, worktreePath, "Implemented");
+    }
+    case "prepareCallHierarchy": {
+      const result = await lspManager.request(abs, "textDocument/prepareCallHierarchy", { textDocument: { uri: docUri }, position: pos });
+      return formatCallHierarchyItems(result as CallHierarchyItem[] | null, worktreePath);
+    }
+    case "incomingCalls": {
+      const items = (await lspManager.request(abs, "textDocument/prepareCallHierarchy", { textDocument: { uri: docUri }, position: pos })) as CallHierarchyItem[] | null;
+      if (!items || items.length === 0) return "No call hierarchy item found at that position";
+      const result = await lspManager.request(abs, "callHierarchy/incomingCalls", { item: items[0] });
+      return formatIncomingCalls(result, worktreePath);
+    }
+    case "outgoingCalls": {
+      const items = (await lspManager.request(abs, "textDocument/prepareCallHierarchy", { textDocument: { uri: docUri }, position: pos })) as CallHierarchyItem[] | null;
+      if (!items || items.length === 0) return "No call hierarchy item found at that position";
+      const result = await lspManager.request(abs, "callHierarchy/outgoingCalls", { item: items[0] });
+      return formatOutgoingCalls(result, worktreePath);
+    }
+    case "typeDefinition": {
+      const result = await lspManager.request(abs, "textDocument/typeDefinition", { textDocument: { uri: docUri }, position: pos });
+      return formatDefinition(result, worktreePath, "Type defined");
+    }
+    case "rename": {
+      const newName = args.new_name as string;
+      if (!newName) return "Error: new_name is required for rename operation";
+      const prepareResult = await lspManager.request(abs, "textDocument/prepareRename", { textDocument: { uri: docUri }, position: pos });
+      if (!prepareResult) return "Error: cannot rename symbol at this position (server rejected prepareRename)";
+      const workspaceEdit = await lspManager.request(abs, "textDocument/rename", { textDocument: { uri: docUri }, position: pos, newName });
+      if (!workspaceEdit) return "Error: rename returned no edits";
+      const applyResult = applyWorkspaceEdit(workspaceEdit as import("../lsp/types.ts").WorkspaceEdit, worktreePath);
+      if ("error" in applyResult) return `Error applying rename: ${applyResult.error}`;
+      // Mark all changed files stale so the next LSP request sees fresh content
+      for (const relPath of applyResult.filesChanged) {
+        lspManager.markStale(resolve(worktreePath, relPath));
+      }
+      return `Renamed to "${newName}": ${applyResult.summary}`;
+    }
+    default:
+      return `Error: unknown lsp operation "${op}"`;
   }
 }
 
