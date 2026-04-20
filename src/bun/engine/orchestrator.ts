@@ -691,6 +691,9 @@ export class Orchestrator implements ExecutionCoordinator {
       onRawModelMessage: (raw) => this._persistRawModelMessage(task.id, executionId, raw),
       nativeExecType,
       toState,
+      enabledMcpTools: task.enabled_mcp_tools
+        ? (() => { try { return JSON.parse(task.enabled_mcp_tools!); } catch { return null; } })()
+        : null,
     };
   }
 

@@ -75,6 +75,9 @@ export interface ExecutionParams {
   toState?: string;
   /** Code-review hunk decisions (required when nativeExecType === "code_review"). */
   reviewDecisions?: Record<string, unknown>;
+
+  /** MCP tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
+  enabledMcpTools?: string[] | null;
 }
 
 export interface RawModelMessage {

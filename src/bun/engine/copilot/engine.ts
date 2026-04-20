@@ -18,6 +18,7 @@ import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
+import { getMcpRegistry } from "../../mcp/registry.ts";
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
@@ -108,7 +109,7 @@ export class CopilotEngine implements ExecutionEngine {
       worktreePath: workingDirectory,
     };
 
-    const tools = buildCopilotTools(toolContext);
+    const tools = buildCopilotTools(toolContext, getMcpRegistry(), params.enabledMcpTools);
 
     // Build system message — append stage_instructions to SDK's managed prompt
     const systemMessage = systemInstructions

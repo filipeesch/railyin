@@ -5,6 +5,7 @@ import { claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter
 import type { ToolMetadata } from "./events.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
+import { getMcpRegistry } from "../../mcp/registry.ts";
 
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -25,7 +26,7 @@ export class ClaudeEngine implements ExecutionEngine {
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
-    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions } = params;
+    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, enabledMcpTools } = params;
 
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
@@ -36,6 +37,15 @@ export class ClaudeEngine implements ExecutionEngine {
       config.workspace.lsp?.servers ?? [],
       workingDirectory,
     );
+
+    // Collect external MCP server configs from the registry for native Claude pass-through.
+    const mcpRegistry = getMcpRegistry();
+    const externalMcpServers = mcpRegistry
+      ? mcpRegistry.getStatus()
+          .filter((s) => s.state === "running")
+          .map((s) => mcpRegistry.getServerConfig(s.name))
+          .filter((c): c is NonNullable<typeof c> => c !== undefined)
+      : undefined;
 
     const runConfig: ClaudeRunConfig = {
       executionId,
@@ -67,6 +77,8 @@ export class ClaudeEngine implements ExecutionEngine {
         });
       },
       toolMetaByCallId,
+      externalMcpServers,
+      enabledMcpTools,
     };
 
     // Wrap the adapter execution to ensure cleanup happens
