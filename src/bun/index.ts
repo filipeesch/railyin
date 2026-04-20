@@ -1,11 +1,13 @@
 import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
 import { getDb } from "./db/index.ts";
-import { getWorkspaceRegistry, loadConfig } from "./config/index.ts";
+import { getWorkspaceRegistry, loadConfig, getDataDir } from "./config/index.ts";
 import { StreamBatcher } from "./pipeline/batcher.ts";
 import * as path from "path";
 import type { ServerWebSocket } from "bun";
 import { getPtySession, killAllPtySessions } from "./launch/pty.ts";
 import { stopAllCodeServers } from "./launch/code-server.ts";
+import { initMcpRegistry } from "./mcp/registry.ts";
+import type { McpConfig, McpServerConfig } from "./mcp/types.ts";
 
 type WsData = { type: "push" } | { type: "pty"; sessionId: string };
 
@@ -88,6 +90,44 @@ seedDefaultWorkspace();
 
 // 2. Load default workspace config (YAML files)
 const { error: configError } = loadConfig();
+
+// 2b. Load MCP config from ~/.railyn/mcp.json and start registry (non-blocking)
+{
+  const { existsSync, readFileSync } = await import("fs");
+  const { join } = await import("path");
+  const mcpConfigPath = join(getDataDir(), "mcp.json");
+  if (existsSync(mcpConfigPath)) {
+    try {
+      const raw = readFileSync(mcpConfigPath, "utf-8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      // Support both VS Code format ({ servers: { name: {...} } }) and internal array format
+      let mcpConfig: McpConfig;
+      if (!parsed.servers) {
+        mcpConfig = { servers: [] };
+      } else if (Array.isArray(parsed.servers)) {
+        mcpConfig = { servers: parsed.servers as McpServerConfig[] };
+      } else {
+        const servers: McpServerConfig[] = Object.entries(parsed.servers as Record<string, unknown>).map(
+          ([name, entry]) => {
+            const e = entry as Record<string, unknown>;
+            const transport = e.url
+              ? { type: "http" as const, url: e.url as string, headers: e.headers as Record<string, string> | undefined }
+              : { type: "stdio" as const, command: e.command as string, args: e.args as string[] | undefined, env: e.env as Record<string, string> | undefined };
+            return { name, transport };
+          }
+        );
+        mcpConfig = { servers };
+      }
+      const registry = initMcpRegistry(mcpConfig);
+      registry.startAll().catch((err: unknown) => {
+        console.error("[mcp] Failed to start MCP servers at startup:", err);
+      });
+      console.log(`[mcp] Loaded ${mcpConfig.servers.length} MCP server(s) from ${mcpConfigPath}`);
+    } catch (err) {
+      console.error("[mcp] Failed to load mcp.json at startup:", err);
+    }
+  }
+}
 
 // 3. Reset any tasks/executions that were still 'running' or 'waiting_user' when
 //    the process last exited (crash, SIGKILL, etc.) so they don't appear stuck forever.

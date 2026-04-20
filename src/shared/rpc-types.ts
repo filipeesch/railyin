@@ -51,6 +51,7 @@ export interface Task {
   worktreePath: string | null;
   executionCount: number;
   position: number;
+  enabledMcpTools: string[] | null;
 }
 
 export type MessageType =

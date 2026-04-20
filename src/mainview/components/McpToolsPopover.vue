@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from "vue";
+import { ref, watch, nextTick } from "vue";
 import Popover from "primevue/popover";
 import Checkbox from "primevue/checkbox";
 import Button from "primevue/button";
@@ -106,6 +106,10 @@ const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
 const servers = ref<McpServerStatus[]>([]);
 const reloading = ref(false);
 const expanded = ref(new Set<string>());
+
+// Local shadow of enabledMcpTools — updated immediately on click for instant UX
+const localEnabled = ref<string[] | null>(props.enabledMcpTools);
+watch(() => props.enabledMcpTools, (val) => { localEnabled.value = val; });
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -157,7 +161,7 @@ function serverCheckState(server: McpServerStatus): "all" | "some" | "none" {
 }
 
 async function toggleServer(server: McpServerStatus, checked: boolean) {
-  let current = props.enabledMcpTools;
+  let current = localEnabled.value;
   if (current === null) {
     current = servers.value.flatMap(s => s.tools.map(t => `${s.name}:${t.name}`));
   }
@@ -170,24 +174,27 @@ async function toggleServer(server: McpServerStatus, checked: boolean) {
   }
   const allKeys = servers.value.flatMap(s => s.tools.map(t => `${s.name}:${t.name}`));
   if (next.length === allKeys.length) next = null;
+  // Update local state immediately for instant visual feedback
+  localEnabled.value = next;
   try {
     const updated = await api("mcp.setTaskTools", { taskId: props.taskId, enabledTools: next });
     emit("tools-changed", updated);
   } catch (err) {
     console.error("[McpToolsPopover] Failed to update server tools", err);
+    localEnabled.value = props.enabledMcpTools; // revert on error
   }
 }
 
 // ─── Tool enable/disable ──────────────────────────────────────────────────────
 
 function isToolEnabled(serverName: string, toolName: string): boolean {
-  if (props.enabledMcpTools === null) return true;
-  return props.enabledMcpTools.includes(`${serverName}:${toolName}`);
+  if (localEnabled.value === null) return true;
+  return localEnabled.value.includes(`${serverName}:${toolName}`);
 }
 
 async function toggleTool(serverName: string, toolName: string, enabled: boolean) {
   const key = `${serverName}:${toolName}`;
-  let current = props.enabledMcpTools;
+  let current = localEnabled.value;
 
   if (current === null) {
     current = servers.value.flatMap(s => s.tools.map(t => `${s.name}:${t.name}`));
@@ -205,11 +212,14 @@ async function toggleTool(serverName: string, toolName: string, enabled: boolean
     next = null;
   }
 
+  // Update local state immediately for instant visual feedback
+  localEnabled.value = next;
   try {
     const updated = await api("mcp.setTaskTools", { taskId: props.taskId, enabledTools: next });
     emit("tools-changed", updated);
   } catch (err) {
     console.error("[McpToolsPopover] Failed to update tools", err);
+    localEnabled.value = props.enabledMcpTools; // revert on error
   }
 }
 

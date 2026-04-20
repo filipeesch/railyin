@@ -33,6 +33,7 @@ export function mapTask(row: TaskRow): Task {
     worktreePath: row.worktree_path ?? null,
     executionCount: row.execution_count ?? 0,
     position: row.position ?? 0,
+    enabledMcpTools: (() => { try { return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : null; } catch { return null; } })(),
   };
 }
 

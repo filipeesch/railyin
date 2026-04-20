@@ -563,7 +563,7 @@ async function onMcpConfigSave(content: string) {
 }
 
 function onMcpToolsChanged(updatedTask: Task) {
-  console.log("[TaskDetailDrawer] MCP tools changed for task", updatedTask.id);
+  taskStore.onTaskUpdated(updatedTask);
 }
 
 async function onManageModelsClosed() {
