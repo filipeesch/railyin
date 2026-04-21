@@ -629,7 +629,11 @@ export class Orchestrator implements ExecutionCoordinator {
     if (!engine.compact) {
       throw new Error(`Engine for task ${taskId} does not support manual compaction`);
     }
-    await engine.compact(taskId);
+    const db = getDb();
+    const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    const workingDirectory = this._resolveWorkingDirectory(task);
+    await engine.compact(taskId, workingDirectory);
   }
 
   // ─── Non-native engine helpers ─────────────────────────────────────────────

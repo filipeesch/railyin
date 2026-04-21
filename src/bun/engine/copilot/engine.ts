@@ -23,8 +23,6 @@ export class CopilotEngine implements ExecutionEngine {
   /** Active sessions keyed by executionId. */
   private readonly sessions = new Map<number, CopilotSdkSession>();
   private readonly executionSessionIds = new Map<number, string>();
-  /** Active sessions keyed by taskId for use by compact(). */
-  private readonly taskSessions = new Map<number, CopilotSdkSession>();
   private readonly pendingResumes = new Map<number, {
     resolve: (input: EngineResumeInput) => void;
     reject: (error: Error) => void;
@@ -139,7 +137,6 @@ export class CopilotEngine implements ExecutionEngine {
 
       this.sessions.set(executionId, session);
       this.executionSessionIds.set(executionId, sdkSessionId);
-      this.taskSessions.set(taskId, session);
       this.sdkAdapter.touchLease(sdkSessionId, "running");
 
       // Bail early if the execution was cancelled while we were creating the session
@@ -253,7 +250,6 @@ export class CopilotEngine implements ExecutionEngine {
       }
       this.sessions.delete(executionId);
       this.executionSessionIds.delete(executionId);
-      this.taskSessions.delete(taskId);
       if (session) {
         await this.sdkAdapter.disconnectSession(session).catch(() => { });
       }
@@ -286,12 +282,22 @@ export class CopilotEngine implements ExecutionEngine {
     await this.sdkAdapter.shutdownAll(options).catch(() => { });
   }
 
-  async compact(taskId: number): Promise<void> {
-    const session = this.taskSessions.get(taskId);
-    if (!session) {
-      throw new Error(`No active session found for task ${taskId}`);
+  async compact(taskId: number, workingDirectory: string): Promise<void> {
+    const sdkSessionId = copilotSessionIdForTask(taskId);
+    // Wake the session — same pattern as execution, but we only need to trigger
+    // compaction then let the lease manager put it back to sleep.
+    const sessionConfig = {
+      workingDirectory,
+      streaming: true,
+    };
+    const session = await this.sdkAdapter.resumeSession(sdkSessionId, sessionConfig);
+    this.sdkAdapter.touchLease(sdkSessionId, "running");
+    try {
+      await session.compact();
+    } finally {
+      await this.sdkAdapter.disconnectSession(session).catch(() => { });
+      this.sdkAdapter.setLeaseState(sdkSessionId, "idle");
     }
-    await session.compact();
   }
 
   async listModels(): Promise<EngineModelInfo[]> {

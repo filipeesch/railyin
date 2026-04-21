@@ -157,7 +157,7 @@ export interface ExecutionEngine {
    * Engines that do not support manual compaction leave this undefined.
    * Compaction lifecycle is signalled via compaction_start/compaction_done EngineEvents.
    */
-  compact?(taskId: number): Promise<void>;
+  compact?(taskId: number, workingDirectory: string): Promise<void>;
 }
 
 // ─── Common tool context ──────────────────────────────────────────────────────
