@@ -289,6 +289,7 @@ export class CopilotEngine implements ExecutionEngine {
     const sessionConfig = {
       workingDirectory,
       streaming: true,
+      onPermissionRequest: (_req: unknown, _inv: unknown) => ({ kind: "approved" as const }),
     };
     const session = await this.sdkAdapter.resumeSession(sdkSessionId, sessionConfig);
     this.sdkAdapter.touchLease(sdkSessionId, "running");
