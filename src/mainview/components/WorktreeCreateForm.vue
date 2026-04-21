@@ -103,21 +103,24 @@ function slugify(text: string): string {
 }
 
 const defaultBranch = computed(() => `task/${props.task.id}-${slugify(props.task.title)}`);
-const defaultPath = computed(() => `${props.worktreeBasePath}/${defaultBranch.value}`);
+const defaultPath = computed(() => {
+  const base = props.worktreeBasePath.replace(/\/$/, "");
+  return base ? `${base}/${defaultBranch.value}` : "";
+});
 
 const mode = ref<"new" | "existing">("new");
 const newBranchName = ref(defaultBranch.value);
 const sourceBranch = ref<string | null>(null);
 const existingBranch = ref<string | null>(null);
-const worktreePath = ref(defaultPath.value);
+const worktreePath = ref("");
 
-// Reset defaults when task changes
-watch(() => props.task.id, () => {
-  newBranchName.value = defaultBranch.value;
-  worktreePath.value = defaultPath.value;
-  sourceBranch.value = null;
-  existingBranch.value = null;
-});
+// Keep path in sync with defaultPath (handles async config load and task changes).
+// Only auto-updates when path still matches the current default or is empty.
+watch(defaultPath, (val, old) => {
+  if (!worktreePath.value || worktreePath.value === old) {
+    worktreePath.value = val;
+  }
+}, { immediate: true });
 
 // Auto-select first branch when branches load and nothing selected
 watch(() => props.branches, (branches) => {
@@ -159,7 +162,8 @@ function submit() {
   padding: 10px 12px;
   border: 1px solid var(--p-content-border-color, #e2e8f0);
   border-radius: 8px;
-  background: var(--p-content-background, #fff);
+  background: var(--p-content-background);
+  max-width: 480px;
 }
 
 .wt-mode-toggle {

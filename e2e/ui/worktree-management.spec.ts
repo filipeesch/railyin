@@ -11,7 +11,7 @@
  */
 
 import { test, expect } from "./fixtures";
-import { makeTask } from "./fixtures/mock-data";
+import { makeTask, makeWorkspace } from "./fixtures/mock-data";
 import type { Task } from "@shared/rpc-types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -224,7 +224,7 @@ test.describe("W-C — create: new branch mode", () => {
     await expect(branchInput).toHaveValue(/task\/21-/);
   });
 
-  test("W-C-3: path pre-filled with worktreeBasePath from workspace config", async ({ page, api }) => {
+  test("W-C-3: path pre-filled with exact worktreeBasePath + branch slug", async ({ page, api }) => {
     const task = makeTask({ id: 22, title: "Test Task", worktreeStatus: "not_created" });
     api.handle("tasks.list", () => [task]);
     api.returns("tasks.listBranches", { branches: BRANCHES });
@@ -233,7 +233,42 @@ test.describe("W-C — create: new branch mode", () => {
     await openInfoTab(page, task.id);
 
     const pathInput = page.locator(".wt-create-form input[placeholder*='path']").first();
-    await expect(pathInput).toHaveValue(/\/tmp\/railyn-test/);
+    // Must be full path: <worktreeBasePath>/<branch-slug>
+    await expect(pathInput).toHaveValue("/tmp/railyn-test/task/22-test-task");
+  });
+
+  test("W-C-3b: path pre-filled when workspace config loads after component mount", async ({ page, api }) => {
+    const task = makeTask({ id: 22, title: "Async Task", worktreeStatus: "not_created" });
+    api.handle("tasks.list", () => [task]);
+    api.returns("tasks.listBranches", { branches: BRANCHES });
+    // Delay workspace config to simulate it arriving after the form renders
+    api.delayed("workspace.getConfig", makeWorkspace({ worktreeBasePath: "/tmp/async-base" }), 300);
+
+    await page.goto("/");
+    await openInfoTab(page, task.id);
+
+    const pathInput = page.locator(".wt-create-form input[placeholder*='path']").first();
+    // Initially empty (no base path yet), then populated once config arrives
+    await expect(pathInput).toHaveValue("/tmp/async-base/task/22-async-task", { timeout: 5_000 });
+  });
+
+  test("W-C-3c: path empty (but editable) when worktreeBasePath not configured", async ({ page, api }) => {
+    const task = makeTask({ id: 22, title: "No Base Task", worktreeStatus: "not_created" });
+    api.handle("tasks.list", () => [task]);
+    api.returns("tasks.listBranches", { branches: BRANCHES });
+    api.returns("workspace.getConfig", makeWorkspace({ worktreeBasePath: "" }));
+
+    await page.goto("/");
+    await openInfoTab(page, task.id);
+
+    const pathInput = page.locator(".wt-create-form input[placeholder*='path']").first();
+    // Empty — user must fill manually
+    await expect(pathInput).toHaveValue("");
+    // But Create button is disabled until user fills the path
+    await expect(page.locator(".wt-create-form button", { hasText: "Create" })).toBeDisabled();
+    // Fill path manually → Create becomes enabled
+    await pathInput.fill("/custom/path/my-task");
+    await expect(page.locator(".wt-create-form button", { hasText: "Create" })).toBeEnabled();
   });
 
   test("W-C-4: tasks.listBranches called when form renders", async ({ page, api }) => {

@@ -47,6 +47,14 @@ export class ApiMock {
     }
 
     /**
+     * Register a handler that introduces an artificial delay before responding.
+     * Useful for testing async timing (e.g., config that loads after component mount).
+     */
+    delayed<M extends keyof RailynAPI>(method: M, value: RailynAPI[M]["response"], delayMs: number): this {
+        return this.handle(method, () => new Promise(resolve => setTimeout(() => resolve(value), delayMs)));
+    }
+
+    /**
      * Install a handler that records all calls and returns a fixed value.
      * Returns a live array that is populated as requests arrive.
      *

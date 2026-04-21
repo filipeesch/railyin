@@ -22,12 +22,10 @@
         </div>
 
         <!-- Path row with delete button / inline confirmation -->
-        <div v-if="task.worktreePath" class="info-meta-row info-meta-row--between">
+        <div v-if="task.worktreePath" class="info-meta-row">
           <template v-if="!confirmingDelete">
-            <div class="info-meta-row">
-              <span class="info-key">Path</span>
-              <span class="info-value info-value--mono info-value--break">{{ task.worktreePath }}</span>
-            </div>
+            <span class="info-key">Path</span>
+            <span class="info-value info-value--mono info-value--break">{{ task.worktreePath }}</span>
             <Button
               icon="pi pi-trash"
               text
@@ -299,14 +297,15 @@ const renderedDescription = computed(() => {
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--p-red-200, #fecaca);
+  border: 1px solid var(--p-red-400, #f87171);
   border-radius: 8px;
-  background: var(--p-red-50, #fff5f5);
+  background: color-mix(in srgb, var(--p-red-400, #f87171) 12%, var(--p-content-background, #fff));
   font-size: 0.82rem;
+  max-width: 480px;
 }
 
 .delete-confirm__text {
-  color: var(--p-text-color, #1e293b);
+  color: var(--p-text-color);
   line-height: 1.5;
 }
 
