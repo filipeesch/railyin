@@ -1,4 +1,5 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
+import type { LSPServerManager } from "../lsp/manager.ts";
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
 
@@ -76,6 +77,9 @@ export interface ExecutionParams {
   toState?: string;
   /** Code-review hunk decisions (required when nativeExecType === "code_review"). */
   reviewDecisions?: Record<string, unknown>;
+
+  /** MCP tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
+  enabledMcpTools?: string[] | null;
 }
 
 export interface RawModelMessage {
@@ -85,6 +89,14 @@ export interface RawModelMessage {
   eventType: string;
   eventSubtype?: string;
   payload: Record<string, unknown>;
+}
+
+// ─── Engine command info ──────────────────────────────────────────────────────
+
+export interface CommandInfo {
+  name: string;
+  description?: string;
+  argumentHint?: string;
 }
 
 // ─── Engine model info ────────────────────────────────────────────────────────
@@ -147,6 +159,12 @@ export interface ExecutionEngine {
   listModels(): Promise<EngineModelInfo[]>;
 
   /**
+   * List available slash commands for this engine in the context of the given task.
+   * taskId is used to look up worktree and project paths from the DB.
+   */
+  listCommands(taskId: number): Promise<CommandInfo[]>;
+
+  /**
    * Optional engine-wide graceful shutdown hook for non-execution lifecycle cleanup.
    */
   shutdown?(options?: EngineShutdownOptions): Promise<void>;
@@ -172,4 +190,6 @@ export interface CommonToolContext {
   onTransition: (taskId: number, toState: string) => void;
   onHumanTurn: (taskId: number, message: string) => void;
   onCancel: (executionId: number) => void;
+  lspManager?: LSPServerManager;
+  worktreePath?: string;
 }

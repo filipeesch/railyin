@@ -61,7 +61,11 @@ export const test = base.extend<Fixtures>({
             .returns("tasks.getPendingHunkSummary", [])
             .returns("projects.list", [])
             .returns("tasks.sessionMemory", { content: null })
-            .returns("mcp.getStatus", []);
+            .returns("mcp.getStatus", [])
+            // Autocomplete endpoints — tests override as needed
+            .returns("engine.listCommands", [])
+            .returns("workspace.listFiles", [])
+            .returns("lsp.workspaceSymbol", []);
 
         await api.install();
         await use(api);

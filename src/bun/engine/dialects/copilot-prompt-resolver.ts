@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 
 /**
  * Pattern: /prompt-name optionally followed by same-line argument text,
@@ -32,44 +33,43 @@ function stripFrontmatter(content: string): string {
  * trailing argument text.
  *
  * Lookup order:
- *   1. `<worktreePath>/.github/prompts/<stem>.prompt.md`
- *   2. `<process.cwd()>/.github/prompts/<stem>.prompt.md` (railyin app repo fallback)
+ *   1. `<worktreePath>/.github/prompts/<stem>.prompt.md`   (git worktree root)
+ *   2. `<projectRootPath>/.github/prompts/<stem>.prompt.md` (monorepo project subdir, if differs)
+ *   3. `~/.github/prompts/<stem>.prompt.md`                (user scope)
+ *   4. `<process.cwd()>/.github/prompts/<stem>.prompt.md`  (railyin app repo fallback)
  *
  * - If `value` does not match the slash pattern, it is returned unchanged.
- * - If the pattern matches but no file is found in either location, an error is
+ * - If the pattern matches but no file is found in any location, an error is
  *   thrown with a descriptive message identifying the missing path.
  *
  * Used by: NativeEngine, CopilotEngine.
  * Not used by: ClaudeEngine (passes prompt raw to the SDK, which resolves
  * `.claude/commands/` and `.claude/skills/` natively in the cwd).
  */
-export async function resolvePrompt(value: string, worktreePath: string): Promise<string> {
+export async function resolvePrompt(value: string, worktreePath: string, projectRootPath?: string, _userDirPath?: string): Promise<string> {
   const match = SLASH_PATTERN.exec(value.trim());
   if (!match) return value;
 
   const [, stem, input = "", appendContent = ""] = match;
   const fileName = `${stem}.prompt.md`;
-  const filePath = join(worktreePath, ".github", "prompts", fileName);
 
-  // Resolve path: try worktree first, then fall back to the app's own .github/prompts/
-  let resolvedPath: string | null = null;
-  if (existsSync(filePath)) {
-    resolvedPath = filePath;
-  } else {
-    const fallbackPath = join(process.cwd(), ".github", "prompts", fileName);
-    if (existsSync(fallbackPath)) {
-      resolvedPath = fallbackPath;
-    }
+  // Build candidate paths in priority order
+  const candidates: string[] = [
+    join(worktreePath, ".github", "prompts", fileName),
+  ];
+  if (projectRootPath && projectRootPath !== worktreePath) {
+    candidates.push(join(projectRootPath, ".github", "prompts", fileName));
   }
+  candidates.push(join(_userDirPath ?? homedir(), ".github", "prompts", fileName));
+  candidates.push(join(process.cwd(), ".github", "prompts", fileName));
+
+  const resolvedPath = candidates.find((p) => existsSync(p)) ?? null;
 
   if (!resolvedPath) {
-    // Not a slash reference — the leading / might be a path or URL fragment.
-    // Only treat as an error if the stem looks like an intentional prompt name
-    // (contains at least one letter and no path separators).
     if (stem.includes("/") || stem.includes("\\")) return value;
     throw new Error(
       `Slash reference '/${stem}' could not be resolved: ` +
-      `file not found at ${filePath}`,
+      `file not found at ${candidates[0]}`,
     );
   }
 

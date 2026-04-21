@@ -51,6 +51,7 @@ export interface Task {
   worktreePath: string | null;
   executionCount: number;
   position: number;
+  enabledMcpTools: string[] | null;
 }
 
 export type MessageType =
@@ -286,6 +287,16 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+/** A user-attached reference — either a pasted/dropped binary file (base64 data) or a file-path reference (@file:path). */
+export interface Attachment {
+  /** Human-readable name shown in the UI (filename, symbol name, etc.) */
+  label: string;
+  /** MIME type for binary attachments, or "text/plain" for @file references */
+  mediaType: string;
+  /** Base64-encoded content for binary attachments, or "@file:path" / "@file:path:L10-L25" for file references */
+  data: string;
+}
+
 export type TodoStatus = "pending" | "in-progress" | "done" | "blocked" | "deleted";
 
 export interface CodeRef {
@@ -511,7 +522,7 @@ export type RailynAPI = {
     response: { task: Task; executionId: number };
   };
   "tasks.sendMessage": {
-    params: { taskId: number; content: string };
+    params: { taskId: number; content: string; attachments?: Attachment[] };
     response: { message: ConversationMessage; executionId: number };
   };
 
@@ -567,6 +578,24 @@ export type RailynAPI = {
   "tasks.delete": {
     params: { taskId: number };
     response: { success: boolean; warning?: string };
+  };
+  "tasks.listBranches": {
+    params: { taskId: number };
+    response: { branches: string[] };
+  };
+  "tasks.createWorktree": {
+    params: {
+      taskId: number;
+      path: string;
+      mode: "new" | "existing";
+      branchName: string;
+      sourceBranch?: string;
+    };
+    response: Task;
+  };
+  "tasks.removeWorktree": {
+    params: { taskId: number };
+    response: { warning?: string };
   };
   "tasks.getGitStat": {
     params: { taskId: number };
@@ -677,6 +706,24 @@ export type RailynAPI = {
   "todos.delete": {
     params: { taskId: number; todoId: number };
     response: TodoListItem | null;
+  };
+
+  // Autocomplete / engine
+  "engine.listCommands": {
+    params: { taskId: number };
+    response: { name: string; description?: string }[];
+  };
+
+  // Autocomplete / workspace files
+  "workspace.listFiles": {
+    params: { taskId: number; query?: string };
+    response: { name: string; path: string }[];
+  };
+
+  // Autocomplete / LSP symbols
+  "lsp.workspaceSymbol": {
+    params: { taskId: number; query: string };
+    response: unknown[];
   };
 
   // Launch

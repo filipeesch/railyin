@@ -12,7 +12,8 @@ import {
 } from "../workflow/engine.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
-import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
+import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree, createWorktree, listBranches } from "../git/worktree.ts";
+import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
@@ -221,6 +222,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "tasks.sendMessage": async (params: {
       taskId: number;
       content: string;
+      attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       // Check if content is a code review trigger
       let parsed: { _type?: string; manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[] } | null = null;
@@ -242,7 +244,14 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
       if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-      return orchestrator.executeHumanTurn(params.taskId, params.content);
+
+      // Resolve @file: attachments — inject file content into the prompt before sending
+      const { resolveFileAttachments } = await import("../utils/resolve-file-attachments.ts");
+      const augmentedContent = params.attachments?.length
+        ? await resolveFileAttachments(params.content, params.attachments)
+        : params.content;
+
+      return orchestrator.executeHumanTurn(params.taskId, augmentedContent);
     },
 
     "tasks.retry": async (params: {
@@ -495,8 +504,46 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       if (row?.conversation_id) {
         db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
       }
+      taskLspRegistry.releaseTask(params.taskId).catch(() => {});
 
       return { success: true, ...(warning ? { warning } : {}) };
+    },
+
+    // ─── tasks.listBranches ──────────────────────────────────────────────────
+    "tasks.listBranches": async (params: { taskId: number }): Promise<{ branches: string[] }> => {
+      const branches = await listBranches(params.taskId);
+      return { branches };
+    },
+
+    // ─── tasks.createWorktree ────────────────────────────────────────────────
+    "tasks.createWorktree": async (params: {
+      taskId: number;
+      path: string;
+      mode: "new" | "existing";
+      branchName: string;
+      sourceBranch?: string;
+    }): Promise<Task> => {
+      const db = getDb();
+      await createWorktree(params.taskId, {
+        mode: params.mode,
+        branchName: params.branchName,
+        path: params.path,
+        sourceBranch: params.sourceBranch,
+      });
+      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
+      if (!row) throw new Error(`Task ${params.taskId} not found`);
+      const task = mapTask(row);
+      onTaskUpdated(task);
+      return task;
+    },
+
+    // ─── tasks.removeWorktree ────────────────────────────────────────────────
+    "tasks.removeWorktree": async (params: { taskId: number }): Promise<{ warning?: string }> => {
+      const db = getDb();
+      const { warning } = await removeWorktree(params.taskId);
+      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
+      if (row) onTaskUpdated(mapTask(row));
+      return { ...(warning ? { warning } : {}) };
     },
 
     // ─── tasks.getGitStat ────────────────────────────────────────────────────
@@ -943,6 +990,11 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "todos.delete": async (params: { taskId: number; todoId: number }) => {
       const { deleteTodo } = await import("../db/todos.ts");
       return deleteTodo(params.taskId, params.todoId);
+    },
+
+    "engine.listCommands": async (params: { taskId: number }) => {
+      if (!orchestrator) return [];
+      return orchestrator.listCommands(params.taskId);
     },
   };
 }

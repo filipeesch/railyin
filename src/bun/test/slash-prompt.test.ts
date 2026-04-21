@@ -94,4 +94,100 @@ describe("resolveSlashReference", () => {
     const result = await resolveSlashReference("/opsx-propose my-feature\nExtra steps here", tmpDir);
     expect(result).toBe("Feature: my-feature\n\nExtra steps here");
   });
+
+  it("falls back to projectRootPath when not found in worktreePath", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "railyn-project-"));
+    try {
+      const projectPromptDir = join(projectDir, ".github", "prompts");
+      mkdirSync(projectPromptDir, { recursive: true });
+      writeFileSync(join(projectPromptDir, "project-cmd.prompt.md"), "From project root", "utf-8");
+
+      const result = await resolveSlashReference("/project-cmd", tmpDir, projectDir);
+      expect(result).toBe("From project root");
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("worktreePath takes priority over projectRootPath", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "railyn-project-"));
+    try {
+      const projectPromptDir = join(projectDir, ".github", "prompts");
+      mkdirSync(projectPromptDir, { recursive: true });
+      writeFileSync(join(projectPromptDir, "shared-cmd.prompt.md"), "From project root", "utf-8");
+      writePromptFile("shared-cmd", "From worktree");
+
+      const result = await resolveSlashReference("/shared-cmd", tmpDir, projectDir);
+      expect(result).toBe("From worktree");
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips projectRootPath lookup when it equals worktreePath", async () => {
+    // Both same dir — only one lookup should happen, no error
+    writePromptFile("opsx-apply", "Body");
+    const result = await resolveSlashReference("/opsx-apply", tmpDir, tmpDir);
+    expect(result).toBe("Body");
+  });
+
+  it("resolves from personal scope when worktree and project both miss", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "railyn-home-"));
+    try {
+      const homePromptDir = join(homeDir, ".github", "prompts");
+      mkdirSync(homePromptDir, { recursive: true });
+      writeFileSync(join(homePromptDir, "user-cmd.prompt.md"), "From user home", "utf-8");
+
+      const result = await resolveSlashReference("/user-cmd", tmpDir, undefined, homeDir);
+      expect(result).toBe("From user home");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("personal scope has lower priority than worktree", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "railyn-home-"));
+    try {
+      const homePromptDir = join(homeDir, ".github", "prompts");
+      mkdirSync(homePromptDir, { recursive: true });
+      writeFileSync(join(homePromptDir, "shared.prompt.md"), "From home", "utf-8");
+      writePromptFile("shared", "From worktree");
+
+      const result = await resolveSlashReference("/shared", tmpDir, undefined, homeDir);
+      expect(result).toBe("From worktree");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("personal scope has lower priority than project root", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "railyn-project-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "railyn-home-"));
+    try {
+      const projectPromptDir = join(projectDir, ".github", "prompts");
+      mkdirSync(projectPromptDir, { recursive: true });
+      writeFileSync(join(projectPromptDir, "shared.prompt.md"), "From project", "utf-8");
+
+      const homePromptDir = join(homeDir, ".github", "prompts");
+      mkdirSync(homePromptDir, { recursive: true });
+      writeFileSync(join(homePromptDir, "shared.prompt.md"), "From home", "utf-8");
+
+      const result = await resolveSlashReference("/shared", tmpDir, projectDir, homeDir);
+      expect(result).toBe("From project");
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when all scopes (worktree, project, personal) miss", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "railyn-home-")); // empty — no files
+    try {
+      await expect(
+        resolveSlashReference("/zzz-totally-nonexistent-8f3k2p", tmpDir, undefined, homeDir),
+      ).rejects.toThrow("could not be resolved");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
 });

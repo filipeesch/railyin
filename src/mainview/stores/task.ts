@@ -238,10 +238,11 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── Send message ─────────────────────────────────────────────────────────
 
-  async function sendMessage(taskId: number, content: string) {
+  async function sendMessage(taskId: number, content: string, attachments?: import("@shared/rpc-types").Attachment[]) {
     const { message, executionId } = await api("tasks.sendMessage", {
       taskId,
       content,
+      ...(attachments?.length ? { attachments } : {}),
     });
     messages.value.push(message);
     sortMessagesInPlace();

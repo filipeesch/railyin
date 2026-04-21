@@ -112,6 +112,10 @@ export class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
   async listModels(): Promise<ClaudeSdkModelInfo[]> {
     return this.models;
   }
+
+  async listCommands(_workingDirectory: string): Promise<Array<{ name: string; description: string }>> {
+    return [];
+  }
 }
 
 export function token(content: string): MockTurnStep {

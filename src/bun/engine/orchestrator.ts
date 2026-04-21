@@ -574,6 +574,16 @@ export class Orchestrator implements ExecutionCoordinator {
     return runWithConfig(config, () => engine.listModels());
   }
 
+  // ─── Command listing ────────────────────────────────────────────────────────
+
+  async listCommands(taskId: number) {
+    const db = getDb();
+    const task = db.query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?").get(taskId);
+    if (!task) return [];
+    const { config, engine } = this.getEngineForWorkspace(getBoardWorkspaceKey(task.board_id));
+    return runWithConfig(config, () => engine.listCommands(taskId));
+  }
+
   async shutdownNonNativeEngines(
     options: import("./types.ts").EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 },
   ): Promise<void> {
@@ -703,6 +713,9 @@ export class Orchestrator implements ExecutionCoordinator {
       onRawModelMessage: (raw) => this._persistRawModelMessage(task.id, executionId, raw),
       nativeExecType,
       toState,
+      enabledMcpTools: task.enabled_mcp_tools
+        ? (() => { try { return JSON.parse(task.enabled_mcp_tools!); } catch { return null; } })()
+        : null,
     };
   }
 

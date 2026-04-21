@@ -7,6 +7,7 @@ import { appendApprovedCommands, getApprovedCommands } from "../../workflow/engi
 import { getDb } from "../../db/index.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
+import type { McpServerConfig } from "../../mcp/types.ts";
 
 export interface ClaudeSdkModelInfo {
   value: string;
@@ -39,12 +40,17 @@ export interface ClaudeRunConfig {
   waitForResume: (request: ClaudeResumeRequest | ClaudeShellApprovalRequest) => Promise<EngineResumeInput>;
   onRawMessage?: (message: Record<string, unknown>) => void;
   toolMetaByCallId?: Map<string, ToolMetadata>;
+  /** External MCP server configs to pass natively to the Claude SDK. */
+  externalMcpServers?: McpServerConfig[];
+  /** Tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
+  enabledMcpTools?: string[] | null;
 }
 
 export interface ClaudeSdkAdapter {
   run(config: ClaudeRunConfig): AsyncIterable<EngineEvent>;
   cancel(executionId: number): Promise<void>;
   listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]>;
+  listCommands(workingDirectory: string): Promise<Array<{ name: string; description: string }>>;
   touchExecutionLease?(executionId: number, state?: EngineLeaseState): void;
   shutdownAll?(options?: EngineShutdownOptions): Promise<void>;
 }
@@ -58,6 +64,7 @@ interface ActiveClaudeQuery {
 type ClaudeSdkRuntime = {
   query: (params: { prompt: string; options?: Record<string, unknown> }) => AsyncIterable<unknown> & {
     supportedModels?: () => Promise<Array<Record<string, unknown>>>;
+    supportedCommands?: () => Promise<Array<{ name: string; description: string }>>;
     interrupt?: () => Promise<void>;
     close?: () => void;
   };
@@ -231,6 +238,28 @@ function normalizeClaudeModel(model?: string): string | undefined {
   return model.startsWith("claude/") ? model.slice("claude/".length) : model;
 }
 
+/**
+ * Convert our internal McpServerConfig list to the format the Claude Agent SDK
+ * expects for external mcpServers (transport config keyed by server name).
+ * Servers with no enabled tools are excluded when a filter is provided.
+ */
+function buildExternalMcpServers(
+  servers: McpServerConfig[] | undefined,
+  enabledMcpTools: string[] | null | undefined,
+): Record<string, unknown> {
+  if (!servers?.length) return {};
+  const result: Record<string, unknown> = {};
+  for (const srv of servers) {
+    // If a filter is provided, only include servers with at least one enabled tool.
+    if (Array.isArray(enabledMcpTools)) {
+      const hasEnabled = enabledMcpTools.some((t) => t.startsWith(`${srv.name}:`));
+      if (!hasEnabled) continue;
+    }
+    result[srv.name] = srv.transport;
+  }
+  return result;
+}
+
 export function buildAllowPermissionResult(
   toolInput: Record<string, unknown>,
   suggestions?: unknown,
@@ -373,7 +402,10 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             systemPrompt: config.systemInstructions
               ? { type: "preset", preset: "claude_code", append: config.systemInstructions }
               : { type: "preset", preset: "claude_code" },
-            mcpServers: { railyin: toolServer },
+            mcpServers: {
+              railyin: toolServer,
+              ...buildExternalMcpServers(config.externalMcpServers, config.enabledMcpTools),
+            },
             canUseTool: async (
               toolName: string,
               input: Record<string, unknown>,
@@ -491,6 +523,31 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
     await this.leases.shutdownAll(async (leaseKey) => {
       await this.closeLeaseExecutions(leaseKey, "engine-shutdown");
     }, options);
+  }
+
+  async listCommands(workingDirectory: string): Promise<Array<{ name: string; description: string }>> {
+    const [sdk, cliPath] = await Promise.all([loadClaudeRuntime(), ensureClaudeCliJs()]);
+    const query = sdk.query({
+      prompt: "List available slash commands.",
+      options: {
+        cwd: workingDirectory,
+        permissionMode: "plan",
+        tools: [],
+        pathToClaudeCodeExecutable: cliPath,
+        onElicitation: async () => ({ action: "decline" }),
+      },
+    });
+
+    try {
+      const commands = await query.supportedCommands?.() ?? [];
+      return commands.map((cmd) => ({
+        name: String(cmd.name ?? ""),
+        description: String(cmd.description ?? ""),
+      }));
+    } finally {
+      await query.interrupt?.().catch(() => { });
+      query.close?.();
+    }
   }
 
   async listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]> {

@@ -1,8 +1,13 @@
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo } from "../types.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
 import { claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
 import type { ToolMetadata } from "./events.ts";
+import { taskLspRegistry } from "../../lsp/task-registry.ts";
+import { getConfig } from "../../config/index.ts";
+import { readdirSync, existsSync, readFileSync } from "fs";
+import { join, relative, extname, basename } from "path";
+import { getMcpRegistry } from "../../mcp/registry.ts";
 
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -23,10 +28,26 @@ export class ClaudeEngine implements ExecutionEngine {
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
-    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions } = params;
+    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, enabledMcpTools } = params;
 
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
+
+    const config = getConfig();
+    const lspManager = taskLspRegistry.getManager(
+      taskId,
+      config.workspace.lsp?.servers ?? [],
+      workingDirectory,
+    );
+
+    // Collect external MCP server configs from the registry for native Claude pass-through.
+    const mcpRegistry = getMcpRegistry();
+    const externalMcpServers = mcpRegistry
+      ? mcpRegistry.getStatus()
+          .filter((s) => s.state === "running")
+          .map((s) => mcpRegistry.getServerConfig(s.name))
+          .filter((c): c is NonNullable<typeof c> => c !== undefined)
+      : undefined;
 
     const runConfig: ClaudeRunConfig = {
       executionId,
@@ -43,6 +64,8 @@ export class ClaudeEngine implements ExecutionEngine {
         onTransition: () => { },
         onHumanTurn: () => { },
         onCancel: (id) => this.cancel(id),
+        lspManager,
+        worktreePath: workingDirectory,
       },
       waitForResume: (request) => this.waitForResume(executionId, request, signal),
       onRawMessage: (message) => {
@@ -56,6 +79,8 @@ export class ClaudeEngine implements ExecutionEngine {
         });
       },
       toolMetaByCallId,
+      externalMcpServers,
+      enabledMcpTools,
     };
 
     // Wrap the adapter execution to ensure cleanup happens
@@ -102,6 +127,24 @@ export class ClaudeEngine implements ExecutionEngine {
     }));
   }
 
+  async listCommands(taskId: number): Promise<CommandInfo[]> {
+    const { getDb } = await import("../../db/index.ts");
+    const db = getDb();
+    const row = db
+      .query<{ git_root_path: string | null; worktree_path: string | null }, [number]>(
+        "SELECT gc.git_root_path, gc.worktree_path FROM task_git_context gc WHERE gc.task_id = ?",
+      )
+      .get(taskId);
+
+    const worktreePath = row?.worktree_path ?? row?.git_root_path ?? process.cwd();
+
+    const sdkCommands = await this.sdkAdapter.listCommands(worktreePath);
+    return sdkCommands.map((cmd) => ({
+      name: cmd.name,
+      description: cmd.description || undefined,
+    }));
+  }
+
   async shutdown(options: import("../types.ts").EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
     await this.sdkAdapter.shutdownAll?.(options);
   }
@@ -140,5 +183,48 @@ export class ClaudeEngine implements ExecutionEngine {
         },
       });
     });
+  }
+}
+
+// ─── Claude command discovery ─────────────────────────────────────────────────
+
+/** Extract `description` value from YAML frontmatter (`---\ndescription: ...\n---`). */
+function parseFrontmatterDescription(filePath: string): string | undefined {
+  try {
+    const content = readFileSync(filePath, "utf8");
+    const match = content.match(/^---[\r\n]([\s\S]*?)[\r\n]---/);
+    if (!match) return undefined;
+    const descLine = match[1].match(/^description:\s*(.+)$/m);
+    return descLine ? descLine[1].trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function collectClaudeCommands(
+  dir: string,
+  prefix: string,
+  seen: Set<string>,
+  out: CommandInfo[],
+): void {
+  if (!existsSync(dir)) return;
+  let entries: import("fs").Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectClaudeCommands(fullPath, prefix ? `${prefix}:${entry.name}` : entry.name, seen, out);
+    } else if (entry.isFile() && extname(entry.name) === ".md") {
+      const stem = basename(entry.name, ".md");
+      const commandName = prefix ? `${prefix}:${stem}` : stem;
+      if (!seen.has(commandName)) {
+        seen.add(commandName);
+        out.push({ name: commandName, description: parseFrontmatterDescription(fullPath) });
+      }
+    }
   }
 }

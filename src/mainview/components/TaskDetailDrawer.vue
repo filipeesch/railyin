@@ -241,16 +241,15 @@
           style="display: none"
           @change="onFileInputChange"
         />
-        <div class="task-detail__input-row">
-          <Textarea
-            v-model="inputText"
+        <div class="task-detail__input-row" @paste="onPaste">
+          <ChatEditor
+            ref="chatEditorRef"
+            :task-id="task.id"
+            :disabled="task.executionState === 'running' || compacting"
             placeholder="Send a message… (Shift+Enter for newline)"
             class="flex-1"
-            rows="1"
-            autoResize
-            :disabled="task.executionState === 'running' || compacting"
-            @keydown.enter.exact.prevent="send"
-            @paste="onPaste"
+            @send="onChatEditorSend"
+            @text-change="inputText = $event"
           />
           <!-- Attach button — only shown when not running/compacting -->
           <Button
@@ -423,7 +422,15 @@
         <TaskInfoTab
           :task="task"
           :board="currentBoard"
+          :branches="worktreeBranches"
+          :create-loading="worktreeCreateLoading"
+          :create-error="worktreeCreateError"
+          :remove-loading="worktreeRemoveLoading"
+          :remove-warning="worktreeRemoveWarning"
+          :worktree-base-path="workspaceStore.config?.worktreeBasePath ?? ''"
           @edit="openTaskOverlay"
+          @create-worktree="onCreateWorktree"
+          @remove-worktree="onRemoveWorktree"
         />
       </div>
 
@@ -495,6 +502,7 @@ import TaskDetailOverlay from "./TaskDetailOverlay.vue";
 import TaskInfoTab from "./TaskInfoTab.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
+import { useWorkspaceStore } from "../stores/workspace";
 import { useToast } from "primevue/usetoast";
 import { useReviewStore } from "../stores/review";
 import { useLaunchStore } from "../stores/launch";
@@ -503,16 +511,61 @@ import { api } from "../rpc";
 import McpToolsPopover from "./McpToolsPopover.vue";
 import ContextPopover from "./ContextPopover.vue";
 import FileEditorOverlay from "./FileEditorOverlay.vue";
+import ChatEditor from "./ChatEditor.vue";
 import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, Attachment, McpServerStatus, Task } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
+const workspaceStore = useWorkspaceStore();
 const toast = useToast();
 const reviewStore = useReviewStore();
 const launchStore = useLaunchStore();
 const terminalStore = useTerminalStore();
 
 const activeTab = ref<'chat' | 'info'>('chat');
+
+// ─── Worktree management state ────────────────────────────────────────────────
+const worktreeBranches = ref<string[]>([]);
+const worktreeCreateLoading = ref(false);
+const worktreeCreateError = ref<string | null>(null);
+const worktreeRemoveLoading = ref(false);
+const worktreeRemoveWarning = ref<string | null>(null);
+
+async function fetchWorktreeBranches(taskId: number) {
+  try {
+    const result = await api("tasks.listBranches", { taskId });
+    worktreeBranches.value = result.branches;
+  } catch {
+    worktreeBranches.value = [];
+  }
+}
+
+async function onCreateWorktree(params: { mode: "new" | "existing"; branchName: string; path: string; sourceBranch?: string }) {
+  if (!task.value) return;
+  worktreeCreateLoading.value = true;
+  worktreeCreateError.value = null;
+  try {
+    await api("tasks.createWorktree", { taskId: task.value.id, ...params });
+  } catch (err) {
+    worktreeCreateError.value = err instanceof Error ? err.message : "Failed to create worktree";
+  } finally {
+    worktreeCreateLoading.value = false;
+  }
+}
+
+async function onRemoveWorktree() {
+  if (!task.value) return;
+  worktreeRemoveLoading.value = true;
+  worktreeRemoveWarning.value = null;
+  try {
+    const result = await api("tasks.removeWorktree", { taskId: task.value.id });
+    if (result?.warning) {
+      worktreeRemoveWarning.value = result.warning;
+    }
+  } finally {
+    worktreeRemoveLoading.value = false;
+  }
+}
 
 const currentBoard = computed(() =>
   task.value ? (boardStore.boards.find(b => b.id === task.value!.boardId) ?? null) : null
@@ -580,7 +633,7 @@ async function onMcpConfigSave(content: string) {
 }
 
 function onMcpToolsChanged(updatedTask: Task) {
-  console.log("[TaskDetailDrawer] MCP tools changed for task", updatedTask.id);
+  taskStore.onTaskUpdated(updatedTask);
 }
 
 async function onManageModelsClosed() {
@@ -786,6 +839,7 @@ const taskWorkspaceKey = computed(() =>
 const inputText = ref("");
 const pendingAttachments = ref<Attachment[]>([]);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const chatEditorRef = ref<InstanceType<typeof ChatEditor> | null>(null);
 const transitioning = ref(false);
 const retrying = ref(false);
 const cancelling = ref(false);
@@ -1014,13 +1068,21 @@ async function onFileInputChange(event: Event) {
   input.value = "";
 }
 
-async function send() {
-  if (!inputText.value.trim() || !task.value) return;
-  const content = inputText.value.trim();
+async function onChatEditorSend(content: string, editorAttachments: Attachment[]) {
+  if (!content.trim() || !task.value) return;
+  // Merge file-drop/paste attachments with editor-resolved chip attachments
+  const allAttachments = [
+    ...(pendingAttachments.value.length ? pendingAttachments.value : []),
+    ...editorAttachments,
+  ];
   inputText.value = "";
-  const attachments = pendingAttachments.value.length ? [...pendingAttachments.value] : undefined;
   pendingAttachments.value = [];
-  await taskStore.sendMessage(task.value.id, content, attachments);
+  await taskStore.sendMessage(task.value.id, content, allAttachments.length ? allAttachments : undefined);
+}
+
+function send() {
+  // Delegate to ChatEditor so chips are extracted and become attachments
+  chatEditorRef.value?.send();
 }
 
 async function transition(toState: string) {
@@ -1163,6 +1225,19 @@ watch(
       }
     }
   },
+);
+
+// Fetch branches for worktree create form when task has no ready worktree
+watch(
+  () => task.value?.worktreeStatus,
+  async (status) => {
+    worktreeRemoveWarning.value = null;
+    if (!task.value) return;
+    if (status === "not_created" || status === "removed" || status === "error") {
+      await fetchWorktreeBranches(task.value.id);
+    }
+  },
+  { immediate: true },
 );
 
 function onTaskSaved() {

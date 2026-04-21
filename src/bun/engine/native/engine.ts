@@ -7,7 +7,7 @@
  * DB writes will be moved to the orchestrator in a future extraction pass (tasks 3.2–3.7).
  */
 
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo } from "../types.ts";
 import type { OnToken, OnError, OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
 import {
   handleTransition,
@@ -222,5 +222,9 @@ export class NativeEngine implements ExecutionEngine {
     }
 
     return results;
+  }
+
+  async listCommands(_taskId: number): Promise<CommandInfo[]> {
+    return [];
   }
 }

@@ -495,3 +495,165 @@ describe("executeTool lsp", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// ─── applyWorkspaceEdit ───────────────────────────────────────────────────────
+
+describe("applyWorkspaceEdit", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "railyin-apply-edits-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("applies a single text edit via 'changes' format", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+    const file = join(dir, "a.ts");
+    writeFileSync(file, "const foo = 1;\n");
+    const uri = `file://${file}`;
+
+    const result = applyWorkspaceEdit(
+      { changes: { [uri]: [{ range: { start: { line: 0, character: 6 }, end: { line: 0, character: 9 } }, newText: "bar" }] } },
+      dir,
+    );
+
+    expect("error" in result).toBe(false);
+    expect(readFileSync(file, "utf-8")).toBe("const bar = 1;\n");
+  });
+
+  it("applies edits via 'documentChanges' format", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+    const file = join(dir, "b.ts");
+    writeFileSync(file, "let x = 42;\n");
+    const uri = `file://${file}`;
+
+    const result = applyWorkspaceEdit(
+      {
+        documentChanges: [{
+          textDocument: { uri, version: null },
+          edits: [{ range: { start: { line: 0, character: 4 }, end: { line: 0, character: 5 } }, newText: "y" }],
+        }],
+      },
+      dir,
+    );
+
+    expect("error" in result).toBe(false);
+    expect(readFileSync(file, "utf-8")).toBe("let y = 42;\n");
+  });
+
+  it("applies multiple edits in the same file in reverse order", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+    const file = join(dir, "c.ts");
+    writeFileSync(file, "ab\n");
+    const uri = `file://${file}`;
+
+    // Replace 'a' at (0,0)-(0,1) and 'b' at (0,1)-(0,2)
+    const result = applyWorkspaceEdit(
+      {
+        changes: {
+          [uri]: [
+            { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, newText: "X" },
+            { range: { start: { line: 0, character: 1 }, end: { line: 0, character: 2 } }, newText: "Y" },
+          ],
+        },
+      },
+      dir,
+    );
+
+    expect("error" in result).toBe(false);
+    expect(readFileSync(file, "utf-8")).toBe("XY\n");
+  });
+
+  it("changes multiple files and reports all in result", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+    const file1 = join(dir, "d.ts");
+    const file2 = join(dir, "e.ts");
+    writeFileSync(file1, "old1\n");
+    writeFileSync(file2, "old2\n");
+    const uri1 = `file://${file1}`;
+    const uri2 = `file://${file2}`;
+
+    const result = applyWorkspaceEdit(
+      {
+        changes: {
+          [uri1]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } }, newText: "new1" }],
+          [uri2]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } }, newText: "new2" }],
+        },
+      },
+      dir,
+    );
+
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(result.filesChanged).toHaveLength(2);
+    }
+    expect(readFileSync(file1, "utf-8")).toBe("new1\n");
+    expect(readFileSync(file2, "utf-8")).toBe("new2\n");
+  });
+
+  it("returns no-op result when edit has no changes", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+
+    const result = applyWorkspaceEdit({}, dir);
+
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(result.filesChanged).toHaveLength(0);
+    }
+  });
+
+  it("returns error for invalid URI", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+
+    const result = applyWorkspaceEdit(
+      { changes: { "not-a-uri": [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, newText: "" }] } },
+      dir,
+    );
+
+    expect("error" in result).toBe(true);
+  });
+});
+
+// ─── TaskLSPRegistry ─────────────────────────────────────────────────────────
+
+describe("TaskLSPRegistry", () => {
+  it("returns a manager on first call (lazy init)", async () => {
+    const { TaskLSPRegistry } = await import("../lsp/task-registry.ts");
+    const registry = new TaskLSPRegistry();
+
+    const manager = registry.getManager(1, [], "/tmp");
+    expect(manager).toBeDefined();
+    await registry.releaseTask(1);
+  });
+
+  it("returns the same manager for the same taskId", async () => {
+    const { TaskLSPRegistry } = await import("../lsp/task-registry.ts");
+    const registry = new TaskLSPRegistry();
+
+    const m1 = registry.getManager(2, [], "/tmp");
+    const m2 = registry.getManager(2, [], "/tmp");
+    expect(m1).toBe(m2);
+    await registry.releaseTask(2);
+  });
+
+  it("returns different managers for different taskIds", async () => {
+    const { TaskLSPRegistry } = await import("../lsp/task-registry.ts");
+    const registry = new TaskLSPRegistry();
+
+    const m1 = registry.getManager(3, [], "/tmp");
+    const m2 = registry.getManager(4, [], "/tmp");
+    expect(m1).not.toBe(m2);
+    await registry.releaseTask(3);
+    await registry.releaseTask(4);
+  });
+
+  it("releaseTask is a no-op for unknown taskId", async () => {
+    const { TaskLSPRegistry } = await import("../lsp/task-registry.ts");
+    const registry = new TaskLSPRegistry();
+
+    await expect(registry.releaseTask(999)).resolves.toBeUndefined();
+  });
+});
