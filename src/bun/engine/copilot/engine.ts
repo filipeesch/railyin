@@ -320,6 +320,10 @@ export class CopilotEngine implements ExecutionEngine {
       contextWindow: undefined,
       supportsThinking: false,
       supportsManualCompact: false,
+    };
+
+    return [
+      autoModel,
       ...sdkModels.map((m) => ({
         qualifiedId: `copilot/${m.id}`,
         displayName: m.name ?? m.id,
