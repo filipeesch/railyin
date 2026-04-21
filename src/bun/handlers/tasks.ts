@@ -251,7 +251,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         ? await resolveFileAttachments(params.content, params.attachments)
         : params.content;
 
-      return orchestrator.executeHumanTurn(params.taskId, augmentedContent);
+      return orchestrator.executeHumanTurn(params.taskId, augmentedContent, params.attachments);
     },
 
     "tasks.retry": async (params: {
