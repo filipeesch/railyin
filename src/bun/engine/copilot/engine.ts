@@ -319,17 +319,13 @@ export class CopilotEngine implements ExecutionEngine {
       description: "Copilot will automatically choose the best available model for your request.",
       contextWindow: undefined,
       supportsThinking: false,
-      supportsManualCompact: true,
-    };
-
-    return [
-      autoModel,
+      supportsManualCompact: false,
       ...sdkModels.map((m) => ({
         qualifiedId: `copilot/${m.id}`,
         displayName: m.name ?? m.id,
         contextWindow: m.capabilities.limits.max_context_window_tokens,
         supportsThinking: m.capabilities.supports.reasoningEffort,
-        supportsManualCompact: true,
+        supportsManualCompact: false,
       })),
     ];
   }
