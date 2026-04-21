@@ -55,8 +55,16 @@ function resolveWorktreeBase(gitRootPath: string): string {
 
 // ─── Task 6.1: Create worktree ────────────────────────────────────────────────
 
+export interface CreateWorktreeOptions {
+  mode: "new" | "existing";
+  branchName: string;
+  path: string;
+  sourceBranch?: string;
+}
+
 export async function createWorktree(
   taskId: number,
+  options?: CreateWorktreeOptions,
 ): Promise<{ path: string; branch: string }> {
   const db = getDb();
 
@@ -67,15 +75,18 @@ export async function createWorktree(
     .get(taskId);
 
   if (!row) throw new Error(`No git context for task ${taskId}`);
-  if ((row.worktree_status === "ready" || row.worktree_status === "creating") && row.worktree_path) {
+
+  // When called without options (auto-creation path), guard against double-creation
+  if (!options && (row.worktree_status === "ready" || row.worktree_status === "creating") && row.worktree_path) {
     return { path: row.worktree_path, branch: row.branch_name ?? branchFromPath(row.worktree_path) };
   }
 
   const task = db.query<TaskRow, [number]>("SELECT id, title, board_id FROM tasks WHERE id = ?").get(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
-  const branch = branchName(taskId, task.title);
-  const worktreePath = `${resolveWorktreeBase(row.git_root_path)}/${branch}`;
+  // Resolve branch and path — use supplied options or compute from task title
+  const branch = options?.branchName ?? branchName(taskId, task.title);
+  const worktreePath = options?.path ?? `${resolveWorktreeBase(row.git_root_path)}/${branchName(taskId, task.title)}`;
 
   // Validate git root exists — ENOENT on posix_spawn is misleading when cwd is missing
   if (!existsSync(row.git_root_path)) {
@@ -102,15 +113,16 @@ export async function createWorktree(
   );
 
   try {
-    // Task 6.2: Create branch + worktree
-    const proc = Bun.spawn(
-      [resolveGit(), "worktree", "add", "-b", branch, worktreePath, "HEAD"],
-      {
-        cwd: row.git_root_path,
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
+    // Build git worktree add command based on mode
+    const gitArgs = options?.mode === "existing"
+      ? [resolveGit(), "worktree", "add", worktreePath, branch]
+      : [resolveGit(), "worktree", "add", "-b", branch, worktreePath, options?.sourceBranch ?? "HEAD"];
+
+    const proc = Bun.spawn(gitArgs, {
+      cwd: row.git_root_path,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
 
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
@@ -239,10 +251,44 @@ export async function triggerWorktreeIfNeeded(
     )
     .get(taskId);
 
-  // Create worktree if not yet created, or retry after a previous failure
-  if (row?.git_root_path && (row.worktree_status === "not_created" || row.worktree_status === "error")) {
+  // Create worktree if not yet created, or retry after a previous failure/removal
+  if (row?.git_root_path && (row.worktree_status === "not_created" || row.worktree_status === "error" || row.worktree_status === "removed")) {
     onStatus?.("Creating worktree for this task…");
     const result = await createWorktree(taskId);
     onStatus?.(`Worktree ready at \`${result.branch}\``);
+  }
+}
+
+// ─── List branches for a task's repository ───────────────────────────────────
+
+export async function listBranches(taskId: number): Promise<string[]> {
+  const db = getDb();
+
+  const row = db
+    .query<Pick<TaskGitContextRow, "git_root_path">, [number]>(
+      "SELECT git_root_path FROM task_git_context WHERE task_id = ?",
+    )
+    .get(taskId);
+
+  if (!row?.git_root_path) return [];
+
+  try {
+    const proc = Bun.spawn(
+      [resolveGit(), "branch", "-a", "--format=%(refname:short)"],
+      {
+        cwd: row.git_root_path,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    await proc.exited;
+    if (proc.exitCode !== 0) return [];
+    const output = await new Response(proc.stdout).text();
+    return output
+      .split("\n")
+      .map((b) => b.trim())
+      .filter((b) => b.length > 0 && !b.includes("HEAD"));
+  } catch {
+    return [];
   }
 }

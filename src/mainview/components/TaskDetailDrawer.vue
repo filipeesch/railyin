@@ -423,7 +423,15 @@
         <TaskInfoTab
           :task="task"
           :board="currentBoard"
+          :branches="worktreeBranches"
+          :create-loading="worktreeCreateLoading"
+          :create-error="worktreeCreateError"
+          :remove-loading="worktreeRemoveLoading"
+          :remove-warning="worktreeRemoveWarning"
+          :worktree-base-path="workspaceStore.config?.worktreeBasePath ?? ''"
           @edit="openTaskOverlay"
+          @create-worktree="onCreateWorktree"
+          @remove-worktree="onRemoveWorktree"
         />
       </div>
 
@@ -495,6 +503,7 @@ import TaskDetailOverlay from "./TaskDetailOverlay.vue";
 import TaskInfoTab from "./TaskInfoTab.vue";
 import { useTaskStore } from "../stores/task";
 import { useBoardStore } from "../stores/board";
+import { useWorkspaceStore } from "../stores/workspace";
 import { useToast } from "primevue/usetoast";
 import { useReviewStore } from "../stores/review";
 import { useLaunchStore } from "../stores/launch";
@@ -506,12 +515,56 @@ import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, Att
 
 const taskStore = useTaskStore();
 const boardStore = useBoardStore();
+const workspaceStore = useWorkspaceStore();
 const toast = useToast();
 const reviewStore = useReviewStore();
 const launchStore = useLaunchStore();
 const terminalStore = useTerminalStore();
 
 const activeTab = ref<'chat' | 'info'>('chat');
+
+// ─── Worktree management state ────────────────────────────────────────────────
+const worktreeBranches = ref<string[]>([]);
+const worktreeCreateLoading = ref(false);
+const worktreeCreateError = ref<string | null>(null);
+const worktreeRemoveLoading = ref(false);
+const worktreeRemoveWarning = ref<string | null>(null);
+
+async function fetchWorktreeBranches(taskId: number) {
+  try {
+    const result = await api("tasks.listBranches", { taskId });
+    worktreeBranches.value = result.branches;
+  } catch {
+    worktreeBranches.value = [];
+  }
+}
+
+async function onCreateWorktree(params: { mode: "new" | "existing"; branchName: string; path: string; sourceBranch?: string }) {
+  if (!task.value) return;
+  worktreeCreateLoading.value = true;
+  worktreeCreateError.value = null;
+  try {
+    await api("tasks.createWorktree", { taskId: task.value.id, ...params });
+  } catch (err) {
+    worktreeCreateError.value = err instanceof Error ? err.message : "Failed to create worktree";
+  } finally {
+    worktreeCreateLoading.value = false;
+  }
+}
+
+async function onRemoveWorktree() {
+  if (!task.value) return;
+  worktreeRemoveLoading.value = true;
+  worktreeRemoveWarning.value = null;
+  try {
+    const result = await api("tasks.removeWorktree", { taskId: task.value.id });
+    if (result?.warning) {
+      worktreeRemoveWarning.value = result.warning;
+    }
+  } finally {
+    worktreeRemoveLoading.value = false;
+  }
+}
 
 const currentBoard = computed(() =>
   task.value ? (boardStore.boards.find(b => b.id === task.value!.boardId) ?? null) : null
@@ -1143,6 +1196,19 @@ watch(
       }
     }
   },
+);
+
+// Fetch branches for worktree create form when task has no ready worktree
+watch(
+  () => task.value?.worktreeStatus,
+  async (status) => {
+    worktreeRemoveWarning.value = null;
+    if (!task.value) return;
+    if (status === "not_created" || status === "removed" || status === "error") {
+      await fetchWorktreeBranches(task.value.id);
+    }
+  },
+  { immediate: true },
 );
 
 function onTaskSaved() {

@@ -1,33 +1,4 @@
-## Purpose
-The task Info tab surfaces project context, worktree metadata, and the task description in a read-friendly format with an inline edit action.
-
-## Requirements
-
-### Requirement: Info tab displays project information
-The system SHALL display the task's project name and project key in the Info tab.
-
-#### Scenario: Project info is shown
-- **WHEN** the Info tab is active and the task has an associated project
-- **THEN** the board name and project key are displayed
-
-### Requirement: Info tab displays worktree and branch metadata
-The system SHALL display the task's branch name, worktree path, and worktree status in the Info tab when available. When `worktreeStatus` is `ready`, a delete button SHALL appear next to the path. When `worktreeStatus` is `not_created`, `removed`, or `error`, an inline action form SHALL appear instead of or alongside the metadata rows.
-
-#### Scenario: Branch name is shown when set
-- **WHEN** the Info tab is active and the task has a branch name
-- **THEN** the branch name is displayed
-
-#### Scenario: Worktree path is shown with delete button when ready
-- **WHEN** the Info tab is active and `worktreeStatus` is `ready`
-- **THEN** the worktree path and a delete button are displayed
-
-#### Scenario: Worktree status is shown when set
-- **WHEN** the Info tab is active and the task has a worktree status
-- **THEN** the worktree status is displayed
-
-#### Scenario: Worktree section is always shown when git context exists
-- **WHEN** the task has any `worktreeStatus` value (including `not_created`)
-- **THEN** the Worktree section is rendered with the appropriate controls
+## ADDED Requirements
 
 ### Requirement: User can delete a worktree from the Info tab
 The system SHALL display a delete button next to the worktree path when `worktreeStatus` is `ready`. Clicking it SHALL show an inline confirmation before calling `tasks.removeWorktree`.
@@ -125,17 +96,23 @@ The system SHALL display a loading indicator when `worktreeStatus` is `creating`
 - **WHEN** `worktreeStatus` is `creating`
 - **THEN** a spinner or progress indicator is shown and no delete or create controls are visible
 
-### Requirement: Info tab displays task description rendered as markdown with an inline edit action
-The system SHALL display the task's description as rendered markdown in the Info tab, with an edit button inline next to the Description heading.
+## MODIFIED Requirements
 
-#### Scenario: Description is rendered as markdown
-- **WHEN** the Info tab is active and the task has a description
-- **THEN** the description is displayed as rendered markdown
+### Requirement: Info tab displays worktree and branch metadata
+The system SHALL display the task's branch name, worktree path, and worktree status in the Info tab when available. When `worktreeStatus` is `ready`, a delete button SHALL appear next to the path. When `worktreeStatus` is `not_created`, `removed`, or `error`, an inline action form SHALL appear instead of or alongside the metadata rows.
 
-#### Scenario: Edit button opens the task edit dialog
-- **WHEN** the user clicks the edit button in the Info tab
-- **THEN** the task edit overlay opens
+#### Scenario: Branch name is shown when set
+- **WHEN** the Info tab is active and the task has a branch name
+- **THEN** the branch name is displayed
 
-#### Scenario: Description section is shown even when description is empty
-- **WHEN** the Info tab is active and the task description is empty
-- **THEN** the description section is still rendered with the edit button available
+#### Scenario: Worktree path is shown with delete button when ready
+- **WHEN** the Info tab is active and `worktreeStatus` is `ready`
+- **THEN** the worktree path and a delete button are displayed
+
+#### Scenario: Worktree status is shown when set
+- **WHEN** the Info tab is active and the task has a worktree status
+- **THEN** the worktree status is displayed
+
+#### Scenario: Worktree section is always shown when git context exists
+- **WHEN** the task has any `worktreeStatus` value (including `not_created`)
+- **THEN** the Worktree section is rendered with the appropriate controls

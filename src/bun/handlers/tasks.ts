@@ -12,7 +12,7 @@ import {
 } from "../workflow/engine.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
-import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
+import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree, createWorktree, listBranches } from "../git/worktree.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
@@ -496,6 +496,43 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       taskLspRegistry.releaseTask(params.taskId).catch(() => {});
 
       return { success: true, ...(warning ? { warning } : {}) };
+    },
+
+    // ─── tasks.listBranches ──────────────────────────────────────────────────
+    "tasks.listBranches": async (params: { taskId: number }): Promise<{ branches: string[] }> => {
+      const branches = await listBranches(params.taskId);
+      return { branches };
+    },
+
+    // ─── tasks.createWorktree ────────────────────────────────────────────────
+    "tasks.createWorktree": async (params: {
+      taskId: number;
+      path: string;
+      mode: "new" | "existing";
+      branchName: string;
+      sourceBranch?: string;
+    }): Promise<Task> => {
+      const db = getDb();
+      await createWorktree(params.taskId, {
+        mode: params.mode,
+        branchName: params.branchName,
+        path: params.path,
+        sourceBranch: params.sourceBranch,
+      });
+      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
+      if (!row) throw new Error(`Task ${params.taskId} not found`);
+      const task = mapTask(row);
+      onTaskUpdated(task);
+      return task;
+    },
+
+    // ─── tasks.removeWorktree ────────────────────────────────────────────────
+    "tasks.removeWorktree": async (params: { taskId: number }): Promise<{ warning?: string }> => {
+      const db = getDb();
+      const { warning } = await removeWorktree(params.taskId);
+      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
+      if (row) onTaskUpdated(mapTask(row));
+      return { ...(warning ? { warning } : {}) };
     },
 
     // ─── tasks.getGitStat ────────────────────────────────────────────────────

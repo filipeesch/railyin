@@ -565,6 +565,24 @@ export type RailynAPI = {
     params: { taskId: number };
     response: { success: boolean; warning?: string };
   };
+  "tasks.listBranches": {
+    params: { taskId: number };
+    response: { branches: string[] };
+  };
+  "tasks.createWorktree": {
+    params: {
+      taskId: number;
+      path: string;
+      mode: "new" | "existing";
+      branchName: string;
+      sourceBranch?: string;
+    };
+    response: Task;
+  };
+  "tasks.removeWorktree": {
+    params: { taskId: number };
+    response: { warning?: string };
+  };
   "tasks.getGitStat": {
     params: { taskId: number };
     response: GitNumstat | null;
