@@ -1,7 +1,4 @@
-## Purpose
-Provides a reference syntax (`/stem`) that Railyin resolves at execution time by reading a prompt file from the project's worktree. Applies to workflow column fields (`on_enter_prompt`, `stage_instructions`) and task chat input.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Slash references resolve to prompt files from the project worktree
 The system SHALL resolve a value matching the pattern `/stem` (and optional text argument) — when it appears at the very beginning of the value — by reading the corresponding `.prompt.md` file. The resolution SHALL be performed by the engine, not the orchestrator. The system SHALL preserve the original slash invocation as the user-visible chat content and pass the resolved prompt body to the underlying LLM.

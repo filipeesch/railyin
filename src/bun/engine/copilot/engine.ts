@@ -9,7 +9,7 @@
  * Compaction: handled by Copilot's infinite sessions feature.
  */
 
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo } from "../types.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
 import type { CopilotSdkAdapter, CopilotSdkSession } from "./session";
 import { copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
@@ -18,6 +18,9 @@ import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
+import { readdirSync, existsSync, readFileSync } from "fs";
+import { join, extname, basename } from "path";
+import { homedir } from "os";
 import { getMcpRegistry } from "../../mcp/registry.ts";
 
 export class CopilotEngine implements ExecutionEngine {
@@ -324,6 +327,51 @@ export class CopilotEngine implements ExecutionEngine {
     ];
   }
 
+  async listCommands(taskId: number): Promise<CommandInfo[]> {
+    const { getDb } = await import("../../db/index.ts");
+    const { getBoardWorkspaceKey } = await import("../../workspace-context.ts");
+    const { getProjectByKey } = await import("../../project-store.ts");
+
+    const db = getDb();
+    const taskRow = db
+      .query<{ board_id: number; project_key: string }, [number]>(
+        "SELECT board_id, project_key FROM tasks WHERE id = ?",
+      )
+      .get(taskId);
+
+    const gitRow = db
+      .query<{ worktree_path: string | null }, [number]>(
+        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+      )
+      .get(taskId);
+
+    const worktreePath = gitRow?.worktree_path ?? process.cwd();
+
+    let projectPath: string | null = null;
+    if (taskRow) {
+      const wsKey = getBoardWorkspaceKey(taskRow.board_id);
+      const project = getProjectByKey(wsKey, taskRow.project_key);
+      if (project?.projectPath && project.projectPath !== worktreePath) {
+        projectPath = project.projectPath;
+      }
+    }
+
+    const userPath = join(homedir(), ".github", "prompts");
+
+    const seen = new Set<string>();
+    const commands: CommandInfo[] = [];
+
+    collectCopilotCommands(join(worktreePath, ".github", "prompts"), seen, commands);
+
+    if (projectPath && projectPath !== worktreePath) {
+      collectCopilotCommands(join(projectPath, ".github", "prompts"), seen, commands);
+    }
+
+    collectCopilotCommands(userPath, seen, commands);
+
+    return commands;
+  }
+
   private waitForResume(executionId: number, signal?: AbortSignal): Promise<EngineResumeInput> {
     return new Promise<EngineResumeInput>((resolve, reject) => {
       const existing = this.pendingResumes.get(executionId);
@@ -366,6 +414,40 @@ export class CopilotEngine implements ExecutionEngine {
           : input.decision === "approve_all"
             ? "The requested shell command was approved for this and similar commands. Continue."
             : "The requested shell command was approved once. Continue.";
+    }
+  }
+}
+
+// ─── Copilot command discovery ────────────────────────────────────────────────
+
+/** Extract `description` value from YAML frontmatter (`---\ndescription: ...\n---`). */
+function parseFrontmatterDescription(filePath: string): string | undefined {
+  try {
+    const content = readFileSync(filePath, "utf8");
+    const match = content.match(/^---[\r\n]([\s\S]*?)[\r\n]---/);
+    if (!match) return undefined;
+    const descLine = match[1].match(/^description:\s*(.+)$/m);
+    return descLine ? descLine[1].trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function collectCopilotCommands(dir: string, seen: Set<string>, out: CommandInfo[]): void {
+  if (!existsSync(dir)) return;
+  let entries: import("fs").Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith(".prompt.md")) {
+      const commandName = basename(entry.name, ".prompt.md");
+      if (!seen.has(commandName)) {
+        seen.add(commandName);
+        out.push({ name: commandName, description: parseFrontmatterDescription(join(dir, entry.name)) });
+      }
     }
   }
 }

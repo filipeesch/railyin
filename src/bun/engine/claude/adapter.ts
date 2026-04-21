@@ -50,6 +50,7 @@ export interface ClaudeSdkAdapter {
   run(config: ClaudeRunConfig): AsyncIterable<EngineEvent>;
   cancel(executionId: number): Promise<void>;
   listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]>;
+  listCommands(workingDirectory: string): Promise<Array<{ name: string; description: string }>>;
   touchExecutionLease?(executionId: number, state?: EngineLeaseState): void;
   shutdownAll?(options?: EngineShutdownOptions): Promise<void>;
 }
@@ -63,6 +64,7 @@ interface ActiveClaudeQuery {
 type ClaudeSdkRuntime = {
   query: (params: { prompt: string; options?: Record<string, unknown> }) => AsyncIterable<unknown> & {
     supportedModels?: () => Promise<Array<Record<string, unknown>>>;
+    supportedCommands?: () => Promise<Array<{ name: string; description: string }>>;
     interrupt?: () => Promise<void>;
     close?: () => void;
   };
@@ -514,6 +516,31 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
     await this.leases.shutdownAll(async (leaseKey) => {
       await this.closeLeaseExecutions(leaseKey, "engine-shutdown");
     }, options);
+  }
+
+  async listCommands(workingDirectory: string): Promise<Array<{ name: string; description: string }>> {
+    const [sdk, cliPath] = await Promise.all([loadClaudeRuntime(), ensureClaudeCliJs()]);
+    const query = sdk.query({
+      prompt: "List available slash commands.",
+      options: {
+        cwd: workingDirectory,
+        permissionMode: "plan",
+        tools: [],
+        pathToClaudeCodeExecutable: cliPath,
+        onElicitation: async () => ({ action: "decline" }),
+      },
+    });
+
+    try {
+      const commands = await query.supportedCommands?.() ?? [];
+      return commands.map((cmd) => ({
+        name: String(cmd.name ?? ""),
+        description: String(cmd.description ?? ""),
+      }));
+    } finally {
+      await query.interrupt?.().catch(() => { });
+      query.close?.();
+    }
   }
 
   async listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]> {

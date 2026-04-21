@@ -89,6 +89,14 @@ export interface RawModelMessage {
   payload: Record<string, unknown>;
 }
 
+// ─── Engine command info ──────────────────────────────────────────────────────
+
+export interface CommandInfo {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+}
+
 // ─── Engine model info ────────────────────────────────────────────────────────
 
 export interface EngineModelInfo {
@@ -145,6 +153,12 @@ export interface ExecutionEngine {
    * List available models for this engine.
    */
   listModels(): Promise<EngineModelInfo[]>;
+
+  /**
+   * List available slash commands for this engine in the context of the given task.
+   * taskId is used to look up worktree and project paths from the DB.
+   */
+  listCommands(taskId: number): Promise<CommandInfo[]>;
 
   /**
    * Optional engine-wide graceful shutdown hook for non-execution lifecycle cleanup.

@@ -302,7 +302,9 @@ test.describe("CS-D — CodeRef chips in chat input", () => {
     await expect(page.locator(".code-ref-chip")).toBeVisible({ timeout: 5_000 });
 
     // Type a message and send
-    await page.locator(".task-detail__input textarea").fill("What does this do?");
+    const editor = page.locator(".task-detail__input .cm-content");
+    await editor.click();
+    await editor.pressSequentially("What does this do?");
     await page.keyboard.press("Enter");
 
     await expect(page.locator(".code-ref-chip")).not.toBeVisible({ timeout: 3_000 });

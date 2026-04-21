@@ -1,10 +1,12 @@
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo } from "../types.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
 import { claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
 import type { ToolMetadata } from "./events.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
+import { readdirSync, existsSync, readFileSync } from "fs";
+import { join, relative, extname, basename } from "path";
 import { getMcpRegistry } from "../../mcp/registry.ts";
 
 export class ClaudeEngine implements ExecutionEngine {
@@ -125,6 +127,24 @@ export class ClaudeEngine implements ExecutionEngine {
     }));
   }
 
+  async listCommands(taskId: number): Promise<CommandInfo[]> {
+    const { getDb } = await import("../../db/index.ts");
+    const db = getDb();
+    const row = db
+      .query<{ git_root_path: string | null; worktree_path: string | null }, [number]>(
+        "SELECT gc.git_root_path, gc.worktree_path FROM task_git_context gc WHERE gc.task_id = ?",
+      )
+      .get(taskId);
+
+    const worktreePath = row?.worktree_path ?? row?.git_root_path ?? process.cwd();
+
+    const sdkCommands = await this.sdkAdapter.listCommands(worktreePath);
+    return sdkCommands.map((cmd) => ({
+      name: cmd.name,
+      description: cmd.description || undefined,
+    }));
+  }
+
   async shutdown(options: import("../types.ts").EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
     await this.sdkAdapter.shutdownAll?.(options);
   }
@@ -163,5 +183,48 @@ export class ClaudeEngine implements ExecutionEngine {
         },
       });
     });
+  }
+}
+
+// ─── Claude command discovery ─────────────────────────────────────────────────
+
+/** Extract `description` value from YAML frontmatter (`---\ndescription: ...\n---`). */
+function parseFrontmatterDescription(filePath: string): string | undefined {
+  try {
+    const content = readFileSync(filePath, "utf8");
+    const match = content.match(/^---[\r\n]([\s\S]*?)[\r\n]---/);
+    if (!match) return undefined;
+    const descLine = match[1].match(/^description:\s*(.+)$/m);
+    return descLine ? descLine[1].trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function collectClaudeCommands(
+  dir: string,
+  prefix: string,
+  seen: Set<string>,
+  out: CommandInfo[],
+): void {
+  if (!existsSync(dir)) return;
+  let entries: import("fs").Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectClaudeCommands(fullPath, prefix ? `${prefix}:${entry.name}` : entry.name, seen, out);
+    } else if (entry.isFile() && extname(entry.name) === ".md") {
+      const stem = basename(entry.name, ".md");
+      const commandName = prefix ? `${prefix}:${stem}` : stem;
+      if (!seen.has(commandName)) {
+        seen.add(commandName);
+        out.push({ name: commandName, description: parseFrontmatterDescription(fullPath) });
+      }
+    }
   }
 }

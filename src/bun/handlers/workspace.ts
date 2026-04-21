@@ -2,6 +2,7 @@ import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspac
 import { clearProviderCache } from "../ai/index.ts";
 import type { WorkspaceConfig, WorkspaceSummary } from "../../shared/rpc-types.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
+import { getDb } from "../db/index.ts";
 
 export function workspaceHandlers() {
   return {
@@ -55,6 +56,36 @@ export function workspaceHandlers() {
       // Clear provider cache so the next execution picks up the new setting
       clearProviderCache();
       return {};
+    },
+
+    "workspace.listFiles": async (params: { taskId: number; query?: string }): Promise<{ name: string; path: string }[]> => {
+      const db = getDb();
+      const row = db
+        .query<{ worktree_path: string | null }, [number]>(
+          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+        )
+        .get(params.taskId);
+      const cwd = row?.worktree_path ?? process.cwd();
+
+      const proc = Bun.spawn(["git", "ls-files", "--cached", "--others", "--exclude-standard"], {
+        cwd,
+        stderr: "ignore",
+      });
+      const text = await new Response(proc.stdout).text();
+      await proc.exited;
+
+      const query = params.query?.toLowerCase() ?? "";
+      const files = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .filter((line) => !query || line.toLowerCase().includes(query))
+        .map((filePath) => {
+          const parts = filePath.split("/");
+          return { name: parts[parts.length - 1], path: filePath };
+        });
+
+      return files;
     },
   };
 }

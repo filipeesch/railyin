@@ -1,5 +1,5 @@
 import type { Task, ConversationMessage, ManualEdit } from "../../shared/rpc-types.ts";
-import type { EngineModelInfo } from "./types.ts";
+import type { EngineModelInfo, CommandInfo } from "./types.ts";
 
 export interface ExecutionCoordinator {
     executeTransition(taskId: number, toState: string): Promise<{ task: Task; executionId: number | null }>;
@@ -9,5 +9,6 @@ export interface ExecutionCoordinator {
     executeCodeReview(taskId: number, manualEdits?: ManualEdit[]): Promise<{ message: ConversationMessage; executionId: number }>;
     cancel(executionId: number): void;
     listModels(workspaceKey?: string): Promise<EngineModelInfo[]>;
+    listCommands(taskId: number): Promise<CommandInfo[]>;
     shutdownNonNativeEngines?(options?: import("./types.ts").EngineShutdownOptions): Promise<void>;
 }

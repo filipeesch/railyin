@@ -245,16 +245,15 @@
           style="display: none"
           @change="onFileInputChange"
         />
-        <div class="task-detail__input-row">
-          <Textarea
-            v-model="inputText"
+        <div class="task-detail__input-row" @paste="onPaste">
+          <ChatEditor
+            ref="chatEditorRef"
+            :task-id="task.id"
+            :disabled="task.executionState === 'running' || compacting"
             placeholder="Send a message… (Shift+Enter for newline)"
             class="flex-1"
-            rows="1"
-            autoResize
-            :disabled="task.executionState === 'running' || compacting"
-            @keydown.enter.exact.prevent="send"
-            @paste="onPaste"
+            @send="onChatEditorSend"
+            @text-change="inputText = $event"
           />
           <!-- Attach button — only shown when not running/compacting -->
           <Button
@@ -511,6 +510,7 @@ import { useTerminalStore } from "../stores/terminal";
 import { api } from "../rpc";
 import McpToolsPopover from "./McpToolsPopover.vue";
 import FileEditorOverlay from "./FileEditorOverlay.vue";
+import ChatEditor from "./ChatEditor.vue";
 import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, Attachment, McpServerStatus, Task } from "@shared/rpc-types";
 
 const taskStore = useTaskStore();
@@ -820,6 +820,7 @@ const taskWorkspaceKey = computed(() =>
 const inputText = ref("");
 const pendingAttachments = ref<Attachment[]>([]);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const chatEditorRef = ref<InstanceType<typeof ChatEditor> | null>(null);
 const transitioning = ref(false);
 const retrying = ref(false);
 const cancelling = ref(false);
@@ -1049,13 +1050,21 @@ async function onFileInputChange(event: Event) {
   input.value = "";
 }
 
-async function send() {
-  if (!inputText.value.trim() || !task.value) return;
-  const content = inputText.value.trim();
+async function onChatEditorSend(content: string, editorAttachments: Attachment[]) {
+  if (!content.trim() || !task.value) return;
+  // Merge file-drop/paste attachments with editor-resolved chip attachments
+  const allAttachments = [
+    ...(pendingAttachments.value.length ? pendingAttachments.value : []),
+    ...editorAttachments,
+  ];
   inputText.value = "";
-  const attachments = pendingAttachments.value.length ? [...pendingAttachments.value] : undefined;
   pendingAttachments.value = [];
-  await taskStore.sendMessage(task.value.id, content, attachments);
+  await taskStore.sendMessage(task.value.id, content, allAttachments.length ? allAttachments : undefined);
+}
+
+function send() {
+  // Delegate to ChatEditor so chips are extracted and become attachments
+  chatEditorRef.value?.send();
 }
 
 async function transition(toState: string) {

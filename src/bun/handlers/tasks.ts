@@ -222,6 +222,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "tasks.sendMessage": async (params: {
       taskId: number;
       content: string;
+      attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       // Check if content is a code review trigger
       let parsed: { _type?: string; manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[] } | null = null;
@@ -243,7 +244,14 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
       if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-      return orchestrator.executeHumanTurn(params.taskId, params.content);
+
+      // Resolve @file: attachments — inject file content into the prompt before sending
+      const { resolveFileAttachments } = await import("../utils/resolve-file-attachments.ts");
+      const augmentedContent = params.attachments?.length
+        ? await resolveFileAttachments(params.content, params.attachments)
+        : params.content;
+
+      return orchestrator.executeHumanTurn(params.taskId, augmentedContent);
     },
 
     "tasks.retry": async (params: {
@@ -979,6 +987,11 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "todos.delete": async (params: { taskId: number; todoId: number }) => {
       const { deleteTodo } = await import("../db/todos.ts");
       return deleteTodo(params.taskId, params.todoId);
+    },
+
+    "engine.listCommands": async (params: { taskId: number }) => {
+      if (!orchestrator) return [];
+      return orchestrator.listCommands(params.taskId);
     },
   };
 }

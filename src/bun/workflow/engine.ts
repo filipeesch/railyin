@@ -1239,7 +1239,7 @@ async function runExecution(
     let resolvedPrompt: string;
     let resolvedStageInstructions: string | undefined;
     try {
-      resolvedPrompt = await resolvePrompt(prompt, worktreePath);
+      resolvedPrompt = await resolvePrompt(prompt, worktreePath, gitContext?.project_path);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log("warn", `Prompt resolution failed: ${msg}`, { taskId, executionId });

@@ -34,7 +34,9 @@ async function openTaskDrawer(page: import("@playwright/test").Page, taskId: num
 }
 
 async function sendMessage(page: import("@playwright/test").Page, text: string) {
-    await page.locator(".task-detail__input textarea").fill(text);
+    const editor = page.locator(".task-detail__input .cm-content");
+    await editor.click();
+    await editor.pressSequentially(text);
     await page.keyboard.press("Enter");
 }
 

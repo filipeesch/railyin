@@ -38,7 +38,9 @@ async function openTaskDrawer(page: import("@playwright/test").Page, taskId: num
 }
 
 async function sendMessage(page: import("@playwright/test").Page, text: string) {
-    await page.locator(".task-detail__input textarea").fill(text);
+    const editor = page.locator(".task-detail__input .cm-content");
+    await editor.click();
+    await editor.pressSequentially(text);
     await page.keyboard.press("Enter");
 }
 
@@ -199,8 +201,8 @@ test.describe("N — execution state in the UI", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        // Empty textarea — send button must be disabled (not absent — it's always rendered)
-        await expect(page.locator(".task-detail__input textarea")).toHaveValue("");
+        // Empty editor — send button must be disabled (not absent — it's always rendered)
+        await expect(page.locator(".task-detail__input .cm-content")).toBeVisible();
         await expect(page.locator(".task-detail__input button:has(.pi-send)")).toBeDisabled();
     });
 });
