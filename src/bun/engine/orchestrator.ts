@@ -624,6 +624,14 @@ export class Orchestrator implements ExecutionCoordinator {
     this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
   }
 
+  async compactTask(taskId: number): Promise<void> {
+    const { engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
+    if (!engine.compact) {
+      throw new Error(`Engine for task ${taskId} does not support manual compaction`);
+    }
+    await engine.compact(taskId);
+  }
+
   // ─── Non-native engine helpers ─────────────────────────────────────────────
 
   private _getColumnConfig(config: LoadedConfig, boardId: number, columnId: string) {
@@ -1159,6 +1167,41 @@ export class Orchestrator implements ExecutionCoordinator {
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
             this.onToken(taskId, executionId, "", true);
             return;
+          }
+
+          case "compaction_start": {
+            const compStartId = appendMessage(taskId, conversationId, "system", null, "Compacting conversation…");
+            this.onNewMessage({
+              id: compStartId,
+              taskId,
+              conversationId,
+              type: "system",
+              role: null,
+              content: "Compacting conversation…",
+              metadata: null,
+              createdAt: new Date().toISOString(),
+            });
+            break;
+          }
+
+          case "compaction_done": {
+            // Deduplicate: skip if the last persisted message is already compaction_summary.
+            const lastMsg = db.query<{ type: string }, [number]>(
+              "SELECT type FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1"
+            ).get(conversationId);
+            if (lastMsg?.type === "compaction_summary") break;
+            const compDoneId = appendMessage(taskId, conversationId, "compaction_summary", null, "");
+            this.onNewMessage({
+              id: compDoneId,
+              taskId,
+              conversationId,
+              type: "compaction_summary",
+              role: null,
+              content: "",
+              metadata: null,
+              createdAt: new Date().toISOString(),
+            });
+            break;
           }
 
           case "task_updated": {

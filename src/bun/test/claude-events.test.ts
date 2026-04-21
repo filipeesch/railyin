@@ -257,7 +257,7 @@ describe("Claude message translator - tool events", () => {
   });
 
   describe("compaction_summary handling", () => {
-    test("emits status event for compaction_summary in system message", () => {
+    test("emits compaction_done for compaction_summary in system message", () => {
       const message = {
         type: "system",
         subtype: "compaction_summary",
@@ -266,10 +266,7 @@ describe("Claude message translator - tool events", () => {
 
       const events = translateClaudeMessage(message as any);
 
-      expect(events).toContainEqual({
-        type: "status",
-        message: "Context window compacted using conversation summary: Concise summary of first part of discussion",
-      });
+      expect(events).toContainEqual({ type: "compaction_done" });
     });
 
     test("skips empty compaction summary", () => {
@@ -281,7 +278,8 @@ describe("Claude message translator - tool events", () => {
 
       const events = translateClaudeMessage(message as any);
 
-      expect(events).toHaveLength(0);
+      // Even with empty summary, compaction_done is still emitted (dedup handled in orchestrator)
+      expect(events).toContainEqual({ type: "compaction_done" });
     });
   });
 

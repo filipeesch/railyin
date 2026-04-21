@@ -48,6 +48,8 @@ export type CopilotSdkEvent =
   | { type: "session.task_complete" }
   | { type: "session.idle" }
   | { type: "session.error"; data: { message: string } }
+  | { type: "session.compaction_start"; data?: { estimatedTokens?: number } }
+  | { type: "session.compaction_complete"; data?: { success?: boolean; postCompactionTokens?: number } }
   | { type: string; data?: unknown };
 
 export interface CopilotSdkModelInfo {
@@ -64,6 +66,8 @@ export interface CopilotSdkSession {
   on(listener: (event: CopilotSdkEvent) => void): () => void;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
+  /** Trigger manual context compaction for this session. */
+  compact(): Promise<void>;
 }
 
 export interface CopilotSdkAdapter {
@@ -100,6 +104,11 @@ type LoadedCopilotSession = {
   on(listener: (event: unknown) => void): () => void;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
+  rpc: {
+    compaction: {
+      compact(): Promise<unknown>;
+    };
+  };
 };
 
 // Shared singleton — used only for listModels(), reuses an existing CLI via port file.
@@ -406,6 +415,10 @@ class DefaultCopilotSdkSession implements CopilotSdkSession {
 
   abort(): Promise<void> {
     return this.session.abort();
+  }
+
+  async compact(): Promise<void> {
+    await this.session.rpc.compaction.compact();
   }
 
   disconnect(): Promise<void> {

@@ -23,6 +23,8 @@ export class CopilotEngine implements ExecutionEngine {
   /** Active sessions keyed by executionId. */
   private readonly sessions = new Map<number, CopilotSdkSession>();
   private readonly executionSessionIds = new Map<number, string>();
+  /** Active sessions keyed by taskId for use by compact(). */
+  private readonly taskSessions = new Map<number, CopilotSdkSession>();
   private readonly pendingResumes = new Map<number, {
     resolve: (input: EngineResumeInput) => void;
     reject: (error: Error) => void;
@@ -137,6 +139,7 @@ export class CopilotEngine implements ExecutionEngine {
 
       this.sessions.set(executionId, session);
       this.executionSessionIds.set(executionId, sdkSessionId);
+      this.taskSessions.set(taskId, session);
       this.sdkAdapter.touchLease(sdkSessionId, "running");
 
       // Bail early if the execution was cancelled while we were creating the session
@@ -250,6 +253,7 @@ export class CopilotEngine implements ExecutionEngine {
       }
       this.sessions.delete(executionId);
       this.executionSessionIds.delete(executionId);
+      this.taskSessions.delete(taskId);
       if (session) {
         await this.sdkAdapter.disconnectSession(session).catch(() => { });
       }
@@ -282,6 +286,14 @@ export class CopilotEngine implements ExecutionEngine {
     await this.sdkAdapter.shutdownAll(options).catch(() => { });
   }
 
+  async compact(taskId: number): Promise<void> {
+    const session = this.taskSessions.get(taskId);
+    if (!session) {
+      throw new Error(`No active session found for task ${taskId}`);
+    }
+    await session.compact();
+  }
+
   async listModels(): Promise<EngineModelInfo[]> {
     let sdkModels;
     try {
@@ -300,6 +312,7 @@ export class CopilotEngine implements ExecutionEngine {
       description: "Copilot will automatically choose the best available model for your request.",
       contextWindow: undefined,
       supportsThinking: false,
+      supportsManualCompact: true,
     };
 
     return [
@@ -309,6 +322,7 @@ export class CopilotEngine implements ExecutionEngine {
         displayName: m.name ?? m.id,
         contextWindow: m.capabilities.limits.max_context_window_tokens,
         supportsThinking: m.capabilities.supports.reasoningEffort,
+        supportsManualCompact: true,
       })),
     ];
   }

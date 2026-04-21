@@ -127,9 +127,11 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
         // Local slash commands (e.g. /opsx:explore) report their text via this event.
         return [{ type: "token", content: system.content }];
       }
-      if (system.subtype === "compaction_summary" && system.summary) {
-        // Surface context window compaction to user
-        return [{ type: "status", message: `Context window compacted using conversation summary: ${system.summary}` }];
+      if (system.subtype === "compaction_summary") {
+        // The onCompactProgress hook already emitted compaction_start/compaction_done.
+        // This system message is a fallback in case the hook did not fire (e.g. older CLI).
+        // Emit compaction_done here; deduplication happens in the orchestrator.
+        return [{ type: "compaction_done" }];
       }
       if (typeof system.status === "string" && system.status.trim()) {
         return [{ type: "status", message: system.status }];

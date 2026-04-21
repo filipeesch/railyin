@@ -331,6 +331,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
             contextWindow: m.contextWindow,
             enabled: enabledSet.has(m.qualifiedId),
             ...(m.supportsThinking ? { supportsAdaptiveThinking: true } : {}),
+            ...(m.supportsManualCompact ? { supportsManualCompact: true } : {}),
           })),
         }));
       } catch (err) {
@@ -426,8 +427,16 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     // ─── tasks.compact ───────────────────────────────────────────────────────
-    "tasks.compact": async (params: { taskId: number }): Promise<ConversationMessage> => {
-      return compactConversation(params.taskId);
+    "tasks.compact": async (params: { taskId: number }): Promise<void> => {
+      if (orchestrator) {
+        try {
+          await orchestrator.compactTask(params.taskId);
+          return;
+        } catch {
+          // Engine doesn't support manual compaction — fall through to native
+        }
+      }
+      await compactConversation(params.taskId);
     },
 
     // ─── tasks.cancel ────────────────────────────────────────────────────────
