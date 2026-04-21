@@ -549,14 +549,10 @@ function onMcpBtnClick(event: MouseEvent) {
 
 const contextPopoverRef = ref<InstanceType<typeof ContextPopover> | null>(null);
 
-/** Find the model info for the task's current model across all providers. */
+/** Find the model info for the task's current model from the enabled models list. */
 const currentModelInfo = computed(() => {
   const modelId = task.value?.model ?? (taskStore.availableModels[0]?.id ?? null);
-  for (const provider of taskStore.allProviderModels) {
-    const found = provider.models.find(m => m.id === modelId);
-    if (found) return found;
-  }
-  return null;
+  return taskStore.availableModels.find(m => m.id === modelId) ?? null;
 });
 
 const supportsManualCompact = computed(() => currentModelInfo.value?.supportsManualCompact === true);

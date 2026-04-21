@@ -72,6 +72,8 @@ export interface ModelInfo {
   displayName?: string;
   description?: string;
   contextWindow: number | null;
+  /** True when the engine supports manual context compaction for this model. */
+  supportsManualCompact?: boolean;
 }
 
 export interface ProviderModelList {

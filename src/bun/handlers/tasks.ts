@@ -399,6 +399,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           displayName: m.displayName,
           description: m.description,
           contextWindow: m.contextWindow ?? null,
+          supportsManualCompact: m.supportsManualCompact,
         }));
     },
 
