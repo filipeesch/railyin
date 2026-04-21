@@ -194,6 +194,7 @@ export class Orchestrator implements ExecutionCoordinator {
   async executeHumanTurn(
     taskId: number,
     content: string,
+    attachments?: import("../../shared/rpc-types.ts").Attachment[],
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -258,6 +259,9 @@ export class Orchestrator implements ExecutionCoordinator {
           column?.stage_instructions,
           this._resolveWorkingDirectory(task),
           "human_turn",
+          undefined,
+          undefined,
+          attachments,
         );
         this._runNonNative(taskId, newExecutionId, engine, execParams);
 
@@ -298,6 +302,9 @@ export class Orchestrator implements ExecutionCoordinator {
       column?.stage_instructions,
       this._resolveWorkingDirectory(task),
       "human_turn",
+      undefined,
+      undefined,
+      attachments,
     );
     this._runNonNative(taskId, executionId, engine, execParams);
 
@@ -675,6 +682,7 @@ export class Orchestrator implements ExecutionCoordinator {
     nativeExecType: NativeExecutionType,
     toState?: string,
     signal?: AbortSignal,
+    attachments?: import("../../shared/rpc-types.ts").Attachment[],
   ): ExecutionParams {
     const controller = new AbortController();
     this.abortControllers.set(executionId, controller);
@@ -704,6 +712,7 @@ export class Orchestrator implements ExecutionCoordinator {
       enabledMcpTools: task.enabled_mcp_tools
         ? (() => { try { return JSON.parse(task.enabled_mcp_tools!); } catch { return null; } })()
         : null,
+      ...(attachments?.length ? { attachments } : {}),
     };
   }
 
