@@ -34,6 +34,8 @@ export type EngineEvent =
   | { type: "usage"; inputTokens: number; outputTokens: number }
   | { type: "task_updated"; task: import("../../shared/rpc-types.ts").Task }
   | { type: "new_message"; message: import("../../shared/rpc-types.ts").ConversationMessage }
+  | { type: "compaction_start" }
+  | { type: "compaction_done" }
   | { type: "done" }
   | { type: "error"; message: string; fatal?: boolean };
 
@@ -110,6 +112,8 @@ export interface EngineModelInfo {
   contextWindow?: number;
   /** Whether the model supports extended thinking / reasoning. */
   supportsThinking?: boolean;
+  /** Whether this engine supports explicit manual compaction for this model. */
+  supportsManualCompact?: boolean;
   /** Whether this model is currently enabled for selection by the user. */
   enabled?: boolean;
 }
@@ -164,6 +168,14 @@ export interface ExecutionEngine {
    * Optional engine-wide graceful shutdown hook for non-execution lifecycle cleanup.
    */
   shutdown?(options?: EngineShutdownOptions): Promise<void>;
+
+  /**
+   * Trigger manual context compaction for the given task.
+   * Only implemented by engines that support explicit compaction (e.g. Copilot).
+   * Engines that do not support manual compaction leave this undefined.
+   * Compaction lifecycle is signalled via compaction_start/compaction_done EngineEvents.
+   */
+  compact?(taskId: number, workingDirectory: string): Promise<void>;
 }
 
 // ─── Common tool context ──────────────────────────────────────────────────────

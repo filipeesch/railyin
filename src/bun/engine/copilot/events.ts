@@ -286,6 +286,12 @@ function translateEvent(
       };
     }
 
+    case "session.compaction_start":
+      return { type: "compaction_start" };
+
+    case "session.compaction_complete":
+      return { type: "compaction_done" };
+
     case "session.task_complete":
       return { type: "done" };
 

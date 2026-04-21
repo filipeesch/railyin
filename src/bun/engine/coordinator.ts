@@ -9,6 +9,7 @@ export interface ExecutionCoordinator {
     executeCodeReview(taskId: number, manualEdits?: ManualEdit[]): Promise<{ message: ConversationMessage; executionId: number }>;
     cancel(executionId: number): void;
     listModels(workspaceKey?: string): Promise<EngineModelInfo[]>;
+    compactTask(taskId: number): Promise<void>;
     listCommands(taskId: number): Promise<CommandInfo[]>;
     shutdownNonNativeEngines?(options?: import("./types.ts").EngineShutdownOptions): Promise<void>;
 }

@@ -73,6 +73,8 @@ export interface ModelInfo {
   displayName?: string;
   description?: string;
   contextWindow: number | null;
+  /** True when the engine supports manual context compaction for this model. */
+  supportsManualCompact?: boolean;
 }
 
 export interface ProviderModelList {
@@ -85,6 +87,8 @@ export interface ProviderModelList {
     enabled: boolean;
     /** True when the model supports adaptive thinking (Anthropic claude-3-7+ and claude-4+). */
     supportsAdaptiveThinking?: boolean;
+    /** True when the engine supports manual context compaction for this model. */
+    supportsManualCompact?: boolean;
   }>;
   error?: string;
 }
@@ -555,7 +559,7 @@ export type RailynAPI = {
   // Conversation compaction
   "tasks.compact": {
     params: { taskId: number };
-    response: ConversationMessage;
+    response: void;
   };
 
   // Task management

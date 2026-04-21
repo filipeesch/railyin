@@ -386,6 +386,13 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             tools: { type: "preset", preset: "claude_code" },
             settingSources: ["project"],
             hooks: {
+              onCompactProgress: (event: { type: string }) => {
+                if (event.type === "compact_start") {
+                  emit({ type: "compaction_start" });
+                } else if (event.type === "compact_end") {
+                  emit({ type: "compaction_done" });
+                }
+              },
               onPostToolUse: (input: Record<string, unknown>) => {
                 if (input.toolName === "mcp__railyin__interview_me") {
                   return { continue: false };

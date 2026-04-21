@@ -59,15 +59,11 @@
     :streaming="false"
   />
 
-  <!-- Conversation compaction marker -->
+  <!-- Conversation compaction marker — divider only -->
   <div v-else-if="chunk.type === 'compaction_summary'" class="msg msg--compaction">
     <div class="msg--compaction__divider">
       <span class="msg--compaction__label">— Conversation compacted —</span>
     </div>
-    <details class="msg--compaction__details">
-      <summary>Show summary</summary>
-      <div class="msg--compaction__summary prose" v-html="renderMd(chunk.content)" />
-    </details>
   </div>
 </template>
 

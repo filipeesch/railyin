@@ -199,11 +199,7 @@
               <span>Thinking…</span>
             </div>
 
-            <!-- Context warning -->
-            <div v-if="contextWarning" class="context-warning">
-              <i class="pi pi-exclamation-triangle" />
-              {{ contextWarning }}
-            </div>
+            <!-- Context warning removed — dead code -->
           </div>
         </div>
 
@@ -339,43 +335,47 @@
               />
             </div>
           </template>
-          <!-- Context ring gauge -->
-          <svg
+          <!-- Context ring gauge (click to open popover) -->
+          <button
             v-if="taskStore.contextUsage"
-            class="context-ring"
-            width="28"
-            height="28"
-            viewBox="0 0 28 28"
+            class="context-ring-btn"
             :title="`~${taskStore.contextUsage.usedTokens.toLocaleString()} / ${taskStore.contextUsage.maxTokens.toLocaleString()} tokens (${Math.round(taskStore.contextUsage.fraction * 100)}%)`"
+            @click="onContextRingClick"
           >
-            <!-- track -->
-            <circle cx="14" cy="14" r="10" fill="none" stroke-width="3" class="context-ring__track" />
-            <!-- fill arc -->
-            <circle
-              cx="14" cy="14" r="10" fill="none" stroke-width="3"
-              stroke-linecap="round"
-              stroke-dasharray="62.83"
-              :stroke-dashoffset="62.83 * (1 - taskStore.contextUsage.fraction)"
-              :stroke="taskStore.contextUsage.fraction >= 0.90 ? 'var(--p-red-500, #ef4444)' : taskStore.contextUsage.fraction >= 0.70 ? 'var(--p-yellow-500, #eab308)' : 'var(--p-green-500, #22c55e)'"
-              transform="rotate(-90 14 14)"
-            />
-            <!-- percentage label -->
-            <text
-              v-if="taskStore.contextUsage.fraction > 0"
-              x="14" y="18"
-              text-anchor="middle"
-              font-size="7"
-              class="context-ring__label"
-            >{{ Math.round(taskStore.contextUsage.fraction * 100) }}%</text>
-          </svg>
-          <!-- Compact button -->
-          <Button
-            label="Compact"
-            size="small"
-            text
-            :disabled="task.executionState === 'running' || compacting"
-            :loading="compacting"
-            @click="compactConversation"
+            <svg
+              class="context-ring"
+              width="28"
+              height="28"
+              viewBox="0 0 28 28"
+            >
+              <!-- track -->
+              <circle cx="14" cy="14" r="10" fill="none" stroke-width="3" class="context-ring__track" />
+              <!-- fill arc -->
+              <circle
+                cx="14" cy="14" r="10" fill="none" stroke-width="3"
+                stroke-linecap="round"
+                stroke-dasharray="62.83"
+                :stroke-dashoffset="62.83 * (1 - taskStore.contextUsage.fraction)"
+                :stroke="taskStore.contextUsage.fraction >= 0.90 ? 'var(--p-red-500, #ef4444)' : taskStore.contextUsage.fraction >= 0.70 ? 'var(--p-yellow-500, #eab308)' : 'var(--p-green-500, #22c55e)'"
+                transform="rotate(-90 14 14)"
+              />
+              <!-- percentage label -->
+              <text
+                v-if="taskStore.contextUsage.fraction > 0"
+                x="14" y="18"
+                text-anchor="middle"
+                font-size="7"
+                class="context-ring__label"
+              >{{ Math.round(taskStore.contextUsage.fraction * 100) }}%</text>
+            </svg>
+          </button>
+          <ContextPopover
+            ref="contextPopoverRef"
+            :context-usage="taskStore.contextUsage"
+            :model-display-name="currentModelInfo?.displayName"
+            :supports-manual-compact="supportsManualCompact"
+            :disabled="task.executionState === 'running'"
+            @compact="compactConversation"
           />
           <!-- MCP Tools button -->
           <Button
@@ -509,6 +509,7 @@ import { useLaunchStore } from "../stores/launch";
 import { useTerminalStore } from "../stores/terminal";
 import { api } from "../rpc";
 import McpToolsPopover from "./McpToolsPopover.vue";
+import ContextPopover from "./ContextPopover.vue";
 import FileEditorOverlay from "./FileEditorOverlay.vue";
 import ChatEditor from "./ChatEditor.vue";
 import type { ConversationMessage, ExecutionState, LaunchConfig, GitNumstat, Attachment, McpServerStatus, Task } from "@shared/rpc-types";
@@ -595,6 +596,22 @@ const mcpHasWarning = computed(() => mcpStatus.value.some(s => s.state === "erro
 
 function onMcpBtnClick(event: MouseEvent) {
   mcpPopoverRef.value?.toggle(event);
+}
+
+// ─── Context Popover ──────────────────────────────────────────────────────────
+
+const contextPopoverRef = ref<InstanceType<typeof ContextPopover> | null>(null);
+
+/** Find the model info for the task's current model from the enabled models list. */
+const currentModelInfo = computed(() => {
+  const modelId = task.value?.model ?? (taskStore.availableModels[0]?.id ?? null);
+  return taskStore.availableModels.find(m => m.id === modelId) ?? null;
+});
+
+const supportsManualCompact = computed(() => currentModelInfo.value?.supportsManualCompact === true);
+
+function onContextRingClick(event: MouseEvent) {
+  contextPopoverRef.value?.toggle(event);
 }
 
 async function onMcpEditConfig() {
@@ -767,6 +784,8 @@ function handleOutsideClick(e: MouseEvent) {
   if (target?.closest('.p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, .p-multiselect-overlay, .todo-overlay-backdrop, .task-overlay, .p-popover, .file-editor-overlay')) return;
   // Also check MCP popover via direct container reference (teleported to body)
   if (mcpPopoverRef.value?.getContainer()?.contains(e.target as Node)) return;
+  // Also check Context popover
+  if (contextPopoverRef.value?.getContainer()?.contains(e.target as Node)) return;
   // Skip if our own dialogs are open
   if (deleteDialogVisible.value) return;
   // PrimeVue Drawer teleports its panel to document.body, so $el is a comment
@@ -876,7 +895,6 @@ watch(
   () => virtualizer.value.getTotalSize(),
   () => { if (pendingScrollBottom.value) scrollToBottom(); },
 );
-const contextWarning = ref<string | null>(null);
 const compacting = ref(false);
 
 // Incremented whenever the model completes a turn, to trigger a todo refresh.
@@ -1116,6 +1134,7 @@ async function toggleShellAutoApprove() {
 
 async function compactConversation() {
   if (!task.value) return;
+  contextPopoverRef.value?.setCompacting(true);
   compacting.value = true;
   try {
     await taskStore.compactTask(task.value.id);
@@ -1123,6 +1142,7 @@ async function compactConversation() {
     toast.add({ severity: "error", summary: "Compact failed", detail: err instanceof Error ? err.message : String(err), life: 6000 });
   } finally {
     compacting.value = false;
+    contextPopoverRef.value?.setCompacting(false);
   }
 }
 
@@ -1481,6 +1501,23 @@ function onTaskDeleted() {
 .model-select-footer {
   padding: 4px 8px;
   border-top: 1px solid var(--p-content-border-color);
+}
+
+.context-ring-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+.context-ring-btn:hover {
+  opacity: 1;
 }
 
 .context-ring {

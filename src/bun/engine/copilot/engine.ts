@@ -296,6 +296,25 @@ export class CopilotEngine implements ExecutionEngine {
     await this.sdkAdapter.shutdownAll(options).catch(() => { });
   }
 
+  async compact(taskId: number, workingDirectory: string): Promise<void> {
+    const sdkSessionId = copilotSessionIdForTask(taskId);
+    // Wake the session — same pattern as execution, but we only need to trigger
+    // compaction then let the lease manager put it back to sleep.
+    const sessionConfig = {
+      workingDirectory,
+      streaming: true,
+      onPermissionRequest: (_req: unknown, _inv: unknown) => ({ kind: "approved" as const }),
+    };
+    const session = await this.sdkAdapter.resumeSession(sdkSessionId, sessionConfig);
+    this.sdkAdapter.touchLease(sdkSessionId, "running");
+    try {
+      await session.compact();
+    } finally {
+      await this.sdkAdapter.disconnectSession(session).catch(() => { });
+      this.sdkAdapter.setLeaseState(sdkSessionId, "idle");
+    }
+  }
+
   async listModels(): Promise<EngineModelInfo[]> {
     let sdkModels;
     try {
@@ -314,6 +333,7 @@ export class CopilotEngine implements ExecutionEngine {
       description: "Copilot will automatically choose the best available model for your request.",
       contextWindow: undefined,
       supportsThinking: false,
+      supportsManualCompact: false,
     };
 
     return [
@@ -323,6 +343,7 @@ export class CopilotEngine implements ExecutionEngine {
         displayName: m.name ?? m.id,
         contextWindow: m.capabilities.limits.max_context_window_tokens,
         supportsThinking: m.capabilities.supports.reasoningEffort,
+        supportsManualCompact: false,
       })),
     ];
   }
