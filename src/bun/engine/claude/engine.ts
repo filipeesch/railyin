@@ -129,16 +129,29 @@ export class ClaudeEngine implements ExecutionEngine {
 
   async listCommands(taskId: number): Promise<CommandInfo[]> {
     const { getDb } = await import("../../db/index.ts");
+    const { getBoardWorkspaceKey } = await import("../../workspace-context.ts");
+    const { getProjectByKey } = await import("../../project-store.ts");
+
     const db = getDb();
-    const row = db
-      .query<{ git_root_path: string | null; worktree_path: string | null }, [number]>(
-        "SELECT gc.git_root_path, gc.worktree_path FROM task_git_context gc WHERE gc.task_id = ?",
+    const taskRow = db
+      .query<{ board_id: number; project_key: string }, [number]>(
+        "SELECT board_id, project_key FROM tasks WHERE id = ?",
       )
       .get(taskId);
 
-    const worktreePath = row?.worktree_path ?? row?.git_root_path ?? process.cwd();
+    if (!taskRow) return [];
 
-    const sdkCommands = await this.sdkAdapter.listCommands(worktreePath);
+    const gitRow = db
+      .query<{ worktree_path: string | null }, [number]>(
+        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+      )
+      .get(taskId);
+
+    const wsKey = getBoardWorkspaceKey(taskRow.board_id);
+    const project = getProjectByKey(wsKey, taskRow.project_key);
+    const cwd = project?.projectPath?.trim() || gitRow?.worktree_path || process.cwd();
+
+    const sdkCommands = await this.sdkAdapter.listCommands(cwd);
     return sdkCommands.map((cmd) => ({
       name: cmd.name,
       description: cmd.description || undefined,

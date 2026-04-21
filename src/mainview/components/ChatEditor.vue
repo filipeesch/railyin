@@ -25,6 +25,7 @@ import { api } from "../rpc";
 import type { Attachment } from "@shared/rpc-types";
 import { CHIP_PATTERN, extractChips } from "../utils/chat-chips";
 import { useDarkMode } from "../composables/useDarkMode";
+import { getCommands } from "../composables/useCommandsCache";
 
 // ─── Props / Emits ────────────────────────────────────────────────────────────
 
@@ -247,11 +248,7 @@ async function slashCompletions(context: CompletionContext): Promise<CompletionR
   const typed = match ? match.text.replace(/^[\s\]]*\//, "") : "";
 
   let commands: { name: string; description?: string }[] = [];
-  try {
-    commands = await api("engine.listCommands", { taskId: props.taskId });
-  } catch {
-    return null;
-  }
+  commands = await getCommands(props.taskId);
 
   const filtered = commands.filter((c) =>
     typed === "" || c.name.toLowerCase().includes(typed.toLowerCase()),

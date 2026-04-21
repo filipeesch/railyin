@@ -4,7 +4,7 @@ Provides `/`-triggered autocomplete in the chat editor for discovering and selec
 ## Requirements
 
 ### Requirement: Typing `/` in the chat editor triggers a slash command picker
-The system SHALL open an autocomplete dropdown when the user types `/` at any position in the chat editor. The dropdown SHALL list all slash commands discoverable from the active engine for the current task. The list SHALL update as the user continues typing (fuzzy/substring match on command name).
+The system SHALL open an autocomplete dropdown when the user types `/` at any position in the chat editor. The dropdown SHALL list all slash commands discoverable from the active engine for the current task. The list SHALL update as the user continues typing (fuzzy/substring match on command name). Command data SHALL be served from the `useCommandsCache` composable, which returns cached data immediately and triggers a background refresh — the picker SHALL never block on a network call after the first open.
 
 #### Scenario: Dropdown opens on `/`
 - **WHEN** the user types `/` in the chat editor
@@ -25,6 +25,10 @@ The system SHALL open an autocomplete dropdown when the user types `/` at any po
 #### Scenario: Escape dismisses the dropdown
 - **WHEN** the dropdown is open and the user presses Escape
 - **THEN** the dropdown closes and the typed text is preserved as-is
+
+#### Scenario: Picker responds instantly on repeat open
+- **WHEN** the user types `/` for the second or later time for the same task
+- **THEN** the dropdown appears immediately (no perceptible delay) using cached command data
 
 ### Requirement: Claude engine lists commands via `session.supportedCommands()`
 The system SHALL retrieve slash commands for Claude engine tasks by calling the SDK's `session.supportedCommands()` method. No filesystem fallback is performed. If the session is not yet active, an empty list is returned.

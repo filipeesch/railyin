@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { collectClaudeCommands } from "../engine/claude/engine.ts";
+import { collectClaudeCommands, ClaudeEngine } from "../engine/claude/engine.ts";
 import { collectCopilotCommands } from "../engine/copilot/engine.ts";
 import type { CommandInfo } from "../engine/types.ts";
+import { MockClaudeSdkAdapter } from "./support/claude-sdk-mock.ts";
+import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import type { Database } from "bun:sqlite";
 
 let tmpDir: string;
 
@@ -234,5 +237,98 @@ describe("collectCopilotCommands — personal scope", () => {
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── ClaudeEngine.listCommands — path resolution ──────────────────────────────
+
+describe("ClaudeEngine.listCommands — path resolution", () => {
+  let db: Database;
+  let projectDir: string;
+  let worktreeDir: string;
+  let configCleanup: () => void;
+
+  beforeEach(() => {
+    db = initDb(); // Must run first so RAILYN_DB=":memory:" is set before setupTestConfig
+    projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
+    worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
+    const cfg = setupTestConfig("", projectDir);
+    configCleanup = cfg.cleanup;
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(worktreeDir, { recursive: true, force: true });
+    configCleanup();
+  });
+
+  it("passes projectPath as cwd to sdkAdapter.listCommands", async () => {
+    const { taskId } = seedProjectAndTask(db, worktreeDir);
+
+    const capturedCwds: string[] = [];
+    const adapter = new MockClaudeSdkAdapter();
+    const origListCommands = adapter.listCommands.bind(adapter);
+    adapter.listCommands = async (cwd: string) => {
+      capturedCwds.push(cwd);
+      return origListCommands(cwd);
+    };
+
+    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    await engine.listCommands(taskId);
+
+    expect(capturedCwds).toHaveLength(1);
+    expect(capturedCwds[0]).toBe(projectDir);
+  });
+
+  it("falls back to worktree_path when projectPath is not found", async () => {
+    // Use a board with a project_key that doesn't exist in config — project lookup returns null
+    const { boardId, taskId } = seedProjectAndTask(db, worktreeDir);
+    // Override project_key to something unknown so getProjectByKey returns null
+    db.run("UPDATE tasks SET project_key = 'nonexistent-project' WHERE id = ?", [taskId]);
+    // Seed git context so fallback uses worktree_path
+    db.run(
+      "INSERT INTO task_git_context (task_id, worktree_path, git_root_path, branch_name) VALUES (?, ?, ?, ?)",
+      [taskId, worktreeDir, worktreeDir, "main"],
+    );
+
+    const capturedCwds: string[] = [];
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.listCommands = async (cwd: string) => {
+      capturedCwds.push(cwd);
+      return [];
+    };
+
+    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    await engine.listCommands(taskId);
+
+    expect(capturedCwds).toHaveLength(1);
+    expect(capturedCwds[0]).toBe(worktreeDir);
+  });
+
+  it("returns empty array when task row does not exist", async () => {
+    const adapter = new MockClaudeSdkAdapter();
+    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+
+    const result = await engine.listCommands(999999);
+
+    expect(result).toEqual([]);
+  });
+
+  it("maps SDK commands to CommandInfo shape", async () => {
+    const { taskId } = seedProjectAndTask(db, worktreeDir);
+
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.listCommands = async (_cwd: string) => [
+      { name: "opsx:apply", description: "Apply a change" },
+      { name: "opsx:propose", description: "" },
+    ];
+
+    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const commands = await engine.listCommands(taskId);
+
+    expect(commands).toEqual([
+      { name: "opsx:apply", description: "Apply a change" },
+      { name: "opsx:propose", description: undefined },
+    ]);
   });
 });

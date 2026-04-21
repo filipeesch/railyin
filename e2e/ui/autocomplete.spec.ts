@@ -669,4 +669,27 @@ test.describe("AC — autocomplete", () => {
         // The drawer must still be visible after the click
         await expect(page.locator(".p-drawer")).toBeVisible({ timeout: 1_000 });
     });
+
+    test("AC-30: commands are served from cache on second dropdown open (SWR)", async ({ page, api, task }) => {
+        const commands: CommandInfo[] = [{ name: "opsx-apply", description: "Apply" }];
+        const calls = api.capture("engine.listCommands", commands);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await focusEditor(page);
+
+        // First / — triggers API fetch (cold miss)
+        await page.keyboard.type("/");
+        await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".cm-tooltip-autocomplete")).toContainText("opsx-apply");
+        await page.keyboard.press("Escape");
+
+        // Second / — cache hit, no new API call within TTL
+        await page.keyboard.type("/");
+        await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".cm-tooltip-autocomplete")).toContainText("opsx-apply");
+
+        // Only one API call total — second open was served from cache
+        expect(calls).toHaveLength(1);
+    });
 });
