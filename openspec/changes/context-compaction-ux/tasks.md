@@ -55,18 +55,18 @@
 - [ ] 9.2 Add tests to `src/bun/test/claude-events.test.ts`: `system.subtype=compaction_summary` → `compaction_done` event (fallback path)
 - [ ] 9.3 Add compaction scenario helpers to `src/bun/test/support/copilot-sdk-mock.ts`: `compactionStart()` and `compactionDone()` event factories
 - [ ] 9.4 Add `runCompactionScenario` to `src/bun/test/support/shared-rpc-scenarios.ts`: full cycle from `compaction_start` to `compaction_done` and verify DB messages
-- [ ] 9.5 Add compaction RPC scenario tests to `src/bun/test/copilot-rpc-scenarios.test.ts`: auto-compaction mid-turn writes system + compaction_summary messages; `tasks.compact` RPC calls engine compact method
+- [x] 9.5 Add compaction RPC scenario tests to `src/bun/test/copilot-rpc-scenarios.test.ts`: auto-compaction mid-turn writes system + compaction_summary messages; `tasks.compact` RPC calls engine compact method
 
 ## 10. E2E Tests
 
-- [ ] 10.1 Update `R-20` in `e2e/ui/extended-chat.spec.ts`: assert context ring is visible (not the bare Compact button)
-- [ ] 10.2 Update `R-20` → `R-20b`: clicking ring opens ContextPopover (`.context-popover` visible)
-- [ ] 10.3 Update `R-21`: manual compact via popover button → `.msg--compaction` divider appears; assert no `.msg--compaction__details` present
-- [ ] 10.4 Delete `R-22` ("Show summary" details test — feature removed)
-- [ ] 10.5 Update `P-15`: assert compact button inside popover is disabled while running (open popover first, then check button state)
-- [ ] 10.6 Add `R-20c`: popover shows linear gauge and token count text
-- [ ] 10.7 Add `R-20d`: compact button visible when `supportsManualCompact: true` in model list
-- [ ] 10.8 Add `R-20e`: compact button absent when `supportsManualCompact` omitted in model list
+- [x] 10.1 Update `R-20` in `e2e/ui/extended-chat.spec.ts`: assert context ring is visible (not the bare Compact button)
+- [x] 10.2 Update `R-20` → `R-20b`: clicking ring opens ContextPopover (`.context-popover` visible)
+- [x] 10.3 Update `R-21`: manual compact via popover button → `.msg--compaction` divider appears; assert no `.msg--compaction__details` present
+- [x] 10.4 Delete `R-22` ("Show summary" details test — feature removed); replaced with divider-only assertion
+- [x] 10.5 Update `P-15`: assert compact button inside popover is disabled while running (open popover first, then check button state)
+- [x] 10.6 Add `R-20c`: popover shows linear gauge and token count text
+- [x] 10.7 Add `R-20d`: compact button visible when `supportsManualCompact: true` in model list
+- [x] 10.8 Add `R-20e`: compact button absent when `supportsManualCompact` omitted in model list
 - [ ] 10.9 Add `S-30`: auto-compaction during turn → "Compacting conversation…" system message appears mid-stream
 - [ ] 10.10 Add `S-31`: after auto-compaction → `.msg--compaction` divider appears and no `.msg--compaction__details` element exists
 - [ ] 10.11 Add `S-32`: ring color is green at <70%, yellow at 70-89%, red at ≥90% (parametric test covering all three states)

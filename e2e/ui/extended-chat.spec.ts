@@ -120,7 +120,14 @@ test.describe("P — Execution cancellation", () => {
         await expect(page.locator(".msg--user")).toHaveCount(before + 1);
     });
 
-    test("P-15: compact button disabled while execution is running", async ({ page, api, ws, task }) => {
+    test("P-15: compact button in popover is disabled while execution is running", async ({ page, api, ws, task }) => {
+        // Provide a model that supports manual compact
+        api.handle("models.list", () => [{
+            provider: "fake",
+            models: [{ id: "fake/test", displayName: "Fake/Test", contextWindow: 8192, supportsManualCompact: true }],
+        }]);
+        api.handle("tasks.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
+
         api.handle("tasks.sendMessage", async () => {
             setTimeout(() => {
                 ws.push({ type: "task.updated", payload: { ...task, executionState: "running" } });
@@ -135,8 +142,11 @@ test.describe("P — Execution cancellation", () => {
 
         await expect(page.locator(".task-detail__input .pi-stop-circle")).toBeVisible({ timeout: 5_000 });
 
-        // Compact button must be disabled during execution
-        const compactBtn = page.locator("button:has-text('Compact')");
+        // Open context popover via ring click
+        await page.locator("button.context-ring-btn").click();
+
+        // Compact button inside popover must be disabled during execution
+        const compactBtn = page.locator(".ctx-popover button:has-text('Compact')");
         await expect(compactBtn).toBeDisabled({ timeout: 2_000 });
     });
 });
@@ -215,16 +225,48 @@ test.describe("Q — Model switching", () => {
 // ─── Suite R — Context compaction ────────────────────────────────────────────
 
 test.describe("R — Context compaction", () => {
-    test("R-20: compact button is visible and enabled when idle", async ({ page, api, ws, task }) => {
+    test("R-20: context ring button opens popover with compact button (supportsManualCompact)", async ({ page, api, ws, task }) => {
+        api.handle("models.list", () => [{
+            provider: "fake",
+            models: [{ id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true }],
+        }]);
+        api.handle("tasks.contextUsage", () => ({ usedTokens: 92_160, maxTokens: 128_000, fraction: 0.72 }));
+
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const compactBtn = page.locator("button:has-text('Compact')");
-        await expect(compactBtn).toBeVisible({ timeout: 3_000 });
-        await expect(compactBtn).toBeEnabled();
+        // Ring button should be visible
+        const ringBtn = page.locator("button.context-ring-btn");
+        await expect(ringBtn).toBeVisible({ timeout: 3_000 });
+
+        // Click ring to open popover
+        await ringBtn.click();
+
+        // Popover body should show model name and gauge
+        await expect(page.locator(".ctx-popover__model-name")).toContainText("Fake/Test", { timeout: 3_000 });
+        await expect(page.locator(".ctx-popover__bar-fill")).toBeVisible();
+        await expect(page.locator(".ctx-popover__pct")).toContainText("72%");
+
+        // Compact button visible because supportsManualCompact = true
+        await expect(page.locator(".ctx-popover button:has-text('Compact')")).toBeVisible();
     });
 
-    test("R-21: manual compact shows .msg--compaction divider", async ({ page, api, ws, task }) => {
+    test("R-20b: compact button hidden when supportsManualCompact is false", async ({ page, api, task }) => {
+        // Default fixture returns models.list: [] → no supportsManualCompact
+        api.handle("tasks.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const ringBtn = page.locator("button.context-ring-btn");
+        await expect(ringBtn).toBeVisible({ timeout: 3_000 });
+        await ringBtn.click();
+
+        // Compact button should NOT be visible
+        await expect(page.locator(".ctx-popover button:has-text('Compact')")).not.toBeVisible();
+    });
+
+    test("R-21: manual compact via popover shows .msg--compaction divider", async ({ page, api, ws, task }) => {
         const compactionMsg: ConversationMessage = {
             id: 9001,
             taskId: task.id,
@@ -236,21 +278,26 @@ test.describe("R — Context compaction", () => {
             createdAt: new Date().toISOString(),
         };
 
+        api.handle("models.list", () => [{
+            provider: "fake",
+            models: [{ id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true }],
+        }]);
+        api.handle("tasks.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
         api.handle("tasks.compact", async () => {
             setTimeout(() => ws.push({ type: "message.new", payload: compactionMsg }), 50);
-            return compactionMsg;
         });
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const compactBtn = page.locator("button:has-text('Compact')");
-        await compactBtn.click();
+        // Open popover and click Compact
+        await page.locator("button.context-ring-btn").click();
+        await page.locator(".ctx-popover button:has-text('Compact')").click();
 
         await expect(page.locator(".msg--compaction")).toBeVisible({ timeout: 5_000 });
     });
 
-    test("R-22: 'Show summary' details element present inside compaction marker", async ({ page, api, ws, task }) => {
+    test("R-22: compaction divider contains no expandable summary", async ({ page, api, ws, task }) => {
         const compactionMsg: ConversationMessage = {
             id: 9002,
             taskId: task.id,
@@ -267,8 +314,8 @@ test.describe("R — Context compaction", () => {
         await openTaskDrawer(page, task.id);
 
         await expect(page.locator(".msg--compaction")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".msg--compaction__details")).toBeVisible();
-        await expect(page.locator(".msg--compaction__details summary")).toContainText("Show summary");
+        // No expandable details element — divider-only rendering
+        await expect(page.locator(".msg--compaction__details")).not.toBeAttached();
     });
 
     test("R-23: context gauge appears after execution completes", async ({ page, api, ws, task }) => {
@@ -289,6 +336,6 @@ test.describe("R — Context compaction", () => {
         await sendMessage(page, "R-23 msg");
 
         await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible({ timeout: 10_000 });
-        await expect(page.locator("svg.context-ring")).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator("button.context-ring-btn svg.context-ring")).toBeVisible({ timeout: 5_000 });
     });
 });
