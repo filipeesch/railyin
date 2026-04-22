@@ -176,6 +176,8 @@ describe("Copilot backend RPC scenarios", () => {
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Cancel session" });
         await runtime.handlers["tasks.cancel"]({ taskId });
         await runtime.waitForExecutionStatus(result.executionId, "cancelled");
+        // abortSession is called asynchronously after the DB update — poll until cleanup completes.
+        await runtime.waitFor(() => adapter.trace.abortCalls >= 1, "adapter abortCalls >= 1");
 
         expect(adapter.trace.abortCalls).toBeGreaterThanOrEqual(1);
         expect(adapter.trace.disconnectCalls).toBeGreaterThanOrEqual(1);

@@ -38,6 +38,8 @@ export interface BackendRpcRuntime {
     getDbStreamEvents: (executionId: number) => PersistedStreamEvent[];
     /** Wait until a persisted event of `type` appears in DB for this execution. */
     waitForDbStreamEvent: (executionId: number, type: string, timeoutMs?: number) => Promise<PersistedStreamEvent>;
+    /** Poll until predicate returns true (useful for asserting async side-effects after cancellation). */
+    waitFor: (predicate: () => boolean, description?: string, timeoutMs?: number) => Promise<void>;
 }
 
 async function waitUntil(predicate: () => boolean, description: string, timeoutMs = 5_000): Promise<void> {
@@ -220,6 +222,9 @@ export function createBackendRpcRuntime(options: {
             }, [number, string]>(
                 "SELECT * FROM stream_events WHERE execution_id = ? AND type = ? ORDER BY seq ASC LIMIT 1",
             ).get(executionId, type)!;
+        },
+        waitFor: async (predicate: () => boolean, description = "condition", timeoutMs = 5_000) => {
+            await waitUntil(predicate, description, timeoutMs);
         },
     };
 }

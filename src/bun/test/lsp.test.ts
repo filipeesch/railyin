@@ -643,8 +643,9 @@ describe("TaskLSPRegistry", () => {
     const { TaskLSPRegistry } = await import("../lsp/task-registry.ts");
     const registry = new TaskLSPRegistry();
 
-    const m1 = registry.getManager(3, [], "/tmp");
-    const m2 = registry.getManager(4, [], "/tmp");
+    const serverConfigs = [{ name: "ts", command: "typescript-language-server", args: ["--stdio"], extensions: [".ts"] }];
+    const m1 = registry.getManager(3, serverConfigs, "/tmp");
+    const m2 = registry.getManager(4, serverConfigs, "/tmp");
     expect(m1).not.toBe(m2);
     await registry.releaseTask(3);
     await registry.releaseTask(4);

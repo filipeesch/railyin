@@ -76,6 +76,7 @@ export function cancelExecution(executionId: number): void {
   const controller = executionControllers.get(executionId);
   if (controller) {
     controller.abort();
+    executionControllers.delete(executionId);
     return;
   }
   // No live controller — zombie cleanup: mark orphaned execution failed and unblock the task.

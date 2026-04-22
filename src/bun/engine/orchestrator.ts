@@ -548,11 +548,14 @@ export class Orchestrator implements ExecutionCoordinator {
     if (controller) {
       controller.abort();
     }
-    nativeCancelExecution(executionId);
     const db = getDb();
+    // Fetch row BEFORE nativeCancelExecution — it may overwrite status to 'failed'
+    // (zombie cleanup path) which would prevent our non-native 'cancelled' update below.
     const execRow = db.query<{ task_id: number; status: string; finished_at: string | null }, [number]>(
       "SELECT task_id, status, finished_at FROM executions WHERE id = ?",
     ).get(executionId);
+
+    nativeCancelExecution(executionId);
 
     if (this.injectedEngine) {
       this.injectedEngine.cancel(executionId);
@@ -977,9 +980,9 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: toolMeta,
               createdAt: new Date().toISOString(),
             });
-            // parentBlockId: use event.parentCallId for explicit subagent nesting.
-            // Tools render at root level (not nested inside reasoning bubbles).
-            const toolParentBlockId = event.parentCallId ?? null;
+            // parentBlockId: use event.parentCallId (explicit subagent nesting) or
+            // reasoningBlockId (group tools under the preceding reasoning bubble).
+            const toolParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false });
             // Push this call onto the stack so nested tokens/reasoning inherit it as parent
             callStack.push(callId);

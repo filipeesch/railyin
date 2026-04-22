@@ -28,6 +28,7 @@ describe("Claude message translator - tool events", () => {
         name: "search",
         arguments: JSON.stringify({ query: "Claude pricing" }),
         isInternal: false,
+        display: { label: "search" },
       });
     });
 

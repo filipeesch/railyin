@@ -4,7 +4,7 @@ The shell command approval capability provides a consent-based security gate for
 ## Requirements
 
 ### Requirement: run_command extracts command binaries before execution
-Before executing any `run_command` call, the system SHALL parse the full command string to extract a deduplicated list of command binaries. Extraction SHALL split the command on shell meta-characters (`&&`, `||`, `|`, `;`) and take the first non-empty token of each segment. The resulting list is passed to the approval gate.
+Before executing any `run_command` call, the system SHALL parse the full command string to extract a deduplicated list of command binaries. Extraction SHALL split the command on shell meta-characters (`&&`, `||`, `;`) only. Bare pipe (`|`) SHALL NOT be treated as a binary boundary — only the left-hand side command of a pipeline is the "initiating command". The resulting list is passed to the approval gate.
 
 #### Scenario: Single command binary extracted
 - **WHEN** the agent calls `run_command` with `git status`
@@ -18,9 +18,13 @@ Before executing any `run_command` call, the system SHALL parse the full command
 - **WHEN** the agent calls `run_command` with `git add . && git commit -m "msg"`
 - **THEN** the extracted binary list is `["git"]` (deduplicated)
 
-#### Scenario: Pipe operator splits correctly
-- **WHEN** the agent calls `run_command` with `ls -la | grep ts`
-- **THEN** the extracted binary list is `["ls", "grep"]`
+#### Scenario: Pipe receiver is NOT extracted as a separate binary
+- **WHEN** the agent calls `run_command` with `bun test | cat`
+- **THEN** the extracted binary list is `["bun"]` — `cat` is a pipe receiver, not the initiating command, and SHALL NOT require approval
+
+#### Scenario: Multiple pipe receivers are all excluded
+- **WHEN** the agent calls `run_command` with `ls -la | grep ts | wc -l`
+- **THEN** the extracted binary list is `["ls"]`
 
 ### Requirement: run_command checks each binary against per-task approved set
 After extracting binaries, the system SHALL compare the list against the task's current approved set (union of `tasks.approved_commands` from the DB and in-memory approve_once state). Binaries present in the approved set SHALL be allowed immediately. Binaries absent from the approved set SHALL be collected and trigger an approval pause.

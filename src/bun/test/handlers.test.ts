@@ -359,7 +359,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
 
   it("keeps Auto when no concrete enabled_models rows match", async () => {
     db.run(
-      "INSERT OR IGNORE INTO enabled_models (workspace_id, qualified_model_id) VALUES (?, ?)",
+      "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)",
       [1, "copilot/non-existent"],
     );
 

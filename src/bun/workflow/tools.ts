@@ -810,6 +810,110 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
     },
   },
 
+
+  // ── todos group ─────────────────────────────────────────────────────────────
+  {
+    name: "create_todo",
+    description:
+      "Create a new todo subtask to help track complex multi-step work without losing context across compactions.\n\n" +
+      "ALWAYS use create_todo when starting a task with 3 or more steps that need tracking.\n" +
+      "NEVER use create_todo when the work can be done in a single step or todos already cover it (call list_todos first).\n\n" +
+      "The `description` field is a rich markdown memory — include WHY, WHAT to do, files involved, constraints, acceptance criteria.\n" +
+      "The optional `phase` field scopes this todo to a specific board column; omit to make it always active.",
+    parameters: {
+      type: "object",
+      properties: {
+        number: { type: "number", description: "Execution order (float). Use sparse values like 10, 20, 30." },
+        title: { type: "string", description: "Short label for the todo item (one line)." },
+        description: { type: "string", description: "Rich markdown specification: what to do, why, files involved, constraints, acceptance criteria." },
+        phase: { type: "string", description: "Optional. Workflow state id (board column). Omit to make the todo always active." },
+      },
+      required: ["number", "title", "description"],
+    },
+  },
+  {
+    name: "edit_todo",
+    description:
+      "Update one or more fields of a todo item by ID (number, title, or description).\n\n" +
+      "ALWAYS call get_todo before editing to see current content.\n" +
+      "NEVER use edit_todo to change status — use update_todo_status instead.\n\n" +
+      "At least one field must be provided.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "The todo item id." },
+        number: { type: "number", description: "New execution order (float)." },
+        title: { type: "string", description: "New short label." },
+        description: { type: "string", description: "Updated markdown specification." },
+        phase: { type: "string", description: "Optional. New phase (workflow state id). Pass null to clear." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "list_todos",
+    description:
+      "List all active todo items for the current task. Returns id, number, title, status, and phase.\n\n" +
+      "ALWAYS call list_todos before creating todos to avoid duplicates.\n" +
+      "ALWAYS call list_todos at the start of a session to understand what work remains.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "get_todo",
+    description:
+      "Get all fields of a todo item including the full markdown description.\n\n" +
+      "ALWAYS call get_todo before editing a todo's description to see its current content.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "The todo item id." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "reorganize_todos",
+    description:
+      "Atomically update the execution order of multiple todo items in a single call.\n\n" +
+      "ALWAYS use reorganize_todos instead of multiple edit_todo calls when reordering.",
+    parameters: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          description: "Array of {id, number} pairs to update.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "number", description: "Todo item id." },
+              number: { type: "number", description: "New execution order." },
+            },
+            required: ["id", "number"],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
+    name: "update_todo_status",
+    description:
+      "Update the status of a todo item.\n\n" +
+      "ALWAYS use update_todo_status (not edit_todo) when changing status.\n" +
+      "Valid statuses: 'pending', 'in-progress', 'done', 'blocked', 'deleted' (soft-delete).",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "The todo item id." },
+        status: { type: "string", description: "New status: 'pending', 'in-progress', 'done', 'blocked', or 'deleted'." },
+      },
+      required: ["id", "status"],
+    },
+  },
   // ── lsp group ───────────────────────────────────────────────────────────────
   LSP_TOOL_DEFINITION,
 ];
