@@ -366,16 +366,24 @@ export interface WorkspaceSummary {
   name: string;
 }
 
+export interface WorkflowColumnGroup {
+  id?: string;
+  label?: string;
+  columns: string[];
+}
+
 export interface WorkflowColumn {
   id: string;
   label: string;
   model?: string;
+  limit?: number;
 }
 
 export interface WorkflowTemplate {
   id: string;
   name: string;
   columns: WorkflowColumn[];
+  groups?: WorkflowColumnGroup[];
 }
 
 // ─── LSP setup types ─────────────────────────────────────────────────────────
@@ -512,6 +520,10 @@ export type RailynAPI = {
   "tasks.reorder": {
     params: { taskId: number; position: number };
     response: Task;
+  };
+  "tasks.reorderColumn": {
+    params: { boardId: number; columnId: string; taskIds: number[] };
+    response: void;
   };
   "tasks.transition": {
     params: { taskId: number; toState: WorkflowState; targetPosition?: number };

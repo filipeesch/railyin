@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { getDb, _resetForTests as resetDbSingleton } from "../db/index.ts";
@@ -214,7 +214,27 @@ export function seedProjectAndTask(
 
 // ─── Minimal config for tests (provider: fake) ───────────────────────────────
 
-export function setupTestConfig(extraYaml = "", gitRootPath = "/tmp/test-git"): { configDir: string; cleanup: () => void } {
+const DEFAULT_WORKFLOWS_YAML = `id: delivery
+name: Delivery
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "Plan the task."
+    stage_instructions: "You are a planning assistant."
+    allowed_transitions: [inprogress]
+  - id: done
+    label: Done
+`;
+
+export function setupTestConfig(
+  extraYaml = "",
+  gitRootPath = "/tmp/test-git",
+  /** Optional extra workflow template YAML strings (single-template format, NOT array). Each is written as its own file. */
+  extraWorkflows: string[] = [],
+): { configDir: string; cleanup: () => void } {
   const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
 
   writeFileSync(
@@ -234,23 +254,14 @@ export function setupTestConfig(extraYaml = "", gitRootPath = "/tmp/test-git"): 
     ].join("\n") + "\n",
   );
 
-  writeFileSync(
-    join(configDir, "workflows.yaml"),
-    `- id: delivery
-  name: Delivery
-  columns:
-    - id: backlog
-      label: Backlog
-      is_backlog: true
-    - id: plan
-      label: Plan
-      on_enter_prompt: "Plan the task."
-      stage_instructions: "You are a planning assistant."
-      allowed_transitions: [inprogress]
-    - id: done
-      label: Done
-`,
-  );
+  // Write workflows into the workflows/ subdirectory so they take precedence
+  // over the legacy workflows.yaml path (config loader checks workflows/ first).
+  const workflowsDir = join(configDir, "workflows");
+  mkdirSync(workflowsDir, { recursive: true });
+  writeFileSync(join(workflowsDir, "delivery.yaml"), DEFAULT_WORKFLOWS_YAML);
+  extraWorkflows.forEach((yaml, idx) => {
+    writeFileSync(join(workflowsDir, `extra-${idx}.yaml`), yaml);
+  });
 
   process.env.RAILYN_CONFIG_DIR = configDir;
   process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");

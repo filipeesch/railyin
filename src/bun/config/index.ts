@@ -127,12 +127,20 @@ export interface WorkflowColumnConfig {
   is_backlog?: boolean;
   tools?: string[];
   model?: string;
+  limit?: number;
+}
+
+export interface WorkflowColumnGroup {
+  id?: string;
+  label?: string;
+  columns: string[];
 }
 
 export interface WorkflowTemplateConfig {
   id: string;
   name: string;
   columns: WorkflowColumnConfig[];
+  groups?: WorkflowColumnGroup[];
 }
 
 export interface LoadedConfig {

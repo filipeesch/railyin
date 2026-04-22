@@ -59,6 +59,32 @@ function fetchTaskWithDetail(db: ReturnType<typeof getDb>, taskId: number): Task
   return row ? mapTask(row) : null;
 }
 
+/** Rebalance column positions to integer multiples of 1000 when floating-point
+ *  gaps have collapsed below the threshold. Only rewrites when needed. */
+function rebalanceColumnPositions(
+  db: ReturnType<typeof getDb>,
+  boardId: number,
+  columnId: string,
+): void {
+  const rows = db
+    .query<{ id: number; position: number }, [number, string]>(
+      "SELECT id, position FROM tasks WHERE board_id = ? AND workflow_state = ? ORDER BY position ASC",
+    )
+    .all(boardId, columnId);
+  if (rows.length < 2) return;
+  let needsRebalance = false;
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i].position - rows[i - 1].position < 1) {
+      needsRebalance = true;
+      break;
+    }
+  }
+  if (!needsRebalance) return;
+  for (let i = 0; i < rows.length; i++) {
+    db.run("UPDATE tasks SET position = ? WHERE id = ?", [(i + 1) * 1000, rows[i].id]);
+  }
+}
+
 export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) {
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
@@ -80,9 +106,25 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "tasks.reorder": async (params: { taskId: number; position: number }): Promise<Task> => {
       const db = getDb();
       db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.position, params.taskId]);
+      const boardRow = db.query<{ board_id: number; workflow_state: string }, [number]>(
+        "SELECT board_id, workflow_state FROM tasks WHERE id = ?",
+      ).get(params.taskId);
+      if (boardRow) {
+        rebalanceColumnPositions(db, boardRow.board_id, boardRow.workflow_state);
+      }
       const task = fetchTaskWithDetail(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
       return task;
+    },
+
+    "tasks.reorderColumn": async (params: { boardId: number; columnId: string; taskIds: number[] }): Promise<void> => {
+      const db = getDb();
+      for (let i = 0; i < params.taskIds.length; i++) {
+        db.run(
+          "UPDATE tasks SET position = ? WHERE id = ? AND board_id = ?",
+          [(i + 1) * 1000, params.taskIds[i], params.boardId],
+        );
+      }
     },
 
     "tasks.create": async (params: {
@@ -153,6 +195,34 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     }): Promise<{ task: Task; executionId: number | null }> => {
       const db = getDb();
 
+      // ── Card limit check ──────────────────────────────────────────────────
+      const taskBoardRow = db
+        .query<{ board_id: number; workflow_template_id: string }, [number]>(
+          `SELECT t.board_id, b.workflow_template_id
+           FROM tasks t JOIN boards b ON b.id = t.board_id
+           WHERE t.id = ?`,
+        )
+        .get(params.taskId);
+      if (taskBoardRow) {
+        const wsKey = getBoardWorkspaceKey(taskBoardRow.board_id);
+        const wsConfig = getWorkspaceConfig(wsKey);
+        const colLimit = wsConfig.workflows
+          .find((w) => w.id === taskBoardRow.workflow_template_id)
+          ?.columns.find((c) => c.id === params.toState)?.limit ?? null;
+        if (colLimit != null) {
+          const countRow = db
+            .query<{ count: number }, [number, string]>(
+              "SELECT COUNT(*) as count FROM tasks WHERE board_id = ? AND workflow_state = ?",
+            )
+            .get(taskBoardRow.board_id, params.toState);
+          if ((countRow?.count ?? 0) >= colLimit) {
+            throw new Error(
+              `Column "${params.toState}" is at capacity (${countRow?.count}/${colLimit}). Move a card out first.`,
+            );
+          }
+        }
+      }
+
       // Update position before transition so the orchestrator sees it immediately.
       // When no targetPosition is provided, default to the top of the target column
       // (MIN(position) / 2, or 500 when the column is empty).
@@ -166,6 +236,9 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           .get(params.taskId, params.toState);
         const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
         db.run("UPDATE tasks SET position = ? WHERE id = ?", [topPos, params.taskId]);
+      }
+      if (taskBoardRow) {
+        rebalanceColumnPositions(db, taskBoardRow.board_id, params.toState);
       }
 
       const taskRow = db

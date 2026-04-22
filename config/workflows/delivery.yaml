@@ -1,5 +1,9 @@
 id: delivery
 name: Delivery Flow
+# Group columns that share a horizontal board slot (visual-only — no engine effect).
+groups:
+  - label: Active
+    columns: [plan, in_progress]
 columns:
   - id: backlog
     label: Backlog
@@ -24,6 +28,8 @@ columns:
   - id: in_progress
     label: In Progress
     description: Active development
+    # WIP limit — block cards when 3 are already in this column.
+    limit: 3
     on_enter_prompt: |
       Implement this task according to the plan.
       In the end:

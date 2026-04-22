@@ -199,6 +199,20 @@ export const useTaskStore = defineStore("task", () => {
     }
   }
 
+  // ─── Batch reorder all tasks in a column (optimistic, fire-and-forget) ────
+
+  function reorderColumnBatch(boardId: number, columnId: string, taskIds: number[]) {
+    const tasks = tasksByBoard.value[boardId];
+    if (!tasks) return;
+    // Assign new positions immediately so Vue re-sorts the column correctly
+    const posMap = new Map(taskIds.map((id, i) => [id, (i + 1) * 1000]));
+    tasksByBoard.value[boardId] = tasks.map((t) =>
+      posMap.has(t.id) ? { ...t, position: posMap.get(t.id)! } : t,
+    );
+    // Sync to backend fire-and-forget — failure only logs, no rollback needed
+    api("tasks.reorderColumn", { boardId, columnId, taskIds }).catch(console.error);
+  }
+
   // ─── Transition task ──────────────────────────────────────────────────────
 
   async function transitionTask(taskId: number, toState: string, targetPosition?: number) {
@@ -794,6 +808,7 @@ export const useTaskStore = defineStore("task", () => {
     loadTasks,
     createTask,
     reorderTask,
+    reorderColumnBatch,
     transitionTask,
     retryTask,
     sendMessage,

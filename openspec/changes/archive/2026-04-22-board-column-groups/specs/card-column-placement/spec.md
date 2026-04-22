@@ -1,7 +1,4 @@
-## Purpose
-Defines how task cards are positioned within a column when moved via the board UI or agent tools.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Card placed at top of target column on transition
 When a task is moved to a different workflow column — via the Select dropdown in the Task Detail Drawer, or via the agent `move_task` tool — the task SHALL be placed at the top of the target column. The `position` value assigned SHALL be `MIN(existing_positions_in_target_column) / 2`, or `500` when the target column is empty. After any position write, if the minimum gap between any two adjacent positions in the column drops below `1.0`, the backend SHALL rebalance all positions in that column to integer multiples of `1000` (e.g. `1000, 2000, 3000, …`) in current sort order.
@@ -29,6 +26,8 @@ When a task is moved to a different workflow column — via the Select dropdown 
 #### Scenario: Positions are rebalanced when gap collapses
 - **WHEN** repeated top-inserts cause the minimum gap between adjacent positions to fall below `1.0`
 - **THEN** the backend rewrites all positions in that column as `1000, 2000, 3000, …` preserving their current order, so future inserts have full float headroom
+
+## ADDED Requirements
 
 ### Requirement: Drag-and-drop is optimistic — ghost removed immediately on drop
 When a user releases a dragged card, the ghost element and source card opacity SHALL be restored immediately (synchronously), before the `tasks.transition` API call resolves. If the API call fails, the card SHALL revert to its original column and position.

@@ -6,11 +6,12 @@
  *   T — Task transitions (card moves between columns)
  *   U — Execution state visuals (CSS class and badge update live)
  *   P — Card placement on column transition (moved card lands at top)
+ *   G — Column groups (group wrapper, label, multi-group, WIP limit badge)
  */
 
 import { test, expect } from "./fixtures";
-import { makeTask } from "./fixtures/mock-data";
-import type { Task } from "@shared/rpc-types";
+import { makeTask, makeBoard, makeWorkflowTemplate, makeGroupedWorkflowTemplate } from "./fixtures/mock-data";
+import type { Task, WorkflowTemplate } from "@shared/rpc-types";
 
 async function navigateToBoard(page: import("@playwright/test").Page) {
     // Navigate to the board view (assume it's the default or use nav link)
@@ -260,5 +261,145 @@ test.describe("P — card placement on column transition", () => {
         );
         expect(cardIds).toHaveLength(1);
         expect(cardIds[0]).toBe(String(task.id));
+    });
+});
+
+// ─── Suite G — Column groups ──────────────────────────────────────────────────
+
+test.describe("G — column groups", () => {
+    test("G-19: grouped columns render inside a .board-column-group wrapper", async ({
+        page,
+        api,
+    }) => {
+        const template = makeGroupedWorkflowTemplate();
+        api
+            .returns("boards.list", [makeBoard({ template } as any)])
+            .returns("workspace.getConfig", {
+                id: 1,
+                key: "test-workspace",
+                name: "Test Workspace",
+                workflows: [template],
+                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
+                worktreeBasePath: "/tmp",
+                enableThinking: false,
+            });
+
+        await navigateToBoard(page);
+
+        // Two groups → two wrappers
+        await expect(page.locator(".board-column-group")).toHaveCount(2);
+    });
+
+    test("G-20: group labels appear in the board", async ({ page, api }) => {
+        const template = makeGroupedWorkflowTemplate();
+        api
+            .returns("boards.list", [makeBoard({ template } as any)])
+            .returns("workspace.getConfig", {
+                id: 1,
+                key: "test-workspace",
+                name: "Test Workspace",
+                workflows: [template],
+                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
+                worktreeBasePath: "/tmp",
+                enableThinking: false,
+            });
+
+        await navigateToBoard(page);
+
+        const labels = page.locator(".board-column-group__label");
+        await expect(labels).toHaveCount(2);
+        await expect(labels.nth(0)).toContainText("Planning");
+        await expect(labels.nth(1)).toContainText("End");
+    });
+
+    test("G-21: sub-columns inside groups have correct data-column-id (regression: second group must render)", async ({
+        page,
+        api,
+    }) => {
+        const template = makeGroupedWorkflowTemplate();
+        api
+            .returns("boards.list", [makeBoard({ template } as any)])
+            .returns("workspace.getConfig", {
+                id: 1,
+                key: "test-workspace",
+                name: "Test Workspace",
+                workflows: [template],
+                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
+                worktreeBasePath: "/tmp",
+                enableThinking: false,
+            });
+
+        await navigateToBoard(page);
+
+        const planningGroup = page.locator(".board-column-group").nth(0);
+        await expect(planningGroup.locator("[data-column-id='plan']")).toBeVisible();
+        await expect(planningGroup.locator("[data-column-id='in_progress']")).toBeVisible();
+
+        const endGroup = page.locator(".board-column-group").nth(1);
+        await expect(endGroup.locator("[data-column-id='in_review']")).toBeVisible();
+        await expect(endGroup.locator("[data-column-id='done']")).toBeVisible();
+    });
+
+    test("G-22: columns not in any group render as standalone (no .board-column-group wrapper)", async ({
+        page,
+        api,
+    }) => {
+        const template = makeGroupedWorkflowTemplate(); // backlog is ungrouped
+        api
+            .returns("boards.list", [makeBoard({ template } as any)])
+            .returns("workspace.getConfig", {
+                id: 1,
+                key: "test-workspace",
+                name: "Test Workspace",
+                workflows: [template],
+                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
+                worktreeBasePath: "/tmp",
+                enableThinking: false,
+            });
+
+        await navigateToBoard(page);
+
+        // backlog is standalone, not inside any .board-column-group
+        await expect(page.locator("[data-column-id='backlog']")).toBeVisible();
+        await expect(
+            page.locator(".board-column-group [data-column-id='backlog']"),
+        ).toHaveCount(0);
+    });
+
+    test("G-23: WIP limit badge shows 'count/limit' when limit is configured", async ({
+        page,
+        api,
+        task,
+    }) => {
+        const template = {
+            ...makeWorkflowTemplate(),
+            columns: [
+                { id: "backlog", label: "Backlog" },
+                { id: "plan", label: "Plan", limit: 2 },
+                { id: "in_progress", label: "In Progress" },
+                { id: "in_review", label: "In Review" },
+                { id: "done", label: "Done" },
+            ],
+        };
+        const limitedTask = makeTask({ id: 99, workflowState: "plan", position: 1000 });
+        api
+            .returns("boards.list", [makeBoard({ template } as any)])
+            .returns("workspace.getConfig", {
+                id: 1,
+                key: "test-workspace",
+                name: "Test Workspace",
+                workflows: [template],
+                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
+                worktreeBasePath: "/tmp",
+                enableThinking: false,
+            })
+            .handle("tasks.list", () => [limitedTask]);
+
+        await navigateToBoard(page);
+
+        // The capacity badge on the "plan" column header should show "1/2"
+        await expect(
+            page.locator("[data-column-id='plan'] .board-column__header .p-badge"),
+        ).toContainText("1/2");
     });
 });

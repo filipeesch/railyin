@@ -48,6 +48,24 @@ export function makeWorkflowTemplate(): WorkflowTemplate {
     } as WorkflowTemplate;
 }
 
+export function makeGroupedWorkflowTemplate(): WorkflowTemplate {
+    return {
+        id: "grouped",
+        name: "Grouped",
+        columns: [
+            { id: "backlog", label: "Backlog" },
+            { id: "plan", label: "Plan" },
+            { id: "in_progress", label: "In Progress" },
+            { id: "in_review", label: "In Review" },
+            { id: "done", label: "Done" },
+        ],
+        groups: [
+            { label: "Planning", columns: ["plan", "in_progress"] },
+            { label: "End", columns: ["in_review", "done"] },
+        ],
+    } as WorkflowTemplate;
+}
+
 export function makeBoard(overrides?: Partial<Board>): Board & { template: WorkflowTemplate } {
     return {
         id: BOARD_ID,

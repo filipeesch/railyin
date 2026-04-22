@@ -1761,6 +1761,17 @@ export async function executeTool(
         const valid = template?.columns.map((c) => c.id).join(", ") ?? "(unknown)";
         return `Error: workflow_state "${targetState}" not found in board template. Valid columns: ${valid}`;
       }
+      // Card limit check
+      if (validColumn.limit != null) {
+        const limitCountRow = db
+          .query<{ count: number }, [number, string]>(
+            "SELECT COUNT(*) as count FROM tasks WHERE board_id = ? AND workflow_state = ?",
+          )
+          .get(taskRow.board_id, targetState);
+        if ((limitCountRow?.count ?? 0) >= validColumn.limit) {
+          return `Error: column "${targetState}" is at capacity (${limitCountRow?.count}/${validColumn.limit}). Move a card out first.`;
+        }
+      }
       // Compute top-of-column position (MIN / 2, or 500 when column is empty)
       const minRow = db
         .query<{ min_pos: number | null }, [number, string]>(

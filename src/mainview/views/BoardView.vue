@@ -62,53 +62,89 @@
 
     <!-- Board columns -->
     <div v-if="boardStore.activeBoard" class="board-columns">
-      <div
-        v-for="column in boardStore.activeBoard.template.columns"
-        :key="column.id"
-        class="board-column"
-        :class="{ 'is-drag-over': dragOverColumnId === column.id }"
-        :data-column-id="column.id"
-        @drop.prevent
-      >
-        <!-- Column header -->
-        <div class="board-column__header">
-          <span class="board-column__name">{{ column.label }}</span>
-          <Badge
-            :value="columnTasks(column.id).length"
-            severity="secondary"
-          />
-        </div>
-
-        <!-- Create Task button (only for backlog column) -->
+      <template v-for="slot in renderSlots" :key="slot.type === 'standalone' ? slot.column.id : slot.groupId">
+        <!-- Standalone column -->
         <div
-          v-if="column.id === 'backlog'"
-          class="board-column__create-task"
+          v-if="slot.type === 'standalone'"
+          class="board-column"
+          :class="{
+            'is-drag-over': dragOverColumnId === slot.column.id && !columnAtCapacity(slot.column.id),
+            'is-drag-over--full': dragOverColumnId === slot.column.id && columnAtCapacity(slot.column.id),
+          }"
+          :data-column-id="slot.column.id"
+          @drop.prevent
         >
-          <Button
-            label="New Task"
-            icon="pi pi-plus"
-            @click="openCreateOverlay"
-          />
+          <div class="board-column__header">
+            <span class="board-column__name">{{ slot.column.label }}</span>
+            <Badge
+              :value="slot.column.limit != null ? `${columnTasks(slot.column.id).length}/${slot.column.limit}` : columnTasks(slot.column.id).length"
+              :severity="columnAtCapacity(slot.column.id) ? 'danger' : 'secondary'"
+            />
+          </div>
+          <div v-if="slot.column.id === 'backlog'" class="board-column__create-task">
+            <Button label="New Task" icon="pi pi-plus" @click="openCreateOverlay" />
+          </div>
+          <div class="board-column__cards">
+            <TaskCard
+              v-for="task in columnTasks(slot.column.id)"
+              :key="task.id"
+              :task="task"
+              @pointerdown="onCardPointerDown($event, task.id)"
+              @click="onCardClick(task.id)"
+              @open-review="onOpenReview(task.id)"
+              @open-terminal="onOpenTerminal"
+            />
+            <div
+              v-if="dragOverColumnId === slot.column.id"
+              class="drop-indicator"
+              :style="{ top: dropIndicatorY + 'px' }"
+            />
+          </div>
         </div>
 
-        <!-- Task cards -->
-        <div class="board-column__cards">
-          <TaskCard
-            v-for="task in columnTasks(column.id)"
-            :key="task.id"
-            :task="task"
-            @pointerdown="onCardPointerDown($event, task.id)"
-            @click="onCardClick(task.id)"
-            @open-review="onOpenReview(task.id)"
-            @open-terminal="onOpenTerminal"
-          />
+        <!-- Group column: stacked sub-columns, wrapper has NO data-column-id -->
+        <div v-else class="board-column-group">
+          <div v-if="slot.label" class="board-column-group__label">{{ slot.label }}</div>
           <div
-            v-if="dragOverColumnId === column.id"
-            class="drop-indicator"
-            :style="{ top: dropIndicatorY + 'px' }"
-          />
+            v-for="col in slot.columns"
+            :key="col.id"
+            class="board-column"
+            :class="{
+              'is-drag-over': dragOverColumnId === col.id && !columnAtCapacity(col.id),
+              'is-drag-over--full': dragOverColumnId === col.id && columnAtCapacity(col.id),
+            }"
+            :data-column-id="col.id"
+            @drop.prevent
+          >
+            <div class="board-column__header">
+              <span class="board-column__name">{{ col.label }}</span>
+              <Badge
+                :value="col.limit != null ? `${columnTasks(col.id).length}/${col.limit}` : columnTasks(col.id).length"
+                :severity="columnAtCapacity(col.id) ? 'danger' : 'secondary'"
+              />
+            </div>
+            <div v-if="col.id === 'backlog'" class="board-column__create-task">
+              <Button label="New Task" icon="pi pi-plus" @click="openCreateOverlay" />
+            </div>
+            <div class="board-column__cards">
+              <TaskCard
+                v-for="task in columnTasks(col.id)"
+                :key="task.id"
+                :task="task"
+                @pointerdown="onCardPointerDown($event, task.id)"
+                @click="onCardClick(task.id)"
+                @open-review="onOpenReview(task.id)"
+                @open-terminal="onOpenTerminal"
+              />
+              <div
+                v-if="dragOverColumnId === col.id"
+                class="drop-indicator"
+                :style="{ top: dropIndicatorY + 'px' }"
+              />
+            </div>
+          </div>
         </div>
-      </div>
+      </template>
     </div>
 
     <!-- Empty state -->
@@ -321,6 +357,40 @@ function columnTasks(columnId: string) {
     .sort((a, b) => a.position - b.position);
 }
 
+function columnAtCapacity(columnId: string): boolean {
+  const template = boardStore.activeBoard?.template;
+  const col = template?.columns.find((c) => c.id === columnId);
+  if (col?.limit == null) return false;
+  return columnTasks(columnId).length >= col.limit;
+}
+
+type RenderSlot =
+  | { type: 'standalone'; column: import('../../shared/rpc-types.ts').WorkflowColumn }
+  | { type: 'group'; groupId: string; label?: string; columns: import('../../shared/rpc-types.ts').WorkflowColumn[] };
+
+const renderSlots = computed((): RenderSlot[] => {
+  const template = boardStore.activeBoard?.template;
+  if (!template) return [];
+  const groups = template.groups ?? [];
+  const emittedGroups = new Set<string>();
+  return template.columns.flatMap((col) => {
+    const group = groups.find((g) => g.columns.includes(col.id));
+    // No group, or single-member group → standalone
+    if (!group || group.columns.length <= 1) {
+      return [{ type: 'standalone' as const, column: col }];
+    }
+    // Use a stable key derived from the group's column list (id may be absent in YAML)
+    const groupKey = group.columns.join('\0');
+    // Multi-column group: emit the group on first encounter
+    if (emittedGroups.has(groupKey)) return [];
+    emittedGroups.add(groupKey);
+    const groupCols = group.columns
+      .map((id) => template.columns.find((c) => c.id === id))
+      .filter((c): c is import('../../shared/rpc-types.ts').WorkflowColumn => c != null);
+    return [{ type: 'group' as const, groupId: groupKey, label: group.label, columns: groupCols }];
+  });
+});
+
 async function onBoardChange() {
   const id = boardStore.activeBoardId;
   if (id != null) await taskStore.loadTasks(id);
@@ -440,52 +510,44 @@ async function onPointerUp(event: PointerEvent) {
   if (activeDrag.active) {
     lastDragEndTime = Date.now();
     const dragSnapshot = activeDrag;
-    try {
-      if (dragOverColumnId.value) {
-        const task = Object.values(taskStore.tasksByBoard).flat().find((t) => t.id === dragSnapshot.taskId);
-        if (task) {
-          const targetColumnId = dragOverColumnId.value;
-          const targetIdx = dropIndex.value;
-          const colTasks = columnTasks(targetColumnId);
 
-          // Compute target float position
-          let targetPosition: number;
-          if (colTasks.length === 0) {
-            targetPosition = 1000;
-          } else {
-            // When reordering within same column, exclude the dragged card from the list
-            const candidates = targetColumnId === dragSnapshot.sourceColumnId
-              ? colTasks.filter((t) => t.id !== dragSnapshot.taskId)
-              : colTasks;
-            const idx = targetIdx ?? candidates.length;
-            if (candidates.length === 0) {
-              targetPosition = 1000;
-            } else if (idx === 0) {
-              targetPosition = candidates[0].position / 2;
-            } else if (idx >= candidates.length) {
-              targetPosition = candidates[candidates.length - 1].position + 1000;
-            } else {
-              targetPosition = (candidates[idx - 1].position + candidates[idx].position) / 2;
-            }
-          }
+    // Capture drop target BEFORE clearing state
+    const targetColumnId = dragOverColumnId.value;
+    const targetIdx = dropIndex.value;
 
+    // Clean up ghost and visual state IMMEDIATELY (before any async work)
+    if (dragSnapshot.ghostEl) document.body.removeChild(dragSnapshot.ghostEl);
+    if (dragSnapshot.sourceEl) dragSnapshot.sourceEl.style.opacity = '';
+    document.body.style.cursor = '';
+    dragOverColumnId.value = null;
+    dropIndex.value = null;
+
+    if (targetColumnId) {
+      const task = Object.values(taskStore.tasksByBoard).flat().find((t) => t.id === dragSnapshot.taskId);
+      if (task) {
+        const colTasks = columnTasks(targetColumnId);
+        const boardId = boardStore.activeBoardId;
+        if (!boardId) return;
+
+        // Check capacity before firing — reject silently if full
+        if (!columnAtCapacity(targetColumnId)) {
           if (targetColumnId === dragSnapshot.sourceColumnId) {
-            // Same-column reorder — never triggers an AI turn
-            if (targetPosition !== task.position) {
-              await taskStore.reorderTask(dragSnapshot.taskId, targetPosition);
-            }
+            // Same-column reorder: splice task into new position, batch-sync positions
+            const others = colTasks.filter((t) => t.id !== dragSnapshot.taskId);
+            const idx = targetIdx ?? others.length;
+            others.splice(idx, 0, task);
+            taskStore.reorderColumnBatch(boardId, targetColumnId, others.map((t) => t.id));
           } else {
-            // Cross-column transition — may trigger AI turn via orchestrator
-            await taskStore.transitionTask(dragSnapshot.taskId, targetColumnId, targetPosition);
+            // Cross-column transition: optimistic move + batch-sync target column order
+            const idx = targetIdx ?? colTasks.length;
+            const newColOrder = [...colTasks];
+            newColOrder.splice(idx, 0, task);
+            // fire-and-forget
+            taskStore.transitionTask(dragSnapshot.taskId, targetColumnId);
+            taskStore.reorderColumnBatch(boardId, targetColumnId, newColOrder.map((t) => t.id));
           }
         }
       }
-    } finally {
-      if (dragSnapshot.ghostEl) document.body.removeChild(dragSnapshot.ghostEl);
-      if (dragSnapshot.sourceEl) dragSnapshot.sourceEl.style.opacity = '';
-      document.body.style.cursor = '';
-      dragOverColumnId.value = null;
-      dropIndex.value = null;
     }
   }
   activeDrag = null;
@@ -615,9 +677,30 @@ function handleOverlayDeleted() {
   transition: outline 0.1s;
 }
 
-.board-column.is-drag-over {
-  outline: 2px dashed var(--p-primary-color, #6366f1);
+.board-column.is-drag-over--full {
+  outline: 2px dashed var(--p-danger-color, #ef4444);
 }
+
+.board-column-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 260px;
+}
+
+.board-column-group__label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--p-text-muted-color, #64748b);
+  padding: 0 4px 2px 4px;
+}
+
+.board-column-group > .board-column {
+  flex: none;
+}
+
 
 .board-column__header {
   display: flex;

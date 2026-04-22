@@ -13,7 +13,9 @@ function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"]
       id: c.id,
       label: c.label,
       model: c.model,
+      limit: c.limit,
     })),
+    groups: t.groups,
   };
 }
 

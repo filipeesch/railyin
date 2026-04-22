@@ -1,5 +1,9 @@
 id: openspec
 name: OpenSpec Flow
+# Group design-phase columns into a single horizontal slot.
+groups:
+  - label: Design
+    columns: [explore, propose]
 columns:
   - id: backlog
     label: Backlog
