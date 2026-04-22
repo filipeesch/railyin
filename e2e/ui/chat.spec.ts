@@ -205,6 +205,35 @@ test.describe("N — execution state in the UI", () => {
         await expect(page.locator(".task-detail__input .cm-content")).toBeVisible();
         await expect(page.locator(".task-detail__input button:has(.pi-send)")).toBeDisabled();
     });
+
+    test("N-9: editor re-enables after AI turn completes without drawer reopen", async ({ page, api, ws, task }) => {
+        const runningTask: Task = { ...task, executionState: "running" };
+        const completedTask: Task = { ...task, executionState: "completed" };
+
+        api.handle("tasks.sendMessage", async () => {
+            setTimeout(() => {
+                ws.push({ type: "task.updated", payload: runningTask });
+                ws.pushStreamEvent(textChunk(task.id, 0, "thinking..."));
+            }, 50);
+            return { message: makeUserMessage(task.id, "N-9"), executionId: EXEC_ID };
+        });
+        api.handle("conversations.getMessages", () => [makeUserMessage(task.id, "N-9")]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await sendMessage(page, "N-9 msg");
+
+        // Editor should be disabled while AI is running
+        const cmContent = page.locator(".task-detail__input .cm-content");
+        await expect(cmContent).toHaveAttribute("contenteditable", "false", { timeout: 5_000 });
+
+        // Simulate AI turn ending
+        ws.pushDone(task.id, EXEC_ID);
+        ws.push({ type: "task.updated", payload: completedTask });
+
+        // Editor must re-enable without closing the drawer
+        await expect(cmContent).toHaveAttribute("contenteditable", "true", { timeout: 5_000 });
+    });
 });
 
 // ─── Suite O — persistence and multi-turn ordering ───────────────────────────

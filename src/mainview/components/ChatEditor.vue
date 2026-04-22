@@ -47,12 +47,14 @@ const { isDark } = useDarkMode();
 const editorEl = ref<HTMLElement | null>(null);
 let editorView: EditorView | null = null;
 
-// ─── Theme compartment (swapped on dark mode toggle) ─────────────────────────
+// ─── Compartments (swapped at runtime without rebuilding all extensions) ──────
 
 const themeCompartment = new Compartment();
+const editableCompartment = new Compartment();
 
 function buildTheme(dark: boolean): Extension {
-  const bg = dark ? "var(--p-surface-900, #0f172a)" : "var(--p-surface-0, white)";
+  // surface-950 = zinc-950 (#09090b) in dark, surface-0 = white in light — matches PrimeVue InputText
+  const bg = dark ? "var(--p-surface-950, #09090b)" : "var(--p-surface-0, #ffffff)";
   const text = dark ? "var(--p-surface-100, #f1f5f9)" : "var(--p-surface-900, #0f172a)";
   const border = dark ? "var(--p-surface-700, #334155)" : "var(--p-surface-200, #e2e8f0)";
   const placeholder = dark ? "var(--p-surface-500, #64748b)" : "var(--p-surface-400, #94a3b8)";
@@ -65,6 +67,7 @@ function buildTheme(dark: boolean): Extension {
     "&": {
       fontSize: "inherit",
       fontFamily: "inherit",
+      background: bg,
     },
     ".cm-content": {
       padding: "8px 12px",
@@ -72,8 +75,6 @@ function buildTheme(dark: boolean): Extension {
       maxHeight: "200px",
       overflowY: "auto",
       caretColor: "var(--p-primary-color, #3b82f6)",
-      whiteSpace: "pre-wrap",
-      wordBreak: "break-word",
       color: text,
       background: bg,
       outline: "none",
@@ -83,9 +84,11 @@ function buildTheme(dark: boolean): Extension {
     },
     ".cm-editor": {
       outline: "none",
+      width: "100%",
     },
     ".cm-scroller": {
       outline: "none",
+      overflowX: "hidden",
     },
     ".cm-line": {
       padding: "0",
@@ -496,8 +499,9 @@ function buildExtensions(): Extension[] {
         emit("textChange", update.state.doc.toString());
       }
     }),
+    EditorView.lineWrapping,
     themeCompartment.of(buildTheme(isDark.value)),
-    EditorView.editable.of(!props.disabled),
+    editableCompartment.of(EditorView.editable.of(!props.disabled)),
   ];
 }
 
@@ -524,7 +528,7 @@ watch(
   () => {
     if (!editorView) return;
     editorView.dispatch({
-      effects: EditorView.editable.reconfigure(!props.disabled),
+      effects: editableCompartment.reconfigure(EditorView.editable.of(!props.disabled)),
     });
   },
 );
@@ -581,11 +585,12 @@ defineExpose({
 <style scoped>
 .chat-editor {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--p-surface-200, #e2e8f0);
   border-radius: 6px;
-  background: var(--p-surface-0, white);
   transition: border-color 0.15s;
-  overflow: visible;
+  background: var(--p-surface-0, #ffffff);
 }
 
 .chat-editor:focus-within {
@@ -627,7 +632,12 @@ defineExpose({
 
 html.dark-mode .chat-editor {
   border-color: var(--p-surface-700, #334155);
-  background: var(--p-surface-900, #0f172a);
+  background: var(--p-surface-950, #09090b);
+}
+
+/* Force word-wrap: CM6 default sets overflow-x: auto which must be overridden */
+.chat-editor .cm-scroller {
+  overflow-x: hidden !important;
 }
 
 html.dark-mode .chat-editor:focus-within {
