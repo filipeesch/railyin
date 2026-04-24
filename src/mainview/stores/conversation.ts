@@ -1,7 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { api } from "../rpc";
-import type { ConversationMessage, StreamError, StreamEvent, StreamEventType, StreamToken } from "@shared/rpc-types";
+import type { ConversationMessage, StreamError, StreamEvent, StreamEventType } from "@shared/rpc-types";
 
 function tryParseJson(s: string): Record<string, unknown> | null {
   try { return JSON.parse(s); } catch { return null; }
@@ -43,15 +43,6 @@ export interface ConversationStreamState {
   blocks: Map<string, StreamBlock>;
   isDone: boolean;
   statusMessage: string;
-}
-
-interface LegacyStreamState {
-  conversationId: number;
-  executionId: number | null;
-  token: string;
-  reasoningToken: string;
-  statusMessage: string;
-  isStreamingReasoning: boolean;
 }
 
 interface ContextUsage {
@@ -112,7 +103,6 @@ export const useConversationStore = defineStore("conversation", () => {
   const messagesLoading = ref(false);
 
   const streamStates = ref(new Map<number, ConversationStreamState>());
-  const liveStreams = ref(new Map<number, LegacyStreamState>());
   const streamVersion = ref(0);
   const contextUsageByConversation = ref(new Map<number, ContextUsage>());
   const hooks = ref(new Map<string, ConversationHooks>());
@@ -122,15 +112,6 @@ export const useConversationStore = defineStore("conversation", () => {
       ? streamStates.value.get(activeConversationId.value) ?? null
       : null,
   );
-  const activeLegacyStream = computed(() =>
-    activeConversationId.value != null
-      ? liveStreams.value.get(activeConversationId.value) ?? null
-      : null,
-  );
-  const streamingToken = computed(() => activeLegacyStream.value?.token ?? "");
-  const streamingReasoningToken = computed(() => activeLegacyStream.value?.reasoningToken ?? "");
-  const streamingStatusMessage = computed(() => activeLegacyStream.value?.statusMessage ?? "");
-  const streamingConversationId = computed(() => activeLegacyStream.value?.conversationId ?? null);
   const contextUsage = computed(() =>
     activeConversationId.value != null
       ? contextUsageByConversation.value.get(activeConversationId.value) ?? null
@@ -225,66 +206,8 @@ export const useConversationStore = defineStore("conversation", () => {
     }
   }
 
-  function getOrCreateLiveState(conversationId: number, executionId: number | null): LegacyStreamState {
-    const existing = liveStreams.value.get(conversationId);
-    if (existing && (executionId == null || existing.executionId === executionId)) {
-      return existing;
-    }
-    const created: LegacyStreamState = {
-      conversationId,
-      executionId,
-      token: "",
-      reasoningToken: "",
-      statusMessage: "",
-      isStreamingReasoning: false,
-    };
-    liveStreams.value = new Map(liveStreams.value).set(conversationId, created);
-    return created;
-  }
-
-  function clearLiveState(conversationId: number) {
-    if (!liveStreams.value.has(conversationId)) return;
-    const next = new Map(liveStreams.value);
-    next.delete(conversationId);
-    liveStreams.value = next;
-  }
-
-  function onStreamToken(payload: StreamToken) {
-    if (payload.conversationId == null) return;
-    const liveState = getOrCreateLiveState(payload.conversationId, payload.executionId);
-
-    if (payload.done) {
-      clearLiveState(payload.conversationId);
-      return;
-    }
-
-    if (payload.isStatus) {
-      liveState.statusMessage = payload.token;
-      liveStreams.value = new Map(liveStreams.value);
-      return;
-    }
-
-    if (payload.isReasoning) {
-      if (!liveState.isStreamingReasoning) {
-        liveState.reasoningToken = "";
-      }
-      liveState.reasoningToken += payload.token;
-      liveState.isStreamingReasoning = true;
-      liveStreams.value = new Map(liveStreams.value);
-      return;
-    }
-
-    if (liveState.isStreamingReasoning) {
-      liveState.isStreamingReasoning = false;
-    }
-    liveState.statusMessage = "";
-    liveState.token += payload.token;
-    liveStreams.value = new Map(liveStreams.value);
-  }
-
   function onStreamError(payload: StreamError) {
     if (payload.conversationId == null) return;
-    clearLiveState(payload.conversationId);
     if (payload.conversationId !== activeConversationId.value) return;
     appendMessage({
       id: Date.now(),
@@ -451,17 +374,6 @@ export const useConversationStore = defineStore("conversation", () => {
     if (streamState && !streamState.isDone) return;
     if (messages.value.some((entry) => entry.id === message.id)) return;
 
-    const liveState = liveStreams.value.get(message.conversationId);
-    if (message.type === "reasoning" && liveState) {
-      liveState.reasoningToken = "";
-      liveState.isStreamingReasoning = false;
-      liveStreams.value = new Map(liveStreams.value);
-    }
-    if (message.type === "assistant" && liveState) {
-      liveState.token = "";
-      liveStreams.value = new Map(liveStreams.value);
-    }
-
     messages.value.push(message);
     sortMessagesInPlace();
   }
@@ -473,10 +385,6 @@ export const useConversationStore = defineStore("conversation", () => {
     streamStates,
     streamVersion,
     activeStreamState,
-    streamingToken,
-    streamingReasoningToken,
-    streamingStatusMessage,
-    streamingConversationId,
     contextUsage,
     contextUsageByConversation,
     registerHooks,
@@ -484,7 +392,6 @@ export const useConversationStore = defineStore("conversation", () => {
     appendMessage,
     loadMessages,
     fetchContextUsage,
-    onStreamToken,
     onStreamError,
     onStreamEvent,
     onNewMessage,

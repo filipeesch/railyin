@@ -2,7 +2,6 @@ import { getDb } from "./index.ts";
 
 export interface PersistedStreamEvent {
   id?: number;
-  taskId: number | null;
   conversationId: number;
   executionId: number;
   seq: number;
@@ -18,9 +17,9 @@ export interface PersistedStreamEvent {
 export function appendStreamEvent(event: PersistedStreamEvent): number {
   const db = getDb();
   const result = db.run(
-    `INSERT OR IGNORE INTO stream_events (task_id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [event.taskId, event.conversationId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
+    `INSERT OR IGNORE INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [event.conversationId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
   );
   return result.lastInsertRowid as number;
 }
@@ -31,9 +30,9 @@ export function appendStreamEventBatch(events: PersistedStreamEvent[]): void {
   db.transaction(() => {
     for (const event of events) {
       db.run(
-        `INSERT OR IGNORE INTO stream_events (task_id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [event.taskId, event.conversationId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
+        `INSERT OR IGNORE INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [event.conversationId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
       );
     }
   })();
@@ -43,7 +42,6 @@ export function getStreamEventsByConversation(conversationId: number, afterSeq?:
   const db = getDb();
   const rows = db.query<{
     id: number;
-    task_id: number | null;
     conversation_id: number;
     execution_id: number;
     seq: number;
@@ -54,13 +52,12 @@ export function getStreamEventsByConversation(conversationId: number, afterSeq?:
     parent_block_id: string | null;
     subagent_id: string | null;
     created_at: string;
-  }, [number, number]>(
-    "SELECT * FROM stream_events WHERE conversation_id = ? AND seq > ? ORDER BY seq ASC",
-  ).all(conversationId, afterSeq ?? -1);
+  }, [number, number, number]>(
+    "SELECT * FROM stream_events WHERE conversation_id = ? AND execution_id = (SELECT MAX(execution_id) FROM stream_events WHERE conversation_id = ?) AND seq > ? ORDER BY seq ASC",
+  ).all(conversationId, conversationId, afterSeq ?? -1);
 
   return rows.map((r) => ({
     id: r.id,
-    taskId: r.task_id,
     conversationId: r.conversation_id,
     executionId: r.execution_id,
     seq: r.seq,

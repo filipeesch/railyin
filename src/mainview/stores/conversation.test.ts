@@ -14,42 +14,6 @@ describe("conversationStore", () => {
     apiMock.mockImplementation(async () => []);
   });
 
-  it("keeps live tokens scoped to the active conversation", () => {
-    const store = useConversationStore();
-
-    store.setActiveConversation(1);
-    store.onStreamToken({
-      taskId: 2,
-      conversationId: 2,
-      executionId: 10,
-      token: "foreign",
-      done: false,
-      isReasoning: false,
-      isStatus: false,
-    });
-
-    expect(store.streamingConversationId).toBeNull();
-    expect(store.streamingToken).toBe("");
-
-    store.onStreamToken({
-      taskId: 1,
-      conversationId: 1,
-      executionId: 11,
-      token: "local",
-      done: false,
-      isReasoning: false,
-      isStatus: false,
-    });
-
-    expect(store.streamingConversationId).toBe(1);
-    expect(store.streamingToken).toBe("local");
-
-    store.setActiveConversation(2);
-
-    expect(store.streamingConversationId).toBe(2);
-    expect(store.streamingToken).toBe("foreign");
-  });
-
   it("only appends pushed messages for the active conversation", () => {
     const store = useConversationStore();
     store.setActiveConversation(1);

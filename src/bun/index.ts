@@ -165,17 +165,6 @@ function broadcast(msg: object): void {
 
 // ─── Push callbacks ───────────────────────────────────────────────────────────
 
-function onToken(taskId: number | null, conversationId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean): void {
-  broadcast({ type: "stream.token", payload: { taskId, conversationId, executionId, token, done, isReasoning, isStatus } });
-  if (taskId == null && done) {
-    const db = getDb();
-    const row = db.query<ChatSessionRow, [number]>(
-      "SELECT * FROM chat_sessions WHERE conversation_id = ?",
-    ).get(conversationId);
-    if (row) notifyChatSessionUpdated(mapChatSession(row));
-  }
-}
-
 function onError(taskId: number | null, conversationId: number, executionId: number, error: string): void {
   broadcast({ type: "stream.error", payload: { taskId, conversationId, executionId, error } });
 }
@@ -199,10 +188,10 @@ function notifyChatSessionUpdated(session: ChatSession): void {
 // ─── Per-execution stream batchers ───────────────────────────────────────────
 const batchers = new Map<number, StreamBatcher>();
 
-function getOrCreateBatcher(taskId: number | null, conversationId: number, executionId: number): StreamBatcher {
+function getOrCreateBatcher(conversationId: number, executionId: number): StreamBatcher {
   const existing = batchers.get(executionId);
   if (existing) return existing;
-  const batcher = new StreamBatcher(taskId, conversationId, executionId, (_events) => {
+  const batcher = new StreamBatcher(conversationId, executionId, (_events) => {
     // DB writes are handled by StreamBatcher.flush() internally.
     // IPC delivery happens immediately in onStreamEvent — nothing to do here.
   });
@@ -212,7 +201,7 @@ function getOrCreateBatcher(taskId: number | null, conversationId: number, execu
 }
 
 function onStreamEvent(event: StreamEvent): void {
-  const batcher = getOrCreateBatcher(event.taskId, event.conversationId, event.executionId);
+  const batcher = getOrCreateBatcher(event.conversationId, event.executionId);
   // ── Diagnostic: verify events are sent incrementally ──
   if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
     console.log(`[stream-diag-bun] ${event.type} len=${event.content.length} t=${performance.now().toFixed(1)}`);
@@ -236,13 +225,11 @@ const orchestrator: Orchestrator | null = !configError
   ? injectedEngine
     ? new Orchestrator(
       injectedEngine,
-      onToken,
       onError,
       notifyTaskUpdated,
       notifyNewMessage,
     )
     : new Orchestrator(
-      onToken,
       onError,
       notifyTaskUpdated,
       notifyNewMessage,

@@ -49,28 +49,6 @@
                 <span>{{ props.streamState.statusMessage }}</span>
               </div>
             </template>
-            <template v-else>
-              <ReasoningBubble
-                v-if="props.streamingReasoningToken && isLegacyStreamVisible"
-                :content="props.streamingReasoningToken"
-                :streaming="true"
-                key="live-reasoning"
-              />
-              <div
-                v-if="props.streamingToken && isLegacyStreamVisible"
-                class="msg msg--assistant"
-              >
-                <div class="msg__bubble prose streaming" v-html="renderMd(props.streamingToken)" />
-                <div class="msg__meta">AI<span class="cursor">▌</span></div>
-              </div>
-              <div
-                v-else-if="props.streamingStatusMessage && isLegacyStreamVisible"
-                class="conv-body__system"
-              >
-                <ProgressSpinner style="width: 16px; height: 16px" />
-                <span>{{ props.streamingStatusMessage }}</span>
-              </div>
-            </template>
           </div>
           <MessageBubble
             v-else
@@ -111,12 +89,7 @@ const props = defineProps<{
   streamState?: ConversationStreamState | null;
   streamVersion?: number;
   executionState: string;
-  // Legacy streaming compat
-  streamingToken?: string;
-  streamingReasoningToken?: string;
-  streamingStatusMessage?: string;
-  streamingActiveId?: number | null;
-  // selfId = conversationId; filters legacy streaming to this conversation only
+  // selfId = conversationId; kept for scroll tracking
   selfId?: number | null;
 }>();
 
@@ -158,7 +131,7 @@ const displayItems = computed<DisplayItem[]>(() => {
       i++;
     }
   }
-  if (hasStructuredTail.value || hasLegacyTail.value) {
+  if (hasStructuredTail.value) {
     items.push({ kind: "stream_tail", key: "stream-tail" });
   }
   return items;
@@ -177,25 +150,12 @@ const hasStructuredTail = computed(() => {
   return Boolean(state && !state.isDone && (state.roots.length > 0 || state.statusMessage));
 });
 
-const hasLegacyTail = computed(() =>
-  !props.streamState
-  && isLegacyStreamVisible.value
-  && Boolean(props.streamingReasoningToken || props.streamingToken || props.streamingStatusMessage),
-);
-
 const hasLiveContent = computed(() => {
   const state = props.streamState;
-  if (state && !state.isDone) return state.roots.length > 0;
-  return Boolean(props.streamingReasoningToken || props.streamingToken);
+  return Boolean(state && !state.isDone && state.roots.length > 0);
 });
 
-const isLegacyStreamVisible = computed(() =>
-  props.selfId == null || props.streamingActiveId === props.selfId,
-);
-
-const hasVisibleStreamingState = computed(() => {
-  return hasStructuredTail.value || hasLegacyTail.value;
-});
+const hasVisibleStreamingState = computed(() => hasStructuredTail.value);
 
 // ─── Virtualizer ─────────────────────────────────────────────────────────────
 
@@ -282,9 +242,6 @@ watch(
 watch(
   [
     () => props.messages.length,
-    () => props.streamingToken?.length ?? 0,
-    () => props.streamingReasoningToken?.length ?? 0,
-    () => props.streamingStatusMessage?.length ?? 0,
     () => props.executionState,
     () => props.streamVersion ?? 0,
   ],

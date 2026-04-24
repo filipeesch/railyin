@@ -148,21 +148,19 @@ export function initDb(): Database {
     );
     CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
     CREATE TABLE IF NOT EXISTS stream_events (
-       id           INTEGER PRIMARY KEY,
-       task_id      INTEGER REFERENCES tasks(id),
-       conversation_id INTEGER REFERENCES conversations(id),
-       execution_id INTEGER NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
-       seq          INTEGER NOT NULL,
-      block_id     TEXT NOT NULL,
-      type         TEXT NOT NULL,
-      content      TEXT NOT NULL DEFAULT '',
-      metadata     TEXT,
-      parent_block_id TEXT,
-      subagent_id  TEXT,
-      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE (execution_id, seq)
+       id              INTEGER PRIMARY KEY AUTOINCREMENT,
+       conversation_id INTEGER NOT NULL,
+       execution_id    INTEGER NOT NULL,
+       seq             INTEGER NOT NULL,
+       block_id        TEXT NOT NULL,
+       type            TEXT NOT NULL,
+       content         TEXT NOT NULL DEFAULT '',
+       metadata        TEXT,
+       parent_block_id TEXT,
+       subagent_id     TEXT,
+       created_at      TEXT DEFAULT (datetime('now')),
+       UNIQUE (conversation_id, seq)
     );
-    CREATE INDEX IF NOT EXISTS idx_stream_events_task ON stream_events (task_id, seq);
     CREATE INDEX IF NOT EXISTS idx_stream_events_conversation ON stream_events (conversation_id, seq);
     CREATE INDEX IF NOT EXISTS idx_stream_events_execution ON stream_events (execution_id, seq);
     CREATE TABLE IF NOT EXISTS chat_sessions (

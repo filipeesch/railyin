@@ -301,8 +301,8 @@ describe("conversations handlers", () => {
       [10, taskId, conversationId],
     );
     db.run(
-      "INSERT INTO stream_events (id, task_id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL), (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
-      [1, taskId, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, taskId, conversationId, 10, 1, "root-2", "assistant", "beta"],
+      "INSERT INTO stream_events (id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL), (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
+      [1, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, conversationId, 10, 1, "root-2", "assistant", "beta"],
     );
 
     const handlers = conversationHandlers(null);

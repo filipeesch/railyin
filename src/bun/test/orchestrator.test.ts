@@ -48,7 +48,6 @@ function makeOrchestrator(): Orchestrator {
 
   return new Orchestrator(
     new TestEngine(),
-    (_taskId, _conversationId, _execId, token, done) => { if (!done) tokens.push(token); },
     noop,
     (task) => taskUpdates.push(task),
     (msg) => newMessages.push(msg),
@@ -140,12 +139,9 @@ describe("Orchestrator.executeHumanTurn", () => {
     let resolveDone!: () => void;
     const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
 
-    const origOnToken = orchestrator["onToken"];
-    // @ts-expect-error — patching private for test
-    orchestrator["onToken"] = (_taskId: number | null, _conversationId: number, execId: number, token: string, done: boolean) => {
-      if (done) resolveDone();
-      origOnToken(null, 0, execId, token, done);
-    };
+    orchestrator.setOnStreamEvent((event) => {
+      if (event.done) resolveDone();
+    });
 
     await orchestrator.executeHumanTurn(taskId, "What should I do first?");
     await donePromise;

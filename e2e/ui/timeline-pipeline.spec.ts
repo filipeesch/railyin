@@ -333,9 +333,9 @@ test.describe("Q — sequential and interleaving order", () => {
             { blockId: `${Q_EXEC}-tc2` },
         ));
 
-        await expect(page.locator(".conversation-inner > .tcg")).toHaveCount(2, { timeout: 3_000 });
+        await expect(page.locator(".conversation-inner .tcg")).toHaveCount(2, { timeout: 3_000 });
 
-        const names = await page.locator(".conversation-inner > .tcg .tcg__tool-name").allTextContents();
+        const names = await page.locator(".conversation-inner .tcg .tcg__tool-name").allTextContents();
         expect(names.map((n) => n.trim())).toEqual(["read_file", "read_file"]);
     });
 
@@ -367,7 +367,39 @@ test.describe("Q — sequential and interleaving order", () => {
                 { blockId: `${Q_EXEC}-tc${i}` },
             ));
             // Each tool should be visible before next arrives
-            await expect(page.locator(".conversation-inner > .tcg")).toHaveCount(i + 1, { timeout: 2_000 });
+            await expect(page.locator(".conversation-inner .tcg")).toHaveCount(i + 1, { timeout: 2_000 });
         }
+    });
+});
+
+// ─── Suite R — stream replay and execution isolation ─────────────────────────
+
+test.describe("R — stream replay and execution isolation", () => {
+    const R_EXEC_1 = 99_961;
+    const R_EXEC_2 = 99_962;
+
+    test("R-1: new execution replaces old live blocks — no ghost blocks from prior execution", async ({ page, ws, task }) => {
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Exec 1: push live text_chunk events
+        ws.pushStreamEvent(mkEvent(task.id, R_EXEC_1, 0, "text_chunk", "exec-one content", { blockId: `${R_EXEC_1}-t1` }));
+        await expect(page.locator(".msg__bubble.streaming")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".msg__bubble.streaming")).toContainText("exec-one content");
+
+        // Exec 1 completes — isDone=true, live section hides
+        ws.pushDone(task.id, R_EXEC_1, 1);
+        await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible({ timeout: 3_000 });
+
+        // Exec 2 starts — new executionId should clear old blocks and show fresh live stream
+        ws.pushStreamEvent(mkEvent(task.id, R_EXEC_2, 0, "text_chunk", "exec-two content", { blockId: `${R_EXEC_2}-t1` }));
+        await expect(page.locator(".msg__bubble.streaming")).toBeVisible({ timeout: 3_000 });
+
+        // Only exec-two content visible — exec-one blocks are gone
+        await expect(page.locator(".msg__bubble.streaming")).toContainText("exec-two content");
+        await expect(page.locator(".msg__bubble.streaming")).not.toContainText("exec-one content");
+
+        // Exactly one live streaming bubble — no duplicates from exec 1
+        await expect(page.locator(".msg__bubble.streaming")).toHaveCount(1);
     });
 });

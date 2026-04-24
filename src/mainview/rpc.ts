@@ -4,11 +4,11 @@
  * api(method, params) — POST /api/<method> with JSON body, returns typed response.
  *
  * WebSocket push: the WS connection to /ws receives server-sent events
- * (stream.token, stream.event, stream.error, task.updated, message.new, workflow.reloaded).
+ * (stream.event, stream.error, task.updated, message.new, workflow.reloaded, ...).
  * The connection reconnects automatically with exponential backoff.
  */
 
-import type { RailynAPI, PushMessage, StreamToken, StreamError, StreamEvent, Task, ConversationMessage, CodeRef, ChatSession } from "@shared/rpc-types";
+import type { RailynAPI, PushMessage, StreamError, StreamEvent, Task, ConversationMessage, CodeRef, ChatSession } from "@shared/rpc-types";
 
 // ─── Server base URL ──────────────────────────────────────────────────────────
 // In dev and production the frontend is served by the same Bun server,
@@ -38,7 +38,6 @@ export async function api<M extends keyof RailynAPI>(
 
 // ─── Push callbacks (registered lazily from App.vue) ─────────────────────────
 
-let _onStreamToken: (payload: StreamToken) => void = () => { };
 let _onStreamError: (payload: StreamError) => void = () => { };
 let _onStreamEvent: (payload: StreamEvent) => void = () => { };
 let _onTaskUpdated: (task: Task) => void = () => { };
@@ -48,7 +47,6 @@ let _onCodeRef: (ref: CodeRef) => void = () => { };
 let _onChatSessionUpdated: (session: ChatSession) => void = () => { };
 let _onChatSessionCreated: (session: ChatSession) => void = () => { };
 
-export function onStreamToken(cb: (payload: StreamToken) => void) { _onStreamToken = cb; }
 export function onStreamError(cb: (payload: StreamError) => void) { _onStreamError = cb; }
 export function onStreamEventMessage(cb: (payload: StreamEvent) => void) { _onStreamEvent = cb; }
 export function onTaskUpdated(cb: (task: Task) => void) { _onTaskUpdated = cb; }
@@ -81,7 +79,6 @@ function connectWs(): void {
       return;
     }
     switch (msg.type) {
-      case "stream.token": _onStreamToken(msg.payload); break;
       case "stream.error": _onStreamError(msg.payload); break;
       case "stream.event": _onStreamEvent(msg.payload); break;
       case "task.updated": _onTaskUpdated(msg.payload); break;

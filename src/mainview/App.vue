@@ -13,7 +13,7 @@ import Toast from "primevue/toast";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
-import { onStreamToken, onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef, onChatSessionUpdated, onChatSessionCreated } from "./rpc";
+import { onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef, onChatSessionUpdated, onChatSessionCreated } from "./rpc";
 import { getTaskActivityToast } from "./task-activity";
 import { useCodeServerStore } from "./stores/codeServer";
 import { useChatStore } from "./stores/chat";
@@ -42,10 +42,6 @@ function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) 
 
 onMounted(async () => {
   // Register IPC push handlers from Bun
-  onStreamToken((payload) => {
-    conversationStore.onStreamToken(payload);
-  });
-
   onStreamError((payload) => {
     // Surface config errors (taskId === -1 is a sentinel)
     if (payload.taskId === -1) {

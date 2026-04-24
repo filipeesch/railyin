@@ -72,17 +72,16 @@ export function createBackendRpcRuntime(options: {
     const ipcEvents: StreamEvent[] = [];
     const batchers = new Map<number, StreamBatcher>();
 
-    function getOrCreateBatcher(taskId: number | null, conversationId: number, executionId: number): StreamBatcher {
+    function getOrCreateBatcher(conversationId: number, executionId: number): StreamBatcher {
         const existing = batchers.get(executionId);
         if (existing) return existing;
-        const batcher = new StreamBatcher(taskId, conversationId, executionId, (events) => {
+        const batcher = new StreamBatcher(conversationId, executionId, (events) => {
             // DB write only — no IPC here (IPC is done immediately in onStreamEvent)
             const persisted = events.filter((e) =>
                 ["user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system"].includes(e.type),
             );
             if (persisted.length > 0) {
                 appendStreamEventBatch(persisted.map((e) => ({
-                    taskId: e.taskId,
                     conversationId: e.conversationId,
                     executionId: e.executionId,
                     seq: e.seq,
@@ -107,7 +106,6 @@ export function createBackendRpcRuntime(options: {
 
     const coordinator = new Orchestrator(
         engine,
-        recorder.recordToken,
         recorder.recordError,
         recorder.recordTaskUpdate,
         recorder.recordNewMessage,
@@ -118,7 +116,7 @@ export function createBackendRpcRuntime(options: {
         // ALL events go to IPC immediately
         ipcEvents.push(event);
         // ALL events also go to batcher (for DB writes)
-        const batcher = getOrCreateBatcher(event.taskId, event.conversationId, event.executionId);
+        const batcher = getOrCreateBatcher(event.conversationId, event.executionId);
         batcher.push({
             type: event.type,
             content: event.content,

@@ -14,7 +14,6 @@ export class StreamBatcher {
   private currentBlockId: string = "";
 
   constructor(
-    private readonly taskId: number | null,
     private readonly conversationId: number,
     private readonly executionId: number,
     private readonly onFlush: (events: StreamEvent[]) => void,
@@ -77,7 +76,6 @@ export class StreamBatcher {
 
     const blockId = this.getBlockId(partial.type, partial.blockId);
     const event: StreamEvent = {
-      taskId: this.taskId,
       conversationId: this.conversationId,
       executionId: this.executionId,
       seq: this.nextSeq(),
@@ -109,7 +107,6 @@ export class StreamBatcher {
     const persisted = batch.filter((e) => PERSISTED_TYPES.has(e.type));
     if (persisted.length > 0) {
       appendStreamEventBatch(persisted.map((e) => ({
-        taskId: e.taskId,
         conversationId: e.conversationId,
         executionId: e.executionId,
         seq: e.seq,

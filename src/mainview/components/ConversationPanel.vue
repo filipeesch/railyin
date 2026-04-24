@@ -5,10 +5,6 @@
       :stream-state="props.streamState"
       :stream-version="props.streamVersion"
       :execution-state="props.executionState"
-      :streaming-token="props.streamingToken"
-      :streaming-reasoning-token="props.streamingReasoningToken"
-      :streaming-status-message="props.streamingStatusMessage"
-      :streaming-active-id="props.streamingActiveId"
       :self-id="props.selfId"
     />
     <!-- Slim fallback input row — used when ConversationPanel is rendered standalone
@@ -56,10 +52,6 @@ const props = defineProps<{
   executionState: string;
   disabled?: boolean;
   placeholder?: string;
-  streamingToken?: string;
-  streamingReasoningToken?: string;
-  streamingStatusMessage?: string;
-  streamingActiveId?: number | null;
   selfId?: number | null;
 }>();
 

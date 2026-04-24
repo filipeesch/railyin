@@ -245,6 +245,12 @@ describe("runMigrations", () => {
       .query<{ name: string; notnull: number }, []>("PRAGMA table_info(stream_events)")
       .all()
       .find((column) => column.name === "task_id");
-    expect(taskIdColumn?.notnull).toBe(0);
+    expect(taskIdColumn).toBeUndefined();
+
+    const conversationIdColumn = db
+      .query<{ name: string; notnull: number }, []>("PRAGMA table_info(stream_events)")
+      .all()
+      .find((column) => column.name === "conversation_id");
+    expect(conversationIdColumn?.notnull).toBe(1);
   });
 });

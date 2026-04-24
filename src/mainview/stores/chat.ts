@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
-import type { ChatSession, ConversationMessage, StreamToken, StreamError, StreamEvent } from "@shared/rpc-types";
+import type { ChatSession, ConversationMessage, StreamError, StreamEvent } from "@shared/rpc-types";
 import { useConversationStore } from "./conversation";
 
 export const useChatStore = defineStore("chat", () => {
@@ -12,10 +12,6 @@ export const useChatStore = defineStore("chat", () => {
   const messages = computed(() => conversationStore.messages);
   const messagesLoading = computed(() => conversationStore.messagesLoading);
   const unreadSessionIds = ref(new Set<number>());
-
-  const streamingToken = computed(() => conversationStore.streamingToken);
-  const streamingConversationId = computed(() => conversationStore.streamingConversationId);
-  const isStreaming = computed(() => streamingConversationId.value != null);
 
   const activeSession = computed(() =>
     activeChatSessionId.value != null
@@ -87,10 +83,6 @@ export const useChatStore = defineStore("chat", () => {
       }
     },
   });
-
-  function onStreamToken(payload: StreamToken) {
-    conversationStore.onStreamToken(payload);
-  }
 
   function onStreamError(payload: StreamError) {
     conversationStore.onStreamError(payload);
@@ -201,9 +193,6 @@ export const useChatStore = defineStore("chat", () => {
     messages,
     messagesLoading,
     unreadSessionIds,
-    streamingToken,
-    streamingConversationId,
-    isStreaming,
     loadSessions,
     createSession,
     selectSession,
@@ -215,7 +204,6 @@ export const useChatStore = defineStore("chat", () => {
     markUnread,
     clearUnread,
     onChatSessionUpdated,
-    onStreamToken,
     onStreamError,
     onStreamEvent,
   };

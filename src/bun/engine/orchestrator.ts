@@ -31,7 +31,7 @@ import { appendMessage, ensureTaskConversation } from "../conversation/messages.
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly injectedEngine: ExecutionEngine | null;
-  private readonly onToken: OnToken;
+  private readonly onToken: OnToken = () => {};
   private readonly onError: OnError;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly onNewMessage: OnNewMessage;
@@ -49,35 +49,30 @@ export class Orchestrator implements ExecutionCoordinator {
 
   constructor(
     engine: ExecutionEngine,
-    onToken: OnToken,
     onError: OnError,
     onTaskUpdated: OnTaskUpdated,
     onNewMessage: OnNewMessage,
   );
   constructor(
-    onToken: OnToken,
     onError: OnError,
     onTaskUpdated: OnTaskUpdated,
     onNewMessage: OnNewMessage,
   );
   constructor(
-    engineOrOnToken: ExecutionEngine | OnToken,
-    onTokenOrOnError: OnToken | OnError,
+    engineOrOnError: ExecutionEngine | OnError,
     onErrorOrOnTaskUpdated: OnError | OnTaskUpdated,
     onTaskUpdatedOrOnNewMessage: OnTaskUpdated | OnNewMessage,
     maybeOnNewMessage?: OnNewMessage,
   ) {
-    if (typeof engineOrOnToken === "object" && "execute" in engineOrOnToken) {
-      this.injectedEngine = engineOrOnToken;
-      this.onToken = onTokenOrOnError as OnToken;
+    if (typeof engineOrOnError === "object" && "execute" in engineOrOnError) {
+      this.injectedEngine = engineOrOnError;
       this.onError = onErrorOrOnTaskUpdated as OnError;
       this.onTaskUpdated = onTaskUpdatedOrOnNewMessage as OnTaskUpdated;
       this.onNewMessage = maybeOnNewMessage!;
       return;
     }
     this.injectedEngine = null;
-    this.onToken = engineOrOnToken;
-    this.onError = onTokenOrOnError as OnError;
+    this.onError = engineOrOnError;
     this.onTaskUpdated = onErrorOrOnTaskUpdated as OnTaskUpdated;
     this.onNewMessage = onTaskUpdatedOrOnNewMessage as OnNewMessage;
   }

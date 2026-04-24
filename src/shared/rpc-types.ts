@@ -421,20 +421,6 @@ export interface LspDetectedLanguage {
   installOptions: LspInstallOption[];
 }
 
-// ─── IPC streaming token event ───────────────────────────────────────────────
-
-/** @deprecated Use StreamEvent / "stream.event" channel instead */
-export interface StreamToken {
-  taskId: number | null;
-  conversationId: number;
-  executionId: number;
-  token: string;
-  done: boolean;
-  isReasoning?: boolean;
-  /** True for ephemeral status events from non-streaming fallback — never stored in DB. */
-  isStatus?: boolean;
-}
-
 // ─── Unified stream event (new pipeline) ─────────────────────────────────────
 
 export type StreamEventType =
@@ -854,7 +840,6 @@ export type RailynAPI = {
 // ─── Push message types (WebSocket server → browser) ─────────────────────────
 
 export type PushMessage =
-  | { type: "stream.token"; payload: StreamToken }
   | { type: "stream.event"; payload: StreamEvent }
   | { type: "stream.error"; payload: StreamError }
   | { type: "task.updated"; payload: Task }

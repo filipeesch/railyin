@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
-import type { Task, ConversationMessage, StreamToken, StreamError, StreamEvent, GitNumstat } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamError, StreamEvent, GitNumstat } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 import { useConversationStore } from "./conversation";
 import { useWorkspaceStore } from "./workspace";
@@ -22,11 +22,6 @@ export const useTaskStore = defineStore("task", () => {
 
   const streamStates = computed(() => conversationStore.streamStates);
   const streamVersion = computed(() => conversationStore.streamVersion);
-  const streamingToken = computed(() => conversationStore.streamingToken);
-  const streamingConversationId = computed(() => conversationStore.streamingConversationId);
-  const streamingReasoningToken = computed(() => conversationStore.streamingReasoningToken);
-  const isStreamingReasoning = computed(() => conversationStore.streamingReasoningToken.length > 0);
-  const streamingStatusMessage = computed(() => conversationStore.streamingStatusMessage);
 
   const loading = ref(false);
   const messagesLoading = computed(() => conversationStore.messagesLoading);
@@ -192,13 +187,8 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── IPC push handlers ────────────────────────────────────────────────────
 
-  /** New unified stream event handler — replaces the three-channel old approach */
   function onStreamEvent(event: StreamEvent) {
     conversationStore.onStreamEvent(event);
-  }
-
-  function onStreamToken(payload: StreamToken) {
-    conversationStore.onStreamToken(payload);
   }
 
   function onStreamError(payload: StreamError) {
@@ -388,11 +378,6 @@ export const useTaskStore = defineStore("task", () => {
     activeTaskId,
     activeTask,
     messages,
-    streamingToken,
-    streamingReasoningToken,
-    isStreamingReasoning,
-    streamingStatusMessage,
-    streamingConversationId,
     streamStates,
     streamVersion,
     activeStreamState,
@@ -428,7 +413,6 @@ export const useTaskStore = defineStore("task", () => {
     refreshChangedFiles,
     hasUnread,
     workspaceHasUnread,
-    onStreamToken,
     onStreamError,
     onStreamEvent,
     onTaskUpdated,

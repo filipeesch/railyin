@@ -65,10 +65,6 @@
       :stream-state="conversationStore.activeStreamState"
       :stream-version="conversationStore.streamVersion"
       :execution-state="session.status"
-      :streaming-token="chatStore.streamingToken || undefined"
-      :streaming-reasoning-token="conversationStore.streamingReasoningToken || undefined"
-      :streaming-status-message="conversationStore.streamingStatusMessage || undefined"
-      :streaming-active-id="conversationStore.streamingConversationId"
       :self-id="session.conversationId"
     />
 

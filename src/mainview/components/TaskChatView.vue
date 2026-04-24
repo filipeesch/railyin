@@ -108,10 +108,6 @@
         :stream-state="taskStore.activeStreamState"
         :stream-version="taskStore.streamVersion"
         :execution-state="task.executionState"
-        :streaming-token="taskStore.streamingToken"
-        :streaming-reasoning-token="taskStore.streamingReasoningToken"
-        :streaming-status-message="taskStore.streamingStatusMessage"
-        :streaming-active-id="taskStore.streamingConversationId"
         :self-id="task.conversationId"
       />
 
