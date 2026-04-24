@@ -426,7 +426,7 @@ export interface LspDetectedLanguage {
 /** @deprecated Use StreamEvent / "stream.event" channel instead */
 export interface StreamToken {
   taskId: number | null;
-  conversationId?: number;
+  conversationId: number;
   executionId: number;
   token: string;
   done: boolean;
@@ -452,7 +452,7 @@ export type StreamEventType =
 
 export interface StreamEvent {
   taskId: number | null;
-  conversationId?: number;
+  conversationId: number;
   executionId: number;
   seq: number;
   blockId: string;
@@ -466,7 +466,7 @@ export interface StreamEvent {
 
 export interface StreamError {
   taskId: number | null;
-  conversationId?: number;
+  conversationId: number;
   executionId: number;
   error: string;
 }
@@ -556,15 +556,15 @@ export type RailynAPI = {
 
   // Conversations
   "conversations.getMessages": {
-    params: { conversationId?: number; taskId?: number };
+    params: { conversationId: number };
     response: ConversationMessage[];
   };
   "conversations.getStreamEvents": {
-    params: { conversationId?: number; taskId?: number; afterSeq?: number };
+    params: { conversationId: number; afterSeq?: number };
     response: import("../bun/db/stream-events").PersistedStreamEvent[];
   };
   "conversations.contextUsage": {
-    params: { conversationId?: number; taskId?: number };
+    params: { conversationId: number };
     response: { usedTokens: number; maxTokens: number; fraction: number };
   };
 

@@ -72,10 +72,10 @@ export function createBackendRpcRuntime(options: {
     const ipcEvents: StreamEvent[] = [];
     const batchers = new Map<number, StreamBatcher>();
 
-    function getOrCreateBatcher(taskId: number, executionId: number): StreamBatcher {
+    function getOrCreateBatcher(taskId: number | null, conversationId: number, executionId: number): StreamBatcher {
         const existing = batchers.get(executionId);
         if (existing) return existing;
-        const batcher = new StreamBatcher(taskId, executionId, (events) => {
+        const batcher = new StreamBatcher(taskId, conversationId, executionId, (events) => {
             // DB write only — no IPC here (IPC is done immediately in onStreamEvent)
             const persisted = events.filter((e) =>
                 ["user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system"].includes(e.type),
@@ -83,6 +83,7 @@ export function createBackendRpcRuntime(options: {
             if (persisted.length > 0) {
                 appendStreamEventBatch(persisted.map((e) => ({
                     taskId: e.taskId,
+                    conversationId: e.conversationId,
                     executionId: e.executionId,
                     seq: e.seq,
                     blockId: e.blockId,
@@ -117,7 +118,7 @@ export function createBackendRpcRuntime(options: {
         // ALL events go to IPC immediately
         ipcEvents.push(event);
         // ALL events also go to batcher (for DB writes)
-        const batcher = getOrCreateBatcher(event.taskId, event.executionId);
+        const batcher = getOrCreateBatcher(event.taskId, event.conversationId, event.executionId);
         batcher.push({
             type: event.type,
             content: event.content,
@@ -189,7 +190,7 @@ export function createBackendRpcRuntime(options: {
             ipcEvents.filter((e) => e.executionId === executionId),
         getDbStreamEvents: (executionId: number) =>
             db.query<{
-                id: number; task_id: number; execution_id: number; seq: number;
+                id: number; task_id: number | null; conversation_id: number; execution_id: number; seq: number;
                 block_id: string; type: string; content: string;
                 metadata: string | null; parent_block_id: string | null; subagent_id: string | null; created_at: string;
             }, [number]>(
@@ -197,6 +198,7 @@ export function createBackendRpcRuntime(options: {
             ).all(executionId).map((r) => ({
                 id: r.id,
                 taskId: r.task_id,
+                conversationId: r.conversation_id,
                 executionId: r.execution_id,
                 seq: r.seq,
                 blockId: r.block_id,
@@ -228,4 +230,3 @@ export function createBackendRpcRuntime(options: {
         },
     };
 }
-

@@ -28,6 +28,50 @@
             v-else-if="displayItems[vitem.index].kind === 'code_review'"
             :message="asCodeReview(vitem.index).message"
           />
+          <div
+            v-else-if="displayItems[vitem.index].kind === 'stream_tail'"
+            class="conv-body__tail"
+          >
+            <template v-if="hasStructuredTail && props.streamState">
+              <StreamBlockNode
+                v-for="rootId in props.streamState.roots"
+                :key="rootId"
+                :blockId="rootId"
+                :blocks="props.streamState.blocks"
+                :renderMd="renderMd"
+                :version="props.streamVersion"
+              />
+              <div
+                v-if="props.streamState.statusMessage"
+                class="conv-body__system"
+              >
+                <ProgressSpinner style="width: 16px; height: 16px" />
+                <span>{{ props.streamState.statusMessage }}</span>
+              </div>
+            </template>
+            <template v-else>
+              <ReasoningBubble
+                v-if="props.streamingReasoningToken && isLegacyStreamVisible"
+                :content="props.streamingReasoningToken"
+                :streaming="true"
+                key="live-reasoning"
+              />
+              <div
+                v-if="props.streamingToken && isLegacyStreamVisible"
+                class="msg msg--assistant"
+              >
+                <div class="msg__bubble prose streaming" v-html="renderMd(props.streamingToken)" />
+                <div class="msg__meta">AI<span class="cursor">▌</span></div>
+              </div>
+              <div
+                v-else-if="props.streamingStatusMessage && isLegacyStreamVisible"
+                class="conv-body__system"
+              >
+                <ProgressSpinner style="width: 16px; height: 16px" />
+                <span>{{ props.streamingStatusMessage }}</span>
+              </div>
+            </template>
+          </div>
           <MessageBubble
             v-else
             :chunk="asSingle(vitem.index).message"
@@ -35,50 +79,6 @@
           />
         </div>
       </div>
-
-      <!-- Unified stream blocks -->
-      <template v-if="props.streamState && props.streamState.roots.length > 0">
-        <StreamBlockNode
-          v-for="rootId in props.streamState.roots"
-          :key="rootId"
-          :blockId="rootId"
-          :blocks="props.streamState.blocks"
-          :renderMd="renderMd"
-          :version="props.streamVersion"
-        />
-      </template>
-      <!-- Ephemeral status message (pipeline path) -->
-      <div
-        v-if="props.streamState && !props.streamState.isDone && props.streamState.statusMessage"
-        class="conv-body__system"
-      >
-        <ProgressSpinner style="width: 16px; height: 16px" />
-        <span>{{ props.streamState.statusMessage }}</span>
-      </div>
-
-      <!-- Legacy streaming (non-pipeline path) -->
-      <template v-else-if="!props.streamState">
-        <ReasoningBubble
-          v-if="props.streamingReasoningToken && isLegacyStreamVisible"
-          :content="props.streamingReasoningToken"
-          :streaming="true"
-          key="live-reasoning"
-        />
-        <div
-          v-if="props.streamingToken && isLegacyStreamVisible"
-          class="msg msg--assistant"
-        >
-          <div class="msg__bubble prose streaming" v-html="renderMd(props.streamingToken)" />
-          <div class="msg__meta">AI<span class="cursor">▌</span></div>
-        </div>
-        <div
-          v-else-if="props.streamingStatusMessage && isLegacyStreamVisible"
-          class="conv-body__system"
-        >
-          <ProgressSpinner style="width: 16px; height: 16px" />
-          <span>{{ props.streamingStatusMessage }}</span>
-        </div>
-      </template>
 
       <!-- Running spinner when no tokens yet -->
       <div
@@ -127,7 +127,8 @@ const TOOL_MSG_TYPES = new Set(["tool_call", "tool_result", "file_diff"]);
 type DisplayItem =
   | { kind: "tool_entry"; entry: ToolEntry; key: string }
   | { kind: "code_review"; message: ConversationMessage; key: string }
-  | { kind: "single"; message: ConversationMessage; msgIndex: number; key: string };
+  | { kind: "single"; message: ConversationMessage; msgIndex: number; key: string }
+  | { kind: "stream_tail"; key: string };
 
 const displayItems = computed<DisplayItem[]>(() => {
   const msgs = props.messages;
@@ -157,6 +158,9 @@ const displayItems = computed<DisplayItem[]>(() => {
       i++;
     }
   }
+  if (hasStructuredTail.value || hasLegacyTail.value) {
+    items.push({ kind: "stream_tail", key: "stream-tail" });
+  }
   return items;
 });
 
@@ -168,10 +172,21 @@ function asToolEntry(i: number) { return displayItems.value[i] as ToolEntryItem;
 function asCodeReview(i: number) { return displayItems.value[i] as CodeReviewItem; }
 function asSingle(i: number) { return displayItems.value[i] as SingleItem; }
 
+const hasStructuredTail = computed(() => {
+  const state = props.streamState;
+  return Boolean(state && !state.isDone && (state.roots.length > 0 || state.statusMessage));
+});
+
+const hasLegacyTail = computed(() =>
+  !props.streamState
+  && isLegacyStreamVisible.value
+  && Boolean(props.streamingReasoningToken || props.streamingToken || props.streamingStatusMessage),
+);
+
 const hasLiveContent = computed(() => {
   const state = props.streamState;
-  if (!state || state.isDone) return false;
-  return state.roots.length > 0;
+  if (state && !state.isDone) return state.roots.length > 0;
+  return Boolean(props.streamingReasoningToken || props.streamingToken);
 });
 
 const isLegacyStreamVisible = computed(() =>
@@ -179,12 +194,7 @@ const isLegacyStreamVisible = computed(() =>
 );
 
 const hasVisibleStreamingState = computed(() => {
-  const state = props.streamState;
-  if (state && !state.isDone && (state.roots.length > 0 || !!state.statusMessage)) return true;
-  if (!props.streamState && isLegacyStreamVisible.value) {
-    return Boolean(props.streamingReasoningToken || props.streamingToken || props.streamingStatusMessage);
-  }
-  return false;
+  return hasStructuredTail.value || hasLegacyTail.value;
 });
 
 // ─── Virtualizer ─────────────────────────────────────────────────────────────
@@ -200,6 +210,7 @@ const virtualizer = useVirtualizer(computed(() => ({
     if (!item) return 80;
     if (item.kind === "single") return 80;
     if (item.kind === "code_review") return 300;
+    if (item.kind === "stream_tail") return 180;
     return 36;
   },
   overscan: 15,
@@ -334,6 +345,12 @@ function renderMd(content: string): string {
   font-size: 0.8rem;
   color: var(--p-text-muted-color, #94a3b8);
   padding: 4px 0;
+}
+
+.conv-body__tail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* ── message bubble styles (mirrored from ConversationPanel) ─────────────── */

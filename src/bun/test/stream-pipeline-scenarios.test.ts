@@ -152,7 +152,7 @@ describe("S-3 [model-reasoning]: reasoning persisted to DB before tool_call row"
         ]);
 
         runtime = makeRuntime(engine);
-        const { taskId } = await runtime.createTask();
+        const { taskId, conversationId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
         await runtime.recorder.waitForStreamDone(executionId);
@@ -160,6 +160,7 @@ describe("S-3 [model-reasoning]: reasoning persisted to DB before tool_call row"
         const db = runtime.getDbStreamEvents(executionId);
         const dbTypes = db.map((e) => e.type);
 
+        expect(db.every((event) => event.conversationId === conversationId)).toBe(true);
         expect(dbTypes).toContain("reasoning");
         expect(dbTypes).toContain("tool_call");
 

@@ -81,6 +81,10 @@ describe("Orchestrator.executeTransition", () => {
   it("updates workflow_state via configured engine", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
+      [taskId, gitDir, gitDir],
+    );
 
     const { task } = await orchestrator.executeTransition(taskId, "plan");
 
@@ -177,6 +181,21 @@ describe("Orchestrator.executeHumanTurn", () => {
     expect(after).toBe(before + 1);
   });
 
+  it("persists conversation_id on task-backed executions", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+
+    const { executionId } = await orchestrator.executeHumanTurn(taskId, "Go.");
+
+    const row = db
+      .query<{ task_id: number | null; conversation_id: number | null }, [number]>(
+        "SELECT task_id, conversation_id FROM executions WHERE id = ?",
+      )
+      .get(executionId);
+
+    expect(row).toEqual({ task_id: taskId, conversation_id: conversationId });
+  });
+
   it("returns message and executionId", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
@@ -218,6 +237,28 @@ describe("Orchestrator.executeHumanTurn", () => {
     expect(taskRow?.conversation_id).not.toBeNull();
     expect(taskRow?.conversation_id).not.toBe(conversationId);
     expect(message.conversationId).toBe(taskRow!.conversation_id!);
+  });
+});
+
+describe("Orchestrator.executeChatTurn", () => {
+  it("persists conversation_id on session executions", async () => {
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const conversationId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
+      [conversationId],
+    );
+    const sessionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+
+    const { executionId } = await orchestrator.executeChatTurn(sessionId, conversationId, "Hello from chat.");
+
+    const row = db
+      .query<{ task_id: number | null; conversation_id: number | null }, [number]>(
+        "SELECT task_id, conversation_id FROM executions WHERE id = ?",
+      )
+      .get(executionId);
+
+    expect(row).toEqual({ task_id: null, conversation_id: conversationId });
   });
 });
 

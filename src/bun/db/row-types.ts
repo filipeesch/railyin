@@ -13,7 +13,7 @@ export interface BoardRow {
 
 export interface ConversationRow {
   id: number;
-  task_id: number;
+  task_id: number | null;
 }
 
 export interface TaskRow {
@@ -53,7 +53,8 @@ export interface TaskGitContextRow {
 
 export interface ExecutionRow {
   id: number;
-  task_id: number;
+  task_id: number | null;
+  conversation_id: number | null;
   from_state: string;
   to_state: string;
   prompt_id: string | null;
@@ -90,7 +91,7 @@ export interface PendingMessageRow {
 
 export interface ModelRawMessageRow {
   id: number;
-  task_id: number;
+  task_id: number | null;
   execution_id: number;
   engine: "claude" | "copilot";
   session_id: string | null;

@@ -383,6 +383,36 @@ test.describe("CD-C — Streaming and execution state", () => {
         await expect(page.locator(".session-chat-view .msg__bubble.streaming")).toContainText("Streaming session text");
     });
 
+    test("CD-C-5b: persisted history stays ahead of the live session tail in one ordered list", async ({ page, api, ws }) => {
+        const session = makeChatSession({ id: 4241, status: "idle" });
+        api.returns("chatSessions.list", [session]);
+        stubSessionMessages(api, session.conversationId, [
+            makeChatMessage(session.id, session.conversationId, "Persisted session answer", "assistant", { id: 92_000 }),
+        ]);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        ws.pushChatSessionUpdated({ ...session, status: "running" });
+        ws.pushStreamEvent(sessionTextChunk(session.conversationId, SESSION_EXEC_ID + 1, 0, "Live session tail"));
+
+        await expect(page.locator(".session-chat-view .conv-body__tail")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".session-chat-view .msg__bubble.streaming")).toContainText("Live session tail");
+
+        const order = await page.locator(".session-chat-view .conv-body [data-index]").evaluateAll((nodes) =>
+            nodes.map((node) => {
+                const tail = node.querySelector(".conv-body__tail");
+                if (tail) return `tail:${tail.textContent?.trim() ?? ""}`;
+                const bubble = node.querySelector(".msg__bubble");
+                return `msg:${bubble?.textContent?.trim() ?? ""}`;
+            }),
+        );
+
+        expect(order).toHaveLength(2);
+        expect(order[0]).toContain("Persisted session answer");
+        expect(order[1]).toContain("Live session tail");
+    });
+
     test("CD-C-6: only one loading indicator is shown while waiting on session status updates", async ({ page, api, ws }) => {
         const session = makeChatSession({ id: 425, status: "running" });
         api.returns("chatSessions.list", [session]);

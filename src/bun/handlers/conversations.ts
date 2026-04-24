@@ -8,49 +8,31 @@ import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context
 import { runWithConfig } from "../config/index.ts";
 import { estimateConversationContextUsage, resolveContextWindow } from "../context-usage.ts";
 
-function resolveConversationId(params: { conversationId?: number; taskId?: number }): number {
-  if (params.conversationId != null) return params.conversationId;
-  if (params.taskId == null) throw new Error("conversationId or taskId is required");
-
-  const db = getDb();
-  const row = db.query<{ conversation_id: number | null }, [number]>(
-    "SELECT conversation_id FROM tasks WHERE id = ?",
-  ).get(params.taskId);
-  const conversationId = row?.conversation_id ?? null;
-  if (conversationId == null) throw new Error(`Conversation not found for task ${params.taskId}`);
-  return conversationId;
-}
-
 export function conversationHandlers(orchestrator: ExecutionCoordinator | null) {
   return {
     "conversations.getMessages": async (params: {
-      conversationId?: number;
-      taskId?: number;
+      conversationId: number;
     }): Promise<ConversationMessage[]> => {
       const db = getDb();
-      const conversationId = resolveConversationId(params);
       return db
         .query<ConversationMessageRow, [number]>(
           "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
         )
-        .all(conversationId)
+        .all(params.conversationId)
         .map(mapConversationMessage);
     },
 
     "conversations.getStreamEvents": async (params: {
-      conversationId?: number;
-      taskId?: number;
+      conversationId: number;
       afterSeq?: number;
     }): Promise<PersistedStreamEvent[]> => {
-      return getStreamEventsByConversation(resolveConversationId(params), params.afterSeq);
+      return getStreamEventsByConversation(params.conversationId, params.afterSeq);
     },
 
     "conversations.contextUsage": async (params: {
-      conversationId?: number;
-      taskId?: number;
+      conversationId: number;
     }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
       const db = getDb();
-      const conversationId = resolveConversationId(params);
       const row = db.query<{
         task_model: string | null;
         task_workspace_key: string | null;
@@ -65,7 +47,7 @@ export function conversationHandlers(orchestrator: ExecutionCoordinator | null) 
          LEFT JOIN boards b ON b.id = t.board_id
          LEFT JOIN chat_sessions cs ON cs.conversation_id = c.id
          WHERE c.id = ?`,
-      ).get(conversationId);
+      ).get(params.conversationId);
 
       const workspaceKey = row?.task_workspace_key ?? row?.session_workspace_key ?? getDefaultWorkspaceKey();
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
@@ -79,7 +61,7 @@ export function conversationHandlers(orchestrator: ExecutionCoordinator | null) 
         ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator))
         : 128_000;
 
-      return estimateConversationContextUsage(conversationId, maxTokens);
+      return estimateConversationContextUsage(params.conversationId, maxTokens);
     },
   };
 }

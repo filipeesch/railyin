@@ -2,8 +2,9 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 import { StreamBatcher } from "./batcher.ts";
 
 // Mock the DB module so tests don't need a real DB
+const appendStreamEventBatchMock = mock(() => {});
 mock.module("../db/stream-events.ts", () => ({
-  appendStreamEventBatch: () => {},
+  appendStreamEventBatch: appendStreamEventBatchMock,
 }));
 
 describe("StreamBatcher", () => {
@@ -13,7 +14,8 @@ describe("StreamBatcher", () => {
 
   beforeEach(() => {
     batches = [];
-    batcher = new StreamBatcher(1, 100, (events) => { batches.push([...events]); });
+    appendStreamEventBatchMock.mockClear();
+    batcher = new StreamBatcher(1, 10, 100, (events) => { batches.push([...events]); });
   });
 
   test("text chunks get the same blockId", () => {
@@ -83,5 +85,22 @@ describe("StreamBatcher", () => {
     batcher.flush();
     expect(batches).toHaveLength(2);
     expect(batches[1][0].blockId).toMatch(/^100-t2$/); // new text block after tool
+  });
+
+  test("persists conversation-scoped rows for chat sessions", () => {
+    batcher = new StreamBatcher(null, 77, 100, (events) => { batches.push([...events]); });
+
+    batcher.push({ type: "assistant", content: "hello" });
+    batcher.flush();
+
+    expect(appendStreamEventBatchMock).toHaveBeenCalledWith([
+      expect.objectContaining({
+        taskId: null,
+        conversationId: 77,
+        executionId: 100,
+        type: "assistant",
+        content: "hello",
+      }),
+    ]);
   });
 });

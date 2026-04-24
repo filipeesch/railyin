@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { makeAssistantMessage } from "./fixtures/mock-data";
 
 async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
     await page.locator(`[data-task-id="${taskId}"]`).click();
@@ -68,5 +69,47 @@ test.describe("TD — task drawer coverage", () => {
             return node.scrollTop + node.clientHeight >= node.scrollHeight - 40;
         });
         expect(isAtBottom).toBe(true);
+    });
+
+    test("TD-6: persisted history and live stream tail share one ordered conversation list", async ({ page, api, ws, task }) => {
+        api.handle("conversations.getMessages", () => [
+            makeAssistantMessage(task.id, "Persisted assistant answer", {
+                id: 81_000,
+                conversationId: task.conversationId,
+            }),
+        ]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        ws.pushStreamEvent({
+            taskId: task.id,
+            conversationId: task.conversationId,
+            executionId: 81_001,
+            seq: 0,
+            blockId: "81_001-text",
+            type: "text_chunk",
+            content: "Live tail answer",
+            metadata: null,
+            parentBlockId: null,
+            subagentId: null,
+            done: false,
+        });
+
+        await expect(page.locator(".task-chat-view .conv-body__tail")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".task-chat-view .msg__bubble.streaming")).toContainText("Live tail answer");
+
+        const order = await page.locator(".task-chat-view .conv-body [data-index]").evaluateAll((nodes) =>
+            nodes.map((node) => {
+                const tail = node.querySelector(".conv-body__tail");
+                if (tail) return `tail:${tail.textContent?.trim() ?? ""}`;
+                const bubble = node.querySelector(".msg__bubble");
+                return `msg:${bubble?.textContent?.trim() ?? ""}`;
+            }),
+        );
+
+        expect(order).toHaveLength(2);
+        expect(order[0]).toContain("Persisted assistant answer");
+        expect(order[1]).toContain("Live tail answer");
     });
 });

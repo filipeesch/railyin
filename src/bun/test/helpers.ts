@@ -55,8 +55,8 @@ export function initDb(): Database {
     );
     CREATE TABLE IF NOT EXISTS executions (
        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-       task_id     INTEGER NOT NULL REFERENCES tasks(id),
-       conversation_id INTEGER REFERENCES conversations(id),
+       task_id     INTEGER REFERENCES tasks(id),
+        conversation_id INTEGER REFERENCES conversations(id),
        from_state  TEXT NOT NULL,
        to_state    TEXT NOT NULL,
       prompt_id   TEXT,
@@ -149,9 +149,9 @@ export function initDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
     CREATE TABLE IF NOT EXISTS stream_events (
        id           INTEGER PRIMARY KEY,
-       task_id      INTEGER NOT NULL,
+       task_id      INTEGER REFERENCES tasks(id),
        conversation_id INTEGER REFERENCES conversations(id),
-       execution_id INTEGER NOT NULL,
+       execution_id INTEGER NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
        seq          INTEGER NOT NULL,
       block_id     TEXT NOT NULL,
       type         TEXT NOT NULL,
@@ -160,10 +160,11 @@ export function initDb(): Database {
       parent_block_id TEXT,
       subagent_id  TEXT,
       created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE (task_id, seq)
+      UNIQUE (execution_id, seq)
     );
     CREATE INDEX IF NOT EXISTS idx_stream_events_task ON stream_events (task_id, seq);
     CREATE INDEX IF NOT EXISTS idx_stream_events_conversation ON stream_events (conversation_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_stream_events_execution ON stream_events (execution_id, seq);
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       workspace_key    TEXT NOT NULL DEFAULT 'default',
@@ -178,7 +179,7 @@ export function initDb(): Database {
     );
     CREATE TABLE IF NOT EXISTS model_raw_messages (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      task_id         INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
       execution_id    INTEGER NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
       engine          TEXT    NOT NULL,
       session_id      TEXT,

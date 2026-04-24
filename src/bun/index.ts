@@ -199,10 +199,10 @@ function notifyChatSessionUpdated(session: ChatSession): void {
 // ─── Per-execution stream batchers ───────────────────────────────────────────
 const batchers = new Map<number, StreamBatcher>();
 
-function getOrCreateBatcher(taskId: number | null, executionId: number): StreamBatcher {
+function getOrCreateBatcher(taskId: number | null, conversationId: number, executionId: number): StreamBatcher {
   const existing = batchers.get(executionId);
   if (existing) return existing;
-  const batcher = new StreamBatcher(taskId, executionId, (_events) => {
+  const batcher = new StreamBatcher(taskId, conversationId, executionId, (_events) => {
     // DB writes are handled by StreamBatcher.flush() internally.
     // IPC delivery happens immediately in onStreamEvent — nothing to do here.
   });
@@ -212,7 +212,7 @@ function getOrCreateBatcher(taskId: number | null, executionId: number): StreamB
 }
 
 function onStreamEvent(event: StreamEvent): void {
-  const batcher = getOrCreateBatcher(event.taskId, event.executionId);
+  const batcher = getOrCreateBatcher(event.taskId, event.conversationId, event.executionId);
   // ── Diagnostic: verify events are sent incrementally ──
   if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
     console.log(`[stream-diag-bun] ${event.type} len=${event.content.length} t=${performance.now().toFixed(1)}`);

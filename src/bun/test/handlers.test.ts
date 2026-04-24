@@ -294,23 +294,12 @@ describe("conversations handlers", () => {
     expect(messages.every((message) => message.conversationId === conversationId)).toBe(true);
   });
 
-  it("keeps taskId as a backward-compatible alias for message reads", async () => {
+  it("loads stream events by conversationId", async () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run(
-      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'assistant', 'assistant', ?)",
-      [taskId, conversationId, "from alias"],
+      "INSERT INTO executions (id, task_id, conversation_id, from_state, to_state, status, attempt) VALUES (?, ?, ?, 'plan', 'plan', 'running', 1)",
+      [10, taskId, conversationId],
     );
-
-    const handlers = conversationHandlers(null);
-    const messages = await handlers["conversations.getMessages"]({ taskId });
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.conversationId).toBe(conversationId);
-    expect(messages[0]?.content).toBe("from alias");
-  });
-
-  it("loads stream events by conversationId and preserves taskId alias", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run(
       "INSERT INTO stream_events (id, task_id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL), (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
       [1, taskId, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, taskId, conversationId, 10, 1, "root-2", "assistant", "beta"],
@@ -318,12 +307,9 @@ describe("conversations handlers", () => {
 
     const handlers = conversationHandlers(null);
     const canonical = await handlers["conversations.getStreamEvents"]({ conversationId, afterSeq: 0 });
-    const aliased = await handlers["conversations.getStreamEvents"]({ taskId, afterSeq: -1 });
 
     expect(canonical).toHaveLength(1);
     expect(canonical[0]?.content).toBe("beta");
-    expect(aliased).toHaveLength(2);
-    expect(aliased.map((event) => event.content)).toEqual(["alpha", "beta"]);
   });
 
   it("computes context usage for session conversations without a task", async () => {

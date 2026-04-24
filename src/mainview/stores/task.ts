@@ -169,7 +169,7 @@ export const useTaskStore = defineStore("task", () => {
     const task = taskIndex.value[taskId];
     if (!task) return;
     activeTaskId.value = taskId;
-    await conversationStore.loadMessages({ conversationId: task.conversationId, taskId });
+    await conversationStore.loadMessages({ conversationId: task.conversationId });
   }
 
   // ─── Select task (opens detail) ───────────────────────────────────────────
@@ -259,7 +259,7 @@ export const useTaskStore = defineStore("task", () => {
   async function fetchContextUsage(taskId: number) {
     const task = taskIndex.value[taskId];
     if (!task) return;
-    await conversationStore.fetchContextUsage({ conversationId: task.conversationId, taskId });
+    await conversationStore.fetchContextUsage({ conversationId: task.conversationId });
   }
 
   // ─── Set model on task ────────────────────────────────────────────────────

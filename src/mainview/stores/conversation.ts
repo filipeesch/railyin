@@ -179,7 +179,7 @@ export const useConversationStore = defineStore("conversation", () => {
     sortMessagesInPlace();
   }
 
-  async function loadMessages(params: { conversationId: number; taskId?: number }) {
+  async function loadMessages(params: { conversationId: number }) {
     activeConversationId.value = params.conversationId;
     messagesLoading.value = true;
     try {
@@ -212,7 +212,7 @@ export const useConversationStore = defineStore("conversation", () => {
     }
   }
 
-  async function fetchContextUsage(params: { conversationId: number; taskId?: number }) {
+  async function fetchContextUsage(params: { conversationId: number }) {
     try {
       const usage = await api("conversations.contextUsage", params);
       const next = new Map(contextUsageByConversation.value);
@@ -331,14 +331,8 @@ export const useConversationStore = defineStore("conversation", () => {
       }
       streamStates.value = new Map(streamStates.value);
       if (event.conversationId === activeConversationId.value) {
-        loadMessages({
-          conversationId: event.conversationId,
-          ...(event.taskId != null ? { taskId: event.taskId } : {}),
-        }).catch(console.error);
-        fetchContextUsage({
-          conversationId: event.conversationId,
-          ...(event.taskId != null ? { taskId: event.taskId } : {}),
-        }).catch(console.error);
+        loadMessages({ conversationId: event.conversationId }).catch(console.error);
+        fetchContextUsage({ conversationId: event.conversationId }).catch(console.error);
       }
       return;
     }
