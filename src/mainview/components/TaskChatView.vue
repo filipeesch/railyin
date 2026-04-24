@@ -268,9 +268,9 @@ const launchConfig = ref<LaunchConfig | null>(null);
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
-async function onSend(text: string, attachments: Attachment[]) {
+async function onSend(text: string, engineText: string, attachments: Attachment[]) {
   if (!task.value) return;
-  await taskStore.sendMessage(task.value.id, text, attachments.length ? attachments : undefined);
+  await taskStore.sendMessage(task.value.id, text, engineText, attachments.length ? attachments : undefined);
 }
 
 async function cancel() {

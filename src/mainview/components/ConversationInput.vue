@@ -263,7 +263,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [text: string, attachments: Attachment[]];
+  send: [text: string, engineText: string, attachments: Attachment[]];
   cancel: [];
   "update:modelId": [string | null];
   compact: [];
@@ -340,13 +340,13 @@ const supportsManualCompact = computed(() =>
 function send() {
   if (!canSend.value) return;
   if (!inputText.value.trim()) {
-    void onChatEditorSend("", []);
+    void onChatEditorSend("", "", []);
     return;
   }
   chatEditorRef.value?.send();
 }
 
-async function onChatEditorSend(content: string, editorAttachments: Attachment[]) {
+async function onChatEditorSend(content: string, engineContent: string, editorAttachments: Attachment[]) {
   if (!canSend.value) return;
   const allAttachments = [
     ...pendingAttachments.value,
@@ -354,12 +354,13 @@ async function onChatEditorSend(content: string, editorAttachments: Attachment[]
   ];
   const refPrefix = props.taskId != null ? codeServerStore.serializeRefs(props.taskId) : "";
   const finalContent = [refPrefix, content.trim()].filter(Boolean).join("\n\n");
+  const finalEngineContent = [refPrefix, engineContent.trim()].filter(Boolean).join("\n\n");
   inputText.value = "";
   pendingAttachments.value = [];
   if (props.taskId != null) {
     codeServerStore.clearRefs(props.taskId);
   }
-  emit("send", finalContent, allAttachments);
+  emit("send", finalContent, finalEngineContent, allAttachments);
 }
 
 function formatCodeRefLabel(ref: CodeRef): string {

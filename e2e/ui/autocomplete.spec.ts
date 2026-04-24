@@ -96,7 +96,7 @@ test.describe("AC — autocomplete", () => {
         // Slash command must render as a chip widget with the command label
         const chip = page.locator(".task-detail__input .chat-editor__chip");
         await expect(chip).toBeVisible({ timeout: 2_000 });
-        await expect(chip).toContainText("opsx-apply");
+        await expect(chip).toContainText("/opsx-apply");
 
         // Raw bracket syntax must not be visible in the DOM text
         const text = await page.locator(".task-detail__input .cm-content").textContent();
@@ -135,7 +135,7 @@ test.describe("AC — autocomplete", () => {
 
         // The chip should render as a decorated token (not raw bracket syntax)
         await expect(page.locator(".task-detail__input .chat-editor__chip")).toBeVisible({ timeout: 2_000 });
-        await expect(page.locator(".task-detail__input .chat-editor__chip")).toContainText("app.ts");
+        await expect(page.locator(".task-detail__input .chat-editor__chip")).toContainText("#app.ts");
     });
 
     test("AC-6: typing @ opens MCP tool picker", async ({ page, api, task }) => {
@@ -179,7 +179,7 @@ test.describe("AC — autocomplete", () => {
         await page.keyboard.press("Enter");
 
         await expect(page.locator(".task-detail__input .chat-editor__chip")).toBeVisible({ timeout: 2_000 });
-        await expect(page.locator(".task-detail__input .chat-editor__chip")).toContainText("read_file");
+        await expect(page.locator(".task-detail__input .chat-editor__chip")).toContainText("@read_file");
     });
 
     test("AC-8: chips render as inline tokens (not raw [#...] syntax)", async ({ page, api, task }) => {
@@ -197,7 +197,7 @@ test.describe("AC — autocomplete", () => {
 
         // Raw chip syntax should not be visible in the DOM text
         const editorText = await page.locator(".task-detail__input .cm-content").textContent();
-        expect(editorText).not.toContain("[#src/config.ts|config.ts]");
+        expect(editorText).not.toContain("[#src/config.ts|#config.ts]");
         // But a chip widget should be rendered
         await expect(page.locator(".chat-editor__chip")).toBeVisible();
     });
@@ -397,7 +397,7 @@ test.describe("AC — autocomplete", () => {
         // A chip widget should be visible with the symbol label
         const chip = page.locator(".task-detail__input .chat-editor__chip");
         await expect(chip).toBeVisible({ timeout: 2_000 });
-        await expect(chip).toContainText("UserService");
+        await expect(chip).toContainText("#UserService");
     });
 
     test("AC-18: no MCP servers connected → @ shows no dropdown", async ({ page, api, task }) => {
@@ -501,7 +501,7 @@ test.describe("AC — autocomplete", () => {
         // Slash command must render as a chip widget, not raw text
         const chip = page.locator(".task-detail__input .chat-editor__chip");
         await expect(chip).toBeVisible({ timeout: 2_000 });
-        await expect(chip).toContainText("opsx-apply");
+        await expect(chip).toContainText("/opsx-apply");
 
         // Raw bracket syntax must not appear in the DOM text
         const text = await page.locator(".task-detail__input .cm-content").textContent();
@@ -648,8 +648,8 @@ test.describe("AC — autocomplete", () => {
         // Both chips must render as tokens
         const chips = page.locator(".task-detail__input .chat-editor__chip");
         await expect(chips).toHaveCount(2, { timeout: 2_000 });
-        await expect(chips.nth(0)).toContainText("app.ts");
-        await expect(chips.nth(1)).toContainText("utils.ts");
+        await expect(chips.nth(0)).toContainText("#app.ts");
+        await expect(chips.nth(1)).toContainText("#utils.ts");
     });
 
     test("AC-29: clicking a completion item with the mouse does not close the task drawer", async ({ page, api, task }) => {
@@ -692,5 +692,152 @@ test.describe("AC — autocomplete", () => {
 
         // Only one API call total — second open was served from cache
         expect(calls).toHaveLength(1);
+    });
+
+    test("AC-31: sending a slash chip preserves stored markup and decoded engine text", async ({ page, api, task }) => {
+        api.returns("engine.listCommands", [{ name: "opsx-propose", description: "Propose" }]);
+
+        let capturedParams:
+            | { content: string; engineContent?: string; attachments?: Array<{ data: string; label: string }> }
+            | undefined;
+        api.handle("tasks.sendMessage", (params: { content: string; engineContent?: string; attachments?: Array<{ data: string; label: string }> }) => {
+            capturedParams = params;
+            return {
+                message: makeUserMessage(task.id, params.content),
+                executionId: EXEC_ID,
+            };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await focusEditor(page);
+        await page.keyboard.type("/opsx");
+        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 3_000 });
+        await page.keyboard.press("Enter");
+        await page.keyboard.type(" add-dark-mode");
+
+        const sendResponsePromise = page.waitForResponse("**/api/tasks.sendMessage");
+        await page.locator(".task-detail__input button:has(.pi-send)").click();
+        await sendResponsePromise;
+
+        expect(capturedParams?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
+        expect(capturedParams?.engineContent).toBe("/opsx-propose add-dark-mode");
+        await expect(page.locator(".msg--user .msg__chip")).toContainText("/opsx-propose");
+    });
+
+    test("AC-32: sending a file chip preserves markup, clean engine text, and attachment delivery", async ({ page, api, task }) => {
+        api.returns("workspace.listFiles", [{ name: "service.ts", path: "src/service.ts" }]);
+        api.returns("lsp.workspaceSymbol", []);
+
+        let capturedParams:
+            | { content: string; engineContent?: string; attachments?: Array<{ data: string; label: string }> }
+            | undefined;
+        api.handle("tasks.sendMessage", (params: { content: string; engineContent?: string; attachments?: Array<{ data: string; label: string }> }) => {
+            capturedParams = params;
+            return {
+                message: makeUserMessage(task.id, params.content),
+                executionId: EXEC_ID,
+            };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await focusEditor(page);
+        await page.keyboard.type("#service");
+        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 3_000 });
+        await page.keyboard.press("Enter");
+
+        const sendResponsePromise = page.waitForResponse("**/api/tasks.sendMessage");
+        await page.locator(".task-detail__input button:has(.pi-send)").click();
+        await sendResponsePromise;
+
+        expect(capturedParams?.content).toBe("[#src/service.ts|#service.ts]");
+        expect(capturedParams?.engineContent).toBe("service.ts");
+        expect(capturedParams?.attachments?.[0]).toEqual({
+            data: "@file:src/service.ts",
+            label: "service.ts",
+            mediaType: "text/plain",
+        });
+        await expect(page.locator(".msg--user .msg__chip")).toContainText("#service.ts");
+    });
+
+    test("AC-33: sending an MCP chip preserves markup and @-prefixed engine text", async ({ page, api, task }) => {
+        api.returns("mcp.getStatus", [
+            {
+                name: "fs",
+                state: "running",
+                tools: [{ name: "read_file", description: "Read a file" }],
+            },
+        ]);
+
+        let capturedParams:
+            | { content: string; engineContent?: string; attachments?: Array<{ data: string; label: string }> }
+            | undefined;
+        api.handle("tasks.sendMessage", (params: { content: string; engineContent?: string; attachments?: Array<{ data: string; label: string }> }) => {
+            capturedParams = params;
+            return {
+                message: makeUserMessage(task.id, params.content),
+                executionId: EXEC_ID,
+            };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await focusEditor(page);
+        await page.keyboard.type("@read");
+        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 3_000 });
+        await page.keyboard.press("Enter");
+
+        const sendResponsePromise = page.waitForResponse("**/api/tasks.sendMessage");
+        await page.locator(".task-detail__input button:has(.pi-send)").click();
+        await sendResponsePromise;
+
+        expect(capturedParams?.content).toBe("[@fs:read_file|@read_file]");
+        expect(capturedParams?.engineContent).toBe("@read_file");
+        expect(capturedParams?.attachments ?? []).toEqual([]);
+        await expect(page.locator(".msg--user .msg__chip")).toContainText("@read_file");
+    });
+
+    test("AC-34: adjacent slash and MCP chips serialize to separated engine text", async ({ page, api, task }) => {
+        api.returns("engine.listCommands", [{ name: "opsx-propose", description: "Propose" }]);
+        api.returns("mcp.getStatus", [
+            {
+                name: "fs",
+                state: "running",
+                tools: [{ name: "read_file", description: "Read a file" }],
+            },
+        ]);
+
+        let capturedParams:
+            | { content: string; engineContent?: string; attachments?: Array<{ data: string; label: string }> }
+            | undefined;
+        api.handle("tasks.sendMessage", (params: { content: string; engineContent?: string; attachments?: Array<{ data: string; label: string }> }) => {
+            capturedParams = params;
+            return {
+                message: makeUserMessage(task.id, params.content),
+                executionId: EXEC_ID,
+            };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await focusEditor(page);
+
+        await page.keyboard.type("/opsx");
+        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 3_000 });
+        await page.keyboard.press("Enter");
+
+        await page.keyboard.type("@read");
+        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 3_000 });
+        await page.keyboard.press("Enter");
+
+        const sendResponsePromise = page.waitForResponse("**/api/tasks.sendMessage");
+        await page.locator(".task-detail__input button:has(.pi-send)").click();
+        await sendResponsePromise;
+
+        expect(capturedParams?.content).toBe("[/opsx-propose|/opsx-propose][@fs:read_file|@read_file]");
+        expect(capturedParams?.engineContent).toBe("/opsx-propose @read_file");
+        expect(capturedParams?.attachments ?? []).toEqual([]);
+        await expect(page.locator(".msg--user .msg__chip")).toContainText(["/opsx-propose", "@read_file"]);
     });
 });

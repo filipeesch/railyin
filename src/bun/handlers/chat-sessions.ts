@@ -2,8 +2,9 @@ import { getDb } from "../db/index.ts";
 import type { ChatSession, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ChatSessionRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
-import { getDefaultWorkspaceKey } from "../workspace-context.ts";
+import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { Orchestrator } from "../engine/orchestrator.ts";
+import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 
 function autoTitle(): string {
   const now = new Date();
@@ -82,6 +83,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
     "chatSessions.sendMessage": async (params: {
       sessionId: number;
       content: string;
+      engineContent?: string;
       model?: string | null;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
@@ -99,6 +101,11 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
       );
 
       // Trigger AI execution — orchestrator appends user message and returns executionId
+      const { extractChips } = await import("../../mainview/utils/chat-chips.ts");
+      const workspaceConfig = getWorkspaceConfig(session.workspace_key);
+      const engine = workspaceConfig.engine.type;
+      const promptContent = params.engineContent ?? extractChips(params.content).humanText;
+      const prepared = await prepareMessageForEngine(engine, promptContent, params.attachments);
       const { message, executionId } = await orchestrator.executeChatTurn(
         params.sessionId,
         session.conversation_id,
@@ -106,7 +113,8 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
         params.model ?? undefined,
         (() => { try { return session.enabled_mcp_tools ? JSON.parse(session.enabled_mcp_tools) : null; } catch { return null; } })(),
         session.workspace_key,
-        params.attachments,
+        prepared.attachments,
+        prepared.content,
       );
 
       const updatedSession = db.query<ChatSessionRow, [number]>(

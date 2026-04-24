@@ -143,7 +143,7 @@ export const useChatStore = defineStore("chat", () => {
     drawerStore.close();
   }
 
-  async function sendMessage(content: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null) {
+  async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null) {
     if (!activeChatSessionId.value) return;
     const session = activeSession.value;
     if (!session) return;
@@ -156,6 +156,7 @@ export const useChatStore = defineStore("chat", () => {
     const { message } = await api("chatSessions.sendMessage", {
       sessionId: activeChatSessionId.value,
       content,
+      ...(engineContent != null ? { engineContent } : {}),
       model,
       ...(attachments?.length ? { attachments } : {}),
     });

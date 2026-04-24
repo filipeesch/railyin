@@ -5,7 +5,18 @@
   </div>
 
   <div v-else-if="chunk.type === 'user'" class="msg msg--user">
-    <div class="msg__bubble">{{ displayContent }}</div>
+    <div class="msg__bubble">
+      <template v-if="hasRenderedUserChips">
+        <template v-for="(segment, idx) in renderedUserSegments" :key="idx">
+          <span v-if="segment.type === 'text'">{{ segment.text }}</span>
+          <span
+            v-else
+            :class="['msg__chip', `msg__chip--${segment.kind}`]"
+          >{{ segment.label }}</span>
+        </template>
+      </template>
+      <template v-else>{{ displayContent }}</template>
+    </div>
     <div class="msg__meta">You</div>
   </div>
 
@@ -78,6 +89,7 @@ import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
 import { useChatStore } from "../stores/chat";
 import { useTaskStore } from "../stores/task";
 import { api } from "../rpc";
+import { segmentChipText } from "../utils/chat-chips";
 
 const props = defineProps<{
   chunk: ConversationMessage;
@@ -94,6 +106,14 @@ function renderMd(content: string): string {
 
 const displayContent = computed(() => props.chunk.content);
 const messageList = computed(() => (props.chunk.taskId == null ? chatStore.messages : taskStore.messages));
+const renderedUserSegments = computed(() =>
+  props.chunk.type === "user" && props.chunk.role !== "prompt"
+    ? segmentChipText(props.chunk.content)
+    : [],
+);
+const hasRenderedUserChips = computed(() =>
+  renderedUserSegments.value.some((segment) => segment.type === "chip"),
+);
 
 /** True when an assistant message was generated in XML <tool_call> format instead of the JSON API format. These should be silently hidden. */
 const isXmlToolCall = computed(() =>
@@ -241,6 +261,32 @@ async function onInterviewSubmit(answer: string) {
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 0.92rem;
+}
+
+.msg__chip {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0.12rem;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.4;
+  vertical-align: baseline;
+}
+
+.msg__chip--slash {
+  background: color-mix(in srgb, var(--p-primary-500, #6366f1) 14%, transparent);
+}
+
+.msg__chip--file {
+  background: color-mix(in srgb, var(--p-green-500, #22c55e) 14%, transparent);
+}
+
+.msg__chip--tool {
+  background: color-mix(in srgb, var(--p-orange-500, #f59e0b) 14%, transparent);
 }
 
 .msg--assistant {

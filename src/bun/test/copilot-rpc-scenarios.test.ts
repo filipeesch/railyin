@@ -224,7 +224,10 @@ describe("Copilot backend RPC scenarios", () => {
         mkdirSync(promptDir, { recursive: true });
         writeFileSync(join(promptDir, "opsx-propose.prompt.md"), "Resolved body: $input", "utf-8");
 
-        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "/opsx-propose add-dark-mode" });
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "[/opsx-propose|/opsx-propose] add-dark-mode",
+        });
         await runtime.recorder.waitForTokenDone(result.executionId);
 
         expect(session.prompts).toEqual(["Resolved body: add-dark-mode"]);
@@ -234,8 +237,77 @@ describe("Copilot backend RPC scenarios", () => {
             )
             .get(taskId);
         expect(persisted?.role).toBe("user");
-        expect(persisted?.content).toBe("/opsx-propose add-dark-mode");
+        expect(persisted?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
         expect(persisted?.metadata).toBeNull();
+    });
+
+    it("sends uploaded text attachments to Copilot as same-turn selections", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        const session = new MockCopilotSession().queueTurn({ steps: [token("done"), done()] });
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(session);
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "Review this note",
+            attachments: [{
+                label: "note.md",
+                mediaType: "text/markdown",
+                data: Buffer.from("# hi\n\nbody").toString("base64"),
+            }],
+        });
+        await runtime.recorder.waitForTokenDone(result.executionId);
+
+        expect(session.sentMessages).toHaveLength(1);
+        expect(session.sentMessages[0]?.attachments).toEqual([{
+            type: "selection",
+            filePath: expect.stringContaining("note.md"),
+            displayName: "note.md",
+            text: "# hi\n\nbody",
+            selection: {
+                start: { line: 0, character: 0 },
+                end: { line: 2, character: 4 },
+            },
+        }]);
+    });
+
+    it("sends #file references to Copilot as same-turn selections without prompt injection", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        const session = new MockCopilotSession().queueTurn({ steps: [token("done"), done()] });
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(session);
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const filePath = join(runtime.gitDir, ".gitignore");
+        writeFileSync(filePath, "node_modules/\ndist/\n", "utf8");
+
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "[#.gitignore|#.gitignore] explain this",
+            attachments: [{
+                label: ".gitignore",
+                mediaType: "text/plain",
+                data: `@file:${filePath}`,
+            }],
+        });
+        await runtime.recorder.waitForTokenDone(result.executionId);
+
+        expect(session.prompts).toEqual([".gitignore explain this"]);
+        expect(session.sentMessages[0]?.attachments).toEqual([{
+            type: "selection",
+            filePath,
+            displayName: ".gitignore",
+            text: "node_modules/\ndist/\n",
+            selection: {
+                start: { line: 0, character: 0 },
+                end: { line: 2, character: 0 },
+            },
+        }]);
     });
 
     it("filters internal Copilot tool activity and preserves rich external tool results", async () => {

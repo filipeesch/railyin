@@ -8,6 +8,7 @@ import { taskHandlers } from "../handlers/tasks.ts";
 import { conversationHandlers } from "../handlers/conversations.ts";
 import { chatSessionHandlers } from "../handlers/chat-sessions.ts";
 import { mcpHandlers } from "../handlers/mcp.ts";
+import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import type { Database } from "bun:sqlite";
 import type { Attachment, Task } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
@@ -421,7 +422,28 @@ describe("chat session parity handlers", () => {
       ["docs:search"],
       "default",
       attachments,
+      "hello",
     ]]);
+  });
+
+  it("injects #file refs for Claude-style prompt routing and strips synthetic attachments", async () => {
+    const filePath = join(gitDir, ".gitignore");
+    writeFileSync(filePath, "node_modules/\ndist/\n", "utf8");
+
+    const prepared = await prepareMessageForEngine(
+      "claude",
+      ".gitignore explain this",
+      [{
+        label: ".gitignore",
+        mediaType: "text/plain",
+        data: `@file:${filePath}`,
+      }],
+    );
+
+    expect(prepared.attachments).toEqual([]);
+    expect(prepared.content).toBe(
+      ".gitignore explain this\n\n```gitignore\n// " + filePath + "\nnode_modules/\ndist/\n\n```",
+    );
   });
 });
 

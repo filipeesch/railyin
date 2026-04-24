@@ -8,10 +8,10 @@
  *   @  → MCP agents / tools   (mcp.getStatus)
  *
  * Chip encoding in document:
- *   /name            — slash command (plain text, no chip)
- *   [#path/to/file.ts|file.ts]  — file reference chip
- *   [#path/to/file.ts:L10-L25|SymbolName] — symbol chip
- *   [@server:tool]   — MCP tool chip
+ *   /name                           — slash command (plain text, no chip)
+ *   [#path/to/file.ts|#file.ts]     — file reference chip
+ *   [#path/to/file.ts:L10-L25|#SymbolName] — symbol chip
+ *   [@server:tool|@tool]            — MCP tool chip
  *
  * On send, chips are extracted from the doc and returned as attachments
  * alongside the human-readable plain text.
@@ -37,7 +37,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [content: string, attachments: Attachment[]];
+  send: [content: string, engineContent: string, attachments: Attachment[]];
   textChange: [text: string];
 }>();
 
@@ -268,7 +268,7 @@ async function slashCompletions(context: CompletionContext): Promise<CompletionR
       detail: c.description,
       type: "keyword",
       apply: (view: EditorView, _completion: Completion, from: number, to: number) => {
-        const chip = `[/${c.name}|${c.name}]`;
+        const chip = `[/${c.name}|/${c.name}]`;
         view.dispatch({ changes: { from, to, insert: chip } });
       },
     })),
@@ -302,7 +302,7 @@ async function hashCompletions(context: CompletionContext): Promise<CompletionRe
         detail: f.path,
         type: "variable",
         apply: (view, _completion, _from, to) => {
-          const chip = `[#${f.path}|${f.name}]`;
+          const chip = `[#${f.path}|#${f.name}]`;
           // Replace from the '#' sigil position (match.from), not from after it
           const chipFrom = match ? match.from : _from;
           view.dispatch({ changes: { from: chipFrom, to, insert: chip } });
@@ -323,9 +323,7 @@ async function hashCompletions(context: CompletionContext): Promise<CompletionRe
         detail: filePath || "symbol",
         type: "class",
         apply: (view, _completion, _from, to) => {
-          const shortPath = filePath.split("/").slice(-1)[0] ?? filePath;
-          const chip = `[#${filePath}|${sym.name}]`;
-          void shortPath;
+          const chip = `[#${filePath}|#${sym.name}]`;
           // Replace from the '#' sigil position (match.from), not from after it
           const chipFrom = match ? match.from : _from;
           view.dispatch({ changes: { from: chipFrom, to, insert: chip } });
@@ -369,7 +367,7 @@ async function atCompletions(context: CompletionContext): Promise<CompletionResu
         detail: tool.description,
         type: "function",
         apply: (view, _completion, _from, to) => {
-          const chip = `[@${server.name}:${tool.name}|${tool.name}]`;
+          const chip = `[@${server.name}:${tool.name}|@${tool.name}]`;
           // Replace from the '@' sigil position (match.from), not from after it
           const chipFrom = match ? match.from : _from;
           view.dispatch({ changes: { from: chipFrom, to, insert: chip } });
@@ -395,8 +393,9 @@ function extractAndSend() {
   const doc = editorView.state.doc.toString();
   if (!doc.trim()) return;
 
+  const storedContent = doc.trim();
   const { humanText, attachments } = extractChips(doc);
-  emit("send", humanText, attachments);
+  emit("send", storedContent, humanText, attachments);
 
   // Clear editor
   editorView.dispatch({

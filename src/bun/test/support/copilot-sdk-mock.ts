@@ -1,5 +1,6 @@
 import type {
     CopilotSdkAdapter,
+    CopilotSdkAttachment,
     CopilotSdkEvent,
     CopilotSdkModelInfo,
     CopilotSdkResumeSessionConfig,
@@ -27,6 +28,7 @@ export class MockCopilotSession implements CopilotSdkSession {
     private aborted = false;
     private tools: Array<{ name: string; handler: (args: unknown) => Promise<string> }> = [];
     readonly prompts: string[] = [];
+    readonly sentMessages: Array<{ prompt: string; attachments?: CopilotSdkAttachment[] }> = [];
     disconnectCalls = 0;
     abortCalls = 0;
 
@@ -39,8 +41,9 @@ export class MockCopilotSession implements CopilotSdkSession {
         return this;
     }
 
-    send(input: { prompt: string }): Promise<unknown> {
+    send(input: { prompt: string; attachments?: CopilotSdkAttachment[] }): Promise<unknown> {
         this.prompts.push(input.prompt);
+        this.sentMessages.push(input);
         const script = this.turns.shift();
         if (!script) {
             return Promise.reject(new Error("No mock turn script queued"));

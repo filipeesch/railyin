@@ -17,6 +17,7 @@ import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import { getProjectByKey } from "../project-store.ts";
 import { resolveContextWindow } from "../context-usage.ts";
+import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
 
@@ -270,6 +271,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "tasks.sendMessage": async (params: {
       taskId: number;
       content: string;
+      engineContent?: string;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       // Check if content is a code review trigger
@@ -293,13 +295,12 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       }
       if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
 
-      // Resolve @file: attachments — inject file content into the prompt before sending
-      const { resolveFileAttachments } = await import("../utils/resolve-file-attachments.ts");
-      const augmentedContent = params.attachments?.length
-        ? await resolveFileAttachments(params.content, params.attachments)
-        : params.content;
+      const { extractChips } = await import("../../mainview/utils/chat-chips.ts");
+      const promptContent = params.engineContent ?? extractChips(params.content).humanText;
+      const engine = getWorkspaceConfig(taskWorkspaceKey).engine.type;
+      const prepared = await prepareMessageForEngine(engine, promptContent, params.attachments);
 
-      return orchestrator.executeHumanTurn(params.taskId, augmentedContent, params.attachments);
+      return orchestrator.executeHumanTurn(params.taskId, params.content, prepared.attachments, prepared.content);
     },
 
     "tasks.retry": async (params: {

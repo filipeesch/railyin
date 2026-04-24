@@ -550,7 +550,7 @@ export type RailynAPI = {
     response: { task: Task; executionId: number };
   };
   "tasks.sendMessage": {
-    params: { taskId: number; content: string; attachments?: Attachment[] };
+    params: { taskId: number; content: string; engineContent?: string; attachments?: Attachment[] };
     response: { message: ConversationMessage; executionId: number };
   };
 
@@ -830,7 +830,7 @@ export type RailynAPI = {
     response: void;
   };
   "chatSessions.sendMessage": {
-    params: { sessionId: number; content: string; model?: string | null; attachments?: Attachment[] };
+    params: { sessionId: number; content: string; engineContent?: string; model?: string | null; attachments?: Attachment[] };
     response: { messageId: number; executionId: number };
   };
   "chatSessions.getMessages": {

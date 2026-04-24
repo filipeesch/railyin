@@ -175,8 +175,8 @@ const statusSeverity = computed((): "secondary" | "info" | "warn" | "success" =>
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
-async function onSend(text: string, _attachments: Attachment[]) {
-  await chatStore.sendMessage(text, _attachments, selectedModelId.value);
+async function onSend(text: string, engineText: string, _attachments: Attachment[]) {
+  await chatStore.sendMessage(text, engineText, _attachments, selectedModelId.value);
 }
 
 async function onCancel() {

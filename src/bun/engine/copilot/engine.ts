@@ -10,17 +10,43 @@
  */
 
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
-import type { CopilotSdkAdapter, CopilotSdkSession } from "./session";
+import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession } from "./session";
 import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
-import { readdirSync, existsSync, readFileSync, mkdirSync, writeFileSync, unlinkSync } from "fs";
+import { readdirSync, existsSync, readFileSync, mkdirSync } from "fs";
 import { join, extname, basename } from "path";
 import { homedir, tmpdir } from "os";
 import { getMcpRegistry } from "../../mcp/registry.ts";
+
+function utf16LineOffsets(text: string): number[] {
+  const offsets = [0];
+  let offset = 0;
+  for (const char of text) {
+    offset += char.length;
+    if (char === "\n") offsets.push(offset);
+  }
+  return offsets;
+}
+
+function toSelectionAttachment(filePath: string, displayName: string, text: string): CopilotSdkAttachment {
+  const offsets = utf16LineOffsets(text);
+  const lastLine = Math.max(0, offsets.length - 1);
+  const lastLineStart = offsets[lastLine] ?? 0;
+  return {
+    type: "selection",
+    filePath,
+    displayName,
+    text,
+    selection: {
+      start: { line: 0, character: 0 },
+      end: { line: lastLine, character: text.length - lastLineStart },
+    },
+  };
+}
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
@@ -190,20 +216,22 @@ export class CopilotEngine implements ExecutionEngine {
         const firstTurn = nextPrompt === resolvedInitialPrompt;
         const attachments = firstTurn ? (params.attachments ?? []) : [];
 
-        // Write text attachments to temp files so the CLI can read them via
-        // the "file" attachment type (the CLI resolves filePath on disk).
-        const tmpFiles: string[] = [];
-        const mappedAttachments = attachments.map(a => {
+        const mappedAttachments = attachments.map((a): CopilotSdkAttachment => {
+          const filePathRef = a.data.match(/^@file:(.+)$/)?.[1];
+          if (filePathRef) {
+            const text = readFileSync(filePathRef, "utf8");
+            return toSelectionAttachment(filePathRef, a.label, text);
+          }
           if (isTextType(a.mediaType)) {
+            const text = Buffer.from(a.data, "base64").toString("utf8");
+            const ext = a.label.includes(".") ? "" : mime.extension(a.mediaType) ? `.${mime.extension(a.mediaType)}` : ".txt";
             const tmpDir = join(tmpdir(), "railyin-attachments");
             mkdirSync(tmpDir, { recursive: true });
-            const tmpPath = join(tmpDir, `${Date.now()}-${a.label}`);
-            writeFileSync(tmpPath, Buffer.from(a.data, "base64"));
-            tmpFiles.push(tmpPath);
-            return { type: "file" as const, path: tmpPath, displayName: a.label };
+            const tmpPath = join(tmpDir, `${Date.now()}-${a.label}${ext}`);
+            return toSelectionAttachment(tmpPath, a.label, text);
           }
           return {
-            type: "blob" as const,
+            type: "blob",
             data: a.data,
             mimeType: a.mediaType,
             displayName: a.label,
@@ -256,17 +284,14 @@ export class CopilotEngine implements ExecutionEngine {
 
         if (pendingInterviewPayload !== null) {
           yield { type: "interview_me", payload: pendingInterviewPayload };
-          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 
         if (params.signal?.aborted || terminal) {
-          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 
         if (!paused) {
-          for (const f of tmpFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
           return;
         }
 

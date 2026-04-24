@@ -176,6 +176,7 @@ export class Orchestrator implements ExecutionCoordinator {
     taskId: number,
     content: string,
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
+    engineContent?: string,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = getDb();
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -196,7 +197,7 @@ export class Orchestrator implements ExecutionCoordinator {
       );
       this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
       try {
-        await engine.resume(task.current_execution_id, { type: "ask_user", content });
+        await engine.resume(task.current_execution_id, { type: "ask_user", content: engineContent ?? content });
         const msgRow = db
           .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
           .get(msgId)!;
@@ -231,7 +232,7 @@ export class Orchestrator implements ExecutionCoordinator {
           task,
           conversationId,
           newExecutionId,
-          content,
+          engineContent ?? content,
           column?.stage_instructions,
           this._resolveWorkingDirectory(task),
           undefined,
@@ -260,7 +261,7 @@ export class Orchestrator implements ExecutionCoordinator {
     );
     this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
 
-    const resolvedPrompt = content;
+    const resolvedPrompt = engineContent ?? content;
     const msgId = appendMessage(
       taskId,
       conversationId,
@@ -515,6 +516,7 @@ export class Orchestrator implements ExecutionCoordinator {
     enabledMcpTools?: string[] | null,
     workspaceKey = getDefaultWorkspaceKey(),
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
+    engineContent?: string,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = getDb();
     const { config, engine } = this.getEngineForWorkspace(workspaceKey);
@@ -546,7 +548,7 @@ export class Orchestrator implements ExecutionCoordinator {
       executionId,
       taskId: null,
       conversationId,
-      prompt: content,
+      prompt: engineContent ?? content,
       systemInstructions: undefined,
       workingDirectory,
       model: resolvedModel,

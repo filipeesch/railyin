@@ -116,6 +116,7 @@ describe("Suite CD-A — opening and rendering", () => {
 
 describe("Suite CD-B — sending messages", () => {
   let sessionId: number;
+  let conversationId: number;
 
   beforeAll(async () => {
     await setupTestEnv();
@@ -124,6 +125,7 @@ describe("Suite CD-B — sending messages", () => {
     await waitForBoardReady(8_000);
     const session = await seedChatSession({ title: "Send Test Session" });
     sessionId = session.id;
+    conversationId = session.conversationId;
     await waitFor(`[data-session-id="${sessionId}"]`, 5_000);
     await openSessionPanel(sessionId);
   });
@@ -177,6 +179,31 @@ describe("Suite CD-B — sending messages", () => {
 
     const after = await getSessionMessageCount("user");
     expect(after).toBeGreaterThan(before);
+  });
+
+  test("CD-B-4: persisted chip-markup user message renders rich chips with sigils", async () => {
+    await webEval(`
+      var pinia = document.querySelector('#app').__vue_app__.config.globalProperties['$pinia'];
+      var conversation = pinia._s.get('conversation');
+      conversation.appendMessage({
+        id: 700401,
+        taskId: null,
+        conversationId: ${conversationId},
+        type: 'user',
+        role: 'user',
+        content: 'Review [#src/app.ts|#app.ts] with [/opsx-propose|/opsx-propose] via [@fs:read_file|@read_file]',
+        metadata: null,
+        createdAt: new Date().toISOString(),
+      });
+      return 'ok';
+    `);
+    await sleep(300);
+
+    const chipTexts = await webEval<string[]>(`
+      return Array.from(document.querySelectorAll('.session-chat-view .msg--user .msg__chip'))
+        .map(function(el) { return (el.textContent || '').trim(); });
+    `);
+    expect(chipTexts).toEqual(["#app.ts", "/opsx-propose", "@read_file"]);
   });
 });
 

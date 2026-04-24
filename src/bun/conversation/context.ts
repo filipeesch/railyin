@@ -7,6 +7,7 @@ import type { ConversationMessage, MessageType } from "../../shared/rpc-types.ts
 import type { ConversationMessageRow, TaskRow } from "../db/row-types.ts";
 import { mapConversationMessage } from "../db/mappers.ts";
 import { appendMessage } from "./messages.ts";
+import { extractChips } from "../../mainview/utils/chat-chips.ts";
 
 const TOOL_RESULT_MAX_CHARS = 8_000;
 const TOOL_RESULT_LIMITS = new Map<string, number>([
@@ -138,7 +139,10 @@ export function compactMessages(messages: ConversationMessageRow[], opts?: { qui
 
     if (message.type === "user" || message.type === "assistant") {
       if (message.role !== "prompt") {
-        result.push({ role: message.role as "user" | "assistant", content: message.content });
+        const content = message.type === "user"
+          ? extractChips(message.content).humanText
+          : message.content;
+        result.push({ role: message.role as "user" | "assistant", content });
       }
       index++;
       continue;

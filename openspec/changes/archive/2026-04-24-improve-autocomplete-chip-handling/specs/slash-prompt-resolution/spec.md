@@ -1,7 +1,4 @@
-## Purpose
-Provides a reference syntax (`/stem`) that Railyin resolves at execution time by reading a prompt file from the project's worktree. Applies to workflow column fields (`on_enter_prompt`, `stage_instructions`) and task chat input.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Slash references resolve to prompt files from the project worktree
 The system SHALL resolve a value matching the pattern `/stem` (and optional text argument) — when it appears at the very beginning of the engine-facing value — by reading the corresponding `.prompt.md` file. The resolution SHALL be performed by the engine, not the orchestrator. When a user message is stored with autocomplete chip markup, the system SHALL first derive plain/raw user text from that markup, preserving the leading `/` in slash-command labels before slash resolution is attempted. The system SHALL preserve the original slash invocation as the user-visible chat content and pass the resolved prompt body to the underlying LLM.
@@ -22,7 +19,7 @@ For **Claude engine**, slash recognition is delegated to the SDK after Railyin d
 - **THEN** the derived engine-facing text begins with `/command` and remains eligible for slash resolution
 
 #### Scenario: Worktree lookup falls back to project root (Copilot)
-- **WHEN** the worktree does not contain the prompt file but `<projectRootPath>/.github/prompts/{stem}.prompt.md` exists and projectRootPath differs from worktreePath
+- **WHEN** the worktree does not contain the prompt file but `<projectRootPath>/.github/prompts/{stem}.prompt.md` exists and projectRootPath differs from `worktreePath`
 - **THEN** the project root file is used and resolution succeeds
 
 #### Scenario: Personal scope used as final fallback (Copilot)

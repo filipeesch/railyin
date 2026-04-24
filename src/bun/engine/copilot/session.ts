@@ -61,8 +61,23 @@ export interface CopilotSdkModelInfo {
   };
 }
 
+export type CopilotSdkAttachment =
+  | { type: "file"; path: string; displayName?: string }
+  | { type: "directory"; path: string; displayName?: string }
+  | {
+    type: "selection";
+    filePath: string;
+    displayName: string;
+    text: string;
+    selection: {
+      start: { line: number; character: number };
+      end: { line: number; character: number };
+    };
+  }
+  | { type: "blob"; data: string; mimeType: string; displayName?: string };
+
 export interface CopilotSdkSession {
-  send(input: { prompt: string }): Promise<unknown>;
+  send(input: { prompt: string; attachments?: CopilotSdkAttachment[] }): Promise<unknown>;
   on(listener: (event: CopilotSdkEvent) => void): () => void;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
@@ -100,7 +115,7 @@ type LoadedCopilotClient = {
 };
 
 type LoadedCopilotSession = {
-  send(input: { prompt: string }): Promise<unknown>;
+  send(input: { prompt: string; attachments?: CopilotSdkAttachment[] }): Promise<unknown>;
   on(listener: (event: unknown) => void): () => void;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
@@ -411,7 +426,7 @@ class DefaultCopilotSdkSession implements CopilotSdkSession {
     private readonly sessionId: string,
   ) { }
 
-  send(input: { prompt: string }): Promise<unknown> {
+  send(input: { prompt: string; attachments?: CopilotSdkAttachment[] }): Promise<unknown> {
     return this.session.send(input);
   }
 
