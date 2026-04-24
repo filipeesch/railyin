@@ -582,11 +582,11 @@ test.describe("CD-E — Persistence and ordering", () => {
 
     test("CD-E-4: opening a session scrolls to the latest message", async ({ page, api }) => {
         const session = makeChatSession({ id: 443 });
-        const messages = Array.from({ length: 30 }, (_, index) =>
+        const messages = Array.from({ length: 240 }, (_, index) =>
             makeChatMessage(
                 session.id,
                 session.conversationId,
-                `Message ${index + 1}`,
+                `Message ${index + 1} — ${"detail ".repeat(24)}`,
                 index % 2 === 0 ? "user" : "assistant",
             ),
         );
@@ -596,7 +596,7 @@ test.describe("CD-E — Persistence and ordering", () => {
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        await expect(page.locator(".session-chat-view .msg__bubble").last()).toContainText("Message 30");
+        await expect(page.locator(".session-chat-view .msg__bubble").last()).toContainText("Message 240");
         const isAtBottom = await page.locator(".session-chat-view .conv-body").evaluate((el) => {
             const node = el as HTMLElement;
             return node.scrollTop + node.clientHeight >= node.scrollHeight - 40;

@@ -45,4 +45,28 @@ test.describe("TD — task drawer coverage", () => {
 
         await expect(page.locator(".task-detail")).not.toBeVisible({ timeout: 3_000 });
     });
+
+    test("TD-5: opening a task chat starts at the latest message", async ({ page, api, task }) => {
+        const messages = Array.from({ length: 240 }, (_, index) => ({
+            id: 70_000 + index,
+            taskId: task.id,
+            conversationId: task.conversationId,
+            type: index % 2 === 0 ? "user" : "assistant",
+            role: index % 2 === 0 ? "user" : "assistant",
+            content: `Task message ${index + 1} — ${"detail ".repeat(24)}`,
+            metadata: null,
+            createdAt: new Date(Date.now() + index * 1_000).toISOString(),
+        }));
+        api.handle("conversations.getMessages", () => messages);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".task-chat-view .msg__bubble").last()).toContainText("Task message 240");
+        const isAtBottom = await page.locator(".task-chat-view .conv-body").evaluate((el) => {
+            const node = el as HTMLElement;
+            return node.scrollTop + node.clientHeight >= node.scrollHeight - 40;
+        });
+        expect(isAtBottom).toBe(true);
+    });
 });

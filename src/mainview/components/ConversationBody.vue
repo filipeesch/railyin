@@ -1,5 +1,9 @@
 <template>
-  <div class="conv-body" ref="scrollEl" @scroll.passive="onScroll">
+  <div
+    :class="['conv-body', { 'conv-body--positioning': !initialScrollReady }]"
+    ref="scrollEl"
+    @scroll.passive="onScroll"
+  >
     <div class="conv-body__inner conversation-inner">
       <!-- Virtual list spacer -->
       <div :style="{ position: 'relative', height: `${virtualizer.getTotalSize()}px` }">
@@ -215,6 +219,8 @@ function measureRef(el: Element | null) {
 const SCROLL_THRESHOLD = 60;
 const autoScroll = ref(true);
 const pendingScrollBottom = ref(false);
+const initialScrollReady = ref(false);
+let initialScrollRun = 0;
 
 function onScroll() {
   if (!scrollEl.value) return;
@@ -222,26 +228,44 @@ function onScroll() {
   autoScroll.value = scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD;
 }
 
-function scrollToBottom(behavior: ScrollBehavior = "instant") {
+function scrollToBottom(behavior: ScrollBehavior = "auto") {
   if (!scrollEl.value) return;
   scrollEl.value.scrollTo({ top: scrollEl.value.scrollHeight, behavior });
 }
 
-async function scheduleScrollToBottom() {
+function scrollToLatest(behavior: ScrollBehavior = "auto") {
+  const lastIndex = displayItems.value.length - 1;
+  if (lastIndex >= 0) {
+    virtualizer.value.scrollToIndex(lastIndex, {
+      align: "end",
+      behavior: behavior === "smooth" ? "smooth" : "auto",
+    });
+  }
+  scrollToBottom(behavior);
+}
+
+async function scheduleScrollToBottom({ revealWhenDone = false }: { revealWhenDone?: boolean } = {}) {
+  const runId = ++initialScrollRun;
   autoScroll.value = true;
   pendingScrollBottom.value = true;
   await nextTick();
-  scrollToBottom();
-  requestAnimationFrame(() => scrollToBottom());
+  if (runId !== initialScrollRun) return;
+  scrollToLatest();
+  requestAnimationFrame(() => {
+    if (runId !== initialScrollRun) return;
+    scrollToLatest();
+  });
   setTimeout(() => {
-    scrollToBottom();
+    if (runId !== initialScrollRun) return;
+    scrollToLatest();
     pendingScrollBottom.value = false;
+    if (revealWhenDone) initialScrollReady.value = true;
   }, 60);
 }
 
 watch(
   () => virtualizer.value.getTotalSize(),
-  () => { if (pendingScrollBottom.value) scrollToBottom(); },
+  () => { if (pendingScrollBottom.value) scrollToLatest(); },
 );
 
 watch(
@@ -256,7 +280,7 @@ watch(
   async ([newMsgLen], [oldMsgLen]) => {
     await nextTick();
     if (!autoScroll.value) return;
-    scrollToBottom(newMsgLen !== oldMsgLen ? "smooth" : "instant");
+    scrollToLatest(newMsgLen !== oldMsgLen ? "smooth" : "auto");
   },
 );
 
@@ -264,16 +288,18 @@ watch(
   () => props.selfId,
   (newId, oldId) => {
     if (newId != null && newId !== oldId) {
+      initialScrollReady.value = false;
       virtualizer.value.measure();
-      void scheduleScrollToBottom();
+      void scheduleScrollToBottom({ revealWhenDone: true });
     }
   },
   { immediate: true },
 );
 
 onMounted(() => {
+  initialScrollReady.value = false;
   virtualizer.value.measure();
-  void scheduleScrollToBottom();
+  void scheduleScrollToBottom({ revealWhenDone: true });
 });
 
 function renderMd(content: string): string {
@@ -288,6 +314,10 @@ function renderMd(content: string): string {
   padding: 8px 4px 8px 12px;
   will-change: scroll-position;
   overflow-anchor: none;
+}
+
+.conv-body--positioning {
+  visibility: hidden;
 }
 
 .conv-body__inner {
