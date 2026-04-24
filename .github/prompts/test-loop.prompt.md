@@ -10,34 +10,25 @@ You are running a disciplined test-driven quality loop.
 
 ## Phase 1 — Write / expand tests
 
-Write all missing test cases identified in conversation or specs. Tests go in `src/ui-tests/review-overlay.test.ts` using `bun:test` + the HTTP bridge helpers from `src/ui-tests/bridge.ts` (`webEval`, `resetDecisions`, `openReviewOverlay`, `waitForZones`, etc.).
+Write all missing test cases identified in conversation or specs. Tests go in `e2e/ui/<feature>.spec.ts` using Playwright + the `ApiMock`/`WsMock` fixtures from `e2e/ui/fixtures/`.
 
-Follow the existing suite structure (Suite A, B, C…). Each new suite gets the next letter. Tests must be self-contained: reset decisions at the start of each `beforeAll`.
+Follow the existing suite structure (Suite A, B, C…). Each new suite gets the next letter. Tests must be self-contained — set up their own API mock state before `page.goto('/')`.
 
 ---
 
-## Phase 2 — Run tests
+## Phase 2 — Build and run tests
 
 ```bash
-bun test src/ui-tests --timeout 120000
+bun run build
+npx playwright test e2e/ui/
 ```
 
-The app must be running in **test+debug mode** (`bun run dev:test`), which opens the debug bridge on `localhost:9229`. A plain `bun run dev` does **not** open the bridge — all tests will fail with `ConnectionRefused`.
+The backend is fully mocked — no server needed. `vite preview` is started automatically.
 
-Start the app if not already running:
+To run a focused subset:
 ```bash
-bun run dev:test   # RAILYN_DEBUG=1 RAILYN_DB=:memory:
+npx playwright test e2e/ui/board.spec.ts
 ```
-Wait ~25s for startup, then verify:
-```bash
-curl http://localhost:9229/
-```
-Or use the fully-automated script (start + test + cleanup):
-```bash
-bun run test:ui:run
-```
-
-After running, clearly report: **N pass, M fail** and the name/message of each failure.
 
 After running, clearly report: **N pass, M fail** and the name/message of each failure.
 
@@ -45,9 +36,7 @@ After running, clearly report: **N pass, M fail** and the name/message of each f
 
 ## Phase 3 — Fix bugs in the implementation
 
-For each failing test, diagnose the root cause in the implementation code (not in the test assertions). Fix the implementation. Do not weaken test assertions to make tests pass.
-
-If you are unsure of the cause, write a small diagnostic script using `webEval` to inspect live state before fixing.
+For each failing test, diagnose the root cause in the **implementation** code (not in the test assertions). Fix the implementation. Do not weaken test assertions to make tests pass.
 
 ---
 
@@ -77,18 +66,17 @@ Make targeted improvements. Do not refactor things unrelated to the feature.
 ## Phase 7 — Run tests again after optimization
 
 ```bash
-bun test src/ui-tests --timeout 120000
-# app must be running: bun run dev:test
+bun run build
+npx playwright test e2e/ui/
 ```
 
-All tests must still pass. If any fail, go back to Phase 3 (fix the regression, not the test).
+All tests must still pass. If any fail, go back to Phase 3.
 
 ---
 
 ## Phase 8 — Final cleanup
 
 - Remove any temporary `console.log` / debug logging added during diagnosis
-- Ensure `hunkZones`, zone keys, and Vue app disposal are correct
 - Verify no leftover `TODO` comments from this session
 
 ---

@@ -20,7 +20,6 @@
     "refine:mock": "bun refinement/runner.ts --mode mock",
     "refine:local": "bun refinement/runner.ts --mode local",
     "refine:live": "bun refinement/runner.ts --mode live",
-    "test:ui:run": "bun scripts/run-ui-tests.ts src/ui-tests",
     "build:ext": "cd extensions/railyin-ref && npm install && npm run compile && npm run package"
   },
   "dependencies": {

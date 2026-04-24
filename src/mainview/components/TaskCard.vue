@@ -24,52 +24,20 @@
       >⬡ {{ changedCount }}</span>
     </div>
 
-    <!-- Launch buttons: only when worktree is ready -->
-    <div v-if="launchConfig && task.worktreePath" class="task-card__launch-row">
-      <LaunchButtons
-        :profiles="launchConfig.profiles"
-        :tools="launchConfig.tools"
-        :card-mode="true"
-        @click.stop
-        @pointerdown.stop
-        @run="runLaunch"
-      />
-    </div>
-
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed } from "vue";
 import Tag from "primevue/tag";
-import { useToast } from "primevue/usetoast";
-import LaunchButtons from "./LaunchButtons.vue";
-import type { Task, LaunchConfig } from "@shared/rpc-types";
+import type { Task } from "@shared/rpc-types";
 import { useTaskStore } from "../stores/task";
-import { useLaunchStore } from "../stores/launch";
 
 const props = defineProps<{ task: Task }>();
-const emit = defineEmits<{ click: []; openReview: []; openTerminal: [sessionId: string, label: string, cwd: string] }>();
+const emit = defineEmits<{ click: []; openReview: [] }>();
 const taskStore = useTaskStore();
-const launchStore = useLaunchStore();
-const toast = useToast();
 const changedCount = computed(() => taskStore.changedFileCounts[props.task.id] ?? 0);
 const isUnread = computed(() => taskStore.hasUnread(props.task.id));
-
-const launchConfig = ref<LaunchConfig | null>(null);
-
-onMounted(async () => {
-  launchConfig.value = await launchStore.getConfig(props.task.id, props.task.projectKey);
-});
-
-async function runLaunch(command: string, mode: "terminal" | "app") {
-  const result = await launchStore.run(props.task.id, command, mode);
-  if (!result.ok) {
-    toast.add({ severity: "error", summary: "Launch failed", detail: result.error, life: 5000 });
-  } else if (result.sessionId) {
-    emit("openTerminal", result.sessionId, props.task.title, props.task.worktreePath ?? "");
-  }
-}
 
 const execLabel = computed(() => {
   const map: Record<string, string> = {
@@ -149,12 +117,6 @@ const execSeverity = computed(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.task-card__launch-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 6px;
 }
 
 .task-card__retry-count {

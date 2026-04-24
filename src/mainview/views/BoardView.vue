@@ -102,7 +102,6 @@
               @pointerdown="onCardPointerDown($event, task.id)"
               @click="onCardClick(task.id)"
               @open-review="onOpenReview(task.id)"
-              @open-terminal="onOpenTerminal"
             />
             <div
               v-if="dragOverColumnId === slot.column.id"
@@ -144,7 +143,6 @@
                 @pointerdown="onCardPointerDown($event, task.id)"
                 @click="onCardClick(task.id)"
                 @open-review="onOpenReview(task.id)"
-                @open-terminal="onOpenTerminal"
               />
               <div
                 v-if="dragOverColumnId === col.id"
@@ -276,10 +274,6 @@ const dropIndex = ref<number | null>(null);
 const dropIndicatorY = ref<number>(0);
 let lastDragEndTime = 0;
 
-function onOpenTerminal(sessionId: string, label: string, cwd: string) {
-  terminalStore.addSession(sessionId, label, cwd);
-}
-
 async function onFooterClick() {
   if (terminalStore.sessions.length === 0) {
     // No sessions yet — create one in the workspace root
@@ -345,6 +339,26 @@ type DragState = {
   sourceColumnId: string | null;
 };
 let activeDrag: DragState | null = null;
+
+let scrollRAF: number | null = null;
+let scrollTarget: { container: HTMLElement; direction: number } | null = null;
+
+function startAutoScroll(container: HTMLElement, direction: number) {
+  if (scrollTarget?.container === container && scrollTarget?.direction === direction) return;
+  stopAutoScroll();
+  scrollTarget = { container, direction };
+  const tick = () => {
+    if (!scrollTarget) return;
+    scrollTarget.container.scrollTop += scrollTarget.direction * 8;
+    scrollRAF = requestAnimationFrame(tick);
+  };
+  scrollRAF = requestAnimationFrame(tick);
+}
+
+function stopAutoScroll() {
+  if (scrollRAF != null) { cancelAnimationFrame(scrollRAF); scrollRAF = null; }
+  scrollTarget = null;
+}
 
 // Load tasks when active board changes
 watch(
@@ -510,23 +524,37 @@ function onPointerMove(event: PointerEvent) {
 
       // Compute pixel offset for the drop indicator line
       const containerRect = cardsContainer.getBoundingClientRect();
-      const scrollTop = (cardsContainer as HTMLElement).scrollTop;
       if (visibleCards.length === 0) {
-        dropIndicatorY.value = scrollTop + 4;
+        dropIndicatorY.value = 4;
       } else if (idx === 0) {
         const firstRect = visibleCards[0].getBoundingClientRect();
-        dropIndicatorY.value = firstRect.top - containerRect.top + scrollTop - 1;
+        dropIndicatorY.value = firstRect.top - containerRect.top - 1;
       } else if (idx >= visibleCards.length) {
         const lastRect = visibleCards[visibleCards.length - 1].getBoundingClientRect();
-        dropIndicatorY.value = lastRect.bottom - containerRect.top + scrollTop + 1;
+        dropIndicatorY.value = lastRect.bottom - containerRect.top + 1;
       } else {
         const prevRect = visibleCards[idx - 1].getBoundingClientRect();
         const nextRect = visibleCards[idx].getBoundingClientRect();
-        dropIndicatorY.value = (prevRect.bottom + nextRect.top) / 2 - containerRect.top + scrollTop;
+        dropIndicatorY.value = (prevRect.bottom + nextRect.top) / 2 - containerRect.top;
+      }
+
+      // Auto-scroll the board when cursor is near top/bottom edge of the viewport
+      const SCROLL_ZONE = 60;
+      const boardContainer = document.querySelector('.board-columns') as HTMLElement | null;
+      if (boardContainer) {
+        const boardRect = boardContainer.getBoundingClientRect();
+        if (event.clientY < boardRect.top + SCROLL_ZONE) {
+          startAutoScroll(boardContainer, -1);
+        } else if (event.clientY > boardRect.bottom - SCROLL_ZONE) {
+          startAutoScroll(boardContainer, 1);
+        } else {
+          stopAutoScroll();
+        }
       }
     }
   } else {
     dropIndex.value = null;
+    stopAutoScroll();
   }
 }
 
@@ -534,6 +562,7 @@ async function onPointerUp(event: PointerEvent) {
   document.removeEventListener('pointermove', onPointerMove);
   document.removeEventListener('pointerup', onPointerUp);
   document.removeEventListener('pointercancel', onPointerUp);
+  stopAutoScroll();
   if (!activeDrag) return;
   // Always restore user-select regardless of whether a real drag occurred
   document.body.style.userSelect = '';
@@ -707,7 +736,7 @@ watch(chatSidebarOpen, (isOpen) => {
   gap: 12px;
   padding: 16px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
   align-items: flex-start;
 }
 
@@ -718,8 +747,12 @@ watch(chatSidebarOpen, (isOpen) => {
   background: var(--p-content-hover-background);
   border-radius: 10px;
   padding: 12px;
-  max-height: 100%;
+  min-height: 120px;
   transition: outline 0.1s;
+}
+
+.board-column.is-drag-over {
+  background: color-mix(in srgb, var(--p-primary-color, #6366f1) 8%, var(--p-content-hover-background));
 }
 
 .board-column.is-drag-over--full {
@@ -744,6 +777,7 @@ watch(chatSidebarOpen, (isOpen) => {
 
 .board-column-group > .board-column {
   flex: none;
+  min-height: 80px;
 }
 
 
@@ -769,7 +803,6 @@ watch(chatSidebarOpen, (isOpen) => {
 
 .board-column__cards {
   flex: 1;
-  overflow-y: auto;
   min-height: 60px;
   position: relative;
 }

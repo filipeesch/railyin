@@ -593,3 +593,124 @@ test.describe("TP — terminal session pane", () => {
         await expect(page.locator(".session-list__new")).toBeVisible();
     });
 });
+
+// ─── Suite BD — Board improvements ───────────────────────────────────────────
+
+test.describe("BD — board improvements", () => {
+    test("BD-1: task card has no launch row even when launch config has profiles and tools", async ({
+        page,
+        api,
+    }) => {
+        api
+            .returns("launch.getConfig", {
+                profiles: [{ id: "p1", label: "Run", command: "npm start", cwd: null, env: {} }],
+                tools: [{ id: "t1", label: "Build", command: "npm run build", cwd: null, env: {} }],
+            })
+            .returns("tasks.list", [makeTask({ workflowState: "backlog" })]);
+
+        await navigateToBoard(page);
+
+        await expect(page.locator(".task-card")).toBeVisible();
+        await expect(page.locator(".task-card__launch-row")).toHaveCount(0);
+    });
+
+    test("BD-2: board scrolls vertically when a grouped column contains many tasks", async ({
+        page,
+        api,
+    }) => {
+        const template = makeGroupedWorkflowTemplate();
+        const manyTasks = Array.from({ length: 20 }, (_, i) =>
+            makeTask({ workflowState: "plan", title: `Task ${i + 1}` }),
+        );
+
+        api
+            .returns("boards.list", [makeBoard({ template } as any)])
+            .returns("workspace.getConfig", {
+                id: 1,
+                key: "test-workspace",
+                name: "Test Workspace",
+                workflows: [template],
+                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
+                worktreeBasePath: "/tmp",
+                enableThinking: false,
+            })
+            .returns("tasks.list", manyTasks);
+
+        await navigateToBoard(page);
+
+        const planColumn = page.locator("[data-column-id='plan']");
+        await expect(planColumn).toBeVisible();
+
+        const boardColumns = page.locator(".board-columns");
+        const metrics = await boardColumns.evaluate((el) => ({
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+            overflowY: getComputedStyle(el).overflowY,
+        }));
+
+        expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+        expect(["auto", "scroll"]).toContain(metrics.overflowY);
+    });
+
+    test("BD-3: board scrolls vertically when columns overflow the viewport", async ({
+        page,
+        api,
+    }) => {
+        const manyTasks = Array.from({ length: 20 }, (_, i) =>
+            makeTask({ workflowState: "backlog", title: `Task ${i + 1}` }),
+        );
+        api.returns("tasks.list", manyTasks);
+
+        await navigateToBoard(page);
+
+        const boardColumns = page.locator(".board-columns");
+        const metrics = await boardColumns.evaluate((el) => ({
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+            overflowY: getComputedStyle(el).overflowY,
+        }));
+
+        expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+        expect(["auto", "scroll"]).toContain(metrics.overflowY);
+
+        await boardColumns.evaluate((el) => {
+            el.scrollTop = el.scrollHeight;
+        });
+        await page.waitForTimeout(50);
+        const scrollTop = await boardColumns.evaluate((el) => el.scrollTop);
+        expect(scrollTop).toBeGreaterThan(0);
+    });
+
+    test("BD-4: dragging a card near the bottom edge of a column scrolls the board", async ({
+        page,
+        api,
+    }) => {
+        const manyTasks = Array.from({ length: 20 }, (_, i) =>
+            makeTask({ workflowState: "backlog", title: `Task ${i + 1}` }),
+        );
+        api.returns("tasks.list", manyTasks);
+
+        await navigateToBoard(page);
+
+        const boardColumns = page.locator(".board-columns");
+        const initialScrollTop = await boardColumns.evaluate((el) => el.scrollTop);
+
+        const firstCard = page.locator(".task-card").first();
+        const cardBox = await firstCard.boundingBox();
+        expect(cardBox).not.toBeNull();
+
+        const viewportSize = page.viewportSize();
+        const bottomEdgeY = (viewportSize?.height ?? 768) - 20;
+
+        await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(cardBox!.x + cardBox!.width / 2, bottomEdgeY, { steps: 10 });
+
+        await page.waitForTimeout(200);
+
+        const newScrollTop = await boardColumns.evaluate((el) => el.scrollTop);
+        await page.mouse.up();
+
+        expect(newScrollTop).toBeGreaterThan(initialScrollTop);
+    });
+});
