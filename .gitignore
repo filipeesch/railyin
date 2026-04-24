@@ -8,7 +8,9 @@ build/
 artifacts/
 
 # Bun lockfile (commit bun.lock if you want reproducible installs, otherwise ignore)
-# bun.lock
+# bun.loc
+
+playwright-report/
 
 # SQLite database
 *.db
