@@ -8,11 +8,15 @@ export interface TerminalSession {
 }
 
 const STORAGE_KEY_HEIGHT = "terminal-panel-height";
+const STORAGE_KEY_SESSION_PANE_WIDTH = "terminal-session-pane-width";
 const STORAGE_KEY_SESSIONS = "terminal-sessions";
 const STORAGE_KEY_ACTIVE = "terminal-active-session";
 const STORAGE_KEY_OPEN = "terminal-panel-open";
 const DEFAULT_HEIGHT = 300;
 const MIN_HEIGHT = 120;
+const DEFAULT_SESSION_PANE_WIDTH = 200;
+const MIN_SESSION_PANE_WIDTH = 160;
+const MAX_SESSION_PANE_WIDTH = 400;
 
 function readStorage<T>(key: string, fallback: T): T {
   if (typeof localStorage === "undefined") return fallback;
@@ -32,9 +36,18 @@ export const useTerminalStore = defineStore("terminal", () => {
 
   const storedHeight = typeof localStorage !== "undefined" ? parseInt(localStorage.getItem(STORAGE_KEY_HEIGHT) ?? "", 10) : NaN;
   const panelHeight = ref(isNaN(storedHeight) ? DEFAULT_HEIGHT : Math.max(MIN_HEIGHT, storedHeight));
+  const storedSessionPaneWidth = typeof localStorage !== "undefined"
+    ? parseInt(localStorage.getItem(STORAGE_KEY_SESSION_PANE_WIDTH) ?? "", 10)
+    : NaN;
+  const sessionPaneWidth = ref(
+    isNaN(storedSessionPaneWidth)
+      ? DEFAULT_SESSION_PANE_WIDTH
+      : Math.min(MAX_SESSION_PANE_WIDTH, Math.max(MIN_SESSION_PANE_WIDTH, storedSessionPaneWidth)),
+  );
 
   // Keep all state in sync with localStorage
   watch(panelHeight, (h) => localStorage.setItem(STORAGE_KEY_HEIGHT, String(h)));
+  watch(sessionPaneWidth, (w) => localStorage.setItem(STORAGE_KEY_SESSION_PANE_WIDTH, String(w)));
   watch(sessions, (s) => localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(s)), { deep: true });
   watch(activeSessionId, (id) => localStorage.setItem(STORAGE_KEY_ACTIVE, JSON.stringify(id)));
   watch(isPanelOpen, (open) => localStorage.setItem(STORAGE_KEY_OPEN, JSON.stringify(open)));
@@ -81,11 +94,16 @@ export const useTerminalStore = defineStore("terminal", () => {
     panelHeight.value = Math.max(MIN_HEIGHT, h);
   }
 
+  function setSessionPaneWidth(w: number) {
+    sessionPaneWidth.value = Math.min(MAX_SESSION_PANE_WIDTH, Math.max(MIN_SESSION_PANE_WIDTH, w));
+  }
+
   return {
     sessions,
     activeSessionId,
     isPanelOpen,
     panelHeight,
+    sessionPaneWidth,
     addSession,
     removeSession,
     setActive,
@@ -93,5 +111,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     closePanel,
     togglePanel,
     setHeight,
+    setSessionPaneWidth,
   };
 });

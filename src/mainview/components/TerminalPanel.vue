@@ -17,6 +17,14 @@
         </div>
       </div>
 
+      <div
+        class="terminal-panel__session-handle"
+        data-testid="terminal-session-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        @mousedown.stop.prevent="startSessionResize"
+      ></div>
+
       <!-- Session list sidebar -->
       <TerminalSessionList />
     </div>
@@ -33,6 +41,8 @@ const terminalStore = useTerminalStore();
 
 let startY = 0;
 let startHeight = 0;
+let startX = 0;
+let startWidth = 0;
 
 function startResize(e: MouseEvent) {
   startY = e.clientY;
@@ -47,14 +57,33 @@ function onMouseMove(e: MouseEvent) {
   terminalStore.setHeight(startHeight + delta);
 }
 
+function startSessionResize(e: MouseEvent) {
+  startX = e.clientX;
+  startWidth = terminalStore.sessionPaneWidth;
+  window.addEventListener("mousemove", onSessionMouseMove);
+  window.addEventListener("mouseup", stopSessionResize);
+}
+
+function onSessionMouseMove(e: MouseEvent) {
+  const delta = startX - e.clientX;
+  terminalStore.setSessionPaneWidth(startWidth + delta);
+}
+
 function stopResize() {
   window.removeEventListener("mousemove", onMouseMove);
   window.removeEventListener("mouseup", stopResize);
 }
 
+function stopSessionResize() {
+  window.removeEventListener("mousemove", onSessionMouseMove);
+  window.removeEventListener("mouseup", stopSessionResize);
+}
+
 onUnmounted(() => {
   window.removeEventListener("mousemove", onMouseMove);
   window.removeEventListener("mouseup", stopResize);
+  window.removeEventListener("mousemove", onSessionMouseMove);
+  window.removeEventListener("mouseup", stopSessionResize);
 });
 </script>
 
@@ -92,6 +121,21 @@ onUnmounted(() => {
   min-width: 0;
   overflow: hidden;
   position: relative; /* needed so absolute child is bounded */
+}
+
+.terminal-panel__session-handle {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.08);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.terminal-panel__session-handle:hover,
+.terminal-panel__session-handle:active {
+  background: rgba(86, 156, 214, 0.2);
+  box-shadow: inset 1px 0 0 rgba(86, 156, 214, 0.55);
 }
 
 .terminal-panel__empty {

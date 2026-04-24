@@ -1,5 +1,12 @@
 <template>
-  <div class="session-list">
+  <div
+    class="session-list"
+    :style="{
+      width: terminalStore.sessionPaneWidth + 'px',
+      minWidth: terminalStore.sessionPaneWidth + 'px',
+      maxWidth: terminalStore.sessionPaneWidth + 'px',
+    }"
+  >
     <div class="session-list__header">TERMINAL</div>
 
     <div class="session-list__items">
@@ -60,10 +67,7 @@ async function killSession(sessionId: string) {
 .session-list {
   display: flex;
   flex-direction: column;
-  width: 200px;
-  min-width: 200px;
   background: #252526;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
   overflow: hidden;
 }
 
@@ -80,6 +84,28 @@ async function killSession(sessionId: string) {
 .session-list__items {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.24) rgba(255, 255, 255, 0.04);
+}
+
+.session-list__items::-webkit-scrollbar {
+  width: 10px;
+}
+
+.session-list__items::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.session-list__items::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.session-list__items::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.34);
+  background-clip: content-box;
 }
 
 .session-item {

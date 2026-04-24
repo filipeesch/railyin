@@ -19,6 +19,49 @@ async function navigateToBoard(page: import("@playwright/test").Page) {
     await expect(page.locator(".board-columns, [data-testid='board-columns']")).toBeVisible({ timeout: 5_000 });
 }
 
+type TerminalSeedSession = {
+    sessionId: string;
+    label: string;
+    cwd: string;
+};
+
+async function seedTerminalPanel(
+    page: import("@playwright/test").Page,
+    sessions: TerminalSeedSession[],
+    options: { paneWidth?: number } = {},
+) {
+    await page.addInitScript(
+        ({ seededSessions, paneWidth }) => {
+            localStorage.setItem("terminal-sessions", JSON.stringify(seededSessions));
+            localStorage.setItem("terminal-panel-open", JSON.stringify(true));
+            localStorage.setItem("terminal-active-session", JSON.stringify(null));
+            if (paneWidth != null) {
+                localStorage.setItem("terminal-session-pane-width", String(paneWidth));
+            }
+        },
+        { seededSessions: sessions, paneWidth: options.paneWidth ?? null },
+    );
+}
+
+async function dragTerminalSessionPane(page: import("@playwright/test").Page, deltaX: number): Promise<number | null> {
+    const handle = page.locator("[data-testid='terminal-session-resize-handle']");
+    const box = await handle.boundingBox();
+    if (!box) return null;
+
+    const baselineWidth = Number(await page.evaluate(() => localStorage.getItem("terminal-session-pane-width") ?? "200"));
+    const y = box.y + box.height / 2;
+    const x = box.x + box.width / 2;
+
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + deltaX, y, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+
+    const storedWidth = Number(await page.evaluate(() => localStorage.getItem("terminal-session-pane-width") ?? "200"));
+    return storedWidth !== baselineWidth ? storedWidth : null;
+}
+
 // ─── Suite S — Board structure ────────────────────────────────────────────────
 
 test.describe("S — board structure", () => {
@@ -464,5 +507,89 @@ test.describe("G — column groups", () => {
         await expect(
             page.locator("[data-column-id='plan'] .board-column__header .p-badge"),
         ).toContainText("1/2");
+    });
+});
+
+// ─── Suite TP — Terminal session pane ──────────────────────────────────────────
+
+test.describe("TP — terminal session pane", () => {
+    test("TP-1: dragging the session divider changes pane width and persists it", async ({ page }) => {
+        await seedTerminalPanel(page, [
+            { sessionId: "term-1", label: "bash", cwd: "/tmp/worktree-a" },
+            { sessionId: "term-2", label: "server", cwd: "/tmp/worktree-b" },
+        ]);
+
+        await navigateToBoard(page);
+
+        const sessionList = page.locator(".session-list");
+        const initialBox = await sessionList.boundingBox();
+        expect(initialBox).not.toBeNull();
+
+        const storedWidth = await dragTerminalSessionPane(page, -80);
+        expect(storedWidth).not.toBeNull();
+
+        const resizedBox = await sessionList.boundingBox();
+        expect(resizedBox).not.toBeNull();
+        expect(resizedBox!.width).toBeGreaterThan(initialBox!.width + 40);
+        expect(storedWidth!).toBeGreaterThan(240);
+        expect(storedWidth!).toBeLessThanOrEqual(400);
+    });
+
+    test("TP-2: persisted terminal pane width is restored after reload", async ({ page }) => {
+        await seedTerminalPanel(page, [
+            { sessionId: "term-1", label: "bash", cwd: "/tmp/worktree-a" },
+            { sessionId: "term-2", label: "server", cwd: "/tmp/worktree-b" },
+        ]);
+
+        await navigateToBoard(page);
+
+        const storedWidth = await dragTerminalSessionPane(page, -120);
+        expect(storedWidth).not.toBeNull();
+        expect(storedWidth!).toBeGreaterThan(260);
+
+        await page.reload();
+        await expect(page.locator(".terminal-panel")).toBeVisible({ timeout: 5_000 });
+
+        const restoredBox = await page.locator(".session-list").boundingBox();
+        expect(restoredBox).not.toBeNull();
+        expect(restoredBox!.width).toBeGreaterThanOrEqual(storedWidth! - 5);
+        expect(restoredBox!.width).toBeLessThanOrEqual(storedWidth! + 10);
+    });
+
+    test("TP-3: overflowing session list remains scrollable with themed scrollbar styling", async ({ page }) => {
+        await seedTerminalPanel(
+            page,
+            Array.from({ length: 24 }, (_, idx) => ({
+                sessionId: `term-${idx + 1}`,
+                label: `terminal-${idx + 1}`,
+                cwd: `/tmp/session-${idx + 1}`,
+            })),
+            { paneWidth: 260 },
+        );
+
+        await navigateToBoard(page);
+
+        const list = page.locator(".session-list__items");
+        await expect(list).toBeVisible();
+
+        const metrics = await list.evaluate((el) => {
+            const style = getComputedStyle(el);
+            return {
+                scrollHeight: el.scrollHeight,
+                clientHeight: el.clientHeight,
+                overflowY: style.overflowY,
+                scrollbarColor: style.getPropertyValue("scrollbar-color"),
+            };
+        });
+
+        expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+        expect(metrics.overflowY).toBe("auto");
+        expect(metrics.scrollbarColor.trim()).not.toBe("");
+
+        await list.evaluate((el) => {
+            el.scrollTop = el.scrollHeight;
+        });
+        await expect(page.locator(".session-item__label").last()).toHaveText("terminal-24");
+        await expect(page.locator(".session-list__new")).toBeVisible();
     });
 });
