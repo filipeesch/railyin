@@ -11,6 +11,8 @@ The system SHALL define a `StreamEvent` discriminated union type for all events 
 
 Providers that do not support reasoning (e.g. `FakeAIProvider`) SHALL never emit `reasoning` events. The engine SHALL handle all four event types.
 
+The system SHALL deliver live streaming updates to connected clients exclusively via the `stream.event` WebSocket message type (`{ type: "stream.event"; payload: StreamEvent }`). The `stream.token` wire format is removed and SHALL NOT be emitted by the backend or handled by the frontend.
+
 #### Scenario: Engine handles all four event types
 - **WHEN** `stream()` is iterated and yields events of all four types in a single session
 - **THEN** the engine forwards `token` events to the UI callback, accumulates `reasoning` events internally, executes `tool_calls` before continuing the loop, and exits its loop on `done`
@@ -26,6 +28,10 @@ Providers that do not support reasoning (e.g. `FakeAIProvider`) SHALL never emit
 #### Scenario: OpenAI-compatible provider yields reasoning events
 - **WHEN** the SSE stream contains `delta.reasoning_content` chunks
 - **THEN** the provider yields `{ type: "reasoning"; content }` events for each chunk
+
+#### Scenario: No legacy stream.token message is sent during streaming
+- **WHEN** the AI produces tokens during an execution
+- **THEN** the WebSocket broadcast contains only `stream.event` messages — no `stream.token` messages are sent
 
 ### Requirement: Orchestrator associates tool calls with preceding reasoning context
 The orchestrator's `consumeStream()` SHALL keep stable parent linkage for tool-related events. Tool calls and their associated tool results/file-change visualization SHALL remain correlated by tool call identity while preserving explicit parent call relationships for nesting.
