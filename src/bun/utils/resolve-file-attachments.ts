@@ -8,7 +8,7 @@ const MAX_BYTES = 100 * 1024; // 100 KB cap per attachment
  *   @file:src/foo.ts              → { path: "src/foo.ts" }
  *   @file:src/foo.ts:L10-L25     → { path: "src/foo.ts", startLine: 10, endLine: 25 }
  */
-function parseFileRef(data: string): { path: string; startLine?: number; endLine?: number } | null {
+export function parseFileRef(data: string): { path: string; startLine?: number; endLine?: number } | null {
   if (!data.startsWith("@file:")) return null;
   const ref = data.slice("@file:".length);
   const lineRangeMatch = /:L(\d+)-L(\d+)$/.exec(ref);

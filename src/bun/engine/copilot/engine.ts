@@ -17,10 +17,11 @@ import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
-import { readdirSync, existsSync, readFileSync, mkdirSync } from "fs";
-import { join, extname, basename } from "path";
+import { readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { join, extname, basename, isAbsolute } from "path";
 import { homedir, tmpdir } from "os";
 import { getMcpRegistry } from "../../mcp/registry.ts";
+import { parseFileRef } from "../../utils/resolve-file-attachments.ts";
 
 function utf16LineOffsets(text: string): number[] {
   const offsets = [0];
@@ -47,6 +48,17 @@ function toSelectionAttachment(filePath: string, displayName: string, text: stri
     },
   };
 }
+
+const MEDIA_TYPE_EXT: Record<string, string> = {
+  "text/plain": ".txt",
+  "text/html": ".html",
+  "text/css": ".css",
+  "text/javascript": ".js",
+  "text/typescript": ".ts",
+  "text/markdown": ".md",
+  "application/json": ".json",
+  "application/yaml": ".yaml",
+};
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
@@ -213,21 +225,31 @@ export class CopilotEngine implements ExecutionEngine {
           mediaType === "application/json" ||
           mediaType === "application/yaml";
 
-        const firstTurn = nextPrompt === resolvedInitialPrompt;
-        const attachments = firstTurn ? (params.attachments ?? []) : [];
+        const attachments = params.attachments ?? [];
 
         const mappedAttachments = attachments.map((a): CopilotSdkAttachment => {
-          const filePathRef = a.data.match(/^@file:(.+)$/)?.[1];
-          if (filePathRef) {
-            const text = readFileSync(filePathRef, "utf8");
-            return toSelectionAttachment(filePathRef, a.label, text);
+          const fileRef = parseFileRef(a.data);
+          if (fileRef) {
+            const absPath = (workingDirectory && !isAbsolute(fileRef.path))
+              ? join(workingDirectory, fileRef.path)
+              : fileRef.path;
+            const raw = readFileSync(absPath, "utf8");
+            let text: string;
+            if (fileRef.startLine !== undefined && fileRef.endLine !== undefined) {
+              const lines = raw.split("\n");
+              text = lines.slice(fileRef.startLine - 1, fileRef.endLine).join("\n");
+            } else {
+              text = raw;
+            }
+            return toSelectionAttachment(absPath, a.label, text);
           }
           if (isTextType(a.mediaType)) {
             const text = Buffer.from(a.data, "base64").toString("utf8");
-            const ext = a.label.includes(".") ? "" : mime.extension(a.mediaType) ? `.${mime.extension(a.mediaType)}` : ".txt";
+            const ext = a.label.includes(".") ? "" : (MEDIA_TYPE_EXT[a.mediaType] ?? ".txt");
             const tmpDir = join(tmpdir(), "railyin-attachments");
             mkdirSync(tmpDir, { recursive: true });
             const tmpPath = join(tmpDir, `${Date.now()}-${a.label}${ext}`);
+            writeFileSync(tmpPath, text, "utf8");
             return toSelectionAttachment(tmpPath, a.label, text);
           }
           return {

@@ -879,3 +879,66 @@ test.describe("CD-J — action execution", () => {
         await expect(page.locator(".session-chat-view")).not.toBeVisible({ timeout: 3_000 });
     });
 });
+
+// ─── Suite CD-K — File chip attachments ──────────────────────────────────────
+
+test.describe("CD-K — file chip attachments", () => {
+    test("CD-K-1: sending a #file chip in session chat includes @file attachment in chatSessions.sendMessage", async ({ page, api }) => {
+        const session = makeChatSession({ id: 495 });
+        api.returns("chatSessions.list", [session]);
+        stubSessionMessages(api, session.conversationId, []);
+        api.returns("workspace.listFiles", [{ name: "utils.ts", path: "src/utils.ts" }]);
+        api.returns("lsp.workspaceSymbol", []);
+
+        let capturedAttachments: unknown[] | undefined;
+        api.handle("chatSessions.sendMessage", (params: { attachments?: unknown[] }) => {
+            capturedAttachments = params.attachments;
+            return { executionId: -1, message: makeChatMessage(session.id, session.conversationId, "#utils.ts") };
+        });
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        const editor = page.locator(".session-chat-view .chat-editor .cm-content");
+        await editor.click();
+        await page.keyboard.type("#utils");
+
+        await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 1_000 });
+        await page.keyboard.press("Enter"); // select file chip
+
+        const sendResponsePromise = page.waitForResponse("**/api/chatSessions.sendMessage");
+        await page.locator(".session-chat-view [data-testid='send-btn']").click();
+        await sendResponsePromise;
+
+        expect(capturedAttachments).toBeDefined();
+        expect(capturedAttachments!.length).toBeGreaterThan(0);
+        const att = capturedAttachments![0] as { data: string; label: string; mediaType: string };
+        expect(att.data).toBe("@file:src/utils.ts");
+        expect(att.label).toBe("utils.ts");
+        expect(att.mediaType).toBe("text/plain");
+    });
+
+    test("CD-K-2: #file chip renders as styled token in session chat editor", async ({ page, api }) => {
+        const session = makeChatSession({ id: 496 });
+        api.returns("chatSessions.list", [session]);
+        stubSessionMessages(api, session.conversationId, []);
+        api.returns("workspace.listFiles", [{ name: "index.ts", path: "src/index.ts" }]);
+        api.returns("lsp.workspaceSymbol", []);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        const editor = page.locator(".session-chat-view .chat-editor .cm-content");
+        await editor.click();
+        await page.keyboard.type("#index");
+
+        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 3_000 });
+        await page.keyboard.press("Enter");
+
+        // Chip must render as a styled widget, not raw markup text
+        await expect(page.locator(".session-chat-view .chat-editor .chat-editor__chip")).toBeVisible({ timeout: 2_000 });
+        const rawText = await page.locator(".session-chat-view .chat-editor .cm-content").textContent();
+        expect(rawText).not.toContain("[#");
+    });
+});

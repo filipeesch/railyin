@@ -310,6 +310,164 @@ describe("Copilot backend RPC scenarios", () => {
         }]);
     });
 
+    it("sends #file attachments on follow-up (non-first) turns", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        const session = new MockCopilotSession()
+            .queueTurn({ steps: [token("first reply"), done()] })
+            .queueTurn({ steps: [token("second reply"), done()] });
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(session)
+            .queueResumeSuccess(session); // second sendMessage resumes the existing session
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        // First turn — no attachment
+        const result1 = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "hello" });
+        await runtime.recorder.waitForTokenDone(result1.executionId);
+
+        const filePath = join(runtime.gitDir, "note.md");
+        writeFileSync(filePath, "# Note\nsome content\n", "utf8");
+
+        // Second turn — with #file attachment
+        const result2 = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "check this file",
+            attachments: [{
+                label: "note.md",
+                mediaType: "text/plain",
+                data: `@file:${filePath}`,
+            }],
+        });
+        await runtime.recorder.waitForTokenDone(result2.executionId);
+
+        expect(session.sentMessages).toHaveLength(2);
+        const secondAtt = session.sentMessages[1]?.attachments?.[0];
+        expect(secondAtt?.type).toBe("selection");
+        if (secondAtt?.type !== "selection") throw new Error("expected selection");
+        expect(secondAtt.text).toBe("# Note\nsome content\n");
+    });
+
+    it("resolves #file relative paths against workingDirectory", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        const session = new MockCopilotSession().queueTurn({ steps: [token("done"), done()] });
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(session);
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        // Write file inside gitDir (which is the workingDirectory for the task)
+        writeFileSync(join(runtime.gitDir, "config.ts"), "export const x = 1;\n", "utf8");
+
+        // Use relative path (as workspace.listFiles would return)
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "explain config",
+            attachments: [{
+                label: "config.ts",
+                mediaType: "text/plain",
+                data: "@file:config.ts",
+            }],
+        });
+        await runtime.recorder.waitForTokenDone(result.executionId);
+
+        const att = session.sentMessages[0]?.attachments?.[0];
+        expect(att?.type).toBe("selection");
+        if (att?.type !== "selection") throw new Error("expected selection");
+        expect(att.text).toBe("export const x = 1;\n");
+        // filePath must be absolute
+        expect(att.filePath).toBe(join(runtime.gitDir, "config.ts"));
+    });
+
+    it("maps extension-less text label to .txt temp file with correct content", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        const session = new MockCopilotSession().queueTurn({ steps: [token("done"), done()] });
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(session);
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "check readme",
+            attachments: [{
+                label: "README",
+                mediaType: "text/plain",
+                data: Buffer.from("# Hello\n\nworld").toString("base64"),
+            }],
+        });
+        await runtime.recorder.waitForTokenDone(result.executionId);
+
+        expect(session.sentMessages).toHaveLength(1);
+        const att = session.sentMessages[0]?.attachments?.[0];
+        expect(att?.type).toBe("selection");
+        if (att?.type !== "selection") throw new Error("expected selection");
+        expect(att.filePath).toMatch(/\.txt$/);
+        expect(att.displayName).toBe("README");
+        expect(att.text).toBe("# Hello\n\nworld");
+    });
+
+    it("writes text attachment to disk at the reported filePath", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        const session = new MockCopilotSession().queueTurn({ steps: [token("done"), done()] });
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(session);
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "review config",
+            attachments: [{
+                label: "config.json",
+                mediaType: "application/json",
+                data: Buffer.from('{"key":"value"}').toString("base64"),
+            }],
+        });
+        await runtime.recorder.waitForTokenDone(result.executionId);
+
+        const att = session.sentMessages[0]?.attachments?.[0];
+        expect(att?.type).toBe("selection");
+        if (att?.type !== "selection") throw new Error("expected selection");
+        const { existsSync: fsExistsSync, readFileSync: fsReadFileSync } = await import("fs");
+        expect(fsExistsSync(att.filePath)).toBe(true);
+        expect(fsReadFileSync(att.filePath, "utf8")).toBe('{"key":"value"}');
+    });
+
+    it("sends line-ranged #file ref with only the specified lines", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        const session = new MockCopilotSession().queueTurn({ steps: [token("done"), done()] });
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(session);
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const filePath = join(runtime.gitDir, "lines.ts");
+        writeFileSync(filePath, "line1\nline2\nline3\nline4\nline5\n", "utf8");
+
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "explain lines",
+            attachments: [{
+                label: "lines.ts",
+                mediaType: "text/plain",
+                data: `@file:${filePath}:L2-L4`,
+            }],
+        });
+        await runtime.recorder.waitForTokenDone(result.executionId);
+
+        const att = session.sentMessages[0]?.attachments?.[0];
+        expect(att?.type).toBe("selection");
+        if (att?.type !== "selection") throw new Error("expected selection");
+        expect(att.text).toBe("line2\nline3\nline4");
+        expect(att.selection?.start.line).toBe(0);
+        expect(att.selection?.end.line).toBe(2);
+    });
+
     it("filters internal Copilot tool activity and preserves rich external tool results", async () => {
         const adapter = new MockCopilotSdkAdapter();
         adapter
