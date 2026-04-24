@@ -1,7 +1,8 @@
 import type { ConversationMessage, StreamEvent, Task } from "../../../shared/rpc-types.ts";
 
 export interface RecordedTokenEvent {
-    taskId: number;
+    taskId: number | null;
+    conversationId: number;
     executionId: number;
     token: string;
     done: boolean;
@@ -10,7 +11,8 @@ export interface RecordedTokenEvent {
 }
 
 export interface RecordedErrorEvent {
-    taskId: number;
+    taskId: number | null;
+    conversationId: number;
     executionId: number;
     error: string;
 }
@@ -32,14 +34,15 @@ export class CallbackRecorder {
     readonly streamEvents: StreamEvent[] = [];
 
     recordToken = (
-        taskId: number,
+        taskId: number | null,
+        conversationId: number,
         executionId: number,
         token: string,
         done: boolean,
         isReasoning?: boolean,
         isStatus?: boolean,
     ): void => {
-        this.tokenEvents.push({ taskId, executionId, token, done, isReasoning, isStatus });
+        this.tokenEvents.push({ taskId, conversationId, executionId, token, done, isReasoning, isStatus });
     };
 
     recordTaskUpdate = (task: Task): void => {
@@ -50,8 +53,8 @@ export class CallbackRecorder {
         this.newMessages.push(message);
     };
 
-    recordError = (taskId: number, executionId: number, error: string): void => {
-        this.errors.push({ taskId, executionId, error });
+    recordError = (taskId: number | null, conversationId: number, executionId: number, error: string): void => {
+        this.errors.push({ taskId, conversationId, executionId, error });
     };
 
     recordStreamEvent = (event: StreamEvent): void => {

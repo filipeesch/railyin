@@ -399,6 +399,12 @@ export function copilotSessionIdForTask(taskId: number): string {
   return `railyin-task-${taskId}`;
 }
 
+export function copilotSessionIdForConversation(taskId: number | null, conversationId: number): string {
+  return taskId != null
+    ? copilotSessionIdForTask(taskId)
+    : `railyin-conversation-${conversationId}`;
+}
+
 class DefaultCopilotSdkSession implements CopilotSdkSession {
   constructor(
     private readonly session: LoadedCopilotSession,

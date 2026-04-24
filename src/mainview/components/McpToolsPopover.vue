@@ -90,16 +90,17 @@ import Popover from "primevue/popover";
 import Checkbox from "primevue/checkbox";
 import Button from "primevue/button";
 import { api } from "../rpc";
-import type { McpServerStatus, Task } from "@shared/rpc-types";
+import type { ChatSession, McpServerStatus, Task } from "@shared/rpc-types";
 
 const props = defineProps<{
-  taskId: number;
+  taskId?: number | null;
+  sessionId?: number | null;
   enabledMcpTools: string[] | null;
 }>();
 
 const emit = defineEmits<{
   "edit-config": [];
-  "tools-changed": [task: Task];
+  "tools-changed": [target: Task | ChatSession];
 }>();
 
 const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
@@ -177,7 +178,7 @@ async function toggleServer(server: McpServerStatus, checked: boolean) {
   // Update local state immediately for instant visual feedback
   localEnabled.value = next;
   try {
-    const updated = await api("mcp.setTaskTools", { taskId: props.taskId, enabledTools: next });
+    const updated = await saveTools(next);
     emit("tools-changed", updated);
   } catch (err) {
     console.error("[McpToolsPopover] Failed to update server tools", err);
@@ -215,7 +216,7 @@ async function toggleTool(serverName: string, toolName: string, enabled: boolean
   // Update local state immediately for instant visual feedback
   localEnabled.value = next;
   try {
-    const updated = await api("mcp.setTaskTools", { taskId: props.taskId, enabledTools: next });
+    const updated = await saveTools(next);
     emit("tools-changed", updated);
   } catch (err) {
     console.error("[McpToolsPopover] Failed to update tools", err);
@@ -246,6 +247,16 @@ async function reloadServer(name: string) {
 
 function onEditConfig() {
   emit("edit-config");
+}
+
+function saveTools(enabledTools: string[] | null): Promise<Task | ChatSession> {
+  if (props.taskId != null) {
+    return api("mcp.setTaskTools", { taskId: props.taskId, enabledTools });
+  }
+  if (props.sessionId != null) {
+    return api("mcp.setSessionTools", { sessionId: props.sessionId, enabledTools });
+  }
+  throw new Error("MCP tool scope is not configured");
 }
 </script>
 

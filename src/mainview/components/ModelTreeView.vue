@@ -107,12 +107,10 @@ import Checkbox from "primevue/checkbox";
 import ProgressSpinner from "primevue/progressspinner";
 import InputText from "primevue/inputtext";
 import ToggleSwitch from "primevue/toggleswitch";
-import { useTaskStore } from "../stores/task";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const props = withDefaults(defineProps<{ workspaceKey?: string }>(), { workspaceKey: undefined });
 
-const taskStore = useTaskStore();
 const workspaceStore = useWorkspaceStore();
 
 const effectiveWorkspaceKey = computed(() => props.workspaceKey ?? workspaceStore.activeWorkspaceKey ?? undefined);
@@ -122,7 +120,7 @@ const collapsed = ref(new Set<string>());
 const refreshing = ref(new Set<string>());
 const searchQuery = ref("");
 
-const providers = computed(() => taskStore.allProviderModels);
+const providers = computed(() => workspaceStore.allProviderModels);
 
 /** True when at least one loaded model supports adaptive thinking. */
 const hasAdaptiveThinkingModels = computed(() =>
@@ -159,7 +157,7 @@ onMounted(async () => {
       workspaceStore.loadWorkspaces(),
       workspaceStore.load(),
     ]);
-    await taskStore.loadAllModels(effectiveWorkspaceKey.value);
+    await workspaceStore.loadAllModels(effectiveWorkspaceKey.value);
   } finally {
     loading.value = false;
   }
@@ -169,7 +167,7 @@ watch(
   effectiveWorkspaceKey,
   async (workspaceKey) => {
     if (workspaceKey == null) return;
-    await taskStore.loadAllModels(workspaceKey);
+    await workspaceStore.loadAllModels(workspaceKey);
   },
 );
 
@@ -184,14 +182,14 @@ function toggleProvider(id: string) {
 async function refresh(providerId: string) {
   refreshing.value.add(providerId);
   try {
-    await taskStore.loadAllModels(effectiveWorkspaceKey.value);
+    await workspaceStore.loadAllModels(effectiveWorkspaceKey.value);
   } finally {
     refreshing.value.delete(providerId);
   }
 }
 
 async function onToggle(qualifiedModelId: string, enabled: boolean) {
-  await taskStore.setModelEnabled(qualifiedModelId, enabled, effectiveWorkspaceKey.value);
+  await workspaceStore.setModelEnabled(qualifiedModelId, enabled, effectiveWorkspaceKey.value);
 }
 
 function modelLabel(model: { id: string; displayName?: string }): string {

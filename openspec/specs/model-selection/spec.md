@@ -1,6 +1,8 @@
 ## Purpose
 Allows the user to select the AI model used for a task from the chat drawer, and allows workflow columns to declare a preferred model in YAML.
+
 ## Requirements
+
 ### Requirement: User can select the AI model for a task from the chat drawer
 The system SHALL allow the user to select an AI model from a searchable dropdown in the task detail drawer. The dropdown SHALL show models returned by the active engine's `listModels()`. For Copilot, the dropdown SHALL always include `Auto` as the first selectable option, and that option SHALL represent a null model identity (no pinned model). The selected model SHALL be persisted on the task and used for all subsequent executions of that task.
 
@@ -205,3 +207,13 @@ The `context_window_tokens` field, if present in a provider config entry, SHALL 
 - **WHEN** the selected model's `contextWindow` is `null` and no `context_window_tokens` is set
 - **THEN** 128,000 tokens is used as the default context window
 
+### Requirement: Enabled model lists are workspace-level shared state
+The system SHALL expose enabled model lists as workspace-level shared state so both task chat and standalone session chat consume the same model availability source.
+
+#### Scenario: Task and session chats see same enabled models
+- **WHEN** the enabled model list is loaded for the active workspace
+- **THEN** both task chat and standalone session chat render the same available model options from that shared workspace-level source
+
+#### Scenario: Model availability updates once for all chat surfaces
+- **WHEN** the enabled model list changes for the active workspace
+- **THEN** both task and session chat reflect the updated list without maintaining separate task-owned copies of the model data

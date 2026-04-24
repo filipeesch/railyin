@@ -16,6 +16,7 @@ const EXEC_ID = 2001;
 function textChunk(taskId: number, seq: number, content: string): StreamEvent {
     return {
         taskId,
+        conversationId: taskId,
         executionId: EXEC_ID,
         seq,
         blockId: `${EXEC_ID}-text`,
@@ -111,15 +112,15 @@ test.describe("P — Execution cancellation", () => {
             return { message: recoveredMsg, executionId: EXEC_ID };
         });
         api.handle("tasks.cancel", () => cancelledTask);
-        api.handle("conversations.getMessages", () => [recoveredMsg]);
+        api.handle("conversations.getMessages", () => []);
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const before = await page.locator(".msg--user").count();
         await sendMessage(page, "Recovery P-14");
 
-        await expect(page.locator(".msg--user")).toHaveCount(before + 1);
+        await expect(page.locator(".msg--user")).toHaveCount(1);
+        await expect(page.locator(".msg--user")).toContainText("Recovery P-14");
     });
 
     test("P-15: compact button in popover is disabled while execution is running", async ({ page, api, ws, task }) => {
@@ -127,7 +128,7 @@ test.describe("P — Execution cancellation", () => {
         api.handle("models.listEnabled", () => [
             { id: "fake/test", displayName: "Fake/Test", contextWindow: 8192, supportsManualCompact: true },
         ]);
-        api.handle("tasks.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
+        api.handle("conversations.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
 
         api.handle("tasks.sendMessage", async () => {
             setTimeout(() => {
@@ -230,7 +231,7 @@ test.describe("R — Context compaction", () => {
         api.handle("models.listEnabled", () => [
             { id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true },
         ]);
-        api.handle("tasks.contextUsage", () => ({ usedTokens: 92_160, maxTokens: 128_000, fraction: 0.72 }));
+        api.handle("conversations.contextUsage", () => ({ usedTokens: 92_160, maxTokens: 128_000, fraction: 0.72 }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -253,7 +254,7 @@ test.describe("R — Context compaction", () => {
 
     test("R-20b: compact button hidden when supportsManualCompact is false", async ({ page, api, task }) => {
         // Default fixture has models.listEnabled without supportsManualCompact
-        api.handle("tasks.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
+        api.handle("conversations.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -281,7 +282,7 @@ test.describe("R — Context compaction", () => {
         api.handle("models.listEnabled", () => [
             { id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true },
         ]);
-        api.handle("tasks.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
+        api.handle("conversations.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
         api.handle("tasks.compact", async () => {
             setTimeout(() => ws.push({ type: "message.new", payload: compactionMsg }), 50);
         });
@@ -328,7 +329,7 @@ test.describe("R — Context compaction", () => {
             }, 50);
             return { message: makeUserMessage(task.id, "R-23"), executionId: EXEC_ID };
         });
-        api.handle("tasks.contextUsage", () => ({ usedTokens: 1024, maxTokens: 8192, fraction: 0.125 }));
+        api.handle("conversations.contextUsage", () => ({ usedTokens: 1024, maxTokens: 8192, fraction: 0.125 }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);

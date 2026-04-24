@@ -1,19 +1,17 @@
 ## Purpose
 Defines the ExecutionEngine interface and related types (ExecutionParams, EngineEvent) that all engine implementations conform to. Specifies how the orchestrator consumes engine events and manages execution lifecycle, persistence, and relay.
+
 ## Requirements
+
 ### Requirement: ExecutionEngine interface defines the contract for all engines
-The system SHALL define an `ExecutionEngine` interface that all engines implement. The interface SHALL include:
+The system SHALL define an `ExecutionEngine` interface that all supported engines implement. The interface SHALL include:
 - `execute(params: ExecutionParams): AsyncIterable<EngineEvent>` — run an agentic execution
 - `cancel(executionId: number): void` — abort a running execution
 - `resume(executionId: number, input: EngineResumeInput): Promise<void>` — resume a paused execution with user input or a permission decision when the engine supports in-loop pauses
 - `listModels(): Promise<EngineModelInfo[]>` — return models available through this engine
 - `shutdown?(options?: { reason: "app-exit" | "workspace-reload" | "lifecycle-timeout"; deadlineMs?: number }): Promise<void>` — optional engine-wide graceful shutdown hook used by orchestrator for non-execution lifecycle cleanup
 
-Every engine implementation SHALL conform to this interface in a way that preserves the shared orchestrator contract. The interface SHALL be defined in `src/bun/engine/types.ts`.
-
-#### Scenario: Native engine implements ExecutionEngine
-- **WHEN** the engine resolver instantiates the native engine
-- **THEN** the returned object satisfies the `ExecutionEngine` interface and all required methods are callable
+Every supported engine implementation SHALL conform to this interface in a way that preserves the shared orchestrator contract. The interface SHALL be defined in `src/bun/engine/types.ts`.
 
 #### Scenario: Copilot engine implements ExecutionEngine
 - **WHEN** the engine resolver instantiates the copilot engine
@@ -95,7 +93,7 @@ The `EngineEvent` type SHALL remain the shared event contract for all engines, i
 - **THEN** the orchestrator serializes the `tool_call` message without a `display` field and the UI falls back to showing the raw tool name
 
 ### Requirement: Engine resolver instantiates the correct engine from workspace config
-The system SHALL resolve the execution engine from the workspace that owns the task being executed, not from a single global workspace config. Supported engine types SHALL include `native`, `copilot`, and `claude`.
+The system SHALL resolve the execution engine from the workspace that owns the task being executed, not from a single global workspace config. Supported engine types SHALL include `copilot` and `claude`.
 
 #### Scenario: Task execution uses owning workspace config
 - **WHEN** a task belongs to a board in workspace A
@@ -113,8 +111,8 @@ The system SHALL resolve the execution engine from the workspace that owns the t
 - **WHEN** `workspace.yaml` has `engine.type: unsupported`
 - **THEN** `resolveEngine` throws an error indicating the engine type is not supported
 
-#### Scenario: Concurrent executions use different workspace engines
-- **WHEN** one running task belongs to a `native` workspace and another running task belongs to a `copilot` or `claude` workspace
+#### Scenario: Concurrent executions use different supported workspace engines
+- **WHEN** one running task belongs to a `copilot` workspace and another running task belongs to a `claude` workspace
 - **THEN** both executions proceed concurrently using their own workspace-specific engine instances and config
 
 ### Requirement: Orchestrator consumes engine events and handles persistence and relay

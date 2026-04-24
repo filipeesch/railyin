@@ -7,8 +7,7 @@
 
 import type { ExecutionEngine } from "./types.ts";
 import type { LoadedConfig } from "../config/index.ts";
-import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
-import { NativeEngine } from "./native/engine.ts";
+import type { OnTaskUpdated, OnNewMessage } from "./types.ts";
 import { CopilotEngine } from "./copilot/engine.ts";
 import { createDefaultCopilotSdkAdapter } from "./copilot/session.ts";
 import { ClaudeEngine } from "./claude/engine.ts";
@@ -45,5 +44,5 @@ export function resolveEngine(
     );
   }
 
-  return new NativeEngine();
+  throw new Error(`Unsupported engine type: ${String((engine as { type?: unknown }).type)}`);
 }

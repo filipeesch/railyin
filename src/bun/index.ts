@@ -8,6 +8,7 @@ import { getPtySession, killAllPtySessions } from "./launch/pty.ts";
 import { stopAllCodeServers } from "./launch/code-server.ts";
 import { initMcpRegistry } from "./mcp/registry.ts";
 import type { McpConfig, McpServerConfig } from "./mcp/types.ts";
+import { MockExecutionEngine } from "./testing/mock-engine.ts";
 
 type WsData = { type: "push" } | { type: "pty"; sessionId: string };
 
@@ -69,13 +70,14 @@ import { launchHandlers } from "./handlers/launch.ts";
 import { lspHandlers } from "./handlers/lsp.ts";
 import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mcpHandlers } from "./handlers/mcp.ts";
-import { mapTask } from "./db/mappers.ts";
-import { appendMessage, compactConversation } from "./workflow/engine.ts";
+import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
+import { mapChatSession, mapTask } from "./db/mappers.ts";
+import { appendMessage } from "./conversation/messages.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
-import type { TaskRow, ConversationMessageRow } from "./db/row-types.ts";
+import type { TaskRow, ConversationMessageRow, ChatSessionRow } from "./db/row-types.ts";
 import type { StreamEvent } from "../shared/rpc-types.ts";
-import type { Task, ConversationMessage } from "../shared/rpc-types.ts";
+import type { Task, ConversationMessage, ChatSession } from "../shared/rpc-types.ts";
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 // 0. Resolve shell environment at startup (captures user PATH from login shell)
@@ -163,12 +165,19 @@ function broadcast(msg: object): void {
 
 // ─── Push callbacks ───────────────────────────────────────────────────────────
 
-function onToken(taskId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean): void {
-  broadcast({ type: "stream.token", payload: { taskId, executionId, token, done, isReasoning, isStatus } });
+function onToken(taskId: number | null, conversationId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean): void {
+  broadcast({ type: "stream.token", payload: { taskId, conversationId, executionId, token, done, isReasoning, isStatus } });
+  if (taskId == null && done) {
+    const db = getDb();
+    const row = db.query<ChatSessionRow, [number]>(
+      "SELECT * FROM chat_sessions WHERE conversation_id = ?",
+    ).get(conversationId);
+    if (row) notifyChatSessionUpdated(mapChatSession(row));
+  }
 }
 
-function onError(taskId: number, executionId: number, error: string): void {
-  broadcast({ type: "stream.error", payload: { taskId, executionId, error } });
+function onError(taskId: number | null, conversationId: number, executionId: number, error: string): void {
+  broadcast({ type: "stream.error", payload: { taskId, conversationId, executionId, error } });
 }
 
 function notifyTaskUpdated(task: Task): void {
@@ -183,10 +192,14 @@ function notifyWorkflowReloaded(): void {
   broadcast({ type: "workflow.reloaded", payload: {} });
 }
 
+function notifyChatSessionUpdated(session: ChatSession): void {
+  broadcast({ type: "chatSession.updated", payload: session });
+}
+
 // ─── Per-execution stream batchers ───────────────────────────────────────────
 const batchers = new Map<number, StreamBatcher>();
 
-function getOrCreateBatcher(taskId: number, executionId: number): StreamBatcher {
+function getOrCreateBatcher(taskId: number | null, executionId: number): StreamBatcher {
   const existing = batchers.get(executionId);
   if (existing) return existing;
   const batcher = new StreamBatcher(taskId, executionId, (_events) => {
@@ -214,14 +227,26 @@ function onStreamEvent(event: StreamEvent): void {
 
 // ─── Wire up RPC handlers ─────────────────────────────────────────────────────
 
+const injectedEngine = process.env.RAILYN_TEST_EXECUTION_ENGINE === "mock"
+  ? new MockExecutionEngine()
+  : null;
+
 // Create orchestrator once all RPC callbacks are defined
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(
-    onToken,
-    onError,
-    notifyTaskUpdated,
-    notifyNewMessage,
-  )
+  ? injectedEngine
+    ? new Orchestrator(
+      injectedEngine,
+      onToken,
+      onError,
+      notifyTaskUpdated,
+      notifyNewMessage,
+    )
+    : new Orchestrator(
+      onToken,
+      onError,
+      notifyTaskUpdated,
+      notifyNewMessage,
+    )
   : null;
 
 if (orchestrator) {
@@ -240,12 +265,13 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...boardHandlers(),
   ...projectHandlers(),
   ...taskHandlers(orchestrator, notifyTaskUpdated, notifyNewMessage),
-  ...conversationHandlers(),
+  ...conversationHandlers(orchestrator),
   ...workflowHandlers(notifyWorkflowReloaded),
   ...launchHandlers(),
   ...lspHandlers(),
   ...codeServerHandlers(broadcast, serverPort),
   ...mcpHandlers(),
+  ...chatSessionHandlers(notifyChatSessionUpdated, orchestrator),
 };
 
 const server = Bun.serve({
@@ -284,7 +310,7 @@ const server = Bun.serve({
       try {
         const params = await req.json();
         const result = await handler(params);
-        return new Response(JSON.stringify(result), {
+        return new Response(JSON.stringify(result ?? null), {
           headers: { "content-type": "application/json" },
         });
       } catch (err) {
@@ -395,7 +421,7 @@ async function shutdown(): Promise<void> {
   try {
     await orchestrator?.shutdownNonNativeEngines?.({ reason: "app-exit", deadlineMs: SHUTDOWN_GRACE_MS });
   } catch (err) {
-    console.warn("[shutdown] Graceful non-native shutdown failed", err instanceof Error ? err.message : String(err));
+    console.warn("[shutdown] Graceful engine shutdown failed", err instanceof Error ? err.message : String(err));
   }
   killAllPtySessions();
   stopAllCodeServers();
@@ -404,6 +430,9 @@ async function shutdown(): Promise<void> {
 
 process.on("SIGTERM", () => { void shutdown(); });
 process.on("SIGINT", () => { void shutdown(); });
+
+// Start chat session auto-archive job (archives sessions idle for 7+ days)
+startChatSessionAutoArchiveJob(notifyChatSessionUpdated);
 
 // ─── Debug / test server (only when RAILYN_DEBUG=1) ───────────────────────────
 // Port 0 = OS-assigned. Port is written to /tmp/railyn-debug.port for bridge.ts.
@@ -976,23 +1005,6 @@ if (process.env.RAILYN_DEBUG) {
         return new Response(JSON.stringify({ taskId, model }), { headers: { "content-type": "application/json" } });
       }
 
-      // Test-only: trigger compaction for a task and push the resulting
-      // compaction_summary message via IPC so the Vue store receives it.
-      // Returns { ok, messageId } on success, or { __error } on failure.
-      if (url.pathname === "/test-compact") {
-        const taskId = Number(url.searchParams.get("taskId"));
-        if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
-        try {
-          const summary = await compactConversation(taskId);
-          // Push the new compaction_summary message to Vue so the test can detect it
-          // without having to fire-and-forget a loadMessages call from webEval.
-          notifyNewMessage(summary);
-          return new Response(JSON.stringify({ ok: true, messageId: summary.id }), { headers: { "content-type": "application/json" } });
-        } catch (e) {
-          return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
-        }
-      }
-
       // Test-only: transition a task to a new workflow state, running any on_enter_prompt.
       // Returns { task, executionId } immediately; execution runs asynchronously via IPC.
       if (url.pathname === "/test-transition") {
@@ -1044,7 +1056,31 @@ if (process.env.RAILYN_DEBUG) {
         return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
       }
 
-      return new Response("paths: /reset-decisions?taskId=, /query-line-comments?taskId=, /query-hunk-decisions?taskId=, /query-messages?taskId=, /test-reject-hunk?taskId=&filePath=, /setup-test-env, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-compact?taskId=, /test-transition?taskId=&toState=, /queue-stream-events, /shutdown", { status: 200 });
+      // Test-only: create a chat session in the DB and push chatSession.created to the frontend.
+      if (url.pathname === "/seed-chat-session") {
+        try {
+          const body = (req.method === "POST" ? await req.json() : {}) as { workspaceKey?: string; title?: string };
+          const workspaceKey = body.workspaceKey ?? "default";
+          const title = body.title;
+          const session = await chatSessionHandlers(notifyChatSessionUpdated)["chatSessions.create"]({ workspaceKey, title });
+          return new Response(JSON.stringify(session), { headers: { "content-type": "application/json" } });
+        } catch (e) {
+          return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
+        }
+      }
+
+      // Test-only: push a chatSession.updated event to the frontend without changing the DB.
+      if (url.pathname === "/push-chat-session-updated") {
+        try {
+          const session = await req.json() as ChatSession;
+          notifyChatSessionUpdated(session);
+          return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
+        } catch (e) {
+          return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
+        }
+      }
+
+      return new Response("paths: /reset-decisions?taskId=, /query-line-comments?taskId=, /query-hunk-decisions?taskId=, /query-messages?taskId=, /test-reject-hunk?taskId=&filePath=, /setup-test-env, /seed-tool-messages?taskId=&scenario=, /test-send-message?taskId=&text=, /test-cancel?taskId=, /test-set-model?taskId=&model=, /test-transition?taskId=&toState=, /queue-stream-events, /seed-chat-session, /push-chat-session-updated, /shutdown", { status: 200 });
     },
   });
   // Announce the actual port. bridge.ts and run-ui-tests.sh read /tmp/railyn-debug.port for discovery.

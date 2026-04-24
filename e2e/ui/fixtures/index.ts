@@ -53,6 +53,7 @@ export const test = base.extend<Fixtures>({
             .handle("tasks.list", () => [task])
             .returns("conversations.getMessages", [])
             .returns("conversations.getStreamEvents", [])
+            .returns("conversations.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 })
             .returns("tasks.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 })
             .returns("todos.list", [])
             .returns("launch.getConfig", null)
@@ -65,7 +66,16 @@ export const test = base.extend<Fixtures>({
             // Autocomplete endpoints — tests override as needed
             .returns("engine.listCommands", [])
             .returns("workspace.listFiles", [])
-            .returns("lsp.workspaceSymbol", []);
+            .returns("lsp.workspaceSymbol", [])
+            // Chat sessions — tests override as needed
+            .returns("chatSessions.list", [])
+            .returns("chatSessions.create", { id: 900, workspaceKey: "test-workspace", title: "New Chat", status: "idle", conversationId: 900, enabledMcpTools: null, lastActivityAt: new Date().toISOString(), lastReadAt: null, archivedAt: null, createdAt: new Date().toISOString() })
+            .returns("chatSessions.getMessages", [])
+            .returns("chatSessions.rename", undefined)
+            .returns("chatSessions.archive", undefined)
+            .returns("chatSessions.markRead", undefined)
+            .returns("chatSessions.cancel", undefined)
+            .returns("chatSessions.sendMessage", { executionId: -1, message: null });
 
         await api.install();
         await use(api);

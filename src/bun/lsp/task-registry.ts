@@ -11,14 +11,15 @@ interface RegistryEntry {
 }
 
 class TaskLSPRegistry {
-  private entries = new Map<number, RegistryEntry>();
+  private entries = new Map<string, RegistryEntry>();
 
-  getManager(taskId: number, serverConfigs: LspServerConfig[], worktreePath: string): LSPServerManager | null {
+  getManager(scopeId: string | number, serverConfigs: LspServerConfig[], worktreePath: string): LSPServerManager | null {
     if (serverConfigs.length === 0) return null;
-    let entry = this.entries.get(taskId);
+    const registryKey = String(scopeId);
+    let entry = this.entries.get(registryKey);
     if (!entry) {
       entry = { manager: null, idleTimer: null, serverConfigs, worktreePath };
-      this.entries.set(taskId, entry);
+      this.entries.set(registryKey, entry);
     }
     if (!entry.manager) {
       entry.manager = new LSPServerManager(entry.serverConfigs, entry.worktreePath);
@@ -26,7 +27,7 @@ class TaskLSPRegistry {
     // Reset idle timer
     if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
     entry.idleTimer = setTimeout(() => {
-      const e = this.entries.get(taskId);
+      const e = this.entries.get(registryKey);
       if (e?.manager) {
         e.manager.shutdown().catch(() => {});
         e.manager = null;
@@ -36,8 +37,9 @@ class TaskLSPRegistry {
     return entry.manager;
   }
 
-  async releaseTask(taskId: number): Promise<void> {
-    const entry = this.entries.get(taskId);
+  async releaseTask(scopeId: string | number): Promise<void> {
+    const registryKey = String(scopeId);
+    const entry = this.entries.get(registryKey);
     if (!entry) return;
     if (entry.idleTimer !== null) {
       clearTimeout(entry.idleTimer);
@@ -47,7 +49,7 @@ class TaskLSPRegistry {
       await entry.manager.shutdown().catch(() => {});
       entry.manager = null;
     }
-    this.entries.delete(taskId);
+    this.entries.delete(registryKey);
   }
 }
 

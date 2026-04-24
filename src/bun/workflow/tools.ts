@@ -1762,7 +1762,9 @@ export async function executeTool(
       if (!project) return `Error: project ${projectKey} not found`;
       const convRes = db.run("INSERT INTO conversations (task_id) VALUES (0)");
       const convId = convRes.lastInsertRowid as number;
-      const effectiveModel = args.model || getConfig()?.workspace.default_model || null;
+      const config = getConfig();
+      const engineDefaultModel = "model" in config.engine ? (config.engine.model ?? null) : null;
+      const effectiveModel = args.model || engineDefaultModel || config.workspace.default_model || null;
       const taskRes = db.run(
         `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id${effectiveModel ? ", model" : ""})
          VALUES (?, ?, ?, ?, 'backlog', 'idle', ?${effectiveModel ? ", ?" : ""})`,

@@ -109,7 +109,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import type { FileDiffPayload, Hunk, ToolCallDisplay } from "@shared/rpc-types";
-import type { StreamBlock } from "../stores/task";
+import type { StreamBlock } from "../stores/conversation";
 import { formatToolSubject, parseToolCallDisplay } from "../utils/toolCallDisplay";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import FileDiff from "./FileDiff.vue";

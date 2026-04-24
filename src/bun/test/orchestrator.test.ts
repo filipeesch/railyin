@@ -13,8 +13,6 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
-import { NativeEngine } from "../engine/native/engine.ts";
-import { queueTurnResponse, queueStreamStep, resetFakeAI } from "../ai/fake.ts";
 import type { Database } from "bun:sqlite";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
@@ -30,14 +28,27 @@ const tokens: string[] = [];
 const taskUpdates: Task[] = [];
 const newMessages: ConversationMessage[] = [];
 
+class TestEngine implements ExecutionEngine {
+  async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+    yield { type: "token", content: "Done." };
+    yield { type: "done" };
+  }
+  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+  cancel(_executionId: number): void { }
+  async listModels() {
+    return [{ qualifiedId: "copilot/mock-model", displayName: "Mock Model", contextWindow: 128_000 }];
+  }
+  async listCommands() { return []; }
+}
+
 function makeOrchestrator(): Orchestrator {
   tokens.length = 0;
   taskUpdates.length = 0;
   newMessages.length = 0;
 
   return new Orchestrator(
-    new NativeEngine(),
-    (_taskId, _execId, token, done) => { if (!done) tokens.push(token); },
+    new TestEngine(),
+    (_taskId, _conversationId, _execId, token, done) => { if (!done) tokens.push(token); },
     noop,
     (task) => taskUpdates.push(task),
     (msg) => newMessages.push(msg),
@@ -62,13 +73,12 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(gitDir, { recursive: true, force: true });
   configCleanup();
-  resetFakeAI();
 });
 
 // ─── executeTransition ───────────────────────────────────────────────────────
 
 describe("Orchestrator.executeTransition", () => {
-  it("updates workflow_state via native engine", async () => {
+  it("updates workflow_state via configured engine", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
 
@@ -128,9 +138,9 @@ describe("Orchestrator.executeHumanTurn", () => {
 
     const origOnToken = orchestrator["onToken"];
     // @ts-expect-error — patching private for test
-    orchestrator["onToken"] = (taskId: number, execId: number, token: string, done: boolean) => {
+    orchestrator["onToken"] = (_taskId: number | null, _conversationId: number, execId: number, token: string, done: boolean) => {
       if (done) resolveDone();
-      origOnToken(taskId, execId, token, done);
+      origOnToken(null, 0, execId, token, done);
     };
 
     await orchestrator.executeHumanTurn(taskId, "What should I do first?");

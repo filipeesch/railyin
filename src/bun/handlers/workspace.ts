@@ -58,14 +58,20 @@ export function workspaceHandlers() {
       return {};
     },
 
-    "workspace.listFiles": async (params: { taskId: number; query?: string }): Promise<{ name: string; path: string }[]> => {
+    "workspace.listFiles": async (params: { taskId?: number; workspaceKey?: string; query?: string }): Promise<{ name: string; path: string }[]> => {
       const db = getDb();
-      const row = db
-        .query<{ worktree_path: string | null }, [number]>(
-          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-        )
-        .get(params.taskId);
-      const cwd = row?.worktree_path ?? process.cwd();
+      let cwd = process.cwd();
+      if (params.taskId != null) {
+        const row = db
+          .query<{ worktree_path: string | null }, [number]>(
+            "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+          )
+          .get(params.taskId);
+        cwd = row?.worktree_path ?? cwd;
+      } else {
+        const workspaceConfig = getWorkspaceConfig(params.workspaceKey ?? getDefaultWorkspaceKey());
+        cwd = workspaceConfig.workspace.workspace_path ?? workspaceConfig.configDir;
+      }
 
       const proc = Bun.spawn(["git", "ls-files", "--cached", "--others", "--exclude-standard"], {
         cwd,

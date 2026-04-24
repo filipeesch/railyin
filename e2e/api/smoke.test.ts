@@ -10,12 +10,46 @@ import { startServer, type TestServer } from "./fixtures/server";
 
 let server: TestServer;
 
+async function waitFor<T>(
+    load: () => Promise<T>,
+    predicate: (value: T) => boolean,
+    timeoutMs = 10_000,
+    intervalMs = 50,
+): Promise<T> {
+    const deadline = Date.now() + timeoutMs;
+    let lastValue = await load();
+    while (!predicate(lastValue)) {
+        if (Date.now() >= deadline) {
+            throw new Error(`Timed out waiting for expected state: ${JSON.stringify(lastValue)}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        lastValue = await load();
+    }
+    return lastValue;
+}
+
+async function getTask(boardId: number, taskId: number) {
+    const tasks = await server.request("tasks.list", { boardId });
+    const task = tasks.find((entry) => entry.id === taskId);
+    if (!task) throw new Error(`Task ${taskId} not found on board ${boardId}`);
+    return task;
+}
+
+async function getSession(sessionId: number, includeArchived = false) {
+    const sessions = await server.request("chatSessions.list", { includeArchived });
+    const session = sessions.find((entry) => entry.id === sessionId);
+    if (!session) throw new Error(`Session ${sessionId} not found`);
+    return session;
+}
+
 beforeAll(async () => {
     server = await startServer();
 }, 20_000);
 
 afterAll(async () => {
-    await server.shutdown();
+    if (server) {
+        await server.shutdown();
+    }
 });
 
 describe("workspace", () => {
@@ -140,6 +174,7 @@ describe("tasks", () => {
 describe("conversations", () => {
     let boardId: number;
     let taskId: number;
+    let conversationId: number;
 
     beforeAll(async () => {
         const board = await server.request("boards.create", {
@@ -156,12 +191,108 @@ describe("conversations", () => {
             description: "",
         });
         taskId = task.id;
+        conversationId = task.conversationId;
     });
 
-    test("conversations.getMessages returns empty array for new task", async () => {
-        const msgs = await server.request("conversations.getMessages", { taskId });
-        expect(Array.isArray(msgs)).toBe(true);
-        expect(msgs.length).toBe(0);
+    test("conversations.getMessages supports taskId alias and conversationId reads for task chats", async () => {
+        const initialByTask = await server.request("conversations.getMessages", { taskId });
+        const initialByConversation = await server.request("conversations.getMessages", { conversationId });
+        expect(initialByTask.length).toBeGreaterThanOrEqual(1);
+        expect(initialByTask.map((message) => message.id)).toEqual(initialByConversation.map((message) => message.id));
+        expect(initialByTask.every((message) => message.conversationId === conversationId)).toBe(true);
+
+        await server.request("tasks.setModel", {
+            taskId,
+            model: "copilot/mock-model",
+        });
+        const sent = await server.request("tasks.sendMessage", {
+            taskId,
+            content: "Hello from the task conversation",
+        });
+        expect(sent.message.role).toBe("user");
+        expect(sent.executionId).toBeGreaterThan(0);
+
+        const canonical = await waitFor(
+            () => server.request("conversations.getMessages", { conversationId }),
+            (messages) => messages.some((message) => message.type === "assistant"),
+        );
+        const aliased = await server.request("conversations.getMessages", { taskId });
+        expect(aliased.map((message) => message.id)).toEqual(canonical.map((message) => message.id));
+        expect(canonical.some((message) => message.role === "user" && message.content === "Hello from the task conversation")).toBe(true);
+        expect(canonical.every((message) => message.conversationId === conversationId)).toBe(true);
+
+        const task = await waitFor(
+            () => getTask(boardId, taskId),
+            (entry) => entry.executionState !== "running",
+        );
+        expect(["waiting_user", "completed"]).toContain(task.executionState);
+    });
+});
+
+describe("chatSessions", () => {
+    test("chatSessions lifecycle covers standalone chat and conversationId reads", async () => {
+        const initial = await server.request("chatSessions.list", {});
+        expect(initial).toEqual([]);
+
+        const created = await server.request("chatSessions.create", {
+            workspaceKey: "test-ws",
+            title: "Standalone Session",
+        });
+        expect(created.id).toBeGreaterThan(0);
+        expect(created.title).toBe("Standalone Session");
+        expect(created.status).toBe("idle");
+        expect(created.conversationId).toBeGreaterThan(0);
+
+        const listed = await server.request("chatSessions.list", {});
+        expect(listed.some((session) => session.id === created.id)).toBe(true);
+
+        await server.request("chatSessions.rename", {
+            sessionId: created.id,
+            title: "Renamed Session",
+        });
+        const renamed = await getSession(created.id);
+        expect(renamed.title).toBe("Renamed Session");
+
+        const sent = await server.request("chatSessions.sendMessage", {
+            sessionId: created.id,
+            content: "Hello from the standalone session",
+            model: "copilot/mock-model",
+        });
+        expect(sent.messageId).toBeGreaterThan(0);
+        expect(sent.executionId).toBeGreaterThan(0);
+
+        const canonical = await waitFor(
+            () => server.request("conversations.getMessages", { conversationId: created.conversationId }),
+            (messages) => messages.some((message) => message.type === "assistant"),
+        );
+        const sessionMessages = await server.request("chatSessions.getMessages", { sessionId: created.id });
+        expect(sessionMessages.map((message) => message.id)).toEqual(canonical.map((message) => message.id));
+        expect(canonical.some((message) => message.role === "user" && message.content === "Hello from the standalone session")).toBe(true);
+        expect(canonical.some((message) => message.type === "assistant" && message.content.length > 0)).toBe(true);
+        expect(canonical.every((message) => message.conversationId === created.conversationId)).toBe(true);
+
+        const idleSession = await waitFor(
+            () => getSession(created.id),
+            (session) => session.status === "idle",
+        );
+        expect(idleSession.status).toBe("idle");
+
+        await server.request("chatSessions.markRead", { sessionId: created.id });
+        const readSession = await waitFor(
+            () => getSession(created.id),
+            (session) => session.lastReadAt !== null,
+        );
+        expect(readSession.lastReadAt).not.toBeNull();
+
+        await server.request("chatSessions.archive", { sessionId: created.id });
+        const activeSessions = await server.request("chatSessions.list", {});
+        expect(activeSessions.some((session) => session.id === created.id)).toBe(false);
+
+        const archived = await waitFor(
+            () => getSession(created.id, true),
+            (session) => session.status === "archived",
+        );
+        expect(archived.archivedAt).not.toBeNull();
     });
 });
 

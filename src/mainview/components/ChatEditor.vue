@@ -30,7 +30,8 @@ import { getCommands } from "../composables/useCommandsCache";
 // ─── Props / Emits ────────────────────────────────────────────────────────────
 
 const props = defineProps<{
-  taskId: number;
+  taskId?: number | null;
+  workspaceKey?: string | null;
   disabled?: boolean;
   placeholder?: string;
 }>();
@@ -249,6 +250,7 @@ async function slashCompletions(context: CompletionContext): Promise<CompletionR
   if (!match && !context.explicit) return null;
 
   const typed = match ? match.text.replace(/^[\s\]]*\//, "") : "";
+  if (props.taskId == null) return null;
 
   let commands: { name: string; description?: string }[] = [];
   commands = await getCommands(props.taskId);
@@ -279,10 +281,16 @@ async function hashCompletions(context: CompletionContext): Promise<CompletionRe
   if (!match && !context.explicit) return null;
 
   const query = match ? match.text.slice(1) : "";
+  const scope = props.taskId != null
+    ? { taskId: props.taskId }
+    : props.workspaceKey
+      ? { workspaceKey: props.workspaceKey }
+      : null;
+  if (!scope) return null;
 
   const [filesResult, symbolsResult] = await Promise.allSettled([
-    api("workspace.listFiles", { taskId: props.taskId, query }),
-    query.length >= 2 ? api("lsp.workspaceSymbol", { taskId: props.taskId, query }) : Promise.resolve([]),
+    api("workspace.listFiles", { ...scope, query }),
+    query.length >= 2 ? api("lsp.workspaceSymbol", { ...scope, query }) : Promise.resolve([]),
   ]);
 
   const options: Completion[] = [];

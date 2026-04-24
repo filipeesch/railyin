@@ -54,6 +54,19 @@ export interface Task {
   enabledMcpTools: string[] | null;
 }
 
+export interface ChatSession {
+  id: number;
+  workspaceKey: string;
+  title: string;
+  status: 'idle' | 'running' | 'waiting_user' | 'archived';
+  conversationId: number;
+  enabledMcpTools: string[] | null;
+  lastActivityAt: string;
+  lastReadAt: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+}
+
 export type MessageType =
   | "user"
   | "assistant"
@@ -278,7 +291,7 @@ export interface FileDiffContent {
 
 export interface ConversationMessage {
   id: number;
-  taskId: number;
+  taskId: number | null;
   conversationId: number;
   type: MessageType;
   role: string | null;
@@ -412,7 +425,8 @@ export interface LspDetectedLanguage {
 
 /** @deprecated Use StreamEvent / "stream.event" channel instead */
 export interface StreamToken {
-  taskId: number;
+  taskId: number | null;
+  conversationId?: number;
   executionId: number;
   token: string;
   done: boolean;
@@ -437,7 +451,8 @@ export type StreamEventType =
   | "done";            // terminal event — closes all state for this execution
 
 export interface StreamEvent {
-  taskId: number;
+  taskId: number | null;
+  conversationId?: number;
   executionId: number;
   seq: number;
   blockId: string;
@@ -450,7 +465,8 @@ export interface StreamEvent {
 }
 
 export interface StreamError {
-  taskId: number;
+  taskId: number | null;
+  conversationId?: number;
   executionId: number;
   error: string;
 }
@@ -540,12 +556,16 @@ export type RailynAPI = {
 
   // Conversations
   "conversations.getMessages": {
-    params: { taskId: number };
+    params: { conversationId?: number; taskId?: number };
     response: ConversationMessage[];
   };
   "conversations.getStreamEvents": {
-    params: { taskId: number };
+    params: { conversationId?: number; taskId?: number; afterSeq?: number };
     response: import("../bun/db/stream-events").PersistedStreamEvent[];
+  };
+  "conversations.contextUsage": {
+    params: { conversationId?: number; taskId?: number };
+    response: { usedTokens: number; maxTokens: number; fraction: number };
   };
 
   // Models
@@ -722,19 +742,19 @@ export type RailynAPI = {
 
   // Autocomplete / engine
   "engine.listCommands": {
-    params: { taskId: number };
+    params: { taskId?: number; workspaceKey?: string };
     response: { name: string; description?: string }[];
   };
 
   // Autocomplete / workspace files
   "workspace.listFiles": {
-    params: { taskId: number; query?: string };
+    params: { taskId?: number; workspaceKey?: string; query?: string };
     response: { name: string; path: string }[];
   };
 
   // Autocomplete / LSP symbols
   "lsp.workspaceSymbol": {
-    params: { taskId: number; query: string };
+    params: { taskId?: number; workspaceKey?: string; query: string };
     response: unknown[];
   };
 
@@ -787,6 +807,48 @@ export type RailynAPI = {
     params: CodeRef;
     response: { ok: boolean };
   };
+
+  // Chat sessions (workspace-scoped, not tied to a task)
+  "chatSessions.list": {
+    params: { workspaceKey?: string; includeArchived?: boolean };
+    response: ChatSession[];
+  };
+  "chatSessions.create": {
+    params: { workspaceKey?: string; title?: string };
+    response: ChatSession;
+  };
+  "chatSessions.rename": {
+    params: { sessionId: number; title: string };
+    response: void;
+  };
+  "chatSessions.archive": {
+    params: { sessionId: number };
+    response: void;
+  };
+  "chatSessions.markRead": {
+    params: { sessionId: number };
+    response: void;
+  };
+  "chatSessions.sendMessage": {
+    params: { sessionId: number; content: string; model?: string | null; attachments?: Attachment[] };
+    response: { messageId: number; executionId: number };
+  };
+  "chatSessions.getMessages": {
+    params: { sessionId: number };
+    response: ConversationMessage[];
+  };
+  "chatSessions.cancel": {
+    params: { sessionId: number };
+    response: void;
+  };
+  "chatSessions.compact": {
+    params: { sessionId: number };
+    response: void;
+  };
+  "mcp.setSessionTools": {
+    params: { sessionId: number; enabledTools: string[] | null };
+    response: ChatSession;
+  };
 };
 
 // ─── Push message types (WebSocket server → browser) ─────────────────────────
@@ -798,4 +860,6 @@ export type PushMessage =
   | { type: "task.updated"; payload: Task }
   | { type: "message.new"; payload: ConversationMessage }
   | { type: "workflow.reloaded"; payload: Record<string, never> }
-  | { type: "code.ref"; payload: CodeRef };
+  | { type: "code.ref"; payload: CodeRef }
+  | { type: "chatSession.updated"; payload: ChatSession }
+  | { type: "chatSession.created"; payload: ChatSession };

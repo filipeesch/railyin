@@ -20,6 +20,7 @@ const EXEC_ID = 1001;
 function textChunk(taskId: number, seq: number, content: string, done = false): StreamEvent {
     return {
         taskId,
+        conversationId: taskId,
         executionId: EXEC_ID,
         seq,
         blockId: `${EXEC_ID}-text`,
@@ -48,13 +49,13 @@ async function sendMessage(page: import("@playwright/test").Page, text: string) 
 
 test.describe("M — basic send & streaming", () => {
     test("M-1: user message appears immediately in .msg--user after send", async ({ page, api, ws, task }) => {
-        const messages = [makeUserMessage(task.id, "Hello from M-1")];
+        const sentMessage = makeUserMessage(task.id, "Hello from M-1");
 
         api.handle("tasks.sendMessage", () => ({
-            message: messages[0],
+            message: sentMessage,
             executionId: EXEC_ID,
         }));
-        api.handle("conversations.getMessages", () => messages);
+        api.handle("conversations.getMessages", () => []);
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -63,6 +64,7 @@ test.describe("M — basic send & streaming", () => {
         await sendMessage(page, "Hello from M-1");
 
         await expect(page.locator(".msg--user")).toHaveCount(before + 1);
+        await expect(page.locator(".msg--user")).toContainText("Hello from M-1");
     });
 
     test("M-2: streaming bubble (.msg__bubble.streaming) visible while streaming", async ({ page, api, ws, task }) => {

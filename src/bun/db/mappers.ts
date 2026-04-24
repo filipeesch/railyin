@@ -1,6 +1,7 @@
 import type {
   Task,
   Board,
+  ChatSession,
   ConversationMessage,
   ExecutionState,
   MessageType,
@@ -8,6 +9,7 @@ import type {
 import type {
   TaskRow,
   BoardRow,
+  ChatSessionRow,
   ConversationMessageRow,
 } from "./row-types.ts";
 
@@ -70,6 +72,21 @@ export function mapConversationMessage(row: ConversationMessageRow): Conversatio
     role: row.role,
     content: row.content,
     metadata,
+    createdAt: row.created_at,
+  };
+}
+
+export function mapChatSession(row: ChatSessionRow): ChatSession {
+  return {
+    id: row.id,
+    workspaceKey: row.workspace_key,
+    title: row.title,
+    status: row.status as ChatSession['status'],
+    conversationId: row.conversation_id,
+    enabledMcpTools: (() => { try { return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : null; } catch { return null; } })(),
+    lastActivityAt: row.last_activity_at,
+    lastReadAt: row.last_read_at,
+    archivedAt: row.archived_at,
     createdAt: row.created_at,
   };
 }

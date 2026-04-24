@@ -8,6 +8,7 @@
 import type {
     Board,
     Task,
+    ChatSession,
     ConversationMessage,
     WorkflowTemplate,
     WorkspaceConfig,
@@ -96,6 +97,7 @@ export function makeTask(overrides?: Partial<Task>): Task {
         createdFromTaskId: null,
         createdFromExecutionId: null,
         model: "fake/test",
+        enabledMcpTools: null,
         shellAutoApprove: false,
         approvedCommands: [],
         worktreeStatus: null,
@@ -158,4 +160,46 @@ export function makeMcpStatus(overrides?: {
         { name: "toolB", qualifiedName: `mcp__${name}__toolB`, serverName: name, description: "Tool B", inputSchema: { type: "object" as const } },
     ];
     return { name, state, tools, error: overrides?.error };
+}
+
+let _nextSessionId = 200;
+let _nextSessionConvId = 500;
+
+export function makeChatSession(overrides?: Partial<ChatSession>): ChatSession {
+    const id = overrides?.id ?? _nextSessionId++;
+    const conversationId = overrides?.conversationId ?? _nextSessionConvId++;
+    const now = new Date().toISOString();
+    return {
+        id,
+        workspaceKey: WORKSPACE_KEY,
+        title: `Chat ${id}`,
+        status: "idle",
+        conversationId,
+        enabledMcpTools: null,
+        lastActivityAt: now,
+        lastReadAt: now,
+        archivedAt: null,
+        createdAt: now,
+        ...overrides,
+    };
+}
+
+export function makeChatMessage(
+    sessionId: number,
+    conversationId: number,
+    content: string,
+    role: "user" | "assistant" = "user",
+    overrides?: Partial<ConversationMessage>,
+): ConversationMessage {
+    return {
+        id: _nextMsgId++,
+        taskId: null as unknown as number,
+        conversationId,
+        type: role === "user" ? "user" : "assistant",
+        role,
+        content,
+        metadata: null,
+        createdAt: new Date().toISOString(),
+        ...overrides,
+    };
 }

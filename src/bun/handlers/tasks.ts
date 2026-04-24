@@ -4,44 +4,19 @@ import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, Review
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
 import {
-  appendMessage,
   estimateContextWarning,
   estimateContextUsage,
-  compactConversation,
-  resolveModelContextWindow,
-} from "../workflow/engine.ts";
+} from "../conversation/context.ts";
+import { appendMessage } from "../conversation/messages.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
 import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree, createWorktree, listBranches } from "../git/worktree.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
-import type { OnTaskUpdated, OnNewMessage } from "../workflow/engine.ts";
+import type { OnTaskUpdated, OnNewMessage } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import { getProjectByKey } from "../project-store.ts";
-
-// ─── Helper: resolve model context window across all engine types ─────────────
-// Resolution order:
-//   1. orchestrator.listModels() — works for Copilot + native engines
-//   2. resolveModelContextWindow() — fallback for native/OpenAI-compat providers
-//   3. 128_000 — hard fallback
-
-async function resolveContextWindow(
-  taskModel: string,
-  workspaceKey: string,
-  orchestrator: ExecutionCoordinator | null,
-): Promise<number> {
-  if (orchestrator) {
-    try {
-      const models = await orchestrator.listModels(workspaceKey);
-      const found = models.find((m) => m.qualifiedId === taskModel);
-      if (found?.contextWindow != null) return found.contextWindow;
-    } catch { /* fall through */ }
-  }
-  try {
-    return await resolveModelContextWindow(taskModel);
-  } catch { /* fall through */ }
-  return 128_000;
-}
+import { resolveContextWindow } from "../context-usage.ts";
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
 

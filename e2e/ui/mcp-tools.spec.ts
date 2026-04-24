@@ -30,12 +30,14 @@ async function openMcpPopover(page: import("@playwright/test").Page) {
 
 async function expandServer(page: import("@playwright/test").Page, serverName?: string) {
     if (serverName) {
+        await expect(page.locator(".mcp-tools-popover__server-name", { hasText: serverName })).toBeVisible();
         await page.locator(".mcp-tools-popover__server-name", { hasText: serverName }).click();
     } else {
-        // Expand all servers
         const chevrons = page.locator(".mcp-tools-popover__chevron");
-        for (const chevron of await chevrons.all()) {
-            await chevron.click();
+        await expect(chevrons.first()).toBeVisible();
+        const count = await chevrons.count();
+        for (let index = 0; index < count; index += 1) {
+            await chevrons.nth(index).click();
         }
     }
 }
@@ -211,10 +213,10 @@ test.describe("V — MCP tool checkboxes", () => {
         await openMcpPopover(page);
         await expandServer(page);
 
-        const checkboxes = page.locator(".mcp-tools-popover__tool input[type='checkbox']");
+        const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
         await expect(checkboxes).toHaveCount(2);
-        await expect(checkboxes.nth(0)).toBeChecked();
-        await expect(checkboxes.nth(1)).toBeChecked();
+        await expect(checkboxes.nth(0)).toHaveClass(/p-checkbox-checked/);
+        await expect(checkboxes.nth(1)).toHaveClass(/p-checkbox-checked/);
     });
 
     test("V-13: enabledMcpTools=[toolA] means only toolA is checked", async ({ page, api, task }) => {
@@ -227,9 +229,10 @@ test.describe("V — MCP tool checkboxes", () => {
         await openMcpPopover(page);
         await expandServer(page);
 
-        const checkboxes = page.locator(".mcp-tools-popover__tool input[type='checkbox']");
-        await expect(checkboxes.nth(0)).toBeChecked();  // toolA
-        await expect(checkboxes.nth(1)).not.toBeChecked(); // toolB
+        const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
+        await expect(checkboxes).toHaveCount(2);
+        await expect(checkboxes.nth(0)).toHaveClass(/p-checkbox-checked/); // toolA
+        await expect(checkboxes.nth(1)).not.toHaveClass(/p-checkbox-checked/); // toolB
     });
 
     test("V-14: Toggling a checkbox calls mcp.setTaskTools with updated list", async ({ page, api, task }) => {
@@ -246,7 +249,9 @@ test.describe("V — MCP tool checkboxes", () => {
         await expandServer(page);
 
         // Uncheck toolA (first checkbox) — click the PrimeVue wrapper, not the hidden input
-        await page.locator(".mcp-tools-popover__tool .p-checkbox").nth(0).click();
+        const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
+        await expect(checkboxes).toHaveCount(2);
+        await checkboxes.nth(0).click();
 
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: ["test-server:toolB"] });

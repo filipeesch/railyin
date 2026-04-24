@@ -264,6 +264,69 @@ test.describe("P — card placement on column transition", () => {
     });
 });
 
+// ─── Suite BL — Board layout with ConversationDrawer ─────────────────────────
+
+import { makeChatSession } from "./fixtures/mock-data";
+
+test.describe("BL — Board layout with ConversationDrawer", () => {
+    test("BL-1: clicking a task card opens .task-chat-view in the drawer", async ({ page, api, task }) => {
+        api.handle("tasks.list", () => [task]);
+        api.returns("chatSessions.list", []);
+
+        await navigateToBoard(page);
+
+        await page.locator(`[data-task-id="${task.id}"]`).click();
+        await expect(page.locator(".task-chat-view")).toBeVisible({ timeout: 5_000 });
+    });
+
+    test("BL-2: task drawer header contains the task title", async ({ page, api, task }) => {
+        api.handle("tasks.list", () => [task]);
+        api.returns("chatSessions.list", []);
+
+        await navigateToBoard(page);
+
+        await page.locator(`[data-task-id="${task.id}"]`).click();
+        await expect(page.locator(".task-chat-view")).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".task-chat-view")).toContainText(task.title);
+    });
+
+    test("BL-3: chat sidebar toggle shows .chat-sidebar", async ({ page, api }) => {
+        api.returns("chatSessions.list", []);
+
+        await navigateToBoard(page);
+
+        await expect(page.locator(".chat-sidebar")).not.toBeVisible();
+
+        const toggleBtn = page.locator("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
+        if (await toggleBtn.count() > 0) {
+            await toggleBtn.first().click();
+            await expect(page.locator(".chat-sidebar")).toBeVisible({ timeout: 3_000 });
+        }
+    });
+
+    test("BL-4: switching from session drawer to task drawer replaces content", async ({ page, api, task }) => {
+        const session = makeChatSession({ id: 500 });
+        api.handle("tasks.list", () => [task]);
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.getMessages", []);
+
+        await navigateToBoard(page);
+
+        // Open session first
+        const toggleBtn = page.locator("button.chat-sidebar-toggle, .toolbar-btn--chat");
+        if (await toggleBtn.count() > 0) await toggleBtn.first().click();
+        await expect(page.locator(".chat-sidebar")).toBeVisible({ timeout: 3_000 });
+
+        await page.locator(`[data-session-id="${session.id}"]`).click();
+        await expect(page.locator(".session-chat-view")).toBeVisible({ timeout: 5_000 });
+
+        // Now click task card — content should switch to task mode
+        await page.locator(`[data-task-id="${task.id}"]`).click();
+        await expect(page.locator(".task-chat-view")).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".session-chat-view")).not.toBeVisible();
+    });
+});
+
 // ─── Suite G — Column groups ──────────────────────────────────────────────────
 
 test.describe("G — column groups", () => {

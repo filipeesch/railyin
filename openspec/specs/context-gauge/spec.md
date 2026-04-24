@@ -40,3 +40,36 @@ The system SHALL expose a `tasks.contextUsage` RPC that returns `{ usedTokens: n
 #### Scenario: Max tokens falls back to config then default
 - **WHEN** the model context window is unknown from the API
 - **THEN** `maxTokens` uses `ai.context_window_tokens` from workspace.yaml if set, otherwise 128,000
+
+### Requirement: Context usage is available by conversationId
+The system SHALL expose conversation-scoped context usage retrieval keyed by `conversationId` so both task and session chat can read the same kind of usage estimate.
+
+#### Scenario: Task chat requests context usage by conversation
+- **WHEN** the active task chat requests context usage for its conversation
+- **THEN** the system returns context usage for that conversation without requiring task-scoped estimation APIs
+
+#### Scenario: Session chat requests context usage by conversation
+- **WHEN** the active standalone session requests context usage for its conversation
+- **THEN** the system returns context usage for that conversation using the same response shape as task chat
+
+### Requirement: Context usage gauge appears in standalone sessions
+The system SHALL display the same context usage gauge and context popover in standalone session chat when the session conversation has a known context window estimate.
+
+#### Scenario: Session context gauge shown when usage is known
+- **WHEN** a standalone session chat is open and conversation context usage is available
+- **THEN** the session input toolbar shows the same context gauge used in task chat
+
+#### Scenario: Session context gauge hidden when usage unavailable
+- **WHEN** a standalone session chat has no context usage estimate
+- **THEN** the context gauge is not rendered
+
+### Requirement: Manual compaction is available in standalone sessions
+The system SHALL expose manual conversation compaction controls in standalone sessions when the active engine supports manual compaction.
+
+#### Scenario: Session compaction button shown in popover
+- **WHEN** the user opens the context popover in a standalone chat session and the engine supports manual compaction
+- **THEN** the popover shows the compact action with the same disabled and loading semantics as task chat
+
+#### Scenario: Session context usage refreshes after execution
+- **WHEN** a standalone session execution completes
+- **THEN** the session context usage is refreshed so the gauge reflects the latest conversation size

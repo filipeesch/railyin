@@ -1,30 +1,23 @@
 /**
  * Orchestrator — sits between RPC handlers and the active ExecutionEngine.
  *
- * For the native engine, the orchestrator delegates directly to the existing
- * callback-based functions in workflow/engine.ts (which handle all DB writes).
- *
- * For non-native engines (e.g. Copilot), the orchestrator builds ExecutionParams,
- * calls engine.execute(), and consumes the EngineEvent stream to drive DB writes
- * and RPC relay. This path is scaffolded here and completed in Task Group 5/7.
+ * It builds ExecutionParams, calls engine.execute(), and consumes the EngineEvent
+ * stream to drive DB writes and RPC relay for the supported engines.
  */
 
-import type { ExecutionEngine, EngineEvent, ExecutionParams, NativeExecutionType } from "./types.ts";
-import { NativeEngine } from "./native/engine.ts";
+import type {
+  ExecutionEngine,
+  EngineEvent,
+  ExecutionParams,
+  OnToken,
+  OnError,
+  OnTaskUpdated,
+  OnNewMessage,
+  OnStreamEvent,
+} from "./types.ts";
 import type { LoadedConfig } from "../config/index.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
-import type { OnToken, OnError, OnTaskUpdated, OnNewMessage, OnStreamEvent } from "../workflow/engine.ts";
-import {
-  handleTransition,
-  handleHumanTurn,
-  handleRetry,
-  handleCodeReview,
-  cancelExecution as nativeCancelExecution,
-  resolveShellApproval,
-  appendMessage,
-  ensureTaskConversation,
-} from "../workflow/engine.ts";
 import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { getDb } from "../db/index.ts";
@@ -34,6 +27,7 @@ import { runWithConfig } from "../config/index.ts";
 import { resolveEngine } from "./resolver.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { MessageType } from "../../shared/rpc-types.ts";
+import { appendMessage, ensureTaskConversation } from "../conversation/messages.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly injectedEngine: ExecutionEngine | null;
@@ -88,12 +82,6 @@ export class Orchestrator implements ExecutionCoordinator {
     this.onNewMessage = onTaskUpdatedOrOnNewMessage as OnNewMessage;
   }
 
-  // ─── Engine type check ──────────────────────────────────────────────────────
-
-  private isNativeEngine(engine: ExecutionEngine): boolean {
-    return engine instanceof NativeEngine;
-  }
-
   private getEngineForWorkspace(workspaceKey: string): { config: LoadedConfig; engine: ExecutionEngine } {
     const config = getWorkspaceConfig(workspaceKey);
     if (this.injectedEngine) {
@@ -117,12 +105,6 @@ export class Orchestrator implements ExecutionCoordinator {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const { config, engine } = this.getEngineForWorkspace(getBoardWorkspaceKey(task.board_id));
-    if (this.isNativeEngine(engine)) {
-      return runWithConfig(
-        config,
-        () => handleTransition(taskId, toState, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
-      );
-    }
 
     // Ensure conversation exists
     let conversationId = task.conversation_id;
@@ -179,15 +161,14 @@ export class Orchestrator implements ExecutionCoordinator {
     const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
     const execParams = this._buildExecutionParams(
       updatedRow,
+      conversationId,
       executionId,
       resolvedPrompt,
       column.stage_instructions,
       this._resolveWorkingDirectory(updatedRow),
-      "transition",
-      toState,
     );
 
-    this._runNonNative(taskId, executionId, engine, execParams);
+    this._runNonNative(taskId, conversationId, executionId, engine, execParams);
     return { task: mapTask(updatedRow), executionId };
   }
 
@@ -200,12 +181,6 @@ export class Orchestrator implements ExecutionCoordinator {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
-    if (this.isNativeEngine(engine)) {
-      return runWithConfig(
-        config,
-        () => handleHumanTurn(taskId, content, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
-      );
-    }
 
     const conversationId = ensureTaskConversation(taskId, task.conversation_id);
 
@@ -254,16 +229,15 @@ export class Orchestrator implements ExecutionCoordinator {
 
         const execParams = this._buildExecutionParams(
           task,
+          conversationId,
           newExecutionId,
           content,
           column?.stage_instructions,
           this._resolveWorkingDirectory(task),
-          "human_turn",
-          undefined,
           undefined,
           attachments,
         );
-        this._runNonNative(taskId, newExecutionId, engine, execParams);
+        this._runNonNative(taskId, conversationId, newExecutionId, engine, execParams);
 
         const msgRow = db
           .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
@@ -297,16 +271,15 @@ export class Orchestrator implements ExecutionCoordinator {
 
     const execParams = this._buildExecutionParams(
       task,
+      conversationId,
       executionId,
       resolvedPrompt,
       column?.stage_instructions,
       this._resolveWorkingDirectory(task),
-      "human_turn",
-      undefined,
       undefined,
       attachments,
     );
-    this._runNonNative(taskId, executionId, engine, execParams);
+    this._runNonNative(taskId, conversationId, executionId, engine, execParams);
 
     const msgRow = db
       .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
@@ -321,13 +294,8 @@ export class Orchestrator implements ExecutionCoordinator {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
-    if (this.isNativeEngine(engine)) {
-      return runWithConfig(
-        config,
-        () => handleRetry(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, this.onStreamEvent),
-      );
-    }
 
+    const conversationId = ensureTaskConversation(taskId, task.conversation_id);
     db.run("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ?", [taskId]);
     const attempt = (task.retry_count ?? 0) + 1;
 
@@ -342,7 +310,7 @@ export class Orchestrator implements ExecutionCoordinator {
       "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
       [executionId, taskId],
     );
-    appendMessage(taskId, task.conversation_id ?? 0, "system", null, `Retry attempt ${attempt}`);
+    appendMessage(taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
 
     const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
 
@@ -350,13 +318,13 @@ export class Orchestrator implements ExecutionCoordinator {
 
     const execParams = this._buildExecutionParams(
       updatedRow,
+      conversationId,
       executionId,
       retryPrompt,
       column?.stage_instructions,
       this._resolveWorkingDirectory(updatedRow),
-      "retry",
     );
-    this._runNonNative(taskId, executionId, engine, execParams);
+    this._runNonNative(taskId, conversationId, executionId, engine, execParams);
 
     return { task: mapTask(updatedRow), executionId };
   }
@@ -369,12 +337,6 @@ export class Orchestrator implements ExecutionCoordinator {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
-    if (this.isNativeEngine(engine)) {
-      return runWithConfig(
-        config,
-        () => handleCodeReview(taskId, this.onToken, this.onError, this.onTaskUpdated, this.onNewMessage, manualEdits, this.onStreamEvent),
-      );
-    }
 
     type DecisionRow = {
       hunk_hash: string;
@@ -507,8 +469,10 @@ export class Orchestrator implements ExecutionCoordinator {
       [taskId],
     );
 
-    const reviewMsgId = appendMessage(taskId, task.conversation_id ?? 0, "code_review", "user", JSON.stringify(payload));
-    appendMessage(taskId, task.conversation_id ?? 0, "user", "user", reviewText);
+    const conversationId = ensureTaskConversation(taskId, task.conversation_id);
+
+    const reviewMsgId = appendMessage(taskId, conversationId, "code_review", "user", JSON.stringify(payload));
+    appendMessage(taskId, conversationId, "user", "user", reviewText);
 
     const column = this._getColumnConfig(config, task.board_id, task.workflow_state);
     const execResult = db.run(
@@ -530,15 +494,74 @@ export class Orchestrator implements ExecutionCoordinator {
 
     const execParams = this._buildExecutionParams(
       task,
+      conversationId,
       executionId,
       reviewText,
       column?.stage_instructions,
       this._resolveWorkingDirectory(task),
-      "code_review",
     );
-    this._runNonNative(taskId, executionId, engine, execParams);
+    this._runNonNative(taskId, conversationId, executionId, engine, execParams);
 
     return { message: mapConversationMessage(reviewMsgRow), executionId };
+  }
+
+  // ─── Chat Session Execution ────────────────────────────────────────────────
+
+  async executeChatTurn(
+    sessionId: number,
+    conversationId: number,
+    content: string,
+    model?: string,
+    enabledMcpTools?: string[] | null,
+    workspaceKey = getDefaultWorkspaceKey(),
+    attachments?: import("../../shared/rpc-types.ts").Attachment[],
+  ): Promise<{ message: ConversationMessage; executionId: number }> {
+    const db = getDb();
+    const { config, engine } = this.getEngineForWorkspace(workspaceKey);
+
+    // Append the user message to the conversation
+    const msgId = appendMessage(null, conversationId, "user", "user", content);
+
+    // Resolve model: explicit > engine model > workspace default_model
+    const engineModel = "model" in config.engine ? (config.engine.model ?? "") : "";
+    const resolvedModel = model ?? engineModel ?? (config.workspace.default_model ?? "");
+
+    // Working directory: workspace_path from workspace config, fallback to configDir
+    const workingDirectory = config.workspace.workspace_path ?? config.configDir;
+
+    // Create an execution row (task_id is NULL for chat sessions)
+    const execResult = db.run(
+      `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
+       VALUES (NULL, ?, 'chat', 'chat', 'chat-turn', 'running', 1)`,
+      [conversationId],
+    );
+    const executionId = execResult.lastInsertRowid as number;
+
+    db.run("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = ?", [conversationId]);
+
+    const controller = new AbortController();
+    this.abortControllers.set(executionId, controller);
+
+    const execParams: import("./types.ts").ExecutionParams = {
+      executionId,
+      taskId: null,
+      conversationId,
+      prompt: content,
+      systemInstructions: undefined,
+      workingDirectory,
+      model: resolvedModel,
+      signal: controller.signal,
+      onRawModelMessage: (raw) => this._persistRawModelMessage(null, conversationId, executionId, raw),
+      enabledMcpTools: enabledMcpTools ?? null,
+      ...(attachments?.length ? { attachments } : {}),
+    };
+
+    this._runNonNative(null, conversationId, executionId, engine, execParams);
+
+    const msgRow = db
+      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
+      .get(msgId)!;
+    return { message: mapConversationMessage(msgRow), executionId };
   }
 
   // ─── Cancellation ──────────────────────────────────────────────────────────
@@ -551,11 +574,9 @@ export class Orchestrator implements ExecutionCoordinator {
     const db = getDb();
     // Fetch row BEFORE nativeCancelExecution — it may overwrite status to 'failed'
     // (zombie cleanup path) which would prevent our non-native 'cancelled' update below.
-    const execRow = db.query<{ task_id: number; status: string; finished_at: string | null }, [number]>(
+    const execRow = db.query<{ task_id: number | null; status: string; finished_at: string | null }, [number]>(
       "SELECT task_id, status, finished_at FROM executions WHERE id = ?",
     ).get(executionId);
-
-    nativeCancelExecution(executionId);
 
     if (this.injectedEngine) {
       this.injectedEngine.cancel(executionId);
@@ -565,15 +586,28 @@ export class Orchestrator implements ExecutionCoordinator {
     }
 
     if (!execRow) return;
-    const { engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(execRow.task_id));
-    if (!this.isNativeEngine(engine) && execRow.status === "running" && execRow.finished_at == null) {
-      db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
-      db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [execRow.task_id]);
-      const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(execRow.task_id);
-      if (taskRow) {
-        this.onTaskUpdated(mapTask(taskRow));
+    const taskId = execRow.task_id ?? null;
+    const execConvRow = db.query<{ conversation_id: number | null }, [number]>(
+      "SELECT conversation_id FROM executions WHERE id = ?",
+    ).get(executionId);
+    const conversationId = execConvRow?.conversation_id ?? 0;
+    if (taskId != null) {
+      if (execRow.status === "running" && execRow.finished_at == null) {
+        db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
+        db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+        const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+        if (taskRow) {
+          this.onTaskUpdated(mapTask(taskRow));
+        }
+        this.onToken(taskId, conversationId, executionId, "", true);
       }
-      this.onToken(execRow.task_id, executionId, "", true);
+    } else if (execRow.status === "running" && execRow.finished_at == null) {
+      // Chat session cancel
+      db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
+      if (conversationId) {
+        db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+      }
+      this.onToken(null, conversationId, executionId, "", true);
     }
   }
 
@@ -603,7 +637,6 @@ export class Orchestrator implements ExecutionCoordinator {
 
     const shutdowns: Array<Promise<void>> = [];
     for (const engine of targets) {
-      if (this.isNativeEngine(engine)) continue;
       if (!engine.shutdown) continue;
       shutdowns.push(engine.shutdown(options).catch((err) => {
         console.warn("[orchestrator] Non-native shutdown failed", {
@@ -628,11 +661,7 @@ export class Orchestrator implements ExecutionCoordinator {
       .get(taskId);
     if (!task?.current_execution_id) return;
 
-    const { config, engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
-    if (this.isNativeEngine(engine)) {
-      runWithConfig(config, () => resolveShellApproval(taskId, decision, this.onTaskUpdated));
-      return;
-    }
+    const { engine } = this.getEngineForWorkspace(getTaskWorkspaceKey(taskId));
 
     await engine.resume(task.current_execution_id, { type: "shell_approval", decision });
 
@@ -653,7 +682,16 @@ export class Orchestrator implements ExecutionCoordinator {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const workingDirectory = this._resolveWorkingDirectory(task);
-    await engine.compact(taskId, workingDirectory);
+    await engine.compact(taskId, task.conversation_id, workingDirectory);
+  }
+
+  async compactConversation(conversationId: number, workspaceKey = getDefaultWorkspaceKey()): Promise<void> {
+    const { config, engine } = this.getEngineForWorkspace(workspaceKey);
+    if (!engine.compact) {
+      throw new Error(`Engine for conversation ${conversationId} does not support manual compaction`);
+    }
+    const workingDirectory = config.workspace.workspace_path ?? config.configDir;
+    await engine.compact(null, conversationId, workingDirectory);
   }
 
   // ─── Non-native engine helpers ─────────────────────────────────────────────
@@ -690,12 +728,11 @@ export class Orchestrator implements ExecutionCoordinator {
 
   private _buildExecutionParams(
     task: TaskRow,
+    conversationId: number,
     executionId: number,
     prompt: string,
     systemInstructions: string | undefined,
     workingDirectory: string,
-    nativeExecType: NativeExecutionType,
-    toState?: string,
     signal?: AbortSignal,
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
   ): ExecutionParams {
@@ -715,15 +752,14 @@ export class Orchestrator implements ExecutionCoordinator {
     return {
       executionId,
       taskId: task.id,
+      conversationId,
       boardId: task.board_id,
       prompt,
       systemInstructions: fullSystemInstructions,
       workingDirectory,
       model: task.model ?? "",
       signal: signal ?? controller.signal,
-      onRawModelMessage: (raw) => this._persistRawModelMessage(task.id, executionId, raw),
-      nativeExecType,
-      toState,
+      onRawModelMessage: (raw) => this._persistRawModelMessage(task.id, conversationId, executionId, raw),
       enabledMcpTools: task.enabled_mcp_tools
         ? (() => { try { return JSON.parse(task.enabled_mcp_tools!); } catch { return null; } })()
         : null,
@@ -732,7 +768,8 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   private _persistRawModelMessage(
-    taskId: number,
+    taskId: number | null,
+    conversationId: number,
     executionId: number,
     raw: import("./types.ts").RawModelMessage,
   ): void {
@@ -765,19 +802,20 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   private _runNonNative(
-    taskId: number,
+    taskId: number | null,
+    conversationId: number,
     executionId: number,
     engine: ExecutionEngine,
     params: ExecutionParams,
   ): void {
     const stream = engine.execute(params);
-    this.consumeStream(taskId, executionId, stream).catch((err) => {
+    this.consumeStream(taskId, conversationId, executionId, stream).catch((err) => {
       console.error(`[orchestrator] Unhandled error from consumeStream (task=${taskId}, execution=${executionId}):`, err);
     });
   }
 
   private _appendPromptMessage(
-    taskId: number,
+    taskId: number | null,
     conversationId: number,
     content: string,
   ): void {
@@ -800,14 +838,22 @@ export class Orchestrator implements ExecutionCoordinator {
     });
   }
 
-  private _pauseExecution(taskId: number, executionId: number): void {
+  private _pauseExecution(taskId: number | null, conversationId: number, executionId: number): void {
     const db = getDb();
-    db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+    if (taskId != null) {
+      db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+    } else {
+      // Chat session: set status back to idle so user can send another message
+      db.run(
+        "UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?",
+        [conversationId],
+      );
+    }
     db.run(
       "UPDATE executions SET status = 'waiting_user', finished_at = NULL WHERE id = ?",
       [executionId],
     );
-    this.onToken(taskId, executionId, "", true);
+    this.onToken(taskId, conversationId, executionId, "", true);
   }
 
   // ─── Event stream consumer (for non-native engines) ───────────────────────
@@ -829,7 +875,8 @@ export class Orchestrator implements ExecutionCoordinator {
    * - error: set execution_state='failed', relay error
    */
   protected async consumeStream(
-    taskId: number,
+    taskId: number | null,
+    conversationId: number,
     executionId: number,
     stream: AsyncIterable<EngineEvent>,
   ): Promise<void> {
@@ -856,18 +903,15 @@ export class Orchestrator implements ExecutionCoordinator {
       })();
 
       // Task 5.5: Set execution state to running
-      db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+      if (taskId != null) {
+        db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+      } else {
+        db.run("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = ?", [conversationId]);
+      }
       db.run(
         "UPDATE executions SET status = 'running', started_at = datetime('now') WHERE id = ?",
         [executionId],
       );
-
-      const taskRow = db
-        .query<{ conversation_id: number | null }, [number]>(
-          "SELECT conversation_id FROM tasks WHERE id = ?",
-        )
-        .get(taskId);
-      const conversationId = taskRow?.conversation_id ?? 0;
 
       for await (const event of stream) {
         // Check for cancellation (Task 5.3)
@@ -886,12 +930,16 @@ export class Orchestrator implements ExecutionCoordinator {
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
             tokenAccum = "";
           }
-          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+          if (taskId != null) {
+            db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+          } else {
+            db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+          }
           db.run(
             "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
             [executionId],
           );
-          this.onToken(taskId, executionId, "", true);
+          this.onToken(taskId, conversationId, executionId, "", true);
           this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
           return;
         }
@@ -912,7 +960,7 @@ export class Orchestrator implements ExecutionCoordinator {
             // Task 5.2: Accumulate tokens for eventual assistant message
             tokenAccum += event.content;
             hadOutput = true;
-            this.onToken(taskId, executionId, event.content, false);
+            this.onToken(taskId, conversationId, executionId, event.content, false);
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
             break;
           }
@@ -920,7 +968,7 @@ export class Orchestrator implements ExecutionCoordinator {
           case "reasoning": {
             // Task 5.2: Accumulate reasoning separately
             reasoningAccum += event.content;
-            this.onToken(taskId, executionId, event.content, false, true);
+            this.onToken(taskId, conversationId, executionId, event.content, false, true);
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
             break;
           }
@@ -928,7 +976,7 @@ export class Orchestrator implements ExecutionCoordinator {
           case "status": {
             // Persist for debugging, relay as ephemeral to UI
             appendMessage(taskId, conversationId, "status", null, event.message);
-            this.onToken(taskId, executionId, event.message, false, false, true);
+            this.onToken(taskId, conversationId, executionId, event.message, false, false, true);
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.message, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false });
             break;
           }
@@ -1116,12 +1164,16 @@ export class Orchestrator implements ExecutionCoordinator {
             }
 
             // Task 5.5: Transition execution to completed
-            db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
+            if (taskId != null) {
+              db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
+            } else {
+              db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+            }
             db.run(
               "UPDATE executions SET status = 'completed', finished_at = datetime('now') WHERE id = ?",
               [executionId],
             );
-            this.onToken(taskId, executionId, "", true);
+            this.onToken(taskId, conversationId, executionId, "", true);
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
             break;
           }
@@ -1129,17 +1181,21 @@ export class Orchestrator implements ExecutionCoordinator {
           case "error": {
             // Task 5.5: Transition to failed on fatal error
             if (event.fatal) {
-              db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+              if (taskId != null) {
+                db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+              } else {
+                db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+              }
               db.run(
                 "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
                 [event.message, executionId],
               );
-              this.onError(taskId, executionId, event.message);
+              this.onError(taskId, conversationId, executionId, event.message);
               return;
             }
 
             // Non-fatal error — relay but continue
-            this.onError(taskId, executionId, event.message);
+            this.onError(taskId, conversationId, executionId, event.message);
             appendMessage(
               taskId,
               conversationId,
@@ -1160,13 +1216,13 @@ export class Orchestrator implements ExecutionCoordinator {
                 unapprovedBinaries: [],
               }),
             );
-            this._pauseExecution(taskId, executionId);
+            this._pauseExecution(taskId, conversationId, executionId);
             break;
           }
 
           case "ask_user": {
             this._appendPromptMessage(taskId, conversationId, event.payload);
-            this._pauseExecution(taskId, executionId);
+            this._pauseExecution(taskId, conversationId, executionId);
             break;
           }
 
@@ -1188,13 +1244,15 @@ export class Orchestrator implements ExecutionCoordinator {
               metadata: null,
               createdAt: new Date().toISOString(),
             });
-            db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+            if (taskId != null) {
+              db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+            }
             db.run(
               "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
               [executionId],
             );
             this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
-            this.onToken(taskId, executionId, "", true);
+            this.onToken(taskId, conversationId, executionId, "", true);
             return;
           }
 
@@ -1267,31 +1325,41 @@ export class Orchestrator implements ExecutionCoordinator {
           this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: null, done: false });
           tokenAccum = "";
         }
-        db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+        if (taskId != null) {
+          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+        } else {
+          db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+        }
         db.run(
           "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
           [executionId],
         );
-        this.onToken(taskId, executionId, "", true);
+        this.onToken(taskId, conversationId, executionId, "", true);
         this.onStreamEvent?.({ taskId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true });
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+      if (taskId != null) {
+        db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+      } else {
+        db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+      }
       db.run(
         "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
         [errMsg, executionId],
       );
-      this.onError(taskId, executionId, errMsg);
+      this.onError(taskId, conversationId, executionId, errMsg);
     } finally {
       // Task 5.3: Clean up AbortController
       this.abortControllers.delete(executionId);
       this.rawMessageSeq.delete(executionId);
 
-      // Relay updated task to UI
-      const finalRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
-      if (finalRow) {
-        this.onTaskUpdated(mapTask(finalRow));
+      // Relay updated task to UI (only for task-based executions)
+      if (taskId != null) {
+        const finalRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+        if (finalRow) {
+          this.onTaskUpdated(mapTask(finalRow));
+        }
       }
     }
   }

@@ -6,11 +6,11 @@ import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
-import { NativeEngine } from "../engine/native/engine.ts";
 import { formatReviewMessageForLLM } from "../workflow/review.ts";
-import { compactMessages } from "../workflow/engine.ts";
+import { compactMessages } from "../conversation/context.ts";
 import type { Database } from "bun:sqlite";
 import type { CodeReviewPayload } from "../../shared/rpc-types.ts";
+import type { EngineEvent, ExecutionEngine, ExecutionParams, EngineResumeInput } from "../engine/types.ts";
 
 let db: Database;
 let gitDir: string;
@@ -38,8 +38,17 @@ afterEach(() => {
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 function makeHandlers() {
+  class NoopEngine implements ExecutionEngine {
+    async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+      yield { type: "done" };
+    }
+    async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+    cancel(_executionId: number): void {}
+    async listModels() { return []; }
+    async listCommands() { return []; }
+  }
   const orch = new Orchestrator(
-    new NativeEngine(),
+    new NoopEngine(),
     () => {},
     () => {},
     () => {},

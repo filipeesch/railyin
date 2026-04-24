@@ -6,16 +6,19 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import Toast from "primevue/toast";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
-import { onStreamToken, onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef } from "./rpc";
+import { onStreamToken, onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef, onChatSessionUpdated, onChatSessionCreated } from "./rpc";
 import { getTaskActivityToast } from "./task-activity";
 import { useCodeServerStore } from "./stores/codeServer";
+import { useChatStore } from "./stores/chat";
+import { useDrawerStore } from "./stores/drawer";
+import { useConversationStore } from "./stores/conversation";
 
 const router = useRouter();
 const toast = useToast();
@@ -23,11 +26,14 @@ const workspaceStore = useWorkspaceStore();
 const boardStore = useBoardStore();
 const taskStore = useTaskStore();
 const codeServerStore = useCodeServerStore();
+const chatStore = useChatStore();
+const drawerStore = useDrawerStore();
+const conversationStore = useConversationStore();
 
 function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) {
   if (!activity) return;
-  // Suppress toast for the task currently visible in the detail drawer
-  if (activity.task.id === taskStore.activeTaskId) return;
+  // Suppress toast for the task currently visible in the conversation drawer
+  if (drawerStore.mode === "task" && activity.task.id === drawerStore.taskId) return;
   const board = boardStore.boards.find((entry) => entry.id === activity.task.boardId);
   const workspace = workspaceStore.workspaces.find((entry) => entry.key === board?.workspaceKey);
   const toastPayload = getTaskActivityToast(activity, workspace?.name ?? "Workspace");
@@ -37,7 +43,7 @@ function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) 
 onMounted(async () => {
   // Register IPC push handlers from Bun
   onStreamToken((payload) => {
-    taskStore.onStreamToken(payload);
+    conversationStore.onStreamToken(payload);
   });
 
   onStreamError((payload) => {
@@ -47,12 +53,14 @@ onMounted(async () => {
       router.push("/setup");
       return;
     }
-    taskStore.onStreamError(payload);
-    toast.add({ severity: "warn", summary: "Execution failed", detail: payload.error, life: 6000 });
+    conversationStore.onStreamError(payload);
+    if (payload.taskId != null) {
+      toast.add({ severity: "warn", summary: "Execution failed", detail: payload.error, life: 6000 });
+    }
   });
 
   onStreamEventMessage((event) => {
-    taskStore.onStreamEvent(event);
+    conversationStore.onStreamEvent(event);
   });
 
   onTaskUpdated((task) => {
@@ -60,12 +68,15 @@ onMounted(async () => {
   });
 
   onNewMessage((message) => {
-    taskStore.onNewMessage(message);
+    conversationStore.onNewMessage(message);
   });
 
   onCodeRef((ref) => {
     codeServerStore.addRef(ref);
   });
+
+  onChatSessionUpdated((session) => chatStore.onChatSessionUpdated(session));
+  onChatSessionCreated((session) => chatStore.onChatSessionUpdated(session));
 
   // Boot: load workspace config
   await workspaceStore.loadWorkspaces();
@@ -83,7 +94,21 @@ onMounted(async () => {
   } else {
     router.push("/board");
   }
+
+  // Load chat sessions (workspace-scoped, not tied to a board)
+  chatStore.loadSessions(workspaceStore.activeWorkspaceKey ?? undefined).catch(console.error);
+
+  // Load enabled models once now, then re-load on workspace switch
+  workspaceStore.loadEnabledModels(workspaceStore.activeWorkspaceKey ?? undefined).catch(console.error);
 });
+
+// Re-load models whenever the active workspace changes
+watch(
+  () => workspaceStore.activeWorkspaceKey,
+  (key) => {
+    if (key) workspaceStore.loadEnabledModels(key).catch(console.error);
+  },
+);
 </script>
 
 <style>

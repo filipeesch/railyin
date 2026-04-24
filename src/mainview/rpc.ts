@@ -8,7 +8,7 @@
  * The connection reconnects automatically with exponential backoff.
  */
 
-import type { RailynAPI, PushMessage, StreamToken, StreamError, StreamEvent, Task, ConversationMessage, CodeRef } from "@shared/rpc-types";
+import type { RailynAPI, PushMessage, StreamToken, StreamError, StreamEvent, Task, ConversationMessage, CodeRef, ChatSession } from "@shared/rpc-types";
 
 // ─── Server base URL ──────────────────────────────────────────────────────────
 // In dev and production the frontend is served by the same Bun server,
@@ -45,6 +45,8 @@ let _onTaskUpdated: (task: Task) => void = () => { };
 let _onNewMessage: (message: ConversationMessage) => void = () => { };
 let _onWorkflowReloaded: () => void = () => { };
 let _onCodeRef: (ref: CodeRef) => void = () => { };
+let _onChatSessionUpdated: (session: ChatSession) => void = () => { };
+let _onChatSessionCreated: (session: ChatSession) => void = () => { };
 
 export function onStreamToken(cb: (payload: StreamToken) => void) { _onStreamToken = cb; }
 export function onStreamError(cb: (payload: StreamError) => void) { _onStreamError = cb; }
@@ -53,6 +55,8 @@ export function onTaskUpdated(cb: (task: Task) => void) { _onTaskUpdated = cb; }
 export function onNewMessage(cb: (message: ConversationMessage) => void) { _onNewMessage = cb; }
 export function onWorkflowReloaded(cb: () => void) { _onWorkflowReloaded = cb; }
 export function onCodeRef(cb: (ref: CodeRef) => void) { _onCodeRef = cb; }
+export function onChatSessionUpdated(cb: (session: ChatSession) => void) { _onChatSessionUpdated = cb; }
+export function onChatSessionCreated(cb: (session: ChatSession) => void) { _onChatSessionCreated = cb; }
 
 // ─── WebSocket push connection ────────────────────────────────────────────────
 
@@ -84,6 +88,8 @@ function connectWs(): void {
       case "message.new": _onNewMessage(msg.payload); break;
       case "workflow.reloaded": _onWorkflowReloaded(); break;
       case "code.ref": _onCodeRef(msg.payload); break;
+      case "chatSession.updated": _onChatSessionUpdated(msg.payload); break;
+      case "chatSession.created": _onChatSessionCreated(msg.payload); break;
     }
   };
 

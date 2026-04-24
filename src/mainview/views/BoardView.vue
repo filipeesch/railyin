@@ -56,6 +56,16 @@
           aria-label="Settings"
           @click="router.push('/setup')"
         />
+        <Button
+          icon="pi pi-comments"
+          severity="secondary"
+          text
+          rounded
+          aria-label="Chat sessions"
+          class="chat-sidebar-toggle toolbar-btn--chat"
+          :class="{ 'is-active': chatSidebarOpen }"
+          @click="chatSidebarOpen = !chatSidebarOpen"
+        />
 
       </div>
     </div>
@@ -153,8 +163,8 @@
       <p>No boards yet. <a href="#" @click.prevent="router.push('/setup')">Create one in setup.</a></p>
     </div>
 
-    <!-- Task detail drawer -->
-    <TaskDetailDrawer />
+    <!-- Unified conversation drawer (tasks + chat sessions) -->
+    <ConversationDrawer />
 
     <!-- Code review overlay -->
     <CodeReviewOverlay />
@@ -184,6 +194,14 @@
       @saved="handleOverlaySaved"
       @deleted="handleOverlayDeleted"
     />
+    <!-- Chat sidebar (right docked panel) -->
+    <ChatSidebar
+      v-if="chatSidebarOpen"
+      @close="chatSidebarOpen = false"
+    />
+
+    <!-- Terminal area: sits above the chat sidebar -->
+    <div class="terminal-area">
     <!-- Terminal Panel -->
     <TerminalPanel
       v-if="terminalStore.isPanelOpen"
@@ -204,6 +222,7 @@
         <span>{{ terminalStore.sessions.find(s => s.sessionId === terminalStore.activeSessionId)?.label ?? '' }}</span>
       </template>
     </div>
+    </div><!-- end terminal-area -->
   </div>
 </template>
 
@@ -221,13 +240,22 @@ import { useProjectStore } from "../stores/project";
 import { useReviewStore } from "../stores/review";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useTerminalStore } from "../stores/terminal";
+import { useChatStore } from "../stores/chat";
 import TaskCard from "../components/TaskCard.vue";
-import TaskDetailDrawer from "../components/TaskDetailDrawer.vue";
+import ConversationDrawer from "../components/ConversationDrawer.vue";
 import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
 import CodeServerOverlay from "../components/CodeServerOverlay.vue";
+import ChatSidebar from "../components/ChatSidebar.vue";
+import { useDrawerStore } from "../stores/drawer";
+
+const CHAT_SIDEBAR_OPEN_KEY = "railyn.chatSidebarOpen";
+
+function loadChatSidebarOpen(): boolean {
+  return localStorage.getItem(CHAT_SIDEBAR_OPEN_KEY) === "true";
+}
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
@@ -236,6 +264,9 @@ const taskStore = useTaskStore();
 const projectStore = useProjectStore();
 const reviewStore = useReviewStore();
 const terminalStore = useTerminalStore();
+const chatStore = useChatStore();
+const drawerStore = useDrawerStore();
+const chatSidebarOpen = ref(loadChatSidebarOpen());
 const { isDark, toggle: toggleDark } = useDarkMode();
 
 const showCreateTask = ref(false);
@@ -555,7 +586,9 @@ async function onPointerUp(event: PointerEvent) {
 
 function onCardClick(taskId: number) {
   if (Date.now() - lastDragEndTime < 200) return;
+  const task = Object.values(taskStore.tasksByBoard).flat().find(t => t.id === taskId);
   taskStore.selectTask(taskId);
+  if (task) drawerStore.openForTask(taskId, task.conversationId);
 }
 
 async function onOpenReview(taskId: number) {
@@ -592,6 +625,18 @@ function handleOverlayDeleted() {
   const id = boardStore.activeBoardId;
   if (id != null) taskStore.loadTasks(id);
 }
+
+// Auto-open sidebar when a chat session becomes active
+watch(
+  () => chatStore.activeChatSessionId,
+  (id) => {
+    if (id != null) chatSidebarOpen.value = true;
+  },
+);
+
+watch(chatSidebarOpen, (isOpen) => {
+  localStorage.setItem(CHAT_SIDEBAR_OPEN_KEY, String(isOpen));
+});
 </script>
 
 <style scoped>
@@ -748,6 +793,12 @@ function handleOverlayDeleted() {
   justify-content: center;
   gap: 12px;
   color: var(--p-text-muted-color, #94a3b8);
+}
+
+.terminal-area {
+  position: relative;
+  z-index: 901; /* above chat-sidebar (z-index: 900) */
+  flex-shrink: 0;
 }
 
 .terminal-footer {

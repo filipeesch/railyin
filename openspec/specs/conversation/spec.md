@@ -1,5 +1,5 @@
 ## Purpose
-The conversation is the canonical history of a task. It is an append-only log of every message, execution, transition, and tool interaction associated with that task.
+The conversation is the canonical history of task and standalone session chat. It is an append-only log of every message, execution, transition, and tool interaction associated with a conversation.
 
 ## Requirements
 
@@ -125,3 +125,69 @@ After each execution for a task ends and the task's `execution_state` transition
 #### Scenario: No pending messages leaves state unchanged
 - **WHEN** an execution ends and no pending messages exist for the task
 - **THEN** no flush occurs and the task remains in its ended execution state
+
+### Requirement: Conversations are not required to have a task
+A conversation's association with a task SHALL be optional. `conversations.task_id` SHALL be nullable. A conversation with `task_id = NULL` represents a standalone session conversation.
+
+#### Scenario: Conversation created without task
+- **WHEN** a chat session is created
+- **THEN** a `conversations` row is inserted with `task_id = NULL` and a valid `conversation_id`
+
+#### Scenario: Existing task conversations unaffected
+- **WHEN** a task conversation is accessed
+- **THEN** `task_id` is still present and all existing query paths continue to work
+
+### Requirement: Conversation forking metadata
+The system SHALL store `parent_conversation_id` and `forked_at_message_id` columns on the `conversations` table to support future conversation branching. Both SHALL default to NULL and have no functional effect in this change.
+
+#### Scenario: Fork columns default to NULL
+- **WHEN** a new conversation is created (task or session)
+- **THEN** `parent_conversation_id` and `forked_at_message_id` are NULL
+
+### Requirement: stream_events keyed by conversation_id
+The `stream_events` table SHALL include a `conversation_id` column, backfilled from the associated conversation. All new stream event writes SHALL populate `conversation_id`. Queries for stream events SHALL support lookup by `conversation_id`.
+
+#### Scenario: Stream events queryable by conversation
+- **WHEN** `getStreamEvents(conversationId, afterSeq)` is called
+- **THEN** events are returned filtered by `conversation_id = ?` and `seq > afterSeq`
+
+#### Scenario: Backfill preserves existing events
+- **WHEN** the migration runs
+- **THEN** all existing `stream_events` rows have `conversation_id` populated via JOIN with `conversations`
+
+### Requirement: Conversation read APIs use conversationId as the canonical identifier
+The system SHALL treat `conversationId` as the primary identifier for conversation reads and stream-event reads across both task and standalone session conversations.
+
+#### Scenario: Messages read by conversationId
+- **WHEN** a caller requests conversation messages with a `conversationId`
+- **THEN** the system returns the ordered messages for that conversation regardless of whether it belongs to a task or a standalone session
+
+#### Scenario: Stream events read by conversationId
+- **WHEN** a caller requests persisted stream events with a `conversationId`
+- **THEN** the system returns the events for that conversation regardless of whether it belongs to a task or a standalone session
+
+### Requirement: Legacy taskId callers remain compatible during migration
+The system SHALL preserve compatibility for task-backed conversation reads during migration by accepting task-based identifiers where required and resolving them to the canonical conversation ID internally.
+
+#### Scenario: Task-backed caller uses compatibility alias
+- **WHEN** an existing task-backed caller requests messages or stream events using `taskId`
+- **THEN** the system resolves the corresponding `conversationId` internally and returns the canonical conversation data
+
+#### Scenario: Session callers do not require task identity
+- **WHEN** a standalone session caller requests messages or stream events
+- **THEN** the system uses the session's `conversationId` directly and does not require a task ID
+
+### Requirement: Standalone sessions render structured streaming conversation state
+The system SHALL render standalone session conversations with the same structured streaming tree used in task chat, including reasoning blocks, tool call blocks, tool results, and status updates.
+
+#### Scenario: Session tool call stream renders as grouped blocks
+- **WHEN** a standalone session emits structured stream events for tool calls and tool results
+- **THEN** the conversation timeline renders grouped tool blocks rather than only raw token text
+
+#### Scenario: Session reasoning stream renders inline
+- **WHEN** a standalone session emits reasoning stream events
+- **THEN** the conversation timeline renders reasoning content with the same interaction model used in task chat
+
+#### Scenario: Session status chunk renders while execution is active
+- **WHEN** a standalone session emits status updates before assistant content is finalized
+- **THEN** the shared conversation body shows the streaming status message for that session

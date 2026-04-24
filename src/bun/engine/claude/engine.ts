@@ -1,7 +1,6 @@
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo } from "../types.ts";
-import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
-import { claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
+import { claudeSessionIdForConversation, claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
 import type { ToolMetadata } from "./events.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
@@ -57,7 +56,7 @@ export class ClaudeEngine implements ExecutionEngine {
       model: model || this.defaultModel,
       systemInstructions,
       signal,
-      sessionId: claudeSessionIdForTask(taskId),
+      sessionId: claudeSessionIdForConversation(taskId, params.conversationId),
       commonToolContext: {
         taskId,
         boardId: boardId ?? 0,
@@ -71,7 +70,7 @@ export class ClaudeEngine implements ExecutionEngine {
       onRawMessage: (message) => {
         params.onRawModelMessage?.({
           engine: "claude",
-          sessionId: claudeSessionIdForTask(taskId),
+          sessionId: claudeSessionIdForConversation(taskId, params.conversationId),
           direction: "inbound",
           eventType: String(message.type ?? "unknown"),
           eventSubtype: typeof message.subtype === "string" ? message.subtype : undefined,

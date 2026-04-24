@@ -31,6 +31,7 @@ function mkEvent(
 ): StreamEvent {
     return {
         taskId,
+        conversationId: taskId,
         executionId: execId,
         seq,
         blockId: `${execId}-${type}-${seq}`,
@@ -119,7 +120,7 @@ test.describe("T — stream-event pipeline rendering", () => {
 
         ws.pushStreamEvent(mkEvent(task.id, EXEC_ID, 0, "status_chunk", "Running tool…", { blockId: `${EXEC_ID}-status` }));
 
-        await expect(page.locator(".msg--status-ephemeral, [data-testid='status-ephemeral']")).toContainText("Running tool…", { timeout: 3_000 });
+        await expect(page.locator(".conv-body__system")).toContainText("Running tool…", { timeout: 3_000 });
         // Must NOT create a text_chunk bubble
         await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible();
     });
@@ -141,11 +142,11 @@ test.describe("T — stream-event pipeline rendering", () => {
         await openTaskDrawer(page, task.id);
 
         ws.pushStreamEvent(mkEvent(task.id, EXEC_ID, 0, "status_chunk", "Starting engines", { blockId: `${EXEC_ID}-s1` }));
-        await expect(page.locator(".msg--status-ephemeral, [data-testid='status-ephemeral']")).toContainText("Starting engines", { timeout: 3_000 });
+        await expect(page.locator(".conv-body__system")).toContainText("Starting engines", { timeout: 3_000 });
 
         ws.pushDone(task.id, EXEC_ID, 99);
 
-        await expect(page.locator(".msg--status-ephemeral, [data-testid='status-ephemeral']")).not.toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".conv-body__system")).toHaveCount(0, { timeout: 3_000 });
     });
 
     test("T-37: new executionId resets stream state so second run is visible", async ({ page, ws, task }) => {

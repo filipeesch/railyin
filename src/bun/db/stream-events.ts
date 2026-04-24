@@ -2,7 +2,7 @@ import { getDb } from "./index.ts";
 
 export interface PersistedStreamEvent {
   id?: number;
-  taskId: number;
+  taskId: number | null;
   executionId: number;
   seq: number;
   blockId: string;
@@ -55,6 +55,39 @@ export function getStreamEvents(taskId: number, afterSeq?: number): PersistedStr
   }, [number, number]>(
     "SELECT * FROM stream_events WHERE task_id = ? AND seq > ? ORDER BY seq ASC",
   ).all(taskId, afterSeq ?? -1);
+
+  return rows.map((r) => ({
+    id: r.id,
+    taskId: r.task_id,
+    executionId: r.execution_id,
+    seq: r.seq,
+    blockId: r.block_id,
+    type: r.type,
+    content: r.content,
+    metadata: r.metadata,
+    parentBlockId: r.parent_block_id,
+    subagentId: r.subagent_id,
+    createdAt: r.created_at,
+  }));
+}
+
+export function getStreamEventsByConversation(conversationId: number, afterSeq?: number): PersistedStreamEvent[] {
+  const db = getDb();
+  const rows = db.query<{
+    id: number;
+    task_id: number;
+    execution_id: number;
+    seq: number;
+    block_id: string;
+    type: string;
+    content: string;
+    metadata: string | null;
+    parent_block_id: string | null;
+    subagent_id: string | null;
+    created_at: string;
+  }, [number, number]>(
+    "SELECT * FROM stream_events WHERE conversation_id = ? AND seq > ? ORDER BY seq ASC",
+  ).all(conversationId, afterSeq ?? -1);
 
   return rows.map((r) => ({
     id: r.id,

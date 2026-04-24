@@ -20,7 +20,7 @@ export interface ProviderConfig {
 
 // ─── Engine config types ─────────────────────────────────────────────────────
 
-/** Config block for Anthropic-specific settings (shared between WorkspaceYaml and NativeEngineConfig). */
+/** Config block for Anthropic-specific settings. */
 export interface AnthropicConfig {
   cache_ttl?: "5m" | "1h";
   enable_thinking?: boolean;
@@ -28,26 +28,15 @@ export interface AnthropicConfig {
   context_edit_strategy?: { enabled?: boolean };
 }
 
-/** Config block for web search (shared between WorkspaceYaml and NativeEngineConfig). */
+/** Config block for web search. */
 export interface SearchConfig {
   engine: string;
   api_key: string;
 }
 
-/** Config block for LSP servers (shared between WorkspaceYaml and NativeEngineConfig). */
+/** Config block for LSP servers. */
 export interface LspConfig {
   servers?: Array<{ name: string; command: string; args: string[]; extensions: string[] }>;
-}
-
-/** Native engine config — same provider-based setup as today. */
-export interface NativeEngineConfig {
-  type: "native";
-  providers?: ProviderConfig[];
-  default_model?: string;
-  search?: SearchConfig;
-  anthropic?: AnthropicConfig;
-  lsp?: LspConfig;
-  worktree_base_path?: string;
 }
 
 /** Copilot engine config — uses the GitHub Copilot SDK. */
@@ -64,7 +53,7 @@ export interface ClaudeEngineConfig {
   model?: string;
 }
 
-export type EngineConfig = NativeEngineConfig | CopilotEngineConfig | ClaudeEngineConfig;
+export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig;
 
 /**
  * @deprecated Use `ProviderConfig` and `WorkspaceYaml.providers` instead.
@@ -83,27 +72,26 @@ export interface WorkspaceYaml {
   projects?: WorkspaceProjectYaml[];
   /**
    * New engine block. Discriminated by `type`:
-   *   - `native`  (default): built-in provider-based loop
    *   - `copilot`: GitHub Copilot SDK
    *   - `claude`: Claude Agent SDK / Claude Code
-   * When absent, legacy top-level fields are auto-migrated to `engine.type:native` in memory.
    */
   engine?: EngineConfig;
-  /** @deprecated Top-level providers list. Use `engine.type:native.providers` instead.
-   *  Still supported — auto-migrated to `engine.type:native` on load. */
+  /** @deprecated Legacy native-engine config. No longer supported. */
   providers?: ProviderConfig[];
-  /** @deprecated Single-provider legacy format. Auto-migrated on load. */
+  /** @deprecated Legacy native-engine config. No longer supported. */
   ai?: AIProviderConfig;
   worktree_base_path?: string;
+  /** Base path for chat session working directory. All projects should live under this folder. */
+  workspace_path?: string;
   git_path?: string; // absolute path to git binary, e.g. /usr/bin/git
   shell_env_timeout_ms?: number; // timeout for shell environment resolution in milliseconds (default: 10000)
-  /** @deprecated Use engine.type:native.default_model. Still supported for legacy configs. */
+  /** @deprecated Legacy native-engine config. No longer supported. */
   default_model?: string;
-  /** @deprecated Use engine.type:native.search. Still supported for legacy configs. */
+  /** @deprecated Legacy native-engine config. No longer supported. */
   search?: SearchConfig;
-  /** @deprecated Use engine.type:native.anthropic. Still supported for legacy configs. */
+  /** @deprecated Legacy native-engine config. No longer supported. */
   anthropic?: AnthropicConfig;
-  /** @deprecated Use engine.type:native.lsp. Still supported for legacy configs. */
+  /** @deprecated Legacy native-engine config. No longer supported. */
   lsp?: LspConfig;
 }
 
@@ -150,7 +138,7 @@ export interface LoadedConfig {
   configDir: string;
   workspace: WorkspaceYaml;
   projects: LoadedProject[];
-  /** Normalized, de-duplicated provider list — always populated after load (native engine only) */
+  /** Normalized, de-duplicated provider list for legacy helpers; supported engines do not rely on it. */
   providers: ProviderConfig[];
   workflows: WorkflowTemplateConfig[];
   /** Resolved engine config — always present after load */
@@ -257,10 +245,6 @@ function getWorkspaceRootDir(): string {
   return process.env.RAILYN_WORKSPACES_DIR ?? join(getDataDir(), "workspaces");
 }
 
-function getLegacyWorkspaceDir(): string {
-  return getDefaultConfigDir();
-}
-
 function sanitizeWorkspaceKey(raw: string | undefined, fallback: string): string {
   const key = (raw ?? fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   return key || fallback;
@@ -354,12 +338,7 @@ export function getWorkspaceRegistry(): WorkspaceRegistryEntry[] {
   }
 
   if (entries.length === 0) {
-    const legacyDir = getLegacyWorkspaceDir();
-    const legacyWorkspaceFile = join(legacyDir, workspaceFileName);
-    const legacyWorkflowsDir = join(legacyDir, "workflows");
-    const defaultDir = existsSync(legacyWorkspaceFile) || existsSync(legacyWorkflowsDir)
-      ? legacyDir
-      : join(workspaceRootDir, "default");
+    const defaultDir = join(workspaceRootDir, "default");
     const workspace = readWorkspaceYamlFile(defaultDir) ?? {};
     entries.push({
       id: getWorkspaceIdForKey("default"),
@@ -387,40 +366,10 @@ name: My Workspace
 projects: []
 
 engine:
-  # Native engine (default) — uses configured providers below.
-  type: native
-  providers:
-    # Fake provider — used for local UI development. Remove when using a real provider.
-    - id: fake
-      type: fake
+  type: copilot
+  # model: gpt-4.1
 
-    # Anthropic direct API (Claude models)
-    # - id: anthropic
-    #   type: anthropic
-    #   api_key: sk-ant-YOUR_KEY_HERE
-
-    # OpenRouter (access to many models via one API key)
-    # - id: openrouter
-    #   type: openrouter
-    #   base_url: https://openrouter.ai/api/v1
-    #   api_key: sk-or-YOUR_KEY_HERE
-    #   # provider_args: forwarded as the "provider" key in every request body (OpenRouter routing preferences)
-    #   # provider_args:
-    #   #   ignore: [google-vertex, azure]
-
-    # LM Studio (local models)
-    # - id: lmstudio
-    #   type: lmstudio
-    #   base_url: http://localhost:1234/
-
-  # default_model: anthropic/claude-sonnet-4-6
-
-# Alternative engine examples:
-#
-# engine:
-#   type: copilot
-#   model: gpt-4.1
-#
+# Alternative engine example:
 # engine:
 #   type: claude
 #   model: claude-sonnet-4-6
@@ -528,77 +477,24 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
   workspace = mergeWorkspaceDefaults(workspace ?? {}, globalConfig.defaults);
 
   // ── Resolve engine config ──────────────────────────────────────────────────
-  //
-  // Priority:
-  //   1. New `engine:` block (discriminated by type)
-  //   2. Legacy top-level `providers:` list → auto-migrate to native engine in memory
-  //   3. Legacy top-level `ai:` block → auto-migrate to native engine in memory
-  //
-  // For the native engine, workspace.anthropic / search / lsp are also promoted
-  // from engine.* into workspace.* so all existing consumers continue to work.
 
   let engine: EngineConfig;
-  let providers: ProviderConfig[];
+  const providers: ProviderConfig[] = [];
 
-  if (workspace.engine) {
+  if (workspace.engine?.type === "native") {
+    _configError = `${workspaceFileName}: engine.type:native is no longer supported. Migrate this workspace to engine.type: copilot or engine.type: claude.`;
+    return { config: null, error: _configError };
+  }
+
+  if (workspace.providers?.length || workspace.ai || workspace.default_model || workspace.search) {
+    _configError = `${workspaceFileName}: legacy native-engine config was removed. Replace providers/ai/default_model/search with a supported engine block (engine.type: copilot or engine.type: claude).`;
+    return { config: null, error: _configError };
+  }
+
+  if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude") {
     engine = workspace.engine;
-    if (engine.type === "copilot" || engine.type === "claude") {
-      // Non-native SDK engines — no local providers needed
-      providers = [];
-    } else {
-      // Native engine block
-      const nativeCfg = engine as NativeEngineConfig;
-      if (!nativeCfg.providers || nativeCfg.providers.length === 0) {
-        _configError = `${workspaceFileName}: engine.type:native requires at least one entry in engine.providers.`;
-        return { config: null, error: _configError };
-      }
-      providers = nativeCfg.providers;
-      // Promote engine-nested fields into workspace.* so all existing consumers work
-      if (nativeCfg.anthropic && !workspace.anthropic) workspace.anthropic = nativeCfg.anthropic;
-      if (nativeCfg.search && !workspace.search) workspace.search = nativeCfg.search;
-      if (nativeCfg.lsp && !workspace.lsp) workspace.lsp = nativeCfg.lsp;
-      if (nativeCfg.default_model && !workspace.default_model) workspace.default_model = nativeCfg.default_model;
-      if (nativeCfg.worktree_base_path && !workspace.worktree_base_path) workspace.worktree_base_path = nativeCfg.worktree_base_path;
-    }
-  } else if (workspace.providers && workspace.providers.length > 0) {
-    // Legacy top-level providers: auto-migrate to native engine in memory
-    if (workspace.ai) {
-      console.warn(`[config] Both 'providers:' and 'ai:' found in ${workspaceFileName} — using 'providers:' and ignoring 'ai:'.`);
-    }
-    providers = workspace.providers;
-    engine = {
-      type: "native",
-      providers,
-      default_model: workspace.default_model,
-      search: workspace.search,
-      anthropic: workspace.anthropic,
-      lsp: workspace.lsp,
-      worktree_base_path: workspace.worktree_base_path,
-    };
-    // Attach so consumers can read config.engine
-    workspace.engine = engine;
-  } else if (workspace.ai) {
-    // Oldest legacy format: single `ai:` block
-    const ai = workspace.ai;
-    providers = [{
-      id: "default",
-      type: ai.provider ?? "fake",
-      base_url: ai.base_url || undefined,
-      api_key: ai.api_key || undefined,
-      context_window_tokens: ai.context_window_tokens,
-    }];
-    engine = {
-      type: "native",
-      providers,
-      default_model: workspace.default_model,
-      search: workspace.search,
-      anthropic: workspace.anthropic,
-      lsp: workspace.lsp,
-      worktree_base_path: workspace.worktree_base_path,
-    };
-    workspace.engine = engine;
   } else {
-    _configError = `${workspaceFileName} is missing 'engine:', 'providers:', or legacy 'ai:' section.`;
+    _configError = `${workspaceFileName} is missing 'engine:'. Supported engines are 'copilot' and 'claude'.`;
     return { config: null, error: _configError };
   }
 

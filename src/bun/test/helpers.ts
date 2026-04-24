@@ -22,9 +22,9 @@ export function initDb(): Database {
       created_at           TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS conversations (
-      id      INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL
-    );
+       id      INTEGER PRIMARY KEY AUTOINCREMENT,
+       task_id INTEGER
+     );
     CREATE TABLE IF NOT EXISTS tasks (
       id                        INTEGER PRIMARY KEY AUTOINCREMENT,
       board_id                  INTEGER NOT NULL REFERENCES boards(id),
@@ -54,10 +54,11 @@ export function initDb(): Database {
       base_sha        TEXT
     );
     CREATE TABLE IF NOT EXISTS executions (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id     INTEGER NOT NULL REFERENCES tasks(id),
-      from_state  TEXT NOT NULL,
-      to_state    TEXT NOT NULL,
+       id          INTEGER PRIMARY KEY AUTOINCREMENT,
+       task_id     INTEGER NOT NULL REFERENCES tasks(id),
+       conversation_id INTEGER REFERENCES conversations(id),
+       from_state  TEXT NOT NULL,
+       to_state    TEXT NOT NULL,
       prompt_id   TEXT,
       status      TEXT NOT NULL DEFAULT 'running',
       attempt     INTEGER NOT NULL DEFAULT 1,
@@ -72,10 +73,10 @@ export function initDb(): Database {
       cache_read_input_tokens INTEGER
     );
     CREATE TABLE IF NOT EXISTS conversation_messages (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id         INTEGER NOT NULL REFERENCES tasks(id),
-      conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-      type            TEXT NOT NULL,
+       id              INTEGER PRIMARY KEY AUTOINCREMENT,
+       task_id         INTEGER REFERENCES tasks(id),
+       conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+       type            TEXT NOT NULL,
       role            TEXT,
       content         TEXT NOT NULL DEFAULT '',
       metadata        TEXT,
@@ -147,10 +148,11 @@ export function initDb(): Database {
     );
     CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
     CREATE TABLE IF NOT EXISTS stream_events (
-      id           INTEGER PRIMARY KEY,
-      task_id      INTEGER NOT NULL,
-      execution_id INTEGER NOT NULL,
-      seq          INTEGER NOT NULL,
+       id           INTEGER PRIMARY KEY,
+       task_id      INTEGER NOT NULL,
+       conversation_id INTEGER REFERENCES conversations(id),
+       execution_id INTEGER NOT NULL,
+       seq          INTEGER NOT NULL,
       block_id     TEXT NOT NULL,
       type         TEXT NOT NULL,
       content      TEXT NOT NULL DEFAULT '',
@@ -161,6 +163,19 @@ export function initDb(): Database {
       UNIQUE (task_id, seq)
     );
     CREATE INDEX IF NOT EXISTS idx_stream_events_task ON stream_events (task_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_stream_events_conversation ON stream_events (conversation_id, seq);
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_key    TEXT NOT NULL DEFAULT 'default',
+      title            TEXT NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'idle',
+      conversation_id  INTEGER NOT NULL REFERENCES conversations(id),
+      enabled_mcp_tools TEXT,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+      archived_at      TEXT,
+      last_read_at     TEXT
+    );
     CREATE TABLE IF NOT EXISTS model_raw_messages (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -241,15 +256,15 @@ export function setupTestConfig(
     join(configDir, "workspace.test.yaml"),
     [
       "name: test",
+      "engine:",
+      "  type: copilot",
+      "  model: copilot/mock-model",
       "projects:",
       "  - key: test-project",
       "    name: Test Project",
       `    project_path: ${gitRootPath}`,
       `    git_root_path: ${gitRootPath}`,
       "    default_branch: main",
-      "providers:",
-      "  - id: fake",
-      "    type: fake",
       extraYaml,
     ].join("\n") + "\n",
   );

@@ -41,10 +41,10 @@ The system SHALL resolve workflow templates from the owning workspace's `workflo
 - **THEN** each workspace resolves its own local `delivery` workflow definition
 
 ### Requirement: Workspace stores AI provider configuration
-Each workspace SHALL store its own engine and AI provider settings in that workspace's `workspace.yaml`. Machine-level `config.yaml` MAY provide shared defaults, but AI executions SHALL use the owning workspace's resolved configuration.
+Each workspace SHALL store its own engine and AI provider settings in that workspace's `workspace.yaml`. Machine-level `config.yaml` MAY provide shared defaults, but AI executions SHALL use the owning workspace's resolved configuration. Supported workspace engine types SHALL be `copilot` and `claude`.
 
-#### Scenario: Different workspaces use different engines
-- **WHEN** workspace A is configured with `engine.type: native` and workspace B is configured with `engine.type: copilot`
+#### Scenario: Different workspaces use different supported engines
+- **WHEN** workspace A is configured with `engine.type: copilot` and workspace B is configured with `engine.type: claude`
 - **THEN** executions in each workspace use their respective engine configuration
 
 #### Scenario: Global defaults are respected
@@ -87,3 +87,14 @@ The system SHALL auto-create `workspace.yaml` and the default workflow YAML when
 #### Scenario: Config directory created automatically
 - **WHEN** the application starts and `~/.railyn/config/` does not exist
 - **THEN** the directory and default config files are created with safe defaults (`provider: fake`)
+
+### Requirement: Standalone session chat resolves workspace root for execution and discovery
+The system SHALL resolve a standalone session's working directory and editor discovery scope from the active workspace configuration.
+
+#### Scenario: Session execution uses workspace root
+- **WHEN** a standalone session execution is started and the active workspace has `workspace_path` configured
+- **THEN** the execution runs with that workspace path as its working directory
+
+#### Scenario: Session execution falls back compatibly when workspace root missing
+- **WHEN** a standalone session execution is started and the active workspace has no configured `workspace_path`
+- **THEN** the system uses the existing compatible fallback path instead of failing the session turn

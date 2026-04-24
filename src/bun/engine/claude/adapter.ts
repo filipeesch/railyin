@@ -3,7 +3,7 @@ import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types
 import { buildClaudeToolServer } from "./tools.ts";
 import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
 import { extractCommandBinaries } from "../../workflow/tools.ts";
-import { appendApprovedCommands, getApprovedCommands } from "../../workflow/engine.ts";
+import { appendApprovedCommands, getApprovedCommands } from "../approved-commands.ts";
 import { getDb } from "../../db/index.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
@@ -325,6 +325,17 @@ function getApprovedShellState(taskId: number): { shellAutoApprove: boolean; app
 
 export function claudeSessionIdForTask(taskId: number): string {
   const hash = createHash("sha1").update(`railyin-claude-task-${taskId}`).digest("hex");
+  return claudeSessionIdFromHash(hash);
+}
+
+export function claudeSessionIdForConversation(taskId: number | null, conversationId: number): string {
+  const hash = createHash("sha1")
+    .update(taskId != null ? `railyin-claude-task-${taskId}` : `railyin-claude-conversation-${conversationId}`)
+    .digest("hex");
+  return claudeSessionIdFromHash(hash);
+}
+
+function claudeSessionIdFromHash(hash: string): string {
   const raw = [
     hash.slice(0, 8),
     hash.slice(8, 12),

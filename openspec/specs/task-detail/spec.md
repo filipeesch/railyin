@@ -1,5 +1,5 @@
 ## Purpose
-The task detail drawer is the primary surface for interacting with a task. Beyond conversation, it surfaces git context, execution metadata, and management actions.
+The task detail panel is the task-scoped wrapper around the shared conversation surface. Beyond conversation, it exposes task metadata, git context, and management actions.
 
 ## Requirements
 
@@ -254,7 +254,6 @@ The system SHALL NOT display toast notifications for task state changes when the
 - **WHEN** the currently active task encounters a stream error (via `onStreamError`)
 - **THEN** the error toast IS still displayed (error toasts are not suppressed)
 
-
 ### Requirement: Task detail drawer body uses a full-width single-column layout
 The system SHALL render the task detail drawer body as a single full-width column containing the active tab content. The two-column layout (conversation + side panel) SHALL be removed.
 
@@ -265,3 +264,25 @@ The system SHALL render the task detail drawer body as a single full-width colum
 #### Scenario: Side panel is not rendered
 - **WHEN** the task detail drawer is open
 - **THEN** no side panel is rendered alongside the conversation timeline
+
+### Requirement: Task detail uses shared ConversationPanel
+The task detail view SHALL use the shared `ConversationPanel` component for its conversation timeline and message input. Task-specific chrome (branch name, worktree status, launch config, changed files, execution label) SHALL remain in the `TaskDetailDrawer` wrapper.
+
+#### Scenario: Task conversation renders via ConversationPanel
+- **WHEN** the task detail panel opens for a task with a conversation
+- **THEN** the conversation timeline renders identically to the previous behavior using the shared component
+
+#### Scenario: Task-specific chrome still visible
+- **WHEN** the task detail panel is open
+- **THEN** the task branch, worktree status, and launch buttons are visible above or alongside the ConversationPanel
+
+### Requirement: Task detail is a docked panel
+The task detail view SHALL open as a docked flex panel (see `docked-detail-panel` spec) rather than as a floating overlay Drawer.
+
+#### Scenario: Task detail compresses the board
+- **WHEN** the user opens a task's detail panel
+- **THEN** the board columns compress horizontally to accommodate the panel (no overlay/dimming)
+
+#### Scenario: Task detail behavior unchanged
+- **WHEN** the user interacts with task chat (send message, streaming, stop button, ask_user)
+- **THEN** all behavior is functionally identical to the previous overlay implementation

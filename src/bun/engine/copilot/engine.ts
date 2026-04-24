@@ -9,10 +9,9 @@
  * Compaction: handled by Copilot's infinite sessions feature.
  */
 
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo } from "../types.ts";
-import type { OnTaskUpdated, OnNewMessage } from "../../workflow/engine.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
 import type { CopilotSdkAdapter, CopilotSdkSession } from "./session";
-import { copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
+import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
@@ -133,7 +132,7 @@ export class CopilotEngine implements ExecutionEngine {
 
     // Deterministic session ID — always derived from taskId so context survives
     // process restarts without needing any DB or in-memory state.
-    const sdkSessionId = copilotSessionIdForTask(taskId);
+    const sdkSessionId = copilotSessionIdForConversation(taskId, params.conversationId);
 
     let session: CopilotSdkSession | undefined;
     try {
@@ -330,8 +329,8 @@ export class CopilotEngine implements ExecutionEngine {
     await this.sdkAdapter.shutdownAll(options).catch(() => { });
   }
 
-  async compact(taskId: number, workingDirectory: string): Promise<void> {
-    const sdkSessionId = copilotSessionIdForTask(taskId);
+  async compact(taskId: number | null, conversationId: number, workingDirectory: string): Promise<void> {
+    const sdkSessionId = copilotSessionIdForConversation(taskId, conversationId);
     // Wake the session — same pattern as execution, but we only need to trigger
     // compaction then let the lease manager put it back to sleep.
     const sessionConfig = {

@@ -7,7 +7,7 @@ import { LANGUAGE_REGISTRY } from "../lsp/registry.ts";
 import type { LanguageEntry, InstallOption } from "../lsp/registry.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import { getDb } from "../db/index.ts";
-import { getBoardWorkspaceKey } from "../workspace-context.ts";
+import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 
 export interface DetectedLanguage {
   entry: LanguageEntry;
@@ -64,28 +64,41 @@ export function lspHandlers() {
       return { success, output };
     },
 
-    "lsp.workspaceSymbol": async (params: { taskId: number; query: string }): Promise<unknown[]> => {
+    "lsp.workspaceSymbol": async (params: { taskId?: number; workspaceKey?: string; query: string }): Promise<unknown[]> => {
       const db = getDb();
-      const row = db
-        .query<{ board_id: number; worktree_path: string | null }, [number]>(
-          `SELECT t.board_id, gc.worktree_path
-           FROM tasks t
-           LEFT JOIN task_git_context gc ON gc.task_id = t.id
-           WHERE t.id = ?`,
-        )
-        .get(params.taskId);
-      if (!row) return [];
+      let worktreePath = process.cwd();
+      let config = getConfig(getDefaultWorkspaceKey());
+      let scopeId: string | number = "default";
 
-      const worktreePath = row.worktree_path ?? process.cwd();
-      const config = getConfig(getBoardWorkspaceKey(row.board_id));
+      if (params.taskId != null) {
+        const row = db
+          .query<{ board_id: number; worktree_path: string | null }, [number]>(
+            `SELECT t.board_id, gc.worktree_path
+             FROM tasks t
+             LEFT JOIN task_git_context gc ON gc.task_id = t.id
+             WHERE t.id = ?`,
+          )
+          .get(params.taskId);
+        if (!row) return [];
+        worktreePath = row.worktree_path ?? process.cwd();
+        config = getConfig(getBoardWorkspaceKey(row.board_id));
+        scopeId = params.taskId;
+      } else {
+        const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
+        const workspaceConfig = getWorkspaceConfig(workspaceKey);
+        worktreePath = workspaceConfig.workspace.workspace_path ?? workspaceConfig.configDir;
+        config = workspaceConfig;
+        scopeId = `workspace:${workspaceKey}`;
+      }
+
       const serverConfigs = config.workspace.lsp?.servers ?? [];
       if (serverConfigs.length === 0) return [];
 
-      const manager = taskLspRegistry.getManager(params.taskId, serverConfigs, worktreePath);
+      const manager = taskLspRegistry.getManager(scopeId, serverConfigs, worktreePath);
       if (!manager) return [];
 
       try {
-        const result = await manager.requestWorkspaceSymbol<unknown[]>("", params.query);
+        const result = await manager.requestWorkspaceSymbol<unknown[]>(worktreePath, params.query);
         return Array.isArray(result) ? result : [];
       } catch {
         return [];

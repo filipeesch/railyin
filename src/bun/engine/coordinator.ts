@@ -10,6 +10,7 @@ export interface ExecutionCoordinator {
     cancel(executionId: number): void;
     listModels(workspaceKey?: string): Promise<EngineModelInfo[]>;
     compactTask(taskId: number): Promise<void>;
+    compactConversation(conversationId: number, workspaceKey?: string): Promise<void>;
     listCommands(taskId: number): Promise<CommandInfo[]>;
     shutdownNonNativeEngines?(options?: import("./types.ts").EngineShutdownOptions): Promise<void>;
 }

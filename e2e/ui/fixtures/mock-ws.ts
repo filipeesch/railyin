@@ -15,7 +15,7 @@
  */
 
 import type { Page } from "@playwright/test";
-import type { PushMessage, StreamEvent } from "@shared/rpc-types";
+import type { PushMessage, StreamEvent, ChatSession } from "@shared/rpc-types";
 
 export class WsMock {
     private _page: Page;
@@ -61,9 +61,10 @@ export class WsMock {
     }
 
     /** Convenience: push a `done` stream event to close out a fake execution. */
-    pushDone(taskId: number, executionId: number, seq = 999): void {
+    pushDone(taskId: number, executionId: number, seq = 999, conversationId: number | null = taskId): void {
         this.pushStreamEvent({
             taskId,
+            conversationId: conversationId ?? undefined,
             executionId,
             seq,
             blockId: `${executionId}-done`,
@@ -74,6 +75,16 @@ export class WsMock {
             subagentId: null,
             done: true,
         });
+    }
+
+    /** Convenience: push a chatSession.updated event. */
+    pushChatSessionUpdated(session: ChatSession): void {
+        this.push({ type: "chatSession.updated", payload: session });
+    }
+
+    /** Convenience: push a chatSession.created event. */
+    pushChatSessionCreated(session: ChatSession): void {
+        this.push({ type: "chatSession.created", payload: session });
     }
 
     /** Wait for the browser to send a WebSocket message (e.g. after user action). */

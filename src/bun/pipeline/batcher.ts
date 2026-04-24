@@ -14,7 +14,7 @@ export class StreamBatcher {
   private currentBlockId: string = "";
 
   constructor(
-    private readonly taskId: number,
+    private readonly taskId: number | null,
     private readonly executionId: number,
     private readonly onFlush: (events: StreamEvent[]) => void,
     seqStart = 0,

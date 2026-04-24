@@ -1,12 +1,12 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { getDb } from "../db/index.ts";
-import { mapTask } from "../db/mappers.ts";
-import type { TaskRow } from "../db/row-types.ts";
+import { mapChatSession, mapTask } from "../db/mappers.ts";
+import type { ChatSessionRow, TaskRow } from "../db/row-types.ts";
 import { getDataDir } from "../config/index.ts";
 import { getMcpRegistry, initMcpRegistry } from "../mcp/registry.ts";
 import type { McpConfig, McpServerConfig, McpServerStatus } from "../mcp/types.ts";
-import type { Task } from "../../shared/rpc-types.ts";
+import type { ChatSession, Task } from "../../shared/rpc-types.ts";
 
 // Support both VS Code format ({ servers: { name: {...} } }) and internal format ({ servers: [...] })
 function normalizeToMcpConfig(parsed: unknown): McpConfig {
@@ -72,6 +72,15 @@ export function mcpHandlers() {
       const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
       if (!row) throw new Error(`Task ${params.taskId} not found`);
       return mapTask(row);
+    },
+
+    "mcp.setSessionTools": async (params: { sessionId: number; enabledTools: string[] | null }): Promise<ChatSession> => {
+      const db = getDb();
+      const value = params.enabledTools === null ? null : JSON.stringify(params.enabledTools);
+      db.run("UPDATE chat_sessions SET enabled_mcp_tools = ? WHERE id = ?", [value, params.sessionId]);
+      const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      if (!row) throw new Error(`Chat session ${params.sessionId} not found`);
+      return mapChatSession(row);
     },
   };
 }

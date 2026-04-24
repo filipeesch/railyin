@@ -75,6 +75,7 @@ import AskUserPrompt from "./AskUserPrompt.vue";
 import InterviewMe from "./InterviewMe.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
+import { useChatStore } from "../stores/chat";
 import { useTaskStore } from "../stores/task";
 import { api } from "../rpc";
 
@@ -84,6 +85,7 @@ const props = defineProps<{
   index?: number;
 }>();
 
+const chatStore = useChatStore();
 const taskStore = useTaskStore();
 
 function renderMd(content: string): string {
@@ -91,6 +93,7 @@ function renderMd(content: string): string {
 }
 
 const displayContent = computed(() => props.chunk.content);
+const messageList = computed(() => (props.chunk.taskId == null ? chatStore.messages : taskStore.messages));
 
 /** True when an assistant message was generated in XML <tool_call> format instead of the JSON API format. These should be silently hidden. */
 const isXmlToolCall = computed(() =>
@@ -142,16 +145,22 @@ const askPayload = computed<AskUserPromptContent>(() => {
 /** The answer text if a user message follows this prompt in conversation history. */
 const answeredText = computed(() => {
   if (props.chunk.type !== "ask_user_prompt" || props.index === undefined) return undefined;
-  const messages = taskStore.messages;
+  const messages = messageList.value;
   const later = messages.slice(props.index + 1);
   const reply = later.find((m) => m.type === "user");
   return reply?.content;
 });
 
 async function onAskSubmit(answer: string) {
-  const taskId = taskStore.activeTaskId;
-  if (taskId === null) return;
-  await taskStore.sendMessage(taskId, answer);
+  if (props.chunk.taskId != null) {
+    const taskId = taskStore.activeTaskId;
+    if (taskId === null) return;
+    await taskStore.sendMessage(taskId, answer);
+    return;
+  }
+
+  if (chatStore.activeChatSessionId == null) return;
+  await chatStore.sendMessage(answer);
 }
 
 // ─── Shell approval support ───────────────────────────────────────────────────
@@ -193,16 +202,22 @@ const interviewPayload = computed<InterviewPayload>(() => {
 
 const interviewAnsweredText = computed(() => {
   if (props.chunk.type !== "interview_prompt" || props.index === undefined) return undefined;
-  const messages = taskStore.messages;
+  const messages = messageList.value;
   const later = messages.slice(props.index + 1);
   const reply = later.find((m) => m.type === "user");
   return reply?.content;
 });
 
 async function onInterviewSubmit(answer: string) {
-  const taskId = taskStore.activeTaskId;
-  if (taskId === null) return;
-  await taskStore.sendMessage(taskId, answer);
+  if (props.chunk.taskId != null) {
+    const taskId = taskStore.activeTaskId;
+    if (taskId === null) return;
+    await taskStore.sendMessage(taskId, answer);
+    return;
+  }
+
+  if (chatStore.activeChatSessionId == null) return;
+  await chatStore.sendMessage(answer);
 }
 </script>
 

@@ -1,4 +1,5 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
+import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
@@ -41,8 +42,11 @@ export type EngineEvent =
 
 // ─── Execution parameters ─────────────────────────────────────────────────────
 
-/** Native engine execution type — used by NativeEngine to dispatch to the right function. */
-export type NativeExecutionType = "transition" | "human_turn" | "retry" | "code_review";
+export type OnToken = (taskId: number | null, conversationId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean) => void;
+export type OnError = (taskId: number | null, conversationId: number, executionId: number, error: string) => void;
+export type OnTaskUpdated = (task: Task) => void;
+export type OnNewMessage = (message: ConversationMessage) => void;
+export type OnStreamEvent = (event: StreamEvent) => void;
 
 export type EngineResumeInput =
   | { type: "ask_user"; content: string }
@@ -50,7 +54,10 @@ export type EngineResumeInput =
 
 export interface ExecutionParams {
   executionId: number;
-  taskId: number;
+  /** null for standalone chat sessions (not tied to a task) */
+  taskId: number | null;
+  /** conversationId — always set; used as the universal routing key */
+  conversationId: number;
   /** Board the task belongs to (used by CopilotEngine for tool context). */
   boardId?: number;
   /** Resolved prompt text (on_enter_prompt or user message). */
@@ -70,16 +77,10 @@ export interface ExecutionParams {
    */
   onRawModelMessage?: (message: RawModelMessage) => void;
 
-  // ── Native engine discriminator (ignored by CopilotEngine) ────────────────
-  /** Which flavour of native execution to run. */
-  nativeExecType?: NativeExecutionType;
-  /** Target workflow column (required when nativeExecType === "transition"). */
-  toState?: string;
-  /** Code-review hunk decisions (required when nativeExecType === "code_review"). */
-  reviewDecisions?: Record<string, unknown>;
-
   /** MCP tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
   enabledMcpTools?: string[] | null;
+  /** Optional user-provided attachments for the first turn of an execution. */
+  attachments?: Attachment[];
 }
 
 export interface RawModelMessage {
@@ -170,19 +171,19 @@ export interface ExecutionEngine {
   shutdown?(options?: EngineShutdownOptions): Promise<void>;
 
   /**
-   * Trigger manual context compaction for the given task.
+   * Trigger manual context compaction for the given conversation scope.
    * Only implemented by engines that support explicit compaction (e.g. Copilot).
    * Engines that do not support manual compaction leave this undefined.
    * Compaction lifecycle is signalled via compaction_start/compaction_done EngineEvents.
    */
-  compact?(taskId: number, workingDirectory: string): Promise<void>;
+  compact?(taskId: number | null, conversationId: number, workingDirectory: string): Promise<void>;
 }
 
 // ─── Common tool context ──────────────────────────────────────────────────────
 
 /**
  * Context passed to common task-management tool handlers.
- * Shared between native and Copilot engines via common-tools.ts.
+ * Shared by task-oriented engine integrations via common-tools.ts.
  */
 export interface CommonToolContext {
   taskId: number;

@@ -272,38 +272,34 @@ describe("executeTool / create_task", () => {
         expect(result).toContain("Error: project nonexistent-proj not found");
     });
 
-    it("inherits workspace default_model when no model arg is given", async () => {
-        cfg.cleanup();
-        cfg = setupTestConfig("default_model: fake/workspace-default");
+    it("inherits the configured engine model when no model arg is given", async () => {
         const result = await executeTool(
             "create_task",
             JSON.stringify({ project_key: projectKey, title: "Default model task", description: "" }),
             ctx(),
         );
         const task = JSON.parse(result as string);
-        expect(task.model).toBe("fake/workspace-default");
+        expect(task.model).toBe("copilot/mock-model");
     });
 
-    it("explicit model arg overrides workspace default_model", async () => {
-        cfg.cleanup();
-        cfg = setupTestConfig("default_model: fake/workspace-default");
+    it("explicit model arg overrides the configured engine model", async () => {
         const result = await executeTool(
             "create_task",
-            JSON.stringify({ project_key: projectKey, title: "Override model task", description: "", model: "fake/explicit" }),
+            JSON.stringify({ project_key: projectKey, title: "Override model task", description: "", model: "copilot/explicit" }),
             ctx(),
         );
         const task = JSON.parse(result as string);
-        expect(task.model).toBe("fake/explicit");
+        expect(task.model).toBe("copilot/explicit");
     });
 
-    it("model is null when no model arg and no workspace default_model", async () => {
+    it("inherits the configured engine model when no model arg is given", async () => {
         const result = await executeTool(
             "create_task",
             JSON.stringify({ project_key: projectKey, title: "No model task", description: "" }),
             ctx(),
         );
         const task = JSON.parse(result as string);
-        expect(task.model).toBeNull();
+        expect(task.model).toBe("copilot/mock-model");
     });
 });
 

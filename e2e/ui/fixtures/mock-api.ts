@@ -101,17 +101,11 @@ export class ApiMock {
 
             try {
                 const result = await handler(params);
-                if (result === undefined) {
-                    // Void/no-return handlers — send empty body without application/json
-                    // so the RPC client returns undefined cleanly (no JSON.parse error).
-                    await route.fulfill({ status: 200, body: "" });
-                } else {
-                    await route.fulfill({
-                        status: 200,
-                        contentType: "application/json",
-                        body: JSON.stringify(result),
-                    });
-                }
+                await route.fulfill({
+                    status: 200,
+                    contentType: "application/json",
+                    body: JSON.stringify(result ?? null),
+                });
             } catch (err) {
                 await route.fulfill({
                     status: 500,

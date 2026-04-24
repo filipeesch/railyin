@@ -5,8 +5,11 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
+import { conversationHandlers } from "../handlers/conversations.ts";
+import { chatSessionHandlers } from "../handlers/chat-sessions.ts";
+import { mcpHandlers } from "../handlers/mcp.ts";
 import type { Database } from "bun:sqlite";
-import type { Task } from "../../shared/rpc-types.ts";
+import type { Attachment, Task } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 
 let db: Database;
@@ -268,6 +271,160 @@ describe("tasks.delete", () => {
   });
 });
 
+describe("conversations handlers", () => {
+  it("loads messages by canonical conversationId", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', ?), (?, ?, 'assistant', 'assistant', ?)",
+      [taskId, conversationId, "hello", taskId, conversationId, "hi there"],
+    );
+
+    db.run("INSERT INTO conversations (task_id) VALUES (0)");
+    const otherConversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', ?)",
+      [taskId, otherConversationId, "other thread"],
+    );
+
+    const handlers = conversationHandlers(null);
+    const messages = await handlers["conversations.getMessages"]({ conversationId });
+
+    expect(messages.map((message) => message.content)).toEqual(["hello", "hi there"]);
+    expect(messages.every((message) => message.conversationId === conversationId)).toBe(true);
+  });
+
+  it("keeps taskId as a backward-compatible alias for message reads", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'assistant', 'assistant', ?)",
+      [taskId, conversationId, "from alias"],
+    );
+
+    const handlers = conversationHandlers(null);
+    const messages = await handlers["conversations.getMessages"]({ taskId });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.conversationId).toBe(conversationId);
+    expect(messages[0]?.content).toBe("from alias");
+  });
+
+  it("loads stream events by conversationId and preserves taskId alias", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO stream_events (id, task_id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL), (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
+      [1, taskId, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, taskId, conversationId, 10, 1, "root-2", "assistant", "beta"],
+    );
+
+    const handlers = conversationHandlers(null);
+    const canonical = await handlers["conversations.getStreamEvents"]({ conversationId, afterSeq: 0 });
+    const aliased = await handlers["conversations.getStreamEvents"]({ taskId, afterSeq: -1 });
+
+    expect(canonical).toHaveLength(1);
+    expect(canonical[0]?.content).toBe("beta");
+    expect(aliased).toHaveLength(2);
+    expect(aliased.map((event) => event.content)).toEqual(["alpha", "beta"]);
+  });
+
+  it("computes context usage for session conversations without a task", async () => {
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
+      [conversationId],
+    );
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (NULL, ?, 'user', 'user', ?)",
+      [conversationId, "session message"],
+    );
+
+    const handlers = conversationHandlers(null);
+    const usage = await handlers["conversations.contextUsage"]({ conversationId });
+
+    expect(usage.maxTokens).toBe(128_000);
+    expect(usage.usedTokens).toBeGreaterThan(0);
+    expect(usage.fraction).toBeGreaterThan(0);
+  });
+});
+
+describe("chat session parity handlers", () => {
+  it("persists session MCP tool selections", async () => {
+    const handlers = mcpHandlers();
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
+      [conversationId],
+    );
+    const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+    const session = await handlers["mcp.setSessionTools"]({
+      sessionId,
+      enabledTools: ["docs:search", "github:issues"],
+    });
+
+    expect(session.enabledMcpTools).toEqual(["docs:search", "github:issues"]);
+    const stored = db.query<{ enabled_mcp_tools: string | null }, [number]>(
+      "SELECT enabled_mcp_tools FROM chat_sessions WHERE id = ?",
+    ).get(sessionId);
+    expect(stored?.enabled_mcp_tools).toBe(JSON.stringify(["docs:search", "github:issues"]));
+  });
+
+  it("forwards session model, attachments, workspace, and MCP tools to the orchestrator", async () => {
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools) VALUES ('default', 'Session', 'idle', ?, ?)",
+      [conversationId, JSON.stringify(["docs:search"])],
+    );
+    const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+    const calls: unknown[][] = [];
+    const handlers = chatSessionHandlers(
+      () => {},
+      {
+        executeChatTurn: async (...args: unknown[]) => {
+          calls.push(args);
+          return {
+            message: {
+              id: 1,
+              taskId: null,
+              conversationId,
+              type: "user",
+              role: "user",
+              content: "hello",
+              metadata: null,
+              createdAt: new Date().toISOString(),
+            },
+            executionId: 7,
+          };
+        },
+        compactConversation: async () => {},
+      } as unknown as ExecutionCoordinator,
+    );
+
+    const attachments: Attachment[] = [
+      { label: "note.md", mediaType: "text/markdown", data: Buffer.from("# hi").toString("base64") },
+    ];
+
+    await handlers["chatSessions.sendMessage"]({
+      sessionId,
+      content: "hello",
+      model: "copilot/mock-model",
+      attachments,
+    });
+
+    expect(calls).toEqual([[
+      sessionId,
+      conversationId,
+      "hello",
+      "copilot/mock-model",
+      ["docs:search"],
+      "default",
+      attachments,
+    ]]);
+  });
+});
+
 // ─── resolveContextWindow (via tasks.contextUsage) ────────────────────────────
 // Tests the engine-agnostic context window resolution introduced in task 1.1.
 // resolveContextWindow is private; tested through the tasks.contextUsage handler.
@@ -375,4 +532,3 @@ describe("models.listEnabled — Copilot Auto option", () => {
     expect(enabled.some((m) => m.id === "copilot/mock-model")).toBe(true);
   });
 });
-

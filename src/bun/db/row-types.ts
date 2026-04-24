@@ -72,7 +72,7 @@ export interface ExecutionRow {
 
 export interface ConversationMessageRow {
   id: number;
-  task_id: number;
+  task_id: number | null;
   conversation_id: number;
   type: string;
   role: string | null;
@@ -110,4 +110,17 @@ export interface TaskTodoRow {
   result: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ChatSessionRow {
+  id: number;
+  workspace_key: string;
+  title: string;
+  status: string;
+  conversation_id: number;
+  enabled_mcp_tools?: string | null;
+  last_activity_at: string;
+  last_read_at: string | null;
+  archived_at: string | null;
+  created_at: string;
 }

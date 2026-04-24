@@ -682,7 +682,8 @@ test.describe("AC — autocomplete", () => {
         await page.keyboard.type("/");
         await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible({ timeout: 3_000 });
         await expect(page.locator(".cm-tooltip-autocomplete")).toContainText("opsx-apply");
-        await page.keyboard.press("Escape");
+        await page.keyboard.press("Backspace");
+        await expect(page.locator(".cm-tooltip-autocomplete")).not.toBeVisible({ timeout: 3_000 });
 
         // Second / — cache hit, no new API call within TTL
         await page.keyboard.type("/");
