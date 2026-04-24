@@ -467,3 +467,106 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
     await expect(nonNative.shutdownNonNativeEngines({ reason: "app-exit", deadlineMs: 100 })).resolves.toBeUndefined();
   });
 });
+
+// ─── Working-directory resolution ─────────────────────────────────────────────
+//
+// ⚠️  REGRESSION GUARD — this invariant has broken three times.
+//
+// The CWD passed to engine.execute() (via _resolveWorkingDirectory) MUST use
+// the same priority as ClaudeEngine.listCommands():
+//   1. projectPath  (workspace.yaml — the sub-application directory)
+//   2. worktree_path (git worktree root — fallback)
+//
+// When a task lives inside a monorepo the worktree_path is the repo root while
+// projectPath points to the specific sub-application (e.g. applications/broker).
+// .claude/commands/ lives under the sub-application, so if worktree_path wins
+// Claude starts in the wrong directory and every slash command becomes
+// "Unknown skill" — even though the commands show up in autocomplete (because
+// listCommands already resolved via projectPath).
+//
+// If you ever change _resolveWorkingDirectory or listCommands, keep both in sync.
+
+describe("Orchestrator working-directory resolution", () => {
+  let capturedWorkingDirectory: string | undefined;
+
+  class CapturingEngine implements ExecutionEngine {
+    async *execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
+      capturedWorkingDirectory = params.workingDirectory;
+      yield { type: "token", content: "ok" };
+      yield { type: "done" };
+    }
+    async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+    cancel(_executionId: number): void { }
+    async listModels() {
+      return [{ qualifiedId: "copilot/mock-model", displayName: "Mock", contextWindow: 128_000 }];
+    }
+    async listCommands() { return []; }
+  }
+
+  function makeCapturingOrchestrator() {
+    capturedWorkingDirectory = undefined;
+    return new Orchestrator(
+      new CapturingEngine(),
+      noop,
+      noop,
+      noop,
+      noop,
+    );
+  }
+
+  it("uses projectPath over worktree_path when both are configured", async () => {
+    // Regression: worktree_path was previously returned unconditionally when
+    // worktree_status = 'ready', causing slash commands to fail with "Unknown skill"
+    // even though they appeared correctly in the autocomplete list.
+    const projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
+    const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
+
+    const localConfig = setupTestConfig("", projectDir);
+
+    try {
+      const localDb = initDb();
+      const { taskId } = seedProjectAndTask(localDb, projectDir);
+      localDb.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+      // Plant a ready worktree — this must NOT win over projectPath
+      localDb.run(
+        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
+        [taskId, worktreeDir, worktreeDir],
+      );
+
+      const orch = makeCapturingOrchestrator();
+      await orch.executeHumanTurn(taskId, "run /opsx:explore");
+
+      expect(capturedWorkingDirectory).toBe(projectDir);
+      expect(capturedWorkingDirectory).not.toBe(worktreeDir);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(worktreeDir, { recursive: true, force: true });
+      localConfig.cleanup();
+    }
+  });
+
+  it("falls back to worktree_path when projectPath is not configured", async () => {
+    const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
+
+    // Config has no project_path for this key — simulate by using an unknown project_key
+    const localConfig = setupTestConfig("", worktreeDir);
+
+    try {
+      const localDb = initDb();
+      const { taskId } = seedProjectAndTask(localDb, worktreeDir);
+      localDb.run("UPDATE tasks SET workflow_state = 'plan', project_key = 'no-project-path' WHERE id = ?", [taskId]);
+      localDb.run(
+        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
+        [taskId, worktreeDir, worktreeDir],
+      );
+
+      const orch = makeCapturingOrchestrator();
+      await orch.executeHumanTurn(taskId, "hello");
+
+      expect(capturedWorkingDirectory).toBe(worktreeDir);
+    } finally {
+      rmSync(worktreeDir, { recursive: true, force: true });
+      localConfig.cleanup();
+    }
+  });
+});

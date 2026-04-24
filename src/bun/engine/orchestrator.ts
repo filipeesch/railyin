@@ -706,6 +706,28 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   private _resolveWorkingDirectory(task: TaskRow): string {
+    // ⚠️  INVARIANT: projectPath must take priority over worktree_path.
+    //
+    // Claude resolves slash commands (.claude/commands/) relative to its CWD.
+    // In a monorepo setup the worktree_path is the git worktree ROOT (the whole
+    // repo checkout), while projectPath is the specific sub-application directory
+    // where .claude/commands/ actually lives.  If worktree_path is returned here,
+    // commands like /opsx:explore become "Unknown skill" at runtime — even though
+    // they appear correctly in autocomplete — because ClaudeEngine.listCommands()
+    // already uses projectPath-first priority.
+    //
+    // Priority order here MUST match ClaudeEngine.listCommands():
+    //   1. projectPath  (configured in workspace.yaml — most specific, wins)
+    //   2. worktree_path (git worktree root — fallback when no projectPath)
+    //
+    // Regression tests: src/bun/test/orchestrator.test.ts
+    //                   "Orchestrator working-directory resolution"
+    const workspaceKey = getTaskWorkspaceKey(task.id);
+    const projectDirectory = getProjectByKey(workspaceKey, task.project_key)?.projectPath?.trim();
+    if (projectDirectory) {
+      return projectDirectory;
+    }
+
     const db = getDb();
     const gitRow = db
       .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
@@ -715,12 +737,8 @@ export class Orchestrator implements ExecutionCoordinator {
     if (gitRow?.worktree_status === "ready" && gitRow.worktree_path) {
       return gitRow.worktree_path;
     }
-    const workspaceKey = getTaskWorkspaceKey(task.id);
-    const projectDirectory = getProjectByKey(workspaceKey, task.project_key)?.projectPath?.trim() ?? "";
-    if (!projectDirectory) {
-      throw new Error(`Project directory not found for project_key=${task.project_key}`);
-    }
-    return projectDirectory;
+
+    throw new Error(`Project directory not found for project_key=${task.project_key}`);
   }
 
   private _buildExecutionParams(

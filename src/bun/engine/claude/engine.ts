@@ -131,6 +131,15 @@ export class ClaudeEngine implements ExecutionEngine {
     const { getBoardWorkspaceKey } = await import("../../workspace-context.ts");
     const { getProjectByKey } = await import("../../project-store.ts");
 
+    // ⚠️  INVARIANT: CWD priority here MUST match Orchestrator._resolveWorkingDirectory().
+    //
+    // Commands shown in autocomplete (this method) must be resolvable when sent
+    // (engine.execute via orchestrator). If the two methods resolve different
+    // directories, commands appear in the list but fail at runtime with
+    // "Unknown skill".  Priority: projectPath → worktree_path → process.cwd().
+    //
+    // Regression tests: src/bun/test/orchestrator.test.ts
+    //                   "Orchestrator working-directory resolution"
     const db = getDb();
     const taskRow = db
       .query<{ board_id: number; project_key: string }, [number]>(

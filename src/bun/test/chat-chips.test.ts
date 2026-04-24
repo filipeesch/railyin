@@ -109,6 +109,12 @@ describe("extractChips", () => {
     expect(attachments).toEqual([]);
   });
 
+  it("slash chips with colon-separated names preserve the full /namespace:command label", () => {
+    const { humanText, attachments } = extractChips("[/opsx:propose|/opsx:propose] my feature");
+    expect(humanText).toBe("/opsx:propose my feature");
+    expect(attachments).toEqual([]);
+  });
+
   it("handles multiple chips of mixed types", () => {
     const doc = "review [#src/a.ts|#a.ts] with [@mcp:t|@tool] and [#src/b.ts|#b.ts]";
     const { humanText, attachments } = extractChips(doc);

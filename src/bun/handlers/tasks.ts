@@ -240,9 +240,13 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         }
 
         const postStatus = (msg: string) => {
+          // Do NOT call onTaskUpdated here: the DB row still carries the old
+          // workflow_state while the worktree is being created (executeTransition
+          // hasn't run yet). Broadcasting the stale row causes the UI card to
+          // bounce back to the source column and then re-animate to the target.
+          // The authoritative state update is pushed at the end of the RPC via
+          // orchestrator.executeTransition → onTaskUpdated.
           appendMessage(params.taskId, convId!, "system", null, msg);
-          const updated = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
-          if (updated) onTaskUpdated(mapTask(updated));
         };
 
         try {

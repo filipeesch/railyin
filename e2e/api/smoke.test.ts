@@ -227,6 +227,53 @@ describe("conversations", () => {
         );
         expect(["waiting_user", "completed"]).toContain(task.executionState);
     });
+
+    test("tasks.sendMessage with slash chip engineContent delivers raw command to engine", async () => {
+        await server.request("tasks.setModel", { taskId, model: "copilot/mock-model" });
+        const baseline = await server.request("conversations.getMessages", { conversationId });
+        const baselineAssistantCount = baseline.filter((m) => m.type === "assistant").length;
+
+        const sent = await server.request("tasks.sendMessage", {
+            taskId,
+            content: "[/opsx:propose|/opsx:propose] my feature",
+            engineContent: "/opsx:propose my feature",
+        });
+        expect(sent.message.role).toBe("user");
+
+        await waitFor(
+            () => getTask(boardId, taskId),
+            (t) => t.executionState !== "running",
+        );
+        const messages = await server.request("conversations.getMessages", { conversationId });
+        const userMsg = [...messages].reverse().find((m) => m.role === "user" && m.type === "user");
+        expect(userMsg?.content).toContain("[/opsx:propose|/opsx:propose]");
+        const assistantMessages = messages.filter((m) => m.type === "assistant");
+        expect(assistantMessages.length).toBe(baselineAssistantCount + 1);
+        const lastAssistant = assistantMessages[assistantMessages.length - 1];
+        expect(lastAssistant?.content).toBe("Mock response: /opsx:propose my feature");
+    });
+
+    test("tasks.sendMessage with slash chip content (no engineContent) falls back to extractChips", async () => {
+        await server.request("tasks.setModel", { taskId, model: "copilot/mock-model" });
+        const baseline = await server.request("conversations.getMessages", { conversationId });
+        const baselineAssistantCount = baseline.filter((m) => m.type === "assistant").length;
+
+        const sent = await server.request("tasks.sendMessage", {
+            taskId,
+            content: "[/opsx:propose|/opsx:propose] my feature",
+        });
+        expect(sent.message.role).toBe("user");
+
+        await waitFor(
+            () => getTask(boardId, taskId),
+            (t) => t.executionState !== "running",
+        );
+        const messages = await server.request("conversations.getMessages", { conversationId });
+        const assistantMessages = messages.filter((m) => m.type === "assistant");
+        expect(assistantMessages.length).toBe(baselineAssistantCount + 1);
+        const lastAssistant = assistantMessages[assistantMessages.length - 1];
+        expect(lastAssistant?.content).toBe("Mock response: /opsx:propose my feature");
+    });
 });
 
 describe("chatSessions", () => {
@@ -293,6 +340,49 @@ describe("chatSessions", () => {
             (session) => session.status === "archived",
         );
         expect(archived.archivedAt).not.toBeNull();
+    });
+
+    test("chatSessions.sendMessage with slash chip engineContent delivers raw command to engine", async () => {
+        const session = await server.request("chatSessions.create", {
+            workspaceKey: "test-ws",
+            title: "Slash Command Test Session",
+        });
+
+        const sent = await server.request("chatSessions.sendMessage", {
+            sessionId: session.id,
+            content: "[/opsx:propose|/opsx:propose] my feature",
+            engineContent: "/opsx:propose my feature",
+            model: "copilot/mock-model",
+        });
+        expect(sent.executionId).toBeGreaterThan(0);
+
+        const messages = await waitFor(
+            () => server.request("conversations.getMessages", { conversationId: session.conversationId }),
+            (msgs) => msgs.some((m) => m.type === "assistant"),
+        );
+        const assistant = messages.find((m) => m.type === "assistant");
+        expect(assistant?.content).toBe("Mock response: /opsx:propose my feature");
+    });
+
+    test("chatSessions.sendMessage with slash chip content (no engineContent) falls back to extractChips", async () => {
+        const session = await server.request("chatSessions.create", {
+            workspaceKey: "test-ws",
+            title: "Slash Fallback Test Session",
+        });
+
+        const sent = await server.request("chatSessions.sendMessage", {
+            sessionId: session.id,
+            content: "[/opsx:propose|/opsx:propose] my feature",
+            model: "copilot/mock-model",
+        });
+        expect(sent.executionId).toBeGreaterThan(0);
+
+        const messages = await waitFor(
+            () => server.request("conversations.getMessages", { conversationId: session.conversationId }),
+            (msgs) => msgs.some((m) => m.type === "assistant"),
+        );
+        const assistant = messages.find((m) => m.type === "assistant");
+        expect(assistant?.content).toBe("Mock response: /opsx:propose my feature");
     });
 });
 
