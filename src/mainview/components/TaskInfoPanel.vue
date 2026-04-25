@@ -109,6 +109,18 @@ watch(
   },
   { immediate: true },
 );
+
+// Watch for worktreeStatus changes to update branches when worktree is created/removed
+watch(
+  () => task.value?.worktreeStatus,
+  async (newStatus, oldStatus) => {
+    if (!task.value) return;
+    // Only fetch branches when worktree status changes to not_created/removed/error
+    if (newStatus === "not_created" || newStatus === "removed" || newStatus === "error") {
+      await fetchBranches();
+    }
+  },
+);
 </script>
 
 <style scoped>

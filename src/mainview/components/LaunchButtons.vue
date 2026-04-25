@@ -23,7 +23,7 @@
             size="small"
             severity="secondary"
             :title="section.entries[0].label"
-            class="launch-icon-splitbtn"
+            class="launch-icon-splitbtn launch-splitbtn"
             @click.stop="emit('run', section.entries[0].command, section.type === 'tools' ? 'app' : 'terminal')"
           >
             <template #default>
@@ -56,6 +56,7 @@
             size="small"
             severity="secondary"
             :title="section.entries[0].label"
+            class="launch-splitbtn"
             @click="emit('run', section.entries[0].command, section.type === 'tools' ? 'app' : 'terminal')"
           >
             <template #default>

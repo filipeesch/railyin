@@ -113,3 +113,43 @@ test.describe("TD — task drawer coverage", () => {
         expect(order[1]).toContain("Live tail answer");
     });
 });
+
+// ─── Suite TD-B — Launch buttons ─────────────────────────────────────────────
+
+test.describe("TD-B — launch buttons", () => {
+    test("TD-B-1: SplitButton dropdown doesn't close drawer when menu item clicked", async ({ page, api, task }) => {
+        // Mock launch config to return multiple tools (to trigger SplitButton rendering)
+        // SplitButton only appears when a section has > 1 entries
+        api.returns("launch.getConfig", {
+            profiles: [],
+            tools: [
+                { label: "Build", icon: "pi-cog", command: "npm run build" },
+                { label: "Test", icon: "pi-check", command: "npm test" },
+            ],
+        });
+        // Use the fixture task but override worktreeStatus and worktreePath for launch buttons to appear
+        api.handle("tasks.list", () => [{ ...task, worktreeStatus: "ready", worktreePath: "/tmp/test" }]);
+
+        await page.goto("/");
+
+        // Wait for the board to load tasks
+        await page.locator(`[data-task-id="${task.id}"]`).waitFor({ state: "visible", timeout: 10_000 });
+
+        await openTaskDrawer(page, task.id);
+
+        // Wait for launch buttons to appear (split button with multiple entries)
+        await expect(page.locator(".launch-splitbtn")).toBeVisible({ timeout: 10_000 });
+
+        // Click launch button dropdown (the split button has multiple entries)
+        await page.locator(".launch-splitbtn .p-splitbutton-dropdown").click();
+
+        // Verify menu is visible (PrimeVue v4 SplitButton uses TieredMenu, class is p-tieredmenu)
+        await expect(page.locator(".p-tieredmenu")).toBeVisible({ timeout: 3_000 });
+
+        // Click menu item
+        await page.locator(".p-tieredmenu .p-tieredmenu-item", { hasText: "Test" }).click();
+
+        // Verify drawer is still open (menu click shouldn't close it)
+        await expect(page.locator(".task-detail")).toBeVisible();
+    });
+});

@@ -69,6 +69,32 @@ test.describe("CS-A — toolbar button: visibility based on worktreePath", () =>
     const codeBtn = page.locator(".task-detail button:has(.pi-code)");
     await expect(codeBtn).not.toBeVisible();
   });
+
+  test("CS-A-3: code editor button appears when worktree is created while drawer is open", async ({ page, api, ws }) => {
+    const task = makeTask({ worktreeStatus: "not_created" });
+    api.handle("tasks.list", () => [task]);
+    api.returns("tasks.createWorktree", undefined);
+    api.returns("tasks.listBranches", { branches: ["main"] });
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // Verify buttons are hidden initially
+    await expect(page.locator(".task-detail button:has(.pi-code)")).not.toBeVisible();
+    await expect(page.locator(".task-detail button:has(.pi-desktop)")).not.toBeVisible();
+
+    // Switch to Info tab and create worktree
+    await page.locator(".tab-btn", { hasText: "Info" }).click();
+    await expect(page.locator(".task-tab-info")).toBeVisible();
+    await page.locator(".wt-create-form button", { hasText: "Create Worktree" }).click();
+
+    // Wait for worktree creation to complete by pushing a task update via WS
+    ws.push({ type: "task.updated", payload: makeTaskWithWorktree({ id: task.id }) });
+
+    // Verify buttons now appear
+    await expect(page.locator(".task-detail button:has(.pi-code)")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".task-detail button:has(.pi-desktop)")).toBeVisible();
+  });
 });
 
 // ─── Suite CS-B — overlay lifecycle ──────────────────────────────────────────
@@ -82,7 +108,7 @@ test.describe("CS-B — overlay lifecycle", () => {
     api.handle("codeServer.start", () => {
       startCalled = true;
       // Simulate a long-running start so we can observe the loading state
-      return new Promise(() => {}); // never resolves — stays in loading
+      return new Promise(() => { }); // never resolves — stays in loading
     });
 
     await page.goto("/");
@@ -102,7 +128,7 @@ test.describe("CS-B — overlay lifecycle", () => {
     const task = makeTaskWithWorktree();
     api.handle("tasks.list", () => [task]);
     // Never resolves — keeps status as 'starting'
-    api.handle("codeServer.start", () => new Promise(() => {}));
+    api.handle("codeServer.start", () => new Promise(() => { }));
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);

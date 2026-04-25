@@ -77,6 +77,7 @@
           <textarea
             v-model="form.description"
             class="task-overlay__textarea"
+            :disabled="!isBacklog"
             placeholder="Write a rich markdown description — what to do, why, files involved, constraints, acceptance criteria."
           />
         </div>
@@ -85,6 +86,13 @@
           class="task-overlay__preview markdown-content"
           v-html="renderedDescription"
         />
+        <div
+          v-if="!isBacklog && !editMode"
+          class="task-overlay__preview-note"
+        >
+          <i class="pi pi-info-circle" />
+          <span>Task description can only be edited when the task is in the backlog column.</span>
+        </div>
       </div>
 
       <!-- Footer -->
@@ -93,11 +101,11 @@
         <div class="task-overlay__footer-actions">
           <Button label="Cancel" severity="secondary" @click="onClose" :disabled="saving" />
           <Button
-            v-if="isBacklog"
             label="Save"
             severity="primary"
             :loading="saving"
-            :disabled="!form.title.trim() || (!props.taskId && !form.projectKey)"
+            :disabled="!isBacklog || !form.title.trim() || (!props.taskId && !form.projectKey)"
+            :tooltip="!isBacklog ? 'Task can only be edited when in the backlog column' : undefined"
             @click="onSave"
           />
         </div>
@@ -455,6 +463,21 @@ onMounted(async () => {
 .markdown-content :deep(pre code) {
   background: none;
   padding: 0;
+}
+
+.task-overlay__preview-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 0.8rem;
+  color: var(--p-text-muted-color, #64748b);
+  background: var(--p-content-hover-background);
+  border-top: 1px solid var(--p-content-border-color);
+}
+
+.task-overlay__preview-note i {
+  color: var(--p-primary-color, #6366f1);
 }
 </style>
 

@@ -90,7 +90,7 @@ function handleOutsideClick(e: MouseEvent) {
   if (target?.closest(
     ".p-select-overlay, .p-dialog, .p-datepicker, .p-autocomplete-overlay, " +
     ".p-multiselect-overlay, .todo-overlay-backdrop, .task-overlay, " +
-    ".p-popover, .file-editor-overlay"
+    ".p-popover, .file-editor-overlay, .p-tieredmenu"
   )) return;
   // Skip if the click is inside the drawer panel itself
   const drawerPanel = document.querySelector(".p-drawer");

@@ -262,6 +262,40 @@ const numstat = ref<GitNumstat | null>(null);
 const pendingByFile = ref<{ filePath: string; pendingCount: number }[]>([]);
 const launchConfig = ref<LaunchConfig | null>(null);
 
+// ─── Shared helper functions ──────────────────────────────────────────────────
+
+async function refreshTaskData() {
+  if (!task.value) return;
+
+  // Only clear data that needs to be refreshed
+  numstat.value = null;
+  pendingByFile.value = [];
+
+  taskStore.loadEnabledModels(taskWorkspaceKey.value);
+
+  if (task.value.worktreeStatus === "ready") {
+    numstat.value = await taskStore.getGitStat(task.value.id);
+    taskStore.refreshChangedFiles(task.value.id);
+    try {
+      pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });
+    } catch { /* non-fatal */ }
+  }
+
+  // Only fetch launch config if not already loaded
+  if (!launchConfig.value) {
+    launchConfig.value = await launchStore.getConfig(task.value.id, task.value.projectKey);
+  }
+}
+
+async function refreshTaskDataOnExecutionEnd() {
+  if (!task.value) return;
+  todoRefreshTrigger.value++;
+  numstat.value = await taskStore.getGitStat(task.value.id);
+  try {
+    pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });
+  } catch { /* non-fatal */ }
+}
+
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
 async function onSend(text: string, engineText: string, attachments: Attachment[]) {
@@ -387,40 +421,34 @@ async function onManageModelsClosed() {
 
 // ─── Watchers ─────────────────────────────────────────────────────────────────
 
+// Initial load when taskId changes
 watch(
   () => props.taskId,
   async (id) => {
-    numstat.value = null;
-    pendingByFile.value = [];
-    launchConfig.value = null;
     if (!id) return;
-    taskStore.loadEnabledModels(taskWorkspaceKey.value);
-    const t = taskStore.activeTask;
-    if (t?.worktreeStatus === "ready") {
-      numstat.value = await taskStore.getGitStat(id);
-      taskStore.refreshChangedFiles(id);
-      try {
-        pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: id });
-      } catch { /* non-fatal */ }
-    }
-    if (t) {
-      launchConfig.value = await launchStore.getConfig(id, t.projectKey);
-    }
+    launchConfig.value = null; // Reset for new task
+    await refreshTaskData();
   },
   { immediate: true },
 );
 
+// Update when worktreeStatus changes to ready
+watch(
+  () => task.value?.worktreeStatus,
+  async (newStatus, oldStatus) => {
+    if (!task.value) return;
+    if (newStatus === "ready" && oldStatus !== "ready") {
+      await refreshTaskData();
+    }
+  },
+);
+
+// Update when execution ends
 watch(
   () => task.value?.executionState,
   async (state, prev) => {
     if (prev === "running" && state !== "running") {
-      todoRefreshTrigger.value++;
-      if (task.value) {
-        numstat.value = await taskStore.getGitStat(task.value.id);
-        try {
-          pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });
-        } catch { /* non-fatal */ }
-      }
+      await refreshTaskDataOnExecutionEnd();
     }
   },
 );

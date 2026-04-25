@@ -363,7 +363,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.handle("tasks.list", () => [task]);
     api.returns("tasks.listBranches", { branches: BRANCHES });
     // Never resolve so we can observe loading state
-    api.handle("tasks.createWorktree", () => new Promise(() => {}));
+    api.handle("tasks.createWorktree", () => new Promise(() => { }));
 
     await page.goto("/");
     await openInfoTab(page, task.id);
@@ -546,5 +546,61 @@ test.describe("W-F — guard rails during running execution", () => {
     ws.push({ type: "task.updated", payload: idleTask });
 
     await expect(page.locator(".task-tab-info button:has(.pi-trash)")).toBeEnabled({ timeout: 5_000 });
+  });
+});
+
+// ─── Suite W-G — Task overlay (edit title/description) ───────────────────────
+
+test.describe("W-G — task overlay save behavior", () => {
+  test("W-G-1: Save button visible but disabled when task not in backlog", async ({ page, api }) => {
+    const task = makeReadyTask({ workflowState: "in_progress" });
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+
+    // Wait for the board to load tasks
+    await page.locator(`[data-task-id="${task.id}"]`).waitFor({ state: "visible", timeout: 10_000 });
+
+    await openInfoTab(page, task.id);
+
+    // Click edit button
+    await page.locator(".info-section--description button:has(.pi-pencil)").click();
+
+    // Verify Save button is visible but disabled (not v-if hidden)
+    const saveBtn = page.locator(".task-overlay__footer button:has-text('Save')");
+    await expect(saveBtn).toBeVisible();
+    await expect(saveBtn).toBeDisabled();
+  });
+
+  test("W-G-2: Save button enabled when task is in backlog", async ({ page, api }) => {
+    const task = makeReadyTask({ workflowState: "backlog" });
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+    await openInfoTab(page, task.id);
+
+    // Click edit button
+    await page.locator(".info-section--description button:has(.pi-pencil)").click();
+
+    // Verify Save button is enabled
+    const saveBtn = page.locator(".task-overlay__footer button:has-text('Save')");
+    await expect(saveBtn).toBeVisible();
+    await expect(saveBtn).toBeEnabled();
+  });
+
+  test("W-G-3: Save button disabled when description not in backlog", async ({ page, api }) => {
+    const task = makeReadyTask({ workflowState: "done" });
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+    await openInfoTab(page, task.id);
+
+    // Click edit button
+    await page.locator(".info-section--description button:has(.pi-pencil)").click();
+
+    // Verify Save button is disabled
+    const saveBtn = page.locator(".task-overlay__footer button:has-text('Save')");
+    await expect(saveBtn).toBeVisible();
+    await expect(saveBtn).toBeDisabled();
   });
 });

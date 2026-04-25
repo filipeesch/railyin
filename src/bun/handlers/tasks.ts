@@ -514,12 +514,14 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     // ─── tasks.update ────────────────────────────────────────────────────────
     "tasks.update": async (params: { taskId: number; title: string; description: string }): Promise<Task> => {
       const db = getDb();
-      const gitRow = db
-        .query<{ worktree_status: string | null }, [number]>(
-          "SELECT worktree_status FROM task_git_context WHERE task_id = ?",
+      const taskRow = db
+        .query<{ workflow_state: string }, [number]>(
+          "SELECT workflow_state FROM tasks WHERE id = ?",
         )
         .get(params.taskId);
-      if (gitRow && gitRow.worktree_status && gitRow.worktree_status !== "not_created") {
+      if (!taskRow) throw new Error(`Task ${params.taskId} not found`);
+      // Only allow editing if the task is in the backlog column
+      if (taskRow.workflow_state !== "backlog") {
         throw new Error("Cannot edit task once a worktree has been created");
       }
       db.run(
@@ -557,7 +559,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       if (row?.conversation_id) {
         db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
       }
-      taskLspRegistry.releaseTask(params.taskId).catch(() => {});
+      taskLspRegistry.releaseTask(params.taskId).catch(() => { });
 
       return { success: true, ...(warning ? { warning } : {}) };
     },
