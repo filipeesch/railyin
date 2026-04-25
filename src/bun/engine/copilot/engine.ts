@@ -426,9 +426,14 @@ export class CopilotEngine implements ExecutionEngine {
       ...sdkModels.map((m) => ({
         qualifiedId: `copilot/${m.id}`,
         displayName: m.name ?? m.id,
+<<<<<<< Updated upstream
         contextWindow: m.capabilities.limits.max_context_window_tokens,
         supportsThinking: m.capabilities.supports.reasoningEffort,
         supportsManualCompact: false,
+=======
+        contextWindow: m.capabilities?.limits?.max_context_window_tokens,
+        supportsThinking: m.capabilities?.supports?.reasoningEffort ?? false,
+>>>>>>> Stashed changes
       })),
     ];
   }
