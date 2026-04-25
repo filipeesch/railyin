@@ -64,6 +64,8 @@ export interface ExecutionParams {
   prompt: string;
   /** stage_instructions from the column config (already slash-reference resolved). */
   systemInstructions?: string;
+  /** Task identity context (title + optional description). Populated when taskId is non-null. */
+  taskContext?: { title: string; description?: string };
   /** Absolute path to the active worktree (or project root). */
   workingDirectory: string;
   /** Engine-specific qualified model ID. */

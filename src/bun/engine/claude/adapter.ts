@@ -34,6 +34,8 @@ export interface ClaudeRunConfig {
   workingDirectory: string;
   model?: string;
   systemInstructions?: string;
+  /** Task identity context injected via SessionStart hook additionalContext. */
+  taskContext?: { title: string; description?: string };
   signal?: AbortSignal;
   sessionId: string;
   commonToolContext: CommonToolContext;
@@ -62,13 +64,35 @@ interface ActiveClaudeQuery {
 }
 
 type ClaudeSdkRuntime = {
+  /**
+   * Starts a Claude Code query. Supports `resume` (continue existing session) and
+   * `sessionId` (create new session with a specific UUID). Using `sessionId` on an
+   * already-existing session causes Claude Code to exit with code 1 — always use
+   * `resume` for existing sessions.
+   */
   query: (params: { prompt: string; options?: Record<string, unknown> }) => AsyncIterable<unknown> & {
     supportedModels?: () => Promise<Array<Record<string, unknown>>>;
     supportedCommands?: () => Promise<Array<{ name: string; description: string }>>;
     interrupt?: () => Promise<void>;
     close?: () => void;
   };
-  getSessionInfo?: (sessionId: string, options?: { dir?: string }) => Promise<unknown>;
+  /**
+   * Returns metadata for a single session by ID (title, lastModified, cwd, etc.).
+   * Returns `undefined` if the session file is not found, is a sidechain session,
+   * or has no extractable summary (i.e. no `"type":"summary"` entry in the JSONL).
+   * DO NOT use this to check whether a session exists — it returns `undefined` for
+   * valid sessions that have never been compacted. Use `getSessionMessages` instead.
+   */
+  getSessionInfo?: (sessionId: string) => Promise<unknown>;
+  /**
+   * Returns the conversation messages for a session. Returns an empty array `[]`
+   * if the session file is not found. Use this to reliably detect session existence:
+   * `(await getSessionMessages(id, { dir, limit: 1 })).length > 0`
+   *
+   * The `dir` option scopes the search to a specific project directory (same as `cwd`
+   * passed to `query`). The `limit` option caps how many messages are returned.
+   */
+  getSessionMessages?: (sessionId: string, options?: { dir?: string; limit?: number }) => Promise<unknown[]>;
   createSdkMcpServer: (options: { name: string; version?: string; tools?: unknown[] }) => unknown;
   tool: (
     name: string,
@@ -260,6 +284,44 @@ function buildExternalMcpServers(
   return result;
 }
 
+/**
+ * Build the allowedTools list for external MCP servers.
+ *
+ * The SDK's allowedTools option pre-approves tools so they run without a permission prompt.
+ * Tool names follow the pattern `mcp__{server-name}__{tool-name}`.
+ *
+ * Our internal enabledMcpTools filter uses `"serverName:toolName"` format — translate to
+ * SDK format here. When enabledMcpTools is null (all enabled), emit a wildcard per server.
+ * When a specific list is provided, translate each entry to its SDK-format tool name.
+ *
+ * Ref: https://code.claude.com/docs/en/agent-sdk/mcp#allow-mcp-tools
+ */
+function buildAllowedExternalMcpTools(
+  servers: McpServerConfig[] | undefined,
+  enabledMcpTools: string[] | null | undefined,
+): string[] {
+  if (!servers?.length) return [];
+  const allowed: string[] = [];
+  for (const srv of servers) {
+    if (!Array.isArray(enabledMcpTools)) {
+      // null = all tools enabled — use a wildcard for this server.
+      allowed.push(`mcp__${srv.name}__*`);
+    } else {
+      // Translate "serverName:toolName" → "mcp__serverName__toolName".
+      for (const entry of enabledMcpTools) {
+        const colonIdx = entry.indexOf(":");
+        if (colonIdx === -1) continue;
+        const serverName = entry.slice(0, colonIdx);
+        const toolName = entry.slice(colonIdx + 1);
+        if (serverName === srv.name) {
+          allowed.push(`mcp__${serverName}__${toolName}`);
+        }
+      }
+    }
+  }
+  return allowed;
+}
+
 export function buildAllowPermissionResult(
   toolInput: Record<string, unknown>,
   suggestions?: unknown,
@@ -384,21 +446,55 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
     const abortController = new AbortController();
     config.signal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
-    let pendingInterviewPayload: string | null = null;
-
     (async () => {
       try {
         const [sdk, zod, cliPath] = await Promise.all([loadClaudeRuntime(), loadZodRuntime(), ensureClaudeCliJs()]);
         const toolContext = {
           ...config.commonToolContext,
-          onInterviewMe: (payload: string) => {
-            pendingInterviewPayload = payload;
-          },
         };
-        const toolServer = buildClaudeToolServer(sdk, zod.z, toolContext);
-        const hasExistingSession = await sdk.getSessionInfo?.(config.sessionId, { dir: config.workingDirectory }).catch(() => undefined);
+        const { server: toolServer, takePendingSuspend } = buildClaudeToolServer(sdk, zod.z, toolContext);
+        // Use getSessionMessages to check session existence — getSessionInfo is unreliable
+        // for sessions without a summary entry (returns undefined even when the file exists).
+        // getSessionMessages returns [] if the session file is not found.
+        const sessionMessages = await sdk.getSessionMessages?.(config.sessionId, { dir: config.workingDirectory, limit: 1 }) ?? [];
+        const hasExistingSession = sessionMessages.length > 0;
+
+        // Build XML task context block to prepend on the first turn of a new session only.
+        // Description is markdown so it is wrapped in CDATA to preserve special characters.
+        const taskContextXml = (!hasExistingSession && config.taskContext)
+          ? [
+            `<task>`,
+            `  <title>${config.taskContext.title}</title>`,
+            ...(config.taskContext.description
+              ? [
+                `  <description><![CDATA[`,
+                config.taskContext.description,
+                `  ]]></description>`,
+              ]
+              : []),
+            `</task>`,
+          ].join("\n")
+          : undefined;
+
+        const prompt = taskContextXml ? `${taskContextXml}\n\n${config.prompt}` : config.prompt;
+
+        // Log the outbound query params so we can verify what Claude actually receives
+        // (prompt + systemInstructions/appendSystemPrompt) — useful for diagnosing
+        // context-loss regressions where task title/description goes missing.
+        config.onRawMessage?.({
+          type: "outbound",
+          subtype: "query_params",
+          prompt,
+          systemInstructions: config.systemInstructions ?? null,
+          taskContext: config.taskContext ?? null,
+          sessionId: config.sessionId,
+          hasExistingSession: !!hasExistingSession,
+          workingDirectory: config.workingDirectory,
+          model: config.model ?? null,
+        });
+
         const query = sdk.query({
-          prompt: config.prompt,
+          prompt,
           options: {
             cwd: config.workingDirectory,
             additionalDirectories: [config.workingDirectory],
@@ -408,19 +504,60 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             ...(hasExistingSession ? { resume: config.sessionId } : { sessionId: config.sessionId }),
             tools: { type: "preset", preset: "claude_code" },
             settingSources: ["project"],
+            // DOCS: Tool search is enabled by default (ENABLE_TOOL_SEARCH is unset/true).
+            // When active, ALL MCP tool definitions are withheld from Claude's context window —
+            // Claude discovers them on demand via a search step. This means Claude never "sees"
+            // mcp__railyin__* tools unless it thinks to search for them, which it won't for
+            // domain-specific tools like interview_me.
+            //
+            // Fix: disable tool search so all tool definitions are loaded into context upfront.
+            // Docs: "With fewer than ~10 tools, loading everything upfront is typically faster."
+            // We have ~14 railyin tools — still small enough that this is the right trade-off.
+            // Ref: https://code.claude.com/docs/en/agent-sdk/tool-search
+            //
+            // IMPORTANT: the `env` option replaces process.env entirely — always spread it as
+            // the base or the Claude subprocess loses ANTHROPIC_API_KEY, HOME, PATH, etc.
+            env: { ...process.env, ENABLE_TOOL_SEARCH: "false" },
+            // DOCS: MCP tools require explicit permission before Claude can call them.
+            // Without allowedTools, calls go through the permission flow (canUseTool callback).
+            // Our canUseTool allows all non-Bash tools, so it works, but allowedTools is the
+            // canonical approach and removes the callback overhead for MCP calls.
+            // The wildcard "mcp__railyin__*" pre-approves every tool in our in-process server.
+            // External MCP tools are also pre-approved here when enabledMcpTools is provided.
+            // Ref: https://code.claude.com/docs/en/agent-sdk/mcp#allow-mcp-tools
+            allowedTools: [
+              "mcp__railyin__*",
+              ...buildAllowedExternalMcpTools(config.externalMcpServers, config.enabledMcpTools),
+            ],
+            // SDK hooks format: Partial<Record<HookEvent, HookCallbackMatcher[]>>
+            // HookEvent keys are PascalCase (e.g. 'PostToolUse', 'PreCompact'), NOT camelCase.
+            // Each value must be an array of { hooks: HookCallback[] } objects.
+            // Wrong format causes iX.initialize() to crash on fn.map() (function ≠ array),
+            // which is swallowed by .catch(()=>{}) — preventing sdkMcpServers registration.
             hooks: {
-              onCompactProgress: (event: { type: string }) => {
-                if (event.type === "compact_start") {
+              PreCompact: [{
+                hooks: [async (_input: unknown) => {
                   emit({ type: "compaction_start" });
-                } else if (event.type === "compact_end") {
+                  return {};
+                }],
+              }],
+              PostCompact: [{
+                hooks: [async (_input: unknown) => {
                   emit({ type: "compaction_done" });
-                }
-              },
-              onPostToolUse: (input: Record<string, unknown>) => {
-                if (input.toolName === "mcp__railyin__interview_me") {
-                  return { continue: false };
-                }
-              },
+                  return {};
+                }],
+              }],
+              PostToolUse: [{
+                hooks: [async () => {
+                  // If the handler set a suspend payload, emit the event and stop the loop.
+                  const payload = takePendingSuspend();
+                  if (payload !== undefined) {
+                    emit({ type: "interview_me", payload });
+                    return { continue: false };
+                  }
+                  return {};
+                }],
+              }],
             },
             systemPrompt: config.systemInstructions
               ? { type: "preset", preset: "claude_code", append: config.systemInstructions }
@@ -490,14 +627,16 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         for await (const message of query) {
           this.leases.touch(config.sessionId, "running");
           config.onRawMessage?.(message as Record<string, unknown>);
+          // DOCS: The first message from the SDK is always type="system" subtype="init".
+          // It includes mcp_servers[].status for each configured server ("connected" | "failed").
+          // A "failed" status means the MCP server process didn't start or the in-process
+          // bridge failed — this is the definitive signal that railyin tools won't be available.
+          // Ref: https://code.claude.com/docs/en/agent-sdk/mcp#error-handling
           for (const event of translateClaudeMessage(message as { type: string }, config.toolMetaByCallId)) {
             emit(event);
           }
         }
 
-        if (pendingInterviewPayload !== null) {
-          emit({ type: "interview_me", payload: pendingInterviewPayload });
-        }
       } catch (err) {
         if (!abortController.signal.aborted) {
           emit({

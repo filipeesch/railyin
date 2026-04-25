@@ -55,8 +55,7 @@ describe("shared common tool registration", () => {
 });
 
 describe("executeCommonTool / interview_me", () => {
-    it("invokes shared interview callback and returns suspension sentinel", async () => {
-        const payloads: string[] = [];
+    it("returns a suspend result with the structured payload", async () => {
         const result = await executeCommonTool(
             "interview_me",
             {
@@ -69,28 +68,27 @@ describe("executeCommonTool / interview_me", () => {
                     },
                 ]),
             },
-            {
-                ...baseContext,
-                onInterviewMe: (payload: string) => payloads.push(payload),
-            },
-        );
-
-        expect(result).toContain("Interview suspended");
-        expect(payloads).toHaveLength(1);
-        const parsed = JSON.parse(payloads[0]!);
-        expect(parsed.context).toBe("Need a decision");
-        expect(Array.isArray(parsed.questions)).toBe(true);
-    });
-
-    it("returns an explicit error when interview callback is missing", async () => {
-        const result = await executeCommonTool(
-            "interview_me",
-            {
-                questions: JSON.stringify([{ question: "Q", type: "freetext" }]),
-            },
             baseContext,
         );
 
-        expect(result).toContain("Error: interview_me is not available");
+        expect(result.type).toBe("suspend");
+        if (result.type === "suspend") {
+            const parsed = JSON.parse(result.payload);
+            expect(parsed.context).toBe("Need a decision");
+            expect(Array.isArray(parsed.questions)).toBe(true);
+        }
+    });
+
+    it("returns a result error when questions is missing", async () => {
+        const result = await executeCommonTool(
+            "interview_me",
+            {},
+            baseContext,
+        );
+
+        expect(result.type).toBe("result");
+        if (result.type === "result") {
+            expect(result.text).toContain("Error: questions is required");
+        }
     });
 });

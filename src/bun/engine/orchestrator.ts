@@ -31,7 +31,7 @@ import { appendMessage, ensureTaskConversation } from "../conversation/messages.
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly injectedEngine: ExecutionEngine | null;
-  private readonly onToken: OnToken = () => {};
+  private readonly onToken: OnToken = () => { };
   private readonly onError: OnError;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly onNewMessage: OnNewMessage;
@@ -754,15 +754,12 @@ export class Orchestrator implements ExecutionCoordinator {
     const controller = new AbortController();
     this.abortControllers.set(executionId, controller);
 
-    // Prepend task title and description so the model always has context
-    // about what it's working on (assembleMessages() is not called for non-native engines)
-    const taskContext = [`## Task`, `**Title:** ${task.title}`];
-    if (task.description?.trim()) {
-      taskContext.push(`**Description:** ${task.description.trim()}`);
-    }
-    const fullSystemInstructions = systemInstructions
-      ? `${taskContext.join("\n")}\n\n${systemInstructions}`
-      : taskContext.join("\n");
+    // Build task identity context — populated for all task executions so each
+    // engine adapter can choose the appropriate injection strategy.
+    const taskContext: ExecutionParams["taskContext"] = {
+      title: task.title,
+      ...(task.description?.trim() ? { description: task.description.trim() } : {}),
+    };
 
     return {
       executionId,
@@ -770,7 +767,8 @@ export class Orchestrator implements ExecutionCoordinator {
       conversationId,
       boardId: task.board_id,
       prompt,
-      systemInstructions: fullSystemInstructions,
+      systemInstructions,
+      taskContext,
       workingDirectory,
       model: task.model ?? "",
       signal: signal ?? controller.signal,

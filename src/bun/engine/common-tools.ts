@@ -365,7 +365,40 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
  * Execute a common task-management tool by name.
  * Returns a plain JSON/text string suitable for sending back to the LLM.
  */
+export type ToolExecutionResult =
+  | { type: "result"; text: string }
+  | { type: "suspend"; payload: string };
+
+/**
+ * Execute a common tool and return a typed result.
+ * Tools marked with `suspendLoop: true` on their definition return `{ type: "suspend" }`
+ * — the engine is responsible for stopping the agent loop and emitting the event.
+ */
 export async function executeCommonTool(
+  name: string,
+  args: Record<string, string>,
+  ctx: CommonToolContext,
+): Promise<ToolExecutionResult> {
+  if (name === "interview_me") {
+    const context = (args.context ?? "").trim();
+    let questions: unknown;
+    try {
+      questions = args.questions ? JSON.parse(args.questions) : undefined;
+    } catch {
+      return { type: "result", text: "Error: questions must be a valid JSON array" };
+    }
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return { type: "result", text: "Error: questions is required" };
+    }
+    const payload: Record<string, unknown> = { questions };
+    if (context) payload.context = context;
+    return { type: "suspend", payload: JSON.stringify(payload) };
+  }
+  const text = await executeCommonToolText(name, args, ctx);
+  return { type: "result", text };
+}
+
+async function executeCommonToolText(
   name: string,
   args: Record<string, string>,
   ctx: CommonToolContext,
@@ -544,7 +577,7 @@ export async function executeCommonTool(
       if (row.conversation_id) {
         db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
       }
-      taskLspRegistry.releaseTask(taskId).catch(() => {});
+      taskLspRegistry.releaseTask(taskId).catch(() => { });
       return JSON.stringify({ success: true, deleted_task_id: taskId });
     }
 
@@ -594,29 +627,6 @@ export async function executeCommonTool(
       }
       ctx.onHumanTurn(taskId, message);
       return JSON.stringify({ status: "delivered", task_id: taskId });
-    }
-
-    case "interview_me": {
-      if (!ctx.onInterviewMe) {
-        return "Error: interview_me is not available in this engine context";
-      }
-
-      const context = (args.context ?? "").trim();
-      let questions: unknown;
-      try {
-        questions = args.questions ? JSON.parse(args.questions) : undefined;
-      } catch {
-        return "Error: questions must be a valid JSON array";
-      }
-
-      if (!Array.isArray(questions) || questions.length === 0) {
-        return "Error: questions is required";
-      }
-
-      const payload: Record<string, unknown> = { questions };
-      if (context) payload.context = context;
-      ctx.onInterviewMe(JSON.stringify(payload));
-      return "Interview suspended - awaiting user response.";
     }
 
     case "create_todo": {

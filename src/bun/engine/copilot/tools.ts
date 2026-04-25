@@ -24,6 +24,7 @@ export function buildCopilotTools(
   context: CommonToolContext,
   mcpRegistry?: McpClientRegistry | null,
   enabledMcpTools?: string[] | null,
+  onSuspend?: (payload: string) => void,
 ): Tool[] {
   const toToolArgs = (args: unknown): Record<string, string> => {
     if (!args || typeof args !== "object") return {};
@@ -51,7 +52,11 @@ export function buildCopilotTools(
         toToolArgs(args),
         context,
       );
-      return result;
+      if (result.type === "suspend") {
+        onSuspend?.(result.payload);
+        return "Interview suspended - awaiting user response.";
+      }
+      return result.text;
     },
   }));
 

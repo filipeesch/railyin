@@ -27,7 +27,7 @@ export class ClaudeEngine implements ExecutionEngine {
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
-    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, enabledMcpTools } = params;
+    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, taskContext, enabledMcpTools } = params;
 
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
@@ -55,6 +55,7 @@ export class ClaudeEngine implements ExecutionEngine {
       workingDirectory,
       model: model || this.defaultModel,
       systemInstructions,
+      taskContext,
       signal,
       sessionId: claudeSessionIdForConversation(taskId, params.conversationId),
       commonToolContext: {
@@ -71,7 +72,7 @@ export class ClaudeEngine implements ExecutionEngine {
         params.onRawModelMessage?.({
           engine: "claude",
           sessionId: claudeSessionIdForConversation(taskId, params.conversationId),
-          direction: "inbound",
+          direction: message.type === "outbound" ? "outbound" : "inbound",
           eventType: String(message.type ?? "unknown"),
           eventSubtype: typeof message.subtype === "string" ? message.subtype : undefined,
           payload: message,

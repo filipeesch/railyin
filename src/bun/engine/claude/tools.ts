@@ -61,11 +61,25 @@ function jsonSchemaToZodShape(z: ZodLike, schema: Record<string, unknown>): Reco
   );
 }
 
+export interface ClaudeToolServer {
+  server: unknown;
+  /**
+   * Atomically reads and clears the pending suspend payload set by the last tool call.
+   * Returns `undefined` if no tool suspended during the current turn.
+   */
+  takePendingSuspend: () => string | undefined;
+}
+
 export function buildClaudeToolServer(
   sdk: ClaudeSdkRuntime,
   z: ZodLike,
   context: CommonToolContext,
-): unknown {
+): ClaudeToolServer {
+  // Shared between the tool handler and the PostToolUse hook.
+  // The handler sets this when a tool returns a suspend result;
+  // the hook reads and clears it — no tool-name awareness needed.
+  let pendingSuspendPayload: string | undefined;
+
   const tools = COMMON_TOOL_DEFINITIONS.map((def) => sdk.tool(
     def.name,
     def.description,
@@ -73,8 +87,12 @@ export function buildClaudeToolServer(
     async (args: Record<string, unknown>) => {
       try {
         const result = await executeCommonTool(def.name, toToolArgs(args ?? {}), context);
+        if (result.type === "suspend") {
+          pendingSuspendPayload = result.payload;
+        }
+        const text = result.type === "result" ? result.text : "Interview suspended - awaiting user response.";
         return {
-          content: [{ type: "text", text: result }],
+          content: [{ type: "text", text }],
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -86,11 +104,20 @@ export function buildClaudeToolServer(
     },
   ));
 
-  return sdk.createSdkMcpServer({
+  const server = sdk.createSdkMcpServer({
     name: "railyin",
     version: "0.1.0",
     tools,
   });
+
+  return {
+    server,
+    takePendingSuspend: () => {
+      const payload = pendingSuspendPayload;
+      pendingSuspendPayload = undefined;
+      return payload;
+    },
+  };
 }
 
 export function extractWrittenFilesFromResult(result: string): FileDiffPayload[] | undefined {

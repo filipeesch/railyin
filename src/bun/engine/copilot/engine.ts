@@ -97,7 +97,7 @@ export class CopilotEngine implements ExecutionEngine {
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
-    const { executionId, taskId, boardId, prompt, systemInstructions, workingDirectory, model } = params;
+    const { executionId, taskId, boardId, prompt, systemInstructions, taskContext, workingDirectory, model } = params;
 
     // Collect status messages from the adapter (download/setup progress)
     // so we can yield them as engine events for the UI.
@@ -117,10 +117,15 @@ export class CopilotEngine implements ExecutionEngine {
     const rawModel = model;
     const resolvedModel = rawModel?.startsWith("copilot/") ? rawModel.slice("copilot/".length) : rawModel;
 
-    // Signal for interview_me interception: when the model calls interview_me,
-    // store the payload and abort the session so the engine can emit the event.
+    // When a suspend-loop tool fires (e.g. interview_me), store the payload and abort
+    // the session. The Copilot SDK provides no in-handler stop signal, so we abort
+    // externally. The abort cuts the stream before the model generates a next turn.
     let pendingInterviewPayload: string | null = null;
     const interviewAbortController = new AbortController();
+    const onSuspend = (payload: string) => {
+      pendingInterviewPayload = payload;
+      interviewAbortController.abort();
+    };
 
     // Build tool context for common task-management tools
     const config = getConfig();
@@ -141,19 +146,19 @@ export class CopilotEngine implements ExecutionEngine {
       onCancel: (_execId: number) => {
         this.cancel(_execId);
       },
-      onInterviewMe: (payload: string) => {
-        pendingInterviewPayload = payload;
-        interviewAbortController.abort();
-      },
       lspManager,
       worktreePath: workingDirectory,
     };
 
-    const tools = buildCopilotTools(toolContext, getMcpRegistry(), params.enabledMcpTools);
+    const tools = buildCopilotTools(toolContext, getMcpRegistry(), params.enabledMcpTools, onSuspend);
 
-    // Build system message — append stage_instructions to SDK's managed prompt
-    const systemMessage = systemInstructions
-      ? { mode: "append" as const, content: systemInstructions }
+    // Build system message — prepend task identity then append stage_instructions
+    const taskBlock = taskContext
+      ? [`## Task`, `**Title:** ${taskContext.title}`, ...(taskContext.description ? [`**Description:** ${taskContext.description}`] : [])].join("\n")
+      : undefined;
+    const systemContent = [taskBlock, systemInstructions].filter(Boolean).join("\n\n");
+    const systemMessage = systemContent
+      ? { mode: "append" as const, content: systemContent }
       : undefined;
 
     const sessionConfig = {
