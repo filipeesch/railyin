@@ -247,16 +247,11 @@ export function buildClaudeToolServer(
   sdk: ClaudeSdkRuntime,
   z: ZodLike,
   context: CommonToolContext,
-<<<<<<< HEAD
-): { server: unknown; takePendingSuspend: () => string | undefined } {
-  let pendingSuspend: string | undefined;
-=======
 ): ClaudeToolServer {
   // Shared between the tool handler and the PostToolUse hook.
   // The handler sets this when a tool returns a suspend result;
   // the hook reads and clears it — no tool-name awareness needed.
   let pendingSuspendPayload: string | undefined;
->>>>>>> origin/main
 
   const tools = COMMON_TOOL_DEFINITIONS.map((def) => sdk.tool(
     def.name,
@@ -266,19 +261,12 @@ export function buildClaudeToolServer(
       try {
         const result = await executeCommonTool(def.name, toToolArgs(args ?? {}), context);
         if (result.type === "suspend") {
-<<<<<<< HEAD
-          pendingSuspend = result.payload;
-          return { content: [{ type: "text", text: "Interview suspended - awaiting user response." }] };
-        }
-        return { content: [{ type: "text", text: result.text }] };
-=======
           pendingSuspendPayload = result.payload;
         }
         const text = result.type === "result" ? result.text : "Interview suspended - awaiting user response.";
         return {
           content: [{ type: "text", text }],
         };
->>>>>>> origin/main
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return {
@@ -298,13 +286,8 @@ export function buildClaudeToolServer(
   return {
     server,
     takePendingSuspend: () => {
-<<<<<<< HEAD
-      const payload = pendingSuspend;
-      pendingSuspend = undefined;
-=======
       const payload = pendingSuspendPayload;
       pendingSuspendPayload = undefined;
->>>>>>> origin/main
       return payload;
     },
   };

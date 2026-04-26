@@ -41,11 +41,15 @@ describe("shared common tool registration", () => {
             },
             createSdkMcpServer: (options: { name: string; version?: string; tools?: unknown[] }) => options,
         };
+        const scalar = () => ({ optional: () => ({}) });
         const z = {
-            string: () => ({ optional: () => ({}) }),
-            number: () => ({ optional: () => ({}) }),
-            boolean: () => ({ optional: () => ({}) }),
-            any: () => ({ optional: () => ({}) }),
+            string: scalar,
+            number: scalar,
+            boolean: scalar,
+            any: scalar,
+            array: (_item: unknown) => ({ optional: () => ({}) }),
+            object: (_shape: Record<string, unknown>) => ({ optional: () => ({}) }),
+            enum: (_values: [string, ...string[]]) => ({ optional: () => ({}) }),
         };
 
         buildClaudeToolServer(sdk, z, baseContext);
