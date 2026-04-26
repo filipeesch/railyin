@@ -112,7 +112,7 @@ test.describe("P — Execution cancellation", () => {
             return { message: recoveredMsg, executionId: EXEC_ID };
         });
         api.handle("tasks.cancel", () => cancelledTask);
-        api.handle("conversations.getMessages", () => []);
+        api.handle("conversations.getMessages", () => ({ messages: [], hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -211,7 +211,7 @@ test.describe("Q — Model switching", () => {
             }, 50);
             return { message: makeUserMessage(task.id, "Q-19 msg"), executionId: EXEC_ID };
         });
-        api.handle("conversations.getMessages", () => [reply]);
+        api.handle("conversations.getMessages", () => ({ messages: [reply], hasMore: false }));
 
         ws.push({ type: "task.updated", payload: v2Task });
 
@@ -308,7 +308,7 @@ test.describe("R — Context compaction", () => {
             metadata: null,
             createdAt: new Date().toISOString(),
         };
-        api.handle("conversations.getMessages", () => [compactionMsg]);
+        api.handle("conversations.getMessages", () => ({ messages: [compactionMsg], hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);

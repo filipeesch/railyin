@@ -5,6 +5,13 @@
     @scroll.passive="onScroll"
   >
     <div class="conv-body__inner conversation-inner">
+      <!-- Sentinel for loading older history via IntersectionObserver -->
+      <div ref="sentinelEl" class="conv-body__sentinel">
+        <div v-if="props.isLoadingOlder" class="conv-body__system">
+          <ProgressSpinner style="width: 16px; height: 16px" />
+          <span>Loading older messages…</span>
+        </div>
+      </div>
       <!-- Virtual list spacer -->
       <div :style="{ position: 'relative', height: `${virtualizer.getTotalSize()}px` }">
         <div
@@ -71,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useVirtualizer } from "@tanstack/vue-virtual";
 import { marked } from "marked";
 import ProgressSpinner from "primevue/progressspinner";
@@ -91,6 +98,12 @@ const props = defineProps<{
   executionState: string;
   // selfId = conversationId; kept for scroll tracking
   selfId?: number | null;
+  hasMoreBefore?: boolean;
+  isLoadingOlder?: boolean;
+}>();
+
+const emit = defineEmits<{
+  (e: "load-older"): void;
 }>();
 
 // ─── Message grouping ─────────────────────────────────────────────────────────
@@ -270,6 +283,63 @@ onMounted(() => {
   void scheduleScrollToBottom({ revealWhenDone: true });
 });
 
+// ─── Older history loading ────────────────────────────────────────────────────
+
+const sentinelEl = ref<HTMLElement | null>(null);
+let sentinelObserver: IntersectionObserver | null = null;
+
+function setupSentinelObserver() {
+  if (sentinelObserver) {
+    sentinelObserver.disconnect();
+    sentinelObserver = null;
+  }
+  if (!sentinelEl.value) return;
+  sentinelObserver = new IntersectionObserver(
+    ([entry]) => {
+      if (entry.isIntersecting && props.hasMoreBefore && !props.isLoadingOlder) {
+        emit("load-older");
+      }
+    },
+    { root: scrollEl.value, threshold: 0 },
+  );
+  sentinelObserver.observe(sentinelEl.value);
+}
+
+onMounted(setupSentinelObserver);
+onUnmounted(() => sentinelObserver?.disconnect());
+
+watch(
+  () => props.hasMoreBefore,
+  () => void nextTick(setupSentinelObserver),
+);
+
+// ─── Scroll restoration on older-message prepend ─────────────────────────────
+
+let savedScrollHeight = 0;
+
+watch(
+  () => props.messages[0]?.id,
+  (newId, oldId) => {
+    if (oldId != null && newId != null && newId < oldId) {
+      savedScrollHeight = scrollEl.value?.scrollHeight ?? 0;
+    }
+  },
+  { flush: "pre" },
+);
+
+watch(
+  () => props.messages[0]?.id,
+  async (newId, oldId) => {
+    if (oldId != null && newId != null && newId < oldId && savedScrollHeight > 0 && scrollEl.value) {
+      await nextTick();
+      const delta = scrollEl.value.scrollHeight - savedScrollHeight;
+      scrollEl.value.scrollTop += delta;
+      savedScrollHeight = 0;
+    }
+  },
+  { flush: "post" },
+);
+
 function renderMd(content: string): string {
   return marked.parse(content, { async: false, breaks: true, gfm: true }) as string;
 }
@@ -286,6 +356,10 @@ function renderMd(content: string): string {
 
 .conv-body--positioning {
   visibility: hidden;
+}
+
+.conv-body__sentinel {
+  min-height: 1px;
 }
 
 .conv-body__inner {

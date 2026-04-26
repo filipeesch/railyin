@@ -433,6 +433,13 @@ const migrations: Array<{ id: string; sql: string }> = [
     id: "030_stream_events_cleanup",
     sql: `-- handled in applyMigration special case`,
   },
+  {
+    id: "031_conversation_pagination_index",
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_messages_conv_id
+        ON conversation_messages(conversation_id, id DESC);
+    `,
+  },
 ];
 
 function hasColumn(tableName: string, columnName: string): boolean {

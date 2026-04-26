@@ -162,7 +162,7 @@ function timeoutMessages(taskId: number): ConversationMessage[] {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 test("S-24: batched tool calls pair results by id, preserving call order", async ({ page, api, task }) => {
-    api.handle("conversations.getMessages", () => batchedMessages(task.id));
+    api.handle("conversations.getMessages", () => ({ messages: batchedMessages(task.id), hasMore: false }));
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);
@@ -178,7 +178,7 @@ test("S-24: batched tool calls pair results by id, preserving call order", async
 });
 
 test("S-25: Copilot-style rawDiff payload renders as a parsed file diff", async ({ page, api, task }) => {
-    api.handle("conversations.getMessages", () => copilotDiffMessages(task.id));
+    api.handle("conversations.getMessages", () => ({ messages: copilotDiffMessages(task.id), hasMore: false }));
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);
@@ -195,7 +195,7 @@ test("S-25: Copilot-style rawDiff payload renders as a parsed file diff", async 
 });
 
 test("S-26: subagent tool calls render nested under spawn_agent", async ({ page, api, task }) => {
-    api.handle("conversations.getMessages", () => subagentMessages(task.id));
+    api.handle("conversations.getMessages", () => ({ messages: subagentMessages(task.id), hasMore: false }));
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);
@@ -220,7 +220,7 @@ test("S-26: subagent tool calls render nested under spawn_agent", async ({ page,
 });
 
 test("S-27: stale orphaned tool call shows unknown state (not spinning)", async ({ page, api, task }) => {
-    api.handle("conversations.getMessages", () => timeoutMessages(task.id));
+    api.handle("conversations.getMessages", () => ({ messages: timeoutMessages(task.id), hasMore: false }));
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);

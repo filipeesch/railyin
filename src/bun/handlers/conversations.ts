@@ -12,14 +12,28 @@ export function conversationHandlers(orchestrator: ExecutionCoordinator | null) 
   return {
     "conversations.getMessages": async (params: {
       conversationId: number;
-    }): Promise<ConversationMessage[]> => {
+      beforeMessageId?: number;
+      limit?: number;
+    }): Promise<{ messages: ConversationMessage[]; hasMore: boolean }> => {
       const db = getDb();
-      return db
-        .query<ConversationMessageRow, [number]>(
-          "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
-        )
-        .all(params.conversationId)
-        .map(mapConversationMessage);
+      const limit = params.limit ?? 50;
+      let rows: ConversationMessageRow[];
+      if (params.beforeMessageId != null) {
+        rows = db
+          .query<ConversationMessageRow, [number, number, number]>(
+            "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+          )
+          .all(params.conversationId, params.beforeMessageId, limit + 1);
+      } else {
+        rows = db
+          .query<ConversationMessageRow, [number, number]>(
+            "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+          )
+          .all(params.conversationId, limit + 1);
+      }
+      const hasMore = rows.length > limit;
+      const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);
+      return { messages, hasMore };
     },
 
     "conversations.getStreamEvents": async (params: {

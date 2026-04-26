@@ -351,7 +351,7 @@ test.describe("BL — Board layout with ConversationDrawer", () => {
         const session = makeChatSession({ id: 500 });
         api.handle("tasks.list", () => [task]);
         api.returns("chatSessions.list", [session]);
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
 
         await navigateToBoard(page);
 

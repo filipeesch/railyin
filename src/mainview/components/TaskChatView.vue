@@ -109,6 +109,9 @@
         :stream-version="taskStore.streamVersion"
         :execution-state="task.executionState"
         :self-id="task.conversationId"
+        :has-more-before="taskStore.hasMoreBefore"
+        :is-loading-older="taskStore.isLoadingOlder"
+        @load-older="task && taskStore.loadOlderMessages(task.id)"
       />
 
       <!-- Changed files panel -->

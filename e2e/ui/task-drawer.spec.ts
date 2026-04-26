@@ -58,7 +58,7 @@ test.describe("TD — task drawer coverage", () => {
             metadata: null,
             createdAt: new Date(Date.now() + index * 1_000).toISOString(),
         }));
-        api.handle("conversations.getMessages", () => messages);
+        api.handle("conversations.getMessages", () => ({ messages: messages, hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -72,12 +72,15 @@ test.describe("TD — task drawer coverage", () => {
     });
 
     test("TD-6: persisted history and live stream tail share one ordered conversation list", async ({ page, api, ws, task }) => {
-        api.handle("conversations.getMessages", () => [
-            makeAssistantMessage(task.id, "Persisted assistant answer", {
-                id: 81_000,
-                conversationId: task.conversationId,
-            }),
-        ]);
+        api.handle("conversations.getMessages", () => ({
+            messages: [
+                makeAssistantMessage(task.id, "Persisted assistant answer", {
+                    id: 81_000,
+                    conversationId: task.conversationId,
+                }),
+            ],
+            hasMore: false,
+        }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);

@@ -542,8 +542,8 @@ export type RailynAPI = {
 
   // Conversations
   "conversations.getMessages": {
-    params: { conversationId: number };
-    response: ConversationMessage[];
+    params: { conversationId: number; beforeMessageId?: number; limit?: number };
+    response: { messages: ConversationMessage[]; hasMore: boolean };
   };
   "conversations.getStreamEvents": {
     params: { conversationId: number; afterSeq?: number };
@@ -820,8 +820,8 @@ export type RailynAPI = {
     response: { messageId: number; executionId: number };
   };
   "chatSessions.getMessages": {
-    params: { sessionId: number };
-    response: ConversationMessage[];
+    params: { sessionId: number; beforeMessageId?: number; limit?: number };
+    response: { messages: ConversationMessage[]; hasMore: boolean };
   };
   "chatSessions.cancel": {
     params: { sessionId: number };

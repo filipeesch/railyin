@@ -288,10 +288,10 @@ describe("conversations handlers", () => {
     );
 
     const handlers = conversationHandlers(null);
-    const messages = await handlers["conversations.getMessages"]({ conversationId });
+    const result = await handlers["conversations.getMessages"]({ conversationId });
 
-    expect(messages.map((message) => message.content)).toEqual(["hello", "hi there"]);
-    expect(messages.every((message) => message.conversationId === conversationId)).toBe(true);
+    expect(result.messages.map((message) => message.content)).toEqual(["hello", "hi there"]);
+    expect(result.messages.every((message) => message.conversationId === conversationId)).toBe(true);
   });
 
   it("loads stream events by conversationId", async () => {

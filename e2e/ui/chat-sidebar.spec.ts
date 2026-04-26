@@ -137,7 +137,7 @@ test.describe("CS-B — Session creation and naming", () => {
             setTimeout(() => ws.pushChatSessionCreated(newSession), 50);
             return newSession;
         });
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
 
         await page.goto("/");
         await openSidebar(page);
@@ -155,7 +155,7 @@ test.describe("CS-B — Session creation and naming", () => {
             setTimeout(() => ws.pushChatSessionCreated(newSession), 50);
             return newSession;
         });
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
 
         await page.goto("/");
         await openSidebar(page);
@@ -167,7 +167,7 @@ test.describe("CS-B — Session creation and naming", () => {
     test("CS-B-3: clicking a session item opens the ConversationDrawer", async ({ page, api }) => {
         const session = makeChatSession({ id: 302, title: "Existing Session" });
         api.returns("chatSessions.list", [session]);
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
 
         await page.goto("/");
         await openSidebar(page);
@@ -280,7 +280,7 @@ test.describe("CS-C — Session archiving", () => {
     test("CS-C-3: archiving the currently-open session closes the drawer", async ({ page, api, ws }) => {
         const session = makeChatSession({ id: 312, title: "Open and Archive" });
         api.returns("chatSessions.list", [session]);
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
         api.handle("chatSessions.archive", () => {
             const archived = { ...session, status: "archived" as const, archivedAt: new Date().toISOString() };
             setTimeout(() => ws.pushChatSessionUpdated(archived), 50);
@@ -366,7 +366,7 @@ test.describe("CS-E — Sidebar lifecycle", () => {
     test("CS-E-1: sidebar stays open after selecting a session (does not auto-close)", async ({ page, api }) => {
         const session = makeChatSession({ id: 330, title: "Stay Open" });
         api.returns("chatSessions.list", [session]);
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
 
         await page.goto("/");
         await openSidebar(page);
@@ -383,7 +383,7 @@ test.describe("CS-E — Sidebar lifecycle", () => {
         const s1 = makeChatSession({ id: 331, title: "Session A" });
         const s2 = makeChatSession({ id: 332, title: "Session B" });
         api.returns("chatSessions.list", [s1, s2]);
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
 
         await page.goto("/");
         await openSidebar(page);
@@ -434,7 +434,7 @@ test.describe("CS-F — Unread notification lifecycle", () => {
     test("CS-F-1: chatSessions.markRead is called when a session is opened", async ({ page, api }) => {
         const session = makeChatSession({ id: 340, title: "Mark Me Read" });
         api.returns("chatSessions.list", [session]);
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
 
         const markReadCalls = api.capture("chatSessions.markRead", undefined);
 
@@ -453,7 +453,7 @@ test.describe("CS-F — Unread notification lifecycle", () => {
         const now = new Date().toISOString();
         const session = makeChatSession({ id: 341, lastReadAt: now });
         api.returns("chatSessions.list", [session]);
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
         api.returns("chatSessions.markRead", undefined);
 
         await page.goto("/");
@@ -474,7 +474,7 @@ test.describe("CS-F — Unread notification lifecycle", () => {
         const now = new Date().toISOString();
         const session = makeChatSession({ id: 342, lastReadAt: now });
         api.returns("chatSessions.list", [session]);
-        api.returns("chatSessions.getMessages", []);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
         api.returns("chatSessions.markRead", undefined);
 
         await page.goto("/");

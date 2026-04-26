@@ -19,6 +19,8 @@ export const useTaskStore = defineStore("task", () => {
   // Active task detail
   const activeTaskId = ref<number | null>(null);
   const messages = computed(() => conversationStore.messages);
+  const hasMoreBefore = computed(() => conversationStore.hasMoreBefore);
+  const isLoadingOlder = computed(() => conversationStore.isLoadingOlder);
 
   const streamStates = computed(() => conversationStore.streamStates);
   const streamVersion = computed(() => conversationStore.streamVersion);
@@ -165,6 +167,12 @@ export const useTaskStore = defineStore("task", () => {
     if (!task) return;
     activeTaskId.value = taskId;
     await conversationStore.loadMessages({ conversationId: task.conversationId });
+  }
+
+  async function loadOlderMessages(taskId: number) {
+    const task = taskIndex.value[taskId];
+    if (!task) return;
+    await conversationStore.loadOlderMessages({ conversationId: task.conversationId });
   }
 
   // ─── Select task (opens detail) ───────────────────────────────────────────
@@ -378,6 +386,8 @@ export const useTaskStore = defineStore("task", () => {
     activeTaskId,
     activeTask,
     messages,
+    hasMoreBefore,
+    isLoadingOlder,
     streamStates,
     streamVersion,
     activeStreamState,
@@ -397,6 +407,7 @@ export const useTaskStore = defineStore("task", () => {
     retryTask,
     sendMessage,
     loadMessages,
+    loadOlderMessages,
     selectTask,
     closeTask,
     loadModels,

@@ -101,6 +101,8 @@ export const useConversationStore = defineStore("conversation", () => {
   const activeConversationId = ref<number | null>(null);
   const messages = ref<ConversationMessage[]>([]);
   const messagesLoading = ref(false);
+  const hasMoreBefore = ref(false);
+  const isLoadingOlder = ref(false);
 
   const streamStates = ref(new Map<number, ConversationStreamState>());
   const streamVersion = ref(0);
@@ -150,6 +152,8 @@ export const useConversationStore = defineStore("conversation", () => {
     if (conversationId == null) {
       messages.value = [];
       messagesLoading.value = false;
+      hasMoreBefore.value = false;
+      isLoadingOlder.value = false;
     }
   }
 
@@ -166,7 +170,8 @@ export const useConversationStore = defineStore("conversation", () => {
     try {
       const loaded = await api("conversations.getMessages", params);
       if (activeConversationId.value !== params.conversationId) return;
-      messages.value = [...loaded].sort((a, b) => a.id - b.id);
+      messages.value = [...loaded.messages].sort((a, b) => a.id - b.id);
+      hasMoreBefore.value = loaded.hasMore;
 
       const existingState = streamStates.value.get(params.conversationId);
       if (existingState) {
@@ -190,6 +195,53 @@ export const useConversationStore = defineStore("conversation", () => {
       if (activeConversationId.value === params.conversationId) {
         messagesLoading.value = false;
       }
+    }
+  }
+
+  async function loadOlderMessages(params: { conversationId: number }) {
+    if (isLoadingOlder.value || !hasMoreBefore.value) return;
+    if (activeConversationId.value !== params.conversationId) return;
+    const oldest = messages.value[0]?.id;
+    if (oldest == null) return;
+    isLoadingOlder.value = true;
+    try {
+      const loaded = await api("conversations.getMessages", {
+        conversationId: params.conversationId,
+        beforeMessageId: oldest,
+      });
+      if (activeConversationId.value !== params.conversationId) return;
+      messages.value = [...loaded.messages, ...messages.value];
+      hasMoreBefore.value = loaded.hasMore;
+    } finally {
+      isLoadingOlder.value = false;
+    }
+  }
+
+  async function refreshLatestPage(params: { conversationId: number }) {
+    try {
+      const loaded = await api("conversations.getMessages", { conversationId: params.conversationId });
+      if (activeConversationId.value !== params.conversationId) return;
+      const pivot = loaded.messages[0]?.id ?? 0;
+      const oldHistory = messages.value.filter((m) => m.id < pivot);
+      messages.value = [...oldHistory, ...loaded.messages];
+      hasMoreBefore.value = loaded.hasMore || oldHistory.length > 0;
+
+      const existingState = streamStates.value.get(params.conversationId);
+      if (existingState) {
+        const persistedTypes: StreamEventType[] = ["assistant", "reasoning", "tool_call", "tool_result", "file_diff", "user", "system"];
+        const toRemove = new Set<string>();
+        for (const [blockId, block] of existingState.blocks) {
+          if (persistedTypes.includes(block.type)) toRemove.add(blockId);
+        }
+        for (const blockId of toRemove) existingState.blocks.delete(blockId);
+        existingState.roots = [];
+        for (const [blockId, block] of existingState.blocks) {
+          if (!block.parentBlockId) existingState.roots.push(blockId);
+        }
+        streamStates.value = new Map(streamStates.value);
+      }
+    } catch (e) {
+      console.error(e);
     }
   }
 
@@ -254,7 +306,7 @@ export const useConversationStore = defineStore("conversation", () => {
       }
       streamStates.value = new Map(streamStates.value);
       if (event.conversationId === activeConversationId.value) {
-        loadMessages({ conversationId: event.conversationId }).catch(console.error);
+        refreshLatestPage({ conversationId: event.conversationId }).catch(console.error);
         fetchContextUsage({ conversationId: event.conversationId }).catch(console.error);
       }
       return;
@@ -382,6 +434,8 @@ export const useConversationStore = defineStore("conversation", () => {
     activeConversationId,
     messages,
     messagesLoading,
+    hasMoreBefore,
+    isLoadingOlder,
     streamStates,
     streamVersion,
     activeStreamState,
@@ -391,6 +445,8 @@ export const useConversationStore = defineStore("conversation", () => {
     setActiveConversation,
     appendMessage,
     loadMessages,
+    loadOlderMessages,
+    refreshLatestPage,
     fetchContextUsage,
     onStreamError,
     onStreamEvent,

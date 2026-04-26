@@ -41,9 +41,10 @@ function sessionTextChunk(conversationId: number, executionId: number, seq: numb
 }
 
 function stubSessionMessages(api: ApiMock, conversationId: number, messages: ReturnType<typeof makeChatMessage>[]) {
-    api.handle("conversations.getMessages", ({ conversationId: requestedConversationId }) =>
-        requestedConversationId === conversationId ? [...messages] : [],
-    );
+    api.handle("conversations.getMessages", ({ conversationId: requestedConversationId }) => ({
+        messages: requestedConversationId === conversationId ? [...messages] : [],
+        hasMore: false,
+    }));
 }
 
 async function typeInSessionEditor(page: import("@playwright/test").Page, text: string, submitKey: "Enter" | "Shift+Enter" = "Enter") {
@@ -657,7 +658,7 @@ test.describe("CD-F — Drawer lifecycle", () => {
         const session = makeChatSession({ id: 451 });
         api.returns("chatSessions.list", [session]);
         // Delay the messages response so we can observe the spinner
-        api.delayed("conversations.getMessages", [], 1_500);
+        api.delayed("conversations.getMessages", { messages: [], hasMore: false }, 1_500);
 
         await page.goto("/");
         await openSidebar(page);
@@ -822,11 +823,10 @@ test.describe("CD-I — Edge cases", () => {
         const sessionA = makeChatSession({ id: 482, title: "Session A" });
         const sessionB = makeChatSession({ id: 483, title: "Session B" });
         api.returns("chatSessions.list", [sessionA, sessionB]);
-        api.handle("conversations.getMessages", ({ conversationId }) => {
-            if (conversationId === sessionA.conversationId) return [];
-            if (conversationId === sessionB.conversationId) return [];
-            return [];
-        });
+        api.handle("conversations.getMessages", ({ conversationId }) => ({
+            messages: [],
+            hasMore: false,
+        }));
 
         await page.goto("/");
         await openSessionDrawer(page, sessionA.id);

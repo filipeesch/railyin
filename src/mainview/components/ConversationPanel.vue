@@ -6,6 +6,9 @@
       :stream-version="props.streamVersion"
       :execution-state="props.executionState"
       :self-id="props.selfId"
+      :has-more-before="props.hasMoreBefore"
+      :is-loading-older="props.isLoadingOlder"
+      @load-older="emit('load-older')"
     />
     <!-- Slim fallback input row — used when ConversationPanel is rendered standalone
          (e.g. future embeds). TaskChatView and SessionChatView use ConversationInput directly. -->
@@ -53,11 +56,14 @@ const props = defineProps<{
   disabled?: boolean;
   placeholder?: string;
   selfId?: number | null;
+  hasMoreBefore?: boolean;
+  isLoadingOlder?: boolean;
 }>();
 
 const emit = defineEmits<{
   send: [text: string];
   cancel: [];
+  "load-older": [];
 }>();
 
 const inputText = ref("");

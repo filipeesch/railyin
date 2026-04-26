@@ -55,7 +55,7 @@ test.describe("M — basic send & streaming", () => {
             message: sentMessage,
             executionId: EXEC_ID,
         }));
-        api.handle("conversations.getMessages", () => []);
+        api.handle("conversations.getMessages", () => ({ messages: [], hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -99,7 +99,7 @@ test.describe("M — basic send & streaming", () => {
             }, 50);
             return { message: makeUserMessage(task.id, "M-3"), executionId: EXEC_ID };
         });
-        api.handle("conversations.getMessages", () => [assistantMsg]);
+        api.handle("conversations.getMessages", () => ({ messages: [assistantMsg], hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -121,7 +121,7 @@ test.describe("M — basic send & streaming", () => {
             }, 50);
             return { message: makeUserMessage(task.id, "M-4"), executionId: EXEC_ID };
         });
-        api.handle("conversations.getMessages", () => [assistantMsg]);
+        api.handle("conversations.getMessages", () => ({ messages: [assistantMsg], hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -219,7 +219,7 @@ test.describe("N — execution state in the UI", () => {
             }, 50);
             return { message: makeUserMessage(task.id, "N-9"), executionId: EXEC_ID };
         });
-        api.handle("conversations.getMessages", () => [makeUserMessage(task.id, "N-9")]);
+        api.handle("conversations.getMessages", () => ({ messages: [makeUserMessage(task.id, "N-9")], hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -246,7 +246,7 @@ test.describe("O — persistence and multi-turn ordering", () => {
             makeUserMessage(task.id, "first"),
             makeAssistantMessage(task.id, "first reply"),
         ];
-        api.handle("conversations.getMessages", () => msgs);
+        api.handle("conversations.getMessages", () => ({ messages: msgs, hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -268,7 +268,7 @@ test.describe("O — persistence and multi-turn ordering", () => {
             makeUserMessage(task.id, "Round 2"),
             makeAssistantMessage(task.id, "Reply 2"),
         ];
-        api.handle("conversations.getMessages", () => msgs);
+        api.handle("conversations.getMessages", () => ({ messages: msgs, hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -289,7 +289,7 @@ test.describe("O — persistence and multi-turn ordering", () => {
         const msgs = [makeAssistantMessage(task.id, "only one")];
         api.handle("conversations.getMessages", () => {
             callCount++;
-            return msgs;
+            return { messages: msgs, hasMore: false };
         });
 
         await page.goto("/");

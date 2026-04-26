@@ -66,6 +66,9 @@
       :stream-version="conversationStore.streamVersion"
       :execution-state="session.status"
       :self-id="session.conversationId"
+      :has-more-before="conversationStore.hasMoreBefore"
+      :is-loading-older="conversationStore.isLoadingOlder"
+      @load-older="session.conversationId && conversationStore.loadOlderMessages({ conversationId: session.conversationId })"
     />
 
     <!-- Input bar -->

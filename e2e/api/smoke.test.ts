@@ -197,9 +197,9 @@ describe("conversations", () => {
     test("conversations.getMessages supports taskId alias and conversationId reads for task chats", async () => {
         const initialByTask = await server.request("conversations.getMessages", { taskId });
         const initialByConversation = await server.request("conversations.getMessages", { conversationId });
-        expect(initialByTask.length).toBeGreaterThanOrEqual(1);
-        expect(initialByTask.map((message) => message.id)).toEqual(initialByConversation.map((message) => message.id));
-        expect(initialByTask.every((message) => message.conversationId === conversationId)).toBe(true);
+        expect(initialByTask.messages.length).toBeGreaterThanOrEqual(1);
+        expect(initialByTask.messages.map((message) => message.id)).toEqual(initialByConversation.messages.map((message) => message.id));
+        expect(initialByTask.messages.every((message) => message.conversationId === conversationId)).toBe(true);
 
         await server.request("tasks.setModel", {
             taskId,
@@ -213,11 +213,11 @@ describe("conversations", () => {
         expect(sent.executionId).toBeGreaterThan(0);
 
         const canonical = await waitFor(
-            () => server.request("conversations.getMessages", { conversationId }),
+            async () => (await server.request("conversations.getMessages", { conversationId })).messages,
             (messages) => messages.some((message) => message.type === "assistant"),
         );
         const aliased = await server.request("conversations.getMessages", { taskId });
-        expect(aliased.map((message) => message.id)).toEqual(canonical.map((message) => message.id));
+        expect(aliased.messages.map((message) => message.id)).toEqual(canonical.map((message) => message.id));
         expect(canonical.some((message) => message.role === "user" && message.content === "Hello from the task conversation")).toBe(true);
         expect(canonical.every((message) => message.conversationId === conversationId)).toBe(true);
 
@@ -309,11 +309,11 @@ describe("chatSessions", () => {
         expect(sent.executionId).toBeGreaterThan(0);
 
         const canonical = await waitFor(
-            () => server.request("conversations.getMessages", { conversationId: created.conversationId }),
+            async () => (await server.request("conversations.getMessages", { conversationId: created.conversationId })).messages,
             (messages) => messages.some((message) => message.type === "assistant"),
         );
         const sessionMessages = await server.request("chatSessions.getMessages", { sessionId: created.id });
-        expect(sessionMessages.map((message) => message.id)).toEqual(canonical.map((message) => message.id));
+        expect(sessionMessages.messages.map((message) => message.id)).toEqual(canonical.map((message) => message.id));
         expect(canonical.some((message) => message.role === "user" && message.content === "Hello from the standalone session")).toBe(true);
         expect(canonical.some((message) => message.type === "assistant" && message.content.length > 0)).toBe(true);
         expect(canonical.every((message) => message.conversationId === created.conversationId)).toBe(true);

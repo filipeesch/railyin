@@ -86,7 +86,7 @@ test.describe("CB — conversation body coverage", () => {
                 ? makeUserMessage(task.id, `virtual user ${index}`, { id: 20_000 + index })
                 : makeAssistantMessage(task.id, `virtual assistant ${index}`, { id: 20_000 + index }),
         );
-        api.handle("conversations.getMessages", () => messages);
+        api.handle("conversations.getMessages", () => ({ messages: messages, hasMore: false }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -103,10 +103,13 @@ test.describe("CB — conversation body coverage", () => {
     });
 
     test("CB-3: mixed persisted tool groups and assistant messages render in the shared body", async ({ page, api, task }) => {
-        api.handle("conversations.getMessages", () => [
-            ...makeToolMessages(task.id),
-            makeUserMessage(task.id, "follow-up question"),
-        ]);
+        api.handle("conversations.getMessages", () => ({
+            messages: [
+                ...makeToolMessages(task.id),
+                makeUserMessage(task.id, "follow-up question"),
+            ],
+            hasMore: false,
+        }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);

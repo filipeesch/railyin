@@ -51,7 +51,7 @@ export const test = base.extend<Fixtures>({
             .returns("models.list", [])
             // Default single task — tests override this for multi-task scenarios
             .handle("tasks.list", () => [task])
-            .returns("conversations.getMessages", [])
+            .returns("conversations.getMessages", { messages: [], hasMore: false })
             .returns("conversations.getStreamEvents", [])
             .returns("conversations.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 })
             .returns("tasks.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 })
@@ -70,7 +70,7 @@ export const test = base.extend<Fixtures>({
             // Chat sessions — tests override as needed
             .returns("chatSessions.list", [])
             .returns("chatSessions.create", { id: 900, workspaceKey: "test-workspace", title: "New Chat", status: "idle", conversationId: 900, enabledMcpTools: null, lastActivityAt: new Date().toISOString(), lastReadAt: null, archivedAt: null, createdAt: new Date().toISOString() })
-            .returns("chatSessions.getMessages", [])
+            .returns("chatSessions.getMessages", { messages: [], hasMore: false })
             .returns("chatSessions.rename", undefined)
             .returns("chatSessions.archive", undefined)
             .returns("chatSessions.markRead", undefined)
