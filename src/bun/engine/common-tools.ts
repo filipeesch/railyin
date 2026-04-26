@@ -390,6 +390,22 @@ export async function executeCommonTool(
     if (!Array.isArray(questions) || questions.length === 0) {
       return { type: "result", text: "Error: questions is required" };
     }
+    const validTypes = new Set(["exclusive", "non_exclusive", "freetext"]);
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i] as Record<string, unknown>;
+      if (!q || typeof q !== "object") {
+        return { type: "result", text: `Error: questions[${i}] must be an object` };
+      }
+      if (typeof q.question !== "string" || !q.question.trim()) {
+        return { type: "result", text: `Error: questions[${i}].question must be a non-empty string` };
+      }
+      if (!validTypes.has(q.type as string)) {
+        return {
+          type: "result",
+          text: `Error: questions[${i}].type is "${q.type}" which is not valid. Must be one of: "exclusive", "non_exclusive", "freetext".`,
+        };
+      }
+    }
     const payload: Record<string, unknown> = { questions };
     if (context) payload.context = context;
     return { type: "suspend", payload: JSON.stringify(payload) };

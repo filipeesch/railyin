@@ -177,6 +177,18 @@ const otherValues = ref<string[]>(props.questions.map(() => ""));
 const notesValues = ref<string[]>(props.questions.map(() => ""));
 const freetextValues = ref<string[]>(props.questions.map(() => ""));
 
+watch(
+  () => props.questions,
+  (newQuestions) => {
+    focusedOption.value = newQuestions.map(() => "");
+    singleSelected.value = newQuestions.map(() => "");
+    multiSelected.value = newQuestions.map(() => []);
+    otherValues.value = newQuestions.map(() => "");
+    notesValues.value = newQuestions.map(() => "");
+    freetextValues.value = newQuestions.map(() => "");
+  },
+);
+
 function weightLabel(weight: string): string {
   if (weight === "critical") return "⚠️ Hard to change later";
   if (weight === "medium") return "🔄 Can change with effort";
@@ -196,6 +208,8 @@ function onRowClick(qi: number, q: InterviewQuestion, title: string) {
   focusedOption.value[qi] = title;
   if (q.type === "exclusive") {
     singleSelected.value[qi] = title;
+  } else if (q.type === "non_exclusive") {
+    onCheckboxClick(qi, q, title);
   }
 }
 
