@@ -429,42 +429,43 @@ describe("formatDocumentSymbols", () => {
   });
 });
 
-// ─── 6.4 executeTool("lsp") with a mock manager ───────────────────────────────
+// ─── 6.4 executeLspTool – dispatcher & lsp-tools coverage ────────────────────
 
-describe("executeTool lsp", () => {
-  it("returns error when lspManager is not in context", async () => {
-    const { executeTool } = await import("../workflow/tools.ts");
-    const ctx = { worktreePath: "/tmp" };
-    const result = await executeTool("lsp", JSON.stringify({ operation: "hover", file_path: "src/foo.ts", line: 1, character: 1 }), ctx as any);
-    expect(result).toContain("Error: LSP is not configured");
+describe("executeLspTool", () => {
+  it("executeCommonTool returns error when lspManager is not in context", async () => {
+    const { executeCommonTool } = await import("../engine/common-tools.ts");
+    const ctx = {
+      taskId: 0, boardId: 0,
+      onTransition: () => {}, onHumanTurn: () => {}, onCancel: () => {},
+      worktreePath: "/tmp",
+    };
+    const result = await executeCommonTool("lsp", { operation: "hover", file_path: "src/foo.ts", line: "1", character: "1" }, ctx as any);
+    expect(result.text).toContain("Error: LSP is not configured");
   });
 
   it("returns error when file_path is outside the worktree", async () => {
-    const { executeTool } = await import("../workflow/tools.ts");
+    const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
     const mockManager = { request: mock(async () => null), shutdown: () => {} };
-    const ctx = { worktreePath: "/tmp/project", lspManager: mockManager };
-    const result = await executeTool("lsp", JSON.stringify({ operation: "hover", file_path: "../../etc/passwd", line: 1, character: 1 }), ctx as any);
+    const result = await executeLspTool({ operation: "hover", file_path: "../../etc/passwd", line: 1, character: 1 }, mockManager as any, "/tmp/project");
     expect(result).toContain("Error: file_path is outside the worktree");
   });
 
   it("returns error for unknown lsp operation", async () => {
-    const { executeTool } = await import("../workflow/tools.ts");
+    const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
     const mockManager = { request: mock(async () => null), shutdown: () => {} };
-    const ctx = { worktreePath: "/tmp/project", lspManager: mockManager };
     // Use a valid path inside the worktree (doesn't need to exist for routing)
-    const result = await executeTool("lsp", JSON.stringify({ operation: "unknownOp", file_path: "src/foo.ts" }), ctx as any);
+    const result = await executeLspTool({ operation: "unknownOp", file_path: "src/foo.ts" }, mockManager as any, "/tmp/project");
     expect(result).toContain("Error: unknown lsp operation");
   });
 
   it("calls lspManager.request with correct LSP method for hover", async () => {
-    const { executeTool } = await import("../workflow/tools.ts");
+    const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
     const mockRequest = mock(async () => ({ contents: "hover text", range: undefined }));
     const mockManager = { request: mockRequest, shutdown: () => {} };
     const dir = mkdtempSync(join(tmpdir(), "railyn-tool-lsp-"));
     writeFileSync(join(dir, "foo.ts"), "const x = 1;\n");
 
-    const ctx = { worktreePath: dir, lspManager: mockManager };
-    const result = await executeTool("lsp", JSON.stringify({ operation: "hover", file_path: "foo.ts", line: 1, character: 1 }), ctx as any);
+    const result = await executeLspTool({ operation: "hover", file_path: "foo.ts", line: 1, character: 1 }, mockManager as any, dir);
 
     expect(mockRequest).toHaveBeenCalledWith(
       join(dir, "foo.ts"),
@@ -477,14 +478,13 @@ describe("executeTool lsp", () => {
   });
 
   it("converts 1-based line/char to 0-based for the LSP request", async () => {
-    const { executeTool } = await import("../workflow/tools.ts");
+    const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
     const mockRequest = mock(async () => null);
     const mockManager = { request: mockRequest, shutdown: () => {} };
     const dir = mkdtempSync(join(tmpdir(), "railyn-tool-lsp2-"));
     writeFileSync(join(dir, "bar.ts"), "const y = 2;\n");
 
-    const ctx = { worktreePath: dir, lspManager: mockManager };
-    await executeTool("lsp", JSON.stringify({ operation: "hover", file_path: "bar.ts", line: 5, character: 10 }), ctx as any);
+    await executeLspTool({ operation: "hover", file_path: "bar.ts", line: 5, character: 10 }, mockManager as any, dir);
 
     expect(mockRequest).toHaveBeenCalledWith(
       join(dir, "bar.ts"),

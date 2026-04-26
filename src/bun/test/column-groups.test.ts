@@ -5,7 +5,8 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
-import { executeTool } from "../workflow/tools.ts";
+import { executeCommonTool } from "../engine/common-tools.ts";
+import type { CommonToolContext } from "../engine/types.ts";
 import type { Database } from "bun:sqlite";
 
 let db: Database;
@@ -235,6 +236,15 @@ describe("card limit enforcement in tasks.transition", () => {
 
 // ─── Card limit enforcement (move_task agent tool) ────────────────────────────
 
+const noop = () => { };
+const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
+  taskId,
+  boardId,
+  onTransition: noop,
+  onHumanTurn: noop,
+  onCancel: noop,
+});
+
 describe("card limit enforcement in move_task", () => {
   it("returns an error string when target column is at capacity", async () => {
     const { boardId, insertTask } = seedBoardWithLimit();
@@ -246,14 +256,13 @@ describe("card limit enforcement in move_task", () => {
     // Task to move
     const taskId = insertTask("backlog", 500);
 
-    const result = await executeTool(
+    const result = await executeCommonTool(
       "move_task",
-      JSON.stringify({ task_id: String(taskId), workflow_state: "inprogress" }),
-      { worktreePath: gitDir, taskId, boardId },
+      { task_id: String(taskId), workflow_state: "inprogress" },
+      makeCommonCtx(taskId, boardId),
     );
 
-    expect(typeof result).toBe("string");
-    expect(result as string).toMatch(/at capacity/);
+    expect(result.text).toMatch(/at capacity/);
   });
 
   it("succeeds when target column is below limit", async () => {
@@ -263,14 +272,13 @@ describe("card limit enforcement in move_task", () => {
     insertTask("inprogress", 1000);
     const taskId = insertTask("backlog", 500);
 
-    const result = await executeTool(
+    const result = await executeCommonTool(
       "move_task",
-      JSON.stringify({ task_id: String(taskId), workflow_state: "inprogress" }),
-      { worktreePath: gitDir, taskId, boardId },
+      { task_id: String(taskId), workflow_state: "inprogress" },
+      makeCommonCtx(taskId, boardId),
     );
 
-    expect(typeof result).toBe("string");
-    const parsed = JSON.parse(result as string);
+    const parsed = JSON.parse(result.text);
     expect(parsed.success).toBe(true);
     expect(parsed.workflow_state).toBe("inprogress");
   });

@@ -23,7 +23,7 @@ describe("Claude adapter permission helpers", () => {
   });
 
   it("filters out already-approved shell binaries", () => {
-    expect(getUnapprovedShellBinaries("git status && bun test | cat", ["git"])).toEqual(["bun"]);
+    expect(getUnapprovedShellBinaries("git status && bun test | cat", ["git"])).toEqual(["bun", "cat"]);
   });
 
   it("returns no shell approvals when every binary is already approved", () => {

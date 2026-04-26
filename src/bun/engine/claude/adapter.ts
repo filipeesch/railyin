@@ -2,8 +2,7 @@ import { createHash } from "crypto";
 import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types.ts";
 import { buildClaudeToolServer } from "./tools.ts";
 import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
-import { extractCommandBinaries } from "../../workflow/tools.ts";
-import { appendApprovedCommands, getApprovedCommands } from "../approved-commands.ts";
+import { appendApprovedCommands, getApprovedCommands, parseShellBinaries } from "../approved-commands.ts";
 import { getDb } from "../../db/index.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
@@ -359,20 +358,7 @@ function permissionDecisionToResult(
 }
 
 export function getUnapprovedShellBinaries(command: string, approvedCommands: string[]): string[] {
-  // Split on && || ; but NOT on | — pipe receivers don't need separate approval
-  const segments = command.split(/&&|\|\||[;]/);
-  const binaries: string[] = [];
-  for (const seg of segments) {
-    // Take only the launcher portion (before any pipe)
-    const launcher = seg.split("|")[0];
-    const trimmed = launcher.trim();
-    if (!trimmed) continue;
-    const token = trimmed.split(/\s+/)[0];
-    if (token && !binaries.includes(token)) {
-      binaries.push(token);
-    }
-  }
-  return binaries.filter((binary) => !approvedCommands.includes(binary));
+  return parseShellBinaries(command).filter((binary) => !approvedCommands.includes(binary));
 }
 
 function getApprovedShellState(taskId: number): { shellAutoApprove: boolean; approvedCommands: string[] } {
