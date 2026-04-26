@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
-const apiMock = mock(async () => []);
-mock.module("../rpc", () => ({
+const apiMock = vi.fn(async (..._args: unknown[]): Promise<unknown> => []);
+vi.mock("../rpc", () => ({
   api: (...args: Parameters<typeof apiMock>) => apiMock(...args),
 }));
 

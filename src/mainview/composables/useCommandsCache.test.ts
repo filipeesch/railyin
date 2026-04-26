@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -13,13 +13,13 @@ function makeRef<T>(initial: T) {
 
 // Mock vue before importing the composable
 const vueMock = {
-  ref: mock((initial: unknown) => makeRef(initial)),
+  ref: vi.fn((initial: unknown) => makeRef(initial)),
 };
-mock.module("vue", () => vueMock);
+vi.mock("vue", () => vueMock);
 
 // Capture the mock function so tests can configure return values
-let mockApiFn = mock(async (_method: string, _args: unknown) => [] as unknown[]);
-mock.module("../rpc", () => ({
+let mockApiFn = vi.fn(async (_method: string, _args: unknown) => [] as unknown[]);
+vi.mock("../rpc", () => ({
   api: (...args: Parameters<typeof mockApiFn>) => mockApiFn(...args),
 }));
 
@@ -38,7 +38,7 @@ const CMD_A: Cmd = { name: "opsx:apply", description: "Apply" };
 const CMD_B: Cmd = { name: "opsx:propose", description: "Propose" };
 
 function makeApi(commands: Cmd[]) {
-  mockApiFn = mock(async () => commands);
+  mockApiFn = vi.fn(async () => commands);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ describe("useCommandsCache", () => {
   beforeEach(() => {
     clearCommandsCache(1);
     clearCommandsCache(2);
-    mockApiFn = mock(async () => [CMD_A]);
+    mockApiFn = vi.fn(async () => [CMD_A]);
   });
 
   describe("getCommands — cold miss", () => {
@@ -67,7 +67,7 @@ describe("useCommandsCache", () => {
     });
 
     it("returns empty array when API throws", async () => {
-      mockApiFn = mock(async () => { throw new Error("network"); });
+      mockApiFn = vi.fn(async () => { throw new Error("network"); });
       const result = await getCommands(1);
       expect(result).toEqual([]);
     });
@@ -77,7 +77,7 @@ describe("useCommandsCache", () => {
     it("returns cached value without calling API again", async () => {
       makeApi([CMD_A]);
       await getCommands(1); // prime cache
-      mockApiFn = mock(async () => [CMD_B]); // change API response
+      mockApiFn = vi.fn(async () => [CMD_B]); // change API response
 
       const result = await getCommands(1);
       expect(result).toEqual([CMD_A]); // stale from cache
@@ -87,7 +87,7 @@ describe("useCommandsCache", () => {
     it("does not trigger background refresh within TTL", async () => {
       makeApi([CMD_A]);
       await getCommands(1);
-      mockApiFn = mock(async () => [CMD_B]);
+      mockApiFn = vi.fn(async () => [CMD_B]);
 
       await getCommands(1);
       // Give microtasks a chance to run
@@ -128,7 +128,7 @@ describe("useCommandsCache", () => {
       await getCommands(2);
       clearCommandsCache(1);
 
-      mockApiFn = mock(async () => [CMD_B]);
+      mockApiFn = vi.fn(async () => [CMD_B]);
       // task 2 still cached
       const r2 = await getCommands(2);
       expect(r2).toEqual([CMD_A]);

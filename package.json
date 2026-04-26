@@ -8,7 +8,7 @@
     "dev": "bun scripts/dev.ts",
     "dev:kill": "pkill -f 'src/bun/index.ts' || true",
     "build": "vite build",
-    "test": "bun test src/bun/test",
+    "test": "bun test src/bun --timeout 20000",
     "test:api": "bun test e2e/api --timeout 30000",
     "test:e2e": "npx playwright test",
     "test:e2e:ui": "npx playwright test e2e/ui",
@@ -20,7 +20,10 @@
     "refine:mock": "bun refinement/runner.ts --mode mock",
     "refine:local": "bun refinement/runner.ts --mode local",
     "refine:live": "bun refinement/runner.ts --mode live",
-    "build:ext": "cd extensions/railyin-ref && npm install && npm run compile && npm run package"
+    "build:ext": "cd extensions/railyin-ref && npm install && npm run compile && npm run package",
+    "test:mutation:backend": "stryker run stryker.backend.json",
+    "test:mutation:frontend": "stryker run stryker.frontend.json",
+    "test:mutation": "bun run test:mutation:backend && bun run test:mutation:frontend"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.98",
@@ -45,6 +48,9 @@
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@primevue/themes": "^4.0.0",
+    "@stryker-mutator/core": "^9.0.0",
+    "@stryker-mutator/typescript-checker": "^9.0.0",
+    "@stryker-mutator/vitest-runner": "^9.0.0",
     "@types/bun": "latest",
     "@types/diff": "^8.0.0",
     "@types/js-yaml": "^4.0.9",
@@ -59,6 +65,7 @@
     "primevue": "^4.0.0",
     "typescript": "^5.0.0",
     "vite": "^6.0.0",
+    "vitest": "^3.0.0",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0"
   }

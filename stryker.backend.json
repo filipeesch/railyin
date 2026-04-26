@@ -1,0 +1,61 @@
+{
+  "$schema": "https://stryker-mutator.io/schemas/stryker-schema.json",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "bun test src/bun --timeout 20000"
+  },
+  "coverageAnalysis": "off",
+  "concurrency": 2,
+  "timeoutMS": 90000,
+  "timeoutFactor": 2,
+  "checkers": [],
+  "plugins": [],
+  "reporters": ["html", "json", "progress"],
+  "htmlReporter": {
+    "fileName": "reports/mutation/backend/index.html"
+  },
+  "jsonReporter": {
+    "fileName": "reports/mutation/backend/mutation.json"
+  },
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": null
+  },
+  "mutate": [
+    "src/bun/ai/retry.ts",
+    "src/bun/ai/anthropic.ts",
+    "src/bun/ai/openai-compatible.ts",
+    "src/bun/engine/lease-registry.ts",
+    "src/bun/engine/orchestrator.ts",
+    "src/bun/engine/claude/adapter.ts",
+    "src/bun/engine/claude/engine.ts",
+    "src/bun/engine/claude/events.ts",
+    "src/bun/engine/claude/tools.ts",
+    "src/bun/engine/copilot/engine.ts",
+    "src/bun/engine/copilot/events.ts",
+    "src/bun/engine/copilot/tools.ts",
+    "src/bun/engine/common-tools.ts",
+    "src/bun/engine/coordinator.ts",
+    "src/bun/engine/tool-display.ts",
+    "src/bun/engine/dialects/copilot-prompt-resolver.ts",
+    "src/bun/handlers/tasks.ts",
+    "src/bun/handlers/conversations.ts",
+    "src/bun/handlers/workflow.ts",
+    "src/bun/handlers/workspace.ts",
+    "src/bun/handlers/projects.ts",
+    "src/bun/handlers/chat-sessions.ts",
+    "src/bun/handlers/mcp.ts",
+    "src/bun/pipeline/batcher.ts",
+    "src/bun/workflow/tools.ts",
+    "src/bun/workflow/review.ts",
+    "src/bun/db/migrations.ts",
+    "src/bun/db/index.ts",
+    "src/bun/git/worktree.ts",
+    "src/bun/utils/resolve-file-attachments.ts",
+    "src/bun/utils/attachment-routing.ts",
+    "src/bun/conversation/context.ts",
+    "src/bun/config/index.ts",
+    "src/shared/stream-tree.ts"
+  ]
+}

@@ -1,0 +1,33 @@
+name: Mutation Tests
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run backend mutation tests
+        run: bun run test:mutation:backend
+
+      - name: Run frontend mutation tests
+        run: bun run test:mutation:frontend
+
+      - name: Upload mutation reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-reports
+          path: reports/mutation/
+          retention-days: 30

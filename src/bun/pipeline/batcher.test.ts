@@ -1,21 +1,22 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, test, expect, beforeEach } from "bun:test";
 import { StreamBatcher } from "./batcher.ts";
-
-// Mock the DB module so tests don't need a real DB
-const appendStreamEventBatchMock = mock(() => {});
-mock.module("../db/stream-events.ts", () => ({
-  appendStreamEventBatch: appendStreamEventBatchMock,
-}));
+import type { StreamEvent } from "../../shared/rpc-types.ts";
 
 describe("StreamBatcher", () => {
-  let flushed: ReturnType<typeof StreamBatcher.prototype.flush> extends void ? unknown[][] : never;
   let batcher: StreamBatcher;
-  let batches: Array<typeof import("../../shared/rpc-types").StreamEvent[]>;
+  let batches: StreamEvent[][];
+  let persisted: StreamEvent[][];
 
   beforeEach(() => {
     batches = [];
-    appendStreamEventBatchMock.mockClear();
-    batcher = new StreamBatcher(1, 10, 100, (events) => { batches.push([...events]); });
+    persisted = [];
+    batcher = new StreamBatcher(
+      1,
+      100,
+      (events) => { batches.push([...events]); },
+      0,
+      (events) => { persisted.push([...events]); },
+    );
   });
 
   test("text chunks get the same blockId", () => {
@@ -55,7 +56,6 @@ describe("StreamBatcher", () => {
     batcher.start();
     batcher.push({ type: "text_chunk", content: "hi" });
     batcher.push({ type: "done" });
-    // flush should have been called immediately (stop → flush) without waiting 500ms
     expect(batches.length).toBe(1);
     const done = batches[0].find((e) => e.type === "done");
     expect(done).toBeDefined();
@@ -76,31 +76,33 @@ describe("StreamBatcher", () => {
   test("tool_call uses explicit blockId and resets text block", () => {
     batcher.push({ type: "text_chunk", content: "preamble" });
     batcher.push({ type: "tool_call", content: "{}", blockId: "call_abc" });
-    // tool_call triggers immediate flush — batch 0 has preamble + tool_call
     expect(batches).toHaveLength(1);
     expect(batches[0][0].blockId).toMatch(/^100-t1$/);
     expect(batches[0][1].blockId).toBe("call_abc");
-    // Next text_chunk goes into a new buffer
     batcher.push({ type: "text_chunk", content: "summary" });
     batcher.flush();
     expect(batches).toHaveLength(2);
-    expect(batches[1][0].blockId).toMatch(/^100-t2$/); // new text block after tool
+    expect(batches[1][0].blockId).toMatch(/^100-t2$/);
   });
 
   test("persists conversation-scoped rows for chat sessions", () => {
-    batcher = new StreamBatcher(null, 77, 100, (events) => { batches.push([...events]); });
+    batcher = new StreamBatcher(
+      null as unknown as number,
+      77,
+      (events) => { batches.push([...events]); },
+      0,
+      (events) => { persisted.push([...events]); },
+    );
 
     batcher.push({ type: "assistant", content: "hello" });
     batcher.flush();
 
-    expect(appendStreamEventBatchMock).toHaveBeenCalledWith([
-      expect.objectContaining({
-        taskId: null,
-        conversationId: 77,
-        executionId: 100,
-        type: "assistant",
-        content: "hello",
-      }),
-    ]);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0][0]).toMatchObject({
+      conversationId: null,
+      executionId: 77,
+      type: "assistant",
+      content: "hello",
+    });
   });
 });

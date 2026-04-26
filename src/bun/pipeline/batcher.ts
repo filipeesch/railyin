@@ -18,6 +18,7 @@ export class StreamBatcher {
     private readonly executionId: number,
     private readonly onFlush: (events: StreamEvent[]) => void,
     seqStart = 0,
+    private readonly persistFn: typeof appendStreamEventBatch = appendStreamEventBatch,
   ) {
     this.seq = seqStart;
   }
@@ -106,7 +107,7 @@ export class StreamBatcher {
     const batch = this.buffer.splice(0);
     const persisted = batch.filter((e) => PERSISTED_TYPES.has(e.type));
     if (persisted.length > 0) {
-      appendStreamEventBatch(persisted.map((e) => ({
+      this.persistFn(persisted.map((e) => ({
         conversationId: e.conversationId,
         executionId: e.executionId,
         seq: e.seq,
