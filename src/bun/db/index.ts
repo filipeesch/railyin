@@ -4,7 +4,7 @@ import { mkdirSync } from "fs";
 
 let _db: Database | null = null;
 
-function getDbPath(): string {
+export function getDbPath(): string {
   // RAILYN_DB can be set to ":memory:" for tests or an explicit file path
   if (process.env.RAILYN_DB) return process.env.RAILYN_DB;
   const dataDir = process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");

@@ -4,7 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { Database } from "bun:sqlite";
 import { _resetForTests as resetDbSingleton, getDb } from "../db/index.ts";
-import { runMigrations } from "../db/migrations.ts";
+import { runMigrations } from "../db/migrations/runner.ts";
 
 let tempDir: string;
 let dbPath: string;
@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("runMigrations", () => {
-  it("does not fail when config_key already exists but migration 015 is not recorded", () => {
+  it("does not fail when config_key already exists but migration 015 is not recorded", async () => {
     const rawDb = new Database(dbPath, { create: true });
     rawDb.exec(`
       CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
@@ -103,15 +103,15 @@ describe("runMigrations", () => {
     `);
     rawDb.close();
 
-    expect(() => runMigrations()).not.toThrow();
+    expect(async () => await runMigrations()).not.toThrow();
 
     const db = getDb();
     const applied = db.query<{ id: string }, [string]>("SELECT id FROM schema_migrations WHERE id = ?").get("015_workspace_config_key");
     expect(applied?.id).toBe("015_workspace_config_key");
   });
 
-  it("boards and tasks have no FK constraints after migration — arbitrary workspace/project keys are accepted", () => {
-    runMigrations();
+  it("boards and tasks have no FK constraints after migration — arbitrary workspace/project keys are accepted", async () => {
+    await runMigrations();
 
     const db = getDb();
 
@@ -135,8 +135,8 @@ describe("runMigrations", () => {
     ).not.toThrow();
   });
 
-  it("workspaces and projects tables do not exist after migration", () => {
-    runMigrations();
+  it("workspaces and projects tables do not exist after migration", async () => {
+    await runMigrations();
 
     const db = getDb();
     const tables = db
@@ -146,7 +146,7 @@ describe("runMigrations", () => {
     expect(tables).toEqual([]);
   });
 
-  it("repairs stream event conversation ids via executions first, then tasks, and prunes unrecoverable rows", () => {
+  it("repairs stream event conversation ids via executions first, then tasks, and prunes unrecoverable rows", async () => {
     const rawDb = new Database(dbPath, { create: true });
     rawDb.exec(`
       CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
@@ -223,7 +223,7 @@ describe("runMigrations", () => {
     `);
     rawDb.close();
 
-    runMigrations();
+    await runMigrations();
 
     const db = getDb();
     const taskRow = db.query<{ conversation_id: number | null }, [number]>(

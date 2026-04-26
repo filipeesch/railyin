@@ -1,4 +1,5 @@
-import { runMigrations, seedDefaultWorkspace } from "./db/migrations.ts";
+import { runMigrations } from "./db/migrations/runner.ts";
+import { seedDefaultWorkspace } from "./db/seed.ts";
 import { getDb } from "./db/index.ts";
 import { getWorkspaceRegistry, loadConfig, getDataDir } from "./config/index.ts";
 import { StreamBatcher } from "./pipeline/batcher.ts";
@@ -87,7 +88,7 @@ import type { Task, ConversationMessage, ChatSession } from "../shared/rpc-types
 await getResolvedShellEnv();
 
 // 1. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
-runMigrations();
+await runMigrations();
 seedDefaultWorkspace();
 
 // 2. Load default workspace config (YAML files)
