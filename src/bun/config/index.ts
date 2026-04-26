@@ -241,7 +241,7 @@ export function getDataDir(): string {
   return process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
 }
 
-function getWorkspaceRootDir(): string {
+export function getWorkspaceRootDir(): string {
   return process.env.RAILYN_WORKSPACES_DIR ?? join(getDataDir(), "workspaces");
 }
 
@@ -249,6 +249,8 @@ function sanitizeWorkspaceKey(raw: string | undefined, fallback: string): string
   const key = (raw ?? fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   return key || fallback;
 }
+
+export { sanitizeWorkspaceKey };
 
 function sanitizeProjectKey(raw: string | undefined, fallback: string): string {
   const key = (raw ?? fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
@@ -425,7 +427,7 @@ columns:
     description: Task complete
 `.trimStart();
 
-function ensureConfigExists(configDir: string): void {
+export function ensureConfigExists(configDir: string): void {
   const workspaceFile = join(configDir, getWorkspaceFileName());
   const workflowsDir = join(configDir, "workflows");
   const deliveryFile = join(workflowsDir, "delivery.yaml");
@@ -636,10 +638,16 @@ export function patchWorkspaceYaml(patch: Partial<WorkspaceYaml>, workspaceKey?:
   } catch { /* file may not exist yet */ }
 
   const merged = { ...current, ...patch };
-  // Deep-merge nested objects (anthropic)
+  // Deep-merge nested objects (anthropic, engine)
   if (patch.anthropic && current.anthropic) {
     merged.anthropic = { ...current.anthropic, ...patch.anthropic };
   }
+  if (patch.engine && current.engine) {
+    merged.engine = { ...current.engine, ...patch.engine } as EngineConfig;
+  }
+  // Strip deprecated fields that are no longer functional
+  delete (merged as Record<string, unknown>).git_path;
+  delete (merged as Record<string, unknown>).shell_env_timeout_ms;
 
   writeFileSync(workspaceFile, yaml.dump(merged), "utf-8");
   // Invalidate the in-memory config so the next getConfig() call re-reads it

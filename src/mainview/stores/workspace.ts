@@ -37,6 +37,29 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
+  async function create(name: string) {
+    const newWorkspace = await api("workspace.create", { name });
+    workspaces.value.push(newWorkspace);
+    await selectWorkspace(newWorkspace.key);
+    return newWorkspace;
+  }
+
+  async function update(params: { name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string }) {
+    await api("workspace.update", {
+      workspaceKey: activeWorkspaceKey.value ?? undefined,
+      ...params,
+    });
+    await load();
+    if (params.name !== undefined) {
+      await loadWorkspaces();
+    }
+  }
+
+  async function resolveGitRoot(path: string): Promise<string | null> {
+    const result = await api("workspace.resolveGitRoot", { path });
+    return result.gitRoot;
+  }
+
   async function setThinking(enabled: boolean) {
     await api("workspace.setThinking", {
       workspaceKey: activeWorkspaceKey.value ?? undefined,
@@ -94,5 +117,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     isConfigured,
     setThinking,
     selectWorkspace,
+    create,
+    update,
+    resolveGitRoot,
   };
 });

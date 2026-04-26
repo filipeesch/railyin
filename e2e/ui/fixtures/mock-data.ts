@@ -12,6 +12,7 @@ import type {
     ConversationMessage,
     WorkflowTemplate,
     WorkspaceConfig,
+    Project,
 } from "@shared/rpc-types";
 
 export const BOARD_ID = 1;
@@ -31,6 +32,19 @@ export function makeWorkspace(overrides?: Partial<WorkspaceConfig>): WorkspaceCo
         },
         worktreeBasePath: "/tmp/railyn-test",
         enableThinking: false,
+        engine: { type: "copilot", model: "copilot/gpt-4.1" },
+        ...overrides,
+    };
+}
+
+export function makeProject(overrides?: Partial<Project>): Project {
+    return {
+        key: "test-project",
+        workspaceKey: WORKSPACE_KEY,
+        name: "Test Project",
+        projectPath: "/home/user/projects/test",
+        gitRootPath: "/home/user/projects/test",
+        defaultBranch: "main",
         ...overrides,
     };
 }

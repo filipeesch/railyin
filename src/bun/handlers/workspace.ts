@@ -1,4 +1,6 @@
-import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml } from "../config/index.ts";
+import { existsSync } from "fs";
+import { join } from "path";
+import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml, sanitizeWorkspaceKey, ensureConfigExists, type WorkspaceYaml } from "../config/index.ts";
 import { clearProviderCache } from "../ai/index.ts";
 import type { WorkspaceConfig, WorkspaceSummary } from "../../shared/rpc-types.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
@@ -38,6 +40,10 @@ export function workspaceHandlers() {
         },
         worktreeBasePath: config.workspace.worktree_base_path ?? "",
         enableThinking: config.workspace.anthropic?.enable_thinking ?? false,
+        engine: {
+          type: config.engine.type,
+          model: config.engine.model,
+        },
       };
     },
 
@@ -56,6 +62,81 @@ export function workspaceHandlers() {
       // Clear provider cache so the next execution picks up the new setting
       clearProviderCache();
       return {};
+    },
+
+    "workspace.create": async (params: { name: string }): Promise<WorkspaceSummary> => {
+      const workspacesRoot = process.env.RAILYN_WORKSPACES_DIR ?? join(process.env.HOME ?? "~", ".railyn", "workspaces");
+      const key = sanitizeWorkspaceKey(params.name, "workspace");
+      const configDir = join(workspacesRoot, key);
+      if (existsSync(configDir)) throw new Error(`Workspace already exists: ${key}`);
+      ensureConfigExists(configDir);
+      resetConfig();
+      return { key, name: params.name.trim() };
+    },
+
+    "workspace.update": async (params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string }): Promise<Record<string, never>> => {
+      resetConfig();
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
+      const patch: Partial<WorkspaceYaml> = {};
+      if (params.name !== undefined) patch.name = params.name;
+      if (params.worktreeBasePath !== undefined) patch.worktree_base_path = params.worktreeBasePath;
+      if (params.engineType !== undefined || params.engineModel !== undefined) {
+        const existing = getConfig(workspaceKey).engine;
+        patch.engine = {
+          type: (params.engineType ?? existing.type) as "copilot" | "claude",
+          ...(params.engineModel ? { model: params.engineModel } : {}),
+        };
+      }
+      patchWorkspaceYaml(patch, workspaceKey);
+      clearProviderCache();
+      return {};
+    },
+
+    "workspace.resolveGitRoot": async (params: { path: string }): Promise<{ gitRoot: string | null }> => {
+      try {
+        const proc = Bun.spawn(["git", "-C", params.path, "rev-parse", "--show-toplevel"], {
+          stdout: "pipe",
+          stderr: "ignore",
+        });
+        const text = (await new Response(proc.stdout).text()).trim();
+        const code = await proc.exited;
+        return { gitRoot: code === 0 && text ? text : null };
+      } catch {
+        return { gitRoot: null };
+      }
+    },
+
+    "workspace.openFolderDialog": async (params: { initialPath?: string }): Promise<{ path: string | null }> => {
+      const platform = process.platform;
+      const expandHome = (p: string) => p.startsWith("~/") || p === "~"
+        ? p.replace("~", process.env.HOME ?? "/tmp")
+        : p;
+      try {
+        if (platform === "darwin") {
+          const initial = expandHome(params.initialPath?.trim() || process.env.HOME || "/tmp");
+          const script = `POSIX path of (choose folder with prompt "Select folder:" default location POSIX file "${initial}" without multiple selections allowed)`;
+          const proc = Bun.spawn(["osascript", "-e", script], { stdout: "pipe", stderr: "ignore" });
+          const text = (await new Response(proc.stdout).text()).trim();
+          const code = await proc.exited;
+          return { path: code === 0 && text ? text.replace(/\/$/, "") : null };
+        } else if (platform === "linux") {
+          const args = ["--file-selection", "--directory", "--title=Select folder"];
+          if (params.initialPath) args.push(`--filename=${expandHome(params.initialPath)}/`);
+          const proc = Bun.spawn(["zenity", ...args], { stdout: "pipe", stderr: "ignore" });
+          const text = (await new Response(proc.stdout).text()).trim();
+          const code = await proc.exited;
+          return { path: code === 0 && text ? text.replace(/\/$/, "") : null };
+        } else if (platform === "win32") {
+          const ps = `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }`;
+          const proc = Bun.spawn(["powershell", "-NoProfile", "-Command", ps], { stdout: "pipe", stderr: "ignore" });
+          const text = (await new Response(proc.stdout).text()).trim();
+          const code = await proc.exited;
+          return { path: code === 0 && text ? text : null };
+        }
+        return { path: null };
+      } catch {
+        return { path: null };
+      }
     },
 
     "workspace.listFiles": async (params: { taskId?: number; workspaceKey?: string; query?: string }): Promise<{ name: string; path: string }[]> => {

@@ -372,6 +372,11 @@ export interface WorkspaceConfig {
   worktreeBasePath: string;
   /** Whether adaptive thinking is enabled for supported Anthropic models. */
   enableThinking: boolean;
+  /** Resolved engine configuration for this workspace. */
+  engine: {
+    type: "copilot" | "claude";
+    model?: string;
+  };
 }
 
 export interface WorkspaceSummary {
@@ -472,6 +477,22 @@ export type RailynAPI = {
     params: Record<string, never>;
     response: WorkspaceSummary[];
   };
+  "workspace.create": {
+    params: { name: string };
+    response: WorkspaceSummary;
+  };
+  "workspace.update": {
+    params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string };
+    response: Record<string, never>;
+  };
+  "workspace.resolveGitRoot": {
+    params: { path: string };
+    response: { gitRoot: string | null };
+  };
+  "workspace.openFolderDialog": {
+    params: { initialPath?: string };
+    response: { path: string | null };
+  };
   "workspace.setThinking": {
     params: { workspaceKey?: string; enabled: boolean };
     response: Record<string, never>;
@@ -503,6 +524,23 @@ export type RailynAPI = {
       description?: string;
     };
     response: Project;
+  };
+  "projects.update": {
+    params: {
+      workspaceKey: string;
+      key: string;
+      name?: string;
+      projectPath?: string;
+      gitRootPath?: string;
+      defaultBranch?: string;
+      slug?: string;
+      description?: string;
+    };
+    response: Project;
+  };
+  "projects.delete": {
+    params: { workspaceKey: string; key: string };
+    response: Record<string, never>;
   };
 
   // Tasks

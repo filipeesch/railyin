@@ -277,6 +277,7 @@ export function setupTestConfig(
     writeFileSync(join(workflowsDir, `extra-${idx}.yaml`), yaml);
   });
 
+  process.env.RAILYN_DB = ":memory:";
   process.env.RAILYN_CONFIG_DIR = configDir;
   process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");
   resetConfig();
@@ -288,6 +289,7 @@ export function setupTestConfig(
       rmSync(configDir, { recursive: true, force: true });
       delete process.env.RAILYN_CONFIG_DIR;
       delete process.env.RAILYN_SESSION_MEMORY_DIR;
+      delete process.env.RAILYN_DB;
       resetConfig();
     },
   };

@@ -41,19 +41,27 @@ The system SHALL resolve workflow templates from the owning workspace's `workflo
 - **THEN** each workspace resolves its own local `delivery` workflow definition
 
 ### Requirement: Workspace stores AI provider configuration
-Each workspace SHALL store its own engine and AI provider settings in that workspace's `workspace.yaml`. Machine-level `config.yaml` MAY provide shared defaults, but AI executions SHALL use the owning workspace's resolved configuration. Supported workspace engine types SHALL be `copilot` and `claude`.
+Each workspace SHALL store its own engine and AI provider settings in that workspace's `workspace.yaml`. Machine-level `config.yaml` MAY provide shared defaults, but AI executions SHALL use the owning workspace's resolved configuration. Supported workspace engine types SHALL be `copilot` and `claude`. The workspace UI SHALL expose engine type and default model selection without requiring users to edit YAML files directly. The `git_path` and `shell_env_timeout_ms` YAML fields are no longer supported and SHALL be stripped from `workspace.yaml` on the next write operation.
 
 #### Scenario: Different workspaces use different supported engines
 - **WHEN** workspace A is configured with `engine.type: copilot` and workspace B is configured with `engine.type: claude`
 - **THEN** executions in each workspace use their respective engine configuration
 
 #### Scenario: Global defaults are respected
-- **WHEN** `config.yaml` defines a shared default such as `git_path` and a workspace does not override it locally
+- **WHEN** `config.yaml` defines a shared default and a workspace does not override it locally
 - **THEN** that workspace inherits the global value during config resolution
 
 #### Scenario: Workspace-local override wins
 - **WHEN** a workspace defines a value in its own `workspace.yaml` that is also present in `config.yaml`
 - **THEN** the workspace-local value is used for that workspace's executions
+
+#### Scenario: Engine type selectable in Setup UI
+- **WHEN** the user opens the Workspace tab in Setup view
+- **THEN** the engine type field shows "GitHub Copilot" or "Claude Code" and can be changed without editing YAML
+
+#### Scenario: Deprecated fields removed on next write
+- **WHEN** a workspace YAML contains `git_path` or `shell_env_timeout_ms` and any setting is saved via the UI
+- **THEN** those keys are absent from the resulting YAML file
 
 ### Requirement: Workspace schema includes workspace_key for board and model association
 The database schema SHALL store `workspace_key TEXT` (the file-derived string key, e.g. `"default"`) on `boards` and `enabled_models` instead of a hash-derived integer `workspace_id`. The key directly identifies the owning workspace without indirection.
@@ -69,17 +77,6 @@ The database schema SHALL store `workspace_key TEXT` (the file-derived string ke
 #### Scenario: No hash-derived integer needed
 - **WHEN** the runtime resolves which workspace a board belongs to
 - **THEN** it reads `workspace_key` directly without reversing a numeric hash
-
-### Requirement: Workspace config is hot-reloaded on demand
-The system SHALL re-read `workspace.yaml` from disk and update all AI provider settings without restarting the application.
-
-#### Scenario: Reload config reflects edited YAML
-- **WHEN** the user edits `workspace.yaml` and clicks "Reload config" in the Setup view
-- **THEN** all subsequent AI calls use the updated settings without restarting the app
-
-#### Scenario: Invalid YAML on reload surfaces an error
-- **WHEN** the user reloads config and `workspace.yaml` contains a parse error
-- **THEN** an error message is shown in the Setup view and the previous valid configuration continues to apply
 
 ### Requirement: Default config files are created on first launch
 The system SHALL auto-create `workspace.yaml` and the default workflow YAML when the config directory does not exist, so users can start without manual setup.

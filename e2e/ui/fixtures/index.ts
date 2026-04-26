@@ -67,6 +67,7 @@ export const test = base.extend<Fixtures>({
             .returns("engine.listCommands", [])
             .returns("workspace.listFiles", [])
             .returns("lsp.workspaceSymbol", [])
+            .returns("lsp.detectLanguages", [])
             // Chat sessions — tests override as needed
             .returns("chatSessions.list", [])
             .returns("chatSessions.create", { id: 900, workspaceKey: "test-workspace", title: "New Chat", status: "idle", conversationId: 900, enabledMcpTools: null, lastActivityAt: new Date().toISOString(), lastReadAt: null, archivedAt: null, createdAt: new Date().toISOString() })
@@ -75,7 +76,15 @@ export const test = base.extend<Fixtures>({
             .returns("chatSessions.archive", undefined)
             .returns("chatSessions.markRead", undefined)
             .returns("chatSessions.cancel", undefined)
-            .returns("chatSessions.sendMessage", { executionId: -1, message: null });
+            .returns("chatSessions.sendMessage", { executionId: -1, message: null })
+            // Workspace management endpoints
+            .returns("workspace.update", {})
+            .returns("workspace.create", { key: "new-workspace", name: "New Workspace" })
+            .returns("workspace.resolveGitRoot", { gitRoot: "" })
+            .returns("workspace.openFolderDialog", { path: null })
+            .returns("projects.register", { key: "new-project", workspaceKey: "test-workspace", name: "New Project", projectPath: "/tmp/new", gitRootPath: "/tmp/new", defaultBranch: "main" })
+            .returns("projects.update", { key: "test-project", workspaceKey: "test-workspace", name: "Test Project", projectPath: "/home/user/projects/test", gitRootPath: "/home/user/projects/test", defaultBranch: "main" })
+            .returns("projects.delete", undefined);
 
         await api.install();
         await use(api);
