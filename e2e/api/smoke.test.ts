@@ -397,3 +397,60 @@ describe("models", () => {
         expect(Array.isArray(lists)).toBe(true);
     });
 });
+
+describe("worktree CWD isolation", () => {
+    // Verifies the fix for: tasks executing in main git repo instead of worktree.
+    // After a worktree is created, task.worktreePath must point inside the
+    // worktrees base directory — not to the main project repo.
+    let boardId: number;
+    let taskId: number;
+
+    beforeAll(async () => {
+        const board = await server.request("boards.create", {
+            workspaceKey: "test-ws",
+            name: "CWD Isolation Board",
+            projectKeys: [],
+            workflowTemplateId: "default",
+        });
+        boardId = board.id;
+        const task = await server.request("tasks.create", {
+            boardId,
+            projectKey: "test-ws",
+            title: "CWD isolation task",
+            description: "",
+        });
+        taskId = task.id;
+    });
+
+    test("worktreePath is null before worktree creation", async () => {
+        const tasks = await server.request("tasks.list", { boardId });
+        const task = tasks.find((t) => t.id === taskId);
+        expect(task?.worktreePath).toBeNull();
+    });
+
+    test("tasks.createWorktree sets worktreePath outside the main project dir", async () => {
+        // The main project repo lives at server.projectDir.
+        // After creating a worktree, task.worktreePath must NOT equal projectDir
+        // — it must be inside the configured worktree_base_path instead.
+        const wsConfig = await server.request("workspace.getConfig", { workspaceKey: "test-ws" });
+        const branchName = `test/cwd-${taskId}`;
+        const worktreePath = `${wsConfig.worktreeBasePath}/${branchName}`;
+
+        await server.request("tasks.createWorktree", {
+            taskId,
+            path: worktreePath,
+            mode: "new",
+            branchName,
+            sourceBranch: "main",
+        });
+
+        const tasks = await server.request("tasks.list", { boardId });
+        const task = tasks.find((t) => t.id === taskId);
+        expect(task?.worktreeStatus).toBe("ready");
+        expect(task?.worktreePath).not.toBeNull();
+        // The worktree must NOT be the main project directory
+        expect(task?.worktreePath).not.toBe(server.projectDir);
+        // The worktree path must start with the configured worktree_base_path
+        expect(task?.worktreePath).toStartWith(wsConfig.worktreeBasePath);
+    });
+});

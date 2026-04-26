@@ -117,6 +117,27 @@ describe("triggerWorktreeIfNeeded", () => {
     expect(statuses[1]).toMatch(/ready/i);
   }, 15_000);
 
+  it("sets worktree_path inside worktree_base_path after creation", async () => {
+    // Verify the path persisted to task_git_context.worktree_path is a
+    // descendant of the configured worktree_base_path.  The orchestrator
+    // uses this path to compute the agent's CWD, so it must be within the
+    // configured worktrees base directory (not the main repo).
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    registerProjectGitContext(taskId, gitDir);
+
+    await triggerWorktreeIfNeeded(taskId);
+
+    const row = db
+      .query<{ worktree_path: string; worktree_status: string }, [number]>(
+        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+      )
+      .get(taskId);
+
+    expect(row!.worktree_status).toBe("ready");
+    expect(row!.worktree_path).toStartWith(worktreesBase);
+    expect(row!.worktree_path).not.toStartWith(gitDir);
+  }, 15_000);
+
   it("retries worktree creation when status is error", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     registerProjectGitContext(taskId, gitDir);

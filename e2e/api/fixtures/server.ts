@@ -80,12 +80,14 @@ columns:
     label: Done
 `);
 
-    return { workspacesDir };
+    return { workspacesDir, projectDir };
 }
 
 export interface TestServer {
     baseUrl: string;
     debugUrl: string;
+    /** Absolute path to the test project directory (the main git repo, NOT a worktree) */
+    projectDir: string;
     /** Type-safe API call */
     request<M extends keyof RailynAPI>(
         method: M,
@@ -96,7 +98,7 @@ export interface TestServer {
 
 export async function startServer(): Promise<TestServer> {
     const runtimeDir = runtimePath("api-");
-    const { workspacesDir } = writeTestConfig(runtimeDir);
+    const { workspacesDir, projectDir } = writeTestConfig(runtimeDir);
 
     const proc = spawn({
         cmd: [
@@ -214,5 +216,5 @@ export async function startServer(): Promise<TestServer> {
         }
     }
 
-    return { baseUrl, debugUrl, request, shutdown };
+    return { baseUrl, debugUrl, request, shutdown, projectDir };
 }

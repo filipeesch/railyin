@@ -28,6 +28,7 @@ import { resolveEngine } from "./resolver.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { MessageType } from "../../shared/rpc-types.ts";
 import { appendMessage, ensureTaskConversation } from "../conversation/messages.ts";
+import { relative, join } from "node:path";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly injectedEngine: ExecutionEngine | null;
@@ -706,27 +707,24 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   private _resolveWorkingDirectory(task: TaskRow): string {
-    // ⚠️  INVARIANT: projectPath must take priority over worktree_path.
+    // When a worktree is ready, the agent MUST execute inside that worktree —
+    // not the main repository — so file edits stay isolated on the task branch.
     //
-    // Claude resolves slash commands (.claude/commands/) relative to its CWD.
-    // In a monorepo setup the worktree_path is the git worktree ROOT (the whole
-    // repo checkout), while projectPath is the specific sub-application directory
-    // where .claude/commands/ actually lives.  If worktree_path is returned here,
-    // commands like /opsx:explore become "Unknown skill" at runtime — even though
-    // they appear correctly in autocomplete — because ClaudeEngine.listCommands()
-    // already uses projectPath-first priority.
+    // For monorepo projects, the worktree is rooted at git_root_path, while the
+    // project lives in a sub-directory (e.g. packages/app).  We preserve that
+    // sub-path inside the worktree so slash commands (.claude/commands/) remain
+    // resolvable relative to the correct CWD.
     //
-    // Priority order here MUST match ClaudeEngine.listCommands():
-    //   1. projectPath  (configured in workspace.yaml — most specific, wins)
-    //   2. worktree_path (git worktree root — fallback when no projectPath)
+    // Priority:
+    //   1. worktree_path + relative(gitRootPath, projectPath)  — when ready
+    //   2. projectPath                                          — pre-worktree
+    //   3. throw                                               — neither found
     //
     // Regression tests: src/bun/test/orchestrator.test.ts
     //                   "Orchestrator working-directory resolution"
     const workspaceKey = getTaskWorkspaceKey(task.id);
-    const projectDirectory = getProjectByKey(workspaceKey, task.project_key)?.projectPath?.trim();
-    if (projectDirectory) {
-      return projectDirectory;
-    }
+    const project = getProjectByKey(workspaceKey, task.project_key);
+    const projectDirectory = project?.projectPath?.trim();
 
     const db = getDb();
     const gitRow = db
@@ -734,8 +732,27 @@ export class Orchestrator implements ExecutionCoordinator {
         "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
       )
       .get(task.id);
+
     if (gitRow?.worktree_status === "ready" && gitRow.worktree_path) {
-      return gitRow.worktree_path;
+      const worktreePath = gitRow.worktree_path;
+      if (!projectDirectory) {
+        return worktreePath;
+      }
+      const gitRootPath = project?.gitRootPath?.trim() ?? projectDirectory;
+      const relSubPath = relative(gitRootPath, projectDirectory);
+      // Guard: if projectPath is outside gitRootPath, relative() produces a
+      // "../.." prefix — that would escape the worktree and is a misconfiguration.
+      if (relSubPath.startsWith("..")) {
+        throw new Error(
+          `projectPath "${projectDirectory}" is outside gitRootPath "${gitRootPath}". ` +
+          `Check the project configuration in workspace.yaml.`,
+        );
+      }
+      return relSubPath ? join(worktreePath, relSubPath) : worktreePath;
+    }
+
+    if (projectDirectory) {
+      return projectDirectory;
     }
 
     throw new Error(`Project directory not found for project_key=${task.project_key}`);
