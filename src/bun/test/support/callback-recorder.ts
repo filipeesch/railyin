@@ -89,6 +89,14 @@ export class CallbackRecorder {
         );
     }
 
+    async waitForAnyStreamContent(executionId: number, timeoutMs = 5_000): Promise<void> {
+        await waitUntil(
+            () => this.streamEvents.some((e) => e.executionId === executionId && e.type === "text_chunk"),
+            `first text_chunk stream event for execution ${executionId}`,
+            timeoutMs,
+        );
+    }
+
     async waitForTaskState(taskId: number, state: string, timeoutMs = 5_000): Promise<Task> {
         await waitUntil(
             () => this.taskUpdates.some((task) => task.id === taskId && task.executionState === state),

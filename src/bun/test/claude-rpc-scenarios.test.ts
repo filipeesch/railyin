@@ -124,9 +124,9 @@ describe("Claude backend RPC scenarios", () => {
     const { taskId } = await runtime.createTask();
 
     const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "First" });
-    await runtime.recorder.waitForTokenDone(first.executionId);
+    await runtime.recorder.waitForStreamDone(first.executionId);
     const second = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Second" });
-    await runtime.recorder.waitForTokenDone(second.executionId);
+    await runtime.recorder.waitForStreamDone(second.executionId);
 
     expect(adapter.trace.createCalls).toHaveLength(1);
     expect(adapter.trace.resumeCalls).toHaveLength(1);
@@ -145,7 +145,7 @@ describe("Claude backend RPC scenarios", () => {
     expect(runtime.getMessages(taskId).some((message) => message.type === "ask_user_prompt" && message.content.includes('"subtype":"shell_approval"'))).toBe(true);
 
     await runtime.handlers["tasks.respondShellApproval"]({ taskId, decision: "approve_once" });
-    await runtime.recorder.waitForTokenDone(first.executionId);
+    await runtime.recorder.waitForStreamDone(first.executionId);
     await runtime.waitForExecutionStatus(first.executionId, "completed");
   });
 

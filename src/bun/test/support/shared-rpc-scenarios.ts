@@ -6,7 +6,7 @@ export async function runSingleTurnChatScenario(runtime: BackendRpcRuntime): Pro
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello from single-turn" });
 
     expect(result.message.content).toBe("Hello from single-turn");
-    await runtime.recorder.waitForTokenDone(result.executionId);
+    await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
 
     const messages = runtime.getMessages(taskId);
@@ -19,11 +19,11 @@ export async function runSingleTurnChatScenario(runtime: BackendRpcRuntime): Pro
 export async function runMultiTurnChatScenario(runtime: BackendRpcRuntime): Promise<void> {
     const { taskId } = await runtime.createTask();
     const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "First turn" });
-    await runtime.recorder.waitForTokenDone(first.executionId);
+    await runtime.recorder.waitForStreamDone(first.executionId);
     await runtime.waitForExecutionStatus(first.executionId, "completed");
 
     const second = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Second turn" });
-    await runtime.recorder.waitForTokenDone(second.executionId);
+    await runtime.recorder.waitForStreamDone(second.executionId);
     await runtime.waitForExecutionStatus(second.executionId, "completed");
 
     const tail = runtime.getMessages(taskId).slice(-4).map((message) => [message.type, message.content]);
@@ -38,7 +38,7 @@ export async function runMultiTurnChatScenario(runtime: BackendRpcRuntime): Prom
 export async function runToolSuccessScenario(runtime: BackendRpcRuntime): Promise<void> {
     const { taskId } = await runtime.createTask();
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Use a tool" });
-    await runtime.recorder.waitForTokenDone(result.executionId);
+    await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
 
     const messages = runtime.getMessages(taskId);
@@ -56,7 +56,7 @@ export async function runToolSuccessScenario(runtime: BackendRpcRuntime): Promis
 export async function runToolFailureScenario(runtime: BackendRpcRuntime): Promise<void> {
     const { taskId } = await runtime.createTask();
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Use a failing tool" });
-    await runtime.recorder.waitForTokenDone(result.executionId);
+    await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
 
     const toolResult = runtime.getMessages(taskId).find((message) => message.type === "tool_result");
@@ -87,7 +87,7 @@ export async function runAskUserResumeScenario(runtime: BackendRpcRuntime): Prom
     const second = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Use option A" });
     expect(second.executionId).toBe(first.executionId);
 
-    await runtime.recorder.waitForTokenDone(second.executionId);
+    await runtime.recorder.waitForStreamDone(second.executionId);
     await runtime.waitForExecutionStatus(second.executionId, "completed");
     await runtime.waitForTaskState(taskId, "completed");
 
@@ -101,16 +101,18 @@ export async function runCancellationScenario(runtime: BackendRpcRuntime): Promi
     const { taskId } = await runtime.createTask();
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Cancel me" });
 
-    await runtime.recorder.waitForAnyToken(result.executionId);
-    const tokenCountBeforeCancel = runtime.recorder.tokenEvents.filter((event) => event.executionId === result.executionId).length;
+    await runtime.recorder.waitForAnyStreamContent(result.executionId);
+    const streamContentBeforeCancel = runtime.recorder.streamEventsForExecution(result.executionId).filter((e) => e.type === "text_chunk").length;
     await runtime.handlers["tasks.cancel"]({ taskId });
-    await runtime.waitForExecutionStatus(result.executionId, "cancelled");
+    // Wait for the stream done event — emitted by consumeStream after the partial-text flush.
+    // This ensures tokenAccum has been flushed to conversation_messages before we assert.
+    await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForTaskState(taskId, "waiting_user");
-    const tokenCountAfterCancel = await runtime.recorder.waitForStableTokenCount(result.executionId);
+    const streamContentAfterCancel = runtime.recorder.streamEventsForExecution(result.executionId).filter((e) => e.type === "text_chunk").length;
 
-    expect(tokenCountAfterCancel).toBeGreaterThanOrEqual(tokenCountBeforeCancel);
+    expect(streamContentAfterCancel).toBeGreaterThanOrEqual(streamContentBeforeCancel);
     // Partial text accumulated before cancel is saved so the message is not lost.
-    // tokenCountBeforeCancel > 0 is guaranteed by waitForAnyToken above.
+    // streamContentBeforeCancel > 0 is guaranteed by waitForAnyStreamContent above.
     expect(runtime.getMessages(taskId).filter((message) => message.type === "assistant").length).toBeGreaterThan(0);
 }
 

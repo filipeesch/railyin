@@ -143,7 +143,7 @@ describe("Copilot backend RPC scenarios", () => {
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Resume existing" });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         expect(adapter.trace.resumeCalls).toHaveLength(1);
         expect(adapter.trace.createCalls).toHaveLength(0);
@@ -158,7 +158,7 @@ describe("Copilot backend RPC scenarios", () => {
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Create fallback" });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         expect(adapter.trace.resumeCalls).toHaveLength(1);
         expect(adapter.trace.createCalls).toHaveLength(1);
@@ -228,7 +228,7 @@ describe("Copilot backend RPC scenarios", () => {
             taskId,
             content: "[/opsx-propose|/opsx-propose] add-dark-mode",
         });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         expect(session.prompts).toEqual(["Resolved body: add-dark-mode"]);
         const persisted = runtime.db
@@ -259,7 +259,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: Buffer.from("# hi\n\nbody").toString("base64"),
             }],
         });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         expect(session.sentMessages).toHaveLength(1);
         expect(session.sentMessages[0]?.attachments).toEqual([{
@@ -295,7 +295,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: `@file:${filePath}`,
             }],
         });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         expect(session.prompts).toEqual([".gitignore explain this"]);
         expect(session.sentMessages[0]?.attachments).toEqual([{
@@ -324,7 +324,7 @@ describe("Copilot backend RPC scenarios", () => {
 
         // First turn — no attachment
         const result1 = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "hello" });
-        await runtime.recorder.waitForTokenDone(result1.executionId);
+        await runtime.recorder.waitForStreamDone(result1.executionId);
 
         const filePath = join(runtime.gitDir, "note.md");
         writeFileSync(filePath, "# Note\nsome content\n", "utf8");
@@ -339,7 +339,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: `@file:${filePath}`,
             }],
         });
-        await runtime.recorder.waitForTokenDone(result2.executionId);
+        await runtime.recorder.waitForStreamDone(result2.executionId);
 
         expect(session.sentMessages).toHaveLength(2);
         const secondAtt = session.sentMessages[1]?.attachments?.[0];
@@ -370,7 +370,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: "@file:config.ts",
             }],
         });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         const att = session.sentMessages[0]?.attachments?.[0];
         expect(att?.type).toBe("selection");
@@ -398,7 +398,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: Buffer.from("# Hello\n\nworld").toString("base64"),
             }],
         });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         expect(session.sentMessages).toHaveLength(1);
         const att = session.sentMessages[0]?.attachments?.[0];
@@ -427,7 +427,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: Buffer.from('{"key":"value"}').toString("base64"),
             }],
         });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         const att = session.sentMessages[0]?.attachments?.[0];
         expect(att?.type).toBe("selection");
@@ -458,7 +458,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: `@file:${filePath}:L2-L4`,
             }],
         });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         const att = session.sentMessages[0]?.attachments?.[0];
         expect(att?.type).toBe("selection");
@@ -489,7 +489,7 @@ describe("Copilot backend RPC scenarios", () => {
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Show me the result" });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         const persistedTools = runtime.db
             .query<{ type: string; content: string }, [number]>(
@@ -536,7 +536,7 @@ describe("Copilot backend RPC scenarios", () => {
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Edit files" });
-        await runtime.recorder.waitForTokenDone(result.executionId);
+        await runtime.recorder.waitForStreamDone(result.executionId);
 
         const toolResults = runtime.db
             .query<{ content: string }, [number]>(

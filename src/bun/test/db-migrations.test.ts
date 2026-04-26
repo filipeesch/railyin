@@ -87,6 +87,9 @@ describe("runMigrations", () => {
         type TEXT,
         content TEXT,
         metadata TEXT,
+        parent_block_id TEXT,
+        subagent_id TEXT,
+        conversation_id INTEGER NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE TABLE chat_sessions (

@@ -1075,6 +1075,10 @@ function applyMigration(id: string, sql: string): void {
       if (hasTable("chat_sessions") && !hasColumn("chat_sessions", "enabled_mcp_tools")) {
         db.exec("ALTER TABLE chat_sessions ADD COLUMN enabled_mcp_tools TEXT NULL;");
       }
+    } else if (id === "031_conversation_pagination_index") {
+      if (hasTable("conversation_messages")) {
+        db.exec(sql);
+      }
     } else {
       db.exec(sql);
     }

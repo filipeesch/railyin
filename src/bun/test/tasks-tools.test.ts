@@ -557,7 +557,7 @@ describe("executeCommonTool / create_todo", () => {
             { number: "10", title: "My todo", description: "Do the thing" },
             commonCtx(),
         );
-        const item = JSON.parse(result);
+        const item = JSON.parse(result.text);
         expect(item.title).toBe("My todo");
         expect(item.number).toBe(10);
         expect(item.phase).toBeNull();
@@ -569,7 +569,7 @@ describe("executeCommonTool / create_todo", () => {
             { number: "10", title: "Phased todo", description: "Do the thing", phase: "backlog" },
             commonCtx(),
         );
-        const item = JSON.parse(result);
+        const item = JSON.parse(result.text);
         expect(item.phase).toBe("backlog");
     });
 
@@ -579,7 +579,7 @@ describe("executeCommonTool / create_todo", () => {
             { title: "No number", description: "Oops" },
             commonCtx(),
         );
-        expect(result).toContain("Error: number is required");
+        expect(result.text).toContain("Error: number is required");
     });
 
     it("returns error when title is missing", async () => {
@@ -588,7 +588,7 @@ describe("executeCommonTool / create_todo", () => {
             { number: "10", description: "No title" },
             commonCtx(),
         );
-        expect(result).toContain("Error: title is required");
+        expect(result.text).toContain("Error: title is required");
     });
 });
 
@@ -596,50 +596,50 @@ describe("executeCommonTool / create_todo", () => {
 
 describe("executeCommonTool / edit_todo", () => {
     it("sets phase on an existing todo", async () => {
-        const created = JSON.parse(await executeCommonTool(
+        const created = JSON.parse((await executeCommonTool(
             "create_todo",
             { number: "10", title: "My todo", description: "Do it" },
             commonCtx(),
-        ));
+        )).text);
 
         const result = await executeCommonTool(
             "edit_todo",
             { id: String(created.id), phase: "in-progress" },
             commonCtx(),
         );
-        const item = JSON.parse(result);
+        const item = JSON.parse(result.text);
         expect(item.phase).toBe("in-progress");
     });
 
     it("clears phase when null string is passed", async () => {
-        const created = JSON.parse(await executeCommonTool(
+        const created = JSON.parse((await executeCommonTool(
             "create_todo",
             { number: "10", title: "My todo", description: "Do it", phase: "backlog" },
             commonCtx(),
-        ));
+        )).text);
 
         const result = await executeCommonTool(
             "edit_todo",
             { id: String(created.id), phase: "null" },
             commonCtx(),
         );
-        const item = JSON.parse(result);
+        const item = JSON.parse(result.text);
         expect(item.phase).toBeNull();
     });
 
     it("does not change phase when phase key is absent", async () => {
-        const created = JSON.parse(await executeCommonTool(
+        const created = JSON.parse((await executeCommonTool(
             "create_todo",
             { number: "10", title: "My todo", description: "Do it", phase: "backlog" },
             commonCtx(),
-        ));
+        )).text);
 
         const result = await executeCommonTool(
             "edit_todo",
             { id: String(created.id), title: "Updated title" },
             commonCtx(),
         );
-        const item = JSON.parse(result);
+        const item = JSON.parse(result.text);
         expect(item.phase).toBe("backlog");
     });
 });
@@ -660,7 +660,7 @@ describe("executeCommonTool / list_todos", () => {
         );
 
         const result = await executeCommonTool("list_todos", {}, commonCtx());
-        const items = JSON.parse(result);
+        const items = JSON.parse(result.text);
         expect(items).toHaveLength(2);
         expect(items.find((t: { title: string }) => t.title === "No phase").phase).toBeNull();
         expect(items.find((t: { title: string }) => t.title === "Backlog only").phase).toBe("backlog");
