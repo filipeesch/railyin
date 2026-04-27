@@ -127,6 +127,8 @@ export interface WorkflowColumnGroup {
 export interface WorkflowTemplateConfig {
   id: string;
   name: string;
+  /** Inline instructions prepended to every AI execution in this workflow. */
+  workflow_instructions?: string;
   columns: WorkflowColumnConfig[];
   groups?: WorkflowColumnGroup[];
 }

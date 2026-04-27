@@ -3,7 +3,7 @@ import { getDb } from "../../db/index.ts";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
 import { getTaskWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
-import { getColumnConfig } from "../../workflow/column-config.ts";
+import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config.ts";
 import { formatReviewMessageForLLM } from "../../workflow/review.ts";
 import { buildDiffCache } from "../git/git-diff-parser.ts";
 import type { EngineRegistry } from "../engine-registry.ts";
@@ -152,7 +152,7 @@ export class CodeReviewExecutor {
       conversationId,
       executionId,
       reviewText,
-      column?.stage_instructions,
+      buildSystemInstructions(config, task.board_id, task.workflow_state),
       this.workdirResolver.resolve(task),
       signal,
       this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),

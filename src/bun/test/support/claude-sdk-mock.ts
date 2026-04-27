@@ -19,7 +19,7 @@ export class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
   private models: ClaudeSdkModelInfo[] = [];
 
   readonly trace = {
-    createCalls: [] as Array<{ sessionId: string; model?: string }>,
+    createCalls: [] as Array<{ sessionId: string; model?: string; systemInstructions?: string }>,
     resumeCalls: [] as Array<{ sessionId: string; model?: string }>,
     cancelCalls: 0,
   };
@@ -44,7 +44,7 @@ export class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
     if (isResume) {
       this.trace.resumeCalls.push({ sessionId: config.sessionId, model: config.model });
     } else {
-      this.trace.createCalls.push({ sessionId: config.sessionId, model: config.model });
+      this.trace.createCalls.push({ sessionId: config.sessionId, model: config.model, systemInstructions: config.systemInstructions });
       this.knownSessions.add(config.sessionId);
     }
 

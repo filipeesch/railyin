@@ -4,7 +4,7 @@ The workflow engine drives automated AI execution when tasks enter workflow colu
 ## Requirements
 
 ### Requirement: Workflow columns are defined in YAML configuration
-The system SHALL load workflow column definitions from YAML files. Each column definition SHALL include at minimum an `id`, `label`, and optionally an `on_enter_prompt`, `stage_instructions`, and `tools`. The `on_enter_prompt` and `stage_instructions` fields SHALL accept either inline text or a slash reference in the form `/stem [argument]`. The `tools` array SHALL accept built-in group names (`read`, `write`, `search`, `web`, `shell`, `interactions`, `agents`) and individual tool names interchangeably — both resolve to tool definitions.
+The system SHALL load workflow column definitions from YAML files. Each column definition SHALL include at minimum an `id`, `label`, and optionally an `on_enter_prompt`, `stage_instructions`, and `tools`. The workflow template itself SHALL optionally include a `workflow_instructions` field. The `on_enter_prompt` field SHALL accept either inline text or a slash reference in the form `/stem [argument]`. The `stage_instructions` and `workflow_instructions` fields SHALL contain inline text only. The `tools` array SHALL accept built-in group names (`read`, `write`, `search`, `web`, `shell`, `interactions`, `agents`) and individual tool names interchangeably — both resolve to tool definitions.
 
 #### Scenario: Columns load from YAML at startup
 - **WHEN** the application starts
@@ -30,9 +30,9 @@ The system SHALL load workflow column definitions from YAML files. Each column d
 - **WHEN** a column defines `on_enter_prompt: /opsx-propose add-dark-mode`
 - **THEN** the engine resolves the reference to the prompt file body (with `$input` substituted) before constructing the AI request
 
-#### Scenario: Slash reference in stage_instructions is resolved before injection
-- **WHEN** a column defines `stage_instructions: /opsx-explore`
-- **THEN** the engine resolves the reference and injects the resolved body as the system message for every AI call in that column
+#### Scenario: stage_instructions is inline text passed as system message
+- **WHEN** a column defines `stage_instructions: "You are a planning assistant."`
+- **THEN** the engine injects that text as the system message for every AI call in that column (after any workflow_instructions)
 
 ### Requirement: Entering a column triggers on_enter_prompt execution
 The system SHALL automatically execute a column's `on_enter_prompt` when a task enters that column, if the prompt is configured. Before starting the execution, the orchestrator SHALL update the task's `model` field to the column's configured `model`, or the workspace default if the column has none. The orchestrator SHALL resolve the `on_enter_prompt` slash reference, persist the resolved content as a `user` message with `sender = 'prompt'` to `conversation_messages`, construct `ExecutionParams`, and delegate to the active `ExecutionEngine.execute()`.
@@ -58,19 +58,19 @@ The system SHALL automatically execute a column's `on_enter_prompt` when a task 
 - **THEN** the orchestrator resolves the slash reference, persists the resolved content as a `user` message with `sender = 'prompt'`, and then calls `engine.execute(params)`
 
 ### Requirement: Stage instructions are injected into every AI call in a column
-The system SHALL inject a column's `stage_instructions` as a system message into every AI call made while a task is in that column. This applies to both `on_enter_prompt` executions and subsequent human turn messages.
+The system SHALL inject a column's `stage_instructions` as a system message into every AI call made while a task is in that column. `workflow_instructions` from the parent workflow template SHALL be merged before `stage_instructions` (workflow-level first, column-level appended). This applies to both `on_enter_prompt` executions and subsequent human turn messages. Both fields are inline text only.
 
 #### Scenario: Stage instructions injected on prompt execution
 - **WHEN** the on_enter_prompt runs for a column with stage_instructions configured
-- **THEN** the AI request includes the stage_instructions as the first system message
+- **THEN** the AI request includes the stage_instructions as the system message (after any workflow_instructions)
 
 #### Scenario: Stage instructions injected on human turn
 - **WHEN** a user sends a follow-up message in the task chat while the task is in a column with stage_instructions
-- **THEN** the AI request includes the stage_instructions as a system message
+- **THEN** the AI request includes the stage_instructions as a system message (after any workflow_instructions)
 
 #### Scenario: No stage_instructions means no injection
 - **WHEN** a column does not define stage_instructions
-- **THEN** no additional system message is prepended to AI calls for tasks in that column
+- **THEN** no column-level system message is prepended to AI calls for tasks in that column (workflow_instructions may still be present)
 
 ### Requirement: Workflow engine ships with built-in templates
 The system SHALL include at least one built-in workflow YAML template that users can use without creating custom configuration.

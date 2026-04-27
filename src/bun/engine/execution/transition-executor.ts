@@ -3,7 +3,7 @@ import { getDb } from "../../db/index.ts";
 import { mapTask } from "../../db/mappers.ts";
 import { appendMessage } from "../../conversation/messages.ts";
 import { getBoardWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
-import { getColumnConfig } from "../../workflow/column-config.ts";
+import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config.ts";
 import type { EngineRegistry } from "../engine-registry.ts";
 import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { WorkingDirectoryResolver } from "./working-directory-resolver.ts";
@@ -76,7 +76,7 @@ export class TransitionExecutor {
       conversationId,
       executionId,
       resolvedPrompt,
-      column.stage_instructions,
+      buildSystemInstructions(config, task.board_id, toState),
       this.workdirResolver.resolve(updatedRow),
       signal,
       this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),

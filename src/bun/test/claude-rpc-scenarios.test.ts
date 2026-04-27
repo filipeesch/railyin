@@ -164,3 +164,39 @@ describe("Claude backend RPC scenarios", () => {
     expect(runtime.getMessages(taskId).some((message) => message.type === "interview_prompt")).toBe(true);
   });
 });
+
+describe("Claude engine — systemInstructions propagation", () => {
+  it("passes systemInstructions to ClaudeRunConfig", async () => {
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.queueCreate({ steps: [token("Done."), done()] });
+
+    const runtime = createClaudeRuntime(adapter);
+    const { taskId } = await runtime.createTask();
+
+    // task is in 'plan' state which has stage_instructions "You are a planning assistant."
+    const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello" });
+    await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+    const call = adapter.trace.createCalls[0];
+    expect(call).toBeDefined();
+    expect(call.systemInstructions).toBe("You are a planning assistant.");
+  });
+
+  it("passes undefined systemInstructions when no instructions are configured", async () => {
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.queueCreate({ steps: [token("Done."), done()] });
+
+    const runtime = createClaudeRuntime(adapter);
+    const { taskId } = await runtime.createTask();
+
+    // Move to backlog which has no instructions
+    runtime.db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+
+    const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello" });
+    await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+    const call = adapter.trace.createCalls[0];
+    expect(call).toBeDefined();
+    expect(call.systemInstructions).toBeUndefined();
+  });
+});

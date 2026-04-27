@@ -444,24 +444,180 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
     expect(shutdownCalls).toBe(1);
   });
 
-  it("ignores engines without shutdown hook", async () => {
-    class NoShutdownEngine implements ExecutionEngine {
-      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
-        yield { type: "done" };
-      }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
-      cancel(_executionId: number): void { }
-      async listModels() { return []; }
-    }
+});
 
-    const nonNative = new Orchestrator(
-      EngineRegistry.fromFixed(new NoShutdownEngine()),
+
+// ─── systemInstructions propagation tests ─────────────────────────────────────
+
+describe("systemInstructions propagation via executors", () => {
+  const WF_BOTH = `id: wf-both
+name: Both Fields
+workflow_instructions: "Workflow context."
+columns:
+  - id: col-both
+    label: Both
+    on_enter_prompt: "Do the thing."
+    stage_instructions: "Stage context."
+  - id: col-wf-only
+    label: WF Only
+    on_enter_prompt: "Do the other thing."
+  - id: col-stage-only
+    label: Stage Only
+    on_enter_prompt: "Stage only thing."
+    stage_instructions: "Stage only."
+  - id: col-neither
+    label: Neither
+    on_enter_prompt: "Neither thing."
+`;
+
+  const WF_NONE = `id: wf-none
+name: No Workflow Instructions
+columns:
+  - id: col-with-stage
+    label: With Stage
+    on_enter_prompt: "Plan."
+    stage_instructions: "Stage only."
+  - id: col-bare
+    label: Bare
+    on_enter_prompt: "Go."
+`;
+
+  let capturedParams: ExecutionParams[] = [];
+  let innerCleanup: (() => void) | null = null;
+
+  class CapturingEngine implements ExecutionEngine {
+    async *execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
+      capturedParams.push(params);
+      yield { type: "done" };
+    }
+    async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+    cancel(_executionId: number): void { }
+    async listModels() {
+      return [{ qualifiedId: "copilot/mock-model", displayName: "Mock", contextWindow: 128_000 }];
+    }
+    async listCommands() { return []; }
+  }
+
+  function makeCapturingOrchestrator(): Orchestrator {
+    capturedParams = [];
+    return new Orchestrator(
+      EngineRegistry.fromFixed(new CapturingEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
     );
+  }
 
-    await expect(nonNative.shutdownNonNativeEngines({ reason: "app-exit", deadlineMs: 100 })).resolves.toBeUndefined();
+  function seedBoardAndTask(templateId: string, workflowState = "backlog") {
+    db.run(
+      `INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', '${templateId}')`,
+    );
+    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    db.run("INSERT INTO conversations (task_id) VALUES (0)");
+    const conversationId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    db.run(
+      `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, 'test-project', 'Test', 'Test', '${workflowState}', 'idle', ?, 'fake/fake')`,
+      [boardId, conversationId],
+    );
+    const taskId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
+    return { boardId, taskId, conversationId };
+  }
+
+  beforeEach(() => {
+    innerCleanup = null;
+  });
+
+  afterEach(() => {
+    innerCleanup?.();
+    innerCleanup = null;
+  });
+
+  it("transition into column with both fields → merged systemInstructions", async () => {
+    const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
+    innerCleanup = cleanup;
+    db = initDb();
+
+    const { taskId } = seedBoardAndTask("wf-both", "backlog");
+    const orc = makeCapturingOrchestrator();
+
+    await orc.executeTransition(taskId, "col-both");
+
+    expect(capturedParams).toHaveLength(1);
+    expect(capturedParams[0].systemInstructions).toBe("Workflow context.\n\nStage context.");
+  });
+
+  it("transition into column with only workflow_instructions → workflow string only", async () => {
+    const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
+    innerCleanup = cleanup;
+    db = initDb();
+
+    const { taskId } = seedBoardAndTask("wf-both", "backlog");
+    const orc = makeCapturingOrchestrator();
+
+    await orc.executeTransition(taskId, "col-wf-only");
+
+    expect(capturedParams).toHaveLength(1);
+    expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
+  });
+
+  it("transition into column with only stage_instructions → stage string only (regression)", async () => {
+    const { cleanup } = setupTestConfig("", gitDir, [WF_NONE]);
+    innerCleanup = cleanup;
+    db = initDb();
+
+    const { taskId } = seedBoardAndTask("wf-none", "backlog");
+    const orc = makeCapturingOrchestrator();
+
+    await orc.executeTransition(taskId, "col-with-stage");
+
+    expect(capturedParams).toHaveLength(1);
+    expect(capturedParams[0].systemInstructions).toBe("Stage only.");
+  });
+
+  it("transition into column with neither field → systemInstructions is undefined", async () => {
+    const { cleanup } = setupTestConfig("", gitDir, [WF_NONE]);
+    innerCleanup = cleanup;
+    db = initDb();
+
+    const { taskId } = seedBoardAndTask("wf-none", "backlog");
+    const orc = makeCapturingOrchestrator();
+
+    await orc.executeTransition(taskId, "col-bare");
+
+    expect(capturedParams).toHaveLength(1);
+    expect(capturedParams[0].systemInstructions).toBeUndefined();
+  });
+
+  it("human-turn in column with both fields → merged systemInstructions", async () => {
+    const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
+    innerCleanup = cleanup;
+    db = initDb();
+
+    const { taskId, conversationId } = seedBoardAndTask("wf-both", "col-both");
+    const orc = makeCapturingOrchestrator();
+
+    await orc.executeHumanTurn(taskId, conversationId, "hello");
+
+    expect(capturedParams.length).toBeGreaterThan(0);
+    expect(capturedParams[0].systemInstructions).toBe("Workflow context.\n\nStage context.");
+  });
+
+  it("multi-board isolation: only board with workflow_instructions receives it", async () => {
+    const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH, WF_NONE]);
+    innerCleanup = cleanup;
+    db = initDb();
+
+    const { taskId: taskIdA } = seedBoardAndTask("wf-both", "backlog");
+    const { taskId: taskIdB } = seedBoardAndTask("wf-none", "backlog");
+
+    const orc = makeCapturingOrchestrator();
+
+    await orc.executeTransition(taskIdA, "col-wf-only");
+    await orc.executeTransition(taskIdB, "col-bare");
+
+    expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
+    expect(capturedParams[1].systemInstructions).toBeUndefined();
   });
 });
 

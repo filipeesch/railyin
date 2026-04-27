@@ -4,7 +4,7 @@ import { getDb } from "../../db/index.ts";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
 import { getTaskWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
-import { getColumnConfig } from "../../workflow/column-config.ts";
+import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config.ts";
 import type { EngineRegistry } from "../engine-registry.ts";
 import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { WorkingDirectoryResolver } from "./working-directory-resolver.ts";
@@ -80,7 +80,7 @@ export class HumanTurnExecutor {
           conversationId,
           newExecutionId,
           engineContent ?? content,
-          column?.stage_instructions,
+          buildSystemInstructions(config, task.board_id, task.workflow_state),
           this.workdirResolver.resolve(task),
           signal,
           this.streamProcessor.makePersistCallback(taskId, conversationId, newExecutionId),
@@ -118,7 +118,7 @@ export class HumanTurnExecutor {
       conversationId,
       executionId,
       resolvedPrompt,
-      column?.stage_instructions,
+      buildSystemInstructions(config, task.board_id, task.workflow_state),
       this.workdirResolver.resolve(task),
       signal,
       this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),

@@ -62,7 +62,7 @@ export interface ExecutionParams {
   boardId?: number;
   /** Resolved prompt text (on_enter_prompt or user message). */
   prompt: string;
-  /** stage_instructions from the column config (already slash-reference resolved). */
+  /** Merged workflow_instructions + stage_instructions (inline text only; no slash-reference resolution). */
   systemInstructions?: string;
   /** Task identity context (title + optional description). Populated when taskId is non-null. */
   taskContext?: { title: string; description?: string };

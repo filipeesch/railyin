@@ -576,3 +576,66 @@ describe("Copilot backend RPC scenarios", () => {
         expect(fileDiffs.every((diff) => typeof diff.added === "number" && typeof diff.removed === "number")).toBe(true);
     });
 });
+
+describe("Copilot engine — systemInstructions propagation", () => {
+    it("passes systemInstructions to session config as systemMessage", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        adapter.setModels([
+            {
+                id: "mock-model",
+                name: "Mock Model",
+                capabilities: { limits: { max_context_window_tokens: 64000 }, supports: { reasoningEffort: true } },
+            },
+        ]);
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Done."), done()] }));
+
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        // The task is in 'plan' state which has stage_instructions "You are a planning assistant."
+        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello" });
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+        const call = adapter.trace.createCalls[0];
+        expect(call).toBeDefined();
+        expect(call.config.systemMessage?.content).toContain("You are a planning assistant.");
+    });
+
+    it("omits systemMessage when systemInstructions is undefined", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        adapter.setModels([
+            {
+                id: "mock-model",
+                name: "Mock Model",
+                capabilities: { limits: { max_context_window_tokens: 64000 }, supports: { reasoningEffort: true } },
+            },
+        ]);
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Done."), done()] }));
+
+        // Move task to 'backlog' which has no stage_instructions or workflow_instructions
+        const runtime = createBackendRpcRuntime({
+            taskModel: "copilot/mock-model",
+            createEngine: ({ onTaskUpdated, onNewMessage }) =>
+                new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
+        });
+        runtimes.push(runtime);
+        const { taskId } = await runtime.createTask();
+        runtime.db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+
+        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello" });
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+        const call = adapter.trace.createCalls[0];
+        expect(call).toBeDefined();
+        // backlog has no instructions so systemMessage should be absent or only contain task context
+        // (task context is always present but not systemInstructions)
+        // The key assertion: no stage/workflow text in systemMessage
+        if (call.config.systemMessage) {
+            expect(call.config.systemMessage.content).not.toContain("planning assistant");
+        }
+    });
+});

@@ -1,5 +1,8 @@
 id: delivery
 name: Delivery Flow
+# workflow_instructions: |
+#   You are an AI assistant helping deliver software tasks end-to-end.
+#   These instructions apply to every column in this workflow.
 # Group columns that share a horizontal board slot (visual-only — no engine effect).
 groups:
   - label: Active
