@@ -30,6 +30,7 @@ export const INTERVIEW_ME_TOOL_DEFINITION: AIToolDefinition = {
             questions: {
                 type: "array",
                 description: "One or more questions. Batch all related decisions into a single call - do not call interview_me multiple times in sequence.",
+                minItems: 1,
                 items: {
                     type: "object",
                     properties: {

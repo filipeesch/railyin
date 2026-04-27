@@ -64,13 +64,13 @@ describe("executeCommonTool / interview_me", () => {
             "interview_me",
             {
                 context: "Need a decision",
-                questions: JSON.stringify([
+                questions: [
                     {
                         question: "Which option?",
                         type: "exclusive",
                         options: [{ title: "A", description: "Option A" }],
                     },
-                ]),
+                ],
             },
             baseContext,
         );
@@ -92,7 +92,7 @@ describe("executeCommonTool / interview_me", () => {
 
         expect(result.type).toBe("result");
         if (result.type === "result") {
-            expect(result.text).toContain("Error: questions is required");
+            expect(result.text).toContain("Error: field 'questions' is required");
         }
     });
 });

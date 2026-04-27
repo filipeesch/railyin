@@ -141,20 +141,20 @@ describe("buildClaudeToolServer — interview_me schema shape", () => {
 describe("executeCommonTool — interview_me input validation", () => {
   const ctx = {} as never;
 
-  it("returns error when questions JSON is malformed", async () => {
-    const result = await executeCommonTool("interview_me", { questions: "not-json" }, ctx);
+  it("returns error when questions is wrong type (not an array)", async () => {
+    const result = await executeCommonTool("interview_me", { questions: "not-an-array" }, ctx);
     expect(result.type).toBe("result");
-    expect((result as { type: "result"; text: string }).text).toMatch(/valid JSON/);
+    expect((result as { type: "result"; text: string }).text).toMatch(/must be array|questions/);
   });
 
   it("returns error when questions array is empty", async () => {
-    const result = await executeCommonTool("interview_me", { questions: "[]" }, ctx);
+    const result = await executeCommonTool("interview_me", { questions: [] }, ctx);
     expect(result.type).toBe("result");
-    expect((result as { type: "result"; text: string }).text).toMatch(/required/);
+    expect((result as { type: "result"; text: string }).text).toMatch(/at least 1/);
   });
 
   it("returns clear error when question type is invalid (e.g. single_choice)", async () => {
-    const questions = JSON.stringify([{ question: "Pick one", type: "single_choice" }]);
+    const questions = [{ question: "Pick one", type: "single_choice" }];
     const result = await executeCommonTool("interview_me", { questions }, ctx);
     expect(result.type).toBe("result");
     const text = (result as { type: "result"; text: string }).text;
@@ -165,30 +165,30 @@ describe("executeCommonTool — interview_me input validation", () => {
   });
 
   it("returns error when question.question field is missing", async () => {
-    const questions = JSON.stringify([{ type: "exclusive" }]);
+    const questions = [{ type: "exclusive" }];
     const result = await executeCommonTool("interview_me", { questions }, ctx);
     expect(result.type).toBe("result");
     expect((result as { type: "result"; text: string }).text).toMatch(/question/);
   });
 
   it("suspends with valid exclusive question", async () => {
-    const questions = JSON.stringify([
+    const questions = [
       { question: "Pick a DB", type: "exclusive", options: [{ title: "PG", description: "Postgres" }] },
-    ]);
+    ];
     const result = await executeCommonTool("interview_me", { questions }, ctx);
     expect(result.type).toBe("suspend");
   });
 
   it("suspends with valid non_exclusive question", async () => {
-    const questions = JSON.stringify([
+    const questions = [
       { question: "Pick strategies", type: "non_exclusive", options: [{ title: "A", description: "opt A" }] },
-    ]);
+    ];
     const result = await executeCommonTool("interview_me", { questions }, ctx);
     expect(result.type).toBe("suspend");
   });
 
   it("suspends with valid freetext question", async () => {
-    const questions = JSON.stringify([{ question: "Any constraints?", type: "freetext" }]);
+    const questions = [{ question: "Any constraints?", type: "freetext" }];
     const result = await executeCommonTool("interview_me", { questions }, ctx);
     expect(result.type).toBe("suspend");
   });

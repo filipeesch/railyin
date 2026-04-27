@@ -21,7 +21,7 @@ function safePath(worktreePath: string, userPath: string): string | null {
 }
 
 export async function executeLspTool(
-  args: Record<string, string | number>,
+  args: Record<string, unknown>,
   lspManager: LSPServerManager,
   worktreePath: string,
 ): Promise<string> {

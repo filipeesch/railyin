@@ -26,21 +26,6 @@ export function buildCopilotTools(
   enabledMcpTools?: string[] | null,
   onSuspend?: (payload: string) => void,
 ): Tool[] {
-  const toToolArgs = (args: unknown): Record<string, string> => {
-    if (!args || typeof args !== "object") return {};
-    return Object.fromEntries(
-      Object.entries(args as Record<string, unknown>).map(([key, value]) => {
-        if (typeof value === "string") return [key, value];
-        if (value == null) return [key, ""];
-        try {
-          return [key, JSON.stringify(value)];
-        } catch {
-          return [key, String(value)];
-        }
-      }),
-    );
-  };
-
   const commonTools = COMMON_TOOL_DEFINITIONS.map((def) => ({
     name: def.name,
     description: def.description,
@@ -49,7 +34,7 @@ export function buildCopilotTools(
     handler: async (args: unknown) => {
       const result = await executeCommonTool(
         def.name,
-        toToolArgs(args),
+        ((args && typeof args === "object" ? args : {}) as Record<string, unknown>),
         context,
       );
       if (result.type === "suspend") {

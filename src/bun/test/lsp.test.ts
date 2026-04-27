@@ -439,7 +439,7 @@ describe("executeLspTool", () => {
       onTransition: () => {}, onHumanTurn: () => {}, onCancel: () => {},
       worktreePath: "/tmp",
     };
-    const result = await executeCommonTool("lsp", { operation: "hover", file_path: "src/foo.ts", line: "1", character: "1" }, ctx as any);
+    const result = await executeCommonTool("lsp", { operation: "hover", file_path: "src/foo.ts", line: 1, character: 1 }, ctx as any);
     expect(result.text).toContain("Error: LSP is not configured");
   });
 

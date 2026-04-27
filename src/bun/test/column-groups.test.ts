@@ -258,7 +258,7 @@ describe("card limit enforcement in move_task", () => {
 
     const result = await executeCommonTool(
       "move_task",
-      { task_id: String(taskId), workflow_state: "inprogress" },
+      { task_id: taskId, workflow_state: "inprogress" },
       makeCommonCtx(taskId, boardId),
     );
 
@@ -274,7 +274,7 @@ describe("card limit enforcement in move_task", () => {
 
     const result = await executeCommonTool(
       "move_task",
-      { task_id: String(taskId), workflow_state: "inprogress" },
+      { task_id: taskId, workflow_state: "inprogress" },
       makeCommonCtx(taskId, boardId),
     );
 

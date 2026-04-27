@@ -15,6 +15,7 @@
         "@iconify/vue": "^5.0.0",
         "@monaco-editor/loader": "^1.4.0",
         "@tanstack/vue-virtual": "^3.13.23",
+        "ajv": "^8.17.1",
         "code-server": "^4.116.0",
         "diff": "^8.0.4",
         "js-yaml": "^4.1.0",
@@ -33,6 +34,7 @@
         "@types/bun": "latest",
         "@types/diff": "^8.0.0",
         "@types/js-yaml": "^4.0.9",
+        "@types/json-schema": "^7.0.15",
         "@types/marked": "^6.0.0",
         "@vitejs/plugin-vue": "^5.2.1",
         "@xterm/addon-fit": "^0.11.0",
@@ -478,6 +480,8 @@
     "@types/geojson": ["@types/geojson@7946.0.16", "", {}, "sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg=="],
 
     "@types/js-yaml": ["@types/js-yaml@4.0.9", "", {}, "sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg=="],
+
+    "@types/json-schema": ["@types/json-schema@7.0.15", "", {}, "sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA=="],
 
     "@types/marked": ["@types/marked@6.0.0", "", { "dependencies": { "marked": "*" } }, "sha512-jmjpa4BwUsmhxcfsgUit/7A9KbrC48Q0q8KvnY107ogcjGgTFDlIL3RpihNpx2Mu1hM4mdFQjoVc4O6JoGKHsA=="],
 

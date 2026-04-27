@@ -43,10 +43,12 @@
     "mermaid": "^11.14.0",
     "monaco-editor": "^0.55.1",
     "node-pty": "^1.0.0",
+    "ajv": "^8.17.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
+    "@types/json-schema": "^7.0.15",
     "@primevue/themes": "^4.0.0",
     "@stryker-mutator/core": "^9.0.0",
     "@stryker-mutator/typescript-checker": "^9.0.0",

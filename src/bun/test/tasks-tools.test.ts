@@ -59,7 +59,7 @@ describe("TOOL_GROUPS", () => {
 
 describe("executeCommonTool / get_task", () => {
     it("returns task metadata for a valid task_id", async () => {
-        const result = await executeCommonTool("get_task", { task_id: String(taskId) }, commonCtx());
+        const result = await executeCommonTool("get_task", { task_id: taskId }, commonCtx());
         const task = JSON.parse(result.text);
         expect(task.id).toBe(taskId);
         expect(task.title).toBe("Test task");
@@ -68,11 +68,11 @@ describe("executeCommonTool / get_task", () => {
 
     it("returns error when task_id is missing", async () => {
         const result = await executeCommonTool("get_task", {}, commonCtx());
-        expect(result.text).toContain("Error: task_id is required");
+        expect(result.text).toContain("Error: field 'task_id' is required");
     });
 
     it("returns error for a nonexistent task_id", async () => {
-        const result = await executeCommonTool("get_task", { task_id: "999999" }, commonCtx());
+        const result = await executeCommonTool("get_task", { task_id: 999999 }, commonCtx());
         expect(result.text).toContain("Error: task 999999 not found");
     });
 
@@ -83,7 +83,7 @@ describe("executeCommonTool / get_task", () => {
         );
         const result = await executeCommonTool(
             "get_task",
-            { task_id: String(taskId), include_messages: "5" },
+            { task_id: taskId, include_messages: 5 },
             commonCtx(),
         );
         const parsed = JSON.parse(result.text);
@@ -109,7 +109,7 @@ describe("executeCommonTool / get_board_summary", () => {
     it("returns column breakdown using explicit board_id arg", async () => {
         const result = await executeCommonTool(
             "get_board_summary",
-            { board_id: String(boardId) },
+            { board_id: boardId },
             commonCtx({ boardId: undefined }),
         );
         const summary = JSON.parse(result.text);
@@ -129,7 +129,7 @@ describe("executeCommonTool / get_board_summary", () => {
     it("returns error for a nonexistent board", async () => {
         const result = await executeCommonTool(
             "get_board_summary",
-            { board_id: "999999" },
+            { board_id: 999999 },
             commonCtx(),
         );
         expect(result.text).toContain("Error: board 999999 not found");
@@ -229,7 +229,7 @@ describe("executeCommonTool / create_task", () => {
             { title: "No project", description: "" },
             commonCtx(),
         );
-        expect(result.text).toContain("Error: project_key is required");
+        expect(result.text).toContain("Error: field 'project_key' is required");
     });
 
     it("returns error when title is missing", async () => {
@@ -286,7 +286,7 @@ describe("executeCommonTool / edit_task", () => {
     it("updates title and description before a branch is created", async () => {
         const result = await executeCommonTool(
             "edit_task",
-            { task_id: String(taskId), title: "Updated", description: "New desc" },
+            { task_id: taskId, title: "Updated", description: "New desc" },
             commonCtx(),
         );
         const task = JSON.parse(result.text);
@@ -297,7 +297,7 @@ describe("executeCommonTool / edit_task", () => {
     it("returns error if task does not exist", async () => {
         const result = await executeCommonTool(
             "edit_task",
-            { task_id: "999999", title: "x" },
+            { task_id: 999999, title: "x" },
             commonCtx(),
         );
         expect(result.text).toContain("Error: task 999999 not found");
@@ -310,7 +310,7 @@ describe("executeCommonTool / edit_task", () => {
         );
         const result = await executeCommonTool(
             "edit_task",
-            { task_id: String(taskId), title: "Should fail" },
+            { task_id: taskId, title: "Should fail" },
             commonCtx(),
         );
         expect(result.text).toContain("Error: cannot edit task once a branch has been created");
@@ -318,7 +318,7 @@ describe("executeCommonTool / edit_task", () => {
 
     it("returns error when task_id is missing", async () => {
         const result = await executeCommonTool("edit_task", {}, commonCtx());
-        expect(result.text).toContain("Error: task_id is required");
+        expect(result.text).toContain("Error: field 'task_id' is required");
     });
 });
 
@@ -328,7 +328,7 @@ describe("executeCommonTool / delete_task", () => {
     it("deletes the task and all cascaded data", async () => {
         const result = await executeCommonTool(
             "delete_task",
-            { task_id: String(taskId) },
+            { task_id: taskId },
             commonCtx(),
         );
         const res = JSON.parse(result.text);
@@ -349,7 +349,7 @@ describe("executeCommonTool / delete_task", () => {
     it("returns error for a nonexistent task", async () => {
         const result = await executeCommonTool(
             "delete_task",
-            { task_id: "999999" },
+            { task_id: 999999 },
             commonCtx(),
         );
         expect(result.text).toContain("Error: task 999999 not found");
@@ -357,7 +357,7 @@ describe("executeCommonTool / delete_task", () => {
 
     it("returns error when task_id is missing", async () => {
         const result = await executeCommonTool("delete_task", {}, commonCtx());
-        expect(result.text).toContain("Error: task_id is required");
+        expect(result.text).toContain("Error: field 'task_id' is required");
     });
 
     it("calls onCancel callback when task has a running execution", async () => {
@@ -375,7 +375,7 @@ describe("executeCommonTool / delete_task", () => {
         let cancelledId: number | null = null;
         await executeCommonTool(
             "delete_task",
-            { task_id: String(taskId) },
+            { task_id: taskId },
             { ...commonCtx(), onCancel: (id) => { cancelledId = id; } },
         );
 
@@ -389,7 +389,7 @@ describe("executeCommonTool / move_task", () => {
     it("moves a task to a valid workflow column", async () => {
         const result = await executeCommonTool(
             "move_task",
-            { task_id: String(taskId), workflow_state: "done" },
+            { task_id: taskId, workflow_state: "done" },
             commonCtx(),
         );
         const res = JSON.parse(result.text);
@@ -405,7 +405,7 @@ describe("executeCommonTool / move_task", () => {
     it("returns error for an invalid workflow column", async () => {
         const result = await executeCommonTool(
             "move_task",
-            { task_id: String(taskId), workflow_state: "nonexistent" },
+            { task_id: taskId, workflow_state: "nonexistent" },
             commonCtx(),
         );
         expect(result.text).toContain("Error: workflow_state \"nonexistent\" not found in board template");
@@ -415,7 +415,7 @@ describe("executeCommonTool / move_task", () => {
         let calledWith: [number, string] | null = null;
         await executeCommonTool(
             "move_task",
-            { task_id: String(taskId), workflow_state: "done" },
+            { task_id: taskId, workflow_state: "done" },
             { ...commonCtx(), onTransition: (id, state) => { calledWith = [id, state]; } },
         );
         expect(calledWith).toEqual([taskId, "done"]);
@@ -424,7 +424,7 @@ describe("executeCommonTool / move_task", () => {
     it("returns error when task does not exist", async () => {
         const result = await executeCommonTool(
             "move_task",
-            { task_id: "999999", workflow_state: "done" },
+            { task_id: 999999, workflow_state: "done" },
             commonCtx(),
         );
         expect(result.text).toContain("Error: task 999999 not found");
@@ -432,16 +432,16 @@ describe("executeCommonTool / move_task", () => {
 
     it("returns error when task_id is missing", async () => {
         const result = await executeCommonTool("move_task", { workflow_state: "done" }, commonCtx());
-        expect(result.text).toContain("Error: task_id is required");
+        expect(result.text).toContain("Error: field 'task_id' is required");
     });
 
     it("returns error when workflow_state is missing", async () => {
-        const result = await executeCommonTool("move_task", { task_id: String(taskId) }, commonCtx());
-        expect(result.text).toContain("Error: workflow_state is required");
+        const result = await executeCommonTool("move_task", { task_id: taskId }, commonCtx());
+        expect(result.text).toContain("Error: field 'workflow_state' is required");
     });
 
     it("sets position to 500 when moving to an empty column", async () => {
-        await executeCommonTool("move_task", { task_id: String(taskId), workflow_state: "done" }, commonCtx());
+        await executeCommonTool("move_task", { task_id: taskId, workflow_state: "done" }, commonCtx());
         const row = db
             .query<{ position: number }, [number]>("SELECT position FROM tasks WHERE id = ?")
             .get(taskId);
@@ -457,7 +457,7 @@ describe("executeCommonTool / message_task", () => {
         let deliveredMsg: string | null = null;
         const result = await executeCommonTool(
             "message_task",
-            { task_id: String(taskId), message: "Please review" },
+            { task_id: taskId, message: "Please review" },
             { ...commonCtx(), onHumanTurn: (id, msg) => { deliveredTo = id; deliveredMsg = msg; } },
         );
         const res = JSON.parse(result.text);
@@ -471,7 +471,7 @@ describe("executeCommonTool / message_task", () => {
 
         const result = await executeCommonTool(
             "message_task",
-            { task_id: String(taskId), message: "Queue me" },
+            { task_id: taskId, message: "Queue me" },
             commonCtx(),
         );
         const res = JSON.parse(result.text);
@@ -488,7 +488,7 @@ describe("executeCommonTool / message_task", () => {
     it("returns error when task does not exist", async () => {
         const result = await executeCommonTool(
             "message_task",
-            { task_id: "999999", message: "Hi" },
+            { task_id: 999999, message: "Hi" },
             commonCtx(),
         );
         expect(result.text).toContain("Error: task 999999 not found");
@@ -497,10 +497,10 @@ describe("executeCommonTool / message_task", () => {
     it("returns error when message is missing", async () => {
         const result = await executeCommonTool(
             "message_task",
-            { task_id: String(taskId) },
+            { task_id: taskId },
             commonCtx(),
         );
-        expect(result.text).toContain("Error: message is required");
+        expect(result.text).toContain("Error: field 'message' is required");
     });
 
     it("returns error when task_id is missing", async () => {
@@ -509,7 +509,7 @@ describe("executeCommonTool / message_task", () => {
             { message: "Hi" },
             commonCtx(),
         );
-        expect(result.text).toContain("Error: task_id is required");
+        expect(result.text).toContain("Error: field 'task_id' is required");
     });
 });
 
@@ -519,7 +519,7 @@ describe("executeCommonTool / create_todo", () => {
     it("creates a todo and returns item with phase null by default", async () => {
         const result = await executeCommonTool(
             "create_todo",
-            { number: "10", title: "My todo", description: "Do the thing" },
+            { number: 10, title: "My todo", description: "Do the thing" },
             commonCtx(),
         );
         const item = JSON.parse(result.text);
@@ -531,7 +531,7 @@ describe("executeCommonTool / create_todo", () => {
     it("creates a todo with a phase", async () => {
         const result = await executeCommonTool(
             "create_todo",
-            { number: "10", title: "Phased todo", description: "Do the thing", phase: "backlog" },
+            { number: 10, title: "Phased todo", description: "Do the thing", phase: "backlog" },
             commonCtx(),
         );
         const item = JSON.parse(result.text);
@@ -544,16 +544,16 @@ describe("executeCommonTool / create_todo", () => {
             { title: "No number", description: "Oops" },
             commonCtx(),
         );
-        expect(result.text).toContain("Error: number is required");
+        expect(result.text).toContain("Error: field 'number' is required");
     });
 
     it("returns error when title is missing", async () => {
         const result = await executeCommonTool(
             "create_todo",
-            { number: "10", description: "No title" },
+            { number: 10, description: "No title" },
             commonCtx(),
         );
-        expect(result.text).toContain("Error: title is required");
+        expect(result.text).toContain("Error: field 'title' is required");
     });
 });
 
@@ -563,13 +563,13 @@ describe("executeCommonTool / edit_todo", () => {
     it("sets phase on an existing todo", async () => {
         const created = JSON.parse((await executeCommonTool(
             "create_todo",
-            { number: "10", title: "My todo", description: "Do it" },
+            { number: 10, title: "My todo", description: "Do it" },
             commonCtx(),
         )).text);
 
         const result = await executeCommonTool(
             "edit_todo",
-            { id: String(created.id), phase: "in-progress" },
+            { id: created.id, phase: "in-progress" },
             commonCtx(),
         );
         const item = JSON.parse(result.text);
@@ -579,13 +579,13 @@ describe("executeCommonTool / edit_todo", () => {
     it("clears phase when null string is passed", async () => {
         const created = JSON.parse((await executeCommonTool(
             "create_todo",
-            { number: "10", title: "My todo", description: "Do it", phase: "backlog" },
+            { number: 10, title: "My todo", description: "Do it", phase: "backlog" },
             commonCtx(),
         )).text);
 
         const result = await executeCommonTool(
             "edit_todo",
-            { id: String(created.id), phase: "null" },
+            { id: created.id, phase: "null" },
             commonCtx(),
         );
         const item = JSON.parse(result.text);
@@ -595,13 +595,13 @@ describe("executeCommonTool / edit_todo", () => {
     it("does not change phase when phase key is absent", async () => {
         const created = JSON.parse((await executeCommonTool(
             "create_todo",
-            { number: "10", title: "My todo", description: "Do it", phase: "backlog" },
+            { number: 10, title: "My todo", description: "Do it", phase: "backlog" },
             commonCtx(),
         )).text);
 
         const result = await executeCommonTool(
             "edit_todo",
-            { id: String(created.id), title: "Updated title" },
+            { id: created.id, title: "Updated title" },
             commonCtx(),
         );
         const item = JSON.parse(result.text);
@@ -615,12 +615,12 @@ describe("executeCommonTool / list_todos", () => {
     it("returns all todos including phase field", async () => {
         await executeCommonTool(
             "create_todo",
-            { number: "10", title: "No phase", description: "Always active" },
+            { number: 10, title: "No phase", description: "Always active" },
             commonCtx(),
         );
         await executeCommonTool(
             "create_todo",
-            { number: "20", title: "Backlog only", description: "Scoped", phase: "backlog" },
+            { number: 20, title: "Backlog only", description: "Scoped", phase: "backlog" },
             commonCtx(),
         );
 

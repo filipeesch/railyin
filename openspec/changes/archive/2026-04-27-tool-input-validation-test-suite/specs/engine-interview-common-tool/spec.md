@@ -1,4 +1,4 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: interview_me suspends execution consistently across engines
 The system SHALL support callback-driven interview suspension from shared common tool execution so that interview_me produces a waiting_user transition and interview prompt event consistently across native, Copilot, and Claude engines. Before invoking the callback, the system SHALL validate the full `interview_me` input against its JSON Schema using the generic `validateToolArgs` helper. Invalid inputs (e.g. missing `questions` field, unknown `type` values, empty `questions` array) SHALL be returned as descriptive error strings to the model rather than triggering ad-hoc normalisation.
@@ -20,10 +20,6 @@ Tests for this SHALL:
 - **WHEN** orchestrator receives interview_me from native, Copilot, or Claude engine
 - **THEN** it persists an interview prompt message, sets task execution state to waiting_user, and marks execution as waiting_user
 
-#### Scenario: Invalid interview_me input is rejected with descriptive error
-- **WHEN** the Claude engine sends an `interview_me` call with a `type` value that is not one of `exclusive`, `non_exclusive`, `freetext`
-- **THEN** `executeCommonTool` returns a descriptive error message naming the invalid value and listing valid options, and the interview callback is NOT invoked
-
 #### Scenario: Invalid type enum rejected by AJV gate (regression guard)
 - **WHEN** the Claude engine sends an `interview_me` call with `questions: [{ question: "Q?", type: "single_choice", options: [] }]`
 - **THEN** `executeCommonTool` returns text that MATCHES `/single_choice/` and does NOT invoke the interview callback
@@ -35,15 +31,3 @@ Tests for this SHALL:
 #### Scenario: Missing questions field rejected by required gate
 - **WHEN** `executeCommonTool("interview_me", {}, ctx)` is called
 - **THEN** the returned `text` MATCHES `/questions/` AND MATCHES `/required|missing/i`
-
-#### Scenario: Valid real-array questions triggers suspension
-- **WHEN** `executeCommonTool("interview_me", { questions: [{ question: "Q?", type: "exclusive", options: [{title:"A", description:"a"}] }] }, ctx)` is called
-- **THEN** the result type is `"suspend"` and the payload contains the questions array
-
-#### Scenario: Missing questions field triggers validation error
-- **WHEN** `executeCommonTool("interview_me", {}, ctx)` is called
-- **THEN** the result type is `"result"` and the text matches `/questions/`
-
-#### Scenario: Invalid question type triggers validation error
-- **WHEN** `executeCommonTool("interview_me", { questions: [{ question: "Q?", type: "single_choice" }] }, ctx)` is called
-- **THEN** the result type is `"result"`, the text mentions `"single_choice"`, and the text mentions valid type values

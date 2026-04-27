@@ -14,14 +14,12 @@ export interface AIMessage {
 
 // ─── Tool calling types ───────────────────────────────────────────────────────
 
+import type { JSONSchema7 } from "json-schema";
+
 export interface AIToolDefinition {
   name: string;
   description: string;
-  parameters: {
-    type: "object";
-    properties: Record<string, { type: string; description: string }>;
-    required?: string[];
-  };
+  parameters: JSONSchema7;
 }
 
 export interface AIToolCall {

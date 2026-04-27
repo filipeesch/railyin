@@ -14,6 +14,7 @@ import { createTodo, editTodo, getTodo, listTodos, reprioritizeTodos } from "../
 import { INTERVIEW_ME_TOOL_DEFINITION } from "./interview-tool-definition.ts";
 import { LSP_TOOL_DEFINITION } from "./lsp-tool-definition.ts";
 import { executeLspTool } from "../workflow/tools/lsp-tools.ts";
+import { validateToolArgs } from "./validate-tool-args.ts";
 import {
   execGetTask,
   execGetBoardSummary,
@@ -302,6 +303,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
         id: { type: "number", description: "The todo item id." },
         status: {
           type: "string",
+          enum: ["pending", "in-progress", "done", "blocked", "deleted"],
           description: "New status: 'pending', 'in-progress', 'done', 'blocked', or 'deleted' (soft-delete).",
         },
       },
@@ -379,37 +381,17 @@ export type ToolExecutionResult =
  */
 export async function executeCommonTool(
   name: string,
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: CommonToolContext,
 ): Promise<ToolExecutionResult> {
+  const def = COMMON_TOOL_DEFINITIONS.find((d) => d.name === name);
+  if (def) {
+    const err = validateToolArgs(def, args);
+    if (err) return { type: "result", text: err };
+  }
   if (name === "interview_me") {
-    const context = (args.context ?? "").trim();
-    let questions: unknown;
-    try {
-      questions = args.questions ? JSON.parse(args.questions) : undefined;
-    } catch {
-      return { type: "result", text: "Error: questions must be a valid JSON array" };
-    }
-    if (!Array.isArray(questions) || questions.length === 0) {
-      return { type: "result", text: "Error: questions is required" };
-    }
-    const validTypes = new Set(["exclusive", "non_exclusive", "freetext"]);
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i] as Record<string, unknown>;
-      if (!q || typeof q !== "object") {
-        return { type: "result", text: `Error: questions[${i}] must be an object` };
-      }
-      if (typeof q.question !== "string" || !q.question.trim()) {
-        return { type: "result", text: `Error: questions[${i}].question must be a non-empty string` };
-      }
-      if (!validTypes.has(q.type as string)) {
-        return {
-          type: "result",
-          text: `Error: questions[${i}].type is "${q.type}" which is not valid. Must be one of: "exclusive", "non_exclusive", "freetext".`,
-        };
-      }
-    }
-    const payload: Record<string, unknown> = { questions };
+    const context = typeof args.context === "string" ? args.context.trim() : "";
+    const payload: Record<string, unknown> = { questions: args.questions };
     if (context) payload.context = context;
     return { type: "suspend", payload: JSON.stringify(payload) };
   }
@@ -419,7 +401,7 @@ export async function executeCommonTool(
 
 async function executeCommonToolText(
   name: string,
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: CommonToolContext,
 ): Promise<string> {
   switch (name) {
@@ -441,11 +423,11 @@ async function executeCommonToolText(
       return execMessageTask(args, ctx);
 
     case "create_todo": {
-      const number = args.number ? parseFloat(args.number) : NaN;
+      const number = args.number != null ? Number(args.number) : NaN;
       if (isNaN(number)) return "Error: number is required";
-      const title = (args.title ?? "").trim();
+      const title = args.title != null ? (args.title as string).trim() : "";
       if (!title) return "Error: title is required";
-      const description = (args.description ?? "").trim();
+      const description = args.description != null ? (args.description as string).trim() : "";
       if (!description) return "Error: description is required";
       const phase = args.phase != null ? String(args.phase) : undefined;
       const item = createTodo(ctx.taskId, number, title, description, phase);
@@ -454,12 +436,12 @@ async function executeCommonToolText(
 
     case "edit_todo": {
       if (!ctx.taskId) return "Error: edit_todo is only available within a task execution";
-      const id = args.id ? parseInt(args.id, 10) : NaN;
+      const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
       const update: Parameters<typeof editTodo>[2] = {};
-      if (args.number !== undefined) update.number = parseFloat(args.number);
-      if (args.title !== undefined) update.title = args.title.trim();
-      if (args.description !== undefined) update.description = args.description;
+      if (args.number !== undefined) update.number = Number(args.number);
+      if (args.title !== undefined) update.title = (args.title as string).trim();
+      if (args.description !== undefined) update.description = args.description as string;
       if ("phase" in args) update.phase = args.phase === "null" || args.phase == null ? null : String(args.phase);
       const result = editTodo(ctx.taskId, id, update);
       if (!result) return `Error: todo ${id} not found`;
@@ -474,7 +456,7 @@ async function executeCommonToolText(
 
     case "get_todo": {
       if (!ctx.taskId) return "Error: get_todo is only available within a task execution";
-      const id = args.id ? parseInt(args.id, 10) : NaN;
+      const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
       const todo = getTodo(ctx.taskId, id);
       if (!todo) return `Error: todo ${id} not found`;
@@ -484,21 +466,16 @@ async function executeCommonToolText(
 
     case "reorganize_todos": {
       if (!ctx.taskId) return "Error: reorganize_todos is only available within a task execution";
-      let items: Array<{ id: number; number: number }>;
-      try {
-        items = typeof args.items === "string" ? JSON.parse(args.items) : (args.items as Array<{ id: number; number: number }>);
-      } catch {
-        return "Error: items must be a valid JSON array of {id, number} pairs";
-      }
+      const items = args.items as Array<{ id: number; number: number }>;
       const updated = reprioritizeTodos(ctx.taskId, items);
       return JSON.stringify(updated);
     }
 
     case "update_todo_status": {
       if (!ctx.taskId) return "Error: update_todo_status is only available within a task execution";
-      const id = args.id ? parseInt(args.id, 10) : NaN;
+      const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const status = (args.status ?? "").trim();
+      const status = args.status != null ? (args.status as string).trim() : "";
       if (!status) return "Error: status is required";
       const result = editTodo(ctx.taskId, id, { status: status as import("../db/todos.ts").TodoStatus });
       if (!result) return `Error: todo ${id} not found`;
@@ -512,7 +489,7 @@ async function executeCommonToolText(
       if (!ctx.worktreePath) {
         return "Error: worktreePath is not set in tool context";
       }
-      return executeLspTool(args as Record<string, string | number>, ctx.lspManager, ctx.worktreePath);
+      return executeLspTool(args, ctx.lspManager, ctx.worktreePath);
     }
 
     default:

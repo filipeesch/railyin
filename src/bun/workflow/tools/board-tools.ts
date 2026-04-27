@@ -16,16 +16,16 @@ const TASK_WITH_GIT = `
   WHERE t.id = ?`;
 
 export async function execGetTask(
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: BoardToolContext,
 ): Promise<string> {
-  const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+  const taskId = Number(args.task_id);
   if (!taskId || isNaN(taskId)) return "Error: task_id is required";
   const db = getDb();
   const row = db.query<TaskRow, [number]>(TASK_WITH_GIT).get(taskId);
   if (!row) return `Error: task ${taskId} not found`;
   const task = mapTask(row);
-  const includeN = args.include_messages ? parseInt(args.include_messages, 10) : 0;
+  const includeN = args.include_messages != null ? Number(args.include_messages) : 0;
   if (includeN > 0) {
     const msgs = db
       .query<ConversationMessageRow, [number, number]>(
@@ -40,11 +40,11 @@ export async function execGetTask(
 }
 
 export async function execGetBoardSummary(
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: BoardToolContext,
 ): Promise<string> {
   const db = getDb();
-  const boardId = args.board_id ? parseInt(args.board_id, 10) : (ctx.boardId ?? 0);
+  const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
   if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
   const boardRow = db.query<{ id: number }, [number]>("SELECT id FROM boards WHERE id = ?").get(boardId);
   if (!boardRow) return `Error: board ${boardId} not found`;
@@ -66,22 +66,22 @@ export async function execGetBoardSummary(
 }
 
 export async function execListTasks(
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: BoardToolContext,
 ): Promise<string> {
   const db = getDb();
-  const boardId = args.board_id ? parseInt(args.board_id, 10) : (ctx.boardId ?? 0);
+  const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
   if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
-  const limitRaw = args.limit ? parseInt(args.limit, 10) : 50;
+  const limitRaw = args.limit != null ? Number(args.limit) : 50;
   const limit = Math.min(Math.max(1, limitRaw), 200);
   const conditions: string[] = ["t.board_id = ?"];
   const params: (string | number)[] = [boardId];
-  if (args.workflow_state) { conditions.push("t.workflow_state = ?"); params.push(args.workflow_state); }
-  if (args.execution_state) { conditions.push("t.execution_state = ?"); params.push(args.execution_state); }
-  if (args.project_key) { conditions.push("t.project_key = ?"); params.push(args.project_key); }
+  if (args.workflow_state) { conditions.push("t.workflow_state = ?"); params.push(args.workflow_state as string); }
+  if (args.execution_state) { conditions.push("t.execution_state = ?"); params.push(args.execution_state as string); }
+  if (args.project_key) { conditions.push("t.project_key = ?"); params.push(args.project_key as string); }
   if (args.query) {
     conditions.push("(t.title LIKE ? OR t.description LIKE ?)");
-    const q = `%${args.query}%`;
+    const q = `%${args.query as string}%`;
     params.push(q, q);
   }
   params.push(limit);
@@ -96,17 +96,16 @@ export async function execListTasks(
   return JSON.stringify(rows.map(mapTask));
 }
 
-// D4 fix: engine model resolution — args.model → config.engine.model → workspace.default_model
 export async function execCreateTask(
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: BoardToolContext,
 ): Promise<string> {
-  const projectKey = (args.project_key ?? "").trim();
+  const projectKey = ((args.project_key as string) ?? "").trim();
   if (!projectKey) return "Error: project_key is required";
-  const title = (args.title ?? "").trim();
+  const title = ((args.title as string) ?? "").trim();
   if (!title) return "Error: title is required";
-  const description = (args.description ?? "").trim();
-  const boardId = args.board_id ? parseInt(args.board_id, 10) : (ctx.boardId ?? 0);
+  const description = ((args.description as string) ?? "").trim();
+  const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
   if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
   const db = getDb();
   const boardRow = db
@@ -121,7 +120,7 @@ export async function execCreateTask(
   const convId = convRes.lastInsertRowid as number;
   const config = getConfig();
   const engineDefaultModel = "model" in config.engine ? (config.engine.model ?? null) : null;
-  const effectiveModel = args.model || engineDefaultModel || config.workspace.default_model || null;
+  const effectiveModel = (args.model as string) || engineDefaultModel || config.workspace.default_model || null;
   const taskRes = db.run(
     `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id${effectiveModel ? ", model" : ""})
      VALUES (?, ?, ?, ?, 'backlog', 'idle', ?${effectiveModel ? ", ?" : ""})`,
@@ -136,10 +135,10 @@ export async function execCreateTask(
 }
 
 export async function execEditTask(
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   _ctx: BoardToolContext,
 ): Promise<string> {
-  const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+  const taskId = Number(args.task_id);
   if (!taskId || isNaN(taskId)) return "Error: task_id is required";
   const db = getDb();
   const existing = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -152,8 +151,8 @@ export async function execEditTask(
   if (gitRow?.worktree_status && gitRow.worktree_status !== "not_created") {
     return "Error: cannot edit task once a branch has been created";
   }
-  const newTitle = (args.title ?? "").trim() || existing.title;
-  const newDesc = args.description !== undefined ? args.description.trim() : existing.description;
+  const newTitle = (args.title != null ? (args.title as string).trim() : "") || existing.title;
+  const newDesc = args.description !== undefined ? (args.description as string).trim() : existing.description;
   db.run("UPDATE tasks SET title = ?, description = ? WHERE id = ?", [newTitle, newDesc, taskId]);
   const updated = db.query<TaskRow, [number]>(TASK_WITH_GIT).get(taskId)!;
   return JSON.stringify(mapTask(updated));
@@ -161,10 +160,10 @@ export async function execEditTask(
 
 // D5 fix: includes LSP registry cleanup (was missing in tools.ts version)
 export async function execDeleteTask(
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: BoardToolContext,
 ): Promise<string> {
-  const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+  const taskId = Number(args.task_id);
   if (!taskId || isNaN(taskId)) return "Error: task_id is required";
   const db = getDb();
   const row = db
@@ -194,12 +193,12 @@ export async function execDeleteTask(
 
 // D3 fix: enforce card limits + compute position (was silently skipped in common-tools.ts)
 export async function execMoveTask(
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: BoardToolContext,
 ): Promise<string> {
-  const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+  const taskId = Number(args.task_id);
   if (!taskId || isNaN(taskId)) return "Error: task_id is required";
-  const targetState = (args.workflow_state ?? "").trim();
+  const targetState = ((args.workflow_state as string) ?? "").trim();
   if (!targetState) return "Error: workflow_state is required";
   const db = getDb();
   const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
@@ -238,12 +237,12 @@ export async function execMoveTask(
 }
 
 export async function execMessageTask(
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   ctx: BoardToolContext,
 ): Promise<string> {
-  const taskId = args.task_id ? parseInt(args.task_id, 10) : NaN;
+  const taskId = Number(args.task_id);
   if (!taskId || isNaN(taskId)) return "Error: task_id is required";
-  const message = (args.message ?? "").trim();
+  const message = ((args.message as string) ?? "").trim();
   if (!message) return "Error: message is required";
   const db = getDb();
   const taskRow = db
