@@ -179,8 +179,8 @@ test.describe("PAG-5 — streaming with paginated history", () => {
 
 test.describe("PAG-6 — refreshLatestPage on stream done", () => {
     test("PAG-6: older paged history is preserved when stream done fires", async ({ page, api, ws, task }) => {
-        const newestPage = makeMessages(task.id, 3, 4); // ids 4-6
-        const olderPage = makeMessages(task.id, 3, 1);  // ids 1-3
+        const newestPage = makeMessages(task.id, 12, 13); // ids 13-24
+        const olderPage = makeMessages(task.id, 12, 1); // ids 1-12
 
         api.handle("conversations.getMessages", (params) => {
             const p = params as { beforeMessageId?: number };
@@ -201,11 +201,13 @@ test.describe("PAG-6 — refreshLatestPage on stream done", () => {
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
-        await expect(page.locator(".conv-body .msg")).toHaveCount(3, { timeout: 3_000 });
+        await expect(page.locator(".conv-body .msg").last()).toContainText("History message 24", { timeout: 5_000 });
 
         // Load older page
         await page.locator(".task-detail .conv-body").evaluate((el) => el.scrollTop = 0);
-        await expect(page.locator(".conv-body .msg")).toHaveCount(6, { timeout: 5_000 });
+        await expect(page.locator(".conv-body__sentinel .conv-body__system")).not.toBeVisible({ timeout: 3_000 });
+        await page.locator(".task-detail .conv-body").evaluate((el) => (el.scrollTop = 0));
+        await expect(page.locator(".conv-body .msg").first()).toContainText("History message 1", { timeout: 5_000 });
 
         // Send message to trigger stream done (which calls refreshLatestPage)
         const editor = page.locator(".task-detail__input .cm-content");
@@ -213,9 +215,9 @@ test.describe("PAG-6 — refreshLatestPage on stream done", () => {
         await editor.pressSequentially("hello");
         await page.keyboard.press("Enter");
 
-        // After stream done, older history (ids 1-3) should still be in the list
-        const msgCount = await page.locator(".conv-body .msg").count();
-        expect(msgCount).toBeGreaterThan(5);
+        // After stream done, older history should still be in the list alongside the refreshed latest page
+        await page.locator(".task-detail .conv-body").evaluate((el) => (el.scrollTop = 0));
+        await expect(page.locator(".conv-body .msg").first()).toContainText("History message 1", { timeout: 5_000 });
     });
 });
 
@@ -223,23 +225,27 @@ test.describe("PAG-6 — refreshLatestPage on stream done", () => {
 
 test.describe("PAG-8 — sentinel hidden when all history loaded", () => {
     test("PAG-8: loading spinner gone and sentinel empty after full history loaded", async ({ page, api, task }) => {
+        const newestPage = makeMessages(task.id, 12, 13);
+        const olderPage = makeMessages(task.id, 12, 1);
+
         api.handle("conversations.getMessages", (params) => {
             const p = params as { beforeMessageId?: number };
             if (p.beforeMessageId != null) {
-                return { messages: makeMessages(task.id, 3, 1), hasMore: false };
+                return { messages: olderPage, hasMore: false };
             }
-            return { messages: makeMessages(task.id, 3, 4), hasMore: true };
+            return { messages: newestPage, hasMore: true };
         });
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
-        await expect(page.locator(".conv-body .msg")).toHaveCount(3, { timeout: 3_000 });
+        await expect(page.locator(".conv-body .msg").last()).toContainText("History message 24", { timeout: 5_000 });
 
         // Trigger load of older page
         await page.locator(".task-detail .conv-body").evaluate((el) => el.scrollTop = 0);
 
         // After load completes (hasMore=false), spinner inside sentinel should not be visible
-        await expect(page.locator(".conv-body .msg")).toHaveCount(6, { timeout: 5_000 });
         await expect(page.locator(".conv-body__sentinel .conv-body__system")).not.toBeVisible({ timeout: 3_000 });
+        await page.locator(".task-detail .conv-body").evaluate((el) => (el.scrollTop = 0));
+        await expect(page.locator(".conv-body .msg").first()).toContainText("History message 1", { timeout: 5_000 });
     });
 });

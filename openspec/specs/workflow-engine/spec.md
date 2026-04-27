@@ -35,11 +35,13 @@ The system SHALL load workflow column definitions from YAML files. Each column d
 - **THEN** the engine injects that text as the system message for every AI call in that column (after any workflow_instructions)
 
 ### Requirement: Entering a column triggers on_enter_prompt execution
-The system SHALL automatically execute a column's `on_enter_prompt` when a task enters that column, if the prompt is configured. Before starting the execution, the orchestrator SHALL update the task's `model` field to the column's configured `model`, or the workspace default if the column has none. The orchestrator SHALL resolve the `on_enter_prompt` slash reference, persist the resolved content as a `user` message with `sender = 'prompt'` to `conversation_messages`, construct `ExecutionParams`, and delegate to the active `ExecutionEngine.execute()`.
+The system SHALL automatically execute a column's `on_enter_prompt` when a task enters that column, if the prompt is configured. Before starting the execution, the orchestrator SHALL update the task's `model` field to the column's configured `model`, or keep the task's current model if the column has none. The orchestrator SHALL append a `transition_event` message that records the workflow move and, for prompted columns, the entered-column instruction detail needed for conversation rendering. The orchestrator SHALL construct `ExecutionParams` for the active engine and delegate to `ExecutionEngine.execute()`.
+
+For prompted column entry, the workflow metadata SHALL preserve both the prompt prepared for execution and the authored source prompt. When the source prompt is slash-based, the task chat SHALL be able to display the authored slash reference while keeping the resolved prompt body available in metadata. New prompted column-entry history SHALL NOT require a separate visible `user` prompt message as the primary explanation of what ran.
 
 #### Scenario: Prompt runs on column entry
 - **WHEN** a task is moved to a column with a configured `on_enter_prompt`
-- **THEN** the orchestrator creates `ExecutionParams` with the resolved prompt and calls `engine.execute(params)`; `execution_state` is set to `running`
+- **THEN** the orchestrator creates `ExecutionParams` for that prompt and calls `engine.execute(params)`; `execution_state` is set to `running`
 
 #### Scenario: No prompt means idle state
 - **WHEN** a task is moved to a column with no `on_enter_prompt`
@@ -49,13 +51,17 @@ The system SHALL automatically execute a column's `on_enter_prompt` when a task 
 - **WHEN** a task enters a column with a `model` field defined
 - **THEN** `task.model` is set to the column's model before execution begins
 
-#### Scenario: Task model reset to workspace default when column has no model
+#### Scenario: Task model falls back to the current task model when column has no model
 - **WHEN** a task enters a column with no `model` field
-- **THEN** `task.model` is set to the workspace `default_model` value (resolved from engine config for native, or from engine config for copilot)
+- **THEN** `task.model` keeps the task's current model value instead of resetting to a workspace default
 
-#### Scenario: Resolved prompt is persisted before execution
+#### Scenario: Prompted transition stores entered-column instruction detail
 - **WHEN** the orchestrator fires for a column with `on_enter_prompt`
-- **THEN** the orchestrator resolves the slash reference, persists the resolved content as a `user` message with `sender = 'prompt'`, and then calls `engine.execute(params)`
+- **THEN** the appended `transition_event` metadata contains the instruction detail needed for the task chat disclosure, including hidden source metadata for debugging
+
+#### Scenario: Prompted transition does not depend on a standalone visible prompt message
+- **WHEN** a task enters a prompted column
+- **THEN** the user-visible history of that transition can be rendered from the `transition_event` alone without requiring a separate visible `user(role="prompt")` row
 
 ### Requirement: Stage instructions are injected into every AI call in a column
 The system SHALL inject a column's `stage_instructions` as a system message into every AI call made while a task is in that column. `workflow_instructions` from the parent workflow template SHALL be merged before `stage_instructions` (workflow-level first, column-level appended). This applies to both `on_enter_prompt` executions and subsequent human turn messages. Both fields are inline text only.

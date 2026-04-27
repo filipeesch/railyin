@@ -10,6 +10,7 @@ import type {
     Task,
     ChatSession,
     ConversationMessage,
+    TransitionEventMetadata,
     WorkflowTemplate,
     WorkspaceConfig,
     Project,
@@ -156,6 +157,24 @@ export function makeAssistantMessage(
         role: "assistant",
         content,
         metadata: null,
+        createdAt: new Date().toISOString(),
+        ...overrides,
+    };
+}
+
+export function makeTransitionMessage(
+    taskId: number,
+    metadata: TransitionEventMetadata,
+    overrides?: Partial<ConversationMessage>,
+): ConversationMessage {
+    return {
+        id: _nextMsgId++,
+        taskId,
+        conversationId: taskId,
+        type: "transition_event",
+        role: null,
+        content: "",
+        metadata,
         createdAt: new Date().toISOString(),
         ...overrides,
     };

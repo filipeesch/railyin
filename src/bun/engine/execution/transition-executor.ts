@@ -1,4 +1,4 @@
-import type { Task } from "../../../shared/rpc-types.ts";
+import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types.ts";
 import { getDb } from "../../db/index.ts";
 import { mapTask } from "../../db/mappers.ts";
 import { appendMessage } from "../../conversation/messages.ts";
@@ -9,6 +9,7 @@ import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { WorkingDirectoryResolver } from "./working-directory-resolver.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
 import type { TaskRow } from "../../db/row-types.ts";
+import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 
 export class TransitionExecutor {
   constructor(
@@ -38,8 +39,6 @@ export class TransitionExecutor {
     const fromState = task.workflow_state;
     db.run("UPDATE tasks SET workflow_state = ? WHERE id = ?", [toState, taskId]);
 
-    appendMessage(taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
-
     const column = getColumnConfig(config, task.board_id, toState);
 
     const resolvedModel = column?.model ?? task.model ?? "";
@@ -50,13 +49,23 @@ export class TransitionExecutor {
     }
 
     if (!column?.on_enter_prompt) {
+      appendMessage(taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
       db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
       const updated = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
       return { task: mapTask(updated), executionId: null };
     }
 
     const resolvedPrompt = column.on_enter_prompt;
-    appendMessage(taskId, conversationId, "user", "prompt", resolvedPrompt);
+    const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+    const workingDirectory = this.workdirResolver.resolve(updatedRow);
+    const transitionMetadata = await this.buildTransitionMetadata(
+      config.engine.type,
+      fromState,
+      toState,
+      resolvedPrompt,
+      workingDirectory,
+    );
+    appendMessage(taskId, conversationId, "transition_event", null, "", transitionMetadata);
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -69,7 +78,6 @@ export class TransitionExecutor {
       [executionId, taskId],
     );
 
-    const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
     const signal = this.streamProcessor.createSignal(executionId);
     const execParams = this.paramsBuilder.build(
       updatedRow,
@@ -77,12 +85,36 @@ export class TransitionExecutor {
       executionId,
       resolvedPrompt,
       buildSystemInstructions(config, task.board_id, toState),
-      this.workdirResolver.resolve(updatedRow),
+      workingDirectory,
       signal,
       this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
     );
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
     return { task: mapTask(updatedRow), executionId };
+  }
+
+  private async buildTransitionMetadata(
+    engineType: "copilot" | "claude",
+    fromState: string,
+    toState: string,
+    prompt: string,
+    workingDirectory: string,
+  ): Promise<TransitionEventMetadata> {
+    const sourceKind = prompt.trimStart().startsWith("/") ? "slash" : "inline";
+    const displayText = engineType === "copilot"
+      ? await resolvePrompt(prompt, workingDirectory)
+      : prompt;
+
+    return {
+      from: fromState,
+      to: toState,
+      instructionDetail: {
+        displayText,
+        sourceText: prompt,
+        sourceKind,
+        ...(sourceKind === "slash" ? { sourceRef: prompt.trim().split(/\s+/, 1)[0] } : {}),
+      },
+    };
   }
 }

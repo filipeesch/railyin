@@ -135,6 +135,9 @@ export const useTaskStore = defineStore("task", () => {
         ...(targetPosition != null ? { targetPosition } : {}),
       });
       onTaskUpdated(task); // sync final state (executionState, model override, etc.)
+      if (activeTaskId.value === taskId) {
+        await loadMessages(taskId);
+      }
       return task;
     } catch (err) {
       // Revert optimistic move on error so the card ends up in a consistent state

@@ -144,6 +144,25 @@ export interface ToolCallDisplay {
   startLine?: number;
 }
 
+// ─── Transition event metadata ────────────────────────────────────────────────
+
+export interface TransitionInstructionDetail {
+  /** Prompt text shown in the transition-card disclosure. */
+  displayText: string;
+  /** Original authored prompt text kept for hidden metadata/debug parity. */
+  sourceText: string;
+  /** Whether the source prompt came from inline workflow text or slash indirection. */
+  sourceKind: "inline" | "slash";
+  /** Original slash reference, when the source was slash-based. */
+  sourceRef?: string;
+}
+
+export interface TransitionEventMetadata {
+  from: string | null;
+  to: string;
+  instructionDetail?: TransitionInstructionDetail;
+}
+
 // ─── Ask user prompt types ───────────────────────────────────────────────────
 
 export interface AskUserOption {

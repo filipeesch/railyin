@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { makeAssistantMessage } from "./fixtures/mock-data";
+import { makeAssistantMessage, makeTransitionMessage } from "./fixtures/mock-data";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -118,6 +118,44 @@ test.describe("TD — task drawer coverage", () => {
         expect(order).toHaveLength(2);
         expect(order[0]).toContain("Persisted assistant answer");
         expect(order[1]).toContain("Live tail answer");
+    });
+
+    test("TD-7: transition cards keep instructions collapsed by default and expand with chip styling", async ({ page, api, task }) => {
+        api.handle("conversations.getMessages", () => ({
+            messages: [
+                makeTransitionMessage(task.id, {
+                    from: "Backlog",
+                    to: "Plan",
+                    instructionDetail: {
+                        displayText: "Expanded instructions for transition card",
+                        sourceText: "Run [/opsx:apply|/opsx:apply] with [#src/app.ts|#app.ts] via [@chrome-devtools:click|@click]",
+                        sourceKind: "slash",
+                    },
+                }, {
+                    id: 83_000,
+                    conversationId: task.conversationId,
+                }),
+            ],
+            hasMore: false,
+        }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const card = page.locator(".transition-card");
+        await expect(card).toContainText("Moved to Plan from Backlog");
+        await expect(card).toContainText("To");
+        await expect(card).toContainText("From");
+        await expect(card.locator(".transition-card__details-body")).not.toBeVisible();
+
+        await card.locator(".transition-card__details-summary").click();
+
+        await expect(card.locator(".transition-card__details-body")).toBeVisible();
+        await expect(card.locator(".inline-chip-text__chip--slash")).toContainText("/opsx:apply");
+        await expect(card.locator(".inline-chip-text__chip--file")).toContainText("#app.ts");
+        await expect(card.locator(".inline-chip-text__chip--tool")).toContainText("@click");
+        await expect(card.locator(".transition-card__details-body")).not.toContainText("Expanded instructions for transition card");
+        await expect(card).not.toContainText("Source");
     });
 });
 

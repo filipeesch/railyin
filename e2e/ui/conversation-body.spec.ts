@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { makeAssistantMessage, makeUserMessage } from "./fixtures/mock-data";
+import { makeAssistantMessage, makeTransitionMessage, makeUserMessage } from "./fixtures/mock-data";
 import type { ConversationMessage, StreamEvent } from "@shared/rpc-types";
 
 const EXEC_ID = 30_001;
@@ -118,5 +118,35 @@ test.describe("CB — conversation body coverage", () => {
         await expect(page.locator(".conv-body .tcg .tcg__tool-name")).toContainText("read_file");
         await expect(page.locator(".conv-body .msg--assistant")).toContainText("Tool output summarized");
         await expect(page.locator(".conv-body .msg--user")).toContainText("follow-up question");
+    });
+
+    test("CB-4: legacy prompt rows coexist with new transition cards without duplicating fresh prompt UI", async ({ page, api, task }) => {
+        api.handle("conversations.getMessages", () => ({
+            messages: [
+                makeTransitionMessage(task.id, { from: "Backlog", to: "Plan" }, { id: 92_000 }),
+                makeUserMessage(task.id, "/legacy-plan prompt", {
+                    id: 92_001,
+                    role: "prompt",
+                }),
+                makeTransitionMessage(task.id, {
+                    from: "Plan",
+                    to: "Apply",
+                    instructionDetail: {
+                        displayText: "Run [/opsx:apply|/opsx:apply] with [#src/app.ts|#app.ts]",
+                        sourceText: "/opsx:apply",
+                        sourceKind: "slash",
+                    },
+                }, { id: 92_002 }),
+            ],
+            hasMore: false,
+        }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".transition-card")).toHaveCount(2);
+        await expect(page.locator(".msg--prompt")).toHaveCount(1);
+        await expect(page.locator(".transition-card").last()).toContainText("Moved to Apply from Plan");
+        await expect(page.locator(".transition-card").last()).not.toContainText("Source");
     });
 });

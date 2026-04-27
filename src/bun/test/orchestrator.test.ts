@@ -129,6 +129,41 @@ describe("Orchestrator.executeTransition", () => {
     expect(executionId).not.toBeNull();
     expect(typeof executionId).toBe("number");
   }, 10_000);
+
+  it("stores prompted transition instructions on the transition event without a standalone prompt row", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+
+    await orchestrator.executeTransition(taskId, "plan");
+
+    const event = db
+      .query<{ metadata: string | null }, [number]>(
+        "SELECT metadata FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' ORDER BY id DESC LIMIT 1",
+      )
+      .get(taskId);
+    const metadata = JSON.parse(event?.metadata ?? "{}") as {
+      from?: string;
+      to?: string;
+      instructionDetail?: { displayText?: string; sourceText?: string; sourceKind?: string };
+    };
+
+    expect(metadata).toEqual({
+      from: "backlog",
+      to: "plan",
+      instructionDetail: {
+        displayText: "Plan the task.",
+        sourceText: "Plan the task.",
+        sourceKind: "inline",
+      },
+    });
+
+    const promptRows = db
+      .query<{ count: number }, [number]>(
+        "SELECT count(*) AS count FROM conversation_messages WHERE task_id = ? AND type = 'user' AND role = 'prompt'",
+      )
+      .get(taskId);
+    expect(promptRows?.count).toBe(0);
+  });
 });
 
 // ─── executeHumanTurn ────────────────────────────────────────────────────────
@@ -620,5 +655,4 @@ columns:
     expect(capturedParams[1].systemInstructions).toBeUndefined();
   });
 });
-
 

@@ -35,6 +35,10 @@
             v-else-if="displayItems[vitem.index].kind === 'code_review'"
             :message="asCodeReview(vitem.index).message"
           />
+          <TransitionEventCard
+            v-else-if="displayItems[vitem.index].kind === 'single' && asSingle(vitem.index).message.type === 'transition_event'"
+            :message="asSingle(vitem.index).message"
+          />
           <div
             v-else-if="displayItems[vitem.index].kind === 'stream_tail'"
             class="conv-body__tail"
@@ -83,9 +87,9 @@ import { useVirtualizer } from "@tanstack/vue-virtual";
 import { marked } from "marked";
 import ProgressSpinner from "primevue/progressspinner";
 import MessageBubble from "./MessageBubble.vue";
+import TransitionEventCard from "./TransitionEventCard.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import { pairToolMessages, type ToolEntry } from "../utils/pairToolMessages";
-import ReasoningBubble from "./ReasoningBubble.vue";
 import StreamBlockNode from "./StreamBlockNode.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import type { ConversationMessage } from "@shared/rpc-types";
@@ -296,7 +300,7 @@ function setupSentinelObserver() {
   if (!sentinelEl.value) return;
   sentinelObserver = new IntersectionObserver(
     ([entry]) => {
-      if (entry.isIntersecting && props.hasMoreBefore && !props.isLoadingOlder) {
+      if (entry.isIntersecting && props.hasMoreBefore && !props.isLoadingOlder && !autoScroll.value) {
         emit("load-older");
       }
     },
