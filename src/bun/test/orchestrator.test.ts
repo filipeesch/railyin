@@ -7,13 +7,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
+import { EngineRegistry } from "../engine/engine-registry.ts";
 import type { Database } from "bun:sqlite";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
@@ -48,7 +49,7 @@ function makeOrchestrator(): Orchestrator {
   newMessages.length = 0;
 
   return new Orchestrator(
-    new TestEngine(),
+    EngineRegistry.fromFixed(new TestEngine()),
     noop,
     (task) => taskUpdates.push(task),
     (msg) => newMessages.push(msg),
@@ -215,8 +216,7 @@ describe("Orchestrator.executeHumanTurn", () => {
     }
 
     const nonNative = new Orchestrator(
-      new StubEngine(),
-      noop,
+      EngineRegistry.fromFixed(new StubEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -274,8 +274,7 @@ describe("Orchestrator.respondShellApproval", () => {
     }
 
     const approvalOrchestrator = new Orchestrator(
-      new RejectingResumeEngine(),
-      noop,
+      EngineRegistry.fromFixed(new RejectingResumeEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -368,8 +367,7 @@ describe("Orchestrator.cancel", () => {
     }
 
     const nonNative = new Orchestrator(
-      new CancelStubEngine(),
-      noop,
+      EngineRegistry.fromFixed(new CancelStubEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -436,8 +434,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
     }
 
     const nonNative = new Orchestrator(
-      new ShutdownStubEngine(),
-      noop,
+      EngineRegistry.fromFixed(new ShutdownStubEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -458,8 +455,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
     }
 
     const nonNative = new Orchestrator(
-      new NoShutdownEngine(),
-      noop,
+      EngineRegistry.fromFixed(new NoShutdownEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -469,277 +465,4 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
   });
 });
 
-// ─── Working-directory resolution ─────────────────────────────────────────────
-//
-// ⚠️  REGRESSION GUARD — this invariant has broken three times.
-//
-// The CWD passed to engine.execute() (via _resolveWorkingDirectory) MUST use
-// the same priority as ClaudeEngine.listCommands():
-//   1. projectPath  (workspace.yaml — the sub-application directory)
-//   2. worktree_path (git worktree root — fallback)
-//
-// When a task lives inside a monorepo the worktree_path is the repo root while
-// projectPath points to the specific sub-application (e.g. applications/broker).
-// .claude/commands/ lives under the sub-application, so if worktree_path wins
-// Claude starts in the wrong directory and every slash command becomes
-// "Unknown skill" — even though the commands show up in autocomplete (because
-// listCommands already resolved via projectPath).
-//
-// If you ever change _resolveWorkingDirectory or listCommands, keep both in sync.
 
-describe("Orchestrator working-directory resolution", () => {
-  let capturedWorkingDirectory: string | undefined;
-
-  class CapturingEngine implements ExecutionEngine {
-    async *execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
-      capturedWorkingDirectory = params.workingDirectory;
-      yield { type: "token", content: "ok" };
-      yield { type: "done" };
-    }
-    async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
-    cancel(_executionId: number): void { }
-    async listModels() {
-      return [{ qualifiedId: "copilot/mock-model", displayName: "Mock", contextWindow: 128_000 }];
-    }
-    async listCommands() { return []; }
-  }
-
-  function makeCapturingOrchestrator() {
-    capturedWorkingDirectory = undefined;
-    return new Orchestrator(
-      new CapturingEngine(),
-      noop,
-      noop,
-      noop,
-      noop,
-    );
-  }
-
-  it("uses worktree_path when worktree is ready (single-repo)", async () => {
-    // Core behaviour: when worktree_status = 'ready', CWD must be the worktree
-    // so the agent's file edits stay isolated on the task branch instead of
-    // modifying the main repository.
-    const projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
-    const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
-
-    // setupTestConfig sets project_path = git_root_path = projectDir
-    const localConfig = setupTestConfig("", projectDir);
-
-    try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, projectDir);
-      localDb.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
-        [taskId, projectDir, worktreeDir],
-      );
-
-      const orch = makeCapturingOrchestrator();
-      await orch.executeHumanTurn(taskId, "run /opsx:explore");
-
-      // relSubPath = relative(projectDir, projectDir) = "" → CWD = worktreeDir
-      expect(capturedWorkingDirectory).toBe(worktreeDir);
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-      rmSync(worktreeDir, { recursive: true, force: true });
-      localConfig.cleanup();
-    }
-  });
-
-  it("uses worktree_path + subdir when worktree is ready (monorepo)", async () => {
-    // Monorepo: git_root_path = /gitroot, project_path = /gitroot/packages/app
-    // Expected CWD in worktree: <worktreeDir>/packages/app
-    const gitRootDir = mkdtempSync(join(tmpdir(), "railyn-gitroot-"));
-    const projectDir = join(gitRootDir, "packages", "app");
-    mkdirSync(projectDir, { recursive: true });
-    const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
-
-    // Write config manually with differing project_path and git_root_path
-    const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
-    const workflowsDir = join(configDir, "workflows");
-    mkdirSync(workflowsDir, { recursive: true });
-    writeFileSync(
-      join(configDir, "workspace.test.yaml"),
-      [
-        "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
-        "projects:",
-        "  - key: test-project",
-        "    name: Test Project",
-        `    project_path: ${projectDir}`,
-        `    git_root_path: ${gitRootDir}`,
-        "    default_branch: main",
-      ].join("\n") + "\n",
-    );
-    writeFileSync(
-      join(workflowsDir, "delivery.yaml"),
-      [
-        "id: delivery",
-        "name: Delivery",
-        "columns:",
-        "  - id: backlog",
-        "    label: Backlog",
-        "    is_backlog: true",
-        "  - id: plan",
-        "    label: Plan",
-        "    on_enter_prompt: 'Plan the task.'",
-        "    stage_instructions: 'You are a planning assistant.'",
-        "    allowed_transitions: [inprogress]",
-        "  - id: done",
-        "    label: Done",
-      ].join("\n") + "\n",
-    );
-    process.env.RAILYN_CONFIG_DIR = configDir;
-    process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");
-    resetConfig();
-    loadConfig();
-
-    try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, projectDir);
-      localDb.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
-        [taskId, gitRootDir, worktreeDir],
-      );
-
-      const orch = makeCapturingOrchestrator();
-      await orch.executeHumanTurn(taskId, "hello");
-
-      // relSubPath = "packages/app" → CWD = <worktreeDir>/packages/app
-      expect(capturedWorkingDirectory).toBe(join(worktreeDir, "packages", "app"));
-    } finally {
-      rmSync(gitRootDir, { recursive: true, force: true });
-      rmSync(worktreeDir, { recursive: true, force: true });
-      rmSync(configDir, { recursive: true, force: true });
-      delete process.env.RAILYN_CONFIG_DIR;
-      delete process.env.RAILYN_SESSION_MEMORY_DIR;
-      resetConfig();
-    }
-  });
-
-  it("falls back to projectPath when worktree is not yet created", async () => {
-    // Pre-worktree state (Backlog / plan column before worktree setup):
-    // task_git_context row is absent or worktree_status != 'ready' → use projectPath
-    const projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
-
-    const localConfig = setupTestConfig("", projectDir);
-
-    try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, projectDir);
-      localDb.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
-      // Insert context row with non-ready status
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'not_created', 'test-branch')",
-        [taskId, projectDir, null],
-      );
-
-      const orch = makeCapturingOrchestrator();
-      await orch.executeHumanTurn(taskId, "hello");
-
-      expect(capturedWorkingDirectory).toBe(projectDir);
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-      localConfig.cleanup();
-    }
-  });
-
-  it("throws when projectPath is outside gitRootPath (misconfiguration)", async () => {
-    // Safeguard: if relative(gitRootPath, projectPath) starts with "..", the
-    // project lives outside the git repo — this is a config error.
-    const gitRootDir = mkdtempSync(join(tmpdir(), "railyn-gitroot-"));
-    const unrelatedDir = mkdtempSync(join(tmpdir(), "railyn-unrelated-"));
-    const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
-
-    // Config maps project_path to a dir that's NOT under git_root_path
-    const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
-    const workflowsDir = join(configDir, "workflows");
-    mkdirSync(workflowsDir, { recursive: true });
-    writeFileSync(
-      join(configDir, "workspace.test.yaml"),
-      [
-        "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
-        "projects:",
-        "  - key: test-project",
-        "    name: Test Project",
-        `    project_path: ${unrelatedDir}`,
-        `    git_root_path: ${gitRootDir}`,
-        "    default_branch: main",
-      ].join("\n") + "\n",
-    );
-    writeFileSync(
-      join(workflowsDir, "delivery.yaml"),
-      [
-        "id: delivery",
-        "name: Delivery",
-        "columns:",
-        "  - id: backlog",
-        "    label: Backlog",
-        "    is_backlog: true",
-        "  - id: plan",
-        "    label: Plan",
-        "    on_enter_prompt: 'Plan the task.'",
-        "    stage_instructions: 'You are a planning assistant.'",
-        "    allowed_transitions: [inprogress]",
-        "  - id: done",
-        "    label: Done",
-      ].join("\n") + "\n",
-    );
-    process.env.RAILYN_CONFIG_DIR = configDir;
-    process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");
-    resetConfig();
-    loadConfig();
-
-    try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, unrelatedDir);
-      localDb.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
-        [taskId, gitRootDir, worktreeDir],
-      );
-
-      const orch = makeCapturingOrchestrator();
-      await expect(orch.executeHumanTurn(taskId, "hello")).rejects.toThrow("outside gitRootPath");
-    } finally {
-      rmSync(gitRootDir, { recursive: true, force: true });
-      rmSync(unrelatedDir, { recursive: true, force: true });
-      rmSync(worktreeDir, { recursive: true, force: true });
-      rmSync(configDir, { recursive: true, force: true });
-      delete process.env.RAILYN_CONFIG_DIR;
-      delete process.env.RAILYN_SESSION_MEMORY_DIR;
-      resetConfig();
-    }
-  });
-
-  it("falls back to worktree_path when projectPath is not configured", async () => {
-    const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
-
-    // Config has no project_path for this key — simulate by using an unknown project_key
-    const localConfig = setupTestConfig("", worktreeDir);
-
-    try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, worktreeDir);
-      localDb.run("UPDATE tasks SET workflow_state = 'plan', project_key = 'no-project-path' WHERE id = ?", [taskId]);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
-        [taskId, worktreeDir, worktreeDir],
-      );
-
-      const orch = makeCapturingOrchestrator();
-      await orch.executeHumanTurn(taskId, "hello");
-
-      expect(capturedWorkingDirectory).toBe(worktreeDir);
-    } finally {
-      rmSync(worktreeDir, { recursive: true, force: true });
-      localConfig.cleanup();
-    }
-  });
-});

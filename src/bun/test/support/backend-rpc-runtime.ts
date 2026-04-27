@@ -6,6 +6,7 @@ import { execSync } from "child_process";
 import type { ConversationMessage, StreamEvent, Task } from "../../../shared/rpc-types.ts";
 import { taskHandlers } from "../../handlers/tasks.ts";
 import { Orchestrator } from "../../engine/orchestrator.ts";
+import { EngineRegistry } from "../../engine/engine-registry.ts";
 import type { ExecutionEngine } from "../../engine/types.ts";
 import { StreamBatcher } from "../../pipeline/batcher.ts";
 import { appendStreamEventBatch } from "../../db/stream-events.ts";
@@ -105,7 +106,7 @@ export function createBackendRpcRuntime(options: {
     });
 
     const coordinator = new Orchestrator(
-        engine,
+        EngineRegistry.fromFixed(engine),
         recorder.recordError,
         recorder.recordTaskUpdate,
         recorder.recordNewMessage,

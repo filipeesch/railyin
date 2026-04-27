@@ -75,6 +75,9 @@ import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/
 import { mapChatSession, mapTask } from "./db/mappers.ts";
 import { appendMessage } from "./conversation/messages.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
+import { EngineRegistry } from "./engine/engine-registry.ts";
+import { resolveEngine } from "./engine/resolver.ts";
+import { getWorkspaceConfig } from "./workspace-context.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
 import type { TaskRow, ConversationMessageRow, ChatSessionRow } from "./db/row-types.ts";
 import type { StreamEvent } from "../shared/rpc-types.ts";
@@ -222,19 +225,12 @@ const injectedEngine = process.env.RAILYN_TEST_EXECUTION_ENGINE === "mock"
   : null;
 
 // Create orchestrator once all RPC callbacks are defined
+const engineRegistry = injectedEngine
+  ? EngineRegistry.fromFixed(injectedEngine)
+  : new EngineRegistry((key) => resolveEngine(getWorkspaceConfig(key), notifyTaskUpdated, notifyNewMessage));
+
 const orchestrator: Orchestrator | null = !configError
-  ? injectedEngine
-    ? new Orchestrator(
-      injectedEngine,
-      onError,
-      notifyTaskUpdated,
-      notifyNewMessage,
-    )
-    : new Orchestrator(
-      onError,
-      notifyTaskUpdated,
-      notifyNewMessage,
-    )
+  ? new Orchestrator(engineRegistry, onError, notifyTaskUpdated, notifyNewMessage)
   : null;
 
 if (orchestrator) {

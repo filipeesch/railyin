@@ -6,6 +6,7 @@ import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
+import { EngineRegistry } from "../engine/engine-registry.ts";
 import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { compactMessages } from "../conversation/context.ts";
 import type { Database } from "bun:sqlite";
@@ -48,8 +49,7 @@ function makeHandlers() {
     async listCommands() { return []; }
   }
   const orch = new Orchestrator(
-    new NoopEngine(),
-    () => {},
+    EngineRegistry.fromFixed(new NoopEngine()),
     () => {},
     () => {},
     () => {},
