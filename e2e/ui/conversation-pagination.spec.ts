@@ -185,7 +185,15 @@ test.describe("PAG-6 — refreshLatestPage on stream done", () => {
         api.handle("conversations.getMessages", (params) => {
             const p = params as { beforeMessageId?: number };
             if (p.beforeMessageId != null) {
-                return { messages: olderPage, hasMore: false };
+                // Only load the older page when asked for messages before the newest page
+                // (beforeMessageId >= 13 means we're paging back from the newest page).
+                // After refreshLatestPage the IO may fire again with beforeMessageId=1;
+                // the server would return nothing for that — mirror that here to prevent
+                // double-loading already-present messages and creating duplicate keys.
+                if (p.beforeMessageId >= 13) {
+                    return { messages: olderPage, hasMore: false };
+                }
+                return { messages: [], hasMore: false };
             }
             // On initial load and after stream done: return the latest page
             return { messages: newestPage, hasMore: true };

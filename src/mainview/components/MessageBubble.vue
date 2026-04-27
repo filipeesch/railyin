@@ -76,6 +76,7 @@ import ReasoningBubble from "./ReasoningBubble.vue";
 import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
 import { useChatStore } from "../stores/chat";
 import { useTaskStore } from "../stores/task";
+import { useConversationStore } from "../stores/conversation";
 import { api } from "../rpc";
 
 const props = defineProps<{
@@ -86,13 +87,14 @@ const props = defineProps<{
 
 const chatStore = useChatStore();
 const taskStore = useTaskStore();
+const conversationStore = useConversationStore();
 
 function renderMd(content: string): string {
   return marked.parse(content, { async: false, breaks: true, gfm: true }) as string;
 }
 
 const displayContent = computed(() => props.chunk.content);
-const messageList = computed(() => (props.chunk.taskId == null ? chatStore.messages : taskStore.messages));
+const messageList = computed(() => conversationStore.messages);
 /** True when an assistant message was generated in XML <tool_call> format instead of the JSON API format. These should be silently hidden. */
 const isXmlToolCall = computed(() =>
   props.chunk.type === "assistant" && props.chunk.content.trimStart().startsWith("<tool_call>"),

@@ -3,7 +3,6 @@
     <ConversationBody
       :messages="props.messages"
       :stream-state="props.streamState"
-      :stream-version="props.streamVersion"
       :execution-state="props.executionState"
       :self-id="props.selfId"
       :has-more-before="props.hasMoreBefore"
@@ -51,7 +50,6 @@ import type { ConversationStreamState } from "../stores/conversation";
 const props = defineProps<{
   messages: ConversationMessage[];
   streamState?: ConversationStreamState | null;
-  streamVersion?: number;
   executionState: string;
   disabled?: boolean;
   placeholder?: string;

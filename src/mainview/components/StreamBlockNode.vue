@@ -13,7 +13,6 @@
           :blockId="childId"
           :blocks="blocks"
           :renderMd="renderMd"
-          :version="version"
         />
       </div>
     </ReasoningBubble>
@@ -55,7 +54,6 @@
             :blockId="childId"
             :blocks="blocks"
             :renderMd="renderMd"
-            :version="version"
           />
         </div>
       </div>
@@ -100,7 +98,6 @@
         :blockId="childId"
         :blocks="blocks"
         :renderMd="renderMd"
-        :version="version"
       />
     </template>
   </template>
@@ -119,18 +116,13 @@ const props = defineProps<{
   blockId: string;
   blocks: Map<string, StreamBlock>;
   renderMd: (md: string) => string;
-  version: number;
 }>();
 
 const open = ref(false);
 
-// Touch `version` so Vue re-evaluates when any stream event fires.
-// Spread into a new object so Vue 3's === check detects the value changed
-// and actually re-renders the template (in-place mutation is invisible to Vue).
 const block = computed(() => {
-  void props.version;
   const b = props.blocks.get(props.blockId);
-  return b ? { ...b } : undefined;
+  return b ?? undefined;
 });
 
 const fileDiffPayload = computed<FileDiffPayload | null>(() => {

@@ -51,14 +51,6 @@ interface ContextUsage {
   fraction: number;
 }
 
-interface ConversationHookContext {
-  activeConversationId: number | null;
-}
-
-interface ConversationHooks {
-  onStreamEvent?: (event: StreamEvent, context: ConversationHookContext) => void;
-  onNewMessage?: (message: ConversationMessage, context: ConversationHookContext) => void;
-}
 
 function removeScopedLiveBlocks(
   state: ConversationStreamState,
@@ -105,9 +97,7 @@ export const useConversationStore = defineStore("conversation", () => {
   const isLoadingOlder = ref(false);
 
   const streamStates = ref(new Map<number, ConversationStreamState>());
-  const streamVersion = ref(0);
   const contextUsageByConversation = ref(new Map<number, ContextUsage>());
-  const hooks = ref(new Map<string, ConversationHooks>());
 
   const activeStreamState = computed(() =>
     activeConversationId.value != null
@@ -120,35 +110,17 @@ export const useConversationStore = defineStore("conversation", () => {
       : null,
   );
 
-  function registerHooks(name: string, value: ConversationHooks) {
-    hooks.value = new Map(hooks.value).set(name, value);
-    return () => {
-      const next = new Map(hooks.value);
-      next.delete(name);
-      hooks.value = next;
-    };
-  }
-
-  function notifyStreamEvent(event: StreamEvent) {
-    const context = { activeConversationId: activeConversationId.value };
-    for (const hook of hooks.value.values()) {
-      hook.onStreamEvent?.(event, context);
-    }
-  }
-
-  function notifyNewMessage(message: ConversationMessage) {
-    const context = { activeConversationId: activeConversationId.value };
-    for (const hook of hooks.value.values()) {
-      hook.onNewMessage?.(message, context);
-    }
-  }
 
   function sortMessagesInPlace() {
     messages.value = [...messages.value].sort((a, b) => a.id - b.id);
   }
 
   function setActiveConversation(conversationId: number | null) {
+    const previousId = activeConversationId.value;
     activeConversationId.value = conversationId;
+    if (previousId != null && previousId !== conversationId) {
+      contextUsageByConversation.value.delete(previousId);
+    }
     if (conversationId == null) {
       messages.value = [];
       messagesLoading.value = false;
@@ -189,9 +161,12 @@ export const useConversationStore = defineStore("conversation", () => {
         for (const [blockId, block] of existingState.blocks) {
           if (!block.parentBlockId) existingState.roots.push(blockId);
         }
-        streamStates.value = new Map(streamStates.value);
+        streamStates.value.set(params.conversationId, existingState);
       }
-    } finally {
+      if (activeConversationId.value === params.conversationId) {
+        messagesLoading.value = false;
+      }
+    } catch {
       if (activeConversationId.value === params.conversationId) {
         messagesLoading.value = false;
       }
@@ -238,7 +213,7 @@ export const useConversationStore = defineStore("conversation", () => {
         for (const [blockId, block] of existingState.blocks) {
           if (!block.parentBlockId) existingState.roots.push(blockId);
         }
-        streamStates.value = new Map(streamStates.value);
+        streamStates.value.set(params.conversationId, existingState);
       }
     } catch (e) {
       console.error(e);
@@ -248,13 +223,9 @@ export const useConversationStore = defineStore("conversation", () => {
   async function fetchContextUsage(params: { conversationId: number }) {
     try {
       const usage = await api("conversations.contextUsage", params);
-      const next = new Map(contextUsageByConversation.value);
-      next.set(params.conversationId, usage);
-      contextUsageByConversation.value = next;
+      contextUsageByConversation.value.set(params.conversationId, usage);
     } catch {
-      const next = new Map(contextUsageByConversation.value);
-      next.delete(params.conversationId);
-      contextUsageByConversation.value = next;
+      contextUsageByConversation.value.delete(params.conversationId);
     }
   }
 
@@ -275,8 +246,6 @@ export const useConversationStore = defineStore("conversation", () => {
 
   function onStreamEvent(event: StreamEvent) {
     if (event.conversationId == null) return;
-    streamVersion.value++;
-    notifyStreamEvent(event);
 
     let state = streamStates.value.get(event.conversationId);
     if (!state) {
@@ -304,7 +273,11 @@ export const useConversationStore = defineStore("conversation", () => {
       for (const [, block] of state.blocks) {
         if (liveTypes.has(block.type)) block.done = true;
       }
-      streamStates.value = new Map(streamStates.value);
+      if (event.conversationId !== activeConversationId.value) {
+        state.blocks.clear();
+        state.roots = [];
+      }
+      streamStates.value.set(event.conversationId, state);
       if (event.conversationId === activeConversationId.value) {
         refreshLatestPage({ conversationId: event.conversationId }).catch(console.error);
         fetchContextUsage({ conversationId: event.conversationId }).catch(console.error);
@@ -314,7 +287,6 @@ export const useConversationStore = defineStore("conversation", () => {
 
     if (event.type === "status_chunk") {
       state.statusMessage = event.content;
-      streamStates.value = new Map(streamStates.value);
       return;
     }
 
@@ -355,7 +327,6 @@ export const useConversationStore = defineStore("conversation", () => {
           state.roots.push(newBlockId);
         }
       }
-      streamStates.value = new Map(streamStates.value);
       return;
     }
 
@@ -415,11 +386,9 @@ export const useConversationStore = defineStore("conversation", () => {
       existing.metadata = JSON.stringify(resultMeta);
     }
 
-    streamStates.value = new Map(streamStates.value);
   }
 
   function onNewMessage(message: ConversationMessage) {
-    notifyNewMessage(message);
     if (message.conversationId !== activeConversationId.value) return;
 
     const streamState = streamStates.value.get(message.conversationId);
@@ -437,11 +406,9 @@ export const useConversationStore = defineStore("conversation", () => {
     hasMoreBefore,
     isLoadingOlder,
     streamStates,
-    streamVersion,
     activeStreamState,
     contextUsage,
     contextUsageByConversation,
-    registerHooks,
     setActiveConversation,
     appendMessage,
     loadMessages,

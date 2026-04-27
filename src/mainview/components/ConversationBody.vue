@@ -50,7 +50,7 @@
                 :blockId="rootId"
                 :blocks="props.streamState.blocks"
                 :renderMd="renderMd"
-                :version="props.streamVersion"
+  
               />
               <div
                 v-if="props.streamState.statusMessage"
@@ -98,7 +98,6 @@ import type { ConversationStreamState } from "../stores/conversation";
 const props = defineProps<{
   messages: ConversationMessage[];
   streamState?: ConversationStreamState | null;
-  streamVersion?: number;
   executionState: string;
   // selfId = conversationId; kept for scroll tracking
   selfId?: number | null;
@@ -260,7 +259,7 @@ watch(
   [
     () => props.messages.length,
     () => props.executionState,
-    () => props.streamVersion ?? 0,
+    () => props.streamState?.roots.length,
   ],
   async ([newMsgLen], [oldMsgLen]) => {
     await nextTick();

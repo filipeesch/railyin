@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
-import type { ChatSession, ConversationMessage, StreamError, StreamEvent } from "@shared/rpc-types";
+import type { ChatSession, ConversationMessage, StreamEvent } from "@shared/rpc-types";
 import { useConversationStore } from "./conversation";
 import { type QueuedMessage, type QueueState, emptyQueueState } from "./queue-types";
 
@@ -10,8 +10,6 @@ export const useChatStore = defineStore("chat", () => {
   const conversationStore = useConversationStore();
   const sessions = ref<ChatSession[]>([]);
   const activeChatSessionId = ref<number | null>(null);
-  const messages = computed(() => conversationStore.messages);
-  const messagesLoading = computed(() => conversationStore.messagesLoading);
   const unreadSessionIds = ref(new Set<number>());
 
   // ─── Queue state ──────────────────────────────────────────────────────────
@@ -64,52 +62,43 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  conversationStore.registerHooks("chat-store", {
-    onStreamEvent(event, context) {
-      if (event.taskId != null || event.conversationId == null) return;
-      const sessionId = sessionIdForConversation(event.conversationId);
-      if (sessionId == null) return;
+  function onChatStreamEvent(event: StreamEvent): void {
+    if (event.taskId != null || event.conversationId == null) return;
+    const sessionId = sessionIdForConversation(event.conversationId);
+    if (sessionId == null) return;
 
-      if (event.type === "done") {
-        // Route through onChatSessionUpdated so the drain guard fires (backend
-        // never broadcasts chatSession.updated on natural completion).
-        const session = sessions.value.find(s => s.id === sessionId);
-        if (session) {
-          onChatSessionUpdated({ ...session, status: "idle" });
-        }
+    if (event.type === "done") {
+      // Route through onChatSessionUpdated so the drain guard fires (backend
+      // never broadcasts chatSession.updated on natural completion).
+      const session = sessions.value.find(s => s.id === sessionId);
+      if (session) {
+        onChatSessionUpdated({ ...session, status: "idle" });
       }
+    }
 
-      if (
-        event.conversationId !== context.activeConversationId &&
-        (event.type === "assistant" || event.type === "reasoning" || event.type === "system" || event.type === "file_diff")
-      ) {
-        markUnread(sessionId);
-      }
-    },
-    onNewMessage(message, context) {
-      if (message.taskId != null) return;
-      const sessionId = sessionIdForConversation(message.conversationId);
-      if (sessionId == null) return;
-
-      if (message.type === "ask_user_prompt" || message.type === "interview_prompt") {
-        updateSession(sessionId, { status: "waiting_user" });
-      }
-
-      if (
-        message.conversationId !== context.activeConversationId &&
-        (message.type === "assistant" || message.type === "reasoning" || message.type === "system" || message.type === "file_diff")
-      ) {
-        markUnread(sessionId);
-      }
-    },
-  });
-
-  function onStreamError(payload: StreamError) {
-    conversationStore.onStreamError(payload);
+    if (
+      event.conversationId !== conversationStore.activeConversationId &&
+      (event.type === "assistant" || event.type === "reasoning" || event.type === "system" || event.type === "file_diff")
+    ) {
+      markUnread(sessionId);
+    }
   }
 
-  function onStreamEvent(event: StreamEvent) {
-    conversationStore.onStreamEvent(event);
+  function onChatNewMessage(message: ConversationMessage): void {
+    if (message.taskId != null) return;
+    const sessionId = sessionIdForConversation(message.conversationId);
+    if (sessionId == null) return;
+
+    if (message.type === "ask_user_prompt" || message.type === "interview_prompt") {
+      updateSession(sessionId, { status: "waiting_user" });
+    }
+
+    if (
+      message.conversationId !== conversationStore.activeConversationId &&
+      (message.type === "assistant" || message.type === "reasoning" || message.type === "system" || message.type === "file_diff")
+    ) {
+      markUnread(sessionId);
+    }
   }
 
   async function loadSessions(workspaceKey?: string) {
@@ -204,13 +193,11 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function markUnread(sessionId: number) {
-    unreadSessionIds.value = new Set([...unreadSessionIds.value, sessionId]);
+    unreadSessionIds.value.add(sessionId);
   }
 
   function clearUnread(sessionId: number) {
-    const next = new Set(unreadSessionIds.value);
-    next.delete(sessionId);
-    unreadSessionIds.value = next;
+    unreadSessionIds.value.delete(sessionId);
   }
 
   function hasUnread(sessionId: number): boolean {
@@ -283,8 +270,6 @@ export const useChatStore = defineStore("chat", () => {
     sessions,
     activeChatSessionId,
     activeSession,
-    messages,
-    messagesLoading,
     unreadSessionIds,
     loadSessions,
     createSession,
@@ -298,8 +283,8 @@ export const useChatStore = defineStore("chat", () => {
     markUnread,
     clearUnread,
     onChatSessionUpdated,
-    onStreamError,
-    onStreamEvent,
+    onChatStreamEvent,
+    onChatNewMessage,
     // Queue
     sessionQueues,
     enqueueMessage,

@@ -87,7 +87,7 @@
           <div class="board-column__header">
             <span class="board-column__name">{{ slot.column.label }}</span>
             <Badge
-              :value="slot.column.limit != null ? `${columnTasks(slot.column.id).length}/${slot.column.limit}` : columnTasks(slot.column.id).length"
+              :value="slot.column.limit != null ? `${columnTasksMap[slot.column.id]?.length ?? 0}/${slot.column.limit}` : (columnTasksMap[slot.column.id]?.length ?? 0)"
               :severity="columnAtCapacity(slot.column.id) ? 'danger' : 'secondary'"
             />
           </div>
@@ -96,9 +96,10 @@
           </div>
           <div class="board-column__cards">
             <TaskCard
-              v-for="task in columnTasks(slot.column.id)"
+              v-for="task in columnTasksMap[slot.column.id] ?? []"
               :key="task.id"
               :task="task"
+              v-memo="[task, taskStore.hasUnread(task.id), taskStore.changedFileCounts[task.id]]"
               @pointerdown="onCardPointerDown($event, task.id)"
               @click="onCardClick(task.id)"
               @open-review="onOpenReview(task.id)"
@@ -128,7 +129,7 @@
             <div class="board-column__header">
               <span class="board-column__name">{{ col.label }}</span>
               <Badge
-                :value="col.limit != null ? `${columnTasks(col.id).length}/${col.limit}` : columnTasks(col.id).length"
+                :value="col.limit != null ? `${columnTasksMap[col.id]?.length ?? 0}/${col.limit}` : (columnTasksMap[col.id]?.length ?? 0)"
                 :severity="columnAtCapacity(col.id) ? 'danger' : 'secondary'"
               />
             </div>
@@ -137,9 +138,10 @@
             </div>
             <div class="board-column__cards">
               <TaskCard
-                v-for="task in columnTasks(col.id)"
+                v-for="task in columnTasksMap[col.id] ?? []"
                 :key="task.id"
                 :task="task"
+                v-memo="[task, taskStore.hasUnread(task.id), taskStore.changedFileCounts[task.id]]"
                 @pointerdown="onCardPointerDown($event, task.id)"
                 @click="onCardClick(task.id)"
                 @open-review="onOpenReview(task.id)"
@@ -248,6 +250,7 @@ import TerminalPanel from "../components/TerminalPanel.vue";
 import CodeServerOverlay from "../components/CodeServerOverlay.vue";
 import ChatSidebar from "../components/ChatSidebar.vue";
 import { useDrawerStore } from "../stores/drawer";
+import type { Task } from "../../shared/rpc-types";
 
 const CHAT_SIDEBAR_OPEN_KEY = "railyn.chatSidebarOpen";
 
@@ -393,20 +396,31 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onKeyDown);
 });
 
-function columnTasks(columnId: string) {
+const columnTasksMap = computed<Record<string, Task[]>>(() => {
   const boardId = boardStore.activeBoardId;
-  if (!boardId) return [];
-  return (taskStore.tasksByBoard[boardId] ?? [])
-    .filter((t) => t.workflowState === columnId)
-    .slice()
-    .sort((a, b) => a.position - b.position);
-}
+  if (!boardId) return {};
+  const tasks = taskStore.tasksByBoard[boardId] ?? [];
+  const template = boardStore.activeBoard?.template;
+  const result: Record<string, Task[]> = {};
+  for (const col of template?.columns ?? []) {
+    result[col.id] = [];
+  }
+  for (const task of tasks) {
+    if (result[task.workflowState]) {
+      result[task.workflowState].push(task);
+    }
+  }
+  for (const colId of Object.keys(result)) {
+    result[colId].sort((a, b) => a.position - b.position);
+  }
+  return result;
+});
 
 function columnAtCapacity(columnId: string): boolean {
   const template = boardStore.activeBoard?.template;
   const col = template?.columns.find((c) => c.id === columnId);
   if (col?.limit == null) return false;
-  return columnTasks(columnId).length >= col.limit;
+  return (columnTasksMap.value[columnId]?.length ?? 0) >= col.limit;
 }
 
 type RenderSlot =
@@ -585,7 +599,7 @@ async function onPointerUp(event: PointerEvent) {
     if (targetColumnId) {
       const task = Object.values(taskStore.tasksByBoard).flat().find((t) => t.id === dragSnapshot.taskId);
       if (task) {
-        const colTasks = columnTasks(targetColumnId);
+        const colTasks = columnTasksMap.value[targetColumnId] ?? [];
         const boardId = boardStore.activeBoardId;
         if (!boardId) return;
 

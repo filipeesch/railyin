@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
-import type { Task, ConversationMessage, StreamError, StreamEvent, GitNumstat } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamEvent, GitNumstat } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 import { useConversationStore } from "./conversation";
 import { useWorkspaceStore } from "./workspace";
@@ -19,19 +19,8 @@ export const useTaskStore = defineStore("task", () => {
 
   // Active task detail
   const activeTaskId = ref<number | null>(null);
-  const messages = computed(() => conversationStore.messages);
-  const hasMoreBefore = computed(() => conversationStore.hasMoreBefore);
-  const isLoadingOlder = computed(() => conversationStore.isLoadingOlder);
-
-  const streamStates = computed(() => conversationStore.streamStates);
-  const streamVersion = computed(() => conversationStore.streamVersion);
 
   const loading = ref(false);
-  const messagesLoading = computed(() => conversationStore.messagesLoading);
-
-  const availableModels = computed(() => workspaceStore.availableModels);
-  const allProviderModels = computed(() => workspaceStore.allProviderModels);
-  const contextUsage = computed(() => conversationStore.contextUsage);
 
   // Changed file counts per task (populated from file_diff events and task completion)
   const changedFileCounts = ref<Record<number, number>>({});
@@ -43,16 +32,12 @@ export const useTaskStore = defineStore("task", () => {
     return activeTaskId.value != null ? taskIndex.value[activeTaskId.value] ?? null : null;
   });
 
-  const activeStreamState = computed(() => conversationStore.activeStreamState);
-
   function markTaskUnread(taskId: number) {
-    unreadTaskIds.value = new Set([...unreadTaskIds.value, taskId]);
+    unreadTaskIds.value.add(taskId);
   }
 
   function clearTaskUnread(taskId: number) {
-    const next = new Set(unreadTaskIds.value);
-    next.delete(taskId);
-    unreadTaskIds.value = next;
+    unreadTaskIds.value.delete(taskId);
   }
 
   // ─── Load tasks for a board ───────────────────────────────────────────────
@@ -202,14 +187,6 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── IPC push handlers ────────────────────────────────────────────────────
 
-  function onStreamEvent(event: StreamEvent) {
-    conversationStore.onStreamEvent(event);
-  }
-
-  function onStreamError(payload: StreamError) {
-    conversationStore.onStreamError(payload);
-  }
-
   function onTaskUpdated(task: Task): TaskActivityEvent | null {
     const previous = taskIndex.value[task.id] ?? null;
     _replaceTask(task);
@@ -234,10 +211,6 @@ export const useTaskStore = defineStore("task", () => {
       drainQueue(task.id);
     }
     return activity;
-  }
-
-  function onNewMessage(message: ConversationMessage) {
-    conversationStore.onNewMessage(message);
   }
 
   // ─── Load enabled models (for chat dropdown) ──────────────────────────────────
@@ -312,6 +285,7 @@ export const useTaskStore = defineStore("task", () => {
     }
     delete taskIndex.value[taskId];
     delete taskQueues.value[taskId];
+    delete changedFileCounts.value[taskId];
     clearTaskUnread(taskId);
     return { warning: result.warning };
   }
@@ -353,14 +327,11 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Internal helpers ─────────────────────────────────────────────────────
 
   function _replaceTask(updated: Task) {
-    for (const [boardId, tasks] of Object.entries(tasksByBoard.value)) {
-      const idx = tasks.findIndex((t) => t.id === updated.id);
+    const board = tasksByBoard.value[updated.boardId];
+    if (board) {
+      const idx = board.findIndex((t) => t.id === updated.id);
       if (idx !== -1) {
-        // Replace the whole array so Vue detects the change reliably.
-        // In-place index assignment (arr[i] = val) can be missed when the
-        // component tracks the array reference rather than individual indices.
-        tasksByBoard.value[Number(boardId)] = tasks.map((t) => (t.id === updated.id ? updated : t));
-        break;
+        board[idx] = updated;
       }
     }
     taskIndex.value[updated.id] = updated;
@@ -420,59 +391,51 @@ export const useTaskStore = defineStore("task", () => {
     await sendMessage(taskId, payload.text, payload.engineText, payload.attachments.length ? payload.attachments : undefined);
   }
 
-  conversationStore.registerHooks("task-store", {
-    onStreamEvent(event, context) {
-      if (event.taskId == null) return;
-      if (event.type === "file_diff") {
-        refreshChangedFiles(event.taskId);
+  function onTaskStreamEvent(event: StreamEvent): void {
+    if (event.taskId == null) return;
+    if (event.type === "file_diff") {
+      refreshChangedFiles(event.taskId);
+    }
+    // Fallback drain: fire when stream ends in case task.updated arrives with
+    // unexpected prior state (e.g. WS reconnect missed the running broadcast).
+    if (event.type === "done") {
+      const task = taskIndex.value[event.taskId];
+      if (task?.executionState === "running") {
+        drainQueue(event.taskId);
       }
-      // Fallback drain: fire when stream ends in case task.updated arrives with
-      // unexpected prior state (e.g. WS reconnect missed the running broadcast).
-      if (event.type === "done") {
-        const task = taskIndex.value[event.taskId];
-        if (task?.executionState === "running") {
-          drainQueue(event.taskId);
-        }
-      }
-      if (
-        event.conversationId !== context.activeConversationId &&
-        (event.type === "assistant" || event.type === "reasoning" || event.type === "system" || event.type === "file_diff")
-      ) {
-        markTaskUnread(event.taskId);
-      }
-    },
-    onNewMessage(message, context) {
-      if (message.taskId == null) return;
-      if (message.type === "file_diff") {
-        refreshChangedFiles(message.taskId);
-      }
-      if (
-        message.conversationId !== context.activeConversationId &&
-        (message.type === "assistant" || message.type === "reasoning" || message.type === "system" || message.type === "file_diff")
-      ) {
-        markTaskUnread(message.taskId);
-      }
-    },
-  });
+    }
+    if (
+      event.conversationId !== conversationStore.activeConversationId &&
+      (event.type === "assistant" || event.type === "reasoning" || event.type === "system" || event.type === "file_diff")
+    ) {
+      markTaskUnread(event.taskId);
+    }
+  }
+
+  function onTaskNewMessage(message: ConversationMessage): void {
+    if (message.taskId == null) return;
+    if (message.type === "file_diff") {
+      refreshChangedFiles(message.taskId);
+    }
+    if (
+      message.conversationId !== conversationStore.activeConversationId &&
+      (message.type === "assistant" || message.type === "reasoning" || message.type === "system" || message.type === "file_diff")
+    ) {
+      markTaskUnread(message.taskId);
+    }
+  }
 
   return {
     tasksByBoard,
     activeTaskId,
     activeTask,
-    messages,
-    hasMoreBefore,
-    isLoadingOlder,
-    streamStates,
-    streamVersion,
-    activeStreamState,
 
     loading,
-    messagesLoading,
-    availableModels,
-    allProviderModels,
-    contextUsage,
     changedFileCounts,
+    taskIndex,
     unreadTaskIds,
+    markTaskUnread,
+    clearTaskUnread,
     loadTasks,
     createTask,
     reorderTask,
@@ -498,10 +461,9 @@ export const useTaskStore = defineStore("task", () => {
     refreshChangedFiles,
     hasUnread,
     workspaceHasUnread,
-    onStreamError,
-    onStreamEvent,
     onTaskUpdated,
-    onNewMessage,
+    onTaskStreamEvent,
+    onTaskNewMessage,
     // Queue
     taskQueues,
     enqueueMessage,

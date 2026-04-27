@@ -6,12 +6,12 @@
         <span class="review-overlay__title">Code Review</span>
 
         <!-- Mode indicator -->
-        <span v-if="reviewStore.mode === 'changes'" class="review-overlay__mode-badge">Changes</span>
+        <span v-if="mode === 'changes'" class="review-overlay__mode-badge">Changes</span>
         <span v-else class="review-overlay__mode-badge review-overlay__mode-badge--review">Review mode</span>
 
         <!-- Filter dropdown -->
         <Select
-          v-model="reviewStore.filter"
+          v-model="filter"
           :options="filterOptions"
           option-label="label"
           option-value="value"
@@ -21,7 +21,7 @@
         />
 
         <!-- Hunk navigation (review mode only) -->
-        <div v-if="reviewStore.mode === 'review'" class="review-overlay__nav">
+        <div v-if="mode === 'review'" class="review-overlay__nav">
           <button class="nav-btn" :disabled="!canNavigatePrev" @click="navigatePrev">← Prev</button>
           <span class="nav-counter">{{ pendingHunks.length }} pending</span>
           <button class="nav-btn" :disabled="!canNavigateNext" @click="navigateNext">Next →</button>
@@ -31,11 +31,11 @@
           <Button size="small" severity="secondary" label="Refresh" @click="onRefresh" :loading="refreshing" />
 
           <Button
-            v-if="reviewStore.mode === 'review'"
+            v-if="mode === 'review'"
             size="small"
             severity="secondary"
             label="View Changes"
-            @click="reviewStore.mode = 'changes'"
+            @click="mode = 'changes'"
           />
 
           <Button size="small" severity="secondary" icon="pi pi-times" rounded text @click="reviewStore.closeReview()" />
@@ -47,7 +47,7 @@
         <!-- File list panel -->
         <ReviewFileList
           :files="fileListItems"
-          :selected-path="reviewStore.selectedFile"
+          :selected-path="selectedFile"
           :aggregate-states="fileAggregateStates"
           :style="{ width: fileListWidth + 'px' }"
           @select="onSelectFile"
@@ -58,7 +58,7 @@
 
         <!-- Diff panel — Monaco fills this entirely, ViewZones provide inline action bars -->
         <div class="review-overlay__diff-panel">
-          <div v-if="!reviewStore.selectedFile" class="review-overlay__placeholder">
+          <div v-if="!selectedFile" class="review-overlay__placeholder">
             Select a file to review
           </div>
           <div v-else-if="diffLoading" class="review-overlay__placeholder">
@@ -66,7 +66,7 @@
           </div>
           <div v-else-if="diffError" class="review-overlay__placeholder review-overlay__error">
             <span>{{ diffError }}</span>
-            <Button size="small" label="Reload" severity="secondary" @click="loadDiff(reviewStore.selectedFile)" />
+            <Button size="small" label="Reload" severity="secondary" @click="loadDiff(selectedFile)" />
           </div>
           <InlineReviewEditor
             v-else-if="diffContent"
@@ -74,8 +74,8 @@
             :modified="diffContent.modified"
             :original="diffContent.original"
             :hunks="diffContent.hunks"
-            :language="guessLanguage(reviewStore.selectedFile)"
-            :mode="reviewStore.mode"
+            :language="guessLanguage(selectedFile)"
+            :mode="mode"
             :enable-comments="true"
             :on-request-line-comment="onRequestLineComment"
             :on-decide-hunk="onDecideHunk"
@@ -87,7 +87,7 @@
       </div>
 
       <!-- Footer: submit (review mode only) -->
-      <div v-if="reviewStore.mode === 'review'" class="review-overlay__footer">
+      <div v-if="mode === 'review'" class="review-overlay__footer">
         <span v-if="pendingCount > 0" class="review-overlay__pending-warning">
           {{ pendingCount }} undecided hunk{{ pendingCount !== 1 ? "s" : "" }}
         </span>
@@ -126,6 +126,7 @@ import Button from "primevue/button";
 import Select from "primevue/select";
 import Dialog from "primevue/dialog";
 import { useReviewStore } from "../stores/review";
+import type { ReviewMode, ReviewFilter } from "../stores/review";
 import { useTaskStore } from "../stores/task";
 import { api } from "../rpc";
 import { useDarkMode } from "../composables/useDarkMode";
@@ -142,6 +143,16 @@ import type {
 const reviewStore = useReviewStore();
 const taskStore = useTaskStore();
 const { isDark } = useDarkMode();
+
+// ——— Local state (moved from store) ————————————————————————————————————
+
+const selectedFile = ref<string | null>(null);
+const filter = ref<ReviewFilter>("all");
+const mode = ref<ReviewMode>("changes");
+const optimisticUpdates = ref(new Map<string, { decision: HunkDecision; comment: string | null }>());
+
+function bumpVersion() { /* no-op — was only for Playwright test hooks */ }
+function selectFile(filePath: string) { selectedFile.value = filePath; }
 
 // ——— State ———————————————————————————————————————————————————————————————
 
@@ -180,10 +191,10 @@ function computeFileAggregateState(hunks: HunkWithDecisions[]): HunkDecision | "
 }
 
 function updateCurrentFileAggregateState() {
-  if (!reviewStore.selectedFile || !diffContent.value) return;
+  if (!selectedFile.value || !diffContent.value) return;
   fileAggregateStates.value = {
     ...fileAggregateStates.value,
-    [reviewStore.selectedFile]: computeFileAggregateState(diffContent.value.hunks),
+    [selectedFile.value]: computeFileAggregateState(diffContent.value.hunks),
   };
 }
 
@@ -223,7 +234,7 @@ let pendingWriteFile: string | null = null;
 let pendingWriteContent: string | null = null;
 
 function onContentChange(value: string) {
-  const filePath = reviewStore.selectedFile;
+  const filePath = selectedFile.value;
   if (!filePath || !reviewStore.taskId) return;
   editedContent.value.set(filePath, value);
   editedFiles.value.add(filePath);
@@ -298,7 +309,7 @@ const filterOptions = [
 const allHunks = computed<HunkWithDecisions[]>(() => diffContent.value?.hunks ?? []);
 
 function effectiveDecision(hunk: HunkWithDecisions): HunkDecision {
-  const opt = reviewStore.optimisticUpdates.get(hunk.hash);
+  const opt = optimisticUpdates.value.get(hunk.hash);
   return opt ? opt.decision : hunk.humanDecision;
 }
 
@@ -307,13 +318,13 @@ const pendingCount = computed(() => pendingHunks.value.length);
 
 const canNavigateNext = computed(() => {
   if (currentPendingIdx.value < pendingHunks.value.length - 1) return true;
-  const idx = reviewStore.files.indexOf(reviewStore.selectedFile ?? "");
+  const idx = reviewStore.files.indexOf(selectedFile.value ?? "");
   return idx >= 0 && idx < reviewStore.files.length - 1;
 });
 
 const canNavigatePrev = computed(() => {
   if (currentPendingIdx.value > 0) return true;
-  const idx = reviewStore.files.indexOf(reviewStore.selectedFile ?? "");
+  const idx = reviewStore.files.indexOf(selectedFile.value ?? "");
   return idx > 0;
 });
 
@@ -329,7 +340,7 @@ const fileListItems = computed(() => reviewStore.files.map((path) => ({ path }))
 // ——— Inline editor callback: hunks rendered ——————————————————————————————
 
 function onHunksRendered() {
-  reviewStore.bumpVersion();
+  bumpVersion();
 
   // After cross-file navigation, scroll to the first or last pending hunk in the new file.
   if (pendingNavTarget.value !== null) {
@@ -354,20 +365,20 @@ function onHunksRendered() {
 // ——— Hunk decision handler ————————————————————————————————————————————————
 
 async function onDecideHunk(hash: string, decision: HunkDecision, comment: string | null) {
-  if (!reviewStore.taskId || !reviewStore.selectedFile || !diffContent.value) return;
+  if (!reviewStore.taskId || !selectedFile.value || !diffContent.value) return;
 
   const hunkIdx = diffContent.value.hunks.findIndex((h) => h.hash === hash);
   if (hunkIdx === -1) return;
   const hunk = diffContent.value.hunks[hunkIdx];
 
-  reviewStore.optimisticUpdates.set(hash, { decision, comment });
+  optimisticUpdates.value.set(hash, { decision, comment });
 
   try {
     if (decision === "rejected") {
       // Reject also reverts the file on disk; reload the diff entirely.
       const newDiff = await api("tasks.rejectHunk", {
         taskId: reviewStore.taskId,
-        filePath: reviewStore.selectedFile,
+        filePath: selectedFile.value,
         hunkIndex: hunk.hunkIndex,
       });
       diffContent.value = newDiff;
@@ -378,7 +389,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
       await api("tasks.setHunkDecision", {
         taskId: reviewStore.taskId,
         hunkHash: hash,
-        filePath: reviewStore.selectedFile,
+        filePath: selectedFile.value,
         decision,
         comment,
         originalStart: hunk.originalStart,
@@ -388,7 +399,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
       });
     }
 
-    reviewStore.optimisticUpdates.delete(hash);
+    optimisticUpdates.value.delete(hash);
 
     // Update in-memory hunk state so canSubmit stays accurate.
     // Skip for "rejected": diffContent was replaced with newDiff which already has
@@ -400,7 +411,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
         humanComment: comment,
       };
     }
-    reviewStore.bumpVersion();
+    bumpVersion();
     updateCurrentFileAggregateState();
 
     if (decision === "accepted") {
@@ -412,7 +423,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
         currentPendingIdx.value = Math.min(currentPendingIdx.value, remainingPendingInFile - 1);
       } else {
         // All hunks in this file decided — track it.
-        if (reviewStore.selectedFile) fullyDecidedFiles.add(reviewStore.selectedFile);
+        if (selectedFile.value) fullyDecidedFiles.add(selectedFile.value);
       }
     } else if (decision === "change_request") {
       // Re-render hunks so visibility filter applies.
@@ -424,7 +435,7 @@ async function onDecideHunk(hash: string, decision: HunkDecision, comment: strin
     }
   } catch (err) {
     console.error("[onDecideHunk] RPC error for decision='" + decision + "' hash='" + hash + "':", err);
-    reviewStore.optimisticUpdates.delete(hash);
+    optimisticUpdates.value.delete(hash);
   }
 }
 
@@ -465,7 +476,7 @@ function onRequestLineComment(lineStart: number, lineEnd: number, colStart?: num
   const tempId = nextTempCommentId--;
   inlineEditorRef.value?.injectCommentZone(tempId, lineStart, lineEnd, "open", undefined, {
     onPost: async (comment: string) => {
-      if (!reviewStore.taskId || !reviewStore.selectedFile) return;
+      if (!reviewStore.taskId || !selectedFile.value) return;
       const modifiedLines = diffContent.value?.modified.split("\n") ?? [];
       const lineText = modifiedLines.slice(lineStart - 1, lineEnd);
       const contextStart = Math.max(0, lineStart - 4);
@@ -473,7 +484,7 @@ function onRequestLineComment(lineStart: number, lineEnd: number, colStart?: num
       const contextLines = modifiedLines.slice(contextStart, contextEnd);
       const saved = await api("tasks.addLineComment", {
         taskId: reviewStore.taskId,
-        filePath: reviewStore.selectedFile,
+        filePath: selectedFile.value,
         lineStart,
         lineEnd,
         colStart: colStart ?? 0,
@@ -508,13 +519,13 @@ function onRequestLineComment(lineStart: number, lineEnd: number, colStart?: num
  * Skips files already fully decided this session (fullyDecidedFiles).
  */
 function navigateToNextFile() {
-  const idx = reviewStore.files.indexOf(reviewStore.selectedFile ?? "");
+  const idx = reviewStore.files.indexOf(selectedFile.value ?? "");
   if (idx < 0) return;
   for (let i = idx + 1; i < reviewStore.files.length; i++) {
     if (!fullyDecidedFiles.has(reviewStore.files[i])) {
       pendingNavTarget.value = "first";
       currentPendingIdx.value = 0;
-      reviewStore.selectFile(reviewStore.files[i]);
+      selectFile(reviewStore.files[i]);
       return;
     }
   }
@@ -528,11 +539,11 @@ function navigateNext() {
     return;
   }
   // No more hunks in this file — move to next file
-  const idx = reviewStore.files.indexOf(reviewStore.selectedFile ?? "");
+  const idx = reviewStore.files.indexOf(selectedFile.value ?? "");
   if (idx < 0 || idx >= reviewStore.files.length - 1) return;
   pendingNavTarget.value = "first";
   currentPendingIdx.value = 0;
-  reviewStore.selectFile(reviewStore.files[idx + 1]);
+  selectFile(reviewStore.files[idx + 1]);
 }
 
 function navigatePrev() {
@@ -542,10 +553,10 @@ function navigatePrev() {
     return;
   }
   // No more hunks before this in the file — move to prev file
-  const idx = reviewStore.files.indexOf(reviewStore.selectedFile ?? "");
+  const idx = reviewStore.files.indexOf(selectedFile.value ?? "");
   if (idx <= 0) return;
   pendingNavTarget.value = "last";
-  reviewStore.selectFile(reviewStore.files[idx - 1]);
+  selectFile(reviewStore.files[idx - 1]);
 }
 
 function scrollToPendingHunk() {
@@ -564,7 +575,7 @@ function scrollToPendingHunk() {
 // ——— File loading ————————————————————————————————————————————————————————
 
 async function onSelectFile(path: string) {
-  reviewStore.selectFile(path);
+  selectFile(path);
   await loadDiff(path);
 }
 
@@ -666,7 +677,7 @@ async function onRefresh() {
       taskId: reviewStore.taskId,
     });
     reviewStore.openReview(reviewStore.taskId, newFiles);
-    if (reviewStore.selectedFile) await loadDiff(reviewStore.selectedFile);
+    if (selectedFile.value) await loadDiff(selectedFile.value);
     await taskStore.refreshChangedFiles(reviewStore.taskId);
   } finally {
     refreshing.value = false;
@@ -679,6 +690,11 @@ watch(
   () => reviewStore.isOpen,
   async (open) => {
     if (open && reviewStore.taskId) {
+      // Reset local state when review opens
+      selectedFile.value = reviewStore.files[0] ?? null;
+      filter.value = "all";
+      mode.value = "review";
+      optimisticUpdates.value.clear();
       fullyDecidedFiles.clear();
       // Fetch the latest checkpoint ref so diffs are scoped to pending hunks.
       try {
@@ -714,7 +730,7 @@ watch(
         }
         fileAggregateStates.value = states;
       }
-      if (reviewStore.selectedFile) await loadDiff(reviewStore.selectedFile);
+      if (selectedFile.value) await loadDiff(selectedFile.value);
     }
     if (!open) {
       fullyDecidedFiles.clear();
@@ -732,7 +748,7 @@ watch(
 );
 
 watch(
-  () => reviewStore.selectedFile,
+  selectedFile,
   async (path) => {
     if (path && reviewStore.isOpen) {
       await flushPendingWrite();
@@ -742,7 +758,7 @@ watch(
 );
 
 watch(
-  () => reviewStore.filter,
+  filter,
   () => {
     if (diffContent.value) {
       inlineEditorRef.value?.renderHunks(diffContent.value.hunks);
@@ -751,7 +767,7 @@ watch(
 );
 
 watch(
-  () => reviewStore.mode,
+  mode,
   () => {
     if (diffContent.value) {
       inlineEditorRef.value?.renderHunks(diffContent.value.hunks);

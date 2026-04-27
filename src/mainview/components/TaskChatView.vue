@@ -95,7 +95,7 @@
           v-if="launchConfig"
           :profiles="launchConfig.profiles"
           :tools="launchConfig.tools"
-          @run="runLaunch"
+          @run="runLaunchHandler"
         />
       </div>
     </div>
@@ -104,14 +104,13 @@
     <template v-if="activeTab === 'chat' && task">
       <!-- Conversation body -->
       <ConversationBody
-        :messages="taskStore.messages"
-        :stream-state="taskStore.activeStreamState"
-        :stream-version="taskStore.streamVersion"
+        :messages="conversationStore.messages"
+        :stream-state="conversationStore.activeStreamState"
         :execution-state="task.executionState"
         :self-id="task.conversationId"
-        :has-more-before="taskStore.hasMoreBefore"
-        :is-loading-older="taskStore.isLoadingOlder"
-        @load-older="task && taskStore.loadOlderMessages(task.id)"
+        :has-more-before="conversationStore.hasMoreBefore"
+        :is-loading-older="conversationStore.isLoadingOlder"
+        @load-older="task && conversationStore.loadOlderMessages({ conversationId: task.id })"
       />
 
       <!-- Changed files panel -->
@@ -136,7 +135,7 @@
         :execution-state="task.executionState"
         :task-id="task.id"
         :model-id="task.model"
-        :context-usage="taskStore.contextUsage"
+        :context-usage="conversationStore.contextUsage"
         :compacting="compacting"
         :enabled-mcp-tools="task.enabledMcpTools ?? null"
         :shell-auto-approve="task.shellAutoApprove"
@@ -203,10 +202,11 @@ import TodoPanel from "./TodoPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
 import { useTaskStore } from "../stores/task";
+import { useConversationStore } from "../stores/conversation";
 import { useBoardStore } from "../stores/board";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useReviewStore } from "../stores/review";
-import { useLaunchStore } from "../stores/launch";
+import { getLaunchConfig, runLaunch } from "../api/launch";
 import { useTerminalStore } from "../stores/terminal";
 import { useCodeServerStore } from "../stores/codeServer";
 import { useDrawerStore } from "../stores/drawer";
@@ -219,10 +219,10 @@ const props = defineProps<{
 }>();
 
 const taskStore = useTaskStore();
+const conversationStore = useConversationStore();
 const boardStore = useBoardStore();
 const workspaceStore = useWorkspaceStore();
 const reviewStore = useReviewStore();
-const launchStore = useLaunchStore();
 const terminalStore = useTerminalStore();
 const codeServerStore = useCodeServerStore();
 const drawerStore = useDrawerStore();
@@ -292,7 +292,7 @@ async function refreshTaskData() {
 
   // Only fetch launch config if not already loaded
   if (!launchConfig.value) {
-    launchConfig.value = await launchStore.getConfig(task.value.id, task.value.projectKey);
+    launchConfig.value = await getLaunchConfig(task.value.id, task.value.projectKey);
   }
 }
 
@@ -410,9 +410,9 @@ async function onOpenReview(filePath: string | null, mode: "review" | "changes")
   } catch { /* non-fatal */ }
 }
 
-async function runLaunch(command: string, mode: "terminal" | "app") {
+async function runLaunchHandler(command: string, mode: "terminal" | "app") {
   if (!task.value) return;
-  const result = await launchStore.run(task.value.id, command, mode);
+  const result = await runLaunch(task.value.id, command, mode);
   if (!result.ok) {
     toast.add({ severity: "error", summary: "Launch failed", detail: result.error, life: 5000 });
   } else if (result.sessionId) {

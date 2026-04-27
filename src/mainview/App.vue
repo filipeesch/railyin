@@ -57,6 +57,8 @@ onMounted(async () => {
 
   onStreamEventMessage((event) => {
     conversationStore.onStreamEvent(event);
+    taskStore.onTaskStreamEvent(event);
+    chatStore.onChatStreamEvent(event);
   });
 
   onTaskUpdated((task) => {
@@ -65,6 +67,8 @@ onMounted(async () => {
 
   onNewMessage((message) => {
     conversationStore.onNewMessage(message);
+    taskStore.onTaskNewMessage(message);
+    chatStore.onChatNewMessage(message);
   });
 
   onCodeRef((ref) => {

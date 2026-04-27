@@ -54,16 +54,15 @@
     </div>
 
     <!-- Loading state (takes priority while messages are being fetched) -->
-    <div v-if="chatStore.messagesLoading" class="scv-loading">
+    <div v-if="conversationStore.messagesLoading" class="scv-loading">
       <ProgressSpinner style="width: 32px; height: 32px" />
     </div>
 
     <!-- Body: conversation -->
     <ConversationBody
       v-else-if="session"
-      :messages="chatStore.messages"
+      :messages="conversationStore.messages"
       :stream-state="conversationStore.activeStreamState"
-      :stream-version="conversationStore.streamVersion"
       :execution-state="session.status"
       :self-id="session.conversationId"
       :has-more-before="conversationStore.hasMoreBefore"
@@ -73,7 +72,7 @@
 
     <!-- Input bar -->
     <ConversationInput
-      v-if="session && !chatStore.messagesLoading"
+      v-if="session && !conversationStore.messagesLoading"
       :execution-state="session.status"
       :session-id="session.id"
       :workspace-key="session.workspaceKey"
