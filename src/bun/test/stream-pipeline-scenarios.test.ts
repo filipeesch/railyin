@@ -40,6 +40,9 @@ import {
     scriptWaitForAbort,
     scriptCheckpoint,
 } from "./support/scripted-engine.ts";
+import { ClaudeEngine } from "../engine/claude/engine.ts";
+import type { ClaudeSdkAdapter, ClaudeRunConfig, ClaudeSdkModelInfo } from "../engine/claude/adapter.ts";
+import type { EngineEvent } from "../engine/types.ts";
 
 // Helpers
 
@@ -607,5 +610,93 @@ describe("S-13: Cancel transitions task to waiting_user", () => {
         // IPC must have done event
         const ipc = runtime.getIpcEvents(executionId);
         expect(ipc.some((e) => e.type === "done")).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// MockClaudeSdkAdapter — yields pre-canned EngineEvents for integration tests
+// ---------------------------------------------------------------------------
+
+class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
+    constructor(private readonly events: EngineEvent[]) {}
+
+    async *run(_config: ClaudeRunConfig): AsyncGenerator<EngineEvent> {
+        for (const event of this.events) {
+            yield event;
+        }
+    }
+
+    async cancel(_executionId: number): Promise<void> {}
+
+    async listModels(_workingDirectory: string): Promise<ClaudeSdkModelInfo[]> {
+        return [];
+    }
+
+    async listCommands(_workingDirectory: string): Promise<Array<{ name: string; description: string }>> {
+        return [];
+    }
+}
+
+function makeClaudeRuntime(sdkAdapter: ClaudeSdkAdapter): BackendRpcRuntime {
+    return createBackendRpcRuntime({
+        createEngine: () => new ClaudeEngine(undefined, () => {}, () => {}, sdkAdapter),
+    });
+}
+
+// ---------------------------------------------------------------------------
+// S-14: [stream_event handling] CE-1 — token events flow through to text_chunk IPC
+// Spec: "WHEN the Claude SDK emits incremental token events
+//        THEN text_chunk IPC events appear in order before the done event"
+// Pipeline assertion: pre-canned token/reasoning events propagate end-to-end.
+// ---------------------------------------------------------------------------
+
+describe("S-14 [stream_event]: token events from ClaudeEngine flow through to text_chunk on IPC", () => {
+    it("text_chunk events arrive in order on IPC for each token yielded by adapter", async () => {
+        const adapter = new MockClaudeSdkAdapter([
+            { type: "token", content: "Hello " },
+            { type: "token", content: "world" },
+            { type: "done" },
+        ]);
+
+        runtime = makeClaudeRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        await runtime.recorder.waitForStreamDone(executionId);
+
+        const ipc = runtime.getIpcEvents(executionId);
+        const textChunks = ipc.filter((e) => e.type === "text_chunk");
+
+        expect(textChunks).toHaveLength(2);
+        expect(textChunks[0]).toMatchObject({ type: "text_chunk", content: "Hello " });
+        expect(textChunks[1]).toMatchObject({ type: "text_chunk", content: "world" });
+
+        // done must arrive after all text_chunks
+        const doneIndex = ipc.findIndex((e) => e.type === "done");
+        const lastChunkIndex = ipc.findLastIndex((e) => e.type === "text_chunk");
+        expect(doneIndex).toBeGreaterThan(lastChunkIndex);
+    });
+
+    it("reasoning_chunk events arrive on IPC for each reasoning event yielded by adapter", async () => {
+        const adapter = new MockClaudeSdkAdapter([
+            { type: "reasoning", content: "Let me think" },
+            { type: "token", content: "Result" },
+            { type: "done" },
+        ]);
+
+        runtime = makeClaudeRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        await runtime.recorder.waitForStreamDone(executionId);
+
+        const ipc = runtime.getIpcEvents(executionId);
+        expect(ipc.some((e) => e.type === "reasoning_chunk")).toBe(true);
+        expect(ipc.some((e) => e.type === "text_chunk")).toBe(true);
+
+        // reasoning_chunk must precede text_chunk (timeline order)
+        const rcIdx = ipc.findIndex((e) => e.type === "reasoning_chunk");
+        const tcIdx = ipc.findIndex((e) => e.type === "text_chunk");
+        expect(rcIdx).toBeLessThan(tcIdx);
     });
 });

@@ -486,6 +486,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             additionalDirectories: [config.workingDirectory],
             abortController,
             pathToClaudeCodeExecutable: cliPath,
+            includePartialMessages: true,
             ...(normalizeClaudeModel(config.model) ? { model: normalizeClaudeModel(config.model) } : {}),
             ...(hasExistingSession ? { resume: config.sessionId } : { sessionId: config.sessionId }),
             tools: { type: "preset", preset: "claude_code" },

@@ -305,8 +305,133 @@ describe("Claude message translator - tool events", () => {
 
       const events = translateClaudeMessage(message as any, toolMetaMap);
 
-      expect(events).toHaveLength(3);
-      expect(events.map((e) => e.type)).toEqual(["reasoning", "token", "tool_start"]);
+      // With includePartialMessages: true, text and thinking arrive via stream_event deltas.
+      // The final assembled assistant message suppresses them to avoid double-emit.
+      expect(events).toHaveLength(1);
+      expect(events.map((e) => e.type)).toEqual(["tool_start"]);
     });
+  });
+});
+
+describe("Claude message translator - stream_event handling", () => {
+  test("translates text_delta to token event", () => {
+    const message = {
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: "Hello" },
+      },
+    };
+
+    const events = translateClaudeMessage(message as any);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "token", content: "Hello" });
+  });
+
+  test("translates thinking_delta to reasoning event", () => {
+    const message = {
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "thinking_delta", thinking: "Let me think..." },
+      },
+    };
+
+    const events = translateClaudeMessage(message as any);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "reasoning", content: "Let me think..." });
+  });
+
+  test("ignores input_json_delta (tool arg streaming)", () => {
+    const message = {
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "input_json_delta", partial_json: '{"q":' },
+      },
+    };
+
+    const events = translateClaudeMessage(message as any);
+
+    expect(events).toHaveLength(0);
+  });
+
+  test("ignores non-content_block_delta stream events", () => {
+    const message = {
+      type: "stream_event",
+      event: { type: "content_block_start", content_block: { type: "text", text: "" } },
+    };
+
+    const events = translateClaudeMessage(message as any);
+
+    expect(events).toHaveLength(0);
+  });
+
+  test("ignores stream_event with no event payload", () => {
+    const events = translateClaudeMessage({ type: "stream_event" } as any);
+    expect(events).toHaveLength(0);
+  });
+});
+
+describe("Claude message translator - assistant dedup (text/thinking suppression)", () => {
+  test("text-only assistant message emits no events", () => {
+    const message = {
+      type: "assistant",
+      message: {
+        content: [{ type: "text", text: "Some response text" }],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any);
+
+    expect(events).toHaveLength(0);
+  });
+
+  test("thinking-only assistant message emits no events", () => {
+    const message = {
+      type: "assistant",
+      message: {
+        content: [{ type: "thinking", thinking: "My internal reasoning" }],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any);
+
+    expect(events).toHaveLength(0);
+  });
+
+  test("assistant message with only tool_use still emits tool_start", () => {
+    const toolMetaMap = new Map();
+    const message = {
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", id: "call_abc", name: "read_file", input: { path: "x.ts" } }],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, toolMetaMap);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("tool_start");
+  });
+
+  test("assistant message with text + tool_use emits only tool_start", () => {
+    const toolMetaMap = new Map();
+    const message = {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "Here is the file:" },
+          { type: "tool_use", id: "call_xyz", name: "write", input: { file_path: "out.ts", content: "" } },
+        ],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, toolMetaMap);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("tool_start");
   });
 });

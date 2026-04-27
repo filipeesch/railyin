@@ -61,11 +61,10 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
       const assistant = message as ClaudeAssistantMessage;
       const events: EngineEvent[] = [];
       for (const block of assistant.message?.content ?? []) {
-        if (block.type === "text" && block.text) {
-          events.push({ type: "token", content: block.text });
-        } else if (block.type === "thinking" && block.thinking) {
-          events.push({ type: "reasoning", content: block.thinking });
-        } else if (block.type === "tool_use" && block.id && block.name) {
+        // text and thinking blocks are skipped here: they arrive incrementally via stream_event
+        // (SDK emits BOTH stream_event deltas AND a final assembled assistant message when
+        //  includePartialMessages: true is set — so we suppress them here to avoid double-emit)
+        if (block.type === "tool_use" && block.id && block.name) {
           // Store tool metadata for later pairing with tool_result
           if (toolMetaByCallId) {
             toolMetaByCallId.set(block.id, {
@@ -176,6 +175,20 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
         }
       }
       return events;
+    }
+
+    case "stream_event": {
+      const evt = (message as { event?: { type?: string; delta?: { type?: string; text?: string; thinking?: string } } }).event;
+      if (evt?.type === "content_block_delta") {
+        const delta = evt.delta;
+        if (delta?.type === "text_delta" && delta.text) {
+          return [{ type: "token", content: delta.text }];
+        }
+        if (delta?.type === "thinking_delta" && delta.thinking) {
+          return [{ type: "reasoning", content: delta.thinking }];
+        }
+      }
+      return [];
     }
 
     default:
