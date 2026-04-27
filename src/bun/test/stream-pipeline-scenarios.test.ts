@@ -529,3 +529,83 @@ describe("S-11 [file-diff]: cancel/retry preserves nested file_diff parent assoc
         }
     });
 });
+
+// ---------------------------------------------------------------------------
+// S-12: Cancel stops streaming — no text_chunk events after done in IPC
+// Validates that the cancel abort signal propagates through the orchestrator
+// and prevents post-cancel events from being broadcast.
+// ---------------------------------------------------------------------------
+
+describe("S-12: Cancel stops streaming — no text_chunk events after done", () => {
+    it("text_chunk emitted before cancel; nothing after done", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            scriptToken("before"),
+            scriptWaitForAbort(),
+            scriptToken("after-abort"),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        // Wait for "before" token to appear on IPC
+        await runtime.recorder.waitUntilIpc(executionId, (evs) =>
+            evs.some((e) => e.type === "text_chunk" && e.content === "before"),
+        );
+
+        await runtime.handlers["tasks.cancel"]({ taskId });
+        await runtime.recorder.waitForStreamDone(executionId, 5_000);
+
+        const ipc = runtime.getIpcEvents(executionId);
+        // "before" must be present
+        expect(ipc.some((e) => e.type === "text_chunk" && e.content === "before")).toBe(true);
+        // "after-abort" must NOT appear — discarded by the abort check in consumeStream
+        expect(ipc.some((e) => e.type === "text_chunk" && e.content === "after-abort")).toBe(false);
+        // done must be present
+        expect(ipc.some((e) => e.type === "done")).toBe(true);
+        // No text_chunk should appear after the done event
+        const doneIndex = ipc.findIndex((e) => e.type === "done");
+        const eventsAfterDone = ipc.slice(doneIndex + 1).filter((e) => e.type === "text_chunk");
+        expect(eventsAfterDone).toHaveLength(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S-13: Cancel transitions task to waiting_user; execution marked cancelled
+// Validates the full state machine: running → waiting_user on cancel.
+// ---------------------------------------------------------------------------
+
+describe("S-13: Cancel transitions task to waiting_user", () => {
+    it("task execution_state is waiting_user after cancel; done on IPC", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            scriptToken("streaming"),
+            scriptWaitForAbort(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        // Wait for at least one token before cancelling
+        await runtime.recorder.waitUntilIpc(executionId, (evs) =>
+            evs.some((e) => e.type === "text_chunk"),
+        );
+
+        await runtime.handlers["tasks.cancel"]({ taskId });
+        await runtime.recorder.waitForStreamDone(executionId, 5_000);
+
+        // Task must transition to waiting_user
+        await runtime.waitForTaskState(taskId, "waiting_user");
+        const cancelledUpdates = runtime.recorder.taskUpdates.filter(
+            (t) => t.id === taskId && t.executionState === "waiting_user",
+        );
+        expect(cancelledUpdates.length).toBeGreaterThan(0);
+
+        // IPC must have done event
+        const ipc = runtime.getIpcEvents(executionId);
+        expect(ipc.some((e) => e.type === "done")).toBe(true);
+    });
+});

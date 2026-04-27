@@ -81,7 +81,13 @@
       :context-usage="conversationStore.contextUsage"
       :compacting="compacting"
       :enabled-mcp-tools="session.enabledMcpTools ?? null"
+      :queue-state="chatStore.sessionQueues[session.id] ?? null"
       @send="onSend"
+      @enqueue="onEnqueue"
+      @confirm-edit="onConfirmEdit"
+      @dequeue="(msgId) => session && chatStore.dequeueMessage(session.id, msgId)"
+      @start-edit="(msgId) => session && chatStore.startEdit(session.id, msgId)"
+      @cancel-edit="() => session && chatStore.cancelEdit(session.id)"
       @cancel="onCancel"
       @update:model-id="selectedModelId = $event"
       @compact="compactConversation"
@@ -178,10 +184,26 @@ async function onSend(text: string, engineText: string, _attachments: Attachment
   await chatStore.sendMessage(text, engineText, _attachments, selectedModelId.value);
 }
 
+function onEnqueue(text: string, engineText: string, attachments: Attachment[]) {
+  if (!session.value) return;
+  chatStore.enqueueMessage(session.value.id, {
+    id: crypto.randomUUID(),
+    text,
+    engineText,
+    attachments,
+    addedAt: Date.now(),
+  });
+}
+
+function onConfirmEdit(msgId: string, text: string, engineText: string, attachments: Attachment[]) {
+  if (!session.value) return;
+  chatStore.confirmEdit(session.value.id, msgId, text, engineText, attachments);
+}
+
 async function onCancel() {
   if (!session.value) return;
   try {
-    await api("chatSessions.cancel", { sessionId: session.value.id });
+    await chatStore.cancelSession(session.value.id);
   } catch (err) {
     console.error("Failed to cancel session", err);
   }

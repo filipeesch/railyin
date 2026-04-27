@@ -22,6 +22,10 @@ import type { ConversationMessage } from "@shared/rpc-types";
 
 let _msgId = 5000;
 
+function messagePage(messages: ConversationMessage[]) {
+    return { messages, hasMore: false };
+}
+
 function makeInterviewPrompt(
     taskId: number,
     payload: { questions: object[]; context?: string },
@@ -76,7 +80,7 @@ const freetextQuestion = {
 test.describe("T-A — exclusive question submit", () => {
     test("T-A: selecting an option in exclusive question enables submit", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
-        api.handle("conversations.getMessages", () => [msg]);
+        api.handle("conversations.getMessages", () => messagePage([msg]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -96,7 +100,7 @@ test.describe("T-A — exclusive question submit", () => {
 test.describe("T-B — non_exclusive question submit", () => {
     test("T-B: checking a checkbox in non_exclusive question enables submit", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [nonExclusiveQuestion] });
-        api.handle("conversations.getMessages", () => [msg]);
+        api.handle("conversations.getMessages", () => messagePage([msg]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -113,7 +117,7 @@ test.describe("T-B — non_exclusive question submit", () => {
 
     test("T-B2: clicking checkbox directly also enables submit", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [nonExclusiveQuestion] });
-        api.handle("conversations.getMessages", () => [msg]);
+        api.handle("conversations.getMessages", () => messagePage([msg]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -132,7 +136,7 @@ test.describe("T-B — non_exclusive question submit", () => {
 test.describe("T-C — freetext question submit", () => {
     test("T-C: typing in freetext textarea enables submit", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [freetextQuestion] });
-        api.handle("conversations.getMessages", () => [msg]);
+        api.handle("conversations.getMessages", () => messagePage([msg]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -148,7 +152,7 @@ test.describe("T-C — freetext question submit", () => {
 
     test("T-C2: clearing freetext after typing disables submit again", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [freetextQuestion] });
-        api.handle("conversations.getMessages", () => [msg]);
+        api.handle("conversations.getMessages", () => messagePage([msg]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -171,7 +175,7 @@ test.describe("T-D — multi-question batch", () => {
         const msg = makeInterviewPrompt(task.id, {
             questions: [exclusiveQuestion, freetextQuestion],
         });
-        api.handle("conversations.getMessages", () => [msg]);
+        api.handle("conversations.getMessages", () => messagePage([msg]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -194,7 +198,7 @@ test.describe("T-D — multi-question batch", () => {
 test.describe("T-E — submit sends message", () => {
     test("T-E: clicking submit calls tasks.sendMessage with answer", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
-        api.handle("conversations.getMessages", () => [msg]);
+        api.handle("conversations.getMessages", () => messagePage([msg]));
 
         let sentBody: unknown;
         const replyMsg = makeUserMessage(task.id, "A: PostgreSQL");
@@ -223,7 +227,7 @@ test.describe("T-F — answered read-only state", () => {
         const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
         // id must be greater than promptMsg.id so sort order is preserved (prompt first, reply second)
         const userReply = makeUserMessage(task.id, "A: PostgreSQL", { id: promptMsg.id + 1 });
-        api.handle("conversations.getMessages", () => [promptMsg, userReply]);
+        api.handle("conversations.getMessages", () => messagePage([promptMsg, userReply]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
@@ -242,7 +246,7 @@ test.describe("T-G — answered detection with streaming", () => {
         // id must be greater than promptMsg.id so sort order is preserved (prompt first, reply second)
         const userReply = makeUserMessage(task.id, "A: SQLite", { id: promptMsg.id + 1 });
         // Pre-seed: the interview was answered before we open the drawer
-        api.handle("conversations.getMessages", () => [promptMsg, userReply]);
+        api.handle("conversations.getMessages", () => messagePage([promptMsg, userReply]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);

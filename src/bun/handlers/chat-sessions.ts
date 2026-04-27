@@ -154,12 +154,21 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
 
     "chatSessions.cancel": async (params: { sessionId: number }): Promise<void> => {
       const db = getDb();
-      db.run(
-        "UPDATE chat_sessions SET status = 'idle' WHERE id = ? AND status = 'running'",
-        [params.sessionId]
-      );
-      const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
-      if (row) onSessionUpdated(mapChatSession(row));
+      const sessionRow = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      if (!sessionRow) return;
+      // Find the running execution for this conversation and cancel it via the orchestrator
+      // so the streaming actually stops (not just the UI state).
+      const execRow = db.query<{ id: number }, [number]>(
+        "SELECT id FROM executions WHERE conversation_id = ? AND task_id IS NULL AND status = 'running' ORDER BY id DESC LIMIT 1"
+      ).get(sessionRow.conversation_id);
+      if (execRow && orchestrator) {
+        orchestrator.cancel(execRow.id);
+      } else {
+        // No running execution found — just update DB status directly.
+        db.run("UPDATE chat_sessions SET status = 'idle' WHERE id = ? AND status = 'running'", [params.sessionId]);
+        const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+        if (row) onSessionUpdated(mapChatSession(row));
+      }
     },
 
     "chatSessions.compact": async (params: { sessionId: number }): Promise<void> => {

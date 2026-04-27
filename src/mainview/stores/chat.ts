@@ -4,6 +4,7 @@ import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
 import type { ChatSession, ConversationMessage, StreamError, StreamEvent } from "@shared/rpc-types";
 import { useConversationStore } from "./conversation";
+import { type QueuedMessage, type QueueState, emptyQueueState } from "./queue-types";
 
 export const useChatStore = defineStore("chat", () => {
   const conversationStore = useConversationStore();
@@ -12,6 +13,11 @@ export const useChatStore = defineStore("chat", () => {
   const messages = computed(() => conversationStore.messages);
   const messagesLoading = computed(() => conversationStore.messagesLoading);
   const unreadSessionIds = ref(new Set<number>());
+
+  // ─── Queue state ──────────────────────────────────────────────────────────
+  const sessionQueues = ref<Record<number, QueueState>>({});
+  // Track sessions where the user explicitly cancelled — suppress queue drain on those transitions
+  const suppressDrainIds = new Set<number>();
 
   const activeSession = computed(() =>
     activeChatSessionId.value != null
@@ -34,6 +40,7 @@ export const useChatStore = defineStore("chat", () => {
 
   function onChatSessionUpdated(session: ChatSession) {
     const idx = sessions.value.findIndex(s => s.id === session.id);
+    const previous = idx !== -1 ? sessions.value[idx] : null;
     if (idx !== -1) {
       sessions.value[idx] = session;
     } else {
@@ -47,6 +54,14 @@ export const useChatStore = defineStore("chat", () => {
     if (session.id !== activeChatSessionId.value && (session.status === 'idle' || session.status === 'waiting_user') && session.lastReadAt == null) {
       markUnread(session.id);
     }
+    // Drain queue when session transitions from running to idle (natural completion only)
+    if (previous?.status === "running" && session.status === "idle") {
+      if (suppressDrainIds.has(session.id)) {
+        suppressDrainIds.delete(session.id);
+      } else {
+        drainSessionQueue(session.id);
+      }
+    }
   }
 
   conversationStore.registerHooks("chat-store", {
@@ -56,7 +71,12 @@ export const useChatStore = defineStore("chat", () => {
       if (sessionId == null) return;
 
       if (event.type === "done") {
-        updateSession(sessionId, { status: "idle" });
+        // Route through onChatSessionUpdated so the drain guard fires (backend
+        // never broadcasts chatSession.updated on natural completion).
+        const session = sessions.value.find(s => s.id === sessionId);
+        if (session) {
+          onChatSessionUpdated({ ...session, status: "idle" });
+        }
       }
 
       if (
@@ -135,6 +155,16 @@ export const useChatStore = defineStore("chat", () => {
     drawerStore.close();
   }
 
+  async function cancelSession(sessionId: number) {
+    suppressDrainIds.add(sessionId);
+    try {
+      await api("chatSessions.cancel", { sessionId });
+    } catch (err) {
+      suppressDrainIds.delete(sessionId);
+      throw err;
+    }
+  }
+
   async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null) {
     if (!activeChatSessionId.value) return;
     const session = activeSession.value;
@@ -167,6 +197,7 @@ export const useChatStore = defineStore("chat", () => {
     if (idx !== -1) {
       sessions.value[idx] = { ...sessions.value[idx], status: 'archived' };
     }
+    delete sessionQueues.value[sessionId];
     if (activeChatSessionId.value === sessionId) {
       closeSession();
     }
@@ -186,6 +217,68 @@ export const useChatStore = defineStore("chat", () => {
     return unreadSessionIds.value.has(sessionId);
   }
 
+  // ─── Queue actions ────────────────────────────────────────────────────────
+
+  function enqueueMessage(sessionId: number, msg: QueuedMessage) {
+    if (!sessionQueues.value[sessionId]) sessionQueues.value[sessionId] = emptyQueueState();
+    sessionQueues.value[sessionId].items.push(msg);
+  }
+
+  function dequeueMessage(sessionId: number, msgId: string) {
+    const queue = sessionQueues.value[sessionId];
+    if (!queue) return;
+    queue.items = queue.items.filter((i) => i.id !== msgId);
+    if (queue.editingId === msgId) queue.editingId = null;
+  }
+
+  function startEdit(sessionId: number, msgId: string) {
+    if (!sessionQueues.value[sessionId]) return;
+    sessionQueues.value[sessionId].editingId = msgId;
+  }
+
+  function confirmEdit(sessionId: number, msgId: string, text: string, engineText: string, attachments: import("@shared/rpc-types").Attachment[]) {
+    const queue = sessionQueues.value[sessionId];
+    if (!queue) return;
+    const idx = queue.items.findIndex((i) => i.id === msgId);
+    if (idx !== -1) {
+      queue.items[idx] = { ...queue.items[idx], text, engineText, attachments };
+    }
+    queue.editingId = null;
+  }
+
+  function cancelEdit(sessionId: number) {
+    const queue = sessionQueues.value[sessionId];
+    if (!queue) return;
+    queue.editingId = null;
+  }
+
+  /** Atomically clears the queue and returns combined payload, or null if empty. */
+  function takeQueue(sessionId: number): { text: string; engineText: string; attachments: import("@shared/rpc-types").Attachment[] } | null {
+    const queue = sessionQueues.value[sessionId];
+    if (!queue || queue.items.length === 0) return null;
+    const items = [...queue.items];
+    sessionQueues.value[sessionId] = emptyQueueState();
+    return {
+      text: items.map((i) => i.text).join("\n\n---\n\n"),
+      engineText: items.map((i) => i.engineText).join("\n\n---\n\n"),
+      attachments: items.flatMap((i) => i.attachments),
+    };
+  }
+
+  async function drainSessionQueue(sessionId: number) {
+    const payload = takeQueue(sessionId);
+    if (!payload) return;
+    const session = sessions.value.find(s => s.id === sessionId);
+    if (!session) return;
+    await api("chatSessions.sendMessage", {
+      sessionId,
+      conversationId: session.conversationId,
+      content: payload.text,
+      engineContent: payload.engineText,
+      attachments: payload.attachments.length ? payload.attachments : undefined,
+    });
+  }
+
   return {
     sessions,
     activeChatSessionId,
@@ -197,6 +290,7 @@ export const useChatStore = defineStore("chat", () => {
     createSession,
     selectSession,
     closeSession,
+    cancelSession,
     sendMessage,
     renameSession,
     archiveSession,
@@ -206,5 +300,13 @@ export const useChatStore = defineStore("chat", () => {
     onChatSessionUpdated,
     onStreamError,
     onStreamEvent,
+    // Queue
+    sessionQueues,
+    enqueueMessage,
+    dequeueMessage,
+    startEdit,
+    confirmEdit,
+    cancelEdit,
+    takeQueue,
   };
 });

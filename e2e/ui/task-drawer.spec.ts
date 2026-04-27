@@ -1,5 +1,9 @@
 import { test, expect } from "./fixtures";
 import { makeAssistantMessage } from "./fixtures/mock-data";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
     await page.locator(`[data-task-id="${taskId}"]`).click();
@@ -32,7 +36,7 @@ test.describe("TD — task drawer coverage", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        await page.locator(".task-chat-view input[type='file']").setInputFiles("/Users/filipe.esch/projects/worktrees/task/126-chat-session-2nd-round/README.md");
+        await page.locator(".task-chat-view input[type='file']").setInputFiles(path.resolve(__dirname, "../../README.md"));
 
         await expect(page.locator(".task-chat-view .attachment-chip")).toHaveCount(1);
         await expect(page.locator(".task-chat-view .attachment-chip")).toContainText("README.md");

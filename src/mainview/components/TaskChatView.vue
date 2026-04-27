@@ -140,7 +140,13 @@
         :compacting="compacting"
         :enabled-mcp-tools="task.enabledMcpTools ?? null"
         :shell-auto-approve="task.shellAutoApprove"
+        :queue-state="taskStore.taskQueues[task.id] ?? null"
         @send="onSend"
+        @enqueue="onEnqueue"
+        @confirm-edit="onConfirmEdit"
+        @dequeue="(msgId) => taskStore.dequeueMessage(task!.id, msgId)"
+        @start-edit="(msgId) => taskStore.startEdit(task!.id, msgId)"
+        @cancel-edit="() => task && taskStore.cancelEdit(task.id)"
         @cancel="cancel"
         @update:model-id="onModelChange"
         @compact="compactConversation"
@@ -304,6 +310,22 @@ async function refreshTaskDataOnExecutionEnd() {
 async function onSend(text: string, engineText: string, attachments: Attachment[]) {
   if (!task.value) return;
   await taskStore.sendMessage(task.value.id, text, engineText, attachments.length ? attachments : undefined);
+}
+
+function onEnqueue(text: string, engineText: string, attachments: Attachment[]) {
+  if (!task.value) return;
+  taskStore.enqueueMessage(task.value.id, {
+    id: crypto.randomUUID(),
+    text,
+    engineText,
+    attachments,
+    addedAt: Date.now(),
+  });
+}
+
+function onConfirmEdit(msgId: string, text: string, engineText: string, attachments: Attachment[]) {
+  if (!task.value) return;
+  taskStore.confirmEdit(task.value.id, msgId, text, engineText, attachments);
 }
 
 async function cancel() {

@@ -6,6 +6,7 @@ import type { Task, ConversationMessage, StreamError, StreamEvent, GitNumstat } 
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 import { useConversationStore } from "./conversation";
 import { useWorkspaceStore } from "./workspace";
+import { type QueuedMessage, type QueueState, emptyQueueState } from "./queue-types";
 
 export const useTaskStore = defineStore("task", () => {
   const conversationStore = useConversationStore();
@@ -34,6 +35,9 @@ export const useTaskStore = defineStore("task", () => {
 
   // Changed file counts per task (populated from file_diff events and task completion)
   const changedFileCounts = ref<Record<number, number>>({});
+
+  // ─── Queue state ──────────────────────────────────────────────────────────
+  const taskQueues = ref<Record<number, QueueState>>({});
 
   const activeTask = computed(() => {
     return activeTaskId.value != null ? taskIndex.value[activeTaskId.value] ?? null : null;
@@ -222,6 +226,10 @@ export const useTaskStore = defineStore("task", () => {
     ) {
       fetchContextUsage(task.id);
     }
+    // Drain queue when task transitions from running to completed (natural finish only)
+    if (previous?.executionState === "running" && task.executionState === "completed") {
+      drainQueue(task.id);
+    }
     return activity;
   }
 
@@ -300,6 +308,7 @@ export const useTaskStore = defineStore("task", () => {
       conversationStore.setActiveConversation(null);
     }
     delete taskIndex.value[taskId];
+    delete taskQueues.value[taskId];
     clearTaskUnread(taskId);
     return { warning: result.warning };
   }
@@ -354,11 +363,73 @@ export const useTaskStore = defineStore("task", () => {
     taskIndex.value[updated.id] = updated;
   }
 
+  // ─── Queue actions ────────────────────────────────────────────────────────
+
+  function enqueueMessage(taskId: number, msg: QueuedMessage) {
+    if (!taskQueues.value[taskId]) taskQueues.value[taskId] = emptyQueueState();
+    taskQueues.value[taskId].items.push(msg);
+  }
+
+  function dequeueMessage(taskId: number, msgId: string) {
+    const queue = taskQueues.value[taskId];
+    if (!queue) return;
+    queue.items = queue.items.filter((i) => i.id !== msgId);
+    if (queue.editingId === msgId) queue.editingId = null;
+  }
+
+  function startEdit(taskId: number, msgId: string) {
+    if (!taskQueues.value[taskId]) return;
+    taskQueues.value[taskId].editingId = msgId;
+  }
+
+  function confirmEdit(taskId: number, msgId: string, text: string, engineText: string, attachments: import("@shared/rpc-types").Attachment[]) {
+    const queue = taskQueues.value[taskId];
+    if (!queue) return;
+    const idx = queue.items.findIndex((i) => i.id === msgId);
+    if (idx !== -1) {
+      queue.items[idx] = { ...queue.items[idx], text, engineText, attachments };
+    }
+    queue.editingId = null;
+  }
+
+  function cancelEdit(taskId: number) {
+    const queue = taskQueues.value[taskId];
+    if (!queue) return;
+    queue.editingId = null;
+  }
+
+  /** Atomically clears the queue and returns the combined payload, or null if empty. */
+  function takeQueue(taskId: number): { text: string; engineText: string; attachments: import("@shared/rpc-types").Attachment[] } | null {
+    const queue = taskQueues.value[taskId];
+    if (!queue || queue.items.length === 0) return null;
+    const items = [...queue.items];
+    taskQueues.value[taskId] = emptyQueueState();
+    return {
+      text: items.map((i) => i.text).join("\n\n---\n\n"),
+      engineText: items.map((i) => i.engineText).join("\n\n---\n\n"),
+      attachments: items.flatMap((i) => i.attachments),
+    };
+  }
+
+  async function drainQueue(taskId: number) {
+    const payload = takeQueue(taskId);
+    if (!payload) return;
+    await sendMessage(taskId, payload.text, payload.engineText, payload.attachments.length ? payload.attachments : undefined);
+  }
+
   conversationStore.registerHooks("task-store", {
     onStreamEvent(event, context) {
       if (event.taskId == null) return;
       if (event.type === "file_diff") {
         refreshChangedFiles(event.taskId);
+      }
+      // Fallback drain: fire when stream ends in case task.updated arrives with
+      // unexpected prior state (e.g. WS reconnect missed the running broadcast).
+      if (event.type === "done") {
+        const task = taskIndex.value[event.taskId];
+        if (task?.executionState === "running") {
+          drainQueue(event.taskId);
+        }
       }
       if (
         event.conversationId !== context.activeConversationId &&
@@ -428,5 +499,13 @@ export const useTaskStore = defineStore("task", () => {
     onStreamEvent,
     onTaskUpdated,
     onNewMessage,
+    // Queue
+    taskQueues,
+    enqueueMessage,
+    dequeueMessage,
+    startEdit,
+    confirmEdit,
+    cancelEdit,
+    takeQueue,
   };
 });

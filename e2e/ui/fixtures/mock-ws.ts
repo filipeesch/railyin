@@ -77,6 +77,23 @@ export class WsMock {
         });
     }
 
+    /** Convenience: push a `done` stream event for a chat session (no taskId). */
+    pushSessionDone(conversationId: number, executionId: number, seq = 999): void {
+        this.pushStreamEvent({
+            taskId: null,
+            conversationId,
+            executionId,
+            seq,
+            blockId: `${executionId}-done`,
+            type: "done",
+            content: "",
+            metadata: null,
+            parentBlockId: null,
+            subagentId: null,
+            done: true,
+        });
+    }
+
     /** Convenience: push a chatSession.updated event. */
     pushChatSessionUpdated(session: ChatSession): void {
         this.push({ type: "chatSession.updated", payload: session });

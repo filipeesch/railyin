@@ -1,5 +1,47 @@
 <template>
   <div :class="['conv-input', { 'task-detail__input': props.taskId != null }]">
+    <!-- Queued message rows -->
+    <div
+      v-if="queueItems.length > 0"
+      class="conv-input__queue-list"
+      data-testid="queue-chips"
+    >
+      <div class="conv-input__queue-header">
+        <span class="conv-input__queue-label">
+          <span v-if="isWaitingUser" class="queue-frozen-indicator" title="Queued messages will send when you answer the question above" data-testid="queue-frozen-indicator">🔒</span>
+          Queued ({{ queueItems.length }})
+        </span>
+      </div>
+      <div
+        v-for="(item, idx) in queueItems"
+        :key="item.id"
+        :class="['queue-row', { 'queue-row--editing': editingId === item.id }]"
+        :data-testid="`queue-chip-${item.id}`"
+      >
+        <span class="queue-row__index">{{ idx + 1 }}</span>
+        <span class="queue-row__content">
+          <template v-for="(segment, si) in segmentChipText(item.text)" :key="si">
+            <span v-if="segment.type === 'text'">{{ segment.text }}</span>
+            <span v-else :class="['msg__chip', `msg__chip--${segment.kind}`]">{{ segment.label }}</span>
+          </template>
+        </span>
+        <span class="queue-row__actions">
+          <button
+            class="queue-row__action"
+            :aria-label="`Edit queued message`"
+            :data-testid="`queue-chip-edit-${item.id}`"
+            @click="emit('startEdit', item.id)"
+          >✏</button>
+          <button
+            class="queue-row__action"
+            aria-label="Remove queued message"
+            :data-testid="`queue-chip-remove-${item.id}`"
+            @click="emit('dequeue', item.id)"
+          >✕</button>
+        </span>
+      </div>
+    </div>
+
     <!-- Pending code refs -->
     <div v-if="pendingCodeRefs.length > 0" class="conv-input__attachments">
       <span
@@ -67,7 +109,7 @@
         @click="fileInputRef?.click()"
       />
 
-      <!-- Cancel / compacting / send button -->
+      <!-- Stop button (when running) -->
       <Button
         v-if="isRunning"
         icon="pi pi-stop-circle"
@@ -75,13 +117,40 @@
         data-testid="cancel-btn"
         @click="emit('cancel')"
       />
+
+      <!-- Compacting spinner -->
       <Button
-        v-else-if="props.compacting"
+        v-if="props.compacting"
         :loading="true"
         :disabled="true"
       />
+
+      <!-- Queue button (when running) -->
       <Button
-        v-else
+        v-if="isRunning"
+        :icon="queueButtonLabel ? undefined : 'pi pi-clock'"
+        :label="queueButtonLabel ?? undefined"
+        :badge="(!queueButtonLabel && queueItems.length > 0) ? String(queueItems.length) : undefined"
+        :disabled="!canSend"
+        data-testid="queue-btn"
+        @click="send"
+      />
+
+      <!-- Cancel edit button (when editing a queued message) -->
+      <Button
+        v-if="isRunning && editingId != null"
+        icon="pi pi-times"
+        text
+        rounded
+        size="small"
+        v-tooltip="'Cancel edit'"
+        data-testid="queue-cancel-edit-btn"
+        @click="emit('cancelEdit')"
+      />
+
+      <!-- Send button (when not running) -->
+      <Button
+        v-if="!isRunning && !props.compacting"
         icon="pi pi-send"
         :disabled="!canSend"
         data-testid="send-btn"
@@ -249,6 +318,8 @@ import { useCodeServerStore } from "../stores/codeServer";
 import { useToast } from "primevue/usetoast";
 import { api } from "../rpc";
 import type { Attachment, ChatSession, CodeRef, McpServerStatus, Task } from "@shared/rpc-types";
+import type { QueueState } from "../stores/queue-types";
+import { segmentChipText } from "../utils/chat-chips";
 
 const props = defineProps<{
   executionState: string;
@@ -260,10 +331,16 @@ const props = defineProps<{
   compacting?: boolean;
   enabledMcpTools?: string[] | null;
   shellAutoApprove?: boolean;
+  queueState?: QueueState | null;
 }>();
 
 const emit = defineEmits<{
   send: [text: string, engineText: string, attachments: Attachment[]];
+  enqueue: [text: string, engineText: string, attachments: Attachment[]];
+  confirmEdit: [msgId: string, text: string, engineText: string, attachments: Attachment[]];
+  dequeue: [msgId: string];
+  startEdit: [msgId: string];
+  cancelEdit: [];
   cancel: [];
   "update:modelId": [string | null];
   compact: [];
@@ -291,7 +368,7 @@ const mcpStatuses = ref<McpServerStatus[]>([]);
 // ─── Computed ─────────────────────────────────────────────────────────────────
 
 const isRunning = computed(() => props.executionState === "running");
-const isDisabled = computed(() => isRunning.value || !!props.compacting);
+const isDisabled = computed(() => !!props.compacting);
 const pendingCodeRefs = computed(() => (
   props.taskId != null ? (codeServerStore.pendingRefs.get(props.taskId) ?? []) : []
 ));
@@ -300,6 +377,30 @@ const canSend = computed(() => (
   pendingAttachments.value.length > 0 ||
   pendingCodeRefs.value.length > 0
 ));
+
+const queueItems = computed(() => props.queueState?.items ?? []);
+const editingId = computed(() => props.queueState?.editingId ?? null);
+const isWaitingUser = computed(() => props.executionState === "waiting_user");
+
+const queueButtonLabel = computed(() => {
+  if (editingId.value != null) {
+    const idx = queueItems.value.findIndex((i) => i.id === editingId.value);
+    return `Update #${idx + 1}`;
+  }
+  return null;
+});
+
+// When editingId changes, load item text into the editor
+watch(editingId, (id) => {
+  if (id == null) return;
+  const item = queueItems.value.find((i) => i.id === id);
+  if (!item) return;
+  const editor = chatEditorRef.value;
+  if (!editor) return;
+  editor.clear();
+  editor.insert(item.text);
+  editor.focus();
+});
 
 const mcpHasWarning = computed(() => mcpStatuses.value.some((status) => status.state === "error"));
 
@@ -338,29 +439,35 @@ const supportsManualCompact = computed(() =>
 // ─── Send logic ───────────────────────────────────────────────────────────────
 
 function send() {
-  if (!canSend.value) return;
-  if (!inputText.value.trim()) {
-    void onChatEditorSend("", "", []);
-    return;
-  }
+  if (!canSend.value && !isRunning.value) return;
+  if (!inputText.value.trim() && !isRunning.value) return;
   chatEditorRef.value?.send();
 }
 
 async function onChatEditorSend(content: string, engineContent: string, editorAttachments: Attachment[]) {
-  if (!canSend.value) return;
+  const trimmed = content.trim();
+  if (!trimmed && !pendingAttachments.value.length && !pendingCodeRefs.value.length) return;
   const allAttachments = [
     ...pendingAttachments.value,
     ...editorAttachments,
   ];
   const refPrefix = props.taskId != null ? codeServerStore.serializeRefs(props.taskId) : "";
-  const finalContent = [refPrefix, content.trim()].filter(Boolean).join("\n\n");
+  const finalContent = [refPrefix, trimmed].filter(Boolean).join("\n\n");
   const finalEngineContent = [refPrefix, engineContent.trim()].filter(Boolean).join("\n\n");
   inputText.value = "";
   pendingAttachments.value = [];
   if (props.taskId != null) {
     codeServerStore.clearRefs(props.taskId);
   }
-  emit("send", finalContent, finalEngineContent, allAttachments);
+  if (isRunning.value) {
+    if (editingId.value != null) {
+      emit("confirmEdit", editingId.value, finalContent, finalEngineContent, allAttachments);
+    } else {
+      emit("enqueue", finalContent, finalEngineContent, allAttachments);
+    }
+  } else {
+    emit("send", finalContent, finalEngineContent, allAttachments);
+  }
 }
 
 function formatCodeRefLabel(ref: CodeRef): string {
@@ -605,5 +712,119 @@ defineExpose({ focus: () => chatEditorRef.value?.focus() });
   font-size: 0.75rem;
   color: var(--p-text-muted-color);
   white-space: nowrap;
+}
+
+/* Queue rows */
+.conv-input__queue-list {
+  display: flex;
+  flex-direction: column;
+  background: var(--p-content-hover-background, rgba(255,255,255,0.04));
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--p-primary-color, #6366f1) 30%, transparent);
+}
+
+.conv-input__queue-header {
+  display: flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--p-content-border-color, #334155) 60%, transparent);
+}
+
+.conv-input__queue-label {
+  font-size: 0.72rem;
+  color: var(--p-text-muted-color);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.queue-frozen-indicator {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.queue-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 8px;
+  font-size: 0.82rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--p-content-border-color, #334155) 40%, transparent);
+}
+
+.queue-row:last-child {
+  border-bottom: none;
+}
+
+.queue-row--editing {
+  opacity: 0.5;
+}
+
+.queue-row__index {
+  flex-shrink: 0;
+  color: var(--p-text-muted-color);
+  font-size: 0.72rem;
+  line-height: 1.6;
+  min-width: 12px;
+}
+
+.queue-row__content {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.queue-row__actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.queue-row__action {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--p-text-muted-color);
+  font-size: 0.85rem;
+  padding: 4px 6px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.queue-row__action:hover {
+  color: var(--p-text-color);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+/* Inline chip styles for queue content (mirror MessageBubble) */
+.msg__chip {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0.12rem;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.4;
+  vertical-align: baseline;
+}
+
+.msg__chip--slash {
+  background: color-mix(in srgb, var(--p-primary-500, #6366f1) 14%, transparent);
+}
+
+.msg__chip--file {
+  background: color-mix(in srgb, var(--p-green-500, #22c55e) 14%, transparent);
+}
+
+.msg__chip--tool {
+  background: color-mix(in srgb, var(--p-orange-500, #f59e0b) 14%, transparent);
 }
 </style>

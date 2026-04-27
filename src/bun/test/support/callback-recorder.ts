@@ -124,6 +124,14 @@ export class CallbackRecorder {
         return this.errors.filter((error) => error.executionId === executionId).at(-1)!;
     }
 
+    async waitUntilIpc(executionId: number, predicate: (events: StreamEvent[]) => boolean, timeoutMs = 5_000): Promise<void> {
+        await waitUntil(
+            () => predicate(this.streamEvents.filter((e) => e.executionId === executionId)),
+            `IPC condition for execution ${executionId}`,
+            timeoutMs,
+        );
+    }
+
     async waitForStableTokenCount(executionId: number, stableMs = 75, timeoutMs = 2_000): Promise<number> {
         const deadline = Date.now() + timeoutMs;
         let lastCount = this.tokenEvents.filter((event) => event.executionId === executionId).length;

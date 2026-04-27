@@ -175,12 +175,18 @@ async function onAskSubmit(answer: string) {
   if (props.chunk.taskId != null) {
     const taskId = taskStore.activeTaskId;
     if (taskId === null) return;
-    await taskStore.sendMessage(taskId, answer);
+    const queued = taskStore.takeQueue(taskId);
+    const text = queued ? `${answer}\n\n---\n\n${queued.text}` : answer;
+    const engineText = queued ? `${answer}\n\n---\n\n${queued.engineText}` : answer;
+    await taskStore.sendMessage(taskId, text, engineText, queued?.attachments.length ? queued.attachments : undefined);
     return;
   }
 
   if (chatStore.activeChatSessionId == null) return;
-  await chatStore.sendMessage(answer);
+  const queued = chatStore.takeQueue(chatStore.activeChatSessionId);
+  const text = queued ? `${answer}\n\n---\n\n${queued.text}` : answer;
+  const engineText = queued ? `${answer}\n\n---\n\n${queued.engineText}` : answer;
+  await chatStore.sendMessage(text, engineText, queued?.attachments.length ? queued.attachments : undefined);
 }
 
 // ─── Shell approval support ───────────────────────────────────────────────────
@@ -232,12 +238,18 @@ async function onInterviewSubmit(answer: string) {
   if (props.chunk.taskId != null) {
     const taskId = taskStore.activeTaskId;
     if (taskId === null) return;
-    await taskStore.sendMessage(taskId, answer);
+    const queued = taskStore.takeQueue(taskId);
+    const text = queued ? `${answer}\n\n---\n\n${queued.text}` : answer;
+    const engineText = queued ? `${answer}\n\n---\n\n${queued.engineText}` : answer;
+    await taskStore.sendMessage(taskId, text, engineText, queued?.attachments.length ? queued.attachments : undefined);
     return;
   }
 
   if (chatStore.activeChatSessionId == null) return;
-  await chatStore.sendMessage(answer);
+  const queued = chatStore.takeQueue(chatStore.activeChatSessionId);
+  const text = queued ? `${answer}\n\n---\n\n${queued.text}` : answer;
+  const engineText = queued ? `${answer}\n\n---\n\n${queued.engineText}` : answer;
+  await chatStore.sendMessage(text, engineText, queued?.attachments.length ? queued.attachments : undefined);
 }
 </script>
 

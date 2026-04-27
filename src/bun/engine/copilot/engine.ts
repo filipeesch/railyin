@@ -218,6 +218,10 @@ export class CopilotEngine implements ExecutionEngine {
         // Fire the prompt; pass the promise into translateCopilotStream so a rejection
         // (e.g. CLI crash) is surfaced as a fatal error rather than silently hanging.
         // Combine the external abort signal with the interview_me internal abort.
+        // Guard: if the outer signal is already aborted (can happen on a second
+        // turn if cancel fired while waitForResume was pending), abort immediately
+        // instead of adding a listener that will never fire.
+        if (params.signal?.aborted) return;
         const combinedController = new AbortController();
         params.signal?.addEventListener("abort", () => combinedController.abort(), { once: true });
         interviewAbortController.signal.addEventListener("abort", () => {

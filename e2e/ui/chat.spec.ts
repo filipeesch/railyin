@@ -208,7 +208,7 @@ test.describe("N — execution state in the UI", () => {
         await expect(page.locator(".task-detail__input button:has(.pi-send)")).toBeDisabled();
     });
 
-    test("N-9: editor re-enables after AI turn completes without drawer reopen", async ({ page, api, ws, task }) => {
+    test("N-9: editor stays enabled and queue button appears while AI is running", async ({ page, api, ws, task }) => {
         const runningTask: Task = { ...task, executionState: "running" };
         const completedTask: Task = { ...task, executionState: "completed" };
 
@@ -225,16 +225,21 @@ test.describe("N — execution state in the UI", () => {
         await openTaskDrawer(page, task.id);
         await sendMessage(page, "N-9 msg");
 
-        // Editor should be disabled while AI is running
+        // Editor stays enabled while AI is running (queue messages feature)
         const cmContent = page.locator(".task-detail__input .cm-content");
-        await expect(cmContent).toHaveAttribute("contenteditable", "false", { timeout: 5_000 });
+        await expect(cmContent).toHaveAttribute("contenteditable", "true", { timeout: 5_000 });
+
+        // Queue button replaces send button while running
+        await expect(page.locator('[data-testid="queue-btn"]')).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator('[data-testid="send-btn"]')).not.toBeVisible();
 
         // Simulate AI turn ending
         ws.pushDone(task.id, EXEC_ID);
         ws.push({ type: "task.updated", payload: completedTask });
 
-        // Editor must re-enable without closing the drawer
-        await expect(cmContent).toHaveAttribute("contenteditable", "true", { timeout: 5_000 });
+        // Send button returns, queue button gone — editor still enabled
+        await expect(page.locator('[data-testid="send-btn"]')).toBeVisible({ timeout: 5_000 });
+        await expect(cmContent).toHaveAttribute("contenteditable", "true");
     });
 });
 
