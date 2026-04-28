@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import { createMockWait } from "./support/mock-wait.ts";
 
-// ─── WB-1: count-triggered auto-flush ─────────────────────────────────────────
+// ─── WB-1: count-triggered loop wakeup ────────────────────────────────────────
 
-describe("WriteBuffer — WB-1: auto-flush on maxBatch", () => {
-  it("flushes when pending items reach maxBatch", () => {
+describe("WriteBuffer — WB-1: wakeup loop on maxBatch (no sync flush)", () => {
+  it("does NOT flush synchronously when pending items reach maxBatch", () => {
+    // enqueue() must never call flushFn synchronously — doing so would block the
+    // event loop in the caller's context and delay WS broadcasts (streaming bursts).
     const flushed: number[][] = [];
     const buf = new WriteBuffer<number>({
       maxBatch: 3,
@@ -14,14 +16,31 @@ describe("WriteBuffer — WB-1: auto-flush on maxBatch", () => {
 
     buf.enqueue(1);
     buf.enqueue(2);
-    expect(flushed).toHaveLength(0); // not yet
+    buf.enqueue(3); // reaches maxBatch — must NOT flush synchronously
+    expect(flushed).toHaveLength(0); // still zero — flush is deferred
+  });
 
-    buf.enqueue(3); // triggers auto-flush
+  it("wakes the loop to flush soon when maxBatch is reached", async () => {
+    const flushed: number[][] = [];
+    const { waitFn, tick } = createMockWait();
+    const buf = new WriteBuffer<number>({
+      maxBatch: 3,
+      flushFn: (items) => flushed.push([...items]),
+      waitFn,
+    });
+
+    buf.start();
+    buf.enqueue(1);
+    buf.enqueue(2);
+    buf.enqueue(3); // wakes the loop via _tick()
+
+    // Loop resumes + setImmediate + flush — need to let all macrotasks drain
+    await new Promise((r) => setTimeout(r, 10));
+
     expect(flushed).toHaveLength(1);
     expect(flushed[0]).toEqual([1, 2, 3]);
 
-    buf.enqueue(4); // below threshold again
-    expect(flushed).toHaveLength(1);
+    buf.stop();
   });
 });
 

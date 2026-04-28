@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { createRawMessageBuffer } from "../engine/stream/raw-message-buffer.ts";
 import type { RawModelMessage } from "../types.ts";
+import { createMockWait } from "./support/mock-wait.ts";
 
 let db: Database;
 let taskId: number;
@@ -47,7 +48,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe("RawMessageBuffer — count-based auto-flush at maxBatch:50", () => {
+describe("RawMessageBuffer — count-based loop wakeup at maxBatch:50", () => {
   it("49 enqueues do not flush", () => {
     const buf = createRawMessageBuffer(db);
     for (let i = 0; i < 49; i++) {
@@ -56,12 +57,27 @@ describe("RawMessageBuffer — count-based auto-flush at maxBatch:50", () => {
     expect(countRaw(db, executionId)).toBe(0);
   });
 
-  it("50th enqueue triggers auto-flush", () => {
+  it("50th enqueue does NOT flush synchronously (no event loop block)", () => {
+    // enqueue() must never flush synchronously to avoid blocking WS broadcasts.
     const buf = createRawMessageBuffer(db);
     for (let i = 0; i < 50; i++) {
       buf.enqueue({ taskId, executionId, seq: i, raw: makeRawMsg(`item-${i}`) });
     }
+    // Immediately after enqueue — still zero because flush is async
+    expect(countRaw(db, executionId)).toBe(0);
+  });
+
+  it("50th enqueue wakes the loop to flush soon", async () => {
+    const { waitFn } = createMockWait();
+    const buf = createRawMessageBuffer(db, waitFn);
+    buf.start();
+    for (let i = 0; i < 50; i++) {
+      buf.enqueue({ taskId, executionId, seq: i, raw: makeRawMsg(`item-${i}`) });
+    }
+    // The loop is woken via _tick() — wait for macrotask to complete
+    await new Promise((r) => setTimeout(r, 10));
     expect(countRaw(db, executionId)).toBe(50);
+    buf.stop();
   });
 });
 
