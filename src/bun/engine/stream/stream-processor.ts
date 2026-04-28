@@ -170,6 +170,11 @@ export class StreamProcessor {
             hadOutput = true;
             this.onToken(taskId, conversationId, executionId, event.content, false);
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
+            // Yield to the event loop so uWS flushes the WS frame for this token
+            // before the next token is processed. Without this, multiple tokens from
+            // a single TCP packet drain in the same microtask batch and uWS coalesces
+            // them into one frame, making the UI receive tokens in bursts.
+            await new Promise<void>((r) => setImmediate(r));
             break;
           }
 
