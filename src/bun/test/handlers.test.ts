@@ -542,3 +542,75 @@ describe("models.listEnabled — Copilot Auto option", () => {
     expect(enabled.some((m) => m.id === "copilot/mock-model")).toBe(true);
   });
 });
+
+// ─── ESP-1: tasks.list — executionCount via LEFT JOIN ────────────────────────
+
+describe("tasks.list — ESP-1: executionCount JOIN", () => {
+  it("returns correct executionCount for tasks with multiple executions", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+    const boardId = db
+      .query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?")
+      .get(taskId)!.board_id;
+
+    // Insert 3 executions for this task
+    for (let i = 0; i < 3; i++) {
+      db.run(
+        "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'completed', ?)",
+        [taskId, conversationId, i + 1],
+      );
+    }
+
+    const { handlers } = makeHandlers();
+    const tasks = await handlers["tasks.list"]({ boardId });
+    const t = tasks.find((x) => x.id === taskId);
+    expect(t).toBeDefined();
+    expect(t!.executionCount).toBe(3);
+  });
+
+  it("returns 0 executionCount when task has no executions", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+    const boardId = db
+      .query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?")
+      .get(taskId)!.board_id;
+
+    const { handlers } = makeHandlers();
+    const tasks = await handlers["tasks.list"]({ boardId });
+    const t = tasks.find((x) => x.id === taskId);
+    expect(t).toBeDefined();
+    expect(t!.executionCount).toBe(0);
+  });
+});
+
+// ─── ESP-2: tasks.delete — cascade atomicity ─────────────────────────────────
+
+describe("tasks.delete — ESP-2: cascade atomicity", () => {
+  it("removes task and all related rows from every related table", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+
+    // Seed related rows
+    db.run(
+      "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'completed', 1)",
+      [taskId, conversationId],
+    );
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', 'hi')",
+      [taskId, conversationId],
+    );
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, '/root', '/root', 'ready', 'branch')",
+      [taskId],
+    );
+
+    const { handlers } = makeHandlers();
+    await handlers["tasks.delete"]({ taskId });
+
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM tasks WHERE id = ?").get(taskId)!.n).toBe(0);
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM executions WHERE task_id = ?").get(taskId)!.n).toBe(0);
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM conversation_messages WHERE task_id = ?").get(taskId)!.n).toBe(0);
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM task_git_context WHERE task_id = ?").get(taskId)!.n).toBe(0);
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM conversations WHERE id = ?").get(conversationId)!.n).toBe(0);
+  });
+});

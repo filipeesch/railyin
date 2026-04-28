@@ -18,8 +18,9 @@ export class ContextEstimator {
       .get(conversationId);
 
     if (recentExec?.input_tokens != null) {
+      const usedTokens = Math.min(recentExec.input_tokens, maxTokens);
       const fraction = maxTokens > 0 ? Math.min(recentExec.input_tokens / maxTokens, 1) : 0;
-      return { usedTokens: recentExec.input_tokens, maxTokens, fraction };
+      return { usedTokens, maxTokens, fraction };
     }
 
     // Slow path: find last compaction_summary anchor, load up to 200 messages after it

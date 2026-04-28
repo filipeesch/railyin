@@ -181,10 +181,10 @@ export class StreamProcessor {
           }
 
           case "status": {
-            convBuffer.enqueue({ taskId, conversationId, type: "status", role: null, content: event.message, notify: false });
-            convBuffer.flush();
             this.onToken(taskId, conversationId, executionId, event.message, false, false, true);
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.message, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
+            convBuffer.enqueue({ taskId, conversationId, type: "status", role: null, content: event.message, notify: false });
+            convBuffer.flush();
             break;
           }
 

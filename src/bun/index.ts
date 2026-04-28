@@ -218,11 +218,6 @@ function onStreamEvent(event: StreamEvent): void {
   const { seq, blockId } = enricher.enrich(event.type, event.blockId || undefined);
   const enrichedEvent: StreamEvent = { ...event, seq, blockId };
 
-  // ── Diagnostic: verify events are sent incrementally ──
-  if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
-    console.log(`[stream-diag-bun] ${event.type} len=${event.content.length} t=${performance.now().toFixed(1)}`);
-  }
-
   broadcast({ type: "stream.event", payload: enrichedEvent });
 
   if (PERSISTED_STREAM_TYPES.has(event.type)) {

@@ -35,7 +35,7 @@ export interface BackendRpcRuntime {
     waitForTaskState: (taskId: number, state: string, timeoutMs?: number) => Promise<void>;
     /** All StreamEvents delivered to IPC immediately (all types). */
     getIpcEvents: (executionId: number) => StreamEvent[];
-    /** StreamEvents written to DB (persisted types only, after batcher flush). */
+    /** StreamEvents written to DB (persisted types only, after WriteBuffer flush). */
     getDbStreamEvents: (executionId: number) => PersistedStreamEvent[];
     /** Wait until a persisted event of `type` appears in DB for this execution. */
     waitForDbStreamEvent: (executionId: number, type: string, timeoutMs?: number) => Promise<PersistedStreamEvent>;
