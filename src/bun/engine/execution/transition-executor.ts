@@ -1,5 +1,5 @@
 import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types.ts";
-import { getDb } from "../../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { mapTask } from "../../db/mappers.ts";
 import { appendMessage } from "../../conversation/messages.ts";
 import { getBoardWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
@@ -13,6 +13,7 @@ import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
 
 export class TransitionExecutor {
   constructor(
+    private readonly db: Database,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly workdirResolver: WorkingDirectoryResolver,
@@ -23,7 +24,7 @@ export class TransitionExecutor {
     taskId: number,
     toState: string,
   ): Promise<{ task: Task; executionId: number | null }> {
-    const db = getDb();
+    const db = this.db;
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const config = getWorkspaceConfig(getBoardWorkspaceKey(task.board_id));
@@ -49,7 +50,7 @@ export class TransitionExecutor {
     }
 
     if (!column?.on_enter_prompt) {
-      appendMessage(taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
+      appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
       db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
       const updated = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
       return { task: mapTask(updated), executionId: null };
@@ -65,7 +66,7 @@ export class TransitionExecutor {
       resolvedPrompt,
       workingDirectory,
     );
-    appendMessage(taskId, conversationId, "transition_event", null, "", transitionMetadata);
+    appendMessage(db, taskId, conversationId, "transition_event", null, "", transitionMetadata);
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)

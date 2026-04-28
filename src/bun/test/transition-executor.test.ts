@@ -11,8 +11,12 @@ import { TransitionExecutor } from "../engine/execution/transition-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import { WorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
+import { WriteBuffer } from "../pipeline/write-buffer.ts";
+import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+
+const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 
 let db: Database;
 let gitDir: string;
@@ -72,7 +76,7 @@ class StubStreamProcessor extends StreamProcessor {
   lastRun: { taskId: number | null; conversationId: number; executionId: number; params: ExecutionParams } | null = null;
 
   constructor() {
-    super(() => {}, () => {}, () => {}, () => {});
+    super(null as never, fakeRawBuffer, () => {}, () => {}, () => {}, () => {});
   }
 
   override createSignal(): AbortSignal {
@@ -129,6 +133,7 @@ describe("TransitionExecutor", () => {
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
+      db,
       EngineRegistry.fromFixed(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
@@ -181,6 +186,7 @@ columns:
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
+      db,
       EngineRegistry.fromFixed(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),

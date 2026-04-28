@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import { existsSync } from "fs";
 import { join } from "path";
 import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml, sanitizeWorkspaceKey, ensureConfigExists, type WorkspaceYaml } from "../config/index.ts";
@@ -5,9 +6,8 @@ import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { clearProviderCache } from "../ai/index.ts";
 import type { WorkspaceConfig, WorkspaceSummary } from "../../shared/rpc-types.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
-import { getDb } from "../db/index.ts";
 
-export function workspaceHandlers() {
+export function workspaceHandlers(db: Database) {
   return {
     "workspace.getConfig": async (params: { workspaceKey?: string }): Promise<WorkspaceConfig> => {
       resetConfig();
@@ -143,7 +143,6 @@ export function workspaceHandlers() {
     },
 
     "workspace.listFiles": async (params: { taskId?: number; workspaceKey?: string; query?: string }): Promise<{ name: string; path: string }[]> => {
-      const db = getDb();
       let cwd = process.cwd();
       if (params.taskId != null) {
         const row = db

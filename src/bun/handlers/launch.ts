@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { mapTask } from "../db/mappers.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import type { LaunchConfig } from "../../shared/rpc-types.ts";
@@ -8,10 +8,9 @@ import { launchApp, launchInTerminal } from "../launch/launcher.ts";
 import { createPtySession, killPtySession } from "../launch/pty.ts";
 import { getLoadedProjectByKey } from "../project-store.ts";
 
-export function launchHandlers() {
+export function launchHandlers(db: Database) {
   return {
     "launch.getConfig": async (params: { taskId: number }): Promise<LaunchConfig | null> => {
-      const db = getDb();
 
       const row = db
         .query<{ project_key: string; workspace_key: string }, [number]>(
@@ -33,7 +32,6 @@ export function launchHandlers() {
       command: string;
       mode: "terminal" | "external-terminal" | "app";
     }): Promise<{ ok: true; sessionId?: string } | { ok: false; error: string }> => {
-      const db = getDb();
 
       const taskRow = db
         .query<TaskRow & { worktree_path: string | null; workspace_key: string }, [number]>(

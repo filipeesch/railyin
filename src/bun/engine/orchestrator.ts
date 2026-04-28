@@ -19,7 +19,7 @@ import type {
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
 import { mapTask } from "../db/mappers.ts";
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import type { TaskRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
@@ -34,8 +34,10 @@ import { HumanTurnExecutor } from "./execution/human-turn-executor.ts";
 import { RetryExecutor } from "./execution/retry-executor.ts";
 import { CodeReviewExecutor } from "./execution/code-review-executor.ts";
 import { ChatExecutor } from "./execution/chat-executor.ts";
+import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
+  private readonly db: Database;
   private readonly registry: EngineRegistry;
   private readonly streamProcessor: StreamProcessor;
   private readonly paramsBuilder: ExecutionParamsBuilder;
@@ -54,24 +56,29 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   constructor(
+    db: Database,
     registry: EngineRegistry,
     onError: OnError,
     onTaskUpdated: OnTaskUpdated,
     onNewMessage: OnNewMessage,
   ) {
+    this.db = db;
     this.registry = registry;
     this.onTaskUpdated = onTaskUpdated;
     this.onNewMessage = onNewMessage;
 
-    this.streamProcessor = new StreamProcessor(() => {}, onError, onTaskUpdated, onNewMessage);
+    const rawBuffer = createRawMessageBuffer(db);
+    rawBuffer.start();
+
+    this.streamProcessor = new StreamProcessor(db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage);
     this.paramsBuilder = new ExecutionParamsBuilder();
     this.workdirResolver = new WorkingDirectoryResolver();
 
-    this.transitionExecutor = new TransitionExecutor(registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor);
-    this.humanTurnExecutor = new HumanTurnExecutor(registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated);
-    this.retryExecutor = new RetryExecutor(registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor);
-    this.codeReviewExecutor = new CodeReviewExecutor(registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage);
-    this.chatExecutor = new ChatExecutor(registry, this.paramsBuilder, this.streamProcessor);
+    this.transitionExecutor = new TransitionExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor);
+    this.humanTurnExecutor = new HumanTurnExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated);
+    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor);
+    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────
@@ -120,7 +127,7 @@ export class Orchestrator implements ExecutionCoordinator {
   cancel(executionId: number): void {
     this.streamProcessor.abort(executionId);
 
-    const db = getDb();
+    const db = this.db;
     // Fetch row BEFORE nativeCancelExecution — it may overwrite status to 'failed'
     // (zombie cleanup path) which would prevent our non-native 'cancelled' update below.
     const execRow = db.query<{ task_id: number | null; status: string; finished_at: string | null }, [number]>(
@@ -166,7 +173,7 @@ export class Orchestrator implements ExecutionCoordinator {
   // ─── Command listing ────────────────────────────────────────────────────────
 
   async listCommands(taskId: number) {
-    const db = getDb();
+    const db = this.db;
     const task = db.query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?").get(taskId);
     if (!task) return [];
     const key = getBoardWorkspaceKey(task.board_id);
@@ -185,7 +192,7 @@ export class Orchestrator implements ExecutionCoordinator {
     taskId: number,
     decision: "approve_once" | "approve_all" | "deny",
   ): Promise<void> {
-    const db = getDb();
+    const db = this.db;
     const task = db
       .query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?")
       .get(taskId);
@@ -207,7 +214,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (!engine.compact) {
       throw new Error(`Engine for task ${taskId} does not support manual compaction`);
     }
-    const db = getDb();
+    const db = this.db;
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const workingDirectory = this.workdirResolver.resolve(task);

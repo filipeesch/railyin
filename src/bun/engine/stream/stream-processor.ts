@@ -10,9 +10,11 @@ import type {
   RawModelMessage,
 } from "../types.ts";
 import type { MessageType } from "../../../shared/rpc-types.ts";
-import { getDb } from "../../db/index.ts";
-import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
-import { appendMessage } from "../../conversation/messages.ts";
+import type { Database } from "bun:sqlite";
+import { mapTask } from "../../db/mappers.ts";
+import { ConvMessageBuffer } from "../../conversation/conv-message-buffer.ts";
+import type { WriteBuffer } from "../../pipeline/write-buffer.ts";
+import type { RawMessageItem } from "./raw-message-buffer.ts";
 import type { TaskRow } from "../../db/row-types.ts";
 
 /**
@@ -22,7 +24,6 @@ import type { TaskRow } from "../../db/row-types.ts";
  *  - createSignal / abort: single registration site for AbortControllers
  *  - runNonNative: starts an engine execution and pipes events to consume()
  *  - consume: full EngineEvent state machine (tokens, tools, done, error, cancel)
- *  - _persistRawModelMessage: incremental raw event storage with retention
  *  - _appendPromptMessage / _pauseExecution: ask_user / shell_approval helpers
  *  - _emitFileDiffFromWrittenFiles: file diff emission on tool_result
  */
@@ -35,6 +36,8 @@ export class StreamProcessor {
   private onStreamEvent?: OnStreamEvent;
 
   constructor(
+    private readonly db: Database,
+    private readonly rawBuffer: WriteBuffer<RawMessageItem>,
     private readonly onToken: OnToken,
     private readonly onError: OnError,
     private readonly onTaskUpdated: OnTaskUpdated,
@@ -74,7 +77,11 @@ export class StreamProcessor {
     conversationId: number,
     executionId: number,
   ): (raw: RawModelMessage) => void {
-    return (raw) => this._persistRawModelMessage(taskId, conversationId, executionId, raw);
+    return (raw) => {
+      const seq = (this.rawMessageSeq.get(executionId) ?? 0) + 1;
+      this.rawMessageSeq.set(executionId, seq);
+      this.rawBuffer.enqueue({ taskId, executionId, seq, raw });
+    };
   }
 
   /** Starts the engine and pipes its event stream to consume(). */
@@ -104,7 +111,8 @@ export class StreamProcessor {
     executionId: number,
     stream: AsyncIterable<EngineEvent>,
   ): Promise<void> {
-    const db = getDb();
+    const db = this.db;
+    const convBuffer = new ConvMessageBuffer(db);
     let tokenAccum = "";
     let reasoningAccum = "";
     let hadOutput = false;
@@ -131,7 +139,8 @@ export class StreamProcessor {
 
       for await (const event of stream) {
         if (abortController.signal.aborted) {
-          this._flushAccumulators(taskId, conversationId, executionId, tokenAccum, reasoningAccum, callStack);
+          this._flushAccumulators(convBuffer, taskId, conversationId, executionId, tokenAccum, reasoningAccum, callStack);
+          convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
           tokenAccum = "";
           reasoningAccum = "";
           if (taskId != null) {
@@ -151,8 +160,8 @@ export class StreamProcessor {
         switch (event.type) {
           case "token": {
             if (reasoningAccum) {
-              const rFlushId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
-              this.onNewMessage({ id: rFlushId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
+              convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               reasoningAccum = "";
             }
@@ -172,7 +181,8 @@ export class StreamProcessor {
           }
 
           case "status": {
-            appendMessage(taskId, conversationId, "status", null, event.message);
+            convBuffer.enqueue({ taskId, conversationId, type: "status", role: null, content: event.message, notify: false });
+            convBuffer.flush();
             this.onToken(taskId, conversationId, executionId, event.message, false, false, true);
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.message, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
             break;
@@ -183,15 +193,15 @@ export class StreamProcessor {
             hadOutput = true;
             if (reasoningAccum) {
               const rBlockId = `${executionId}-pre-r${++reasoningFlushCount}`;
-              const rId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
-              this.onNewMessage({ id: rId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
+              convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: rBlockId, type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               reasoningBlockId = rBlockId;
               reasoningAccum = "";
             }
             if (tokenAccum) {
-              const flushId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
-              this.onNewMessage({ id: flushId, taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, metadata: null, createdAt: new Date().toISOString() });
+              convBuffer.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, notify: true });
+              convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               tokenAccum = "";
             }
@@ -205,8 +215,8 @@ export class StreamProcessor {
             const toolMeta = {
               parent_tool_call_id: event.parentCallId ?? null,
             };
-            const msgId = appendMessage(taskId, conversationId, "tool_call", null, toolCallMsg, toolMeta);
-            this.onNewMessage({ id: msgId, taskId, conversationId, type: "tool_call", role: null, content: toolCallMsg, metadata: toolMeta, createdAt: new Date().toISOString() });
+            convBuffer.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: toolCallMsg, metadata: toolMeta, notify: true });
+            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             const toolParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false, subagentId: null });
             callStack.push(callId);
@@ -217,8 +227,8 @@ export class StreamProcessor {
             if (event.isInternal) break;
             hadOutput = true;
             if (reasoningAccum) {
-              const rId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
-              this.onNewMessage({ id: rId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
+              convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               reasoningAccum = "";
             }
@@ -235,9 +245,11 @@ export class StreamProcessor {
               tool_call_id: event.callId ?? null,
               parent_tool_call_id: event.parentCallId ?? null,
             };
-            const msgId = appendMessage(taskId, conversationId, "tool_result", null, resultMsg, resultMeta);
-            this.onNewMessage({ id: msgId, taskId, conversationId, type: "tool_result", role: null, content: resultMsg, metadata: resultMeta, createdAt: new Date().toISOString() });
-            const resultCallId = event.callId ?? msgId.toString();
+            convBuffer.enqueue({ taskId, conversationId, type: "tool_result", role: null, content: resultMsg, metadata: resultMeta, notify: true });
+            const flushedResult = convBuffer.flush();
+            const resultMsgRow = flushedResult[0];
+            if (resultMsgRow) this.onNewMessage(resultMsgRow);
+            const resultCallId = event.callId ?? (resultMsgRow?.id.toString() ?? "");
             const stackIdx = callStack.lastIndexOf(resultCallId);
             if (stackIdx !== -1) callStack.splice(stackIdx, 1);
             const resultParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
@@ -247,6 +259,7 @@ export class StreamProcessor {
               const writtenFiles = event.writtenFiles ?? [];
               if (writtenFiles.length > 0) {
                 await this._emitFileDiffFromWrittenFiles(
+                  convBuffer,
                   taskId,
                   conversationId,
                   executionId,
@@ -268,21 +281,19 @@ export class StreamProcessor {
 
           case "done": {
             if (reasoningAccum) {
-              const rDoneId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
-              this.onNewMessage({ id: rDoneId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+              convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               reasoningAccum = "";
             }
             if (tokenAccum) {
-              const msgId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
-              this.onNewMessage({ id: msgId, taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, metadata: null, createdAt: new Date().toISOString() });
+              convBuffer.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, notify: true });
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               tokenAccum = "";
             } else if (!hadOutput) {
               const warnMsg = "Agent completed with no output. The prompt may not have been resolved correctly.";
-              const msgId = appendMessage(taskId, conversationId, "system", null, warnMsg);
-              this.onNewMessage({ id: msgId, taskId, conversationId, type: "system", role: null, content: warnMsg, metadata: null, createdAt: new Date().toISOString() });
+              convBuffer.enqueue({ taskId, conversationId, type: "system", role: null, content: warnMsg, notify: true });
             }
+            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
 
             if (taskId != null) {
               db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
@@ -313,12 +324,14 @@ export class StreamProcessor {
               return;
             }
             this.onError(taskId, conversationId, executionId, event.message);
-            appendMessage(taskId, conversationId, "system", null, `Error: ${event.message}`);
+            convBuffer.enqueue({ taskId, conversationId, type: "system", role: null, content: `Error: ${event.message}`, notify: false });
+            convBuffer.flush();
             break;
           }
 
           case "shell_approval": {
             this._appendPromptMessage(
+              convBuffer,
               taskId,
               conversationId,
               JSON.stringify({ subtype: "shell_approval", command: event.command, unapprovedBinaries: [] }),
@@ -328,14 +341,14 @@ export class StreamProcessor {
           }
 
           case "ask_user": {
-            this._appendPromptMessage(taskId, conversationId, event.payload);
+            this._appendPromptMessage(convBuffer, taskId, conversationId, event.payload);
             this._pauseExecution(taskId, conversationId, executionId);
             break;
           }
 
           case "interview_me": {
-            const msgId = appendMessage(taskId, conversationId, "interview_prompt", null, event.payload);
-            this.onNewMessage({ id: msgId, taskId, conversationId, type: "interview_prompt", role: null, content: event.payload, metadata: null, createdAt: new Date().toISOString() });
+            convBuffer.enqueue({ taskId, conversationId, type: "interview_prompt", role: null, content: event.payload, notify: true });
+            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             if (taskId != null) {
               db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
             }
@@ -349,8 +362,8 @@ export class StreamProcessor {
           }
 
           case "compaction_start": {
-            const compStartId = appendMessage(taskId, conversationId, "system", null, "Compacting conversation…");
-            this.onNewMessage({ id: compStartId, taskId, conversationId, type: "system", role: null, content: "Compacting conversation…", metadata: null, createdAt: new Date().toISOString() });
+            convBuffer.enqueue({ taskId, conversationId, type: "system", role: null, content: "Compacting conversation…", notify: true });
+            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             break;
           }
 
@@ -359,8 +372,8 @@ export class StreamProcessor {
               "SELECT type FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1"
             ).get(conversationId);
             if (lastMsg?.type === "compaction_summary") break;
-            const compDoneId = appendMessage(taskId, conversationId, "compaction_summary", null, "");
-            this.onNewMessage({ id: compDoneId, taskId, conversationId, type: "compaction_summary", role: null, content: "", metadata: null, createdAt: new Date().toISOString() });
+            convBuffer.enqueue({ taskId, conversationId, type: "compaction_summary", role: null, content: "", notify: true });
+            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             break;
           }
 
@@ -381,7 +394,8 @@ export class StreamProcessor {
 
       // Post-loop: generator ended normally (done event handled above) or was aborted.
       if (abortController.signal.aborted) {
-        this._flushAccumulators(taskId, conversationId, executionId, tokenAccum, reasoningAccum, callStack);
+        this._flushAccumulators(convBuffer, taskId, conversationId, executionId, tokenAccum, reasoningAccum, callStack);
+        convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
         tokenAccum = "";
         reasoningAccum = "";
         if (taskId != null) {
@@ -423,8 +437,9 @@ export class StreamProcessor {
 
   // ─── Private helpers ───────────────────────────────────────────────────────
 
-  /** Flush accumulated tokens and reasoning to DB before a cancel or done transition. */
+  /** Flush accumulated tokens and reasoning to buffer before a cancel or done transition. */
   private _flushAccumulators(
+    convBuffer: ConvMessageBuffer,
     taskId: number | null,
     conversationId: number,
     executionId: number,
@@ -433,67 +448,27 @@ export class StreamProcessor {
     callStack: string[],
   ): void {
     if (reasoningAccum) {
-      const rId = appendMessage(taskId, conversationId, "reasoning", null, reasoningAccum);
-      this.onNewMessage({ id: rId, taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, metadata: null, createdAt: new Date().toISOString() });
+      convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
       this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
     }
     if (tokenAccum) {
-      const tId = appendMessage(taskId, conversationId, "assistant", "assistant", tokenAccum);
-      this.onNewMessage({ id: tId, taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, metadata: null, createdAt: new Date().toISOString() });
+      convBuffer.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, notify: true });
       this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
     }
   }
 
-  private _persistRawModelMessage(
-    taskId: number | null,
-    conversationId: number,
-    executionId: number,
-    raw: RawModelMessage,
-  ): void {
-    const db = getDb();
-    const seq = (this.rawMessageSeq.get(executionId) ?? 0) + 1;
-    this.rawMessageSeq.set(executionId, seq);
-
-    const payloadJson = JSON.stringify(raw.payload);
-    db.run(
-      `INSERT INTO model_raw_messages
-         (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        taskId,
-        executionId,
-        raw.engine,
-        raw.sessionId ?? null,
-        seq,
-        raw.direction,
-        raw.eventType,
-        raw.eventSubtype ?? null,
-        payloadJson,
-      ],
-    );
-    db.run("DELETE FROM model_raw_messages WHERE created_at < datetime('now', '-1 day')");
-  }
-
   private _appendPromptMessage(
+    convBuffer: ConvMessageBuffer,
     taskId: number | null,
     conversationId: number,
     content: string,
   ): void {
-    const msgId = appendMessage(taskId, conversationId, "ask_user_prompt" as MessageType, null, content);
-    this.onNewMessage({
-      id: msgId,
-      taskId,
-      conversationId,
-      type: "ask_user_prompt",
-      role: null,
-      content,
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    });
+    convBuffer.enqueue({ taskId, conversationId, type: "ask_user_prompt" as MessageType, role: null, content, notify: true });
+    convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
   }
 
   private _pauseExecution(taskId: number | null, conversationId: number, executionId: number): void {
-    const db = getDb();
+    const db = this.db;
     if (taskId != null) {
       db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
     } else {
@@ -507,13 +482,14 @@ export class StreamProcessor {
   }
 
   private async _emitFileDiffFromWrittenFiles(
+    convBuffer: ConvMessageBuffer,
     taskId: number | null,
     conversationId: number,
     executionId: number,
     callId: string,
     writtenFiles: Array<import("../../../shared/rpc-types.ts").FileDiffPayload>,
   ): Promise<void> {
-    const db = getDb();
+    const db = this.db;
 
     let worktreePath = "";
     if (taskId != null) {
@@ -547,20 +523,22 @@ export class StreamProcessor {
 
       const diffMeta = { tool_call_id: callId };
       const diffContent = JSON.stringify(payload);
-      const diffId = appendMessage(taskId, conversationId, "file_diff", null, diffContent, diffMeta);
-      this.onNewMessage({ id: diffId, taskId, conversationId, type: "file_diff", role: null, content: diffContent, metadata: diffMeta, createdAt: new Date().toISOString() });
-      this.onStreamEvent?.({
-        taskId,
-        conversationId,
-        executionId,
-        seq: 0,
-        blockId: `${callId}-diff-${file.path}`,
-        type: "file_diff",
-        content: diffContent,
-        metadata: JSON.stringify(diffMeta),
-        parentBlockId: callId,
-        done: false,
-        subagentId: null,
+      convBuffer.enqueue({ taskId, conversationId, type: "file_diff", role: null, content: diffContent, metadata: diffMeta, notify: true });
+      convBuffer.flush().forEach((msg) => {
+        this.onNewMessage(msg);
+        this.onStreamEvent?.({
+          taskId,
+          conversationId,
+          executionId,
+          seq: 0,
+          blockId: `${callId}-diff-${file.path}`,
+          type: "file_diff",
+          content: diffContent,
+          metadata: JSON.stringify(diffMeta),
+          parentBlockId: callId,
+          done: false,
+          subagentId: null,
+        });
       });
     }
   }

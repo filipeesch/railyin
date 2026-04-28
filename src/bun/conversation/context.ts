@@ -1,4 +1,4 @@
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { getConfig } from "../config/index.ts";
 import { log } from "../logger.ts";
 import { resolveProvider, retryTurn } from "../ai/index.ts";
@@ -235,10 +235,10 @@ export function compactMessages(messages: ConversationMessageRow[], opts?: { qui
 }
 
 export function estimateContextUsage(
+  db: Database,
   taskId: number,
   maxTokens: number,
 ): { usedTokens: number; maxTokens: number; fraction: number } {
-  const db = getDb();
   const recentExecution = db
     .query<{ input_tokens: number | null }, [number]>(
       "SELECT input_tokens FROM executions WHERE task_id = ? AND status = 'completed' AND input_tokens IS NOT NULL ORDER BY id DESC LIMIT 1",
@@ -267,10 +267,10 @@ export function estimateContextUsage(
   return { usedTokens, maxTokens, fraction };
 }
 
-export function estimateContextWarning(taskId: number, contextWindowOverride?: number): string | null {
+export function estimateContextWarning(db: Database, taskId: number, contextWindowOverride?: number): string | null {
   const contextWindowTokens = contextWindowOverride ?? 128_000;
   const warnAt = Math.floor(contextWindowTokens * CONTEXT_WARN_FRACTION);
-  const { usedTokens } = estimateContextUsage(taskId, contextWindowTokens);
+  const { usedTokens } = estimateContextUsage(db, taskId, contextWindowTokens);
   if (usedTokens >= warnAt) {
     return `Context is ~${usedTokens.toLocaleString()} tokens (${Math.round((usedTokens / contextWindowTokens) * 100)}% of model limit). Consider archiving this task's conversation.`;
   }
@@ -286,8 +286,7 @@ export function extractSummaryBlock(raw: string): string {
   return match?.[1]?.trim() ?? raw.trim();
 }
 
-export async function compactConversation(taskId: number): Promise<ConversationMessage> {
-  const db = getDb();
+export async function compactConversation(db: Database, taskId: number): Promise<ConversationMessage> {
   const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
   if (!task?.conversation_id) throw new Error(`Task ${taskId} not found`);
 
@@ -318,7 +317,7 @@ export async function compactConversation(taskId: number): Promise<ConversationM
 
   const rawSummary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
   const summary = extractSummaryBlock(rawSummary);
-  const messageId = appendMessage(taskId, task.conversation_id, "compaction_summary" as MessageType, null, summary);
+  const messageId = appendMessage(db, taskId, task.conversation_id, "compaction_summary" as MessageType, null, summary);
   const messageRow = db
     .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
     .get(messageId)!;

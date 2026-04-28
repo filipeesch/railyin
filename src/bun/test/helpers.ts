@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
 import { join, dirname, basename } from "path";
 import { tmpdir } from "os";
-import { getDb, _resetForTests as resetDbSingleton } from "../db/index.ts";
+import { getDb, _softResetForTests as resetDbSingleton } from "../db/index.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
 
 // ─── In-memory DB ─────────────────────────────────────────────────────────────

@@ -49,6 +49,7 @@ function makeOrchestrator(): Orchestrator {
   newMessages.length = 0;
 
   return new Orchestrator(
+    db,
     EngineRegistry.fromFixed(new TestEngine()),
     noop,
     (task) => taskUpdates.push(task),
@@ -251,6 +252,7 @@ describe("Orchestrator.executeHumanTurn", () => {
     }
 
     const nonNative = new Orchestrator(
+      db,
       EngineRegistry.fromFixed(new StubEngine()),
       noop,
       (task) => taskUpdates.push(task),
@@ -309,6 +311,7 @@ describe("Orchestrator.respondShellApproval", () => {
     }
 
     const approvalOrchestrator = new Orchestrator(
+      db,
       EngineRegistry.fromFixed(new RejectingResumeEngine()),
       noop,
       (task) => taskUpdates.push(task),
@@ -402,6 +405,7 @@ describe("Orchestrator.cancel", () => {
     }
 
     const nonNative = new Orchestrator(
+      db,
       EngineRegistry.fromFixed(new CancelStubEngine()),
       noop,
       (task) => taskUpdates.push(task),
@@ -469,6 +473,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
     }
 
     const nonNative = new Orchestrator(
+      db,
       EngineRegistry.fromFixed(new ShutdownStubEngine()),
       noop,
       (task) => taskUpdates.push(task),
@@ -536,6 +541,7 @@ columns:
   function makeCapturingOrchestrator(): Orchestrator {
     capturedParams = [];
     return new Orchestrator(
+      db,
       EngineRegistry.fromFixed(new CapturingEngine()),
       noop,
       (task) => taskUpdates.push(task),

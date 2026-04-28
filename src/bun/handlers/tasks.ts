@@ -1,4 +1,4 @@
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { createHash } from "crypto";
 import type { Task, ConversationMessage, HunkDecision, HunkWithDecisions, ReviewerDecision, FileDiffContent, LineComment, ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
@@ -18,10 +18,11 @@ import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getW
 import { getLoadedProjectByKey } from "../project-store.ts";
 import { resolveContextWindow } from "../context-usage.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
+import { PositionService } from "./position-service.ts";
 
 // ─── Helper: fetch a single task with git context + execution count ───────────
 
-function fetchTaskWithDetail(db: ReturnType<typeof getDb>, taskId: number): Task | null {
+function fetchTaskWithDetail(db: Database, taskId: number): Task | null {
   const row = db
     .query<TaskRow, [number]>(
       `SELECT t.*,
@@ -35,44 +36,20 @@ function fetchTaskWithDetail(db: ReturnType<typeof getDb>, taskId: number): Task
   return row ? mapTask(row) : null;
 }
 
-/** Rebalance column positions to integer multiples of 1000 when floating-point
- *  gaps have collapsed below the threshold. Only rewrites when needed. */
-function rebalanceColumnPositions(
-  db: ReturnType<typeof getDb>,
-  boardId: number,
-  columnId: string,
-): void {
-  const rows = db
-    .query<{ id: number; position: number }, [number, string]>(
-      "SELECT id, position FROM tasks WHERE board_id = ? AND workflow_state = ? ORDER BY position ASC",
-    )
-    .all(boardId, columnId);
-  if (rows.length < 2) return;
-  let needsRebalance = false;
-  for (let i = 1; i < rows.length; i++) {
-    if (rows[i].position - rows[i - 1].position < 1) {
-      needsRebalance = true;
-      break;
-    }
-  }
-  if (!needsRebalance) return;
-  for (let i = 0; i < rows.length; i++) {
-    db.run("UPDATE tasks SET position = ? WHERE id = ?", [(i + 1) * 1000, rows[i].id]);
-  }
-}
-
-export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) {
+export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) {
+  const positionService = new PositionService(db);
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
-      const db = getDb();
       return db
         .query<TaskRow, [number]>(
           `SELECT t.*,
                   gc.worktree_status, gc.branch_name, gc.worktree_path,
-                  (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
+                  COUNT(e.id) AS execution_count
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
+           LEFT JOIN executions e ON e.task_id = t.id
            WHERE t.board_id = ?
+           GROUP BY t.id
            ORDER BY t.position ASC`,
         )
         .all(params.boardId)
@@ -80,13 +57,12 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     "tasks.reorder": async (params: { taskId: number; position: number }): Promise<Task> => {
-      const db = getDb();
       db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.position, params.taskId]);
       const boardRow = db.query<{ board_id: number; workflow_state: string }, [number]>(
         "SELECT board_id, workflow_state FROM tasks WHERE id = ?",
       ).get(params.taskId);
       if (boardRow) {
-        rebalanceColumnPositions(db, boardRow.board_id, boardRow.workflow_state);
+        positionService.rebalanceColumnPositions(boardRow.board_id, boardRow.workflow_state);
       }
       const task = fetchTaskWithDetail(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
@@ -94,13 +70,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     },
 
     "tasks.reorderColumn": async (params: { boardId: number; columnId: string; taskIds: number[] }): Promise<void> => {
-      const db = getDb();
-      for (let i = 0; i < params.taskIds.length; i++) {
-        db.run(
-          "UPDATE tasks SET position = ? WHERE id = ? AND board_id = ?",
-          [(i + 1) * 1000, params.taskIds[i], params.boardId],
-        );
-      }
+      positionService.reorderColumn(params.boardId, params.taskIds);
     },
 
     "tasks.create": async (params: {
@@ -109,7 +79,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       title: string;
       description: string;
     }): Promise<Task> => {
-      const db = getDb();
+
       const workspaceKey = getBoardWorkspaceKey(params.boardId);
       const project = getLoadedProjectByKey(workspaceKey, params.projectKey);
       if (!project) {
@@ -149,7 +119,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       }
 
       // Seed conversation with task description as first system message
-      appendMessage(
+      appendMessage(db, 
         taskId,
         conversationId,
         "system",
@@ -170,7 +140,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       toState: string;
       targetPosition?: number;
     }): Promise<{ task: Task; executionId: number | null }> => {
-      const db = getDb();
+
 
       // ── Card limit check ──────────────────────────────────────────────────
       const taskBoardRow = db
@@ -215,7 +185,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         db.run("UPDATE tasks SET position = ? WHERE id = ?", [topPos, params.taskId]);
       }
       if (taskBoardRow) {
-        rebalanceColumnPositions(db, taskBoardRow.board_id, params.toState);
+        positionService.rebalanceColumnPositions(taskBoardRow.board_id, params.toState);
       }
 
       const taskRow = db
@@ -247,7 +217,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           // bounce back to the source column and then re-animate to the target.
           // The authoritative state update is pushed at the end of the RPC via
           // orchestrator.executeTransition → onTaskUpdated.
-          appendMessage(params.taskId, convId!, "system", null, msg);
+          appendMessage(db, params.taskId, convId!, "system", null, msg);
         };
 
         try {
@@ -256,7 +226,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           // Worktree is required — fail the task so the user sees the error in the UI
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(
+          appendMessage(db, 
             params.taskId,
             convId!,
             "system",
@@ -290,11 +260,11 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       }
 
       const taskWorkspaceKey = getTaskWorkspaceKey(params.taskId);
-      const taskRow2 = getDb().query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
+      const taskRow2 = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
       const resolvedCtxWindow = taskRow2?.model
         ? await resolveContextWindow(taskRow2.model, taskWorkspaceKey, orchestrator)
         : 128_000;
-      const warning = estimateContextWarning(params.taskId, resolvedCtxWindow);
+      const warning = estimateContextWarning(db, params.taskId, resolvedCtxWindow);
       if (warning) {
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
@@ -311,7 +281,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     "tasks.retry": async (params: {
       taskId: number;
     }): Promise<{ task: Task; executionId: number }> => {
-      const db = getDb();
+
 
       // Retry worktree setup if it previously failed — same logic as tasks.transition
       const taskRow = db
@@ -336,7 +306,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         }
 
         const postStatus = (msg: string) => {
-          appendMessage(params.taskId, retryConvId!, "system", null, msg);
+          appendMessage(db, params.taskId, retryConvId!, "system", null, msg);
           const updated = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
           if (updated) onTaskUpdated(mapTask(updated));
         };
@@ -346,7 +316,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
+          appendMessage(db, params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
           const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId)!;
           onTaskUpdated(mapTask(failedRow));
           // Return a fake execution id of -1 since we can't proceed — caller won't use it
@@ -360,7 +330,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── models.list ─────────────────────────────────────────────────────────
     "models.list": async (params: { workspaceKey?: string } = {}): Promise<ProviderModelList[]> => {
-      const db = getDb();
+
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
 
       if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
@@ -410,7 +380,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── models.setEnabled ───────────────────────────────────────────────────
     "models.setEnabled": async (params: { workspaceKey?: string; qualifiedModelId: string; enabled: boolean }): Promise<Record<string, never>> => {
-      const db = getDb();
+
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       if (params.enabled) {
         db.run(
@@ -432,7 +402,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     // enabled DB entries match the current engine, all engine models are returned
     // (default-all-enabled behaviour on first use / engine switch).
     "models.listEnabled": async (params: { workspaceKey?: string } = {}): Promise<ModelInfo[]> => {
-      const db = getDb();
+
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       if (!orchestrator) return [];
 
@@ -468,7 +438,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.setModel ──────────────────────────────────────────────────────
     "tasks.setModel": async (params: { taskId: number; model: string | null }): Promise<Task> => {
-      const db = getDb();
+
       db.run("UPDATE tasks SET model = ? WHERE id = ?", [params.model, params.taskId]);
       const task = fetchTaskWithDetail(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
@@ -477,7 +447,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.contextUsage ──────────────────────────────────────────────────
     "tasks.contextUsage": async (params: { taskId: number }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
-      const db = getDb();
+
       const task = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
       const taskModel = task?.model ?? null;
       const workspaceKey = getTaskWorkspaceKey(params.taskId);
@@ -487,7 +457,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
           ? resolveContextWindow(taskModel, workspaceKey, orchestrator)
           : Promise.resolve(128_000)
       ));
-      return estimateContextUsage(params.taskId, maxTokens);
+      return estimateContextUsage(db, params.taskId, maxTokens);
     },
 
     // ─── tasks.compact ───────────────────────────────────────────────────────
@@ -498,7 +468,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.cancel ────────────────────────────────────────────────────────
     "tasks.cancel": async (params: { taskId: number }): Promise<Task> => {
-      const db = getDb();
+
       const row = db
         .query<{ current_execution_id: number | null }, [number]>(
           "SELECT current_execution_id FROM tasks WHERE id = ?",
@@ -514,7 +484,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.update ────────────────────────────────────────────────────────
     "tasks.update": async (params: { taskId: number; title: string; description: string }): Promise<Task> => {
-      const db = getDb();
+
       const taskRow = db
         .query<{ workflow_state: string }, [number]>(
           "SELECT workflow_state FROM tasks WHERE id = ?",
@@ -536,7 +506,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.delete ────────────────────────────────────────────────────────
     "tasks.delete": async (params: { taskId: number }): Promise<{ success: boolean }> => {
-      const db = getDb();
+
 
       // Cancel any running execution first
       const row = db
@@ -552,14 +522,16 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       const { warning } = await removeWorktree(params.taskId);
 
       // Cascade delete — tasks must be deleted before conversations (FK ref)
-      db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [params.taskId]);
-      db.run("DELETE FROM conversation_messages WHERE task_id = ?", [params.taskId]);
-      db.run("DELETE FROM executions WHERE task_id = ?", [params.taskId]);
-      db.run("DELETE FROM task_git_context WHERE task_id = ?", [params.taskId]);
-      db.run("DELETE FROM tasks WHERE id = ?", [params.taskId]);
-      if (row?.conversation_id) {
-        db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
-      }
+      db.transaction(() => {
+        db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [params.taskId]);
+        db.run("DELETE FROM conversation_messages WHERE task_id = ?", [params.taskId]);
+        db.run("DELETE FROM executions WHERE task_id = ?", [params.taskId]);
+        db.run("DELETE FROM task_git_context WHERE task_id = ?", [params.taskId]);
+        db.run("DELETE FROM tasks WHERE id = ?", [params.taskId]);
+        if (row?.conversation_id) {
+          db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
+        }
+      })();
       taskLspRegistry.releaseTask(params.taskId).catch(() => { });
 
       return { success: true, ...(warning ? { warning } : {}) };
@@ -579,7 +551,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       branchName: string;
       sourceBranch?: string;
     }): Promise<Task> => {
-      const db = getDb();
+
       await createWorktree(params.taskId, {
         mode: params.mode,
         branchName: params.branchName,
@@ -595,7 +567,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.removeWorktree ────────────────────────────────────────────────
     "tasks.removeWorktree": async (params: { taskId: number }): Promise<{ warning?: string }> => {
-      const db = getDb();
+
       const { warning } = await removeWorktree(params.taskId);
       const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
       if (row) onTaskUpdated(mapTask(row));
@@ -604,7 +576,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.getGitStat ────────────────────────────────────────────────────
     "tasks.getGitStat": async (params: { taskId: number }): Promise<import("../../shared/rpc-types.ts").GitNumstat | null> => {
-      const db = getDb();
+
       const gitRow = db
         .query<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }, [number]>(
           "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = ?",
@@ -655,7 +627,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.getChangedFiles ───────────────────────────────────────────────
     "tasks.getChangedFiles": async (params: { taskId: number }): Promise<string[]> => {
-      const db = getDb();
+
       const gitRow = db
         .query<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }, [number]>(
           "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = ?",
@@ -684,7 +656,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.getFileDiff ───────────────────────────────────────────────────
     "tasks.getFileDiff": async (params: { taskId: number; filePath: string; checkpointRef?: string }): Promise<FileDiffContent> => {
-      const db = getDb();
+
       const gitRow = db
         .query<{ worktree_path: string | null; base_sha: string | null }, [number]>(
           "SELECT worktree_path, base_sha FROM task_git_context WHERE task_id = ?",
@@ -696,7 +668,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.rejectHunk ────────────────────────────────────────────────────
     "tasks.rejectHunk": async (params: { taskId: number; filePath: string; hunkIndex: number }): Promise<FileDiffContent> => {
-      const db = getDb();
+
       const gitRow = db
         .query<{ worktree_path: string | null; base_sha: string | null }, [number]>(
           "SELECT worktree_path, base_sha FROM task_git_context WHERE task_id = ?",
@@ -781,7 +753,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.decideAllHunks ────────────────────────────────────────────────
     "tasks.decideAllHunks": async (params: { taskId: number; decision: "accepted" | "rejected" }): Promise<{ decided: number }> => {
-      const db = getDb();
+
       const gitRow = db
         .query<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }, [number]>(
           "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = ?",
@@ -838,7 +810,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       modifiedStart: number;
       modifiedEnd: number;
     }): Promise<void> => {
-      const db = getDb();
+
       db.run(
         `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, original_end, modified_start, modified_end, updated_at)
          VALUES (?, ?, ?, 'human', 'user', ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -865,7 +837,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
       contextLines: string[];
       comment: string;
     }): Promise<LineComment> => {
-      const db = getDb();
+
       const colStart = params.colStart ?? 0;
       const colEnd = params.colEnd ?? 0;
       const result = db.run(
@@ -889,7 +861,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.getLineComments ────────────────────────────────────────────────
     "tasks.getLineComments": async (params: { taskId: number }): Promise<LineComment[]> => {
-      const db = getDb();
+
       const rows = db.query(
         `SELECT id, file_path, line_start, line_end, col_start, col_end, line_text, context_lines, comment, reviewer_type
          FROM task_line_comments
@@ -923,13 +895,13 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.deleteLineComment ──────────────────────────────────────────────
     "tasks.deleteLineComment": async (params: { taskId: number; commentId: number }): Promise<void> => {
-      const db = getDb();
+
       db.run(`DELETE FROM task_line_comments WHERE id = ? AND task_id = ?`, [params.commentId, params.taskId]);
     },
 
     // ─── tasks.writeFile ────────────────────────────────────────────────────
     "tasks.writeFile": async (params: { taskId: number; filePath: string; content: string }): Promise<void> => {
-      const db = getDb();
+
       const gitRow = db
         .query<{ worktree_path: string | null }, [number]>(
           "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
@@ -947,7 +919,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.getPendingHunkSummary ─────────────────────────────────────────
     "tasks.getPendingHunkSummary": async (params: { taskId: number }): Promise<{ filePath: string; pendingCount: number }[]> => {
-      const db = getDb();
+
       // Count decided hunks per file (sent=0 means not yet submitted).
       // A file is fully decided when ALL its hunks have a decision row.
       // Files with no decisions at all won't appear here — the frontend
@@ -972,7 +944,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.getCheckpointRef ──────────────────────────────────────────────
     "tasks.getCheckpointRef": async (params: { taskId: number }): Promise<string | null> => {
-      const db = getDb();
+
       // Find the most recent execution for this task that has unsent pending hunk decisions
       const row = db
         .query<{ stash_ref: string | null }, [number]>(
@@ -1005,7 +977,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
     // ─── tasks.setShellAutoApprove ────────────────────────────────────────────
     "tasks.setShellAutoApprove": async (params: { taskId: number; enabled: boolean }): Promise<Task> => {
-      const db = getDb();
+
       db.run("UPDATE tasks SET shell_auto_approve = ? WHERE id = ?", [params.enabled ? 1 : 0, params.taskId]);
       const updated = fetchTaskWithDetail(db, params.taskId);
       if (!updated) throw new Error(`Task ${params.taskId} not found`);
@@ -1058,7 +1030,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 // ─── Shared helpers for file diff content ────────────────────────────────────
 
 async function readFileDiffContent(
-  db: ReturnType<typeof getDb>,
+  db: Database,
   taskId: number,
   worktreePath: string,
   filePath: string,

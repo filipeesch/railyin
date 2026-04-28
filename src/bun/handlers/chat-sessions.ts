@@ -1,4 +1,4 @@
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import type { ChatSession, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ChatSessionRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
@@ -15,10 +15,9 @@ function autoTitle(): string {
 
 export type OnChatSessionUpdated = (session: ChatSession) => void;
 
-export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orchestrator: Orchestrator | null) {
+export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessionUpdated, orchestrator: Orchestrator | null) {
   return {
     "chatSessions.list": async (params: { workspaceKey?: string; includeArchived?: boolean }): Promise<ChatSession[]> => {
-      const db = getDb();
       const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const rows = db.query<ChatSessionRow, [string]>(
         params.includeArchived
@@ -29,7 +28,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
     },
 
     "chatSessions.create": async (params: { workspaceKey?: string; title?: string }): Promise<ChatSession> => {
-      const db = getDb();
+
       const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const title = params.title ?? autoTitle();
 
@@ -56,14 +55,14 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
     },
 
     "chatSessions.rename": async (params: { sessionId: number; title: string }): Promise<void> => {
-      const db = getDb();
+
       db.run("UPDATE chat_sessions SET title = ? WHERE id = ?", [params.title, params.sessionId]);
       const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
       if (row) onSessionUpdated(mapChatSession(row));
     },
 
     "chatSessions.archive": async (params: { sessionId: number }): Promise<void> => {
-      const db = getDb();
+
       db.run(
         "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now') WHERE id = ?",
         [params.sessionId]
@@ -73,7 +72,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
     },
 
     "chatSessions.markRead": async (params: { sessionId: number }): Promise<void> => {
-      const db = getDb();
+
       db.run(
         "UPDATE chat_sessions SET last_read_at = datetime('now') WHERE id = ?",
         [params.sessionId]
@@ -87,7 +86,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
       model?: string | null;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
-      const db = getDb();
+
       const session = db.query<ChatSessionRow, [number]>(
         "SELECT * FROM chat_sessions WHERE id = ?"
       ).get(params.sessionId);
@@ -130,7 +129,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
       beforeMessageId?: number;
       limit?: number;
     }): Promise<{ messages: ConversationMessage[]; hasMore: boolean }> => {
-      const db = getDb();
+
       const session = db.query<ChatSessionRow, [number]>(
         "SELECT conversation_id FROM chat_sessions WHERE id = ?"
       ).get(params.sessionId);
@@ -153,7 +152,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
     },
 
     "chatSessions.cancel": async (params: { sessionId: number }): Promise<void> => {
-      const db = getDb();
+
       const sessionRow = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
       if (!sessionRow) return;
       // Find the running execution for this conversation and cancel it via the orchestrator
@@ -172,7 +171,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
     },
 
     "chatSessions.compact": async (params: { sessionId: number }): Promise<void> => {
-      const db = getDb();
+
       const session = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
@@ -181,10 +180,10 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
   };
 }
 
-export function startChatSessionAutoArchiveJob(onSessionUpdated: OnChatSessionUpdated): void {
+export function startChatSessionAutoArchiveJob(db: Database, onSessionUpdated: OnChatSessionUpdated): void {
   setInterval(() => {
     try {
-      const db = getDb();
+
       const rows = db.query<ChatSessionRow, []>(
         `SELECT * FROM chat_sessions
          WHERE status != 'archived'

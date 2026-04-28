@@ -1,4 +1,5 @@
 import { join } from "path";
+import type { Database } from "bun:sqlite";
 import { getConfigDir, getConfig } from "../config/index.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { detectLanguages, probeInstalled } from "../lsp/detect.ts";
@@ -7,7 +8,6 @@ import { addServerToConfig } from "../lsp/config-writer.ts";
 import { LANGUAGE_REGISTRY } from "../lsp/registry.ts";
 import type { LanguageEntry, InstallOption } from "../lsp/registry.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
-import { getDb } from "../db/index.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 
 export interface DetectedLanguage {
@@ -16,7 +16,7 @@ export interface DetectedLanguage {
   installOptions: InstallOption[];
 }
 
-export function lspHandlers() {
+export function lspHandlers(db: Database) {
   return {
     "lsp.detectLanguages": async (params: { projectPath: string }): Promise<DetectedLanguage[]> => {
       const entries = detectLanguages(params.projectPath);
@@ -66,7 +66,6 @@ export function lspHandlers() {
     },
 
     "lsp.workspaceSymbol": async (params: { taskId?: number; workspaceKey?: string; query: string }): Promise<unknown[]> => {
-      const db = getDb();
       let worktreePath = process.cwd();
       let config = getConfig(getDefaultWorkspaceKey());
       let scopeId: string | number = "default";

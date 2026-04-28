@@ -49,12 +49,14 @@ function makeHandlers() {
     async listCommands() { return []; }
   }
   const orch = new Orchestrator(
+    db,
     EngineRegistry.fromFixed(new NoopEngine()),
     () => {},
     () => {},
     () => {},
   );
   return taskHandlers(
+    db,
     orch,
     () => {},
     () => {},

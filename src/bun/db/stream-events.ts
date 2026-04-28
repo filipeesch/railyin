@@ -1,4 +1,4 @@
-import { getDb } from "./index.ts";
+import type { Database } from "bun:sqlite";
 
 export interface PersistedStreamEvent {
   id?: number;
@@ -14,8 +14,7 @@ export interface PersistedStreamEvent {
   createdAt?: string;
 }
 
-export function appendStreamEvent(event: PersistedStreamEvent): number {
-  const db = getDb();
+export function appendStreamEvent(db: Database, event: PersistedStreamEvent): number {
   const result = db.run(
     `INSERT OR IGNORE INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -24,9 +23,8 @@ export function appendStreamEvent(event: PersistedStreamEvent): number {
   return result.lastInsertRowid as number;
 }
 
-export function appendStreamEventBatch(events: PersistedStreamEvent[]): void {
+export function appendStreamEventBatch(db: Database, events: PersistedStreamEvent[]): void {
   if (events.length === 0) return;
-  const db = getDb();
   db.transaction(() => {
     for (const event of events) {
       db.run(
@@ -38,8 +36,7 @@ export function appendStreamEventBatch(events: PersistedStreamEvent[]): void {
   })();
 }
 
-export function getStreamEventsByConversation(conversationId: number, afterSeq?: number): PersistedStreamEvent[] {
-  const db = getDb();
+export function getStreamEventsByConversation(db: Database, conversationId: number, afterSeq?: number): PersistedStreamEvent[] {
   const rows = db.query<{
     id: number;
     conversation_id: number;

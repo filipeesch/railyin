@@ -1,11 +1,10 @@
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { startCodeServer, stopCodeServer, getCodeServerEntry } from "../launch/code-server.ts";
 import type { CodeRef } from "../../shared/rpc-types.ts";
 
-export function codeServerHandlers(broadcast: (msg: object) => void, serverPort: number) {
+export function codeServerHandlers(db: Database, broadcast: (msg: object) => void, serverPort: number) {
   return {
     "codeServer.start": async (params: { taskId: number }): Promise<{ port: number } | { error: string }> => {
-      const db = getDb();
 
       const row = db
         .query<{ worktree_path: string | null }, [number]>(

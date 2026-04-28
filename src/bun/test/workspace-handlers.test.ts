@@ -3,15 +3,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "os";
 import { join } from "path";
 import yaml from "js-yaml";
+import type { Database } from "bun:sqlite";
 import { setupTestConfig, initDb } from "./helpers.ts";
 import { workspaceHandlers } from "../handlers/workspace.ts";
 import { projectHandlers } from "../handlers/projects.ts";
 import { getWorkspaceRegistry, loadConfig, resetConfig, patchWorkspaceYaml } from "../config/index.ts";
 
 let cleanupConfig: () => void;
+let db: Database;
 
 beforeEach(() => {
   cleanupConfig = setupTestConfig().cleanup;
+  db = initDb();
 });
 
 afterEach(() => {
@@ -36,7 +39,7 @@ describe("workspaceHandlers", () => {
       "utf-8",
     );
 
-    const handlers = workspaceHandlers();
+    const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.getConfig"]({});
 
     expect(result.workflows.map((workflow) => workflow.id)).toContain("openspec");
@@ -66,7 +69,7 @@ describe("workspaceHandlers", () => {
     );
     resetConfig();
 
-    const handlers = workspaceHandlers();
+    const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.getConfig"]({});
 
     expect(result.enableThinking).toBe(true);
@@ -101,7 +104,7 @@ describe("workspaceHandlers", () => {
   });
 
   it("workspace.getConfig returns engine type and model", async () => {
-    const handlers = workspaceHandlers();
+    const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.getConfig"]({});
     expect(result.engine).toBeDefined();
     expect(result.engine.type).toBe("copilot");
@@ -110,7 +113,7 @@ describe("workspaceHandlers", () => {
 
   it("workspace.update patches name and engine in workspace yaml", async () => {
     const configDir = process.env.RAILYN_CONFIG_DIR!;
-    const handlers = workspaceHandlers();
+    const handlers = workspaceHandlers(db);
     await handlers["workspace.update"]({ name: "Updated Workspace", engineType: "claude" });
     const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
     const parsed = yaml.load(raw) as Record<string, unknown>;
@@ -120,7 +123,7 @@ describe("workspaceHandlers", () => {
 
   it("workspace.update deep-merges engine block (preserves type when only model is updated)", async () => {
     const configDir = process.env.RAILYN_CONFIG_DIR!;
-    const handlers = workspaceHandlers();
+    const handlers = workspaceHandlers(db);
     await handlers["workspace.update"]({ engineModel: "copilot/gpt-4.1" });
     const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
     const parsed = yaml.load(raw) as Record<string, unknown>;
@@ -144,7 +147,7 @@ describe("workspaceHandlers", () => {
   });
 
   it("workspace.resolveGitRoot returns git root for a valid git repo", async () => {
-    const handlers = workspaceHandlers();
+    const handlers = workspaceHandlers(db);
     // Use the cwd which is always inside a git repo during tests
     const result = await handlers["workspace.resolveGitRoot"]({ path: process.cwd() });
     expect(result.gitRoot).toBeTruthy();
@@ -152,7 +155,7 @@ describe("workspaceHandlers", () => {
   });
 
   it("workspace.resolveGitRoot returns null for a non-git path", async () => {
-    const handlers = workspaceHandlers();
+    const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.resolveGitRoot"]({ path: tmpdir() });
     expect(result.gitRoot).toBeNull();
   });

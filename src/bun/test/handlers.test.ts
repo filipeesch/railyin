@@ -41,6 +41,7 @@ function makeHandlers() {
   const updates: Task[] = [];
 
   const handlers = taskHandlers(
+    db,
     null,
     (task) => updates.push(task),
     () => {},
@@ -287,7 +288,7 @@ describe("conversations handlers", () => {
       [taskId, otherConversationId, "other thread"],
     );
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId });
 
     expect(result.messages.map((message) => message.content)).toEqual(["hello", "hi there"]);
@@ -305,7 +306,7 @@ describe("conversations handlers", () => {
       [1, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, conversationId, 10, 1, "root-2", "assistant", "beta"],
     );
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const canonical = await handlers["conversations.getStreamEvents"]({ conversationId, afterSeq: 0 });
 
     expect(canonical).toHaveLength(1);
@@ -324,7 +325,7 @@ describe("conversations handlers", () => {
       [conversationId, "session message"],
     );
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const usage = await handlers["conversations.contextUsage"]({ conversationId });
 
     expect(usage.maxTokens).toBe(128_000);
@@ -335,7 +336,7 @@ describe("conversations handlers", () => {
 
 describe("chat session parity handlers", () => {
   it("persists session MCP tool selections", async () => {
-    const handlers = mcpHandlers();
+    const handlers = mcpHandlers(db);
     db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
     const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run(
@@ -367,6 +368,7 @@ describe("chat session parity handlers", () => {
 
     const calls: unknown[][] = [];
     const handlers = chatSessionHandlers(
+      db,
       () => {},
       {
         executeChatTurn: async (...args: unknown[]) => {
@@ -460,7 +462,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-sonnet-4.6", contextWindow: 200_000 },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(200_000);
@@ -474,7 +476,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     // No matching model in orchestrator; resolveModelContextWindow also won't find
@@ -486,7 +488,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
 
-    const handlers = taskHandlers(null, () => {}, () => {});
+    const handlers = taskHandlers(db, null, () => {}, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
@@ -500,7 +502,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-opus", contextWindow: undefined },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
@@ -513,7 +515,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
       { qualifiedId: null },
       { qualifiedId: "copilot/mock-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
 
@@ -532,7 +534,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
       { qualifiedId: null },
       { qualifiedId: "copilot/mock-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
 

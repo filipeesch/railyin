@@ -32,7 +32,7 @@ afterEach(() => {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeHandlers() {
-  return taskHandlers(null, () => {}, () => {});
+  return taskHandlers(db, null, () => {}, () => {});
 }
 
 const EXTRA_WORKFLOW_WITH_LIMIT = `id: delivery-lim
