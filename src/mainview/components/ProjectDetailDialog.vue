@@ -8,17 +8,21 @@
     @hide="emit('close')"
   >
     <div class="project-dialog-body">
+      <Message v-if="!workspacePathSet" severity="warn" :closable="false" class="mb-3">
+        <strong>workspace_path is not set.</strong> Set it in Workspace Settings before adding projects.
+      </Message>
+
       <div class="field">
         <label>Name</label>
         <InputText v-model="form.name" placeholder="my-service" class="w-full" />
       </div>
 
       <div class="field">
-        <label>Project path <span class="field-hint">(absolute path to the project folder)</span></label>
+        <label>Project path <span class="field-hint">(relative to workspace path)</span></label>
         <div class="path-row">
           <InputText
             v-model="form.projectPath"
-            placeholder="/home/user/projects/my-service"
+            :placeholder="workspacePathSet ? 'my-service' : '/absolute/path/to/project'"
             class="w-full"
             @blur="onProjectPathBlur"
           />
@@ -92,7 +96,7 @@
         :label="isEdit ? 'Save changes' : 'Add project'"
         :icon="isEdit ? 'pi pi-save' : 'pi pi-plus'"
         :loading="saving"
-        :disabled="!canSave"
+        :disabled="!canSave || !workspacePathSet"
         @click="onSave"
       />
     </template>
@@ -141,11 +145,12 @@ const browsingProject = ref(false);
 const browsingGitRoot = ref(false);
 
 const isEdit = computed(() => !!props.project);
+const workspacePathSet = computed(() => !!(workspaceStore.config?.workspacePath));
 
 const form = reactive({
   name: props.project?.name ?? "",
-  projectPath: props.project?.projectPath ?? "",
-  gitRootPath: props.project?.gitRootPath ?? "",
+  projectPath: props.project?.projectPath.relative ?? "",
+  gitRootPath: props.project?.gitRootPath.relative ?? "",
   defaultBranch: props.project?.defaultBranch ?? "main",
   slug: props.project?.slug ?? "",
   description: props.project?.description ?? "",
@@ -156,8 +161,8 @@ watch(() => props.modelValue, (v) => {
   if (v) {
     // Reset form when dialog opens
     form.name = props.project?.name ?? "";
-    form.projectPath = props.project?.projectPath ?? "";
-    form.gitRootPath = props.project?.gitRootPath ?? "";
+    form.projectPath = props.project?.projectPath.relative ?? "";
+    form.gitRootPath = props.project?.gitRootPath.relative ?? "";
     form.defaultBranch = props.project?.defaultBranch ?? "main";
     form.slug = props.project?.slug ?? "";
     form.description = props.project?.description ?? "";

@@ -4,6 +4,7 @@ import { getDb } from "../../db/index.ts";
 import { mapConversationMessage } from "../../db/mappers.ts";
 import { appendMessage } from "../../conversation/messages.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
+import { getEffectiveWorkspacePath } from "../../config/path-utils.ts";
 import type { EngineRegistry } from "../engine-registry.ts";
 import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
@@ -34,7 +35,7 @@ export class ChatExecutor {
 
     const engineModel = "model" in config.engine ? (config.engine.model ?? "") : "";
     const resolvedModel = model ?? engineModel ?? (config.workspace.default_model ?? "");
-    const workingDirectory = config.workspace.workspace_path ?? config.configDir;
+    const workingDirectory = getEffectiveWorkspacePath(config);
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)

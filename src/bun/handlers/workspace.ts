@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import { join } from "path";
 import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml, sanitizeWorkspaceKey, ensureConfigExists, type WorkspaceYaml } from "../config/index.ts";
+import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { clearProviderCache } from "../ai/index.ts";
 import type { WorkspaceConfig, WorkspaceSummary } from "../../shared/rpc-types.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
@@ -22,6 +23,7 @@ export function workspaceHandlers() {
       return {
         key: config.workspaceKey,
         name: config.workspaceName,
+        workspacePath: config.workspace.workspace_path ?? "",
         workflows: config.workflows.map((workflow) => ({
           id: workflow.id,
           name: workflow.name,
@@ -74,12 +76,13 @@ export function workspaceHandlers() {
       return { key, name: params.name.trim() };
     },
 
-    "workspace.update": async (params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string }): Promise<Record<string, never>> => {
+    "workspace.update": async (params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string; workspacePath?: string }): Promise<Record<string, never>> => {
       resetConfig();
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const patch: Partial<WorkspaceYaml> = {};
       if (params.name !== undefined) patch.name = params.name;
       if (params.worktreeBasePath !== undefined) patch.worktree_base_path = params.worktreeBasePath;
+      if (params.workspacePath !== undefined) patch.workspace_path = params.workspacePath;
       if (params.engineType !== undefined || params.engineModel !== undefined) {
         const existing = getConfig(workspaceKey).engine;
         patch.engine = {
@@ -151,7 +154,7 @@ export function workspaceHandlers() {
         cwd = row?.worktree_path ?? cwd;
       } else {
         const workspaceConfig = getWorkspaceConfig(params.workspaceKey ?? getDefaultWorkspaceKey());
-        cwd = workspaceConfig.workspace.workspace_path ?? workspaceConfig.configDir;
+        cwd = getEffectiveWorkspacePath(workspaceConfig);
       }
 
       const proc = Bun.spawn(["git", "ls-files", "--cached", "--others", "--exclude-standard"], {

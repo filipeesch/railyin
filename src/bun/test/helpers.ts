@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
-import { join } from "path";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { join, dirname, basename } from "path";
 import { tmpdir } from "os";
 import { getDb, _resetForTests as resetDbSingleton } from "../db/index.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
@@ -245,11 +245,23 @@ columns:
 
 export function setupTestConfig(
   extraYaml = "",
-  gitRootPath = "/tmp/test-git",
+  /** Absolute path to an existing project directory. When provided and the directory exists, its parent becomes the workspace_path and its basename becomes the relative project_path. When omitted or the directory does not exist, a workspace + project directory are created inside configDir. */
+  gitRootPath?: string,
   /** Optional extra workflow template YAML strings (single-template format, NOT array). Each is written as its own file. */
   extraWorkflows: string[] = [],
 ): { configDir: string; cleanup: () => void } {
   const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
+
+  let workspacePath: string;
+  let relativeProjectPath: string;
+  if (gitRootPath && existsSync(gitRootPath)) {
+    workspacePath = dirname(gitRootPath);
+    relativeProjectPath = basename(gitRootPath);
+  } else {
+    workspacePath = join(configDir, "workspace");
+    mkdirSync(join(workspacePath, "test-project"), { recursive: true });
+    relativeProjectPath = "test-project";
+  }
 
   writeFileSync(
     join(configDir, "workspace.test.yaml"),
@@ -258,11 +270,12 @@ export function setupTestConfig(
       "engine:",
       "  type: copilot",
       "  model: copilot/mock-model",
+      `workspace_path: ${workspacePath}`,
       "projects:",
       "  - key: test-project",
       "    name: Test Project",
-      `    project_path: ${gitRootPath}`,
-      `    git_root_path: ${gitRootPath}`,
+      `    project_path: ${relativeProjectPath}`,
+      `    git_root_path: ${relativeProjectPath}`,
       "    default_branch: main",
       extraYaml,
     ].join("\n") + "\n",

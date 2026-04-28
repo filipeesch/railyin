@@ -6,7 +6,7 @@ import type { LaunchConfig } from "../../shared/rpc-types.ts";
 import { readLaunchConfig } from "../launch/config.ts";
 import { launchApp, launchInTerminal } from "../launch/launcher.ts";
 import { createPtySession, killPtySession } from "../launch/pty.ts";
-import { getProjectByKey } from "../project-store.ts";
+import { getLoadedProjectByKey } from "../project-store.ts";
 
 export function launchHandlers() {
   return {
@@ -23,7 +23,7 @@ export function launchHandlers() {
         .get(params.taskId);
       if (!row) return null;
 
-      const project = getProjectByKey(row.workspace_key, row.project_key);
+      const project = getLoadedProjectByKey(row.workspace_key, row.project_key);
       if (!project) return null;
       return readLaunchConfig(project.projectPath);
     },
@@ -55,7 +55,7 @@ export function launchHandlers() {
         }
         cwd = task.worktreePath;
       } else {
-        const project = getProjectByKey(taskRow.workspace_key, taskRow.project_key);
+        const project = getLoadedProjectByKey(taskRow.workspace_key, taskRow.project_key);
         if (!project) return { ok: false, error: "Project not found" };
         if (!existsSync(project.projectPath)) {
           return { ok: false, error: `Project directory does not exist: ${project.projectPath}` };

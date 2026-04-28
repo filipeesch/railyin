@@ -1,5 +1,6 @@
 import { join } from "path";
 import { getConfigDir, getConfig } from "../config/index.ts";
+import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { detectLanguages, probeInstalled } from "../lsp/detect.ts";
 import { runInstall } from "../lsp/installer.ts";
 import { addServerToConfig } from "../lsp/config-writer.ts";
@@ -86,7 +87,7 @@ export function lspHandlers() {
       } else {
         const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
         const workspaceConfig = getWorkspaceConfig(workspaceKey);
-        worktreePath = workspaceConfig.workspace.workspace_path ?? workspaceConfig.configDir;
+        worktreePath = getEffectiveWorkspacePath(workspaceConfig);
         config = workspaceConfig;
         scopeId = `workspace:${workspaceKey}`;
       }

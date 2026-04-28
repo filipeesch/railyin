@@ -20,7 +20,7 @@
 
 import { describe, it, expect } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, dirname, basename, relative } from "path";
 import { tmpdir } from "os";
 import type { Database } from "bun:sqlite";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
@@ -51,6 +51,11 @@ function setupMonorepoConfig(
   const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
   const workflowsDir = join(configDir, "workflows");
   mkdirSync(workflowsDir, { recursive: true });
+  // Use the parent of gitRootDir as workspace_path so both projectDir and
+  // gitRootDir resolve correctly (handles monorepo and outside-gitRoot cases).
+  const workspacePath = dirname(gitRootDir);
+  const relGitRoot = basename(gitRootDir);
+  const relProject = relative(workspacePath, projectDir);
   writeFileSync(
     join(configDir, "workspace.test.yaml"),
     [
@@ -58,11 +63,12 @@ function setupMonorepoConfig(
       "engine:",
       "  type: copilot",
       "  model: copilot/mock-model",
+      `workspace_path: ${workspacePath}`,
       "projects:",
       "  - key: test-project",
       "    name: Test Project",
-      `    project_path: ${projectDir}`,
-      `    git_root_path: ${gitRootDir}`,
+      `    project_path: ${relProject}`,
+      `    git_root_path: ${relGitRoot}`,
       "    default_branch: main",
     ].join("\n") + "\n",
   );

@@ -1,5 +1,29 @@
 name: My Workspace
 
+# ─── Workspace root path (REQUIRED when using projects) ───────────────────────
+# All project_path and git_root_path values are relative to this directory.
+# Migration: if you have absolute paths, set workspace_path to their common ancestor
+# and convert each project_path to a relative path from it.
+#
+# workspace_path: /home/user/projects
+
+# ─── Projects ─────────────────────────────────────────────────────────────────
+# workspace_path MUST be set for projects to work.
+# All paths are relative to workspace_path.
+#
+# projects:
+#   # Standalone repo (project_path == git root):
+#   - name: my-service
+#     project_path: my-service      # relative to workspace_path
+#     git_root_path: my-service     # same as project_path for standalone repos
+#     default_branch: main
+#
+#   # Monorepo package (project is a subdirectory of the git root):
+#   - name: ui-package
+#     project_path: mono-repo/packages/ui   # relative to workspace_path
+#     git_root_path: mono-repo             # git root is the repo root
+#     default_branch: main
+
 # ─── Engine configuration ─────────────────────────────────────────────────────
 # Choose between the native engine (built-in provider loop) or the Copilot engine.
 #

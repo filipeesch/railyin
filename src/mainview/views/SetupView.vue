@@ -94,6 +94,22 @@
               <small v-if="modelsError" class="field-error">{{ modelsError }}</small>
             </div>
             <div class="field">
+              <label>Workspace path <span class="field-hint">(root folder containing all projects)</span></label>
+              <div class="path-row">
+                <InputText v-model="wsForm.workspacePath" placeholder="/home/user/projects" class="w-full" />
+                <Button
+                  icon="pi pi-folder-open"
+                  severity="secondary"
+                  outlined
+                  :loading="browsingWorkspacePath"
+                  aria-label="Browse folder"
+                  title="Browse for workspace root folder"
+                  @click="browseWorkspacePath"
+                />
+              </div>
+              <small class="field-hint">All project paths must be relative to this folder.</small>
+            </div>
+            <div class="field">
               <label>Worktree base path <span class="field-hint">(where git worktrees are created)</span></label>
               <div class="path-row">
                 <InputText v-model="wsForm.worktreeBasePath" placeholder="~/.railyn/worktrees" class="w-full" />
@@ -121,7 +137,7 @@
                 <i class="pi pi-folder project-item__icon" />
                 <div class="project-item__info">
                   <span class="project-item__name">{{ p.name }}</span>
-                  <code class="project-item__path">{{ p.projectPath }}</code>
+                  <code class="project-item__path">{{ p.projectPath.relative }}</code>
                 </div>
                 <div class="project-item__actions">
                   <Button icon="pi pi-pencil" severity="secondary" text rounded size="small" aria-label="Edit project" @click="openEditProject(p)" />
@@ -263,6 +279,7 @@ const wsForm = reactive({
   engineType: "copilot" as "copilot" | "claude",
   engineModel: null as string | null,
   worktreeBasePath: "",
+  workspacePath: "",
 });
 const wsSaving = ref(false);
 const wsSaveError = ref<string | null>(null);
@@ -303,6 +320,7 @@ const selectedModelOption = computed(() => {
 });
 
 const browsingWorktreePath = ref(false);
+const browsingWorkspacePath = ref(false);
 
 async function loadModelsForEngine() {
   modelsLoading.value = true;
@@ -327,11 +345,22 @@ function syncWsForm() {
   wsForm.engineType = (cfg.engine?.type ?? "copilot") as "copilot" | "claude";
   wsForm.engineModel = cfg.engine?.model ?? null;
   wsForm.worktreeBasePath = cfg.worktreeBasePath ?? "";
+  wsForm.workspacePath = cfg.workspacePath ?? "";
 }
 
 async function onEngineTypeChange() {
   wsForm.engineModel = null;
   await loadModelsForEngine();
+}
+
+async function browseWorkspacePath() {
+  browsingWorkspacePath.value = true;
+  try {
+    const { path } = await api("workspace.openFolderDialog", { initialPath: wsForm.workspacePath || undefined });
+    if (path) wsForm.workspacePath = path;
+  } finally {
+    browsingWorkspacePath.value = false;
+  }
 }
 
 async function browseWorktreePath() {
@@ -354,6 +383,7 @@ async function saveWorkspaceSettings() {
       engineType: wsForm.engineType,
       engineModel: wsForm.engineModel ?? undefined,
       worktreeBasePath: wsForm.worktreeBasePath || undefined,
+      workspacePath: wsForm.workspacePath || undefined,
     });
     wsSaveSuccess.value = true;
     setTimeout(() => { wsSaveSuccess.value = false; }, 3000);
@@ -426,16 +456,15 @@ async function onProjectSave(data: {
       });
       projectDialogVisible.value = false;
     } else {
-      const registeredPath = data.projectPath;
-      await projectStore.registerProject({
+      const registeredProject = await projectStore.registerProject({
         workspaceKey: workspaceStore.activeWorkspaceKey ?? "default",
         ...data,
       });
       projectDialogVisible.value = false;
       try {
-        const detected = await api("lsp.detectLanguages", { projectPath: registeredPath });
+        const detected = await api("lsp.detectLanguages", { projectPath: registeredProject.projectPath.absolute });
         if (detected.length > 0) {
-          lastRegisteredPath.value = registeredPath;
+          lastRegisteredPath.value = registeredProject.projectPath.absolute;
           lspLanguages.value = detected;
           showLspPrompt.value = true;
           return;

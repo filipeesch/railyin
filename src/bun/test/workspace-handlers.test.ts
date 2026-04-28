@@ -61,12 +61,6 @@ describe("workspaceHandlers", () => {
         "      command: typescript-language-server",
         "      args: ['--stdio']",
         "      extensions: ['.ts']",
-        "projects:",
-        "  - key: test-project",
-        "    name: Test Project",
-        "    project_path: /tmp/test-git",
-        "    git_root_path: /tmp/test-git",
-        "    default_branch: main",
       ].join("\n"),
       "utf-8",
     );

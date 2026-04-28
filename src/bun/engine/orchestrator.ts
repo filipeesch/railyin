@@ -22,6 +22,7 @@ import { mapTask } from "../db/mappers.ts";
 import { getDb } from "../db/index.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
+import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 
 import { EngineRegistry } from "./engine-registry.ts";
@@ -219,7 +220,7 @@ export class Orchestrator implements ExecutionCoordinator {
     if (!engine.compact) {
       throw new Error(`Engine for conversation ${conversationId} does not support manual compaction`);
     }
-    const workingDirectory = config.workspace.workspace_path ?? config.configDir;
+    const workingDirectory = getEffectiveWorkspacePath(config);
     await engine.compact(null, conversationId, workingDirectory);
   }
 }

@@ -444,7 +444,7 @@ export class CopilotEngine implements ExecutionEngine {
   async listCommands(taskId: number): Promise<CommandInfo[]> {
     const { getDb } = await import("../../db/index.ts");
     const { getBoardWorkspaceKey } = await import("../../workspace-context.ts");
-    const { getProjectByKey } = await import("../../project-store.ts");
+    const { getLoadedProjectByKey } = await import("../../project-store.ts");
 
     const db = getDb();
     const taskRow = db
@@ -464,7 +464,7 @@ export class CopilotEngine implements ExecutionEngine {
     let projectPath: string | null = null;
     if (taskRow) {
       const wsKey = getBoardWorkspaceKey(taskRow.board_id);
-      const project = getProjectByKey(wsKey, taskRow.project_key);
+      const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
       if (project?.projectPath && project.projectPath !== worktreePath) {
         projectPath = project.projectPath;
       }

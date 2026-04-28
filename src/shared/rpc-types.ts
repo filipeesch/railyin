@@ -12,8 +12,8 @@ export interface Project {
   key: string;
   workspaceKey: string;
   name: string;
-  projectPath: string;
-  gitRootPath: string;
+  projectPath: { absolute: string; relative: string };
+  gitRootPath: { absolute: string; relative: string };
   defaultBranch: string;
   slug?: string;
   description?: string;
@@ -380,6 +380,8 @@ export interface WorkspaceConfig {
   id: number;
   key: string;
   name: string;
+  /** Resolved workspace root path (workspace_path or configDir). */
+  workspacePath: string;
   workflows: WorkflowTemplate[];
   ai: {
     baseUrl: string;
@@ -501,7 +503,7 @@ export type RailynAPI = {
     response: WorkspaceSummary;
   };
   "workspace.update": {
-    params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string };
+    params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string; workspacePath?: string };
     response: Record<string, never>;
   };
   "workspace.resolveGitRoot": {

@@ -82,8 +82,8 @@ export const test = base.extend<Fixtures>({
             .returns("workspace.create", { key: "new-workspace", name: "New Workspace" })
             .returns("workspace.resolveGitRoot", { gitRoot: "" })
             .returns("workspace.openFolderDialog", { path: null })
-            .returns("projects.register", { key: "new-project", workspaceKey: "test-workspace", name: "New Project", projectPath: "/tmp/new", gitRootPath: "/tmp/new", defaultBranch: "main" })
-            .returns("projects.update", { key: "test-project", workspaceKey: "test-workspace", name: "Test Project", projectPath: "/home/user/projects/test", gitRootPath: "/home/user/projects/test", defaultBranch: "main" })
+            .returns("projects.register", { key: "new-project", workspaceKey: "test-workspace", name: "New Project", projectPath: { absolute: "/tmp/new", relative: "new" }, gitRootPath: { absolute: "/tmp/new", relative: "new" }, defaultBranch: "main" })
+            .returns("projects.update", { key: "test-project", workspaceKey: "test-workspace", name: "Test Project", projectPath: { absolute: "/home/user/projects/test", relative: "test" }, gitRootPath: { absolute: "/home/user/projects/test", relative: "test" }, defaultBranch: "main" })
             .returns("projects.delete", undefined);
 
         await api.install();

@@ -70,7 +70,7 @@ export async function createWorktree(
 
   const row = db
     .query<TaskGitContextRow, [number]>(
-      "SELECT git_root_path, worktree_path, worktree_status, branch_name, subrepo_path FROM task_git_context WHERE task_id = ?",
+      "SELECT git_root_path, worktree_path, worktree_status, branch_name FROM task_git_context WHERE task_id = ?",
     )
     .get(taskId);
 

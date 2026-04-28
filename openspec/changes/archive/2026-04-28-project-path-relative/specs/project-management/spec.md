@@ -1,7 +1,4 @@
-## Purpose
-Project management covers the UI-driven lifecycle of registered projects within a workspace: creating, editing, and deleting projects through the Setup view without editing `workspace.yaml` directly.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: User can edit an existing project
 The system SHALL allow users to update any field of a registered project (name, project path, git root path, default branch, slug, description) through the Setup view. The `workspace_path` MUST be configured before a project can be edited; the dialog SHALL show an inline warning and disable save if `workspace_path` is not set.

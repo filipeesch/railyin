@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "fs";
-import { join } from "path";
+import { join, isAbsolute, resolve, relative } from "path";
 import { createHash } from "crypto";
 import yaml from "js-yaml";
+import { resolveConfigPath } from "./path-utils.ts";
 
 // ─── Config types ─────────────────────────────────────────────────────────────
 
@@ -176,6 +177,8 @@ export interface LoadedProject {
   name: string;
   projectPath: string;
   gitRootPath: string;
+  /** Path from gitRootPath to projectPath. Empty string for standalone repos. */
+  subPath: string;
   defaultBranch: string;
   slug?: string;
   description?: string;
@@ -559,21 +562,54 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
   }
 
   const rawProjects = workspace.projects ?? [];
-  const projects: LoadedProject[] = rawProjects.map((project, index) => {
+
+  // Validate workspace_path is set when projects are defined
+  if (rawProjects.length > 0 && !workspace.workspace_path) {
+    _configError = `workspace_path is required when projects are defined. Add a workspace_path to your workspace.yaml.`;
+    return { config: null, error: _configError };
+  }
+
+  const workspacePath = workspace.workspace_path!;
+
+  const projects: LoadedProject[] = [];
+  for (let index = 0; index < rawProjects.length; index++) {
+    const project = rawProjects[index]!;
     const key = sanitizeProjectKey(project.key ?? project.slug, project.name || `project-${index + 1}`);
-    return {
+
+    if (isAbsolute(project.project_path)) {
+      _configError = `project "${project.name}": project_path must be a relative path (relative to workspace_path).\nFound: ${project.project_path}\nMigration: change project_path to the path relative to your workspace_path.\nExample: if workspace_path is ${workspacePath}, use project_path: ${relative(workspacePath, project.project_path)}`;
+      return { config: null, error: _configError };
+    }
+
+    const resolvedProjectPath = resolveConfigPath(workspacePath, project.project_path);
+
+    let resolvedGitRootPath: string;
+    if (project.git_root_path) {
+      if (isAbsolute(project.git_root_path)) {
+        _configError = `project "${project.name}": git_root_path must be a relative path (relative to workspace_path).\nFound: ${project.git_root_path}\nMigration: change git_root_path to the path relative to your workspace_path.\nExample: if workspace_path is ${workspacePath}, use git_root_path: ${relative(workspacePath, project.git_root_path)}`;
+        return { config: null, error: _configError };
+      }
+      resolvedGitRootPath = resolveConfigPath(workspacePath, project.git_root_path);
+    } else {
+      resolvedGitRootPath = resolvedProjectPath;
+    }
+
+    const subPath = relative(resolvedGitRootPath, resolvedProjectPath);
+
+    projects.push({
       id: getProjectIdForKey(entry.key, key),
       key,
       workspaceId: entry.id,
       workspaceKey: entry.key,
       name: project.name,
-      projectPath: project.project_path,
-      gitRootPath: project.git_root_path ?? project.project_path,
+      projectPath: resolvedProjectPath,
+      gitRootPath: resolvedGitRootPath,
+      subPath,
       defaultBranch: project.default_branch ?? "main",
       ...(project.slug ? { slug: project.slug } : {}),
       ...(project.description ? { description: project.description } : {}),
-    };
-  });
+    });
+  }
 
   _config = {
     workspaceId: entry.id,

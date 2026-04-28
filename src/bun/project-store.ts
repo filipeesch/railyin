@@ -7,8 +7,11 @@ import {
   type LoadedProject,
   type WorkspaceProjectYaml,
 } from "./config/index.ts";
+import { getEffectiveWorkspacePath, toWorkspaceRelativePath, isInsideWorkspace, resolveConfigPath } from "./config/path-utils.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
 import { getDb } from "./db/index.ts";
+import { existsSync } from "fs";
+import { isAbsolute } from "path";
 import type { Project } from "../shared/rpc-types.ts";
 
 function sanitizeProjectKey(raw: string | undefined, fallback: string): string {
@@ -16,13 +19,19 @@ function sanitizeProjectKey(raw: string | undefined, fallback: string): string {
   return key || fallback;
 }
 
-function toProject(project: LoadedProject): Project {
+function toProject(project: LoadedProject, workspacePath: string): Project {
   return {
     key: project.key,
     workspaceKey: project.workspaceKey,
     name: project.name,
-    projectPath: project.projectPath,
-    gitRootPath: project.gitRootPath,
+    projectPath: {
+      absolute: project.projectPath,
+      relative: toWorkspaceRelativePath(workspacePath, project.projectPath),
+    },
+    gitRootPath: {
+      absolute: project.gitRootPath,
+      relative: toWorkspaceRelativePath(workspacePath, project.gitRootPath),
+    },
     defaultBranch: project.defaultBranch,
     ...(project.slug ? { slug: project.slug } : {}),
     ...(project.description ? { description: project.description } : {}),
@@ -30,11 +39,17 @@ function toProject(project: LoadedProject): Project {
 }
 
 function loadAllWorkspaceConfigs(): LoadedConfig[] {
-  return getWorkspaceRegistry().map((entry) => loadConfig(entry.key).config ?? getConfig(entry.key));
+  return getWorkspaceRegistry().flatMap((entry) => {
+    const { config } = loadConfig(entry.key);
+    return config ? [config] : [];
+  });
 }
 
 export function listFileBackedProjects(): Project[] {
-  return loadAllWorkspaceConfigs().flatMap((config) => config.projects.map(toProject));
+  return loadAllWorkspaceConfigs().flatMap((config) => {
+    const workspacePath = getEffectiveWorkspacePath(config);
+    return config.projects.map((p) => toProject(p, workspacePath));
+  });
 }
 
 export function listProjects(): Project[] {
@@ -49,9 +64,33 @@ export function getProjectByKey(workspaceKey: string, projectKey: string): Proje
   for (const config of loadAllWorkspaceConfigs()) {
     if (config.workspaceKey !== workspaceKey) continue;
     const project = config.projects.find((entry) => entry.key === projectKey);
-    if (project) return toProject(project);
+    if (project) return toProject(project, getEffectiveWorkspacePath(config));
   }
   return null;
+}
+
+export function getLoadedProjectByKey(workspaceKey: string, projectKey: string): LoadedProject | null {
+  for (const config of loadAllWorkspaceConfigs()) {
+    if (config.workspaceKey !== workspaceKey) continue;
+    const project = config.projects.find((entry) => entry.key === projectKey);
+    if (project) return project;
+  }
+  return null;
+}
+
+/**
+ * Normalizes an input path (absolute or relative) to a workspace-relative path.
+ * Validates that the path exists on disk and is inside the workspace.
+ */
+function normalizeProjectPath(inputPath: string, workspacePath: string, fieldName: string): string {
+  const absolutePath = isAbsolute(inputPath) ? inputPath : resolveConfigPath(workspacePath, inputPath);
+  if (!existsSync(absolutePath)) {
+    throw new Error(`${fieldName} does not exist: ${absolutePath}`);
+  }
+  if (!isInsideWorkspace(workspacePath, absolutePath)) {
+    throw new Error(`${fieldName} must be inside workspace_path.\nPath: ${absolutePath}\nWorkspace: ${workspacePath}`);
+  }
+  return toWorkspaceRelativePath(workspacePath, absolutePath);
 }
 
 export function updateProject(params: {
@@ -65,6 +104,10 @@ export function updateProject(params: {
   description?: string;
 }): Project {
   const workspaceConfig = getWorkspaceConfig(params.workspaceKey);
+  const workspacePath = getEffectiveWorkspacePath(workspaceConfig);
+  if (!workspaceConfig.workspace.workspace_path) {
+    throw new Error(`workspace_path must be set before registering or updating projects`);
+  }
   const currentProjects = workspaceConfig.workspace.projects ?? [];
   const idx = currentProjects.findIndex(
     (p) => sanitizeProjectKey(p.key ?? p.slug, p.name) === params.key,
@@ -74,8 +117,8 @@ export function updateProject(params: {
   const updated: WorkspaceProjectYaml = {
     ...existing,
     ...(params.name !== undefined ? { name: params.name.trim() } : {}),
-    ...(params.projectPath !== undefined ? { project_path: params.projectPath } : {}),
-    ...(params.gitRootPath !== undefined ? { git_root_path: params.gitRootPath } : {}),
+    ...(params.projectPath !== undefined ? { project_path: normalizeProjectPath(params.projectPath, workspacePath, "project_path") } : {}),
+    ...(params.gitRootPath !== undefined ? { git_root_path: normalizeProjectPath(params.gitRootPath, workspacePath, "git_root_path") } : {}),
     ...(params.defaultBranch !== undefined ? { default_branch: params.defaultBranch } : {}),
     ...(params.slug !== undefined ? { slug: params.slug } : {}),
     ...(params.description !== undefined ? { description: params.description } : {}),
@@ -86,7 +129,7 @@ export function updateProject(params: {
   const reloaded = loadConfig(params.workspaceKey).config ?? getConfig(params.workspaceKey);
   const project = reloaded.projects.find((p) => p.key === params.key);
   if (!project) throw new Error(`Failed to reload project ${params.key}`);
-  return toProject(project);
+  return toProject(project, workspacePath);
 }
 
 export function deleteProject(workspaceKey: string, projectKey: string): void {
@@ -116,6 +159,10 @@ export function registerProject(params: {
   description?: string;
 }): Project {
   const workspaceConfig = getWorkspaceConfig(params.workspaceKey);
+  if (!workspaceConfig.workspace.workspace_path) {
+    throw new Error(`workspace_path must be set before registering projects`);
+  }
+  const workspacePath = getEffectiveWorkspacePath(workspaceConfig);
   const currentProjects = workspaceConfig.workspace.projects ?? [];
   const keyBase = params.slug?.trim() || params.name;
   const key = sanitizeProjectKey(keyBase, params.name);
@@ -123,11 +170,14 @@ export function registerProject(params: {
     throw new Error(`Project key already exists in workspace: ${key}`);
   }
 
+  const relProjectPath = normalizeProjectPath(params.projectPath, workspacePath, "project_path");
+  const relGitRootPath = normalizeProjectPath(params.gitRootPath, workspacePath, "git_root_path");
+
   const nextProject: WorkspaceProjectYaml = {
     key,
     name: params.name.trim(),
-    project_path: params.projectPath,
-    git_root_path: params.gitRootPath,
+    project_path: relProjectPath,
+    git_root_path: relGitRootPath,
     default_branch: params.defaultBranch,
     ...(params.slug ? { slug: params.slug } : {}),
     ...(params.description ? { description: params.description } : {}),
@@ -140,5 +190,5 @@ export function registerProject(params: {
   const reloaded = loadConfig(workspaceConfig.workspaceKey).config ?? getConfig(workspaceConfig.workspaceKey);
   const project = reloaded.projects.find((entry) => entry.key === key);
   if (!project) throw new Error(`Failed to register project ${key}`);
-  return toProject(project);
+  return toProject(project, workspacePath);
 }

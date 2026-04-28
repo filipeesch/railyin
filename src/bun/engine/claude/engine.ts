@@ -133,7 +133,7 @@ export class ClaudeEngine implements ExecutionEngine {
   async listCommands(taskId: number): Promise<CommandInfo[]> {
     const { getDb } = await import("../../db/index.ts");
     const { getBoardWorkspaceKey } = await import("../../workspace-context.ts");
-    const { getProjectByKey } = await import("../../project-store.ts");
+    const { getLoadedProjectByKey } = await import("../../project-store.ts");
 
     // ⚠️  INVARIANT: CWD priority here MUST match Orchestrator._resolveWorkingDirectory().
     //
@@ -160,8 +160,8 @@ export class ClaudeEngine implements ExecutionEngine {
       .get(taskId);
 
     const wsKey = getBoardWorkspaceKey(taskRow.board_id);
-    const project = getProjectByKey(wsKey, taskRow.project_key);
-    const cwd = project?.projectPath?.trim() || gitRow?.worktree_path || process.cwd();
+    const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
+    const cwd = project?.projectPath || gitRow?.worktree_path || process.cwd();
 
     const sdkCommands = await this.sdkAdapter.listCommands(cwd);
     return sdkCommands.map((cmd) => ({

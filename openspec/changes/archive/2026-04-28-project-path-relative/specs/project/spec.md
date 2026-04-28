@@ -1,7 +1,4 @@
-## Purpose
-Projects represent registered Git repositories (or monorepo sub-folders) that tasks are scoped to. All Git operations use the project's stored paths.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Project is a registered folder
 The system SHALL allow users to register, edit, and delete projects through the Setup view UI without editing `workspace.yaml` directly. A project may be the root of a standalone Git repository or a subfolder within a monorepo. An optional `railyin.yaml` file at the project root MAY define run profiles and tool launchers for tasks belonging to that project. A project MUST reside inside the workspace's `workspace_path` folder; registration of paths outside the workspace is rejected.
@@ -20,22 +17,11 @@ The system SHALL allow users to register, edit, and delete projects through the 
 
 #### Scenario: Existing project edited via UI
 - **WHEN** the user opens the project edit dialog, modifies fields, and saves
-- **THEN** the project entry in `workspace.yaml` is updated without re-registering
+- **THEN** the project entry in `workspace.yaml` is updated with relative paths without re-registering
 
 #### Scenario: Project deleted via UI
 - **WHEN** the user confirms deletion of a project
 - **THEN** the project is removed from `workspace.yaml` and all associated tasks are deleted from the database
-
-### Requirement: Project git root can be auto-detected from project path
-The system SHALL provide a backend endpoint that accepts a filesystem path and returns the Git repository root by running `git rev-parse --show-toplevel` at that path. The frontend SHALL call this endpoint when the user requests git root detection in the project form.
-
-#### Scenario: Git root resolved from valid project path
-- **WHEN** the frontend calls `workspace.resolveGitRoot` with a path inside a Git repository
-- **THEN** the response contains `gitRoot` set to the absolute path of the repository root
-
-#### Scenario: Git root not found for non-Git path
-- **WHEN** the frontend calls `workspace.resolveGitRoot` with a path not inside any Git repository
-- **THEN** the response contains `gitRoot: null`
 
 ### Requirement: Project stores git root and project path as relative paths
 The system SHALL store `project_path` and `git_root_path` as relative paths (relative to `workspace_path`) in `workspace.yaml`. The config loader SHALL resolve them to absolute paths at load time. All consumers of `LoadedProject` receive absolute paths. A `subPath` field (the relative path from `gitRootPath` to `projectPath`) SHALL be pre-computed on `LoadedProject` at load time for use by the working directory resolver.
@@ -63,6 +49,17 @@ The system SHALL store `project_path` and `git_root_path` as relative paths (rel
 #### Scenario: Missing workspace_path with projects defined
 - **WHEN** `workspace.yaml` defines one or more projects but `workspace_path` is not set
 - **THEN** config loading fails with an error stating that `workspace_path` is required when projects are defined
+
+### Requirement: Project git root can be auto-detected from project path
+The system SHALL provide a backend endpoint that accepts a filesystem path and returns the Git repository root by running `git rev-parse --show-toplevel` at that path. The frontend SHALL call this endpoint when the user requests git root detection in the project form.
+
+#### Scenario: Git root resolved from valid project path
+- **WHEN** the frontend calls `workspace.resolveGitRoot` with a path inside a Git repository
+- **THEN** the response contains `gitRoot` set to the absolute path of the repository root
+
+#### Scenario: Git root not found for non-Git path
+- **WHEN** the frontend calls `workspace.resolveGitRoot` with a path not inside any Git repository
+- **THEN** the response contains `gitRoot: null`
 
 ### Requirement: Project requires a default branch
 Each project SHALL store a `default_branch` field used as the base for new task branches and worktrees.

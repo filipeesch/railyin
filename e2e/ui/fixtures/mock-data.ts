@@ -43,6 +43,7 @@ export function makeWorkspace(overrides?: Partial<WorkspaceConfig>): WorkspaceCo
             provider: "fake",
         },
         worktreeBasePath: "/tmp/railyn-test",
+        workspacePath: "/home/user/projects",
         enableThinking: false,
         engine: { type: "copilot", model: "copilot/gpt-4.1" },
         ...overrides,
@@ -54,8 +55,8 @@ export function makeProject(overrides?: Partial<Project>): Project {
         key: "test-project",
         workspaceKey: WORKSPACE_KEY,
         name: "Test Project",
-        projectPath: "/home/user/projects/test",
-        gitRootPath: "/home/user/projects/test",
+        projectPath: { absolute: "/home/user/projects/test", relative: "test" },
+        gitRootPath: { absolute: "/home/user/projects/test", relative: "test" },
         defaultBranch: "main",
         ...overrides,
     };

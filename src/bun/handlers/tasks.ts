@@ -15,7 +15,7 @@ import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
-import { getProjectByKey } from "../project-store.ts";
+import { getLoadedProjectByKey } from "../project-store.ts";
 import { resolveContextWindow } from "../context-usage.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 
@@ -111,7 +111,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
     }): Promise<Task> => {
       const db = getDb();
       const workspaceKey = getBoardWorkspaceKey(params.boardId);
-      const project = getProjectByKey(workspaceKey, params.projectKey);
+      const project = getLoadedProjectByKey(workspaceKey, params.projectKey);
       if (!project) {
         throw new Error(`Project ${params.projectKey} not found in workspace ${workspaceKey}`);
       }
@@ -235,7 +235,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
 
         // Backfill git context for tasks created before this was wired up
         const wsKey = getTaskWorkspaceKey(params.taskId);
-        const project = getProjectByKey(wsKey, taskRow.project_key);
+        const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
           registerProjectGitContext(params.taskId, project.gitRootPath);
         }
@@ -330,7 +330,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         }
 
         const wsKey = getTaskWorkspaceKey(params.taskId);
-        const project = getProjectByKey(wsKey, taskRow.project_key);
+        const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
           registerProjectGitContext(params.taskId, project.gitRootPath);
         }
