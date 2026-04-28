@@ -199,7 +199,12 @@ export const useConversationStore = defineStore("conversation", () => {
       const pivot = loaded.messages[0]?.id ?? 0;
       const oldHistory = messages.value.filter((m) => m.id < pivot);
       messages.value = [...oldHistory, ...loaded.messages];
-      hasMoreBefore.value = loaded.hasMore || oldHistory.length > 0;
+      // When oldHistory is non-empty we've already loaded those pages; preserve
+      // the existing hasMoreBefore instead of overwriting it with loaded.hasMore
+      // (which would incorrectly signal more pages exist and trigger the sentinel).
+      if (oldHistory.length === 0) {
+        hasMoreBefore.value = loaded.hasMore;
+      }
 
       const existingState = streamStates.value.get(params.conversationId);
       if (existingState) {
