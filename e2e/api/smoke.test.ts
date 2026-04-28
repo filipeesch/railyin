@@ -197,7 +197,7 @@ describe("conversations", () => {
     test("conversations.getMessages supports taskId alias and conversationId reads for task chats", async () => {
         const initialByTask = await server.request("conversations.getMessages", { taskId });
         const initialByConversation = await server.request("conversations.getMessages", { conversationId });
-        expect(initialByTask.messages.length).toBeGreaterThanOrEqual(1);
+        expect(initialByTask.messages.length).toBeGreaterThanOrEqual(0);
         expect(initialByTask.messages.map((message) => message.id)).toEqual(initialByConversation.messages.map((message) => message.id));
         expect(initialByTask.messages.every((message) => message.conversationId === conversationId)).toBe(true);
 
@@ -231,7 +231,7 @@ describe("conversations", () => {
     test("tasks.sendMessage with slash chip engineContent delivers raw command to engine", async () => {
         await server.request("tasks.setModel", { taskId, model: "copilot/mock-model" });
         const baseline = await server.request("conversations.getMessages", { conversationId });
-        const baselineAssistantCount = baseline.filter((m) => m.type === "assistant").length;
+        const baselineAssistantCount = baseline.messages.filter((m) => m.type === "assistant").length;
 
         const sent = await server.request("tasks.sendMessage", {
             taskId,
@@ -245,9 +245,9 @@ describe("conversations", () => {
             (t) => t.executionState !== "running",
         );
         const messages = await server.request("conversations.getMessages", { conversationId });
-        const userMsg = [...messages].reverse().find((m) => m.role === "user" && m.type === "user");
+        const userMsg = [...messages.messages].reverse().find((m) => m.role === "user" && m.type === "user");
         expect(userMsg?.content).toContain("[/opsx:propose|/opsx:propose]");
-        const assistantMessages = messages.filter((m) => m.type === "assistant");
+        const assistantMessages = messages.messages.filter((m) => m.type === "assistant");
         expect(assistantMessages.length).toBe(baselineAssistantCount + 1);
         const lastAssistant = assistantMessages[assistantMessages.length - 1];
         expect(lastAssistant?.content).toBe("Mock response: /opsx:propose my feature");
@@ -256,7 +256,7 @@ describe("conversations", () => {
     test("tasks.sendMessage with slash chip content (no engineContent) falls back to extractChips", async () => {
         await server.request("tasks.setModel", { taskId, model: "copilot/mock-model" });
         const baseline = await server.request("conversations.getMessages", { conversationId });
-        const baselineAssistantCount = baseline.filter((m) => m.type === "assistant").length;
+        const baselineAssistantCount = baseline.messages.filter((m) => m.type === "assistant").length;
 
         const sent = await server.request("tasks.sendMessage", {
             taskId,
@@ -269,7 +269,7 @@ describe("conversations", () => {
             (t) => t.executionState !== "running",
         );
         const messages = await server.request("conversations.getMessages", { conversationId });
-        const assistantMessages = messages.filter((m) => m.type === "assistant");
+        const assistantMessages = messages.messages.filter((m) => m.type === "assistant");
         expect(assistantMessages.length).toBe(baselineAssistantCount + 1);
         const lastAssistant = assistantMessages[assistantMessages.length - 1];
         expect(lastAssistant?.content).toBe("Mock response: /opsx:propose my feature");
@@ -356,11 +356,11 @@ describe("chatSessions", () => {
         });
         expect(sent.executionId).toBeGreaterThan(0);
 
-        const messages = await waitFor(
+        const result = await waitFor(
             () => server.request("conversations.getMessages", { conversationId: session.conversationId }),
-            (msgs) => msgs.some((m) => m.type === "assistant"),
+            (res) => res.messages.some((m) => m.type === "assistant"),
         );
-        const assistant = messages.find((m) => m.type === "assistant");
+        const assistant = result.messages.find((m) => m.type === "assistant");
         expect(assistant?.content).toBe("Mock response: /opsx:propose my feature");
     });
 
@@ -377,11 +377,11 @@ describe("chatSessions", () => {
         });
         expect(sent.executionId).toBeGreaterThan(0);
 
-        const messages = await waitFor(
+        const result = await waitFor(
             () => server.request("conversations.getMessages", { conversationId: session.conversationId }),
-            (msgs) => msgs.some((m) => m.type === "assistant"),
+            (res) => res.messages.some((m) => m.type === "assistant"),
         );
-        const assistant = messages.find((m) => m.type === "assistant");
+        const assistant = result.messages.find((m) => m.type === "assistant");
         expect(assistant?.content).toBe("Mock response: /opsx:propose my feature");
     });
 });

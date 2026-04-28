@@ -11,11 +11,21 @@ import { estimateConversationContextUsage, resolveContextWindow } from "../conte
 export function conversationHandlers(orchestrator: ExecutionCoordinator | null) {
   return {
     "conversations.getMessages": async (params: {
-      conversationId: number;
+      conversationId?: number;
+      taskId?: number;
       beforeMessageId?: number;
       limit?: number;
     }): Promise<{ messages: ConversationMessage[]; hasMore: boolean }> => {
       const db = getDb();
+      let conversationId = params.conversationId;
+      if (conversationId == null && params.taskId != null) {
+        const row = db.query<{ conversation_id: number }, [number]>(
+          "SELECT conversation_id FROM tasks WHERE id = ?",
+        ).get(params.taskId);
+        if (!row) throw new Error(`Task ${params.taskId} not found`);
+        conversationId = row.conversation_id;
+      }
+      if (conversationId == null) throw new Error("conversationId or taskId is required");
       const limit = params.limit ?? 50;
       let rows: ConversationMessageRow[];
       if (params.beforeMessageId != null) {
@@ -23,13 +33,13 @@ export function conversationHandlers(orchestrator: ExecutionCoordinator | null) 
           .query<ConversationMessageRow, [number, number, number]>(
             "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
           )
-          .all(params.conversationId, params.beforeMessageId, limit + 1);
+          .all(conversationId, params.beforeMessageId, limit + 1);
       } else {
         rows = db
           .query<ConversationMessageRow, [number, number]>(
             "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
           )
-          .all(params.conversationId, limit + 1);
+          .all(conversationId, limit + 1);
       }
       const hasMore = rows.length > limit;
       const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);

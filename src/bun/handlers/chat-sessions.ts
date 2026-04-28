@@ -86,7 +86,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
       engineContent?: string;
       model?: string | null;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
-    }): Promise<{ message: ConversationMessage; executionId: number }> => {
+    }): Promise<{ messageId: number; executionId: number }> => {
       const db = getDb();
       const session = db.query<ChatSessionRow, [number]>(
         "SELECT * FROM chat_sessions WHERE id = ?"
@@ -122,7 +122,7 @@ export function chatSessionHandlers(onSessionUpdated: OnChatSessionUpdated, orch
       ).get(params.sessionId);
       if (updatedSession) onSessionUpdated(mapChatSession(updatedSession));
 
-      return { message, executionId };
+      return { messageId: message.id, executionId };
     },
 
     "chatSessions.getMessages": async (params: {
