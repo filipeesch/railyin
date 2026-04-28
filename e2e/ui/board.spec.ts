@@ -10,14 +10,9 @@
  */
 
 import { test, expect } from "./fixtures";
-import { makeTask, makeBoard, makeWorkflowTemplate, makeGroupedWorkflowTemplate } from "./fixtures/mock-data";
+import { makeTask, makeWorkflowTemplate, makeGroupedWorkflowTemplate, setupBoardWithTemplate } from "./fixtures/mock-data";
+import { navigateToBoard } from "./fixtures/board-helpers";
 import type { Task, WorkflowTemplate } from "@shared/rpc-types";
-
-async function navigateToBoard(page: import("@playwright/test").Page) {
-    // Navigate to the board view (assume it's the default or use nav link)
-    await page.goto("/");
-    await expect(page.locator(".board-columns, [data-testid='board-columns']")).toBeVisible({ timeout: 5_000 });
-}
 
 type TerminalSeedSession = {
     sessionId: string;
@@ -378,17 +373,7 @@ test.describe("G — column groups", () => {
         api,
     }) => {
         const template = makeGroupedWorkflowTemplate();
-        api
-            .returns("boards.list", [makeBoard({ template } as any)])
-            .returns("workspace.getConfig", {
-                id: 1,
-                key: "test-workspace",
-                name: "Test Workspace",
-                workflows: [template],
-                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
-                worktreeBasePath: "/tmp",
-                enableThinking: false,
-            });
+        setupBoardWithTemplate(api, template);
 
         await navigateToBoard(page);
 
@@ -398,17 +383,7 @@ test.describe("G — column groups", () => {
 
     test("G-20: group labels appear in the board", async ({ page, api }) => {
         const template = makeGroupedWorkflowTemplate();
-        api
-            .returns("boards.list", [makeBoard({ template } as any)])
-            .returns("workspace.getConfig", {
-                id: 1,
-                key: "test-workspace",
-                name: "Test Workspace",
-                workflows: [template],
-                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
-                worktreeBasePath: "/tmp",
-                enableThinking: false,
-            });
+        setupBoardWithTemplate(api, template);
 
         await navigateToBoard(page);
 
@@ -423,17 +398,7 @@ test.describe("G — column groups", () => {
         api,
     }) => {
         const template = makeGroupedWorkflowTemplate();
-        api
-            .returns("boards.list", [makeBoard({ template } as any)])
-            .returns("workspace.getConfig", {
-                id: 1,
-                key: "test-workspace",
-                name: "Test Workspace",
-                workflows: [template],
-                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
-                worktreeBasePath: "/tmp",
-                enableThinking: false,
-            });
+        setupBoardWithTemplate(api, template);
 
         await navigateToBoard(page);
 
@@ -451,17 +416,7 @@ test.describe("G — column groups", () => {
         api,
     }) => {
         const template = makeGroupedWorkflowTemplate(); // backlog is ungrouped
-        api
-            .returns("boards.list", [makeBoard({ template } as any)])
-            .returns("workspace.getConfig", {
-                id: 1,
-                key: "test-workspace",
-                name: "Test Workspace",
-                workflows: [template],
-                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
-                worktreeBasePath: "/tmp",
-                enableThinking: false,
-            });
+        setupBoardWithTemplate(api, template);
 
         await navigateToBoard(page);
 
@@ -488,18 +443,8 @@ test.describe("G — column groups", () => {
             ],
         };
         const limitedTask = makeTask({ id: 99, workflowState: "plan", position: 1000 });
-        api
-            .returns("boards.list", [makeBoard({ template } as any)])
-            .returns("workspace.getConfig", {
-                id: 1,
-                key: "test-workspace",
-                name: "Test Workspace",
-                workflows: [template],
-                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
-                worktreeBasePath: "/tmp",
-                enableThinking: false,
-            })
-            .handle("tasks.list", () => [limitedTask]);
+        setupBoardWithTemplate(api, template as any);
+        api.handle("tasks.list", () => [limitedTask]);
 
         await navigateToBoard(page);
 
@@ -623,18 +568,8 @@ test.describe("BD — board improvements", () => {
             makeTask({ workflowState: "plan", title: `Task ${i + 1}` }),
         );
 
-        api
-            .returns("boards.list", [makeBoard({ template } as any)])
-            .returns("workspace.getConfig", {
-                id: 1,
-                key: "test-workspace",
-                name: "Test Workspace",
-                workflows: [template],
-                ai: { baseUrl: "", apiKey: "", model: "fake/test", provider: "fake" },
-                worktreeBasePath: "/tmp",
-                enableThinking: false,
-            })
-            .returns("tasks.list", manyTasks);
+        setupBoardWithTemplate(api, template);
+        api.returns("tasks.list", manyTasks);
 
         await navigateToBoard(page);
 

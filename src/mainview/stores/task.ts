@@ -332,6 +332,9 @@ export const useTaskStore = defineStore("task", () => {
       const idx = board.findIndex((t) => t.id === updated.id);
       if (idx !== -1) {
         board[idx] = updated;
+      } else {
+        // Task created by AI tool or another client — add it to the board
+        board.push(updated);
       }
     }
     taskIndex.value[updated.id] = updated;

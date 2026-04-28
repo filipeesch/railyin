@@ -15,9 +15,20 @@ import type {
     WorkspaceConfig,
     Project,
 } from "@shared/rpc-types";
+import type { ApiMock } from "./mock-api";
 
 export const BOARD_ID = 1;
 export const WORKSPACE_KEY = "test-workspace";
+
+/**
+ * Setup boards.list and workspace.getConfig mocks for a custom workflow template.
+ * Eliminates the verbose inline workspace object repeated across G-* and capacity tests.
+ */
+export function setupBoardWithTemplate(api: ApiMock, template: WorkflowTemplate): void {
+    api
+        .returns("boards.list", [makeBoard({ template } as any)])
+        .returns("workspace.getConfig", makeWorkspace({ workflows: [template] }));
+}
 
 export function makeWorkspace(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
     return {

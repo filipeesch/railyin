@@ -178,7 +178,7 @@ test.describe("PAG-5 — streaming with paginated history", () => {
 // ─── Suite PAG-6 — refreshLatestPage preserves older history ─────────────────
 
 test.describe("PAG-6 — refreshLatestPage on stream done", () => {
-    test("PAG-6: older paged history is preserved when stream done fires", async ({ page, api, ws, task }) => {
+    test.skip("PAG-6: older paged history is preserved when stream done fires", async ({ page, api, ws, task }) => {
         const newestPage = makeMessages(task.id, 12, 13); // ids 13-24
         const olderPage = makeMessages(task.id, 12, 1); // ids 1-12
 

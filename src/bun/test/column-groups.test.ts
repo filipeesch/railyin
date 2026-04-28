@@ -243,6 +243,7 @@ const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
   onTransition: noop,
   onHumanTurn: noop,
   onCancel: noop,
+  onTaskUpdated: noop,
 });
 
 describe("card limit enforcement in move_task", () => {

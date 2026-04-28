@@ -25,6 +25,7 @@ const commonCtx = (overrides?: { taskId?: number; boardId?: number }): CommonToo
     onTransition: noop,
     onHumanTurn: noop,
     onCancel: noop,
+    onTaskUpdated: noop,
 });
 
 beforeEach(() => {

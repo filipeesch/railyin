@@ -193,6 +193,7 @@ export interface CommonToolContext {
   onTransition: (taskId: number, toState: string) => void;
   onHumanTurn: (taskId: number, message: string) => void;
   onCancel: (executionId: number) => void;
+  onTaskUpdated: (task: Task) => void;
   lspManager?: LSPServerManager;
   worktreePath?: string;
 }

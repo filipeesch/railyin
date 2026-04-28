@@ -131,6 +131,7 @@ export async function execCreateTask(
   const newTaskId = taskRes.lastInsertRowid as number;
   db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [newTaskId, convId]);
   const newRow = db.query<TaskRow, [number]>(TASK_WITH_GIT).get(newTaskId)!;
+  ctx.onTaskUpdated(mapTask(newRow));
   return JSON.stringify(mapTask(newRow));
 }
 
@@ -232,6 +233,8 @@ export async function execMoveTask(
     .get(taskRow.board_id, targetState);
   const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
   db.run("UPDATE tasks SET workflow_state = ?, position = ? WHERE id = ?", [targetState, topPos, taskId]);
+  const updatedRow = db.query<TaskRow, [number]>(TASK_WITH_GIT).get(taskId)!;
+  ctx.onTaskUpdated(mapTask(updatedRow));
   ctx.onTransition(taskId, targetState);
   return JSON.stringify({ success: true, task_id: taskId, workflow_state: targetState });
 }

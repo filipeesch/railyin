@@ -62,6 +62,7 @@ const MEDIA_TYPE_EXT: Record<string, string> = {
 
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
+  private readonly _onTaskUpdated: OnTaskUpdated;
 
   /** Active sessions keyed by executionId. */
   private readonly sessions = new Map<number, CopilotSdkSession>();
@@ -72,12 +73,13 @@ export class CopilotEngine implements ExecutionEngine {
   }>();
 
   constructor(
-    _onTaskUpdated: OnTaskUpdated,
+    onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: CopilotSdkAdapter = createDefaultCopilotSdkAdapter(),
     // cliPath is only used when constructing the default adapter above;
     // when a custom sdkAdapter is injected (tests) this parameter is unused.
   ) {
+    this._onTaskUpdated = onTaskUpdated;
     this.sdkAdapter = sdkAdapter;
   }
 
@@ -145,6 +147,9 @@ export class CopilotEngine implements ExecutionEngine {
       },
       onCancel: (_execId: number) => {
         this.cancel(_execId);
+      },
+      onTaskUpdated: (task: import("../../../shared/rpc-types.ts").Task) => {
+        this._onTaskUpdated(task);
       },
       lspManager,
       worktreePath: workingDirectory,

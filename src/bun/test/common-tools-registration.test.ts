@@ -11,6 +11,7 @@ const baseContext: CommonToolContext = {
     onTransition: () => { },
     onHumanTurn: () => { },
     onCancel: () => { },
+    onTaskUpdated: () => { },
 };
 
 describe("shared common tool registration", () => {

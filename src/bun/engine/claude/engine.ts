@@ -11,6 +11,7 @@ import { getMcpRegistry } from "../../mcp/registry.ts";
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
   private readonly sdkAdapter: ClaudeSdkAdapter;
+  private readonly _onTaskUpdated: OnTaskUpdated;
   private readonly pendingResumes = new Map<number, {
     resolve: (input: EngineResumeInput) => void;
     reject: (error: Error) => void;
@@ -18,11 +19,12 @@ export class ClaudeEngine implements ExecutionEngine {
 
   constructor(
     defaultModel: string | undefined,
-    _onTaskUpdated: OnTaskUpdated,
+    onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: ClaudeSdkAdapter = createDefaultClaudeSdkAdapter(),
   ) {
     this.defaultModel = defaultModel;
+    this._onTaskUpdated = onTaskUpdated;
     this.sdkAdapter = sdkAdapter;
   }
 
@@ -64,6 +66,7 @@ export class ClaudeEngine implements ExecutionEngine {
         onTransition: () => { },
         onHumanTurn: () => { },
         onCancel: (id) => this.cancel(id),
+        onTaskUpdated: (task) => this._onTaskUpdated(task),
         lspManager,
         worktreePath: workingDirectory,
       },

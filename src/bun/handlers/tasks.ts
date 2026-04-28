@@ -161,6 +161,7 @@ export function taskHandlers(orchestrator: ExecutionCoordinator | null, onTaskUp
         .query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?")
         .get(taskId)!;
 
+      onTaskUpdated(mapTask(row));
       return mapTask(row);
     },
 

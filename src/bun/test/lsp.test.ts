@@ -436,7 +436,7 @@ describe("executeLspTool", () => {
     const { executeCommonTool } = await import("../engine/common-tools.ts");
     const ctx = {
       taskId: 0, boardId: 0,
-      onTransition: () => {}, onHumanTurn: () => {}, onCancel: () => {},
+      onTransition: () => {}, onHumanTurn: () => {}, onCancel: () => {}, onTaskUpdated: () => {},
       worktreePath: "/tmp",
     };
     const result = await executeCommonTool("lsp", { operation: "hover", file_path: "src/foo.ts", line: 1, character: 1 }, ctx as any);
