@@ -10,6 +10,7 @@
  */
 
 import { test, expect } from "./fixtures";
+import { openTaskDrawer, sendMessage } from "./fixtures";
 import { makeUserMessage, makeAssistantMessage } from "./fixtures/mock-data";
 import type { Task, StreamEvent } from "@shared/rpc-types";
 
@@ -31,18 +32,6 @@ function textChunk(taskId: number, seq: number, content: string, done = false): 
         subagentId: null,
         done,
     };
-}
-
-async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
-    await page.locator(`[data-task-id="${taskId}"]`).click();
-    await expect(page.locator(".task-detail")).toBeVisible();
-}
-
-async function sendMessage(page: import("@playwright/test").Page, text: string) {
-    const editor = page.locator(".task-detail__input .cm-content");
-    await editor.click();
-    await editor.pressSequentially(text);
-    await page.keyboard.press("Enter");
 }
 
 // ─── Suite M — basic send & streaming ────────────────────────────────────────

@@ -1,14 +1,9 @@
-import { test, expect } from "./fixtures";
+import { test, expect, openTaskDrawer } from "./fixtures";
 import { makeAssistantMessage, makeTransitionMessage } from "./fixtures/mock-data";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
-    await page.locator(`[data-task-id="${taskId}"]`).click();
-    await expect(page.locator(".task-detail")).toBeVisible();
-}
 
 test.describe("TD — task drawer coverage", () => {
     test("TD-1: task drawer opens on Chat tab and can switch to Info and back", async ({ page, task }) => {

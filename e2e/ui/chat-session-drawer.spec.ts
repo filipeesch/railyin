@@ -15,7 +15,7 @@
  * Backend is fully mocked via ApiMock + WsMock fixtures.
  */
 
-import { test, expect } from "./fixtures";
+import { test, expect, openSidebar, openSessionDrawer, typeInSessionEditor } from "./fixtures";
 import { makeChatSession, makeChatMessage, WORKSPACE_KEY } from "./fixtures/mock-data";
 import type { StreamEvent } from "@shared/rpc-types";
 import type { ApiMock } from "./fixtures/mock-api";
@@ -45,26 +45,6 @@ function stubSessionMessages(api: ApiMock, conversationId: number, messages: Ret
         messages: requestedConversationId === conversationId ? [...messages] : [],
         hasMore: false,
     }));
-}
-
-async function typeInSessionEditor(page: import("@playwright/test").Page, text: string, submitKey: "Enter" | "Shift+Enter" = "Enter") {
-    const editor = page.locator(".session-chat-view .chat-editor .cm-content");
-    await editor.click();
-    await editor.pressSequentially(text);
-    await page.keyboard.press(submitKey);
-}
-
-async function openSidebar(page: import("@playwright/test").Page) {
-    const btn = page.locator("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
-    const count = await btn.count();
-    if (count > 0) await btn.first().click();
-    await expect(page.locator(".chat-sidebar")).toBeVisible({ timeout: 3_000 });
-}
-
-async function openSessionDrawer(page: import("@playwright/test").Page, sessionId: number) {
-    await openSidebar(page);
-    await page.locator(`[data-session-id="${sessionId}"]`).click();
-    await expect(page.locator(".session-chat-view")).toBeVisible({ timeout: 5_000 });
 }
 
 function sessionInterviewPrompt(conversationId: number, content: string): ReturnType<typeof makeChatMessage> {
