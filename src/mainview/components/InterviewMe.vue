@@ -208,9 +208,8 @@ function onRowClick(qi: number, q: InterviewQuestion, title: string) {
   focusedOption.value[qi] = title;
   if (q.type === "exclusive") {
     singleSelected.value[qi] = title;
-  } else if (q.type === "non_exclusive") {
-    onCheckboxClick(qi, q, title);
   }
+  // non_exclusive: row click only focuses preview; selection requires clicking the checkbox
 }
 
 function onCheckboxClick(qi: number, q: InterviewQuestion, title: string) {

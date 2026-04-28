@@ -98,7 +98,7 @@ test.describe("T-A — exclusive question submit", () => {
 // ─── T-B: Non-exclusive question — check checkbox → submit enabled ────────────
 
 test.describe("T-B — non_exclusive question submit", () => {
-    test("T-B: checking a checkbox in non_exclusive question enables submit", async ({ page, api, task }) => {
+    test("T-B: clicking checkbox enables submit", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [nonExclusiveQuestion] });
         api.handle("conversations.getMessages", () => messagePage([msg]));
 
@@ -109,8 +109,7 @@ test.describe("T-B — non_exclusive question submit", () => {
         await expect(submit).toBeVisible();
         await expect(submit).toBeDisabled();
 
-        // Click the row (which now toggles the checkbox via onRowClick fix)
-        await page.locator(".interview__option").filter({ hasText: "Auth" }).click();
+        await page.locator(".interview__option").filter({ hasText: "Auth" }).locator(".interview__checkbox").click();
 
         await expect(submit).toBeEnabled();
     });
@@ -127,6 +126,45 @@ test.describe("T-B — non_exclusive question submit", () => {
 
         await page.locator(".interview__option").filter({ hasText: "Realtime" }).locator(".interview__checkbox").click();
 
+        await expect(submit).toBeEnabled();
+    });
+
+    test("T-B3: clicking a row in non_exclusive shows description preview but does NOT toggle checkbox", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [nonExclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const submit = page.locator(".interview__submit");
+        await expect(submit).toBeDisabled();
+
+        // Click the row (not the checkbox) — should only show preview
+        await page.locator(".interview__option").filter({ hasText: "Auth" }).click();
+
+        // Preview panel should appear
+        await expect(page.locator(".interview__desc-panel")).toBeVisible();
+        // But submit should remain disabled — no checkbox was checked
+        await expect(submit).toBeDisabled();
+    });
+
+    test("T-B4: clicking a row then clicking its checkbox in non_exclusive enables submit", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [nonExclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const submit = page.locator(".interview__submit");
+        const row = page.locator(".interview__option").filter({ hasText: "Auth" });
+
+        // Row click focuses preview but does not select
+        await row.click();
+        await expect(page.locator(".interview__desc-panel")).toBeVisible();
+        await expect(submit).toBeDisabled();
+
+        // Checkbox click selects the option → submit enabled
+        await row.locator(".interview__checkbox").click();
         await expect(submit).toBeEnabled();
     });
 });

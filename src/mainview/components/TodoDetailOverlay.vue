@@ -73,7 +73,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from "vue";
-import { marked } from "marked";
+import { useMarkdown } from "../composables/useMarkdown";
 import { api } from "../rpc";
 import type { TodoStatus } from "@shared/rpc-types";
 import Button from "primevue/button";
@@ -105,9 +105,11 @@ const form = reactive({
 
 const isPending = computed(() => form.status === "pending");
 
+const { renderMd } = useMarkdown();
+
 const renderedDescription = computed(() => {
   if (!form.description) return "<p><em>No description yet.</em></p>";
-  return marked.parse(form.description, { async: false, breaks: true, gfm: true }) as string;
+  return renderMd(form.description);
 });
 
 async function loadTodo() {

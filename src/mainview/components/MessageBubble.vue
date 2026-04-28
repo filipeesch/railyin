@@ -63,7 +63,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { marked } from "marked";
+import { useMarkdown } from "../composables/useMarkdown";
 import type {
   ConversationMessage,
   AskUserPromptContent,
@@ -89,9 +89,7 @@ const chatStore = useChatStore();
 const taskStore = useTaskStore();
 const conversationStore = useConversationStore();
 
-function renderMd(content: string): string {
-  return marked.parse(content, { async: false, breaks: true, gfm: true }) as string;
-}
+const { renderMd } = useMarkdown();
 
 const displayContent = computed(() => props.chunk.content);
 const messageList = computed(() => conversationStore.messages);

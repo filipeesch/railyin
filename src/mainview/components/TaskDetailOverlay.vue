@@ -117,7 +117,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted } from "vue";
-import { marked } from "marked";
+import { useMarkdown } from "../composables/useMarkdown";
 import { api } from "../rpc";
 import type { Task } from "@shared/rpc-types";
 import Button from "primevue/button";
@@ -160,9 +160,11 @@ const visibleProjects = computed(() =>
 
 const isBacklog = computed(() => form.workflowState === "backlog");
 
+const { renderMd } = useMarkdown();
+
 const renderedDescription = computed(() => {
   if (!form.description) return "<p><em>No description yet.</em></p>";
-  return marked.parse(form.description, { async: false, breaks: true, gfm: true }) as string;
+  return renderMd(form.description);
 });
 
 async function loadTask() {

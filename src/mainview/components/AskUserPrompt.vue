@@ -127,12 +127,10 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { marked } from "marked";
+import { useMarkdown } from "../composables/useMarkdown";
 import type { AskUserQuestion } from "@shared/rpc-types";
 
-function renderMd(content: string): string {
-  return marked.parse(content, { async: false }) as string;
-}
+const { renderMd } = useMarkdown();
 
 const props = defineProps<{
   questions: AskUserQuestion[];

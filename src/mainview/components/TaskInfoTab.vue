@@ -153,7 +153,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { marked } from "marked";
+import { useMarkdown } from "../composables/useMarkdown";
 import Button from "primevue/button";
 import type { Task, Board } from "@shared/rpc-types";
 import WorktreeCreateForm from "./WorktreeCreateForm.vue";
@@ -207,9 +207,11 @@ function onCreateWorktree(params: { mode: "new" | "existing"; branchName: string
   emit("createWorktree", params);
 }
 
+const { renderMd } = useMarkdown();
+
 const renderedDescription = computed(() => {
   if (!props.task.description?.trim()) return '<p class="info-description--empty">No description.</p>';
-  return marked.parse(props.task.description, { async: false, breaks: true, gfm: true }) as string;
+  return renderMd(props.task.description);
 });
 </script>
 

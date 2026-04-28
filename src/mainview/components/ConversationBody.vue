@@ -84,7 +84,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useVirtualizer } from "@tanstack/vue-virtual";
-import { marked } from "marked";
+import { useMarkdown } from "../composables/useMarkdown";
 import ProgressSpinner from "primevue/progressspinner";
 import MessageBubble from "./MessageBubble.vue";
 import TransitionEventCard from "./TransitionEventCard.vue";
@@ -343,9 +343,7 @@ watch(
   { flush: "post" },
 );
 
-function renderMd(content: string): string {
-  return marked.parse(content, { async: false, breaks: true, gfm: true }) as string;
-}
+const { renderMd } = useMarkdown();
 </script>
 
 <style scoped>
