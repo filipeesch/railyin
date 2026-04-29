@@ -68,7 +68,9 @@ describe("runMigrations", () => {
       CREATE TABLE executions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER,
-        conversation_id INTEGER
+        conversation_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'running',
+        input_tokens INTEGER
       );
       CREATE TABLE conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,7 +78,9 @@ describe("runMigrations", () => {
       );
       CREATE TABLE tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id INTEGER
+        conversation_id INTEGER,
+        board_id INTEGER,
+        workflow_state TEXT
       );
       CREATE TABLE stream_events (
         id INTEGER PRIMARY KEY,
@@ -189,12 +193,16 @@ describe("runMigrations", () => {
       );
       CREATE TABLE tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id INTEGER
+        conversation_id INTEGER,
+        board_id INTEGER,
+        workflow_state TEXT
       );
       CREATE TABLE executions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER,
-        conversation_id INTEGER
+        conversation_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'running',
+        input_tokens INTEGER
       );
       CREATE TABLE stream_events (
         id INTEGER PRIMARY KEY,

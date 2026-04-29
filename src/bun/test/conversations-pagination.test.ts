@@ -53,7 +53,7 @@ describe("conversations.getMessages pagination", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     seedMessages(taskId, conversationId, 3);
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId });
 
     expect(result.messages).toHaveLength(3);
@@ -66,7 +66,7 @@ describe("conversations.getMessages pagination", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     seedMessages(taskId, conversationId, 55);
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId, limit: 50 });
 
     expect(result.messages).toHaveLength(50);
@@ -80,7 +80,7 @@ describe("conversations.getMessages pagination", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     seedMessages(taskId, conversationId, 10);
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId, limit: 10 });
 
     const ids = result.messages.map((m) => m.id);
@@ -92,7 +92,7 @@ describe("conversations.getMessages pagination", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     seedMessages(taskId, conversationId, 10);
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
 
     // First page: newest 5
     const page1 = await handlers["conversations.getMessages"]({ conversationId, limit: 5 });
@@ -126,7 +126,7 @@ describe("conversations.getMessages pagination", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     seedMessages(taskId, conversationId, 10);
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
 
     // Get the 6th message id to use as cursor
     const all = await handlers["conversations.getMessages"]({ conversationId, limit: 100 });
@@ -145,7 +145,7 @@ describe("conversations.getMessages pagination", () => {
   it("P-6: empty conversation returns empty messages with hasMore false", async () => {
     const { conversationId } = seedProjectAndTask(db, gitDir);
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId });
 
     expect(result.messages).toHaveLength(0);
@@ -164,7 +164,7 @@ describe("conversations.getMessages pagination", () => {
       [taskId, otherConvId, "other-msg"],
     );
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId });
 
     expect(result.messages.every((m) => m.conversationId === conversationId)).toBe(true);

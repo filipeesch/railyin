@@ -2,7 +2,10 @@ import { runMigrations } from "./db/migrations/runner.ts";
 import { seedDefaultWorkspace } from "./db/seed.ts";
 import { getDb } from "./db/index.ts";
 import { getWorkspaceRegistry, loadConfig, getDataDir } from "./config/index.ts";
-import { StreamBatcher } from "./pipeline/batcher.ts";
+import { StreamEventEnricher } from "./pipeline/stream-event-enricher.ts";
+import { WriteBuffer } from "./pipeline/write-buffer.ts";
+import { appendStreamEventBatch, type PersistedStreamEvent } from "./db/stream-events.ts";
+import type { RawMessageItem } from "./engine/stream/raw-message-buffer.ts";
 import * as path from "path";
 import type { ServerWebSocket } from "bun";
 import { getPtySession, killAllPtySessions } from "./launch/pty.ts";
@@ -94,6 +97,9 @@ await getResolvedShellEnv();
 await runMigrations();
 seedDefaultWorkspace();
 
+// Single shared DB instance — injected into all handlers
+const db = getDb();
+
 // 2. Load default workspace config (YAML files)
 const { error: configError } = loadConfig();
 
@@ -141,7 +147,6 @@ const { error: configError } = loadConfig();
 //    hold the resume promise in memory — after a restart that in-memory state is gone and
 //    any future message would call engine.resume() on a dead execution.
 {
-  const db = getDb();
   const stuckCount = db
     .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tasks WHERE execution_state IN ('running', 'waiting_user')")
     .get()?.n ?? 0;
@@ -189,32 +194,50 @@ function notifyChatSessionUpdated(session: ChatSession): void {
   broadcast({ type: "chatSession.updated", payload: session });
 }
 
-// ─── Per-execution stream batchers ───────────────────────────────────────────
-const batchers = new Map<number, StreamBatcher>();
+// ─── Per-execution stream event enrichers and write buffer ────────────────────
+import type { StreamEventType } from "../shared/rpc-types.ts";
 
-function getOrCreateBatcher(conversationId: number, executionId: number): StreamBatcher {
-  const existing = batchers.get(executionId);
-  if (existing) return existing;
-  const batcher = new StreamBatcher(conversationId, executionId, (_events) => {
-    // DB writes are handled by StreamBatcher.flush() internally.
-    // IPC delivery happens immediately in onStreamEvent — nothing to do here.
-  });
-  batcher.start();
-  batchers.set(executionId, batcher);
-  return batcher;
-}
+const PERSISTED_STREAM_TYPES = new Set<StreamEventType>([
+  "user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system",
+]);
+
+const enrichers = new Map<number, StreamEventEnricher>();
+
+const streamEventBuffer = new WriteBuffer<PersistedStreamEvent>({
+  maxBatch: 100,
+  intervalMs: 500,
+  flushFn: (events) => appendStreamEventBatch(db, events),
+});
+streamEventBuffer.start();
 
 function onStreamEvent(event: StreamEvent): void {
-  const batcher = getOrCreateBatcher(event.conversationId, event.executionId);
-  // ── Diagnostic: verify events are sent incrementally ──
-  if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
-    console.log(`[stream-diag-bun] ${event.type} len=${event.content.length} t=${performance.now().toFixed(1)}`);
+  let enricher = enrichers.get(event.executionId);
+  if (!enricher) {
+    enricher = new StreamEventEnricher(event.executionId);
+    enrichers.set(event.executionId, enricher);
   }
-  // ALL events go to push immediately — no 500ms delay for any event type.
-  broadcast({ type: "stream.event", payload: event });
-  batcher.push(event);
+  const { seq, blockId } = enricher.enrich(event.type, event.blockId || undefined);
+  const enrichedEvent: StreamEvent = { ...event, seq, blockId };
+
+  broadcast({ type: "stream.event", payload: enrichedEvent });
+
+  if (PERSISTED_STREAM_TYPES.has(event.type)) {
+    streamEventBuffer.enqueue({
+      conversationId: enrichedEvent.conversationId,
+      executionId: enrichedEvent.executionId,
+      seq: enrichedEvent.seq,
+      blockId: enrichedEvent.blockId,
+      type: enrichedEvent.type,
+      content: enrichedEvent.content,
+      metadata: typeof enrichedEvent.metadata === "string" ? enrichedEvent.metadata : (enrichedEvent.metadata ? JSON.stringify(enrichedEvent.metadata) : null),
+      parentBlockId: enrichedEvent.parentBlockId ?? null,
+      subagentId: enrichedEvent.subagentId ?? null,
+    });
+  }
+
   if (event.done) {
-    batchers.delete(event.executionId);
+    streamEventBuffer.flush();
+    enrichers.delete(event.executionId);
   }
 }
 
@@ -229,13 +252,77 @@ const engineRegistry = injectedEngine
   ? EngineRegistry.fromFixed(injectedEngine)
   : new EngineRegistry((key) => resolveEngine(getWorkspaceConfig(key), notifyTaskUpdated, notifyNewMessage));
 
+// Broadcast text_chunk / reasoning_chunk immediately when enqueued into the raw
+// message buffer — fires synchronously in the IIFE's execution context, before
+// the token event is added to the generator queue. This decouples WS delivery
+// from DB flush timing and restores per-token streaming UX.
+function onRawMessageEnqueued(item: RawMessageItem): void {
+  let eventType: StreamEventType | null = null;
+  let content: string | null = null;
+
+  if (item.raw.engine === "claude") {
+    const evt = (item.raw.payload as any)?.event;
+    if (evt?.type !== "content_block_delta") return;
+    const delta = evt.delta;
+    if (delta?.type === "text_delta" && delta.text) {
+      eventType = "text_chunk";
+      content = delta.text as string;
+    } else if (delta?.type === "thinking_delta" && delta.thinking) {
+      eventType = "reasoning_chunk";
+      content = delta.thinking as string;
+    }
+  } else if (item.raw.engine === "copilot") {
+    const eventTypeName = item.raw.eventType;
+    if (eventTypeName === "assistant.message_delta") {
+      eventType = "text_chunk";
+      content = (item.raw.payload as any)?.data?.deltaContent as string ?? null;
+    } else if (eventTypeName === "assistant.reasoning_delta") {
+      eventType = "reasoning_chunk";
+      content = (item.raw.payload as any)?.data?.deltaContent as string ?? null;
+    }
+  }
+
+  if (!eventType || !content) return;
+
+  // Mark this execution so consume() skips the duplicate broadcast in the generator path.
+  orchestrator?.markClaudeExecution(item.executionId);
+
+  let enricher = enrichers.get(item.executionId);
+  if (!enricher) {
+    enricher = new StreamEventEnricher(item.executionId);
+    enrichers.set(item.executionId, enricher);
+  }
+  const { seq, blockId } = enricher.enrich(eventType);
+  broadcast({
+    type: "stream.event",
+    payload: {
+      taskId: item.taskId,
+      conversationId: item.conversationId,
+      executionId: item.executionId,
+      seq,
+      blockId,
+      type: eventType,
+      content,
+      metadata: null,
+      parentBlockId: null,
+      subagentId: null,
+      done: false,
+    },
+  });
+}
+
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(engineRegistry, onError, notifyTaskUpdated, notifyNewMessage)
+  ? new Orchestrator(db, engineRegistry, onError, notifyTaskUpdated, notifyNewMessage, onRawMessageEnqueued)
   : null;
 
 if (orchestrator) {
   orchestrator.setOnStreamEvent(onStreamEvent);
 }
+
+// ─── Start retention job ──────────────────────────────────────────────────────
+const { RetentionJob } = await import("./jobs/retention-job.ts");
+const retentionJob = new RetentionJob(db);
+retentionJob.start();
 
 // ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
 
@@ -245,17 +332,17 @@ const portArg = process.argv.find(a => a.startsWith("--port="));
 const serverPort = portArg ? Number(portArg.split("=")[1]) : 3000;
 
 const allHandlers: Record<string, (params: unknown) => unknown> = {
-  ...workspaceHandlers(),
-  ...boardHandlers(),
+  ...workspaceHandlers(db),
+  ...boardHandlers(db),
   ...projectHandlers(),
-  ...taskHandlers(orchestrator, notifyTaskUpdated, notifyNewMessage),
-  ...conversationHandlers(orchestrator),
+  ...taskHandlers(db, orchestrator, notifyTaskUpdated, notifyNewMessage),
+  ...conversationHandlers(db, orchestrator),
   ...workflowHandlers(notifyWorkflowReloaded),
-  ...launchHandlers(),
-  ...lspHandlers(),
-  ...codeServerHandlers(broadcast, serverPort),
-  ...mcpHandlers(),
-  ...chatSessionHandlers(notifyChatSessionUpdated, orchestrator),
+  ...launchHandlers(db),
+  ...lspHandlers(db),
+  ...codeServerHandlers(db, broadcast, serverPort),
+  ...mcpHandlers(db),
+  ...chatSessionHandlers(db, notifyChatSessionUpdated, orchestrator),
 };
 
 const server = Bun.serve({
@@ -416,7 +503,7 @@ process.on("SIGTERM", () => { void shutdown(); });
 process.on("SIGINT", () => { void shutdown(); });
 
 // Start chat session auto-archive job (archives sessions idle for 7+ days)
-startChatSessionAutoArchiveJob(notifyChatSessionUpdated);
+startChatSessionAutoArchiveJob(db, notifyChatSessionUpdated);
 
 // ─── Debug / test server (only when RAILYN_DEBUG=1) ───────────────────────────
 // Port 0 = OS-assigned. Port is written to /tmp/railyn-debug.port for bridge.ts.
@@ -440,7 +527,7 @@ if (process.env.RAILYN_DEBUG) {
         const taskId = url.searchParams.get("taskId");
         if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
         const tid = parseInt(taskId, 10);
-        const db = getDb();
+
 
         // Cancel any running execution to prevent background interference
         const execRow = db.query<{ current_execution_id: number | null }, [number]>(
@@ -498,7 +585,7 @@ if (process.env.RAILYN_DEBUG) {
       if (url.pathname === "/query-line-comments") {
         const taskId = url.searchParams.get("taskId");
         if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
-        const db = getDb();
+
         const rows = db.query<{ id: number; file_path: string; line_start: number; line_end: number; col_start: number; col_end: number; comment: string; sent: number }, [number]>(
           "SELECT id, file_path, line_start, line_end, col_start, col_end, comment, sent FROM task_line_comments WHERE task_id = ? ORDER BY id",
         ).all(parseInt(taskId, 10));
@@ -509,7 +596,7 @@ if (process.env.RAILYN_DEBUG) {
       if (url.pathname === "/query-hunk-decisions") {
         const taskId = url.searchParams.get("taskId");
         if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
-        const db = getDb();
+
         const rows = db.query<{ id: number; file_path: string; hash: string; decision: string; sent: number }, [number]>(
           "SELECT rowid as id, file_path, hunk_hash as hash, decision, sent FROM task_hunk_decisions WHERE task_id = ? AND reviewer_id = 'user' ORDER BY rowid",
         ).all(parseInt(taskId, 10));
@@ -520,7 +607,7 @@ if (process.env.RAILYN_DEBUG) {
       if (url.pathname === "/query-messages") {
         const taskId = url.searchParams.get("taskId");
         if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
-        const db = getDb();
+
         const rows = db.query<{ id: number; role: string; type: string; content: string; created_at: string }, [number]>(
           "SELECT id, role, type, content, created_at FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
         ).all(parseInt(taskId, 10));
@@ -533,7 +620,7 @@ if (process.env.RAILYN_DEBUG) {
         const filePath = url.searchParams.get("filePath");
         if (!taskId || !filePath) return new Response(JSON.stringify({ __error: "taskId and filePath required" }), { status: 400, headers: { "content-type": "application/json" } });
         try {
-          const db = getDb();
+  
           const gitRow = db.query<{ worktree_path: string | null; base_sha: string | null }, [number]>(
             "SELECT worktree_path, base_sha FROM task_git_context WHERE task_id = ?",
           ).get(parseInt(taskId, 10));
@@ -579,7 +666,7 @@ if (process.env.RAILYN_DEBUG) {
       // known files. Returns { taskId, files, worktreePath }.
       if (url.pathname === "/setup-test-env") {
         try {
-          const db = getDb();
+  
 
           // Clean up any previous test task so we don't accumulate stale rows.
           const prev = db.query<{ id: number; conversation_id: number | null }, []>("SELECT id, conversation_id FROM tasks WHERE title = 'UI Test Task' LIMIT 1").get();
@@ -798,7 +885,7 @@ if (process.env.RAILYN_DEBUG) {
         }
 
         try {
-          const db = getDb();
+  
           const task = db.query<{ conversation_id: number | null }, [number]>(
             "SELECT conversation_id FROM tasks WHERE id = ?",
           ).get(taskId);
@@ -815,6 +902,7 @@ if (process.env.RAILYN_DEBUG) {
             metadata?: Record<string, unknown>,
           ) => {
             appendMessage(
+              db,
               taskId,
               conversationId,
               "tool_call",
@@ -835,6 +923,7 @@ if (process.env.RAILYN_DEBUG) {
             metadata?: Record<string, unknown>,
           ) => {
             appendMessage(
+              db,
               taskId,
               conversationId,
               "tool_result",
@@ -898,6 +987,7 @@ if (process.env.RAILYN_DEBUG) {
 
             case "timeout": {
               const msgId = appendMessage(
+                db,
                 taskId,
                 conversationId,
                 "tool_call",
@@ -966,7 +1056,7 @@ if (process.env.RAILYN_DEBUG) {
       if (url.pathname === "/test-cancel") {
         const taskId = Number(url.searchParams.get("taskId"));
         if (!taskId) return new Response(JSON.stringify({ __error: "taskId required" }), { status: 400, headers: { "content-type": "application/json" } });
-        const db = getDb();
+
         const row = db.query<{ current_execution_id: number | null }, [number]>(
           "SELECT current_execution_id FROM tasks WHERE id = ?",
         ).get(taskId);
@@ -982,7 +1072,7 @@ if (process.env.RAILYN_DEBUG) {
         const taskId = Number(url.searchParams.get("taskId"));
         const model = url.searchParams.get("model") ?? "";
         if (!taskId || !model) return new Response(JSON.stringify({ __error: "taskId and model required" }), { status: 400, headers: { "content-type": "application/json" } });
-        const db = getDb();
+
         db.run("UPDATE tasks SET model = ? WHERE id = ?", [model, taskId]);
         const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
         if (taskRow) notifyTaskUpdated(mapTask(taskRow));
@@ -1046,7 +1136,7 @@ if (process.env.RAILYN_DEBUG) {
           const body = (req.method === "POST" ? await req.json() : {}) as { workspaceKey?: string; title?: string };
           const workspaceKey = body.workspaceKey ?? "default";
           const title = body.title;
-          const session = await chatSessionHandlers(notifyChatSessionUpdated)["chatSessions.create"]({ workspaceKey, title });
+          const session = await chatSessionHandlers(db, notifyChatSessionUpdated, orchestrator)["chatSessions.create"]({ workspaceKey, title });
           return new Response(JSON.stringify(session), { headers: { "content-type": "application/json" } });
         } catch (e) {
           return new Response(JSON.stringify({ __error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });

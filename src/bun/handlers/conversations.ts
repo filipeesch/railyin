@@ -1,4 +1,4 @@
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import type { ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 import { mapConversationMessage } from "../db/mappers.ts";
@@ -6,9 +6,10 @@ import { getStreamEventsByConversation, type PersistedStreamEvent } from "../db/
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import { runWithConfig } from "../config/index.ts";
-import { estimateConversationContextUsage, resolveContextWindow } from "../context-usage.ts";
+import { resolveContextWindow } from "../context-usage.ts";
+import { ContextEstimator } from "../conversation/context-estimator.ts";
 
-export function conversationHandlers(orchestrator: ExecutionCoordinator | null) {
+export function conversationHandlers(db: Database, orchestrator: ExecutionCoordinator | null) {
   return {
     "conversations.getMessages": async (params: {
       conversationId?: number;
@@ -16,7 +17,6 @@ export function conversationHandlers(orchestrator: ExecutionCoordinator | null) 
       beforeMessageId?: number;
       limit?: number;
     }): Promise<{ messages: ConversationMessage[]; hasMore: boolean }> => {
-      const db = getDb();
       let conversationId = params.conversationId;
       if (conversationId == null && params.taskId != null) {
         const row = db.query<{ conversation_id: number }, [number]>(
@@ -50,13 +50,12 @@ export function conversationHandlers(orchestrator: ExecutionCoordinator | null) 
       conversationId: number;
       afterSeq?: number;
     }): Promise<PersistedStreamEvent[]> => {
-      return getStreamEventsByConversation(params.conversationId, params.afterSeq);
+      return getStreamEventsByConversation(db, params.conversationId, params.afterSeq);
     },
 
     "conversations.contextUsage": async (params: {
       conversationId: number;
     }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
-      const db = getDb();
       const row = db.query<{
         task_model: string | null;
         task_workspace_key: string | null;
@@ -85,7 +84,7 @@ export function conversationHandlers(orchestrator: ExecutionCoordinator | null) 
         ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator))
         : 128_000;
 
-      return estimateConversationContextUsage(params.conversationId, maxTokens);
+      return new ContextEstimator(db).estimate(params.conversationId, maxTokens);
     },
   };
 }

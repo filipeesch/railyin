@@ -1,5 +1,5 @@
 import type { Task } from "../../../shared/rpc-types.ts";
-import { getDb } from "../../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { mapTask } from "../../db/mappers.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
 import { getTaskWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
@@ -13,6 +13,7 @@ import { resolveTaskModel } from "./model-resolver.ts";
 
 export class RetryExecutor {
   constructor(
+    private readonly db: Database,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly workdirResolver: WorkingDirectoryResolver,
@@ -20,13 +21,13 @@ export class RetryExecutor {
   ) {}
 
   async execute(taskId: number): Promise<{ task: Task; executionId: number }> {
-    const db = getDb();
+    const db = this.db;
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const config = getWorkspaceConfig(getTaskWorkspaceKey(taskId));
     const engine = this.engineRegistry.getEngine(getTaskWorkspaceKey(taskId));
 
-    const conversationId = ensureTaskConversation(taskId, task.conversation_id);
+    const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
     db.run("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ?", [taskId]);
     const attempt = (task.retry_count ?? 0) + 1;
 
@@ -45,7 +46,7 @@ export class RetryExecutor {
       "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
       [executionId, taskId],
     );
-    appendMessage(taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
+    appendMessage(db, taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
 
     const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
     const retryPrompt = column?.on_enter_prompt ?? "Please continue with the task.";

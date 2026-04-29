@@ -7,6 +7,7 @@
  *   C — Memory cleanup (stream blocks cleared after done for background task)
  *   D — Unread state (background task gets unread dot)
  *   E — Auto-scroll (conversation body scrolls to bottom during live stream)
+ *   F — Progressive streaming (each token appears before the next arrives)
  */
 import { test, expect } from "./fixtures";
 import { makeTask } from "./fixtures/mock-data";
@@ -365,5 +366,65 @@ test.describe("E — Auto-scroll", () => {
 
     // task1's scroll should not have changed due to task2's events
     expect(scrollAfter).toBe(scrollBefore);
+  });
+});
+
+// ─── Suite F — Progressive streaming ──────────────────────────────────────────
+
+test.describe("F — Progressive streaming", () => {
+  test("F-1: each token appears in the DOM before the next token is sent", async ({
+    page,
+    api,
+    ws,
+    task,
+  }) => {
+    api.returns("conversations.getMessages", { messages: [], hasMore: false });
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    const tokens = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"];
+
+    for (let i = 0; i < tokens.length; i++) {
+      ws.pushStreamEvent(textChunk(task.id, task.conversationId, i, tokens[i]));
+      // Each token must be visible BEFORE the next one is pushed.
+      // A 16ms wait (one frame) is enough for Vue to flush reactive updates.
+      await expect(page.locator(".conv-body")).toContainText(tokens[i], { timeout: 2_000 });
+    }
+
+    // All tokens should be concatenated in the final block.
+    await expect(page.locator(".conv-body")).toContainText("AlphaBetaGammaDeltaEpsilon", {
+      timeout: 1_000,
+    });
+  });
+
+  test("F-2: status_chunk events do not delay subsequent text_chunk rendering", async ({
+    page,
+    api,
+    ws,
+    task,
+  }) => {
+    api.returns("conversations.getMessages", { messages: [], hasMore: false });
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // Push a status event followed immediately by text tokens.
+    ws.pushStreamEvent({
+      taskId: task.id,
+      conversationId: task.conversationId,
+      executionId: EXEC_ID,
+      seq: 0,
+      blockId: `${EXEC_ID}-status`,
+      type: "status_chunk",
+      content: "Thinking…",
+      metadata: null,
+      parentBlockId: null,
+      subagentId: null,
+      done: false,
+    });
+    ws.pushStreamEvent(textChunk(task.id, task.conversationId, 1, "Hello"));
+    ws.pushStreamEvent(textChunk(task.id, task.conversationId, 2, " world"));
+
+    // Text should appear promptly — not blocked by the preceding status event.
+    await expect(page.locator(".conv-body")).toContainText("Hello world", { timeout: 2_000 });
   });
 });

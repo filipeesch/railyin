@@ -1,5 +1,5 @@
 import type { ConversationMessage, ManualEdit, CodeReviewPayload, CodeReviewHunk, LineComment, HunkDecision } from "../../../shared/rpc-types.ts";
-import { getDb } from "../../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
 import { getTaskWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
@@ -37,6 +37,7 @@ type LineCommentRow = {
 
 export class CodeReviewExecutor {
   constructor(
+    private readonly db: Database,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly workdirResolver: WorkingDirectoryResolver,
@@ -49,7 +50,7 @@ export class CodeReviewExecutor {
     taskId: number,
     manualEdits?: ManualEdit[],
   ): Promise<{ message: ConversationMessage; executionId: number }> {
-    const db = getDb();
+    const db = this.db;
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const config = getWorkspaceConfig(getTaskWorkspaceKey(taskId));
@@ -123,10 +124,10 @@ export class CodeReviewExecutor {
     );
     db.run(`UPDATE task_line_comments SET sent = 1 WHERE task_id = ? AND sent = 0`, [taskId]);
 
-    const conversationId = ensureTaskConversation(taskId, task.conversation_id);
+    const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
 
-    const reviewMsgId = appendMessage(taskId, conversationId, "code_review", "user", JSON.stringify(payload));
-    appendMessage(taskId, conversationId, "user", "user", reviewText);
+    const reviewMsgId = appendMessage(db, taskId, conversationId, "code_review", "user", JSON.stringify(payload));
+    appendMessage(db, taskId, conversationId, "user", "user", reviewText);
 
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
     const execResult = db.run(

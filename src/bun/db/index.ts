@@ -27,3 +27,11 @@ export function _resetForTests(): void {
   _db?.close();
   _db = null;
 }
+
+/** Only for tests — discards the singleton reference WITHOUT closing it.
+ *  Use when background buffers (rawBuffer, WriteBuffer) still hold the old
+ *  db reference and may flush after the test completes. The old in-memory db
+ *  will be garbage-collected once all references are dropped. */
+export function _softResetForTests(): void {
+  _db = null;
+}

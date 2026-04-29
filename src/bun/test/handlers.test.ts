@@ -43,6 +43,7 @@ function makeHandlers() {
   const updates: Task[] = [];
 
   const handlers = taskHandlers(
+    db,
     null,
     (task) => updates.push(task),
     () => {},
@@ -218,7 +219,7 @@ describe("tasks.transition / git context backfill", () => {
     const { projectKey, boardId, taskId, conversationId } = seedProjectAndTask(db, gitDir);
     // No task_git_context row exists yet
 
-    const handlers = taskHandlers(makeDbOrchestrator(), () => {}, () => {});
+    const handlers = taskHandlers(db, makeDbOrchestrator(), () => {}, () => {});
 
     // Transition — should backfill then create worktree
     await handlers["tasks.transition"]({ taskId, toState: "plan" });
@@ -352,7 +353,7 @@ describe("conversations handlers", () => {
       [taskId, otherConversationId, "other thread"],
     );
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId });
 
     expect(result.messages.map((message) => message.content)).toEqual(["hello", "hi there"]);
@@ -370,7 +371,7 @@ describe("conversations handlers", () => {
       [1, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, conversationId, 10, 1, "root-2", "assistant", "beta"],
     );
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const canonical = await handlers["conversations.getStreamEvents"]({ conversationId, afterSeq: 0 });
 
     expect(canonical).toHaveLength(1);
@@ -389,7 +390,7 @@ describe("conversations handlers", () => {
       [conversationId, "session message"],
     );
 
-    const handlers = conversationHandlers(null);
+    const handlers = conversationHandlers(db, null);
     const usage = await handlers["conversations.contextUsage"]({ conversationId });
 
     expect(usage.maxTokens).toBe(128_000);
@@ -400,7 +401,7 @@ describe("conversations handlers", () => {
 
 describe("chat session parity handlers", () => {
   it("persists session MCP tool selections", async () => {
-    const handlers = mcpHandlers();
+    const handlers = mcpHandlers(db);
     db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
     const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run(
@@ -432,6 +433,7 @@ describe("chat session parity handlers", () => {
 
     const calls: unknown[][] = [];
     const handlers = chatSessionHandlers(
+      db,
       () => {},
       {
         executeChatTurn: async (...args: unknown[]) => {
@@ -525,7 +527,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-sonnet-4.6", contextWindow: 200_000 },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(200_000);
@@ -539,7 +541,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     // No matching model in orchestrator; resolveModelContextWindow also won't find
@@ -551,7 +553,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
 
-    const handlers = taskHandlers(null, () => {}, () => {});
+    const handlers = taskHandlers(db, null, () => {}, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
@@ -565,7 +567,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-opus", contextWindow: undefined },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
@@ -578,7 +580,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
       { qualifiedId: null },
       { qualifiedId: "copilot/mock-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
 
@@ -597,11 +599,83 @@ describe("models.listEnabled — Copilot Auto option", () => {
       { qualifiedId: null },
       { qualifiedId: "copilot/mock-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
 
     const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
 
     expect(enabled.some((m) => m.id === null)).toBe(true);
     expect(enabled.some((m) => m.id === "copilot/mock-model")).toBe(true);
+  });
+});
+
+// ─── ESP-1: tasks.list — executionCount via LEFT JOIN ────────────────────────
+
+describe("tasks.list — ESP-1: executionCount JOIN", () => {
+  it("returns correct executionCount for tasks with multiple executions", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+    const boardId = db
+      .query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?")
+      .get(taskId)!.board_id;
+
+    // Insert 3 executions for this task
+    for (let i = 0; i < 3; i++) {
+      db.run(
+        "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'completed', ?)",
+        [taskId, conversationId, i + 1],
+      );
+    }
+
+    const { handlers } = makeHandlers();
+    const tasks = await handlers["tasks.list"]({ boardId });
+    const t = tasks.find((x) => x.id === taskId);
+    expect(t).toBeDefined();
+    expect(t!.executionCount).toBe(3);
+  });
+
+  it("returns 0 executionCount when task has no executions", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+    const boardId = db
+      .query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?")
+      .get(taskId)!.board_id;
+
+    const { handlers } = makeHandlers();
+    const tasks = await handlers["tasks.list"]({ boardId });
+    const t = tasks.find((x) => x.id === taskId);
+    expect(t).toBeDefined();
+    expect(t!.executionCount).toBe(0);
+  });
+});
+
+// ─── ESP-2: tasks.delete — cascade atomicity ─────────────────────────────────
+
+describe("tasks.delete — ESP-2: cascade atomicity", () => {
+  it("removes task and all related rows from every related table", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+
+    // Seed related rows
+    db.run(
+      "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'completed', 1)",
+      [taskId, conversationId],
+    );
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', 'hi')",
+      [taskId, conversationId],
+    );
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, '/root', '/root', 'ready', 'branch')",
+      [taskId],
+    );
+
+    const { handlers } = makeHandlers();
+    await handlers["tasks.delete"]({ taskId });
+
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM tasks WHERE id = ?").get(taskId)!.n).toBe(0);
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM executions WHERE task_id = ?").get(taskId)!.n).toBe(0);
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM conversation_messages WHERE task_id = ?").get(taskId)!.n).toBe(0);
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM task_git_context WHERE task_id = ?").get(taskId)!.n).toBe(0);
+    expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM conversations WHERE id = ?").get(conversationId)!.n).toBe(0);
   });
 });

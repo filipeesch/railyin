@@ -84,6 +84,7 @@ function makeExecutor() {
   const builder = new CapturingParamsBuilder();
   const streamProcessor = new StubStreamProcessor();
   const executor = new RetryExecutor(
+    db,
     EngineRegistry.fromFixed(new TestEngine()),
     builder,
     new StubWorkdirResolver(gitDir),

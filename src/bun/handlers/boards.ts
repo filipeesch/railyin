@@ -1,4 +1,4 @@
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { getConfig } from "../config/index.ts";
 import type { Board, WorkflowTemplate } from "../../shared/rpc-types.ts";
 import type { BoardRow } from "../db/row-types.ts";
@@ -19,10 +19,9 @@ function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"]
   };
 }
 
-export function boardHandlers() {
+export function boardHandlers(db: Database) {
   return {
     "boards.list": async (): Promise<Array<Board & { template: WorkflowTemplate }>> => {
-      const db = getDb();
       const rows = db
         .query<BoardRow, []>("SELECT * FROM boards ORDER BY created_at ASC")
         .all();
@@ -42,7 +41,6 @@ export function boardHandlers() {
       projectKeys: string[];
       workflowTemplateId: string;
     }): Promise<Board> => {
-      const db = getDb();
       const config = getWorkspaceConfig(params.workspaceKey);
 
       // Validate that the workflow template exists; fall back to first available

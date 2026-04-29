@@ -1,7 +1,8 @@
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import type { MessageType } from "../../shared/rpc-types.ts";
 
 export function appendMessage(
+  db: Database,
   taskId: number | null,
   conversationId: number,
   type: MessageType,
@@ -9,7 +10,6 @@ export function appendMessage(
   content: string,
   metadata?: Record<string, unknown>,
 ): number {
-  const db = getDb();
   const result = db.run(
     `INSERT INTO conversation_messages (task_id, conversation_id, type, role, content, metadata)
      VALUES (?, ?, ?, ?, ?, ?)`,
@@ -18,9 +18,7 @@ export function appendMessage(
   return result.lastInsertRowid as number;
 }
 
-export function ensureTaskConversation(taskId: number, conversationId: number | null): number {
-  const db = getDb();
-
+export function ensureTaskConversation(db: Database, taskId: number, conversationId: number | null): number {
   if (conversationId != null) {
     const existing = db
       .query<{ id: number }, [number, number]>(

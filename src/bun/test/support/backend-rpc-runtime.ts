@@ -8,9 +8,9 @@ import { taskHandlers } from "../../handlers/tasks.ts";
 import { Orchestrator } from "../../engine/orchestrator.ts";
 import { EngineRegistry } from "../../engine/engine-registry.ts";
 import type { ExecutionEngine } from "../../engine/types.ts";
-import { StreamBatcher } from "../../pipeline/batcher.ts";
-import { appendStreamEventBatch } from "../../db/stream-events.ts";
-import type { PersistedStreamEvent } from "../../db/stream-events.ts";
+import { StreamEventEnricher } from "../../pipeline/stream-event-enricher.ts";
+import { WriteBuffer } from "../../pipeline/write-buffer.ts";
+import { appendStreamEventBatch, type PersistedStreamEvent } from "../../db/stream-events.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { CallbackRecorder } from "./callback-recorder.ts";
 
@@ -35,7 +35,7 @@ export interface BackendRpcRuntime {
     waitForTaskState: (taskId: number, state: string, timeoutMs?: number) => Promise<void>;
     /** All StreamEvents delivered to IPC immediately (all types). */
     getIpcEvents: (executionId: number) => StreamEvent[];
-    /** StreamEvents written to DB (persisted types only, after batcher flush). */
+    /** StreamEvents written to DB (persisted types only, after WriteBuffer flush). */
     getDbStreamEvents: (executionId: number) => PersistedStreamEvent[];
     /** Wait until a persisted event of `type` appears in DB for this execution. */
     waitForDbStreamEvent: (executionId: number, type: string, timeoutMs?: number) => Promise<PersistedStreamEvent>;
@@ -69,36 +69,16 @@ export function createBackendRpcRuntime(options: {
 
     // ── Two-channel IPC simulation ──────────────────────────────────────────
     // ipcEvents: every event delivered immediately (mirrors what frontend receives in real-time)
-    // DB:        persisted events written by batcher.flush() (500ms or forced)
+    // DB:        persisted events written by stream event buffer
     const ipcEvents: StreamEvent[] = [];
-    const batchers = new Map<number, StreamBatcher>();
-
-    function getOrCreateBatcher(conversationId: number, executionId: number): StreamBatcher {
-        const existing = batchers.get(executionId);
-        if (existing) return existing;
-        const batcher = new StreamBatcher(conversationId, executionId, (events) => {
-            // DB write only — no IPC here (IPC is done immediately in onStreamEvent)
-            const persisted = events.filter((e) =>
-                ["user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system"].includes(e.type),
-            );
-            if (persisted.length > 0) {
-                appendStreamEventBatch(persisted.map((e) => ({
-                    conversationId: e.conversationId,
-                    executionId: e.executionId,
-                    seq: e.seq,
-                    blockId: e.blockId,
-                    type: e.type,
-                    content: e.content,
-                    metadata: e.metadata,
-                    parentBlockId: e.parentBlockId,
-                    subagentId: e.subagentId,
-                })));
-            }
-        });
-        batcher.start();
-        batchers.set(executionId, batcher);
-        return batcher;
-    }
+    const enrichers = new Map<number, StreamEventEnricher>();
+    const PERSISTED_TYPES = new Set(["user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system"]);
+    const streamEventBuffer = new WriteBuffer<PersistedStreamEvent>({
+        maxBatch: 100,
+        intervalMs: 500,
+        flushFn: (events) => appendStreamEventBatch(db, events),
+    });
+    streamEventBuffer.start();
 
     const engine = options.createEngine({
         onTaskUpdated: recorder.recordTaskUpdate,
@@ -106,6 +86,7 @@ export function createBackendRpcRuntime(options: {
     });
 
     const coordinator = new Orchestrator(
+        db,
         EngineRegistry.fromFixed(engine),
         recorder.recordError,
         recorder.recordTaskUpdate,
@@ -114,25 +95,34 @@ export function createBackendRpcRuntime(options: {
 
     coordinator.setOnStreamEvent((event: StreamEvent) => {
         recorder.recordStreamEvent(event);
-        // ALL events go to IPC immediately
-        ipcEvents.push(event);
-        // ALL events also go to batcher (for DB writes)
-        const batcher = getOrCreateBatcher(event.conversationId, event.executionId);
-        batcher.push({
-            type: event.type,
-            content: event.content,
-            metadata: event.metadata,
-            parentBlockId: event.parentBlockId,
-            subagentId: event.subagentId,
-            done: event.done,
-            blockId: event.blockId,
-        });
+        let enricher = enrichers.get(event.executionId);
+        if (!enricher) {
+            enricher = new StreamEventEnricher(event.executionId);
+            enrichers.set(event.executionId, enricher);
+        }
+        const { seq, blockId } = enricher.enrich(event.type, event.blockId || undefined);
+        const enrichedEvent = { ...event, seq, blockId };
+        ipcEvents.push(enrichedEvent);
+        if (PERSISTED_TYPES.has(event.type)) {
+            streamEventBuffer.enqueue({
+                conversationId: enrichedEvent.conversationId,
+                executionId: enrichedEvent.executionId,
+                seq: enrichedEvent.seq,
+                blockId: enrichedEvent.blockId,
+                type: enrichedEvent.type,
+                content: enrichedEvent.content,
+                metadata: typeof enrichedEvent.metadata === "string" ? enrichedEvent.metadata : (enrichedEvent.metadata ? JSON.stringify(enrichedEvent.metadata) : null),
+                parentBlockId: enrichedEvent.parentBlockId ?? null,
+                subagentId: enrichedEvent.subagentId ?? null,
+            });
+        }
         if (event.done) {
-            batchers.delete(event.executionId);
+            streamEventBuffer.flush();
+            enrichers.delete(event.executionId);
         }
     });
 
-    const handlers = taskHandlers(coordinator, recorder.recordTaskUpdate, recorder.recordNewMessage);
+    const handlers = taskHandlers(db, coordinator, recorder.recordTaskUpdate, recorder.recordNewMessage);
 
     return {
         db,
@@ -140,8 +130,8 @@ export function createBackendRpcRuntime(options: {
         recorder,
         gitDir,
         cleanup: () => {
-            for (const batcher of batchers.values()) batcher.stop();
-            batchers.clear();
+            streamEventBuffer.stop();
+            enrichers.clear();
             rmSync(gitDir, { recursive: true, force: true });
             cfg.cleanup();
         },

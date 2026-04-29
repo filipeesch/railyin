@@ -1,6 +1,6 @@
 import type { ConversationMessage } from "../../../shared/rpc-types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
-import { getDb } from "../../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { mapConversationMessage } from "../../db/mappers.ts";
 import { appendMessage } from "../../conversation/messages.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
@@ -12,6 +12,7 @@ import type { ConversationMessageRow } from "../../db/row-types.ts";
 
 export class ChatExecutor {
   constructor(
+    private readonly db: Database,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly streamProcessor: StreamProcessor,
@@ -27,11 +28,11 @@ export class ChatExecutor {
     attachments?: Attachment[],
     engineContent?: string,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
-    const db = getDb();
+    const db = this.db;
     const config = getWorkspaceConfig(workspaceKey);
     const engine = this.engineRegistry.getEngine(workspaceKey);
 
-    const msgId = appendMessage(null, conversationId, "user", "user", content);
+    const msgId = appendMessage(db, null, conversationId, "user", "user", content);
 
     const engineModel = "model" in config.engine ? (config.engine.model ?? "") : "";
     const resolvedModel = model ?? engineModel ?? (config.workspace.default_model ?? "");

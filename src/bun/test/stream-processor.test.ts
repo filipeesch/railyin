@@ -1,10 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
+import { WriteBuffer } from "../pipeline/write-buffer.ts";
+import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
+import type { ConversationMessage } from "../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
 
 function noop(..._args: unknown[]): void {}
+
+const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 
 let db: Database;
 let configCleanup: () => void;
@@ -58,7 +63,7 @@ afterEach(() => {
 
 describe("StreamProcessor", () => {
   it("SP-1: createSignal / abort round-trip", () => {
-    const sp = new StreamProcessor(noop as never, noop as never, noop as never, noop as never);
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never);
     const signal = sp.createSignal(executionId);
     expect(signal.aborted).toBe(false);
     sp.abort(executionId);
@@ -66,7 +71,7 @@ describe("StreamProcessor", () => {
   });
 
   it("SP-2: abortControllers cleaned up after done, subsequent createSignal returns fresh signal", async () => {
-    const sp = new StreamProcessor(noop as never, noop as never, noop as never, noop as never);
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never);
     sp.createSignal(executionId);
 
     const engine = new NoopEngine();
@@ -100,7 +105,7 @@ describe("StreamProcessor", () => {
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(noop as never, noop as never, noop as never, noop as never);
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never);
     const signal = sp.createSignal(executionId);
     const params = makeParams(taskId, conversationId, executionId, signal);
     const engine = new PausableEngine();
@@ -140,7 +145,7 @@ describe("StreamProcessor", () => {
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(noop as never, noop as never, noop as never, noop as never);
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never);
     const signal = sp.createSignal(executionId);
     const params = makeParams(taskId, conversationId, executionId, signal);
     const engine = new PausableReasoningEngine();
@@ -172,7 +177,7 @@ describe("StreamProcessor", () => {
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(noop as never, noop as never, noop as never, noop as never);
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never);
     const engine = new FatalErrorEngine();
     const params = makeParams(taskId, conversationId, executionId);
 
@@ -187,5 +192,35 @@ describe("StreamProcessor", () => {
       "SELECT execution_state FROM tasks WHERE id = ?",
     ).get(taskId);
     expect(taskRow!.execution_state).toBe("failed");
+  });
+
+  it("SP-6: onNewMessage called once with real DB id after assistant message flush", async () => {
+    class TextEngine implements ExecutionEngine {
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        yield { type: "token", content: "hello world" };
+        yield { type: "done" };
+      }
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      cancel(_executionId: number): void {}
+      async listModels() { return []; }
+      async listCommands() { return []; }
+    }
+
+    const newMessages: ConversationMessage[] = [];
+    const sp = new StreamProcessor(
+      db,
+      fakeRawBuffer,
+      noop as never,
+      noop as never,
+      noop as never,
+      (msg) => newMessages.push(msg),
+    );
+
+    await sp.consume(taskId, conversationId, executionId, new TextEngine().execute(makeParams(taskId, conversationId, executionId)));
+
+    expect(newMessages).toHaveLength(1);
+    expect(newMessages[0].content).toContain("hello world");
+    expect(typeof newMessages[0].id).toBe("number");
+    expect(newMessages[0].id).toBeGreaterThan(0);
   });
 });

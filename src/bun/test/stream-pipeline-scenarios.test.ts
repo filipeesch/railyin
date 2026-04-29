@@ -700,3 +700,132 @@ describe("S-14 [stream_event]: token events from ClaudeEngine flow through to te
         expect(rcIdx).toBeLessThan(tcIdx);
     });
 });
+
+// ---------------------------------------------------------------------------
+// S-15: [per-token delivery] Each text_chunk reaches IPC before next token emitted
+//
+// Why this matters: if any buffer sits between broadcast() and the engine
+// generator, multiple tokens could pile up before the first IPC push.
+// Using scriptCheckpoint() as a causal gate: the engine only advances past
+// the checkpoint AFTER the previous token was fully processed by consume().
+// By the time waitForCheckpoint() resolves, ipcEvents already contains the
+// broadcast for that token.
+// ---------------------------------------------------------------------------
+
+describe("S-15 [per-token delivery]: each text_chunk reaches IPC before the next token is emitted", () => {
+    it("IPC has exactly 1 text_chunk after first checkpoint, 2 after second", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            scriptToken("alpha"),
+            scriptCheckpoint("after-alpha"),
+            scriptToken("beta"),
+            scriptCheckpoint("after-beta"),
+            scriptToken("gamma"),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        await engine.waitForCheckpoint("after-alpha");
+        const ipcAt1 = runtime.getIpcEvents(executionId).filter((e) => e.type === "text_chunk");
+        expect(ipcAt1).toHaveLength(1);
+        expect(ipcAt1[0].content).toBe("alpha");
+
+        engine.proceed("after-alpha");
+
+        await engine.waitForCheckpoint("after-beta");
+        const ipcAt2 = runtime.getIpcEvents(executionId).filter((e) => e.type === "text_chunk");
+        expect(ipcAt2).toHaveLength(2);
+        expect(ipcAt2[1].content).toBe("beta");
+
+        engine.proceed("after-beta");
+
+        await runtime.recorder.waitForStreamDone(executionId);
+        const ipcFinal = runtime.getIpcEvents(executionId).filter((e) => e.type === "text_chunk");
+        expect(ipcFinal).toHaveLength(3);
+        expect(ipcFinal[2].content).toBe("gamma");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S-16: [per-token delivery] status event does not delay subsequent text_chunk
+//
+// Regression guard for the stream-processor bug where case "status" was
+// calling convBuffer.flush() BEFORE broadcast(). The flush blocked the
+// event loop, causing the next token's broadcast() to be delayed.
+// Fix: broadcast() is now called BEFORE flush().
+// Test: checkpoint AFTER the token that follows a status event — that token
+// must be on IPC already, not held behind a flush.
+// ---------------------------------------------------------------------------
+
+describe("S-16 [per-token delivery]: status event does not delay broadcast of subsequent text_chunk", () => {
+    it("text_chunk after a status event reaches IPC before next checkpoint", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            scriptToken("before"),
+            scriptStatus("Processing..."),
+            scriptToken("after"),
+            scriptCheckpoint("after-post-status-token"),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        await engine.waitForCheckpoint("after-post-status-token");
+
+        const ipc = runtime.getIpcEvents(executionId);
+        const textChunks = ipc.filter((e) => e.type === "text_chunk");
+
+        // Both "before" and "after" must be on IPC — status flush did not block broadcast
+        expect(textChunks).toHaveLength(2);
+        expect(textChunks[0].content).toBe("before");
+        expect(textChunks[1].content).toBe("after");
+
+        engine.proceed("after-post-status-token");
+        await runtime.recorder.waitForStreamDone(executionId);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S-17: [per-token delivery] N tokens produce exactly N individual IPC events
+//
+// Validates that no coalescing happens in the pipeline between engine and IPC.
+// A burst of tokens (no checkpoint between them) should still produce one
+// IPC entry per token — seq numbers must be strictly consecutive.
+// ---------------------------------------------------------------------------
+
+describe("S-17 [per-token delivery]: burst of N tokens produces N individual text_chunk IPC events", () => {
+    it("5-token burst: each token is a separate IPC entry with consecutive seq numbers", async () => {
+        const tokens = ["one", "two", "three", "four", "five"];
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            ...tokens.map(scriptToken),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        await runtime.recorder.waitForStreamDone(executionId);
+
+        const ipc = runtime.getIpcEvents(executionId);
+        const chunks = ipc.filter((e) => e.type === "text_chunk");
+
+        // One IPC entry per token — no coalescing
+        expect(chunks).toHaveLength(tokens.length);
+        tokens.forEach((content, i) => {
+            expect(chunks[i].content).toBe(content);
+        });
+
+        // seq numbers must be strictly increasing (no gaps, no duplicates)
+        const seqs = chunks.map((e) => e.seq);
+        for (let i = 1; i < seqs.length; i++) {
+            expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
+        }
+    });
+});

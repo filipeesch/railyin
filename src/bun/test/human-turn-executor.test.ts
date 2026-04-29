@@ -90,6 +90,7 @@ function makeExecutor(engine: TestEngine) {
   const builder = new CapturingParamsBuilder();
   const streamProcessor = new StubStreamProcessor();
   const executor = new HumanTurnExecutor(
+    db,
     EngineRegistry.fromFixed(engine),
     builder,
     new StubWorkdirResolver(gitDir),

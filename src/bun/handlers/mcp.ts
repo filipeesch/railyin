@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { mapChatSession, mapTask } from "../db/mappers.ts";
 import type { ChatSessionRow, TaskRow } from "../db/row-types.ts";
 import { getDataDir } from "../config/index.ts";
@@ -26,7 +26,7 @@ function normalizeToMcpConfig(parsed: unknown): McpConfig {
   return { servers };
 }
 
-export function mcpHandlers() {
+export function mcpHandlers(db: Database) {
   return {
     "mcp.getStatus": async (_params: Record<string, never>): Promise<McpServerStatus[]> => {
       const registry = getMcpRegistry();
@@ -66,7 +66,6 @@ export function mcpHandlers() {
     },
 
     "mcp.setTaskTools": async (params: { taskId: number; enabledTools: string[] | null }): Promise<Task> => {
-      const db = getDb();
       const value = params.enabledTools === null ? null : JSON.stringify(params.enabledTools);
       db.run("UPDATE tasks SET enabled_mcp_tools = ? WHERE id = ?", [value, params.taskId]);
       const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
@@ -75,7 +74,6 @@ export function mcpHandlers() {
     },
 
     "mcp.setSessionTools": async (params: { sessionId: number; enabledTools: string[] | null }): Promise<ChatSession> => {
-      const db = getDb();
       const value = params.enabledTools === null ? null : JSON.stringify(params.enabledTools);
       db.run("UPDATE chat_sessions SET enabled_mcp_tools = ? WHERE id = ?", [value, params.sessionId]);
       const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
