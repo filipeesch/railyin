@@ -10,6 +10,7 @@ import type { WorkingDirectoryResolver } from "./working-directory-resolver.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
 import type { TaskRow } from "../../db/row-types.ts";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
+import { resolveTaskModel } from "./model-resolver.ts";
 
 export class TransitionExecutor {
   constructor(
@@ -41,7 +42,7 @@ export class TransitionExecutor {
 
     const column = getColumnConfig(config, task.board_id, toState);
 
-    const resolvedModel = column?.model ?? task.model ?? "";
+    const resolvedModel = resolveTaskModel(column?.model, task.model, config.engine);
     if (column?.model != null) {
       db.run("UPDATE tasks SET model = ? WHERE id = ?", [column.model, taskId]);
     } else if (resolvedModel) {

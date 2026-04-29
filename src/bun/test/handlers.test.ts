@@ -123,6 +123,49 @@ describe("tasks.create", () => {
     expect(msgs[0].content).toContain("My task");
     expect(msgs[0].content).toContain("My description");
   });
+
+  // TC-1: engine.model is set → task.model seeded at creation
+  it("seeds task.model from engine.model when engine.model is configured", async () => {
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectKey,
+      title: "Model task",
+      description: "Should inherit engine model",
+    });
+
+    const row = db
+      .query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?")
+      .get(task.id);
+
+    expect(row!.model).toBe("copilot/mock-model");
+  });
+
+  // TC-2: engine.model is null → task.model remains NULL
+  it("leaves task.model as NULL when engine.model is not configured", async () => {
+    // Re-init config without engine model
+    configCleanup();
+    const cfg = setupTestConfig("", gitDir, [], null);
+    configCleanup = cfg.cleanup;
+
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectKey,
+      title: "No model task",
+      description: "Engine has no model configured",
+    });
+
+    const row = db
+      .query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?")
+      .get(task.id);
+
+    expect(row!.model).toBeNull();
+  });
 });
 
 // ─── tasks.transition (worktree failure) ─────────────────────────────────────

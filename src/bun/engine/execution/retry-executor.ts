@@ -9,6 +9,7 @@ import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { WorkingDirectoryResolver } from "./working-directory-resolver.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
 import type { TaskRow } from "../../db/row-types.ts";
+import { resolveTaskModel } from "./model-resolver.ts";
 
 export class RetryExecutor {
   constructor(
@@ -30,6 +31,10 @@ export class RetryExecutor {
     const attempt = (task.retry_count ?? 0) + 1;
 
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
+    const resolvedModel = resolveTaskModel(column?.model, task.model, config.engine);
+    if (resolvedModel && !task.model) {
+      db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedModel, taskId]);
+    }
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
        VALUES (?, ?, ?, ?, ?, 'running', ?)`,

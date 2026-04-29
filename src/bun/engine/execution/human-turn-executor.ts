@@ -11,6 +11,7 @@ import type { WorkingDirectoryResolver } from "./working-directory-resolver.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
 import type { OnTaskUpdated } from "../types.ts";
 import type { TaskRow, ConversationMessageRow } from "../../db/row-types.ts";
+import { resolveTaskModel } from "./model-resolver.ts";
 
 export class HumanTurnExecutor {
   constructor(
@@ -62,6 +63,11 @@ export class HumanTurnExecutor {
         );
 
         const column = getColumnConfig(config, task.board_id, task.workflow_state);
+        const resolvedFallbackModel = resolveTaskModel(column?.model, task.model, config.engine);
+        if (resolvedFallbackModel && !task.model) {
+          db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedFallbackModel, taskId]);
+        }
+        const taskForFallback: TaskRow = resolvedFallbackModel ? { ...task, model: resolvedFallbackModel } : task;
         const execResult = db.run(
           `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
            VALUES (?, ?, ?, ?, 'human-turn', 'running', ?)`,
@@ -76,12 +82,12 @@ export class HumanTurnExecutor {
 
         const signal = this.streamProcessor.createSignal(newExecutionId);
         const execParams = this.paramsBuilder.build(
-          task,
+          taskForFallback,
           conversationId,
           newExecutionId,
           engineContent ?? content,
           buildSystemInstructions(config, task.board_id, task.workflow_state),
-          this.workdirResolver.resolve(task),
+          this.workdirResolver.resolve(taskForFallback),
           signal,
           this.streamProcessor.makePersistCallback(taskId, conversationId, newExecutionId),
           attachments,
@@ -96,6 +102,11 @@ export class HumanTurnExecutor {
     }
 
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
+    const resolvedModel = resolveTaskModel(column?.model, task.model, config.engine);
+    if (resolvedModel && !task.model) {
+      db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedModel, taskId]);
+    }
+    const taskWithModel: TaskRow = resolvedModel ? { ...task, model: resolvedModel } : task;
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -112,14 +123,14 @@ export class HumanTurnExecutor {
     const resolvedPrompt = engineContent ?? content;
     const msgId = appendMessage(taskId, conversationId, "user", "user", content);
 
-    const signal = this.streamProcessor.createSignal(executionId);
+        const signal = this.streamProcessor.createSignal(executionId);
     const execParams = this.paramsBuilder.build(
-      task,
+      taskWithModel,
       conversationId,
       executionId,
       resolvedPrompt,
       buildSystemInstructions(config, task.board_id, task.workflow_state),
-      this.workdirResolver.resolve(task),
+      this.workdirResolver.resolve(taskWithModel),
       signal,
       this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
       attachments,

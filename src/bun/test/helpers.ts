@@ -249,6 +249,8 @@ export function setupTestConfig(
   gitRootPath?: string,
   /** Optional extra workflow template YAML strings (single-template format, NOT array). Each is written as its own file. */
   extraWorkflows: string[] = [],
+  /** Override the engine model. Pass null to omit the `model:` line entirely (simulates unconfigured engine model). Defaults to "copilot/mock-model". */
+  engineModel: string | null = "copilot/mock-model",
 ): { configDir: string; cleanup: () => void } {
   const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
 
@@ -269,7 +271,7 @@ export function setupTestConfig(
       "name: test",
       "engine:",
       "  type: copilot",
-      "  model: copilot/mock-model",
+      ...(engineModel !== null ? [`  model: ${engineModel}`] : []),
       `workspace_path: ${workspacePath}`,
       "projects:",
       "  - key: test-project",
