@@ -10,8 +10,6 @@ artifacts/
 # Bun lockfile (commit bun.lock if you want reproducible installs, otherwise ignore)
 # bun.loc
 
-playwright-report/
-
 # SQLite database
 *.db
 *.db-shm
@@ -53,3 +51,4 @@ knowledge/
 reports/mutation/**/*.html
 reports/mutation/**/*.json
 playwright-report/
+test-results/

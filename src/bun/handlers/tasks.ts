@@ -95,20 +95,41 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
       const convResult = db.run("INSERT INTO conversations (task_id) VALUES (0)");
       const conversationId = convResult.lastInsertRowid as number;
 
-      const taskResult = db.run(
-        `INSERT INTO tasks
-           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position)
-         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
-           COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000)`,
-        [
-          params.boardId,
-          params.projectKey,
-          params.title.trim(),
-          params.description.trim(),
-          conversationId,
-          params.boardId,
-        ],
-      );
+      const engineModel = (() => {
+        const engine = getWorkspaceConfig(workspaceKey).engine;
+        return "model" in engine ? (engine.model || null) : null;
+      })();
+
+      const taskResult = engineModel
+        ? db.run(
+            `INSERT INTO tasks
+               (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position, model)
+             VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
+               COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000, ?)`,
+            [
+              params.boardId,
+              params.projectKey,
+              params.title.trim(),
+              params.description.trim(),
+              conversationId,
+              params.boardId,
+              engineModel,
+            ],
+          )
+        : db.run(
+            `INSERT INTO tasks
+               (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position)
+             VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
+               COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000)`,
+            [
+              params.boardId,
+              params.projectKey,
+              params.title.trim(),
+              params.description.trim(),
+              conversationId,
+              params.boardId,
+            ],
+          );
       const taskId = taskResult.lastInsertRowid as number;
 
       // Fix up conversation → task link

@@ -34,7 +34,7 @@ The system SHALL allow the user to select an AI model from a searchable dropdown
 - **THEN** the task's `model` is set to the column's configured `model` field, or the workspace default if the column has none
 
 ### Requirement: Workflow column can declare a preferred model as a fully-qualified ID
-The system SHALL allow each workflow column to declare an optional `model` field in the workflow YAML. This value SHALL be a fully-qualified model ID for the native engine, and a plain engine-native model name for non-native engines such as Copilot and Claude. Column model takes precedence over the engine default model.
+The system SHALL allow each workflow column to declare an optional `model` field in the workflow YAML. When a task transitions into a column, the effective model SHALL be resolved in priority order: `column.model → task.model → engine.model → ""`. Column model takes precedence over all other sources. When a column has no model configured, `task.model` is preserved; the `engine.model` from workspace config is used as a fallback only when `task.model` is also null.
 
 #### Scenario: Column model applied on entry as fully-qualified ID
 - **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` defined
@@ -44,13 +44,17 @@ The system SHALL allow each workflow column to declare an optional `model` field
 - **WHEN** a task transitions into a column that has `model: "claude-sonnet-4-6"` and the active engine is Claude
 - **THEN** the task's `model` is updated to `"claude-sonnet-4-6"` and passed to the Claude engine
 
-#### Scenario: Task model set to null when column has no model
-- **WHEN** a task transitions into a column with no `model` field
-- **THEN** the task's `model` is set to `null`, and on the next execution attempt the engine moves the task to `waiting_user`
+#### Scenario: Task model preserved when column has no model
+- **WHEN** a task transitions into a column with no `model` field and the task has `model: "gpt-4.1"` set
+- **THEN** the task's `model` remains `"gpt-4.1"` and subsequent executions use that model
 
-#### Scenario: Column model takes precedence over workspace default_model
-- **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` defined and workspace has `default_model: "openrouter/gpt-4o"`
-- **THEN** the task's `model` is set to `"anthropic/claude-opus-4-5"` (column wins)
+#### Scenario: Column default falls back to engine.model when task model is null
+- **WHEN** a task transitions into a column with no `model` field, `task.model` is null, and `engine.model` is set to `"gpt-4.1"` in workspace config
+- **THEN** the task's `model` is set to `"gpt-4.1"` before execution
+
+#### Scenario: Column default falls back to null when neither column nor task nor engine specifies a model
+- **WHEN** a task transitions into a column with no `model` field, `task.model` is null, and `engine.model` is not set in workspace config
+- **THEN** the task's `model` is left unchanged (null) and the engine uses its built-in default
 
 ### Requirement: Available models are fetched dynamically from the provider
 The system SHALL expose a `models.list` RPC that delegates to the active engine's `listModels()` method. For the native engine, this calls `GET {base_url}/v1/models` on each configured provider. For the Copilot engine, this returns models available through the Copilot subscription. For the Claude engine, this returns models available through the Claude Agent SDK in the same provider-grouped shape used by the rest of the product, with a single Claude provider group.
@@ -82,115 +86,65 @@ The system SHALL NOT require a default model to be set in engine config. For the
 - **WHEN** `workspace.yaml` has `engine: { type: claude }` and a task has no explicit model
 - **THEN** the system loads successfully and the Claude engine uses SDK-default model behavior until a task or column model is chosen
 
-#### Scenario: Column default falls back to workspace default_model when column has no model
-- **WHEN** a task transitions into a column with no `model` field and `default_model` is set in workspace config
-- **THEN** the task's model is set to the workspace `default_model` value
+### Requirement: New tasks inherit workspace engine model on creation
+The system SHALL set a newly created task's `model` to the workspace `engine.model` when no explicit model is specified at creation time and `engine.model` is configured. This applies to tasks created via the `tasks.create` RPC handler.
 
-#### Scenario: Column default falls back to null when neither column nor workspace specifies a model
-- **WHEN** a task transitions into a column with no `model` field and `default_model` is not set in workspace config
-- **THEN** the task's model is left unchanged (not overridden)
+#### Scenario: Task created without explicit model gets engine.model as default
+- **WHEN** `tasks.create` is called and workspace has `engine.model: "gpt-4.1"` configured
+- **THEN** the new task's `model` field is set to `"gpt-4.1"`
 
-### Requirement: New tasks inherit engine default_model on creation
-The system SHALL set a newly created task's `model` to the engine's default model when no explicit model is specified at creation time and a default is configured.
-
-#### Scenario: Task created without explicit model gets engine default
-- **WHEN** `create_task` is called without an `args.model` and the engine config has a default model
-- **THEN** the new task's `model` field is set to that default
-
-#### Scenario: Task created with explicit model ignores engine default
-- **WHEN** `create_task` is called with `args.model: "openrouter/gpt-4o"` and the engine has a different default
-- **THEN** the new task's `model` field is set to `"openrouter/gpt-4o"`
-
-#### Scenario: Task created without model and no engine default stays null
-- **WHEN** `create_task` is called without an `args.model` and the engine config has no default model
+#### Scenario: Task created without model and no engine.model stays null
+- **WHEN** `tasks.create` is called and workspace has no `engine.model` configured
 - **THEN** the new task's `model` field is `null`
 
-### Requirement: Context window tokens config is a fallback override only
-The `context_window_tokens` field, if present in a provider config entry, SHALL serve as a manual override for the model's context window size. It is used only when the model's context window cannot be determined from the model list response.
+### Requirement: Human turn and retry executions fall back to engine.model when task model is null
+The system SHALL resolve `engine.model` as a fallback in `HumanTurnExecutor` and `RetryExecutor` when `task.model` is null at execution time. When `engine.model` is used as the fallback, the resolved model SHALL be written back to `task.model` in the database so subsequent executions find it without re-resolving from config.
 
-#### Scenario: API context window takes precedence over config
-- **WHEN** the selected model has a `contextWindow` value from `models.list`
-- **THEN** that value is used for context usage estimation, ignoring `context_window_tokens` from config
+#### Scenario: Human turn uses engine.model when task model is null
+- **WHEN** a user sends a message to a task whose `model` is null and `engine.model` is set to `"claude-sonnet-4-6"`
+- **THEN** the execution uses `"claude-sonnet-4-6"` as the model
+- **AND** `task.model` is updated to `"claude-sonnet-4-6"` in the database
 
-#### Scenario: Config value used when API context window is null
-- **WHEN** the selected model's `contextWindow` is `null` and `context_window_tokens` is set in the provider's config entry
-- **THEN** `context_window_tokens` is used as the effective context window
+#### Scenario: Human turn preserves task model when set
+- **WHEN** a user sends a message to a task whose `model` is `"gpt-4.1"`
+- **THEN** the execution uses `"gpt-4.1"` as the model regardless of `engine.model`
 
-#### Scenario: Default used when both API and config are absent
-- **WHEN** the selected model's `contextWindow` is `null` and no `context_window_tokens` is set
-- **THEN** 128,000 tokens is used as the default context window
+#### Scenario: Retry uses engine.model when task model is null
+- **WHEN** a retry is triggered on a task whose `model` is null and `engine.model` is set to `"gpt-4.1"`
+- **THEN** the retry execution uses `"gpt-4.1"` as the model
+- **AND** `task.model` is updated to `"gpt-4.1"` in the database
 
-### Requirement: Workflow column can declare a preferred model as a fully-qualified ID
-The system SHALL allow each workflow column to declare an optional `model` field in the workflow YAML. This value SHALL be a fully-qualified model ID for the native engine, and a plain engine-native model name for non-native engines such as Copilot and Claude. Column model takes precedence over the engine default model.
+#### Scenario: Engine-lost fallback resolves engine.model when task model is null
+- **WHEN** a `HumanTurnExecutor` execution is started for a task with `model = null`, `engine.resume()` throws (session lost), and `engine.model` is configured
+- **THEN** the fallback fresh execution uses `engine.model` as the model
+- **AND** `task.model` is updated in the database with the resolved value
 
-#### Scenario: Column model applied on entry as fully-qualified ID
-- **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` defined
-- **THEN** the task's `model` is updated to `"anthropic/claude-opus-4-5"` before any execution is started
+### Requirement: Model resolution uses a single canonical utility function
+The system SHALL use a single `resolveTaskModel(columnModel, taskModel, engineConfig)` pure function as the canonical implementation of the model priority chain across all task execution paths. The function SHALL return a `string` (empty string when all sources are null/undefined). The function SHALL use `||` (not `??`) so that empty string values fall through to the next source, treated equivalently to `null` or `undefined`.
 
-#### Scenario: Column model applied on entry (Claude)
-- **WHEN** a task transitions into a column that has `model: "claude-sonnet-4-6"` and the active engine is Claude
-- **THEN** the task's `model` is updated to `"claude-sonnet-4-6"` and passed to the Claude engine
+#### Scenario: resolveTaskModel returns column model when set
+- **WHEN** `columnModel` is `"gpt-4.1"`, `taskModel` is `"claude-sonnet-4-6"`, and `engineConfig.model` is `"other-model"`
+- **THEN** `resolveTaskModel` returns `"gpt-4.1"`
 
-#### Scenario: Task model set to null when column has no model
-- **WHEN** a task transitions into a column with no `model` field
-- **THEN** the task's `model` is set to `null`, and on the next execution attempt the engine moves the task to `waiting_user`
+#### Scenario: resolveTaskModel returns task model when column is null
+- **WHEN** `columnModel` is null, `taskModel` is `"claude-sonnet-4-6"`, and `engineConfig.model` is `"other-model"`
+- **THEN** `resolveTaskModel` returns `"claude-sonnet-4-6"`
 
-#### Scenario: Column model takes precedence over workspace default_model
-- **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` defined and workspace has `default_model: "openrouter/gpt-4o"`
-- **THEN** the task's `model` is set to `"anthropic/claude-opus-4-5"` (column wins)
+#### Scenario: resolveTaskModel returns engine model when column and task are null
+- **WHEN** `columnModel` is null, `taskModel` is null, and `engineConfig.model` is `"gpt-4.1"`
+- **THEN** `resolveTaskModel` returns `"gpt-4.1"`
 
-### Requirement: Available models are fetched dynamically from the provider
-The system SHALL expose a `models.list` RPC that delegates to the active engine's `listModels()` method. For the native engine, this calls `GET {base_url}/v1/models` on each configured provider. For the Copilot engine, this returns models available through the Copilot subscription. For the Claude engine, this returns models available through the Claude Agent SDK in the same provider-grouped shape used by the rest of the product, with a single Claude provider group.
+#### Scenario: resolveTaskModel returns empty string when all sources are null
+- **WHEN** `columnModel` is null, `taskModel` is null, and `engineConfig` has no `model` property
+- **THEN** `resolveTaskModel` returns `""`
 
-#### Scenario: Models returned grouped by provider with enabled flags
-- **WHEN** all configured providers respond with valid model lists
-- **THEN** `models.list` returns `ProviderModelList[]` — one entry per provider — each containing the provider `id`, a `models` array of `{ id: string, contextWindow: number | null, enabled: boolean }`, and no `error` field
+#### Scenario: Empty column model falls through to task model
+- **WHEN** `columnModel` is `""` (empty string) and `taskModel` is `"gpt-4.1"`
+- **THEN** `resolveTaskModel` returns `"gpt-4.1"`
 
-#### Scenario: Failed provider included with error, not omitted
-- **WHEN** one provider's `/v1/models` request fails and another succeeds
-- **THEN** `models.list` returns one entry per provider: the failed provider has `error` set and an empty `models` array; the successful provider has its full model list
-
-#### Scenario: Claude engine returns available models
-- **WHEN** the active engine is Claude and `models.list` is called
-- **THEN** the engine returns models available through the Claude SDK in the shared grouped model format with a single `claude` provider group
-
-### Requirement: Workspace AI model is optional in configuration
-The system SHALL NOT require a default model to be set in engine config. For the native engine, `default_model` under the `engine:` block is optional. For non-native engines such as Copilot and Claude, `engine.model` is optional. When absent, task execution SHALL use the model set on the task itself. If neither is set, the engine uses its own default behavior.
-
-#### Scenario: Workspace starts without default_model set
-- **WHEN** `workspace.yaml` has no `default_model` field
-- **THEN** the system loads without a configuration error
-
-#### Scenario: Task model used when workspace model absent
-- **WHEN** a task has a model set and `default_model` is absent from workspace config
-- **THEN** the task's model is used for AI calls
-
-#### Scenario: Claude engine starts without default model
-- **WHEN** `workspace.yaml` has `engine: { type: claude }` and a task has no explicit model
-- **THEN** the system loads successfully and the Claude engine uses SDK-default model behavior until a task or column model is chosen
-
-#### Scenario: Column default falls back to workspace default_model when column has no model
-- **WHEN** a task transitions into a column with no `model` field and `default_model` is set in workspace config
-- **THEN** the task's model is set to the workspace `default_model` value
-
-#### Scenario: Column default falls back to null when neither column nor workspace specifies a model
-- **WHEN** a task transitions into a column with no `model` field and `default_model` is not set in workspace config
-- **THEN** the task's model is left unchanged (not overridden)
-
-### Requirement: New tasks inherit workspace default_model on creation
-The system SHALL set a newly created task's `model` to the workspace `default_model` when no explicit model is specified at creation time and `default_model` is configured.
-
-#### Scenario: Task created without explicit model gets workspace default
-- **WHEN** `create_task` is called without an `args.model` and workspace has `default_model: "anthropic/claude-sonnet-4-5"`
-- **THEN** the new task's `model` field is set to `"anthropic/claude-sonnet-4-5"`
-
-#### Scenario: Task created with explicit model ignores workspace default
-- **WHEN** `create_task` is called with `args.model: "openrouter/gpt-4o"` and workspace has `default_model: "anthropic/claude-sonnet-4-5"`
-- **THEN** the new task's `model` field is set to `"openrouter/gpt-4o"`
-
-#### Scenario: Task created without model and no workspace default stays null
-- **WHEN** `create_task` is called without an `args.model` and workspace has no `default_model`
-- **THEN** the new task's `model` field is `null`
+#### Scenario: Empty task model falls through to engine model
+- **WHEN** `columnModel` is null, `taskModel` is `""` (empty string), and `engineConfig.model` is `"gpt-4.1"`
+- **THEN** `resolveTaskModel` returns `"gpt-4.1"`
 
 ### Requirement: Context window tokens config is a fallback override only
 The `context_window_tokens` field, if present in a provider config entry, SHALL serve as a manual override for the model's context window size. It is used only when the model's context window cannot be determined from the model list response.

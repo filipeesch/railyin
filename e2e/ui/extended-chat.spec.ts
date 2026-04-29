@@ -211,6 +211,22 @@ test.describe("Q — Model switching", () => {
         await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible({ timeout: 10_000 });
         await expect(page.locator(".msg--assistant")).toHaveCount(1);
     });
+
+    // Q-20: task.model seeded from engine.model → model selector shows engine-seeded model
+    test("Q-20: model selector shows engine-seeded model when task.model was seeded at creation", async ({ page, api, ws, task }) => {
+        // Simulate a task whose model was seeded from engine.model at creation time
+        const engineSeededTask = { ...task, model: "copilot/gpt-4.1" };
+        api.handle("tasks.list", () => [engineSeededTask]);
+        api.handle("models.listEnabled", () => [
+            { id: "copilot/gpt-4.1", displayName: "GPT-4.1", contextWindow: 1_047_576 },
+        ]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, engineSeededTask.id);
+
+        await expect(page.locator(".model-select__value")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".task-detail__model-row")).toContainText("GPT-4.1");
+    });
 });
 
 // ─── Suite R — Context compaction ────────────────────────────────────────────

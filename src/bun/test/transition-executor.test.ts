@@ -218,4 +218,142 @@ columns:
       .get(taskId);
     expect(promptRows?.count).toBe(0);
   });
+
+  // T-3: task has model, column has no model → task.model is used
+  it("uses task.model when column has no model configured", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: no-col-model
+name: NoColModel
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog', model = 'task/custom-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'no-col-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      EngineRegistry.fromFixed(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(builder.lastBuilt?.model).toBe("task/custom-model");
+  });
+
+  // T-4: task has no model, engine.model is configured → engine.model is used as fallback
+  it("falls back to engine.model when task and column have no model", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: fallback-engine
+name: FallbackEngine
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog', model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'fallback-engine' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      EngineRegistry.fromFixed(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+    );
+
+    await executor.execute(taskId, "plan");
+
+    // engine.model is "copilot/mock-model" (set by setupTestConfig default)
+    expect(builder.lastBuilt?.model).toBe("copilot/mock-model");
+  });
+
+  // T-5: column has model → column.model overrides task.model
+  it("prefers column.model over task.model", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: col-model
+name: ColModel
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    model: column/specific-model
+    on_enter_prompt: "do work"
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog', model = 'task/custom-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'col-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      EngineRegistry.fromFixed(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(builder.lastBuilt?.model).toBe("column/specific-model");
+  });
+
+  // T-6: no model anywhere (task=null, column=none, engine.model=null) → empty string
+  it("uses empty string when no model is configured anywhere", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: no-model
+name: NoModel
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+`,
+    ], null);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog', model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'no-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      EngineRegistry.fromFixed(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(builder.lastBuilt?.model).toBe("");
+  });
 });
