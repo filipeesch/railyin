@@ -257,21 +257,36 @@ const engineRegistry = injectedEngine
 // the token event is added to the generator queue. This decouples WS delivery
 // from DB flush timing and restores per-token streaming UX.
 function onRawMessageEnqueued(item: RawMessageItem): void {
-  if (item.raw.engine !== "claude") return;
-  orchestrator?.markClaudeExecution(item.executionId);
-  const evt = (item.raw.payload as any)?.event;
-  if (evt?.type !== "content_block_delta") return;
-  const delta = evt.delta;
   let eventType: StreamEventType | null = null;
   let content: string | null = null;
-  if (delta?.type === "text_delta" && delta.text) {
-    eventType = "text_chunk";
-    content = delta.text as string;
-  } else if (delta?.type === "thinking_delta" && delta.thinking) {
-    eventType = "reasoning_chunk";
-    content = delta.thinking as string;
+
+  if (item.raw.engine === "claude") {
+    const evt = (item.raw.payload as any)?.event;
+    if (evt?.type !== "content_block_delta") return;
+    const delta = evt.delta;
+    if (delta?.type === "text_delta" && delta.text) {
+      eventType = "text_chunk";
+      content = delta.text as string;
+    } else if (delta?.type === "thinking_delta" && delta.thinking) {
+      eventType = "reasoning_chunk";
+      content = delta.thinking as string;
+    }
+  } else if (item.raw.engine === "copilot") {
+    const eventTypeName = item.raw.eventType;
+    if (eventTypeName === "assistant.message_delta") {
+      eventType = "text_chunk";
+      content = (item.raw.payload as any)?.data?.deltaContent as string ?? null;
+    } else if (eventTypeName === "assistant.reasoning_delta") {
+      eventType = "reasoning_chunk";
+      content = (item.raw.payload as any)?.data?.deltaContent as string ?? null;
+    }
   }
+
   if (!eventType || !content) return;
+
+  // Mark this execution so consume() skips the duplicate broadcast in the generator path.
+  orchestrator?.markClaudeExecution(item.executionId);
+
   let enricher = enrichers.get(item.executionId);
   if (!enricher) {
     enricher = new StreamEventEnricher(item.executionId);
