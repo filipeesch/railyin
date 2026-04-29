@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+TBD — provides a generic, reusable write buffer primitive for batching database writes, used to reduce WAL pressure during streaming.
+
+## Requirements
 
 ### Requirement: Generic write buffer primitive
 The system SHALL provide a generic `WriteBuffer<T>` class that buffers items in memory and flushes them in batches via an injected `flushFn`.

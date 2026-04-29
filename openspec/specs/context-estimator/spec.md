@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+TBD — provides a unified service for estimating conversation context token usage, replacing the previous dual-path estimation functions.
+
+## Requirements
 
 ### Requirement: ContextEstimator consolidates both estimation paths
 The system SHALL provide a single `ContextEstimator` service that replaces both `estimateContextUsage` (in `context.ts`) and `estimateConversationContextUsage` (in `context-usage.ts`). It SHALL accept either a `taskId` or `conversationId` as the lookup key.

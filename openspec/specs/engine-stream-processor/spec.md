@@ -1,3 +1,6 @@
+## Purpose
+Manages the lifecycle of AI engine stream consumption, write buffer coordination, and database persistence for executions.
+
 ## Requirements
 
 ### Requirement: StreamProcessor receives Database via constructor injection

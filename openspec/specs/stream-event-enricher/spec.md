@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+TBD — provides a stateful, I/O-free enricher that assigns blockId and seq to stream events, replacing the enrichment responsibility previously held by StreamBatcher.
+
+## Requirements
 
 ### Requirement: StreamEventEnricher assigns blockId and seq
 The system SHALL provide a `StreamEventEnricher` class that is the single source of truth for assigning `blockId` and `seq` to stream events. It SHALL have no I/O and no dependency on `Database`.

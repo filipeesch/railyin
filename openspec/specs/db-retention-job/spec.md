@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+TBD — provides a background job that periodically cleans up old database rows, moving retention logic off the hot write path.
+
+## Requirements
 
 ### Requirement: RetentionJob runs model_raw_messages cleanup periodically
 The system SHALL provide a `RetentionJob` that deletes `model_raw_messages` older than 1 day. It SHALL run once on startup (after migrations) and then on a recurring timer (every 5 minutes). The inline `DELETE` in `_persistRawModelMessage` SHALL be removed.

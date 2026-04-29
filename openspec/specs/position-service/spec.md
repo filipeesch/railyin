@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+TBD — provides a dedicated service for task position mutations, ensuring all position reordering operations are wrapped in database transactions.
+
+## Requirements
 
 ### Requirement: PositionService wraps all task position mutations in transactions
 The system SHALL provide a `PositionService` extracted from `tasks.ts` that wraps `rebalanceColumnPositions` and `reorderColumn` in `db.transaction()`. Individual UPDATE calls within these operations SHALL NOT be autocommit.
