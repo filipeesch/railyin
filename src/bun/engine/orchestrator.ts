@@ -73,10 +73,6 @@ export class Orchestrator implements ExecutionCoordinator {
     rawBuffer.start();
 
     this.streamProcessor = new StreamProcessor(db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage);
-    if (onRawMessageEnqueued) {
-      // Claude broadcasts text_chunk/reasoning_chunk via onEnqueue; skip the generator path to avoid double-send.
-      this.streamProcessor.setBroadcastTextChunks(false);
-    }
     this.paramsBuilder = new ExecutionParamsBuilder();
     this.workdirResolver = new WorkingDirectoryResolver();
 
@@ -129,6 +125,10 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   // ─── Cancellation ──────────────────────────────────────────────────────────
+
+  markClaudeExecution(executionId: number): void {
+    this.streamProcessor.markClaudeExecution(executionId);
+  }
 
   cancel(executionId: number): void {
     this.streamProcessor.abort(executionId);

@@ -258,6 +258,7 @@ const engineRegistry = injectedEngine
 // from DB flush timing and restores per-token streaming UX.
 function onRawMessageEnqueued(item: RawMessageItem): void {
   if (item.raw.engine !== "claude") return;
+  orchestrator?.markClaudeExecution(item.executionId);
   const evt = (item.raw.payload as any)?.event;
   if (evt?.type !== "content_block_delta") return;
   const delta = evt.delta;

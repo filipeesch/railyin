@@ -34,9 +34,9 @@ export class StreamProcessor {
   private readonly rawMessageSeq = new Map<number, number>();
 
   private onStreamEvent?: OnStreamEvent;
-  /** When true, consume() broadcasts text_chunk/reasoning_chunk via onStreamEvent.
-   * Set to false when onRawMessageEnqueued handles broadcast for Claude (avoids double-send). */
-  private broadcastTextChunks = true;
+  /** Execution IDs for which onRawMessageEnqueued is already broadcasting text/reasoning chunks.
+   * consume() skips text_chunk/reasoning_chunk broadcast for these executions to avoid double-send. */
+  private readonly claudeExecutionIds = new Set<number>();
 
   constructor(
     private readonly db: Database,
@@ -51,8 +51,14 @@ export class StreamProcessor {
     this.onStreamEvent = cb;
   }
 
-  setBroadcastTextChunks(v: boolean): void {
-    this.broadcastTextChunks = v;
+  /** Mark an execution as Claude-backed so consume() skips text/reasoning chunk broadcast. */
+  markClaudeExecution(executionId: number): void {
+    this.claudeExecutionIds.add(executionId);
+  }
+
+  /** Remove per-execution Claude marker on cleanup. */
+  private clearClaudeExecution(executionId: number): void {
+    this.claudeExecutionIds.delete(executionId);
   }
 
   /**
@@ -176,7 +182,7 @@ export class StreamProcessor {
             tokenAccum += event.content;
             hadOutput = true;
             this.onToken(taskId, conversationId, executionId, event.content, false);
-            if (this.broadcastTextChunks) {
+            if (!this.claudeExecutionIds.has(executionId)) {
               // For non-Claude engines (mock, Copilot): broadcast text_chunk here.
               // For Claude: onEnqueue fires earlier in the adapter IIFE; skip to avoid double-send.
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, parentBlockId: null, done: false, subagentId: null });
@@ -187,7 +193,7 @@ export class StreamProcessor {
           case "reasoning": {
             reasoningAccum += event.content;
             this.onToken(taskId, conversationId, executionId, event.content, false, true);
-            if (this.broadcastTextChunks) {
+            if (!this.claudeExecutionIds.has(executionId)) {
               // For non-Claude engines: broadcast reasoning_chunk here.
               // For Claude: onEnqueue fires earlier; skip to avoid double-send.
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, parentBlockId: null, done: false, subagentId: null });
@@ -440,6 +446,7 @@ export class StreamProcessor {
     } finally {
       this.abortControllers.delete(executionId);
       this.rawMessageSeq.delete(executionId);
+      this.clearClaudeExecution(executionId);
 
       if (taskId != null) {
         const finalRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
