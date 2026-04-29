@@ -3,7 +3,7 @@
     <!-- Reasoning (live chunk or persisted) -->
     <ReasoningBubble
       v-if="block.type === 'reasoning_chunk' || block.type === 'reasoning'"
-      :content="block.content"
+      :content="(block.type === 'reasoning_chunk' ? displayedContent : block.content)"
       :streaming="!block.done && block.type === 'reasoning_chunk'"
     >
       <div v-if="block.children.length > 0" class="rb__children">
@@ -24,7 +24,7 @@
     >
       <div
         :class="['msg__bubble', 'prose', { streaming: !block.done && block.type === 'text_chunk' }]"
-        v-html="renderMd(block.content)"
+        v-html="renderMd(block.type === 'text_chunk' ? displayedContent : block.content)"
       />
       <div class="msg__meta">
         AI
@@ -108,6 +108,7 @@ import { ref, computed } from "vue";
 import type { FileDiffPayload, Hunk, ToolCallDisplay } from "@shared/rpc-types";
 import type { StreamBlock } from "../stores/conversation";
 import { formatToolSubject, parseToolCallDisplay } from "../utils/toolCallDisplay";
+import { useTypewriter } from "../composables/useTypewriter";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import FileDiff from "./FileDiff.vue";
 import ReadView from "./ReadView.vue";
@@ -124,6 +125,14 @@ const block = computed(() => {
   const b = props.blocks.get(props.blockId);
   return b ?? undefined;
 });
+
+// Typewriter animation for live streaming blocks only.
+// isLive is captured at component mount: blocks already done at mount (history) skip animation.
+const isLiveBlock = computed(() => block.value != null && !block.value.done);
+const blockContent = computed(() => block.value?.content ?? "");
+const blockDone = computed(() => block.value?.done ?? true);
+const isLiveAtMount = !!(props.blocks.get(props.blockId) && !props.blocks.get(props.blockId)!.done);
+const { displayed: displayedContent } = useTypewriter(blockContent, blockDone, isLiveAtMount);
 
 const fileDiffPayload = computed<FileDiffPayload | null>(() => {
   const b = block.value;
