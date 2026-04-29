@@ -255,6 +255,25 @@ watch(
   () => { if (pendingScrollBottom.value) scrollToLatest(); },
 );
 
+// While there are live streaming blocks, run a requestAnimationFrame loop to
+// keep the scroll position at the bottom as the typewriter animation grows the
+// DOM height. The loop stops automatically when streaming ends.
+{
+  let rafId: number | null = null;
+
+  function rafScrollLoop() {
+    if (!hasLiveContent.value) { rafId = null; return; }
+    if (autoScroll.value) scrollToLatest();
+    rafId = requestAnimationFrame(rafScrollLoop);
+  }
+
+  watch(hasLiveContent, (live) => {
+    if (live && rafId === null) rafId = requestAnimationFrame(rafScrollLoop);
+  });
+
+  onUnmounted(() => { if (rafId !== null) cancelAnimationFrame(rafId); });
+}
+
 watch(
   [
     // Track the last message's ID rather than array length so that prepending

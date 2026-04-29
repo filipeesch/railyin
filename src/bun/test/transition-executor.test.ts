@@ -242,6 +242,7 @@ columns:
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
+      db,
       EngineRegistry.fromFixed(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
@@ -276,6 +277,7 @@ columns:
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
+      db,
       EngineRegistry.fromFixed(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
@@ -312,6 +314,7 @@ columns:
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
+      db,
       EngineRegistry.fromFixed(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
@@ -346,6 +349,7 @@ columns:
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
+      db,
       EngineRegistry.fromFixed(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),

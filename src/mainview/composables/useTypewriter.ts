@@ -23,7 +23,9 @@ export function useTypewriter(
   }
 
   const displayed = ref(target.value);
-  let pos = displayed.value.length;
+  // pos is a word-array index. Initialise past end so pre-existing content is
+  // shown immediately (no animation for content already present at mount).
+  let pos = target.value ? target.value.split(" ").length : 0;
   let intervalId: ReturnType<typeof setInterval> | null = null;
 
   function tick() {
@@ -51,12 +53,16 @@ export function useTypewriter(
     if (done) flush();
   });
 
-  // Keep pos in sync when target shrinks (shouldn't happen, but be safe)
+  // Keep pos in sync when target changes.
+  // - If pos >= wordCount: we are caught up to the word boundary — update
+  //   displayed immediately (handles space-less token concatenation).
+  // - If pos > wordCount: content shrank (shouldn't happen), clamp pos.
+  // - If pos < wordCount: new words arrived, the ticker will animate them.
   watch(target, (val) => {
     const wordCount = val.split(" ").length;
-    if (pos > wordCount) {
-      pos = wordCount;
+    if (pos >= wordCount) {
       displayed.value = val;
+      pos = wordCount;
     }
   });
 
