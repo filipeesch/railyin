@@ -51,12 +51,10 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         .query<TaskRow, [number]>(
           `SELECT t.*,
                   gc.worktree_status, gc.branch_name, gc.worktree_path,
-                  COUNT(e.id) AS execution_count
+                  (SELECT COUNT(*) FROM executions WHERE task_id = t.id) AS execution_count
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
-           LEFT JOIN executions e ON e.task_id = t.id
            WHERE t.board_id = ?
-           GROUP BY t.id
            ORDER BY t.position ASC`,
         )
         .all(params.boardId)

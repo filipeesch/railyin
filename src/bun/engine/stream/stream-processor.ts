@@ -18,6 +18,18 @@ import type { RawMessageItem } from "./raw-message-buffer.ts";
 import type { TaskRow } from "../../db/row-types.ts";
 
 /**
+ * Per-token delta event types that are broadcast immediately but not persisted to
+ * model_raw_messages. Skipping persistence for these reduces write load by ~90%
+ * during active streaming without losing any information (assembled content is
+ * stored via stream_events and conversation_messages).
+ */
+const HIGH_FREQ_RAW_EVENT_TYPES = new Set([
+  "assistant.message_delta",   // Copilot text token
+  "assistant.reasoning_delta", // Copilot reasoning token
+  "content_block_delta",       // Claude text/tool-input token
+]);
+
+/**
  * Owns the AbortController lifecycle and stream event processing for non-native engines.
  *
  * Responsibilities:
@@ -84,6 +96,10 @@ export class StreamProcessor {
   /**
    * Returns a bound callback for persisting raw model messages for the given execution.
    * Used by ExecutionParamsBuilder to populate onRawModelMessage.
+   *
+   * High-frequency per-token events (text/reasoning deltas) are broadcast via
+   * signalOnly() so the WS push fires immediately, but they are NOT written to
+   * model_raw_messages — this reduces write load by ~90% during active streaming.
    */
   makePersistCallback(
     taskId: number | null,
@@ -93,7 +109,13 @@ export class StreamProcessor {
     return (raw) => {
       const seq = (this.rawMessageSeq.get(executionId) ?? 0) + 1;
       this.rawMessageSeq.set(executionId, seq);
-      this.rawBuffer.enqueue({ taskId, conversationId, executionId, seq, raw });
+      const item = { taskId, conversationId, executionId, seq, raw };
+      if (HIGH_FREQ_RAW_EVENT_TYPES.has(raw.eventType)) {
+        // Broadcast immediately but skip DB persistence for token-level deltas.
+        this.rawBuffer.signalOnly(item);
+      } else {
+        this.rawBuffer.enqueue(item);
+      }
     };
   }
 

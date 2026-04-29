@@ -39,6 +39,15 @@ export class WriteBuffer<T> {
     }
   }
 
+  /**
+   * Fires the onEnqueue side-effect (e.g. WS broadcast) without adding the
+   * item to the pending batch. Use when an item must be broadcast immediately
+   * but must not be persisted to the database.
+   */
+  signalOnly(item: T): void {
+    this.onEnqueue?.(item);
+  }
+
   flush(): T[] {
     if (this.pending.length === 0) return [];
     const items = this.pending.splice(0);
