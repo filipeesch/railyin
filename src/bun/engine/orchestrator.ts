@@ -35,6 +35,7 @@ import { RetryExecutor } from "./execution/retry-executor.ts";
 import { CodeReviewExecutor } from "./execution/code-review-executor.ts";
 import { ChatExecutor } from "./execution/chat-executor.ts";
 import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
+import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -61,16 +62,21 @@ export class Orchestrator implements ExecutionCoordinator {
     onError: OnError,
     onTaskUpdated: OnTaskUpdated,
     onNewMessage: OnNewMessage,
+    onRawMessageEnqueued?: (item: RawMessageItem) => void,
   ) {
     this.db = db;
     this.registry = registry;
     this.onTaskUpdated = onTaskUpdated;
     this.onNewMessage = onNewMessage;
 
-    const rawBuffer = createRawMessageBuffer(db);
+    const rawBuffer = createRawMessageBuffer(db, { onEnqueue: onRawMessageEnqueued });
     rawBuffer.start();
 
     this.streamProcessor = new StreamProcessor(db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage);
+    if (onRawMessageEnqueued) {
+      // Claude broadcasts text_chunk/reasoning_chunk via onEnqueue; skip the generator path to avoid double-send.
+      this.streamProcessor.setBroadcastTextChunks(false);
+    }
     this.paramsBuilder = new ExecutionParamsBuilder();
     this.workdirResolver = new WorkingDirectoryResolver();
 

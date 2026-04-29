@@ -164,6 +164,50 @@ index.ts: const db = getDb()
 2. Deploy updated Bun process — in-process change, no server restart required beyond normal redeploy
 3. Rollback: revert commit; the old `getDb()` singleton is unchanged, migration indices are additive and harmless if left
 
+---
+
+### D9: Broadcast-first via `WriteBuffer.onEnqueue` — text_chunk and reasoning_chunk hot path
+
+**Problem (post-implementation discovery)**: After implementing `WriteBuffer` with async flush, token delivery remained bursty. Root cause: the adapter IIFE fills the generator queue with all tokens from a single TCP packet instantly (array push, ~1μs each). The generator's inner `while (queue.length > 0)` drains them all in one tight loop before the event loop can flush any WS frames. A `setImmediate` hack between tokens in `consume()` was attempted and failed because `setImmediate` fires in the "check" phase before I/O — uWS still coalesces frames buffered in the same event-loop turn.
+
+**Decision**: Add `onEnqueue?: (item: T) => void` to `WriteBuffer<T>`. The callback fires **synchronously, before `pending.push()`** in `enqueue()`. For `rawBuffer`, this callback detects text_delta / thinking_delta raw messages, enriches them (seq/blockId) via the per-execution `StreamEventEnricher`, and calls `broadcast()` immediately — in the IIFE's execution context, before any generator queue involvement.
+
+`consume()` no longer calls `onStreamEvent` for `text_chunk` or `reasoning_chunk` events (they are already broadcast). The `setImmediate` hack in `consume()` case "token" is removed. The `setImmediate` in `_loop()` is also removed — the broadcast is fully decoupled from DB flush by construction.
+
+**Architecture after D9:**
+```
+Claude SDK message arrives (I/O callback):
+  IIFE:
+    onRawMessage() → makePersistCallback() →
+      rawBuffer.enqueue():
+        ┌─ onEnqueue callback (synchronous) ─────────────────────┐
+        │  if text_delta:  enrich("text_chunk") → broadcast()    │  ← immediate WS send
+        │  if thinking_delta: enrich("reasoning_chunk") → broadcast()│
+        └────────────────────────────────────────────────────────┘
+        pending.push(item)    ← DB write deferred to _loop() flush
+
+    translateClaudeMessage() → emit(token/reasoning event)
+
+Generator / consume():
+  case "token":    → onToken() only — no onStreamEvent (already broadcast above)
+  case "reasoning": → onToken() only — no onStreamEvent (already broadcast above)
+  case "tool_start": → onStreamEvent("tool_call") → enrich + broadcast + DB
+  case "done":       → onStreamEvent("done")       → enrich + broadcast + DB
+  ... (all non-token events unchanged)
+```
+
+**Seq/blockId consistency**: The `StreamEventEnricher` is called in the IIFE context for text/reasoning chunks, and in `consume()` for all other event types. Since raw messages arrive (and fire `onEnqueue`) BEFORE their corresponding EngineEvents are emitted to the generator queue, the enricher sees events in the correct arrival order. Tool events (tool_call, tool_result) and done events continue through `onStreamEvent` with seq numbers that follow the token chunks.
+
+**`onEnqueue` wiring**: `index.ts` creates the callback (which closes over `enrichers` map and `broadcast()`), passes it to `Orchestrator` constructor as `onRawMessageEnqueued`, which forwards it to `createRawMessageBuffer`. Engine-specific format detection (`eventType === "stream_event"`, `event.delta.type === "text_delta"`) is isolated in this callback. Copilot does not use `onRawMessage` and is unaffected.
+
+**`RawMessageItem`**: Gains a `conversationId` field so the broadcast callback can produce a complete `StreamEvent` without additional DB lookups.
+
+**Prepared statement**: `createRawMessageBuffer` now prepares the INSERT statement once at construction time and reuses it across flushes, avoiding per-flush statement compilation overhead.
+
+**Alternative considered**: Inserting a `setTimeout(0)` or `setImmediate` between generator yields. Rejected — does not solve the uWS frame coalescing issue and introduces non-deterministic test behavior.
+
+---
+
 ## Open Questions
 
 - Should `WriteBuffer` expose a `size()` method for observability/metrics? (Nice to have, not required)

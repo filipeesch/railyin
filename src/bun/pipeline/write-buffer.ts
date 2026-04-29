@@ -7,6 +7,10 @@ export interface WriteBufferOptions<T> {
   intervalMs?: number;
   flushFn: (items: T[]) => void;
   waitFn?: WaitFn;
+  /** Fires synchronously on each enqueue, before the item is added to the
+   *  pending batch. Use this for side-effects (e.g. WS broadcast) that must
+   *  happen immediately and must not wait for the batch flush. */
+  onEnqueue?: (item: T) => void;
 }
 
 export class WriteBuffer<T> {
@@ -16,6 +20,7 @@ export class WriteBuffer<T> {
   private readonly intervalMs: number;
   private readonly flushFn: (items: T[]) => void;
   private readonly waitFn: WaitFn;
+  private readonly onEnqueue?: (item: T) => void;
   private tickResolve: (() => void) | null = null;
 
   constructor(opts: WriteBufferOptions<T>) {
@@ -23,14 +28,12 @@ export class WriteBuffer<T> {
     this.intervalMs = opts.intervalMs ?? 500;
     this.flushFn = opts.flushFn;
     this.waitFn = opts.waitFn ?? defaultWaitFn;
+    this.onEnqueue = opts.onEnqueue;
   }
 
   enqueue(item: T): void {
+    this.onEnqueue?.(item);
     this.pending.push(item);
-    // Wake the loop to flush soon — do NOT flush synchronously here.
-    // A synchronous flush would block the event loop in the caller's context
-    // (e.g., the adapter IIFE), preventing WS broadcasts from being sent
-    // until the SQLite transaction completes, causing token delivery bursts.
     if (this.pending.length >= this.maxBatch) {
       this._tick();
     }
@@ -75,10 +78,6 @@ export class WriteBuffer<T> {
         });
       });
       if (this.running) {
-        // Yield to the macrotask queue before flushing so that any pending
-        // WS broadcasts (microtask continuations from the stream consumer)
-        // complete before the synchronous SQLite write blocks the event loop.
-        await new Promise<void>((r) => setImmediate(r));
         this.flush();
       }
     }

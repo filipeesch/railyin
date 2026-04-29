@@ -34,6 +34,9 @@ export class StreamProcessor {
   private readonly rawMessageSeq = new Map<number, number>();
 
   private onStreamEvent?: OnStreamEvent;
+  /** When true, consume() broadcasts text_chunk/reasoning_chunk via onStreamEvent.
+   * Set to false when onRawMessageEnqueued handles broadcast for Claude (avoids double-send). */
+  private broadcastTextChunks = true;
 
   constructor(
     private readonly db: Database,
@@ -46,6 +49,10 @@ export class StreamProcessor {
 
   setOnStreamEvent(cb: OnStreamEvent): void {
     this.onStreamEvent = cb;
+  }
+
+  setBroadcastTextChunks(v: boolean): void {
+    this.broadcastTextChunks = v;
   }
 
   /**
@@ -80,7 +87,7 @@ export class StreamProcessor {
     return (raw) => {
       const seq = (this.rawMessageSeq.get(executionId) ?? 0) + 1;
       this.rawMessageSeq.set(executionId, seq);
-      this.rawBuffer.enqueue({ taskId, executionId, seq, raw });
+      this.rawBuffer.enqueue({ taskId, conversationId, executionId, seq, raw });
     };
   }
 
@@ -169,19 +176,22 @@ export class StreamProcessor {
             tokenAccum += event.content;
             hadOutput = true;
             this.onToken(taskId, conversationId, executionId, event.content, false);
-            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
-            // Yield to the event loop so uWS flushes the WS frame for this token
-            // before the next token is processed. Without this, multiple tokens from
-            // a single TCP packet drain in the same microtask batch and uWS coalesces
-            // them into one frame, making the UI receive tokens in bursts.
-            await new Promise<void>((r) => setImmediate(r));
+            if (this.broadcastTextChunks) {
+              // For non-Claude engines (mock, Copilot): broadcast text_chunk here.
+              // For Claude: onEnqueue fires earlier in the adapter IIFE; skip to avoid double-send.
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, parentBlockId: null, done: false, subagentId: null });
+            }
             break;
           }
 
           case "reasoning": {
             reasoningAccum += event.content;
             this.onToken(taskId, conversationId, executionId, event.content, false, true);
-            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
+            if (this.broadcastTextChunks) {
+              // For non-Claude engines: broadcast reasoning_chunk here.
+              // For Claude: onEnqueue fires earlier; skip to avoid double-send.
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, parentBlockId: null, done: false, subagentId: null });
+            }
             break;
           }
 

@@ -51,14 +51,15 @@ function writeTestConfig(runtimeDir: string) {
 
     writeFileSync(join(workspaceDir, "workspace.test.yaml"), `
 name: Test Workspace
+workspace_path: ${runtimeDir}
 engine:
   type: copilot
   model: copilot/mock-model
 projects:
   - key: test-ws
     name: Test Project
-    project_path: ${projectDir}
-    git_root_path: ${projectDir}
+    project_path: project
+    git_root_path: project
     default_branch: main
 worktree_base_path: ${join(workspaceDir, "worktrees")}
 enableThinking: false

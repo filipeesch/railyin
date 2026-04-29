@@ -5,6 +5,7 @@ import { getWorkspaceRegistry, loadConfig, getDataDir } from "./config/index.ts"
 import { StreamEventEnricher } from "./pipeline/stream-event-enricher.ts";
 import { WriteBuffer } from "./pipeline/write-buffer.ts";
 import { appendStreamEventBatch, type PersistedStreamEvent } from "./db/stream-events.ts";
+import type { RawMessageItem } from "./engine/stream/raw-message-buffer.ts";
 import * as path from "path";
 import type { ServerWebSocket } from "bun";
 import { getPtySession, killAllPtySessions } from "./launch/pty.ts";
@@ -251,8 +252,51 @@ const engineRegistry = injectedEngine
   ? EngineRegistry.fromFixed(injectedEngine)
   : new EngineRegistry((key) => resolveEngine(getWorkspaceConfig(key), notifyTaskUpdated, notifyNewMessage));
 
+// Broadcast text_chunk / reasoning_chunk immediately when enqueued into the raw
+// message buffer — fires synchronously in the IIFE's execution context, before
+// the token event is added to the generator queue. This decouples WS delivery
+// from DB flush timing and restores per-token streaming UX.
+function onRawMessageEnqueued(item: RawMessageItem): void {
+  if (item.raw.engine !== "claude") return;
+  const evt = (item.raw.payload as any)?.event;
+  if (evt?.type !== "content_block_delta") return;
+  const delta = evt.delta;
+  let eventType: StreamEventType | null = null;
+  let content: string | null = null;
+  if (delta?.type === "text_delta" && delta.text) {
+    eventType = "text_chunk";
+    content = delta.text as string;
+  } else if (delta?.type === "thinking_delta" && delta.thinking) {
+    eventType = "reasoning_chunk";
+    content = delta.thinking as string;
+  }
+  if (!eventType || !content) return;
+  let enricher = enrichers.get(item.executionId);
+  if (!enricher) {
+    enricher = new StreamEventEnricher(item.executionId);
+    enrichers.set(item.executionId, enricher);
+  }
+  const { seq, blockId } = enricher.enrich(eventType);
+  broadcast({
+    type: "stream.event",
+    payload: {
+      taskId: item.taskId,
+      conversationId: item.conversationId,
+      executionId: item.executionId,
+      seq,
+      blockId,
+      type: eventType,
+      content,
+      metadata: null,
+      parentBlockId: null,
+      subagentId: null,
+      done: false,
+    },
+  });
+}
+
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, onError, notifyTaskUpdated, notifyNewMessage)
+  ? new Orchestrator(db, engineRegistry, onError, notifyTaskUpdated, notifyNewMessage, onRawMessageEnqueued)
   : null;
 
 if (orchestrator) {

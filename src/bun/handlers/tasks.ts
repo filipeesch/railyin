@@ -20,6 +20,13 @@ import { resolveContextWindow } from "../context-usage.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { PositionService } from "./position-service.ts";
 
+// ─── Helper: assert orchestrator is initialised ──────────────────────────────
+
+function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinator {
+  if (!o) throw new Error("Engine not initialized — check workspace config");
+  return o;
+}
+
 // ─── Helper: fetch a single task with git context + execution count ───────────
 
 function fetchTaskWithDetail(db: Database, taskId: number): Task | null {
@@ -239,8 +246,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         }
       }
 
-      if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-      return orchestrator.executeTransition(params.taskId, params.toState);
+      return requireOrchestrator(orchestrator).executeTransition(params.taskId, params.toState);
     },
 
     "tasks.sendMessage": async (params: {
@@ -255,8 +261,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         parsed = JSON.parse(params.content) as typeof parsed;
       } catch { /* not JSON — treat as plain text */ }
       if (parsed?._type === "code_review") {
-        if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-        return orchestrator.executeCodeReview(params.taskId, parsed.manualEdits);
+        return requireOrchestrator(orchestrator).executeCodeReview(params.taskId, parsed.manualEdits);
       }
 
       const taskWorkspaceKey = getTaskWorkspaceKey(params.taskId);
@@ -268,14 +273,12 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
       if (warning) {
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
-      if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-
       const { extractChips } = await import("../../mainview/utils/chat-chips.ts");
       const promptContent = params.engineContent ?? extractChips(params.content).humanText;
       const engine = getWorkspaceConfig(taskWorkspaceKey).engine.type;
       const prepared = await prepareMessageForEngine(engine, promptContent, params.attachments);
 
-      return orchestrator.executeHumanTurn(params.taskId, params.content, prepared.attachments, prepared.content);
+      return requireOrchestrator(orchestrator).executeHumanTurn(params.taskId, params.content, prepared.attachments, prepared.content);
     },
 
     "tasks.retry": async (params: {
@@ -324,8 +327,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         }
       }
 
-      if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
-      return orchestrator.executeRetry(params.taskId);
+      return requireOrchestrator(orchestrator).executeRetry(params.taskId);
     },
 
     // ─── models.list ─────────────────────────────────────────────────────────
@@ -333,7 +335,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
 
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
 
-      if (!orchestrator) throw new Error("Engine not initialized — check workspace config");
+      const coord = requireOrchestrator(orchestrator);
 
       const enabledSet = new Set(
         db
@@ -345,7 +347,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
       );
 
       try {
-        const engineModels = await orchestrator.listModels(workspaceKey);
+        const engineModels = await coord.listModels(workspaceKey);
         // Group models by provider (first part of the qualified ID before slash)
         const byProvider = new Map<string, typeof engineModels>();
         for (const model of engineModels) {
@@ -462,8 +464,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
 
     // ─── tasks.compact ───────────────────────────────────────────────────────
     "tasks.compact": async (params: { taskId: number }): Promise<void> => {
-      if (!orchestrator) throw new Error("Orchestrator not available");
-      await orchestrator.compactTask(params.taskId);
+      await requireOrchestrator(orchestrator).compactTask(params.taskId);
     },
 
     // ─── tasks.cancel ────────────────────────────────────────────────────────

@@ -9,8 +9,10 @@ import { conversationHandlers } from "../handlers/conversations.ts";
 import { chatSessionHandlers } from "../handlers/chat-sessions.ts";
 import { mcpHandlers } from "../handlers/mcp.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
+import { mapTask } from "../db/mappers.ts";
 import type { Database } from "bun:sqlite";
 import type { Attachment, Task } from "../../shared/rpc-types.ts";
+import type { TaskRow } from "../db/row-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 
 let db: Database;
@@ -48,6 +50,26 @@ function makeHandlers() {
   );
 
   return { handlers, updates };
+}
+
+/** Mock coordinator that persists the transition in the DB and returns the updated task. */
+function makeDbOrchestrator(): ExecutionCoordinator {
+  return {
+    executeTransition: async (taskId, toState) => {
+      db.run("UPDATE tasks SET workflow_state = ? WHERE id = ?", [toState, taskId]);
+      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+      return { task: mapTask(row), executionId: null };
+    },
+    executeHumanTurn: async () => { throw new Error("not implemented"); },
+    executeRetry: async () => { throw new Error("not implemented"); },
+    executeCodeReview: async () => { throw new Error("not implemented"); },
+    respondShellApproval: async () => { throw new Error("not implemented"); },
+    cancel: () => {},
+    listModels: async () => [],
+    compactTask: async () => {},
+    compactConversation: async () => {},
+    listCommands: async () => [],
+  };
 }
 
 // ─── tasks.create ─────────────────────────────────────────────────────────────
@@ -111,7 +133,7 @@ describe("tasks.transition / worktree failure", () => {
     // Create board and task with a project that has a bad git root path.
     // After the projects table was removed, we seed task_git_context directly
     // with the invalid path to simulate a task whose worktree setup will fail.
-    const projectKey = "test-project";
+    const projectKey = "broken-project"; // not in workspace config — prevents backfill from overwriting the invalid path
     db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'b', 'delivery')");
     const boardId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run("INSERT INTO conversations (task_id) VALUES (0)");
@@ -154,7 +176,7 @@ describe("tasks.transition / git context backfill", () => {
     const { projectKey, boardId, taskId, conversationId } = seedProjectAndTask(db, gitDir);
     // No task_git_context row exists yet
 
-    const { handlers } = makeHandlers();
+    const handlers = taskHandlers(db, makeDbOrchestrator(), () => {}, () => {});
 
     // Transition — should backfill then create worktree
     await handlers["tasks.transition"]({ taskId, toState: "plan" });

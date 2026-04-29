@@ -601,7 +601,7 @@ export type RailynAPI = {
 
   // Conversations
   "conversations.getMessages": {
-    params: { conversationId: number; beforeMessageId?: number; limit?: number };
+    params: { conversationId?: number; taskId?: number; beforeMessageId?: number; limit?: number };
     response: { messages: ConversationMessage[]; hasMore: boolean };
   };
   "conversations.getStreamEvents": {

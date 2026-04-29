@@ -257,14 +257,22 @@ watch(
 
 watch(
   [
-    () => props.messages.length,
+    // Track the last message's ID rather than array length so that prepending
+    // older messages (loadOlderMessages) does not trigger a scroll-to-bottom.
+    // Prepend leaves at(-1)?.id unchanged; append/refresh changes it.
+    () => props.messages.at(-1)?.id,
     () => props.executionState,
     () => props.streamState?.roots.length,
   ],
-  async ([newMsgLen], [oldMsgLen]) => {
+  async ([newLastId], [oldLastId]) => {
     await nextTick();
-    if (!autoScroll.value) return;
-    scrollToLatest(newMsgLen !== oldMsgLen ? "smooth" : "auto");
+    // Re-read scroll position from DOM instead of the stale autoScroll ref to
+    // avoid a race where scroll restoration (post-flush) sets scrollTop near
+    // the bottom after this callback was already suspended at nextTick.
+    if (!scrollEl.value) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
+    if (scrollHeight - scrollTop - clientHeight >= SCROLL_THRESHOLD) return;
+    scrollToLatest(newLastId !== oldLastId ? "smooth" : "auto");
   },
 );
 
@@ -319,25 +327,31 @@ watch(
 // ─── Scroll restoration on older-message prepend ─────────────────────────────
 
 let savedScrollHeight = 0;
+let savedScrollTop = 0;
 
 watch(
   () => props.messages[0]?.id,
   (newId, oldId) => {
     if (oldId != null && newId != null && newId < oldId) {
       savedScrollHeight = scrollEl.value?.scrollHeight ?? 0;
+      savedScrollTop = scrollEl.value?.scrollTop ?? 0;
     }
   },
   { flush: "pre" },
 );
 
+// Apply scroll restoration synchronously in the post-flush tick so it always
+// completes before any external scrollTop assignment (e.g. Playwright CDP eval)
+// can arrive. Using absolute assignment (savedScrollTop + delta) rather than
+// += avoids clobbering a concurrent external scrollTop=0 with a stale delta.
 watch(
   () => props.messages[0]?.id,
-  async (newId, oldId) => {
+  (newId, oldId) => {
     if (oldId != null && newId != null && newId < oldId && savedScrollHeight > 0 && scrollEl.value) {
-      await nextTick();
       const delta = scrollEl.value.scrollHeight - savedScrollHeight;
-      scrollEl.value.scrollTop += delta;
+      scrollEl.value.scrollTop = savedScrollTop + delta;
       savedScrollHeight = 0;
+      savedScrollTop = 0;
     }
   },
   { flush: "post" },
