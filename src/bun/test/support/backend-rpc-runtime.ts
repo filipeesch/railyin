@@ -5,6 +5,11 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import type { ConversationMessage, StreamEvent, Task } from "../../../shared/rpc-types.ts";
 import { taskHandlers } from "../../handlers/tasks.ts";
+import { taskGitHandlers } from "../../handlers/task-git.ts";
+import { codeReviewHandlers } from "../../handlers/code-review.ts";
+import { todoHandlers } from "../../handlers/todos.ts";
+import { modelHandlers } from "../../handlers/models.ts";
+import { engineHandlers } from "../../handlers/engine.ts";
 import { Orchestrator } from "../../engine/orchestrator.ts";
 import { EngineRegistry } from "../../engine/engine-registry.ts";
 import type { ExecutionEngine } from "../../engine/types.ts";
@@ -14,7 +19,12 @@ import { appendStreamEventBatch, type PersistedStreamEvent } from "../../db/stre
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { CallbackRecorder } from "./callback-recorder.ts";
 
-type TaskHandlersMap = ReturnType<typeof taskHandlers>;
+type AllHandlersMap = ReturnType<typeof taskHandlers> &
+    ReturnType<typeof taskGitHandlers> &
+    ReturnType<typeof codeReviewHandlers> &
+    ReturnType<typeof todoHandlers> &
+    ReturnType<typeof modelHandlers> &
+    ReturnType<typeof engineHandlers>;
 
 interface EngineFactoryCallbacks {
     onTaskUpdated: (task: Task) => void;
@@ -23,7 +33,7 @@ interface EngineFactoryCallbacks {
 
 export interface BackendRpcRuntime {
     db: Database;
-    handlers: TaskHandlersMap;
+    handlers: AllHandlersMap;
     recorder: CallbackRecorder;
     gitDir: string;
     cleanup: () => void;
@@ -122,7 +132,14 @@ export function createBackendRpcRuntime(options: {
         }
     });
 
-    const handlers = taskHandlers(db, coordinator, recorder.recordTaskUpdate, recorder.recordNewMessage);
+    const handlers = {
+        ...taskHandlers(db, coordinator, recorder.recordTaskUpdate),
+        ...taskGitHandlers(db, recorder.recordTaskUpdate),
+        ...codeReviewHandlers(db),
+        ...todoHandlers(db),
+        ...modelHandlers(db, coordinator),
+        ...engineHandlers(coordinator),
+    } as AllHandlersMap;
 
     return {
         db,

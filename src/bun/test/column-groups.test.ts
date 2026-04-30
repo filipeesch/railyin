@@ -7,6 +7,7 @@ import { initDb, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 import type { CommonToolContext } from "../engine/types.ts";
+import { TodoRepository } from "../db/todos.ts";
 import type { Database } from "bun:sqlite";
 
 let db: Database;
@@ -32,7 +33,7 @@ afterEach(() => {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeHandlers() {
-  return taskHandlers(db, null, () => {}, () => {});
+  return taskHandlers(db, null, () => {});
 }
 
 const EXTRA_WORKFLOW_WITH_LIMIT = `id: delivery-lim
@@ -244,6 +245,7 @@ const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
   onHumanTurn: noop,
   onCancel: noop,
   onTaskUpdated: noop,
+  todoRepo: new TodoRepository(db),
 });
 
 describe("card limit enforcement in move_task", () => {

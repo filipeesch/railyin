@@ -1,6 +1,7 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
+import type { TodoRepository } from "../db/todos.ts";
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
 
@@ -194,6 +195,7 @@ export interface CommonToolContext {
   onHumanTurn: (taskId: number, message: string) => void;
   onCancel: (executionId: number) => void;
   onTaskUpdated: (task: Task) => void;
+  todoRepo: TodoRepository;
   lspManager?: LSPServerManager;
   worktreePath?: string;
 }

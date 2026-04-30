@@ -115,6 +115,8 @@ export function initDb(): Database {
       file_path     TEXT    NOT NULL,
       line_start    INTEGER NOT NULL,
       line_end      INTEGER NOT NULL,
+      col_start     INTEGER NOT NULL DEFAULT 0,
+      col_end       INTEGER NOT NULL DEFAULT 0,
       line_text     TEXT    NOT NULL,
       context_lines TEXT,
       comment       TEXT    NOT NULL,
@@ -163,6 +165,11 @@ export function initDb(): Database {
     );
     CREATE INDEX IF NOT EXISTS idx_stream_events_conversation ON stream_events (conversation_id, seq);
     CREATE INDEX IF NOT EXISTS idx_stream_events_execution ON stream_events (execution_id, seq);
+    CREATE TABLE IF NOT EXISTS task_execution_checkpoints (
+      execution_id INTEGER PRIMARY KEY REFERENCES executions(id),
+      stash_ref    TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       workspace_key    TEXT NOT NULL DEFAULT 'default',

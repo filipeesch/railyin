@@ -22,6 +22,7 @@ import { join, extname, basename, isAbsolute } from "path";
 import { homedir, tmpdir } from "os";
 import { getMcpRegistry } from "../../mcp/registry.ts";
 import { parseFileRef } from "../../utils/resolve-file-attachments.ts";
+import { TodoRepository } from "../../db/todos.ts";
 
 function utf16LineOffsets(text: string): number[] {
   const offsets = [0];
@@ -151,6 +152,7 @@ export class CopilotEngine implements ExecutionEngine {
       onTaskUpdated: (task: import("../../../shared/rpc-types.ts").Task) => {
         this._onTaskUpdated(task);
       },
+      todoRepo: new TodoRepository(),
       lspManager,
       worktreePath: workingDirectory,
     };

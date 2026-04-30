@@ -5,6 +5,8 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
+import { taskGitHandlers } from "../handlers/task-git.ts";
+import { codeReviewHandlers } from "../handlers/code-review.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { EngineRegistry } from "../engine/engine-registry.ts";
 import { formatReviewMessageForLLM } from "../workflow/review.ts";
@@ -55,12 +57,11 @@ function makeHandlers() {
     () => {},
     () => {},
   );
-  return taskHandlers(
-    db,
-    orch,
-    () => {},
-    () => {},
-  );
+  return {
+    ...taskHandlers(db, orch, () => {}),
+    ...taskGitHandlers(db, () => {}),
+    ...codeReviewHandlers(db),
+  };
 }
 
 /** Insert task_git_context pointing to gitDir as both root and worktree. */

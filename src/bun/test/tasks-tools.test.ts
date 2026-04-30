@@ -4,6 +4,7 @@ import { TOOL_GROUPS } from "../workflow/tools.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import type { CommonToolContext } from "../engine/types.ts";
+import { TodoRepository } from "../db/todos.ts";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,7 @@ const commonCtx = (overrides?: { taskId?: number; boardId?: number }): CommonToo
     onHumanTurn: noop,
     onCancel: noop,
     onTaskUpdated: noop,
+    todoRepo: new TodoRepository(db),
 });
 
 beforeEach(() => {

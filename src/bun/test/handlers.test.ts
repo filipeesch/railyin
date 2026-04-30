@@ -5,6 +5,11 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
+import { taskGitHandlers } from "../handlers/task-git.ts";
+import { codeReviewHandlers } from "../handlers/code-review.ts";
+import { todoHandlers } from "../handlers/todos.ts";
+import { modelHandlers } from "../handlers/models.ts";
+import { engineHandlers } from "../handlers/engine.ts";
 import { conversationHandlers } from "../handlers/conversations.ts";
 import { chatSessionHandlers } from "../handlers/chat-sessions.ts";
 import { mcpHandlers } from "../handlers/mcp.ts";
@@ -42,12 +47,14 @@ afterEach(() => {
 function makeHandlers() {
   const updates: Task[] = [];
 
-  const handlers = taskHandlers(
-    db,
-    null,
-    (task) => updates.push(task),
-    () => {},
-  );
+  const handlers = {
+    ...taskHandlers(db, null, (task) => updates.push(task)),
+    ...taskGitHandlers(db, (task) => updates.push(task)),
+    ...codeReviewHandlers(db),
+    ...todoHandlers(db),
+    ...modelHandlers(db, null),
+    ...engineHandlers(null),
+  };
 
   return { handlers, updates };
 }
@@ -219,7 +226,7 @@ describe("tasks.transition / git context backfill", () => {
     const { projectKey, boardId, taskId, conversationId } = seedProjectAndTask(db, gitDir);
     // No task_git_context row exists yet
 
-    const handlers = taskHandlers(db, makeDbOrchestrator(), () => {}, () => {});
+    const handlers = taskHandlers(db, makeDbOrchestrator(), () => {});
 
     // Transition — should backfill then create worktree
     await handlers["tasks.transition"]({ taskId, toState: "plan" });
@@ -527,7 +534,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-sonnet-4.6", contextWindow: 200_000 },
     ]);
-    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(200_000);
@@ -541,7 +548,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     // No matching model in orchestrator; resolveModelContextWindow also won't find
@@ -553,7 +560,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
 
-    const handlers = taskHandlers(db, null, () => {}, () => {});
+    const handlers = taskHandlers(db, null, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
@@ -567,7 +574,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-opus", contextWindow: undefined },
     ]);
-    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
+    const handlers = taskHandlers(db, orchestrator, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
@@ -580,7 +587,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
       { qualifiedId: null },
       { qualifiedId: "copilot/mock-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
+    const handlers = modelHandlers(db, orchestrator);
 
     const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
 
@@ -599,7 +606,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
       { qualifiedId: null },
       { qualifiedId: "copilot/mock-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(db, orchestrator, () => {}, () => {});
+    const handlers = modelHandlers(db, orchestrator);
 
     const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
 

@@ -10,7 +10,6 @@
 
 import type { AIToolDefinition } from "../ai/types.ts";
 import type { CommonToolContext } from "./types.ts";
-import { createTodo, editTodo, getTodo, listTodos, reprioritizeTodos } from "../db/todos.ts";
 import { INTERVIEW_ME_TOOL_DEFINITION } from "./interview-tool-definition.ts";
 import { LSP_TOOL_DEFINITION } from "./lsp-tool-definition.ts";
 import { executeLspTool } from "../workflow/tools/lsp-tools.ts";
@@ -430,7 +429,7 @@ async function executeCommonToolText(
       const description = args.description != null ? (args.description as string).trim() : "";
       if (!description) return "Error: description is required";
       const phase = args.phase != null ? String(args.phase) : undefined;
-      const item = createTodo(ctx.taskId, number, title, description, phase);
+      const item = ctx.todoRepo.createTodo(ctx.taskId, number, title, description, phase);
       return JSON.stringify(item);
     }
 
@@ -438,19 +437,19 @@ async function executeCommonToolText(
       if (!ctx.taskId) return "Error: edit_todo is only available within a task execution";
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const update: Parameters<typeof editTodo>[2] = {};
+      const update: Parameters<typeof ctx.todoRepo.editTodo>[2] = {};
       if (args.number !== undefined) update.number = Number(args.number);
       if (args.title !== undefined) update.title = (args.title as string).trim();
       if (args.description !== undefined) update.description = args.description as string;
       if ("phase" in args) update.phase = args.phase === "null" || args.phase == null ? null : String(args.phase);
-      const result = editTodo(ctx.taskId, id, update);
+      const result = ctx.todoRepo.editTodo(ctx.taskId, id, update);
       if (!result) return `Error: todo ${id} not found`;
       return JSON.stringify(result);
     }
 
     case "list_todos": {
       if (!ctx.taskId) return "Error: list_todos is only available within a task execution";
-      const todos = listTodos(ctx.taskId);
+      const todos = ctx.todoRepo.listTodos(ctx.taskId);
       return JSON.stringify(todos);
     }
 
@@ -458,7 +457,7 @@ async function executeCommonToolText(
       if (!ctx.taskId) return "Error: get_todo is only available within a task execution";
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const todo = getTodo(ctx.taskId, id);
+      const todo = ctx.todoRepo.getTodo(ctx.taskId, id);
       if (!todo) return `Error: todo ${id} not found`;
       if ("deleted" in todo) return todo.message;
       return JSON.stringify(todo);
@@ -467,7 +466,7 @@ async function executeCommonToolText(
     case "reorganize_todos": {
       if (!ctx.taskId) return "Error: reorganize_todos is only available within a task execution";
       const items = args.items as Array<{ id: number; number: number }>;
-      const updated = reprioritizeTodos(ctx.taskId, items);
+      const updated = ctx.todoRepo.reprioritizeTodos(ctx.taskId, items);
       return JSON.stringify(updated);
     }
 
@@ -477,7 +476,7 @@ async function executeCommonToolText(
       if (!id || isNaN(id)) return "Error: id is required";
       const status = args.status != null ? (args.status as string).trim() : "";
       if (!status) return "Error: status is required";
-      const result = editTodo(ctx.taskId, id, { status: status as import("../db/todos.ts").TodoStatus });
+      const result = ctx.todoRepo.editTodo(ctx.taskId, id, { status: status as import("../db/todos.ts").TodoStatus });
       if (!result) return `Error: todo ${id} not found`;
       return JSON.stringify(result);
     }

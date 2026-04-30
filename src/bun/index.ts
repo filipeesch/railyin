@@ -68,6 +68,11 @@ import { workspaceHandlers } from "./handlers/workspace.ts";
 import { boardHandlers } from "./handlers/boards.ts";
 import { projectHandlers } from "./handlers/projects.ts";
 import { taskHandlers } from "./handlers/tasks.ts";
+import { taskGitHandlers } from "./handlers/task-git.ts";
+import { codeReviewHandlers } from "./handlers/code-review.ts";
+import { todoHandlers } from "./handlers/todos.ts";
+import { modelHandlers } from "./handlers/models.ts";
+import { engineHandlers } from "./handlers/engine.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
 import { launchHandlers } from "./handlers/launch.ts";
@@ -335,7 +340,12 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...workspaceHandlers(db),
   ...boardHandlers(db),
   ...projectHandlers(),
-  ...taskHandlers(db, orchestrator, notifyTaskUpdated, notifyNewMessage),
+  ...taskHandlers(db, orchestrator, notifyTaskUpdated),
+  ...taskGitHandlers(db, notifyTaskUpdated),
+  ...codeReviewHandlers(db),
+  ...todoHandlers(db),
+  ...modelHandlers(db, orchestrator),
+  ...engineHandlers(orchestrator),
   ...conversationHandlers(db, orchestrator),
   ...workflowHandlers(notifyWorkflowReloaded),
   ...launchHandlers(db),

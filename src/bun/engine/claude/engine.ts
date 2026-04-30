@@ -7,6 +7,7 @@ import { getConfig } from "../../config/index.ts";
 import { readdirSync, existsSync, readFileSync } from "fs";
 import { join, relative, extname, basename } from "path";
 import { getMcpRegistry } from "../../mcp/registry.ts";
+import { TodoRepository } from "../../db/todos.ts";
 
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -67,6 +68,7 @@ export class ClaudeEngine implements ExecutionEngine {
         onHumanTurn: () => { },
         onCancel: (id) => this.cancel(id),
         onTaskUpdated: (task) => this._onTaskUpdated(task),
+        todoRepo: new TodoRepository(),
         lspManager,
         worktreePath: workingDirectory,
       },

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../engine/common-tools.ts";
 import { buildCopilotTools } from "../engine/copilot/tools.ts";
 import { buildClaudeToolServer } from "../engine/claude/tools.ts";
+import { TodoRepository } from "../db/todos.ts";
 
 import type { CommonToolContext } from "../engine/types.ts";
 
@@ -12,6 +13,7 @@ const baseContext: CommonToolContext = {
     onHumanTurn: () => { },
     onCancel: () => { },
     onTaskUpdated: () => { },
+    todoRepo: new TodoRepository(),
 };
 
 describe("shared common tool registration", () => {
