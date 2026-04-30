@@ -42,7 +42,7 @@
         />
       </div>
 
-      <TabView v-model:activeIndex="activeTab">
+      <TabView v-model:activeIndex="activeTab" @tab-change="onTabChange">
 
         <TabPanel header="Workspace">
           <div class="setup-section">
@@ -157,35 +157,7 @@
         </TabPanel>
 
         <TabPanel header="Boards">
-          <div class="setup-section">
-            <h3>Create a Board</h3>
-            <div class="field">
-              <label>Board name</label>
-              <InputText v-model="boardName" placeholder="Q2 Delivery" class="w-full" />
-            </div>
-            <div class="field">
-              <label>Workflow</label>
-              <select :key="workflowOptionsKey" v-model="boardWorkflowTemplateId" class="setup-native-select">
-                <option disabled value="">Select workflow</option>
-                <option v-for="workflow in workflowOptions" :key="workflow.value" :value="workflow.value">{{ workflow.label }}</option>
-              </select>
-            </div>
-            <Message v-if="boardError" severity="error" :closable="false">{{ boardError }}</Message>
-            <Button
-              label="Create board"
-              icon="pi pi-plus"
-              :loading="boardSaving"
-              :disabled="!boardName.trim() || !boardWorkflowTemplateId"
-              class="mb-4"
-              @click="createBoard"
-            />
-            <div v-if="visibleBoards.length" class="project-list mt-4">
-              <div v-for="b in visibleBoards" :key="b.id" class="project-item">
-                <i class="pi pi-table" />
-                <span>{{ b.name }}</span>
-              </div>
-            </div>
-          </div>
+          <BoardSetupTab />
         </TabPanel>
 
         <TabPanel header="Models">
@@ -263,7 +235,8 @@ import { useTaskStore } from "../stores/task";
 import ModelTreeView from "../components/ModelTreeView.vue";
 import LspSetupPrompt from "../components/LspSetupPrompt.vue";
 import ProjectDetailDialog from "../components/ProjectDetailDialog.vue";
-import type { LspDetectedLanguage, ModelInfo, Project, WorkflowTemplate } from "../../shared/rpc-types";
+import BoardSetupTab from "../components/BoardSetupTab.vue";
+import type { LspDetectedLanguage, ModelInfo, Project } from "../../shared/rpc-types";
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
@@ -272,6 +245,15 @@ const projectStore = useProjectStore();
 const taskStore = useTaskStore();
 
 const activeTab = ref(0);
+
+// Boards tab is index 2; reload boards when the user switches to it so the
+// list is always fresh (and works correctly in tests that set the mock after navigation).
+const BOARDS_TAB_INDEX = 2;
+function onTabChange(event: { index: number }) {
+  if (event.index === BOARDS_TAB_INDEX) {
+    boardStore.loadBoards();
+  }
+}
 
 // ── Workspace settings form ──────────────────────────────────────────────────
 const wsForm = reactive({
@@ -514,14 +496,6 @@ async function doDeleteProject() {
 }
 
 // ── Board form ───────────────────────────────────────────────────────────────
-const boardName = ref("");
-const boardWorkflowTemplateId = ref("");
-const boardSaving = ref(false);
-const boardError = ref<string | null>(null);
-const workflowOptions = ref<Array<{ label: string; value: string }>>([]);
-const workflowOptionsKey = computed(() =>
-  `${workspaceStore.activeWorkspaceKey ?? "none"}:${workflowOptions.value.map((entry) => entry.value).join(",")}`,
-);
 const hasAnyBoards = computed(() => boardStore.boards.length > 0);
 
 const visibleProjects = computed(() =>
@@ -534,7 +508,6 @@ const visibleBoards = computed(() =>
 onMounted(async () => {
   await workspaceStore.loadWorkspaces();
   await Promise.all([projectStore.loadProjects(), boardStore.loadBoards(), workspaceStore.load()]);
-  await loadWorkflowOptions(workspaceStore.activeWorkspaceKey);
   await loadModelsForEngine();
   syncWsForm();
   if (!visibleProjects.value.length) activeTab.value = 1;
@@ -543,52 +516,17 @@ onMounted(async () => {
 
 watch(() => workspaceStore.config, () => { syncWsForm(); });
 
-function setWorkflowOptions(workflows: WorkflowTemplate[]) {
-  workflowOptions.value = workflows.map((w) => ({ label: w.name, value: w.id }));
-  if (!workflowOptions.value.length) { boardWorkflowTemplateId.value = ""; return; }
-  if (!workflowOptions.value.some((w) => w.value === boardWorkflowTemplateId.value)) {
-    boardWorkflowTemplateId.value = workflowOptions.value[0]!.value;
-  }
-}
-
-async function loadWorkflowOptions(workspaceKey: string | null) {
-  boardWorkflowTemplateId.value = "";
-  if (workspaceKey == null) { workflowOptions.value = []; return; }
-  const config = await api("workspace.getConfig", { workspaceKey });
-  setWorkflowOptions(config.workflows);
-}
-
 watch(
   () => workspaceStore.activeWorkspaceKey,
-  async (workspaceKey) => {
-    await loadWorkflowOptions(workspaceKey);
+  async () => {
     await loadModelsForEngine();
     syncWsForm();
   },
   { immediate: true },
 );
 
-async function createBoard() {
-  boardError.value = null;
-  boardSaving.value = true;
-  try {
-    if (!boardWorkflowTemplateId.value) throw new Error("Select a workflow template");
-    await boardStore.createBoard(
-      workspaceStore.activeWorkspaceKey ?? "default",
-      boardName.value.trim(),
-      boardWorkflowTemplateId.value,
-    );
-    boardName.value = "";
-  } catch (e) {
-    boardError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    boardSaving.value = false;
-  }
-}
-
 async function onWorkspaceSelected(workspaceKey: string) {
   await workspaceStore.selectWorkspace(workspaceKey);
-  await loadWorkflowOptions(workspaceStore.activeWorkspaceKey);
 }
 
 async function goToBoard() {

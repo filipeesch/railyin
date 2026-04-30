@@ -94,13 +94,14 @@ export function makeGroupedWorkflowTemplate(): WorkflowTemplate {
     } as WorkflowTemplate;
 }
 
-export function makeBoard(overrides?: Partial<Board>): Board & { template: WorkflowTemplate } {
+export function makeBoard(overrides?: Partial<Board & { template: WorkflowTemplate }>): Board & { template: WorkflowTemplate } {
     return {
         id: BOARD_ID,
         workspaceKey: WORKSPACE_KEY,
         name: "Test Board",
         workflowTemplateId: "default",
         projectKeys: [],
+        taskCount: 0,
         template: makeWorkflowTemplate(),
         ...overrides,
     };

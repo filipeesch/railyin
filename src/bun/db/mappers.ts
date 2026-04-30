@@ -39,7 +39,7 @@ export function mapTask(row: TaskRow): Task {
   };
 }
 
-export function mapBoard(row: BoardRow): Board {
+export function mapBoard(row: BoardRow, taskCount?: number): Board {
   let projectKeys: string[] = [];
   try {
     projectKeys = JSON.parse(row.project_keys);
@@ -52,6 +52,7 @@ export function mapBoard(row: BoardRow): Board {
     name: row.name,
     workflowTemplateId: row.workflow_template_id,
     projectKeys,
+    taskCount: taskCount ?? 0,
   };
 }
 

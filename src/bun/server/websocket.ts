@@ -11,7 +11,7 @@ export class WebSocketHandler {
     private readonly getPtySession: (id: string) => PtySession | undefined,
   ) {}
 
-  open(ws: ServerWebSocket<WsData>): void {
+  open = (ws: ServerWebSocket<WsData>): void => {
     if (ws.data.type === "pty") {
       const session = this.getPtySession(ws.data.sessionId);
       if (!session) {
@@ -39,7 +39,7 @@ export class WebSocketHandler {
     }
   }
 
-  close(ws: ServerWebSocket<WsData>): void {
+  close = (ws: ServerWebSocket<WsData>): void => {
     if (ws.data.type === "push") {
       this.channel.clients.delete(ws);
     } else {
@@ -53,7 +53,7 @@ export class WebSocketHandler {
     }
   }
 
-  message(ws: ServerWebSocket<WsData>, msg: string | Buffer): void {
+  message = (ws: ServerWebSocket<WsData>, msg: string | Buffer): void => {
     if (ws.data.type !== "pty") return;
     const session = this.getPtySession(ws.data.sessionId);
     if (session) {

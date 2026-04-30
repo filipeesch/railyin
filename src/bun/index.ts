@@ -164,7 +164,7 @@ const serverPort = portArg ? Number(portArg.split("=")[1]) : 3000;
 
 const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...workspaceHandlers(db),
-  ...boardHandlers(db),
+  ...boardHandlers(),
   ...projectHandlers(),
   ...taskHandlers(db, orchestrator, notifier.notifyTaskUpdated.bind(notifier)),
   ...taskGitHandlers(db, notifier.notifyTaskUpdated.bind(notifier)),

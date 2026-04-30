@@ -1,8 +1,6 @@
 ## Purpose
 The board is the primary navigation surface. It organises tasks by workflow state and exposes transitions and high-level execution status at a glance.
-
 ## Requirements
-
 ### Requirement: Board is the primary navigation surface
 The board is the primary navigation surface inside the active workspace. It SHALL expose workspace switching at the top level and board switching within the selected workspace.
 
@@ -34,7 +32,7 @@ The board SHALL indicate unread task activity on individual task cards, and the 
 - **THEN** its workspace tab unread indicator is cleared
 
 ### Requirement: Board coordinates tasks across one or more projects
-The system SHALL allow a board to be linked to one or more registered projects. Tasks on the board each belong to exactly one of those projects.
+The system SHALL allow a board to be linked to one or more registered projects. Tasks on the board each belong to exactly one of those projects. The project assignment SHALL be editable at any time through the Setup UI without requiring a board recreate.
 
 #### Scenario: Board created with a project
 - **WHEN** a user creates a board and links it to one or more projects
@@ -44,8 +42,12 @@ The system SHALL allow a board to be linked to one or more registered projects. 
 - **WHEN** a board is linked to multiple projects
 - **THEN** task cards on the board display a project badge identifying which project each task belongs to
 
+#### Scenario: Board project assignment updated from Setup UI
+- **WHEN** the user edits a board in the Boards tab and changes the project checkbox selection
+- **THEN** the board's projectKeys are updated and the task creation dialog reflects the new project options
+
 ### Requirement: Board uses a configurable workflow template
-The system SHALL associate each board with a workflow template that defines its columns, column order, `on_enter_prompt`, and `stage_instructions`. Templates are defined in YAML configuration files.
+The system SHALL associate each board with a workflow template that defines its columns, column order, `on_enter_prompt`, and `stage_instructions`. Templates are defined in YAML configuration files. The template SHALL be changeable from the Setup UI; changing the template on a board with existing tasks SHALL show a non-blocking inline warning.
 
 #### Scenario: Board renders columns from template
 - **WHEN** a board is opened
@@ -54,6 +56,14 @@ The system SHALL associate each board with a workflow template that defines its 
 #### Scenario: Invalid template blocks board display
 - **WHEN** a board's associated workflow template YAML is missing or invalid
 - **THEN** the board displays a configuration error instead of columns
+
+#### Scenario: Workflow template changed from Setup UI
+- **WHEN** the user edits a board's workflow template in the Boards tab and saves
+- **THEN** the board's workflowTemplateId is updated and the board view reloads with the new column layout
+
+#### Scenario: Inline warning shown when changing template on board with tasks
+- **WHEN** the user selects a different workflow template for a board that has at least one task
+- **THEN** an inline warning is shown in the dialog; the save button remains enabled
 
 ### Requirement: Board shows task cards with dual state
 The system SHALL display each task as a card in its current workflow column, showing both the workflow state (column name) and execution state as a badge.
@@ -122,3 +132,4 @@ The system SHALL display a task creation button below the backlog column title f
 #### Scenario: Create task button only visible in backlog column
 - **WHEN** the board view is displayed
 - **THEN** the "Create Task" button is only visible in the backlog column header, not in other column headers
+

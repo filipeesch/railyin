@@ -31,11 +31,11 @@ export const useBoardStore = defineStore("board", () => {
     }
   }
 
-  async function createBoard(workspaceKey: string, name: string, workflowTemplateId: string) {
+  async function createBoard(workspaceKey: string, name: string, workflowTemplateId: string, projectKeys: string[] = []) {
     const board = await api("boards.create", {
       workspaceKey,
       name,
-      projectKeys: [],
+      projectKeys,
       workflowTemplateId,
     });
     await loadBoards();
@@ -51,6 +51,20 @@ export const useBoardStore = defineStore("board", () => {
     activeBoardId.value = findFirstBoardInWorkspace(boards.value, workspaceKey);
   }
 
+  async function updateBoard(id: number, params: { name?: string; workflowTemplateId?: string; projectKeys?: string[] }) {
+    const board = await api("boards.update", { id, ...params });
+    await loadBoards();
+    return board;
+  }
+
+  async function deleteBoard(id: number) {
+    await api("boards.delete", { id });
+    boards.value = boards.value.filter((b) => b.id !== id);
+    if (activeBoardId.value === id) {
+      activeBoardId.value = boards.value[0]?.id ?? null;
+    }
+  }
+
   return {
     boards,
     activeBoardId,
@@ -61,5 +75,7 @@ export const useBoardStore = defineStore("board", () => {
     createBoard,
     selectBoard,
     selectFirstBoardInWorkspace,
+    updateBoard,
+    deleteBoard,
   };
 });

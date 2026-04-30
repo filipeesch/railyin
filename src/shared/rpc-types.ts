@@ -6,6 +6,7 @@ export interface Board {
   name: string;
   workflowTemplateId: string;
   projectKeys: string[];
+  taskCount: number;
 }
 
 export interface Project {
@@ -528,6 +529,14 @@ export type RailynAPI = {
   "boards.create": {
     params: { workspaceKey: string; name: string; projectKeys: string[]; workflowTemplateId: string };
     response: Board;
+  };
+  "boards.update": {
+    params: { id: number; name?: string; workflowTemplateId?: string; projectKeys?: string[] };
+    response: Board;
+  };
+  "boards.delete": {
+    params: { id: number };
+    response: Record<string, never>;
   };
 
   // Projects

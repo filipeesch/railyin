@@ -11,7 +11,7 @@
 
 import { test, expect } from "./fixtures";
 import { makeWorkspace, makeProject, WORKSPACE_KEY } from "./fixtures/mock-data";
-import type { ApiMock } from "./fixtures/mock-api";
+import { goToSetup } from "./fixtures/setup-helpers";
 
 const MODELS = [
     {
@@ -22,13 +22,6 @@ const MODELS = [
         ],
     },
 ];
-
-async function goToSetup(page: import("@playwright/test").Page, api: ApiMock) {
-    // Empty boards list forces App.vue onMounted to redirect to /setup
-    api.returns("boards.list", []);
-    await page.goto("/");
-    await expect(page.locator(".setup-card")).toBeVisible({ timeout: 5_000 });
-}
 
 // ─── Suite S — Setup page navigation ─────────────────────────────────────────
 
