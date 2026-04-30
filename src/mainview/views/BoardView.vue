@@ -74,85 +74,41 @@
     <div v-if="boardStore.activeBoard" class="board-columns">
       <template v-for="slot in renderSlots" :key="slot.type === 'standalone' ? slot.column.id : slot.groupId">
         <!-- Standalone column -->
-        <div
+        <BoardColumn
           v-if="slot.type === 'standalone'"
-          class="board-column"
-          :class="{
-            'is-drag-over': dragOverColumnId === slot.column.id && !columnAtCapacity(slot.column.id),
-            'is-drag-over--full': dragOverColumnId === slot.column.id && columnAtCapacity(slot.column.id),
-          }"
-          :data-column-id="slot.column.id"
-          @drop.prevent
-        >
-          <div class="board-column__header">
-            <span class="board-column__name">{{ slot.column.label }}</span>
-            <Badge
-              :value="slot.column.limit != null ? `${columnTasksMap[slot.column.id]?.length ?? 0}/${slot.column.limit}` : (columnTasksMap[slot.column.id]?.length ?? 0)"
-              :severity="columnAtCapacity(slot.column.id) ? 'danger' : 'secondary'"
-            />
-          </div>
-          <div v-if="slot.column.id === 'backlog'" class="board-column__create-task">
-            <Button label="New Task" icon="pi pi-plus" @click="openCreateOverlay" />
-          </div>
-          <div class="board-column__cards">
-            <TaskCard
-              v-for="task in columnTasksMap[slot.column.id] ?? []"
-              :key="task.id"
-              :task="task"
-              v-memo="[task, taskStore.hasUnread(task.id), taskStore.changedFileCounts[task.id]]"
-              @pointerdown="onCardPointerDown($event, task.id)"
-              @click="onCardClick(task.id)"
-              @open-review="onOpenReview(task.id)"
-            />
-            <div
-              v-if="dragOverColumnId === slot.column.id"
-              class="drop-indicator"
-              :style="{ top: dropIndicatorY + 'px' }"
-            />
-          </div>
-        </div>
+          :column="slot.column"
+          :tasks="columnTasksMap[slot.column.id] ?? []"
+          :is-drag-over="dragOverColumnId === slot.column.id"
+          :is-at-capacity="columnAtCapacity(slot.column.id)"
+          :is-forbidden="forbiddenColumnIds.has(slot.column.id)"
+          :drop-indicator-y="dropIndicatorY"
+          :has-unread="taskStore.hasUnread"
+          :changed-file-counts="taskStore.changedFileCounts"
+          @create-task="openCreateOverlay"
+          @card-pointerdown="onCardPointerDown"
+          @card-click="onCardClick"
+          @open-review="onOpenReview"
+        />
 
         <!-- Group column: stacked sub-columns, wrapper has NO data-column-id -->
         <div v-else class="board-column-group">
           <div v-if="slot.label" class="board-column-group__label">{{ slot.label }}</div>
-          <div
+          <BoardColumn
             v-for="col in slot.columns"
             :key="col.id"
-            class="board-column"
-            :class="{
-              'is-drag-over': dragOverColumnId === col.id && !columnAtCapacity(col.id),
-              'is-drag-over--full': dragOverColumnId === col.id && columnAtCapacity(col.id),
-            }"
-            :data-column-id="col.id"
-            @drop.prevent
-          >
-            <div class="board-column__header">
-              <span class="board-column__name">{{ col.label }}</span>
-              <Badge
-                :value="col.limit != null ? `${columnTasksMap[col.id]?.length ?? 0}/${col.limit}` : (columnTasksMap[col.id]?.length ?? 0)"
-                :severity="columnAtCapacity(col.id) ? 'danger' : 'secondary'"
-              />
-            </div>
-            <div v-if="col.id === 'backlog'" class="board-column__create-task">
-              <Button label="New Task" icon="pi pi-plus" @click="openCreateOverlay" />
-            </div>
-            <div class="board-column__cards">
-              <TaskCard
-                v-for="task in columnTasksMap[col.id] ?? []"
-                :key="task.id"
-                :task="task"
-                v-memo="[task, taskStore.hasUnread(task.id), taskStore.changedFileCounts[task.id]]"
-                @pointerdown="onCardPointerDown($event, task.id)"
-                @click="onCardClick(task.id)"
-                @open-review="onOpenReview(task.id)"
-              />
-              <div
-                v-if="dragOverColumnId === col.id"
-                class="drop-indicator"
-                :style="{ top: dropIndicatorY + 'px' }"
-              />
-            </div>
-          </div>
+            :column="col"
+            :tasks="columnTasksMap[col.id] ?? []"
+            :is-drag-over="dragOverColumnId === col.id"
+            :is-at-capacity="columnAtCapacity(col.id)"
+            :is-forbidden="forbiddenColumnIds.has(col.id)"
+            :drop-indicator-y="dropIndicatorY"
+            :has-unread="taskStore.hasUnread"
+            :changed-file-counts="taskStore.changedFileCounts"
+            @create-task="openCreateOverlay"
+            @card-pointerdown="onCardPointerDown"
+            @card-click="onCardClick"
+            @open-review="onOpenReview"
+          />
         </div>
       </template>
     </div>
@@ -242,6 +198,7 @@ import { useWorkspaceStore } from "../stores/workspace";
 import { useTerminalStore } from "../stores/terminal";
 import { useChatStore } from "../stores/chat";
 import TaskCard from "../components/TaskCard.vue";
+import BoardColumn from "../components/BoardColumn.vue";
 import ConversationDrawer from "../components/ConversationDrawer.vue";
 import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
@@ -423,6 +380,22 @@ function columnAtCapacity(columnId: string): boolean {
   return (columnTasksMap.value[columnId]?.length ?? 0) >= col.limit;
 }
 
+const draggingSourceColumnId = ref<string | null>(null);
+
+const forbiddenColumnIds = computed<Set<string>>(() => {
+  const sourceId = draggingSourceColumnId.value;
+  if (!sourceId) return new Set();
+  const template = boardStore.activeBoard?.template;
+  const sourceCol = template?.columns.find((c) => c.id === sourceId);
+  const allowed = sourceCol?.allowedTransitions;
+  if (allowed === undefined) return new Set();
+  return new Set(
+    (template?.columns ?? [])
+      .map((c) => c.id)
+      .filter((id) => id !== sourceId && !allowed.includes(id))
+  );
+});
+
 type RenderSlot =
   | { type: 'standalone'; column: import('../../shared/rpc-types.ts').WorkflowColumn }
   | { type: 'group'; groupId: string; label?: string; columns: import('../../shared/rpc-types.ts').WorkflowColumn[] };
@@ -494,6 +467,7 @@ function onPointerMove(event: PointerEvent) {
   if (!activeDrag.active) {
     if (Math.hypot(dx, dy) < 5) return;
     activeDrag.active = true;
+    draggingSourceColumnId.value = activeDrag.sourceColumnId;
     document.body.style.cursor = 'grabbing';
     // Clone the actual card element so the ghost looks identical
     const sourceEl = activeDrag.sourceEl!;
@@ -516,6 +490,13 @@ function onPointerMove(event: PointerEvent) {
   const col = el?.closest('[data-column-id]');
   const hoveredColumnId = col?.getAttribute('data-column-id') ?? null;
   dragOverColumnId.value = hoveredColumnId;
+
+  // Update cursor to reflect whether the hovered column is forbidden
+  if (hoveredColumnId && forbiddenColumnIds.value.has(hoveredColumnId)) {
+    document.body.style.cursor = 'not-allowed';
+  } else {
+    document.body.style.cursor = 'grabbing';
+  }
 
   // Compute drop index and indicator position within the hovered column
   if (hoveredColumnId && col) {
@@ -595,6 +576,7 @@ async function onPointerUp(event: PointerEvent) {
     document.body.style.cursor = '';
     dragOverColumnId.value = null;
     dropIndex.value = null;
+    draggingSourceColumnId.value = null;
 
     if (targetColumnId) {
       const task = Object.values(taskStore.tasksByBoard).flat().find((t) => t.id === dragSnapshot.taskId);
@@ -603,8 +585,8 @@ async function onPointerUp(event: PointerEvent) {
         const boardId = boardStore.activeBoardId;
         if (!boardId) return;
 
-        // Check capacity before firing — reject silently if full
-        if (!columnAtCapacity(targetColumnId)) {
+        // Check capacity and allowed transitions before firing
+        if (!columnAtCapacity(targetColumnId) && !forbiddenColumnIds.value.has(targetColumnId)) {
           if (targetColumnId === dragSnapshot.sourceColumnId) {
             // Same-column reorder: splice task into new position, batch-sync positions
             const others = colTasks.filter((t) => t.id !== dragSnapshot.taskId);

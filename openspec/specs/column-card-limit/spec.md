@@ -34,7 +34,7 @@ When a user attempts to drag a card into a column that already holds `limit` car
 - **THEN** the drop succeeds and the card appears in the target column
 
 ### Requirement: Backend rejects transitions that exceed column limit
-Both the `tasks.transition` RPC and the `move_task` agent tool SHALL return an error when the target column already holds `limit` cards. No database write SHALL occur.
+Both the `tasks.transition` RPC and the `move_task` agent tool SHALL return an error when the target column already holds `limit` cards. No database write SHALL occur. Both paths SHALL use a shared `TransitionValidator` module that performs this check, ensuring workspace-config is resolved correctly for each board.
 
 #### Scenario: tasks.transition RPC returns error at capacity
 - **WHEN** `tasks.transition` is called with a `toState` whose column is at its limit

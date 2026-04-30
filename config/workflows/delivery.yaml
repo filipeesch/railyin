@@ -15,6 +15,10 @@ columns:
   - id: plan
     label: Plan
     description: Define what needs to be done
+    # allowed_transitions restricts where tasks in this column can move.
+    # If omitted, all transitions are open (default, backward-compatible).
+    # Example: only allow moving to in_progress from plan.
+    # allowed_transitions: [in_progress]
     on_enter_prompt: |
       Create a clear, detailed implementation plan for this task.
       Break it down into concrete steps. Focus on WHAT needs to be

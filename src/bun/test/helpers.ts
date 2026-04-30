@@ -238,7 +238,6 @@ columns:
     label: Plan
     on_enter_prompt: "Plan the task."
     stage_instructions: "You are a planning assistant."
-    allowed_transitions: [inprogress]
   - id: done
     label: Done
 `;

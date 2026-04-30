@@ -416,6 +416,7 @@ export interface WorkflowColumn {
   label: string;
   model?: string;
   limit?: number;
+  allowedTransitions?: string[];
 }
 
 export interface WorkflowTemplate {

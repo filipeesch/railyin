@@ -6,6 +6,7 @@ import { removeWorktree } from "../../git/worktree.ts";
 import { getProjectByKey } from "../../project-store.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import type { BoardToolContext } from "./types.ts";
+import { validateTransition } from "../transition-validator.ts";
 
 const TASK_WITH_GIT = `
   SELECT t.*,
@@ -202,35 +203,16 @@ export async function execMoveTask(
   const targetState = ((args.workflow_state as string) ?? "").trim();
   if (!targetState) return "Error: workflow_state is required";
   const db = getDb();
-  const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
-  if (!taskRow) return `Error: task ${taskId} not found`;
-  const boardRow = db
-    .query<{ workflow_template_id: string }, [number]>(
-      "SELECT workflow_template_id FROM boards WHERE id = ?",
-    )
-    .get(taskRow.board_id);
-  const config = getConfig();
-  const template = config.workflows.find((w) => w.id === boardRow?.workflow_template_id);
-  const validColumn = template?.columns.find((c) => c.id === targetState);
-  if (!validColumn) {
-    const valid = template?.columns.map((c) => c.id).join(", ") ?? "(unknown)";
-    return `Error: workflow_state "${targetState}" not found in board template. Valid columns: ${valid}`;
-  }
-  if (validColumn.limit != null) {
-    const limitCountRow = db
-      .query<{ count: number }, [number, string]>(
-        "SELECT COUNT(*) as count FROM tasks WHERE board_id = ? AND workflow_state = ?",
-      )
-      .get(taskRow.board_id, targetState);
-    if ((limitCountRow?.count ?? 0) >= validColumn.limit) {
-      return `Error: column "${targetState}" is at capacity (${limitCountRow?.count}/${validColumn.limit}). Move a card out first.`;
-    }
+
+  const validation = validateTransition(db, taskId, targetState);
+  if (!validation.ok) {
+    return `Error: ${validation.reason}`;
   }
   const minRow = db
     .query<{ min_pos: number | null }, [number, string]>(
       "SELECT MIN(position) as min_pos FROM tasks WHERE board_id = ? AND workflow_state = ?",
     )
-    .get(taskRow.board_id, targetState);
+    .get(validation.boardId, targetState);
   const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
   db.run("UPDATE tasks SET workflow_state = ?, position = ? WHERE id = ?", [targetState, topPos, taskId]);
   const updatedRow = db.query<TaskRow, [number]>(TASK_WITH_GIT).get(taskId)!;

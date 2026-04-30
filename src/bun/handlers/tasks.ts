@@ -18,6 +18,7 @@ import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getW
 import { getLoadedProjectByKey } from "../project-store.ts";
 import { resolveContextWindow } from "../context-usage.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
+import { validateTransition } from "../workflow/transition-validator.ts";
 import { PositionService } from "./position-service.ts";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────
@@ -168,32 +169,9 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
     }): Promise<{ task: Task; executionId: number | null }> => {
 
 
-      // ── Card limit check ──────────────────────────────────────────────────
-      const taskBoardRow = db
-        .query<{ board_id: number; workflow_template_id: string }, [number]>(
-          `SELECT t.board_id, b.workflow_template_id
-           FROM tasks t JOIN boards b ON b.id = t.board_id
-           WHERE t.id = ?`,
-        )
-        .get(params.taskId);
-      if (taskBoardRow) {
-        const wsKey = getBoardWorkspaceKey(taskBoardRow.board_id);
-        const wsConfig = getWorkspaceConfig(wsKey);
-        const colLimit = wsConfig.workflows
-          .find((w) => w.id === taskBoardRow.workflow_template_id)
-          ?.columns.find((c) => c.id === params.toState)?.limit ?? null;
-        if (colLimit != null) {
-          const countRow = db
-            .query<{ count: number }, [number, string]>(
-              "SELECT COUNT(*) as count FROM tasks WHERE board_id = ? AND workflow_state = ?",
-            )
-            .get(taskBoardRow.board_id, params.toState);
-          if ((countRow?.count ?? 0) >= colLimit) {
-            throw new Error(
-              `Column "${params.toState}" is at capacity (${countRow?.count}/${colLimit}). Move a card out first.`,
-            );
-          }
-        }
+      const validation = validateTransition(db, params.taskId, params.toState);
+      if (!validation.ok) {
+        throw new Error(validation.reason);
       }
 
       // Update position before transition so the orchestrator sees it immediately.
@@ -210,8 +188,8 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
         db.run("UPDATE tasks SET position = ? WHERE id = ?", [topPos, params.taskId]);
       }
-      if (taskBoardRow) {
-        positionService.rebalanceColumnPositions(taskBoardRow.board_id, params.toState);
+      if (validation.ok) {
+        positionService.rebalanceColumnPositions(validation.boardId, params.toState);
       }
 
       const taskRow = db
