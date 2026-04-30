@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../engine/common-tools.ts";
 import { buildCopilotTools } from "../engine/copilot/tools.ts";
 import { buildClaudeToolServer } from "../engine/claude/tools.ts";

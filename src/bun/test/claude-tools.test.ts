@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { buildClaudeToolServer, extractWrittenFilesFromResult } from "../engine/claude/tools.ts";
 import { INTERVIEW_ME_TOOL_DEFINITION } from "../engine/interview-tool-definition.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";

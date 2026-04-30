@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import { createMockWait } from "./support/mock-wait.ts";
 

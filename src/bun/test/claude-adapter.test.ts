@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { buildAllowPermissionResult, getUnapprovedShellBinaries } from "../engine/claude/adapter.ts";
 
 describe("Claude adapter permission helpers", () => {

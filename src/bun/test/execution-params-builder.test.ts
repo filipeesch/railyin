@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import type { TaskRow } from "../db/row-types.ts";
 

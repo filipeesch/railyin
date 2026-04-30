@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "bun:test";
+import { describe, expect, it, test } from "vitest";
 import { translateClaudeMessage, type ToolMetadata } from "../engine/claude/events.ts";
 
 describe("Claude message translator - tool events", () => {

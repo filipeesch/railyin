@@ -21,7 +21,7 @@
  *   Tool call / result → callId (e.g., "c1", "c2")
  */
 
-import { describe, it, expect, afterEach } from "bun:test";
+import { describe, it, expect, afterEach } from "vitest";
 import { createBackendRpcRuntime, type BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import {
     ScriptedEngine,

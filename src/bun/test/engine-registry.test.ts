@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { EngineRegistry } from "../engine/engine-registry.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, EngineShutdownOptions } from "../engine/types.ts";
 

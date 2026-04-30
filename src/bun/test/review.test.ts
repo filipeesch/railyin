@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
@@ -162,7 +162,7 @@ describe("tasks.rejectHunk", () => {
     const result = await handlers["tasks.rejectHunk"]({ taskId, filePath: "app.ts", hunkIndex: 0 });
 
     // After reverting hunk 0, the file should be back to HEAD content
-    const reverted = await Bun.file(join(gitDir, "app.ts")).text();
+    const reverted = readFileSync(join(gitDir, "app.ts"), "utf-8");
     expect(reverted).toContain("const x = 1;");
 
     // Returned diff should show no difference (original == modified after revert)

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  mutation:
+  mutation-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,13 +21,33 @@ jobs:
       - name: Run backend mutation tests
         run: bun run test:mutation:backend
 
-      - name: Run frontend mutation tests
-        run: bun run test:mutation:frontend
-
-      - name: Upload mutation reports
+      - name: Upload backend mutation report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mutation-reports
-          path: reports/mutation/
+          name: mutation-report-backend
+          path: reports/mutation/backend/
+          retention-days: 30
+
+  mutation-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run frontend mutation tests
+        run: bun run test:mutation:frontend
+
+      - name: Upload frontend mutation report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report-frontend
+          path: reports/mutation/frontend/
           retention-days: 30

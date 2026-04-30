@@ -10,7 +10,8 @@ export interface Migration {
   up(db: Database): void;
 }
 
-const MIGRATIONS_DIR = import.meta.dir;
+// import.meta.dir is Bun-only; fall back to import.meta.dirname (Node 20.11+)
+const MIGRATIONS_DIR = (import.meta as { dir?: string }).dir ?? import.meta.dirname;
 
 function checksumOf(filePath: string): string {
   const content = readFileSync(filePath, "utf-8");

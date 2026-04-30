@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
 import { TOOL_GROUPS } from "../workflow/tools.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, setupTestConfig } from "./helpers.ts";
 import { modelHandlers } from "../handlers/models.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";

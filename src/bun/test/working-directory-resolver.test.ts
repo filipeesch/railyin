@@ -18,7 +18,7 @@
  * If you ever change WorkingDirectoryResolver or listCommands, keep both in sync.
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { join, dirname, basename, relative } from "path";
 import { tmpdir } from "os";

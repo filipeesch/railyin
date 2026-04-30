@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { resolveToolsForColumn, TOOL_GROUPS } from "../workflow/tools.ts";
 
 // ─── resolveToolsForColumn — group expansion ──────────────────────────────────

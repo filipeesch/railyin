@@ -2,6 +2,11 @@ import type { Attachment } from "../../shared/rpc-types.ts";
 
 const MAX_BYTES = 100 * 1024; // 100 KB cap per attachment
 
+/** Injectable file-reader — defaults to Bun's native API in production. */
+export type FileReader = (path: string) => Promise<string>;
+
+const defaultFileReader: FileReader = (path: string) => Bun.file(path).text();
+
 /**
  * Parse an @file: data URI into its components.
  * Supports:
@@ -31,7 +36,7 @@ export function parseFileRef(data: string): { path: string; startLine?: number; 
  *
  * Returns the augmented content string.
  */
-export async function resolveFileAttachments(content: string, attachments: Attachment[]): Promise<string> {
+export async function resolveFileAttachments(content: string, attachments: Attachment[], readFile: FileReader = defaultFileReader): Promise<string> {
   const fileAttachments = attachments.filter((a) => a.data.startsWith("@file:"));
   if (fileAttachments.length === 0) return content;
 
@@ -45,7 +50,7 @@ export async function resolveFileAttachments(content: string, attachments: Attac
 
     let text: string;
     try {
-      const raw = await Bun.file(path).text();
+      const raw = await readFile(path);
       if (startLine !== undefined && endLine !== undefined) {
         const lines = raw.split("\n");
         const sliced = lines.slice(startLine - 1, endLine);

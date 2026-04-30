@@ -10,6 +10,7 @@ import type {
 } from "./types.ts";
 import { ProviderError } from "./retry.ts";
 import { log } from "../logger.ts";
+import { type TextHasher, createBunHasher } from "./crypto.ts";
 
 // ─── Usage logging helper ─────────────────────────────────────────────────────
 
@@ -277,82 +278,103 @@ export const CONTEXT_EDIT_STRATEGY = {
 
 // ─── Cache break detection ────────────────────────────────────────────────────
 
-/** Per-execution hash state for cache break detection. Keyed by execution ID. */
-const _execHashes = new Map<number, { system: string; tools: string; toolHashes: Map<string, string>; round: number }>();
+type ExecHashState = { system: string; tools: string; toolHashes: Map<string, string>; round: number };
 
-/** Compute a short (8-char) SHA-256 hex digest of a string using Bun's crypto API. */
-function hashShort(text: string): string {
-  return new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 8);
-}
+/**
+ * Tracks per-execution hash state to detect unexpected Anthropic prompt-cache breaks.
+ *
+ * Owns its own hash Map (no module-level globals) and accepts a TextHasher so it
+ * can be constructed with a Node-compatible hasher in tests.
+ */
+export class CacheBreakTracker {
+  private readonly _execHashes = new Map<number, ExecHashState>();
 
-/** Build a name→hash map from a serialized tools array. */
-function buildToolHashes(toolsJson: string): Map<string, string> {
-  const hashes = new Map<string, string>();
-  try {
-    const tools = JSON.parse(toolsJson) as Array<{ name?: string }>;
-    for (const tool of tools) {
-      if (tool.name) hashes.set(tool.name, hashShort(JSON.stringify(tool)));
+  constructor(private readonly hash: TextHasher = createBunHasher()) {}
+
+  private buildToolHashes(toolsJson: string): Map<string, string> {
+    const hashes = new Map<string, string>();
+    try {
+      const tools = JSON.parse(toolsJson) as Array<{ name?: string }>;
+      for (const tool of tools) {
+        if (tool.name) hashes.set(tool.name, this.hash(JSON.stringify(tool)));
+      }
+    } catch {
+      // malformed JSON — leave empty
     }
-  } catch {
-    // malformed JSON — leave empty
+    return hashes;
   }
-  return hashes;
+
+  /** Compare system and tools hashes against the stored values for this execution.
+   *  Emits console.warn when a hash changes (cache miss cause). Updates stored hashes. */
+  checkAndUpdate(executionId: number | undefined, systemText: string | undefined, toolsJson: string): void {
+    if (!executionId) return;
+    const sysHash = this.hash(systemText ?? "");
+    const toolsHash = this.hash(toolsJson);
+    const newToolHashes = this.buildToolHashes(toolsJson);
+    const prev = this._execHashes.get(executionId);
+    if (prev) {
+      if (prev.system !== sysHash) {
+        console.warn(`[cache] system hash changed: ${prev.system} → ${sysHash}`);
+      }
+      if (prev.tools !== toolsHash) {
+        const changed: string[] = [];
+        const added: string[] = [];
+        const removed: string[] = [];
+        for (const [name, hash] of newToolHashes) {
+          if (!prev.toolHashes.has(name)) added.push(name);
+          else if (prev.toolHashes.get(name) !== hash) changed.push(name);
+        }
+        for (const name of prev.toolHashes.keys()) {
+          if (!newToolHashes.has(name)) removed.push(name);
+        }
+        const parts: string[] = [];
+        if (changed.length) parts.push(`changed: ${changed.join(", ")}`);
+        if (added.length) parts.push(`added: ${added.join(", ")}`);
+        if (removed.length) parts.push(`removed: ${removed.join(", ")}`);
+        console.warn(`[cache] tools hash changed: ${prev.tools} → ${toolsHash}${parts.length ? ` (${parts.join("; ")})` : ""}`);
+      }
+    }
+    this._execHashes.set(executionId, { system: sysHash, tools: toolsHash, toolHashes: newToolHashes, round: (prev?.round ?? 0) + 1 });
+  }
+
+  /** After receiving a response, warn if cache_read_input_tokens is 0 on a non-first round. */
+  checkRead(executionId: number | undefined, cacheReadTokens: number): void {
+    if (!executionId) return;
+    const state = this._execHashes.get(executionId);
+    if (!state || state.round <= 1) return;
+    if (cacheReadTokens === 0) {
+      console.warn(`[cache] unexpected miss on round ${state.round}: cache_read_input_tokens=0`);
+    }
+  }
+
+  /** Clear stored hash state for an execution (call on completion to free memory). */
+  clear(executionId: number): void {
+    this._execHashes.delete(executionId);
+  }
 }
 
-/** Compare system and tools hashes against the stored values for this execution.
- *  Emits console.warn when a hash changes (cache miss cause). Updates stored hashes. */
+/** Module-level singleton — preserves existing per-process shared behaviour. */
+const _sharedTracker = new CacheBreakTracker();
+
+/** @deprecated Use CacheBreakTracker directly. These module-level wrappers are kept for
+ *  backward compatibility with existing callers. */
 export function checkAndUpdateCacheBreak(
   executionId: number | undefined,
   systemText: string | undefined,
   toolsJson: string,
 ): void {
-  if (!executionId) return;
-  const sysHash = hashShort(systemText ?? "");
-  const toolsHash = hashShort(toolsJson);
-  const newToolHashes = buildToolHashes(toolsJson);
-  const prev = _execHashes.get(executionId);
-  if (prev) {
-    if (prev.system !== sysHash) {
-      console.warn(`[cache] system hash changed: ${prev.system} → ${sysHash}`);
-    }
-    if (prev.tools !== toolsHash) {
-      const changed: string[] = [];
-      const added: string[] = [];
-      const removed: string[] = [];
-      for (const [name, hash] of newToolHashes) {
-        if (!prev.toolHashes.has(name)) added.push(name);
-        else if (prev.toolHashes.get(name) !== hash) changed.push(name);
-      }
-      for (const name of prev.toolHashes.keys()) {
-        if (!newToolHashes.has(name)) removed.push(name);
-      }
-      const parts: string[] = [];
-      if (changed.length) parts.push(`changed: ${changed.join(", ")}`);
-      if (added.length) parts.push(`added: ${added.join(", ")}`);
-      if (removed.length) parts.push(`removed: ${removed.join(", ")}`);
-      console.warn(`[cache] tools hash changed: ${prev.tools} → ${toolsHash}${parts.length ? ` (${parts.join("; ")})` : ""}`);
-    }
-  }
-  _execHashes.set(executionId, { system: sysHash, tools: toolsHash, toolHashes: newToolHashes, round: (prev?.round ?? 0) + 1 });
+  _sharedTracker.checkAndUpdate(executionId, systemText, toolsJson);
 }
 
-/** After receiving a response, warn if cache_read_input_tokens is 0 on a non-first round.
- *  A zero read on round ≥ 2 means the cache was busted unexpectedly (TTL expiry, provider issue, etc.). */
 export function checkCacheReadOnResponse(
   executionId: number | undefined,
   cacheReadTokens: number,
 ): void {
-  if (!executionId) return;
-  const state = _execHashes.get(executionId);
-  if (!state || state.round <= 1) return;
-  if (cacheReadTokens === 0) {
-    console.warn(`[cache] unexpected miss on round ${state.round}: cache_read_input_tokens=0`);
-  }
+  _sharedTracker.checkRead(executionId, cacheReadTokens);
 }
 
-/** Clear stored hash state for an execution (call on completion to free memory). */
 export function clearExecHashes(executionId: number): void {
-  _execHashes.delete(executionId);
+  _sharedTracker.clear(executionId);
 }
 
 export class AnthropicProvider implements AIProvider {

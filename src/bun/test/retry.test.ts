@@ -7,7 +7,7 @@
  * and idleTimeoutMs to a small value so tests run fast without real waits.
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { retryStream, retryTurn, ProviderError } from "../ai/retry.ts";
 import type { AIProvider, AIMessage, AICallOptions, AITurnResult, StreamEvent } from "../ai/types.ts";
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
 import { initDb, setupTestConfig } from "./helpers.ts";
 import { buildSystemInstructions, getColumnConfig, getWorkflowTemplate } from "../workflow/column-config.ts";

@@ -1,4 +1,4 @@
-import { expect } from "bun:test";
+import { expect } from "vitest";
 import type { BackendRpcRuntime } from "./backend-rpc-runtime.ts";
 
 export async function runSingleTurnChatScenario(runtime: BackendRpcRuntime): Promise<void> {

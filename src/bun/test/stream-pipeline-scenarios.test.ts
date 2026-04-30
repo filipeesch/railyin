@@ -26,7 +26,7 @@
  *   S-11 [file-diff]       Cancel/retry nested tool calls keep file_diff parent association per execution
  */
 
-import { describe, it, expect, afterEach } from "bun:test";
+import { describe, it, expect, afterEach } from "vitest";
 import { createBackendRpcRuntime, type BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import {
     ScriptedEngine,

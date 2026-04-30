@@ -1,15 +1,16 @@
 {
   "$schema": "https://stryker-mutator.io/schemas/stryker-schema.json",
-  "testRunner": "command",
-  "commandRunner": {
-    "command": "bun test src/bun --timeout 20000"
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.backend.config.ts"
   },
-  "coverageAnalysis": "off",
-  "concurrency": 2,
-  "timeoutMS": 90000,
-  "timeoutFactor": 2,
+  "coverageAnalysis": "perTest",
+  "concurrency": 8,
   "checkers": [],
-  "plugins": [],
+  "plugins": [
+    "@stryker-mutator/vitest-runner"
+  ],
+  "tsconfigFile": "tsconfig.backend.test.json",
   "reporters": ["html", "json", "progress"],
   "htmlReporter": {
     "fileName": "reports/mutation/backend/index.html"

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { engineHandlers } from "../handlers/engine.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 

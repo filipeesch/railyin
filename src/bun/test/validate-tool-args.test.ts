@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { validateToolArgs } from "../engine/validate-tool-args.ts";
 import type { AIToolDefinition } from "../ai/types.ts";
 import { COMMON_TOOL_DEFINITIONS } from "../engine/common-tools.ts";

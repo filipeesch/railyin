@@ -1,8 +1,10 @@
 import { readdirSync, existsSync } from "fs";
 import { join } from "path";
-import { spawnSync } from "child_process";
+import { spawnSync, type SpawnSyncReturns } from "child_process";
 import { LANGUAGE_REGISTRY, getRegistryForPlatform } from "./registry.ts";
 import type { LanguageEntry } from "./registry.ts";
+
+type SpawnSyncFn = (cmd: string, args: string[], opts: { encoding: "utf-8" }) => SpawnSyncReturns<string>;
 
 // ─── Language detection ───────────────────────────────────────────────────────
 
@@ -61,10 +63,10 @@ function matchesAnyGlob(filesSet: Set<string>, globs: string[]): boolean {
  * Checks whether a binary is available on $PATH using `which` (macOS/Linux)
  * or `where` (Windows). Returns true if found.
  */
-export function probeInstalled(serverName: string): boolean {
+export function probeInstalled(serverName: string, _spawnSync: SpawnSyncFn = spawnSync): boolean {
   const cmd = process.platform === "win32" ? "where" : "which";
   try {
-    const result = spawnSync(cmd, [serverName], { encoding: "utf-8" });
+    const result = _spawnSync(cmd, [serverName], { encoding: "utf-8" });
     return result.status === 0;
   } catch {
     return false;

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, setupTestConfig, seedProjectAndTask } from "./helpers.ts";
 import { todoHandlers } from "../handlers/todos.ts";
 import { TodoRepository } from "../db/todos.ts";

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"],
+    "noEmit": true
+  },
+  "include": [
+    "src/bun/**/*.ts",
+    "src/shared/**/*.ts",
+    "vitest.backend.config.ts"
+  ]
+}

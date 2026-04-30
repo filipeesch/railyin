@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LeaseRegistry } from "../engine/lease-registry.ts";
 
 afterEach(() => {
-  mock.restore();
+  vi.restoreAllMocks();
 });
 
 describe("LeaseRegistry", () => {

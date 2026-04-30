@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -56,59 +56,26 @@ describe("detectLanguages", () => {
 
 describe("probeInstalled", () => {
   it("returns true when the binary is on PATH (exit 0)", async () => {
-    const child_process = await import("child_process");
-    const spy = spyOn(child_process, "spawnSync").mockReturnValue({
-      status: 0,
-      stdout: "/usr/bin/node\n",
-      stderr: "",
-      pid: 1,
-      signal: null,
-      error: undefined,
-      output: [null, "/usr/bin/node\n", ""],
-    } as any);
-
     const { probeInstalled } = await import("../lsp/detect.ts");
-    expect(probeInstalled("node")).toBe(true);
-    spy.mockRestore();
+    const mockSpawn = vi.fn().mockReturnValue({ status: 0, stdout: "/usr/bin/node\n", stderr: "", pid: 1, signal: null, error: undefined, output: [null, "/usr/bin/node\n", ""] });
+    expect(probeInstalled("node", mockSpawn)).toBe(true);
   });
 
   it("returns false when the binary is not on PATH (exit 1)", async () => {
-    const child_process = await import("child_process");
-    const spy = spyOn(child_process, "spawnSync").mockReturnValue({
-      status: 1,
-      stdout: "",
-      stderr: "not found\n",
-      pid: 1,
-      signal: null,
-      error: undefined,
-      output: [null, "", "not found\n"],
-    } as any);
-
     const { probeInstalled } = await import("../lsp/detect.ts");
-    expect(probeInstalled("no-such-binary")).toBe(false);
-    spy.mockRestore();
+    const mockSpawn = vi.fn().mockReturnValue({ status: 1, stdout: "", stderr: "not found\n", pid: 1, signal: null, error: undefined, output: [null, "", "not found\n"] });
+    expect(probeInstalled("no-such-binary", mockSpawn)).toBe(false);
   });
 
   it("uses 'where' on Windows", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 
-    const child_process = await import("child_process");
-    const spy = spyOn(child_process, "spawnSync").mockReturnValue({
-      status: 0,
-      stdout: "C:\\Windows\\node.exe\r\n",
-      stderr: "",
-      pid: 1,
-      signal: null,
-      error: undefined,
-      output: [null, "C:\\Windows\\node.exe\r\n", ""],
-    } as any);
-
     const { probeInstalled } = await import("../lsp/detect.ts");
-    probeInstalled("node");
-    expect(spy).toHaveBeenCalledWith("where", ["node"], expect.anything());
+    const mockSpawn = vi.fn().mockReturnValue({ status: 0, stdout: "C:\\Windows\\node.exe\r\n", stderr: "", pid: 1, signal: null, error: undefined, output: [null, "C:\\Windows\\node.exe\r\n", ""] });
+    probeInstalled("node", mockSpawn);
+    expect(mockSpawn).toHaveBeenCalledWith("where", ["node"], expect.anything());
 
-    spy.mockRestore();
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 });
@@ -445,14 +412,14 @@ describe("executeLspTool", () => {
 
   it("returns error when file_path is outside the worktree", async () => {
     const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
-    const mockManager = { request: mock(async () => null), shutdown: () => {} };
+    const mockManager = { request: vi.fn(async () => null), shutdown: () => {} };
     const result = await executeLspTool({ operation: "hover", file_path: "../../etc/passwd", line: 1, character: 1 }, mockManager as any, "/tmp/project");
     expect(result).toContain("Error: file_path is outside the worktree");
   });
 
   it("returns error for unknown lsp operation", async () => {
     const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
-    const mockManager = { request: mock(async () => null), shutdown: () => {} };
+    const mockManager = { request: vi.fn(async () => null), shutdown: () => {} };
     // Use a valid path inside the worktree (doesn't need to exist for routing)
     const result = await executeLspTool({ operation: "unknownOp", file_path: "src/foo.ts" }, mockManager as any, "/tmp/project");
     expect(result).toContain("Error: unknown lsp operation");
@@ -460,7 +427,7 @@ describe("executeLspTool", () => {
 
   it("calls lspManager.request with correct LSP method for hover", async () => {
     const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
-    const mockRequest = mock(async () => ({ contents: "hover text", range: undefined }));
+    const mockRequest = vi.fn(async () => ({ contents: "hover text", range: undefined }));
     const mockManager = { request: mockRequest, shutdown: () => {} };
     const dir = mkdtempSync(join(tmpdir(), "railyn-tool-lsp-"));
     writeFileSync(join(dir, "foo.ts"), "const x = 1;\n");
@@ -479,7 +446,7 @@ describe("executeLspTool", () => {
 
   it("converts 1-based line/char to 0-based for the LSP request", async () => {
     const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
-    const mockRequest = mock(async () => null);
+    const mockRequest = vi.fn(async () => null);
     const mockManager = { request: mockRequest, shutdown: () => {} };
     const dir = mkdtempSync(join(tmpdir(), "railyn-tool-lsp2-"));
     writeFileSync(join(dir, "bar.ts"), "const y = 2;\n");

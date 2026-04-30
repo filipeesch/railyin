@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { CopilotEngine } from "../engine/copilot/engine.ts";

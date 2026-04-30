@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -134,8 +134,8 @@ describe("triggerWorktreeIfNeeded", () => {
       .get(taskId);
 
     expect(row!.worktree_status).toBe("ready");
-    expect(row!.worktree_path).toStartWith(worktreesBase);
-    expect(row!.worktree_path).not.toStartWith(gitDir);
+    expect(row!.worktree_path).toMatch(new RegExp(`^${worktreesBase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    expect(row!.worktree_path).not.toMatch(new RegExp(`^${gitDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/?$`));
   }, 15_000);
 
   it("retries worktree creation when status is error", async () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -107,7 +107,7 @@ describe("runMigrations", () => {
     `);
     rawDb.close();
 
-    expect(async () => await runMigrations()).not.toThrow();
+    await runMigrations();
 
     const db = getDb();
     const applied = db.query<{ id: string }, [string]>("SELECT id FROM schema_migrations WHERE id = ?").get("015_workspace_config_key");

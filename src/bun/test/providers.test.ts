@@ -5,7 +5,7 @@
  * and OpenAI-compatible wire formats. No real network calls are made.
  */
 
-import { describe, it, expect, afterEach, beforeEach } from "bun:test";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { adaptMessages, adaptTools, AnthropicProvider, isEmptyAssistantMessage, checkAndUpdateCacheBreak, checkCacheReadOnResponse, clearExecHashes, CONTEXT_EDIT_STRATEGY } from "../ai/anthropic.ts";
 import { resolveProvider, UnresolvableProviderError, clearProviderCache, listOpenAICompatibleModels } from "../ai/index.ts";
 import { OpenAICompatibleProvider } from "../ai/openai-compatible.ts";

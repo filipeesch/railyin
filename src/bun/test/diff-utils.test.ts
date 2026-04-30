@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import type { Database } from "bun:sqlite";
 import { computeHunkHash, parseGitDiffHunks, extractHunkPatch } from "../git/diff-utils.ts";
 
