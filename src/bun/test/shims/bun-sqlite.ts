@@ -14,14 +14,32 @@ type BindValue = string | number | bigint | Buffer | null;
 // Track every open Database so we can close them before V8 teardown.
 // better-sqlite3's native addon SIGSEGVs on macOS when open connections are
 // GC'd after the V8 shutdown sequence has begun (e.g. during Vitest perTest
-// coverage collection).  Closing them synchronously in "exit" avoids this.
-const _openDatabases = new Set<Database>();
-process.on("exit", () => {
+// coverage collection).  We expose closeAll() so the vitest setup file can
+// register an afterAll() hook — which fires inside vitest's lifecycle, while
+// V8 is still fully operational, earlier than process.on('exit').
+//
+// IMPORTANT: Use globalThis to store the Set so it persists across module
+// reloads.  Stryker forces pool:'threads' with reloadEnvironment:true, which
+// clears the module registry between test files within the same worker thread.
+// Without globalThis, each module generation gets its OWN empty Set, and the
+// closeAll() captured by vitest-teardown.ts operates on a stale (empty) Set —
+// leaving the new generation's connections unclosed at V8 isolate teardown.
+const _g = globalThis as Record<string, unknown>;
+if (!(_g.__openSqliteDbs instanceof Set)) {
+  _g.__openSqliteDbs = new Set<Database>();
+}
+const _openDatabases = _g.__openSqliteDbs as Set<Database>;
+
+export function closeAll(): void {
   for (const db of _openDatabases) {
     try { db.close(); } catch { /* already closed */ }
   }
   _openDatabases.clear();
-});
+}
+
+// Belt-and-suspenders: also close on process exit for any code path that
+// bypasses vitest teardown (e.g. direct node invocations of the shim).
+process.on("exit", closeAll);
 
 interface QueryResult<T> {
   get(...params: BindValue[]): T | null;
