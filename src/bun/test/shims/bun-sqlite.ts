@@ -39,7 +39,29 @@ export function closeAll(): void {
 
 // Belt-and-suspenders: also close on process exit for any code path that
 // bypasses vitest teardown (e.g. direct node invocations of the shim).
-process.on("exit", closeAll);
+// Guard with globalThis so reloadEnvironment module reloads don't accumulate
+// duplicate listeners (65 files = 65 reloads without this guard).
+if (!(_g.__sqliteExitHooked)) {
+  _g.__sqliteExitHooked = true;
+  process.on("exit", closeAll);
+}
+
+// In vitest worker threads (Stryker forces pool:'threads'), the worker is
+// terminated via worker.terminate() — process.on('exit') does NOT fire.
+// Hook parentPort.once('close') instead: it fires when the parent closes the
+// communication channel, which is BEFORE V8 isolate teardown.  This ensures
+// all DB connections are explicitly closed before C++ finalizers run.
+// Guard with globalThis so we only register once across module reloads.
+if (!(_g.__sqlitePortCloseHooked)) {
+  _g.__sqlitePortCloseHooked = true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const wt = require("worker_threads") as typeof import("worker_threads");
+    wt.parentPort?.once("close", closeAll);
+  } catch {
+    // not in a worker thread context, ignore
+  }
+}
 
 interface QueryResult<T> {
   get(...params: BindValue[]): T | null;
