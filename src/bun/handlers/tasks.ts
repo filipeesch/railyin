@@ -18,6 +18,7 @@ import { getLoadedProjectByKey } from "../project-store.ts";
 import { resolveContextWindow } from "../context-usage.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { validateTransition } from "../workflow/transition-validator.ts";
+import { getColumnConfig } from "../workflow/column-config.ts";
 import { PositionService } from "./position-service.ts";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────
@@ -191,6 +192,48 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         positionService.rebalanceColumnPositions(validation.boardId, params.toState);
       }
 
+      // ── Deferred-path: running task ──────────────────────────────────────────
+      // If the task is currently executing, skip worktree setup and orchestrator.
+      // Just update the workflow_state and set needs_column_prompt if the target
+      // column has an on_enter_prompt. The StreamProcessor drain will fire the
+      // column prompt once the current execution completes.
+      const runningCheck = db
+        .query<{ execution_state: string; board_id: number; conversation_id: number | null }, [number]>(
+          "SELECT execution_state, board_id, conversation_id FROM tasks WHERE id = ?",
+        )
+        .get(params.taskId);
+
+      if (runningCheck?.execution_state === "running") {
+        const fromStateRow = db
+          .query<{ workflow_state: string }, [number]>("SELECT workflow_state FROM tasks WHERE id = ?")
+          .get(params.taskId);
+        const fromState = fromStateRow?.workflow_state ?? params.toState;
+
+        db.run(
+          "UPDATE tasks SET workflow_state = ? WHERE id = ?",
+          [params.toState, params.taskId],
+        );
+
+        const wsKey = getBoardWorkspaceKey(runningCheck.board_id);
+        const config = getWorkspaceConfig(wsKey);
+        const col = getColumnConfig(config, runningCheck.board_id, params.toState);
+        if (col?.on_enter_prompt) {
+          db.run("UPDATE tasks SET needs_column_prompt = 1 WHERE id = ?", [params.taskId]);
+        }
+
+        const convId = runningCheck.conversation_id;
+        if (convId != null) {
+          appendMessage(db, params.taskId, convId, "transition_event", null, "", {
+            from: fromState,
+            to: params.toState,
+          } as unknown as Record<string, unknown>);
+        }
+
+        const deferredRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId)!;
+        onTaskUpdated(mapTask(deferredRow));
+        return { task: mapTask(deferredRow), executionId: null };
+      }
+
       const taskRow = db
         .query<{ project_key: string; conversation_id: number }, [number]>(
           "SELECT project_key, conversation_id FROM tasks WHERE id = ?",
@@ -243,7 +286,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
       }
 
       return requireOrchestrator(orchestrator).executeTransition(params.taskId, params.toState);
-    },
+    }, 
 
     "tasks.sendMessage": async (params: {
       taskId: number;

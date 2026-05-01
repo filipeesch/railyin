@@ -414,17 +414,75 @@ describe("executeCommonTool / move_task", () => {
         expect(result.text).toContain("Error: workflow_state \"nonexistent\" not found in board template");
     });
 
-    it("fires onTransition callback after updating DB", async () => {
+    it("fires onTransition (Case B) for idle other task moving to prompt column", async () => {
+        // Seed a second idle task that is NOT the calling task
+        db.run(
+            "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state) VALUES (?, ?, 'Other task', 'backlog', 'idle')",
+            [boardId, projectKey],
+        );
+        const otherTaskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+        let calledWith: [number, string] | null = null;
+        await executeCommonTool(
+            "move_task",
+            { task_id: otherTaskId, workflow_state: "plan" },
+            { ...commonCtx(), onTransition: (id, state) => { calledWith = [id, state]; } },
+        );
+        expect(calledWith).toEqual([otherTaskId, "plan"]);
+    });
+
+    it("defers column prompt (Case A) when task moves itself to prompt column", async () => {
+        let calledWith: [number, string] | null = null;
+        // ctx.taskId === task_id (self-move), target column "plan" has on_enter_prompt
+        await executeCommonTool(
+            "move_task",
+            { task_id: taskId, workflow_state: "plan" },
+            { ...commonCtx({ taskId }), onTransition: (id, state) => { calledWith = [id, state]; } },
+        );
+        // onTransition should NOT be called immediately — deferred via needs_column_prompt flag
+        expect(calledWith).toBeNull();
+        const row = db
+            .query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?")
+            .get(taskId);
+        expect(row?.needs_column_prompt).toBe(1);
+    });
+
+    it("does not fire onTransition (Case C) when target column has no prompt", async () => {
         let calledWith: [number, string] | null = null;
         await executeCommonTool(
             "move_task",
             { task_id: taskId, workflow_state: "done" },
             { ...commonCtx(), onTransition: (id, state) => { calledWith = [id, state]; } },
         );
-        expect(calledWith).toEqual([taskId, "done"]);
+        expect(calledWith).toBeNull();
+        const row = db
+            .query<{ workflow_state: string }, [number]>("SELECT workflow_state FROM tasks WHERE id = ?")
+            .get(taskId);
+        expect(row?.workflow_state).toBe("done");
     });
 
-    it("returns error when task does not exist", async () => {
+    it("defers column prompt (Case A2) when moving a running other task to prompt column", async () => {
+        // Seed another task and mark it as running
+        db.run(
+            "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state) VALUES (?, ?, 'Running task', 'backlog', 'running')",
+            [boardId, projectKey],
+        );
+        const runningTaskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+        let calledWith: [number, string] | null = null;
+        await executeCommonTool(
+            "move_task",
+            { task_id: runningTaskId, workflow_state: "plan" },
+            { ...commonCtx(), onTransition: (id, state) => { calledWith = [id, state]; } },
+        );
+        expect(calledWith).toBeNull();
+        const row = db
+            .query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?")
+            .get(runningTaskId);
+        expect(row?.needs_column_prompt).toBe(1);
+    });
+
+    it("returns error when task 999999 does not exist", async () => {
         const result = await executeCommonTool(
             "move_task",
             { task_id: 999999, workflow_state: "done" },

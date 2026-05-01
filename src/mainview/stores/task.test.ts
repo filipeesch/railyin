@@ -153,7 +153,7 @@ describe("taskStore", () => {
     expect(store.unreadTaskIds.has(99)).toBe(false);
   });
 
-  it("T-A: onTaskStreamEvent file_diff marks inactive task unread", async () => {
+  it("T-A: onTaskStreamEvent file_diff does NOT mark task unread (unread fires only on terminal execution state)", async () => {
     const store = useTaskStore();
     const conversationStore = useConversationStore();
     const task1 = makeTask({ id: 1, boardId: 1, conversationId: 1 });
@@ -176,11 +176,11 @@ describe("taskStore", () => {
       done: false,
     });
 
-    expect(store.hasUnread(2)).toBe(true);
+    expect(store.hasUnread(2)).toBe(false);
     expect(store.hasUnread(1)).toBe(false);
   });
 
-  it("T-B: onTaskNewMessage file_diff marks inactive task unread", async () => {
+  it("T-B: onTaskNewMessage file_diff does NOT mark task unread (unread fires only on terminal execution state)", async () => {
     const store = useTaskStore();
     const conversationStore = useConversationStore();
     const task1 = makeTask({ id: 1, boardId: 1, conversationId: 1 });
@@ -201,7 +201,7 @@ describe("taskStore", () => {
       createdAt: new Date().toISOString(),
     });
 
-    expect(store.hasUnread(2)).toBe(true);
+    expect(store.hasUnread(2)).toBe(false);
     expect(store.hasUnread(1)).toBe(false);
   });
 
@@ -260,5 +260,98 @@ describe("taskStore", () => {
     expect(conversationStore.messages).toEqual([transitionMessage]);
     expect(taskStore.activeTask?.workflowState).toBe("plan");
     expect(apiMock.mock.calls.filter(([method]) => method === "conversations.getMessages")).toHaveLength(2);
+  });
+
+  // ─── Unread dot: terminal execution states ──────────────────────────────────
+
+  it("T10: onTaskUpdated marks unread when execution reaches 'completed' (background task)", async () => {
+    const store = useTaskStore();
+    const running = makeTask({ id: 10, boardId: 1, executionState: "running" });
+    const completed = makeTask({ id: 10, boardId: 1, executionState: "completed" });
+    apiMock.mockResolvedValueOnce([running]);
+    await store.loadTasks(1);
+
+    store.onTaskUpdated(completed);
+
+    expect(store.unreadTaskIds.has(10)).toBe(true);
+  });
+
+  it("T11: onTaskUpdated marks unread when execution reaches 'waiting_user'", async () => {
+    const store = useTaskStore();
+    const running = makeTask({ id: 11, boardId: 1, executionState: "running" });
+    const waiting = makeTask({ id: 11, boardId: 1, executionState: "waiting_user" });
+    apiMock.mockResolvedValueOnce([running]);
+    await store.loadTasks(1);
+
+    store.onTaskUpdated(waiting);
+
+    expect(store.unreadTaskIds.has(11)).toBe(true);
+  });
+
+  it("T12: onTaskUpdated marks unread when execution reaches 'failed'", async () => {
+    const store = useTaskStore();
+    const running = makeTask({ id: 12, boardId: 1, executionState: "running" });
+    const failed = makeTask({ id: 12, boardId: 1, executionState: "failed" });
+    apiMock.mockResolvedValueOnce([running]);
+    await store.loadTasks(1);
+
+    store.onTaskUpdated(failed);
+
+    expect(store.unreadTaskIds.has(12)).toBe(true);
+  });
+
+  it("T13: onTaskUpdated does NOT mark unread while task is still 'running'", async () => {
+    const store = useTaskStore();
+    const idle = makeTask({ id: 13, boardId: 1, executionState: "idle" });
+    const running = makeTask({ id: 13, boardId: 1, executionState: "running" });
+    apiMock.mockResolvedValueOnce([idle]);
+    await store.loadTasks(1);
+
+    store.onTaskUpdated(running);
+
+    expect(store.unreadTaskIds.has(13)).toBe(false);
+  });
+
+  it("T14: onTaskUpdated does NOT mark unread for active (selected) task even on terminal state", async () => {
+    const store = useTaskStore();
+    const running = makeTask({ id: 14, boardId: 1, executionState: "running" });
+    const completed = makeTask({ id: 14, boardId: 1, executionState: "completed" });
+    apiMock.mockImplementation(async (method: string) => {
+      if (method === "tasks.list") return [running];
+      if (method === "conversations.getMessages") return { messages: [], hasMore: false };
+      if (method === "conversations.contextUsage") return { usedTokens: 0, maxTokens: 8192, fraction: 0 };
+      if (method === "tasks.getChangedFiles") return [];
+      if (method === "tasks.getGitStat") return null;
+      return [];
+    });
+    await store.loadTasks(1);
+    await store.selectTask(14); // make it the active task
+
+    store.onTaskUpdated(completed);
+
+    // Active task should NOT get the unread dot
+    expect(store.unreadTaskIds.has(14)).toBe(false);
+  });
+
+  it("T15: onTaskStreamEvent does NOT mark unread on 'done' stream event", async () => {
+    const store = useTaskStore();
+    const running = makeTask({ id: 15, boardId: 1, executionState: "running" });
+    apiMock.mockResolvedValueOnce([running]);
+    await store.loadTasks(1);
+
+    store.onTaskStreamEvent({ type: "done", taskId: 15, executionId: 42 } as Parameters<typeof store.onTaskStreamEvent>[0]);
+
+    expect(store.unreadTaskIds.has(15)).toBe(false);
+  });
+
+  it("T16: onTaskNewMessage does NOT mark unread when message arrives during streaming", async () => {
+    const store = useTaskStore();
+    const running = makeTask({ id: 16, boardId: 1, executionState: "running" });
+    apiMock.mockResolvedValueOnce([running]);
+    await store.loadTasks(1);
+
+    store.onTaskNewMessage({ taskId: 16, type: "assistant", content: "thinking..." } as Parameters<typeof store.onTaskNewMessage>[0]);
+
+    expect(store.unreadTaskIds.has(16)).toBe(false);
   });
 });

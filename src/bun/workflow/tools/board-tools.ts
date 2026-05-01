@@ -7,6 +7,8 @@ import { getProjectByKey } from "../../project-store.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import type { BoardToolContext } from "./types.ts";
 import { validateTransition } from "../transition-validator.ts";
+import { getBoardWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
+import { getColumnConfig } from "../column-config.ts";
 
 const TASK_WITH_GIT = `
   SELECT t.*,
@@ -214,10 +216,31 @@ export async function execMoveTask(
     )
     .get(validation.boardId, targetState);
   const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
+
+  const movedTask = db.query<{ execution_state: string }, [number]>(
+    "SELECT execution_state FROM tasks WHERE id = ?",
+  ).get(taskId)!;
+  const wsKey = getBoardWorkspaceKey(validation.boardId);
+  const config = getWorkspaceConfig(wsKey);
+  const targetCol = getColumnConfig(config, validation.boardId, targetState);
+
+  const isSelf = taskId === ctx.taskId;
+  const isRunning = movedTask.execution_state === "running";
+  const hasPrompt = !!targetCol?.on_enter_prompt;
+
   db.run("UPDATE tasks SET workflow_state = ?, position = ? WHERE id = ?", [targetState, topPos, taskId]);
+
+  if ((isSelf || isRunning) && hasPrompt) {
+    // Case A: task is running (self or another running task) — defer column prompt
+    db.run("UPDATE tasks SET needs_column_prompt = 1 WHERE id = ?", [taskId]);
+  } else if (!isSelf && !isRunning && hasPrompt) {
+    // Case B: different idle task moving to a prompt column — fire immediately
+    ctx.onTransition(taskId, targetState);
+  }
+  // Case C: no on_enter_prompt — no callback needed
+
   const updatedRow = db.query<TaskRow, [number]>(TASK_WITH_GIT).get(taskId)!;
   ctx.onTaskUpdated(mapTask(updatedRow));
-  ctx.onTransition(taskId, targetState);
   return JSON.stringify({ success: true, task_id: taskId, workflow_state: targetState });
 }
 

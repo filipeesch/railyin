@@ -223,4 +223,80 @@ describe("StreamProcessor", () => {
     expect(typeof newMessages[0].id).toBe("number");
     expect(newMessages[0].id).toBeGreaterThan(0);
   });
+
+  it("SP-7: needs_column_prompt=1 triggers onDeferredTransition with (taskId, workflow_state) and clears flag", async () => {
+    db.run("UPDATE tasks SET needs_column_prompt = 1, workflow_state = 'review' WHERE id = ?", [taskId]);
+
+    let deferredArgs: [number, string] | null = null;
+    const sp = new StreamProcessor(
+      db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never,
+      (tid, state) => { deferredArgs = [tid, state]; },
+    );
+
+    await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
+
+    expect(deferredArgs).toEqual([taskId, "review"]);
+    const row = db.query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?").get(taskId);
+    expect(row?.needs_column_prompt).toBe(0);
+  });
+
+  it("SP-8: pending_messages rows and needs_column_prompt=0 → onPendingMessage called per row, rows deleted", async () => {
+    db.run("INSERT INTO pending_messages (task_id, content) VALUES (?, ?)", [taskId, "hello"]);
+    db.run("INSERT INTO pending_messages (task_id, content) VALUES (?, ?)", [taskId, "world"]);
+
+    const delivered: string[] = [];
+    const sp = new StreamProcessor(
+      db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never,
+      () => {},
+      (_tid, msg) => { delivered.push(msg); },
+    );
+
+    await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
+
+    expect(delivered).toEqual(["hello", "world"]);
+    const remaining = db.query<{ c: number }, [number]>("SELECT COUNT(*) as c FROM pending_messages WHERE task_id = ?").get(taskId);
+    expect(remaining?.c).toBe(0);
+  });
+
+  it("SP-9: no flag, no pending rows → neither drain spy called, only onTaskUpdated fires", async () => {
+    let deferredCalled = false;
+    let pendingCalled = false;
+    let taskUpdatedCalled = false;
+
+    const sp = new StreamProcessor(
+      db, fakeRawBuffer, noop as never, noop as never,
+      () => { taskUpdatedCalled = true; },
+      noop as never,
+      () => { deferredCalled = true; },
+      () => { pendingCalled = true; },
+    );
+
+    await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
+
+    expect(deferredCalled).toBe(false);
+    expect(pendingCalled).toBe(false);
+    expect(taskUpdatedCalled).toBe(true);
+  });
+
+  it("SP-10: needs_column_prompt=1 AND pending_messages → only onDeferredTransition fires; onPendingMessage NOT called", async () => {
+    db.run("UPDATE tasks SET needs_column_prompt = 1, workflow_state = 'done' WHERE id = ?", [taskId]);
+    db.run("INSERT INTO pending_messages (task_id, content) VALUES (?, ?)", [taskId, "pending"]);
+
+    let deferredCalled = false;
+    let pendingCalled = false;
+
+    const sp = new StreamProcessor(
+      db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never,
+      () => { deferredCalled = true; },
+      () => { pendingCalled = true; },
+    );
+
+    await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
+
+    expect(deferredCalled).toBe(true);
+    expect(pendingCalled).toBe(false);
+
+    const remaining = db.query<{ c: number }, [number]>("SELECT COUNT(*) as c FROM pending_messages WHERE task_id = ?").get(taskId);
+    expect(remaining?.c).toBe(1); // NOT deleted — deferred path skips pending drain
+  });
 });

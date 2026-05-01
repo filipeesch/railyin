@@ -84,6 +84,10 @@ export interface ExecutionParams {
   enabledMcpTools?: string[] | null;
   /** Optional user-provided attachments for the first turn of an execution. */
   attachments?: Attachment[];
+  /** Called when the engine tool triggers a task workflow-state transition. */
+  onTransition?: (taskId: number, toState: string) => void;
+  /** Called when the engine tool sends a human-turn message to another task. */
+  onHumanTurn?: (taskId: number, message: string) => void;
 }
 
 export interface RawModelMessage {

@@ -21,6 +21,8 @@ export class HumanTurnExecutor {
     private readonly workdirResolver: WorkingDirectoryResolver,
     private readonly streamProcessor: StreamProcessor,
     private readonly onTaskUpdated: OnTaskUpdated,
+    private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
+    private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
   ) {}
 
   async execute(
@@ -82,17 +84,21 @@ export class HumanTurnExecutor {
         this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
 
         const signal = this.streamProcessor.createSignal(newExecutionId);
-        const execParams = this.paramsBuilder.build(
-          taskForFallback,
-          conversationId,
-          newExecutionId,
-          engineContent ?? content,
-          buildSystemInstructions(config, task.board_id, task.workflow_state),
-          this.workdirResolver.resolve(taskForFallback),
-          signal,
-          this.streamProcessor.makePersistCallback(taskId, conversationId, newExecutionId),
-          attachments,
-        );
+        const execParams = {
+          ...this.paramsBuilder.build(
+            taskForFallback,
+            conversationId,
+            newExecutionId,
+            engineContent ?? content,
+            buildSystemInstructions(config, task.board_id, task.workflow_state),
+            this.workdirResolver.resolve(taskForFallback),
+            signal,
+            this.streamProcessor.makePersistCallback(taskId, conversationId, newExecutionId),
+            attachments,
+          ),
+          ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
+          ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
+        };
         this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, engine, execParams);
 
         const msgRow = db
@@ -125,17 +131,21 @@ export class HumanTurnExecutor {
     const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);
 
         const signal = this.streamProcessor.createSignal(executionId);
-    const execParams = this.paramsBuilder.build(
-      taskWithModel,
-      conversationId,
-      executionId,
-      resolvedPrompt,
-      buildSystemInstructions(config, task.board_id, task.workflow_state),
-      this.workdirResolver.resolve(taskWithModel),
-      signal,
-      this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
-      attachments,
-    );
+    const execParams = {
+      ...this.paramsBuilder.build(
+        taskWithModel,
+        conversationId,
+        executionId,
+        resolvedPrompt,
+        buildSystemInstructions(config, task.board_id, task.workflow_state),
+        this.workdirResolver.resolve(taskWithModel),
+        signal,
+        this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
+        attachments,
+      ),
+      ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
+      ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
+    };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 
     const msgRow = db

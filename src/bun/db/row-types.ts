@@ -40,6 +40,7 @@ export interface TaskRow {
   execution_count?: number | null;
   position: number;
   enabled_mcp_tools?: string | null;
+  needs_column_prompt: number;
 }
 
 export interface TaskGitContextRow {

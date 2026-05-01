@@ -57,6 +57,8 @@ export class StreamProcessor {
     private readonly onError: OnError,
     private readonly onTaskUpdated: OnTaskUpdated,
     private readonly onNewMessage: OnNewMessage,
+    private readonly onDeferredTransition: (taskId: number, toState: string) => void = () => {},
+    private readonly onPendingMessage: (taskId: number, message: string) => void = () => {},
   ) {}
 
   setOnStreamEvent(cb: OnStreamEvent): void {
@@ -474,6 +476,23 @@ export class StreamProcessor {
         const finalRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
         if (finalRow) {
           this.onTaskUpdated(mapTask(finalRow));
+
+          if (finalRow.needs_column_prompt === 1) {
+            db.run("UPDATE tasks SET needs_column_prompt = 0 WHERE id = ?", [taskId]);
+            void this.onDeferredTransition(taskId, finalRow.workflow_state);
+          } else {
+            const pending = db
+              .query<{ id: number; content: string }, [number]>(
+                "SELECT id, content FROM pending_messages WHERE task_id = ? ORDER BY id",
+              )
+              .all(taskId);
+            if (pending.length > 0) {
+              db.run("DELETE FROM pending_messages WHERE task_id = ?", [taskId]);
+              for (const row of pending) {
+                void this.onPendingMessage(taskId, row.content);
+              }
+            }
+          }
         }
       }
     }

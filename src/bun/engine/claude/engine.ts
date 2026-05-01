@@ -64,8 +64,8 @@ export class ClaudeEngine implements ExecutionEngine {
       commonToolContext: {
         taskId,
         boardId: boardId ?? 0,
-        onTransition: () => { },
-        onHumanTurn: () => { },
+        onTransition: params.onTransition ?? (() => {}),
+        onHumanTurn: params.onHumanTurn ?? (() => {}),
         onCancel: (id) => this.cancel(id),
         onTaskUpdated: (task) => this._onTaskUpdated(task),
         todoRepo: new TodoRepository(),

@@ -72,12 +72,24 @@ export class Orchestrator implements ExecutionCoordinator {
     const rawBuffer = createRawMessageBuffer(db, { onEnqueue: onRawMessageEnqueued });
     rawBuffer.start();
 
-    this.streamProcessor = new StreamProcessor(db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage);
+    this.streamProcessor = new StreamProcessor(
+      db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage,
+      (tid, state) => void this.transitionExecutor.execute(tid, state),
+      (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
+    );
     this.paramsBuilder = new ExecutionParamsBuilder();
     this.workdirResolver = new WorkingDirectoryResolver();
 
-    this.transitionExecutor = new TransitionExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor);
-    this.humanTurnExecutor = new HumanTurnExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated);
+    this.transitionExecutor = new TransitionExecutor(
+      db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor,
+      (tid, state) => void this.transitionExecutor.execute(tid, state),
+      (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
+    );
+    this.humanTurnExecutor = new HumanTurnExecutor(
+      db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated,
+      (tid, state) => void this.transitionExecutor.execute(tid, state),
+      (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
+    );
     this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor);
     this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage);
     this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor);

@@ -113,7 +113,7 @@ test.describe("B — Rendering isolation", () => {
       };
     });
 
-    // Push 5 ASSISTANT-type events for task2 (background) — assistant type triggers unread marking
+    // Push 5 text_chunk events for task2 (background) — should not touch task1 DOM
     for (let i = 0; i < 5; i++) {
       ws.pushStreamEvent({
         taskId: task2.id,
@@ -121,7 +121,7 @@ test.describe("B — Rendering isolation", () => {
         executionId: EXEC_ID,
         seq: i,
         blockId: `bg-${i}`,
-        type: "assistant",
+        type: "text_chunk",
         content: `chunk-${i}`,
         metadata: null,
         parentBlockId: null,
@@ -130,7 +130,8 @@ test.describe("B — Rendering isolation", () => {
       });
     }
 
-    // Positive proof: task2 card should get an unread dot (events processed)
+    // Positive proof: push task.updated with terminal state → task2 gets unread dot
+    ws.push({ type: "task.updated", payload: makeTask({ id: task2.id, executionState: "completed" }) });
     await expect(
       page.locator(`[data-task-id="${task2.id}"] .task-card__unread-dot`),
     ).toBeVisible({ timeout: 5_000 });
@@ -251,7 +252,7 @@ test.describe("C — Memory cleanup", () => {
 // ─── Suite D — Unread state ────────────────────────────────────────────────────
 
 test.describe("D — Unread state", () => {
-  test("D-1: background stream gives task2 unread dot; opening task2 clears it", async ({
+  test("D-1: task.updated with terminal state gives task2 unread dot; opening task2 clears it", async ({
     page,
     api,
     ws,
@@ -264,19 +265,10 @@ test.describe("D — Unread state", () => {
     await page.goto("/");
     await openTaskDrawer(page, task1.id);
 
-    // Push an "assistant" event for task2 (background) — this marks it unread
-    ws.pushStreamEvent({
-      taskId: task2.id,
-      conversationId: task2.conversationId,
-      executionId: EXEC_ID,
-      seq: 1,
-      blockId: "b1",
-      type: "assistant",
-      content: "done",
-      metadata: null,
-      parentBlockId: null,
-      subagentId: null,
-      done: true,
+    // Push task.updated with terminal executionState for task2 (background) — this marks it unread
+    ws.push({
+      type: "task.updated",
+      payload: makeTask({ id: task2.id, executionState: "completed" }),
     });
 
     // Task2 card should have unread dot

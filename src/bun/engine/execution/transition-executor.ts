@@ -19,6 +19,8 @@ export class TransitionExecutor {
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly workdirResolver: WorkingDirectoryResolver,
     private readonly streamProcessor: StreamProcessor,
+    private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
+    private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
   ) {}
 
   async execute(
@@ -67,7 +69,7 @@ export class TransitionExecutor {
       resolvedPrompt,
       workingDirectory,
     );
-    appendMessage(db, taskId, conversationId, "transition_event", null, "", transitionMetadata);
+    appendMessage(db, taskId, conversationId, "transition_event", null, "", transitionMetadata as unknown as Record<string, unknown>);
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -81,19 +83,24 @@ export class TransitionExecutor {
     );
 
     const signal = this.streamProcessor.createSignal(executionId);
-    const execParams = this.paramsBuilder.build(
-      updatedRow,
-      conversationId,
-      executionId,
-      resolvedPrompt,
-      buildSystemInstructions(config, task.board_id, toState),
-      workingDirectory,
-      signal,
-      this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
-    );
+    const execParams = {
+      ...this.paramsBuilder.build(
+        updatedRow,
+        conversationId,
+        executionId,
+        resolvedPrompt,
+        buildSystemInstructions(config, task.board_id, toState),
+        workingDirectory,
+        signal,
+        this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
+      ),
+      ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
+      ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
+    };
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
-    return { task: mapTask(updatedRow), executionId };
+    const runningRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+    return { task: mapTask(runningRow), executionId };
   }
 
   private async buildTransitionMetadata(

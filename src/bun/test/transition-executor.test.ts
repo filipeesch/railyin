@@ -360,4 +360,25 @@ columns:
 
     expect(builder.lastBuilt?.model).toBe("");
   });
+
+  it("TE-BADGE: returned task has execution_state='running' (not stale 'idle')", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    // task starts in 'plan' column (which has on_enter_prompt), execution_state = 'idle'
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      EngineRegistry.fromFixed(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+    );
+
+    const result = await executor.execute(taskId, "plan");
+
+    // The returned task must reflect the running state that was written to DB
+    expect(result.task.executionState).toBe("running");
+  });
 });

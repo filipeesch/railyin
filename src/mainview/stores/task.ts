@@ -189,7 +189,12 @@ export const useTaskStore = defineStore("task", () => {
     _replaceTask(task);
     taskIndex.value[task.id] = task;
     const activity = classifyTaskActivity(previous, task);
-    if (activity && activeTaskId.value !== task.id) {
+    const TERMINAL_STATES = ["completed", "waiting_user", "failed", "cancelled"] as const;
+    if (
+      activity?.kind === "execution" &&
+      TERMINAL_STATES.includes(activity.nextState as typeof TERMINAL_STATES[number]) &&
+      activeTaskId.value !== task.id
+    ) {
       markTaskUnread(task.id);
     }
     // Refresh context usage when the active task finishes an execution
@@ -385,22 +390,10 @@ export const useTaskStore = defineStore("task", () => {
         drainQueue(event.taskId);
       }
     }
-    if (
-      event.conversationId !== conversationStore.activeConversationId &&
-      (event.type === "assistant" || event.type === "reasoning" || event.type === "system" || event.type === "file_diff")
-    ) {
-      markTaskUnread(event.taskId);
-    }
   }
 
   function onTaskNewMessage(message: ConversationMessage): void {
     if (message.taskId == null) return;
-    if (
-      message.conversationId !== conversationStore.activeConversationId &&
-      (message.type === "assistant" || message.type === "reasoning" || message.type === "system" || message.type === "file_diff")
-    ) {
-      markTaskUnread(message.taskId);
-    }
   }
 
   return {

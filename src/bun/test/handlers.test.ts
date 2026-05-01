@@ -243,6 +243,53 @@ describe("tasks.transition / git context backfill", () => {
   }, 15_000);
 });
 
+// ─── tasks.transition (running guard — deferred prompt) ───────────────────────
+
+describe("tasks.transition / running task deferred", () => {
+  it("TH-DEFER-1: running task moving to prompt column defers prompt and keeps execution_state running", async () => {
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    // Force task into running state (simulates an active execution)
+    db.run("UPDATE tasks SET execution_state = 'running', workflow_state = 'backlog' WHERE id = ?", [taskId]);
+
+    const taskUpdates: Task[] = [];
+    const handlers = taskHandlers(db, makeDbOrchestrator(), (t) => taskUpdates.push(t));
+
+    const result = await handlers["tasks.transition"]({ taskId, toState: "plan" });
+
+    // executionId should be null — we didn't start a new execution
+    expect(result.executionId).toBeNull();
+    // workflow_state was updated
+    expect(result.task.workflowState).toBe("plan");
+    // execution_state stayed running (we didn't touch it)
+    expect(result.task.executionState).toBe("running");
+    // needs_column_prompt flag was set (plan column has on_enter_prompt)
+    const dbRow = db.query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?").get(taskId);
+    expect(dbRow?.needs_column_prompt).toBe(1);
+    // transition_event was appended to the conversation
+    const msg = db.query<{ type: string }, [number]>(
+      "SELECT type FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' LIMIT 1",
+    ).get(taskId);
+    expect(msg).not.toBeNull();
+    // onTaskUpdated was called
+    expect(taskUpdates.length).toBeGreaterThan(0);
+  });
+
+  it("TH-DEFER-2: running task moving to no-prompt column updates state without flag", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET execution_state = 'running', workflow_state = 'plan' WHERE id = ?", [taskId]);
+
+    const handlers = taskHandlers(db, makeDbOrchestrator(), () => {});
+
+    const result = await handlers["tasks.transition"]({ taskId, toState: "done" });
+
+    expect(result.executionId).toBeNull();
+    expect(result.task.workflowState).toBe("done");
+    expect(result.task.executionState).toBe("running");
+    const dbRow = db.query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?").get(taskId);
+    expect(dbRow?.needs_column_prompt).toBe(0);
+  });
+});
+
 // ─── tasks.delete ─────────────────────────────────────────────────────────────
 
 describe("tasks.delete", () => {

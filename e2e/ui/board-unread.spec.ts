@@ -1,9 +1,9 @@
 import { test, expect } from "./fixtures";
 import { navigateToBoard } from "./fixtures/board-helpers";
-import { makeAssistantMessage, makeBoard } from "./fixtures/mock-data";
+import { makeBoard, makeTask } from "./fixtures/mock-data";
 
 test.describe("Board unread indicators", () => {
-    test("UNREAD-1: task card shows unread dot after message.new WS push for that task", async ({
+    test("UNREAD-1: task card shows unread dot after task.updated WS push with terminal executionState", async ({
         page,
         task,
         ws,
@@ -13,9 +13,11 @@ test.describe("Board unread indicators", () => {
         const card = page.locator(`[data-task-id="${task.id}"]`);
         await expect(card).toBeVisible();
 
-        // Must be an assistant message — onTaskNewMessage only marks unread
-        // for assistant/reasoning/system/file_diff types, not user messages.
-        ws.push({ type: "message.new", payload: makeAssistantMessage(task.id, "hello") });
+        // Unread is triggered by task.updated with a terminal execution state (completed/waiting_user/failed/cancelled)
+        ws.push({
+            type: "task.updated",
+            payload: makeTask({ id: task.id, executionState: "completed" }),
+        });
 
         await expect(card.locator(".task-card__unread-dot")).toBeVisible();
     });
@@ -32,7 +34,7 @@ test.describe("Board unread indicators", () => {
         await expect(card.locator(".task-card__unread-dot")).not.toBeVisible();
     });
 
-    test("UNREAD-3: workspace tab shows unread dot when a task in that workspace receives message.new", async ({
+    test("UNREAD-3: workspace tab shows unread dot when a background task reaches terminal execution state", async ({
         page,
         task,
         ws,
@@ -57,8 +59,11 @@ test.describe("Board unread indicators", () => {
         // No unread dots initially
         await expect(ws2Tab.locator(".workspace-tab__unread-dot")).not.toBeVisible();
 
-        // Push an assistant message for the task that lives on board 1 (owned by ws-2)
-        ws.push({ type: "message.new", payload: makeAssistantMessage(task.id, "New activity in ws-2") });
+        // Push task.updated with completed state for the task on board 1 (owned by ws-2)
+        ws.push({
+            type: "task.updated",
+            payload: makeTask({ id: task.id, executionState: "completed" }),
+        });
 
         // Workspace 2 tab should now show the unread dot
         await expect(ws2Tab.locator(".workspace-tab__unread-dot")).toBeVisible();
@@ -77,14 +82,73 @@ test.describe("Board unread indicators", () => {
         const card = page.locator(`[data-task-id="${task.id}"]`);
         await expect(card).toBeVisible();
 
-        // Trigger unread state
-        ws.push({ type: "message.new", payload: makeAssistantMessage(task.id, "hello") });
+        // Trigger unread state via terminal execution state
+        ws.push({
+            type: "task.updated",
+            payload: makeTask({ id: task.id, executionState: "completed" }),
+        });
         await expect(card.locator(".task-card__unread-dot")).toBeVisible();
 
         // Click the card — calls taskStore.selectTask(taskId) which clears unread
         await card.click();
 
         // Unread dot should be gone
+        await expect(card.locator(".task-card__unread-dot")).not.toBeVisible();
+    });
+
+    test("UNREAD-5: task.updated with 'waiting_user' executionState triggers unread dot", async ({
+        page,
+        task,
+        ws,
+    }) => {
+        await navigateToBoard(page);
+
+        const card = page.locator(`[data-task-id="${task.id}"]`);
+        await expect(card).toBeVisible();
+
+        ws.push({
+            type: "task.updated",
+            payload: makeTask({ id: task.id, executionState: "waiting_user" }),
+        });
+
+        await expect(card.locator(".task-card__unread-dot")).toBeVisible();
+    });
+
+    test("UNREAD-6: task.updated with 'running' executionState does NOT trigger unread dot", async ({
+        page,
+        task,
+        ws,
+    }) => {
+        await navigateToBoard(page);
+
+        const card = page.locator(`[data-task-id="${task.id}"]`);
+        await expect(card).toBeVisible();
+
+        ws.push({
+            type: "task.updated",
+            payload: makeTask({ id: task.id, executionState: "running" }),
+        });
+
+        // No unread dot during an active execution
+        await expect(card.locator(".task-card__unread-dot")).not.toBeVisible();
+    });
+
+    test("UNREAD-7: task.updated with only workflowState change does NOT trigger unread dot", async ({
+        page,
+        task,
+        ws,
+    }) => {
+        await navigateToBoard(page);
+
+        const card = page.locator(`[data-task-id="${task.id}"]`);
+        await expect(card).toBeVisible();
+
+        // Move the task to a different column (workflow state change, no execution state change)
+        ws.push({
+            type: "task.updated",
+            payload: makeTask({ id: task.id, executionState: "idle", workflowState: "plan" }),
+        });
+
         await expect(card.locator(".task-card__unread-dot")).not.toBeVisible();
     });
 });

@@ -140,12 +140,8 @@ export class CopilotEngine implements ExecutionEngine {
     const toolContext = {
       taskId,
       boardId: boardId ?? 0,
-      onTransition: (_tId: number, _state: string) => {
-        // Transitions are not directly triggered from Copilot turn; log only
-      },
-      onHumanTurn: (_tId: number, _msg: string) => {
-        // Human turns not triggered from within Copilot execution
-      },
+      onTransition: params.onTransition ?? (() => {}),
+      onHumanTurn: params.onHumanTurn ?? (() => {}),
       onCancel: (_execId: number) => {
         this.cancel(_execId);
       },
