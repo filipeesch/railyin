@@ -11,6 +11,18 @@ import BetterSqlite3 from "better-sqlite3";
 
 type BindValue = string | number | bigint | Buffer | null;
 
+// Track every open Database so we can close them before V8 teardown.
+// better-sqlite3's native addon SIGSEGVs on macOS when open connections are
+// GC'd after the V8 shutdown sequence has begun (e.g. during Vitest perTest
+// coverage collection).  Closing them synchronously in "exit" avoids this.
+const _openDatabases = new Set<Database>();
+process.on("exit", () => {
+  for (const db of _openDatabases) {
+    try { db.close(); } catch { /* already closed */ }
+  }
+  _openDatabases.clear();
+});
+
 interface QueryResult<T> {
   get(...params: BindValue[]): T | null;
   all(...params: BindValue[]): T[];
@@ -22,6 +34,7 @@ export class Database {
 
   constructor(path: string, options?: { create?: boolean; readonly?: boolean }) {
     this._db = new BetterSqlite3(path, { readonly: options?.readonly ?? false });
+    _openDatabases.add(this);
   }
 
   exec(sql: string): void {
@@ -55,6 +68,7 @@ export class Database {
 
   close(): void {
     this._db.close();
+    _openDatabases.delete(this);
   }
 
   get inTransaction(): boolean {
