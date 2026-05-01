@@ -20,6 +20,6 @@ export default defineConfig({
     pool: "forks",
     environment: "node",
     globals: false,
-    setupFiles: ["src/bun/test/shims/bun-globals.ts"],
+    setupFiles: ["src/bun/test/shims/bun-globals.ts", "src/bun/test/shims/vitest-teardown.ts"],
   },
 });
