@@ -72,5 +72,8 @@
     "vitest": "^3.0.0",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0"
+  },
+  "patchedDependencies": {
+    "@stryker-mutator/vitest-runner@9.6.1": "patches/@stryker-mutator%2Fvitest-runner@9.6.1.patch"
   }
 }
