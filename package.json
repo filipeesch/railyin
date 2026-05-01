@@ -26,7 +26,7 @@
     "test:mutation": "bun run test:mutation:backend && bun run test:mutation:frontend"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.98",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.126",
     "@codemirror/autocomplete": "^6.18.6",
     "@codemirror/commands": "^6.8.1",
     "@codemirror/language": "^6.11.1",
@@ -36,6 +36,7 @@
     "@iconify/vue": "^5.0.0",
     "@monaco-editor/loader": "^1.4.0",
     "@tanstack/vue-virtual": "^3.13.23",
+    "ajv": "^8.17.1",
     "code-server": "^4.116.0",
     "diff": "^8.0.4",
     "js-yaml": "^4.1.0",
@@ -43,7 +44,6 @@
     "mermaid": "^11.14.0",
     "monaco-editor": "^0.55.1",
     "node-pty": "^1.0.0",
-    "ajv": "^8.17.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {
