@@ -9,8 +9,29 @@
 
 import { test, expect } from "./fixtures";
 import { openTaskDrawer } from "./fixtures";
-import { makeTask } from "./fixtures/mock-data";
-import type { Task } from "@shared/rpc-types";
+import { makeTask, makeWorkflowTemplate, setupBoardWithTemplate } from "./fixtures/mock-data";
+import type { Task, WorkflowTemplate } from "@shared/rpc-types";
+
+const restrictedTemplate: WorkflowTemplate = {
+    id: "restricted",
+    name: "Restricted",
+    columns: [
+        { id: "backlog", label: "Backlog", allowedTransitions: ["plan"] },
+        { id: "plan", label: "Plan" },
+        { id: "in_progress", label: "In Progress" },
+        { id: "done", label: "Done" },
+    ],
+} as WorkflowTemplate;
+
+const frozenTemplate: WorkflowTemplate = {
+    id: "frozen",
+    name: "Frozen",
+    columns: [
+        { id: "backlog", label: "Backlog", allowedTransitions: [] },
+        { id: "plan", label: "Plan" },
+        { id: "done", label: "Done" },
+    ],
+} as WorkflowTemplate;
 
 test.describe("TT — toolbar action guards", () => {
     test("TT-1: workflow select shows current column label", async ({ page, api }) => {
@@ -147,5 +168,110 @@ test.describe("TT — toolbar action guards", () => {
         await page.waitForTimeout(300);
         expect(deleteCalls).toHaveLength(1);
         expect(deleteCalls[0].taskId).toBe(task.id);
+    });
+
+    test("TT-12: Select shows only current + allowed columns when allowedTransitions is set", async ({ page, api }) => {
+        const task = makeTask({ id: 12, workflowState: "backlog" });
+        setupBoardWithTemplate(api, restrictedTemplate);
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".workflow-select").click();
+
+        const options = page.locator(".p-select-option");
+        await expect(options).toHaveCount(2);
+        await expect(options.nth(0)).toContainText("Backlog");
+        await expect(options.nth(1)).toContainText("Plan");
+    });
+
+    test("TT-13: current column option is disabled in Select", async ({ page, api }) => {
+        const task = makeTask({ id: 13, workflowState: "backlog" });
+        setupBoardWithTemplate(api, restrictedTemplate);
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".workflow-select").click();
+
+        const currentOption = page.locator(".p-select-option", { hasText: "Backlog" });
+        await expect(currentOption).toHaveAttribute("aria-disabled", "true");
+    });
+
+    test("TT-14: forbidden column is absent from Select options when allowedTransitions is set", async ({ page, api }) => {
+        const task = makeTask({ id: 14, workflowState: "backlog" });
+        setupBoardWithTemplate(api, restrictedTemplate);
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".workflow-select").click();
+
+        await expect(page.locator(".p-select-option", { hasText: "In Progress" })).not.toBeAttached();
+        await expect(page.locator(".p-select-option", { hasText: "Done" })).not.toBeAttached();
+    });
+
+    test("TT-15: frozen column (allowedTransitions: []) shows only current option disabled", async ({ page, api }) => {
+        const task = makeTask({ id: 15, workflowState: "backlog" });
+        setupBoardWithTemplate(api, frozenTemplate);
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".workflow-select").click();
+
+        const options = page.locator(".p-select-option");
+        await expect(options).toHaveCount(1);
+        const onlyOption = options.nth(0);
+        await expect(onlyOption).toContainText("Backlog");
+        await expect(onlyOption).toHaveAttribute("aria-disabled", "true");
+    });
+
+    test("TT-16: selecting an allowed option triggers tasks.transition", async ({ page, api }) => {
+        const task = makeTask({ id: 16, workflowState: "backlog" });
+        const updatedTask: Task = { ...task, workflowState: "plan" };
+        setupBoardWithTemplate(api, restrictedTemplate);
+        api.handle("tasks.list", () => [task]);
+        const calls = api.capture("tasks.transition", { task: updatedTask });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".workflow-select").click();
+        await page.locator(".p-select-option", { hasText: "Plan" }).click();
+
+        await page.waitForTimeout(200);
+        expect(calls).toHaveLength(1);
+        expect(calls[0].taskId).toBe(task.id);
+    });
+
+    test("TT-17: Select shows all columns when allowedTransitions is undefined", async ({ page, api }) => {
+        const task = makeTask({ id: 17, workflowState: "backlog" });
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".workflow-select").click();
+
+        const options = page.locator(".p-select-option");
+        await expect(options).toHaveCount(5);
+    });
+
+    test("TT-18: current column is disabled when allowedTransitions is undefined", async ({ page, api }) => {
+        const task = makeTask({ id: 18, workflowState: "backlog" });
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".workflow-select").click();
+
+        const currentOption = page.locator(".p-select-option", { hasText: "Backlog" });
+        await expect(currentOption).toHaveAttribute("aria-disabled", "true");
     });
 });

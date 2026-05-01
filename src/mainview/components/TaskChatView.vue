@@ -55,9 +55,9 @@
       </div>
       <div class="toolbar-actions" v-if="task">
         <Select
-          v-if="columns.length"
+          v-if="selectableColumns.length"
           :model-value="task.workflowState"
-          :options="columns"
+          :options="selectableColumns"
           option-label="label"
           option-value="id"
           option-disabled="disabled"
@@ -67,7 +67,7 @@
           @change="(e: { value: string }) => transition(e.value)"
         >
           <template #value>
-            {{ columns.find(c => c.id === task.workflowState)?.label ?? task.workflowState }}
+            {{ selectableColumns.find(c => c.id === task.workflowState)?.label ?? task.workflowState }}
           </template>
         </Select>
         <Button
@@ -195,6 +195,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
+import { useColumnTransitions } from "../composables/useColumnTransitions";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Select from "primevue/select";
@@ -217,7 +218,7 @@ import { useCodeServerStore } from "../stores/codeServer";
 import { useDrawerStore } from "../stores/drawer";
 import { useToast } from "primevue/usetoast";
 import { api } from "../rpc";
-import type { LaunchConfig, GitNumstat, Attachment, Task, WorkflowColumn } from "@shared/rpc-types";
+import type { LaunchConfig, GitNumstat, Attachment, Task } from "@shared/rpc-types";
 
 const props = defineProps<{
   taskId: number;
@@ -241,19 +242,10 @@ const taskWorkspaceKey = computed(() =>
   task.value ? (boardStore.boards.find(b => b.id === task.value!.boardId)?.workspaceKey ?? undefined) : undefined
 );
 
-type SelectableColumn = WorkflowColumn & { disabled?: boolean };
-
-const columns = computed((): SelectableColumn[] => {
-  const allCols = boardStore.activeBoard?.template.columns ?? [];
-  const currentState = task.value?.workflowState;
-  if (!currentState) return allCols;
-  const sourceCol = allCols.find(c => c.id === currentState);
-  if (!sourceCol?.allowedTransitions?.length) return allCols;
-  const targets = allCols.filter(c => sourceCol.allowedTransitions!.includes(c.id));
-  // Prepend the current column as a disabled placeholder so the Select always
-  // displays the active state even when only allowed transitions are shown.
-  return [{ ...sourceCol, disabled: true }, ...targets];
-});
+const { selectableColumns } = useColumnTransitions(
+  computed(() => boardStore.activeBoard?.template),
+  computed(() => task.value?.workflowState),
+);
 
 const execLabel = computed(() => {
   const map: Record<string, string> = {
