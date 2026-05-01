@@ -13,15 +13,7 @@
         :severity="execSeverity"
         rounded
       />
-      <span v-if="task.retryCount > 0" class="task-card__retry-count">
-        ↺ {{ task.retryCount }}
-      </span>
-      <span
-        v-if="changedCount > 0"
-        class="task-card__changed-badge"
-        :title="`${changedCount} file${changedCount !== 1 ? 's' : ''} changed — click to review`"
-        @click.stop="emit('openReview')"
-      >⬡ {{ changedCount }}</span>
+      <span class="task-card__project">{{ projectName }}</span>
     </div>
 
   </div>
@@ -32,11 +24,13 @@ import { computed } from "vue";
 import Tag from "primevue/tag";
 import type { Task } from "@shared/rpc-types";
 import { useTaskStore } from "../stores/task";
+import { useProjectStore } from "../stores/project";
 
 const props = defineProps<{ task: Task }>();
-const emit = defineEmits<{ click: []; openReview: [] }>();
+const emit = defineEmits<{ click: [] }>();
 const taskStore = useTaskStore();
-const changedCount = computed(() => taskStore.changedFileCounts[props.task.id] ?? 0);
+const projectStore = useProjectStore();
+const projectName = computed(() => projectStore.projects.find(p => p.key === props.task.projectKey)?.name ?? props.task.projectKey);
 const isUnread = computed(() => taskStore.hasUnread(props.task.id));
 
 const execLabel = computed(() => {
@@ -117,28 +111,16 @@ const execSeverity = computed(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-content: space-between;
 }
 
-.task-card__retry-count {
-  font-size: 0.75rem;
-  color: var(--p-text-muted-color, #94a3b8);
-}
-
-.task-card__changed-badge {
+.task-card__project {
   font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--p-primary-color);
-  background: var(--p-highlight-background);
-  border: 1px solid color-mix(in srgb, var(--p-primary-color) 30%, transparent);
-  border-radius: 10px;
-  padding: 1px 7px;
-  cursor: pointer;
+  color: var(--p-text-muted-color, #94a3b8);
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  transition: background 0.12s;
-}
-
-.task-card__changed-badge:hover {
-  background: var(--p-highlight-focus-background);
 }
 
 

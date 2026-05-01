@@ -284,7 +284,6 @@ async function refreshTaskData() {
 
   if (task.value.worktreeStatus === "ready") {
     numstat.value = await taskStore.getGitStat(task.value.id);
-    taskStore.refreshChangedFiles(task.value.id);
     try {
       pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });
     } catch { /* non-fatal */ }
@@ -391,7 +390,6 @@ async function syncChangedFiles() {
   if (!task.value) return;
   syncingChanges.value = true;
   try {
-    await taskStore.refreshChangedFiles(task.value.id);
     numstat.value = await taskStore.getGitStat(task.value.id);
     pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });
   } finally {

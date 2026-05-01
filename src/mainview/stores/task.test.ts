@@ -153,28 +153,56 @@ describe("taskStore", () => {
     expect(store.unreadTaskIds.has(99)).toBe(false);
   });
 
-  it("T8: deleteTask removes changedFileCounts entry", async () => {
+  it("T-A: onTaskStreamEvent file_diff marks inactive task unread", async () => {
     const store = useTaskStore();
-    const task = makeTask({ id: 10, boardId: 1 });
-    apiMock.mockResolvedValueOnce([task]);
+    const conversationStore = useConversationStore();
+    const task1 = makeTask({ id: 1, boardId: 1, conversationId: 1 });
+    const task2 = makeTask({ id: 2, boardId: 1, conversationId: 2 });
+    apiMock.mockResolvedValueOnce([task1, task2]);
     await store.loadTasks(1);
 
-    // Seed changedFileCounts by mocking refreshChangedFiles path
-    apiMock.mockImplementation(async (method: string) => {
-      if (method === "tasks.getChangedFiles") return ["a.ts", "b.ts"];
-      if (method === "tasks.delete") return {};
-      return [];
-    });
-    await store.refreshChangedFiles(10);
-    expect(store.changedFileCounts[10]).toBe(2);
+    conversationStore.setActiveConversation(1);
 
-    apiMock.mockImplementation(async (method: string) => {
-      if (method === "tasks.delete") return {};
-      return [];
+    store.onTaskStreamEvent({
+      taskId: 2,
+      conversationId: 2,
+      executionId: 1,
+      seq: 0,
+      blockId: "b1",
+      type: "file_diff",
+      content: "",
+      metadata: null,
+      subagentId: null,
+      done: false,
     });
-    await store.deleteTask(10);
 
-    expect(store.changedFileCounts[10]).toBeUndefined();
+    expect(store.hasUnread(2)).toBe(true);
+    expect(store.hasUnread(1)).toBe(false);
+  });
+
+  it("T-B: onTaskNewMessage file_diff marks inactive task unread", async () => {
+    const store = useTaskStore();
+    const conversationStore = useConversationStore();
+    const task1 = makeTask({ id: 1, boardId: 1, conversationId: 1 });
+    const task2 = makeTask({ id: 2, boardId: 1, conversationId: 2 });
+    apiMock.mockResolvedValueOnce([task1, task2]);
+    await store.loadTasks(1);
+
+    conversationStore.setActiveConversation(1);
+
+    store.onTaskNewMessage({
+      id: 99,
+      taskId: 2,
+      conversationId: 2,
+      type: "file_diff",
+      role: null,
+      content: "",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(store.hasUnread(2)).toBe(true);
+    expect(store.hasUnread(1)).toBe(false);
   });
 
   it("T9: deleteTask removes the task from tasksByBoard", async () => {

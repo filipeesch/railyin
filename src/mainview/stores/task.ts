@@ -22,9 +22,6 @@ export const useTaskStore = defineStore("task", () => {
 
   const loading = ref(false);
 
-  // Changed file counts per task (populated from file_diff events and task completion)
-  const changedFileCounts = ref<Record<number, number>>({});
-
   // ─── Queue state ──────────────────────────────────────────────────────────
   const taskQueues = ref<Record<number, QueueState>>({});
 
@@ -195,10 +192,6 @@ export const useTaskStore = defineStore("task", () => {
     if (activity && activeTaskId.value !== task.id) {
       markTaskUnread(task.id);
     }
-    // Refresh changed file count when execution completes
-    if (task.executionState === "completed") {
-      refreshChangedFiles(task.id);
-    }
     // Refresh context usage when the active task finishes an execution
     if (
       task.id === activeTaskId.value &&
@@ -285,7 +278,6 @@ export const useTaskStore = defineStore("task", () => {
     }
     delete taskIndex.value[taskId];
     delete taskQueues.value[taskId];
-    delete changedFileCounts.value[taskId];
     clearTaskUnread(taskId);
     return { warning: result.warning };
   }
@@ -300,17 +292,6 @@ export const useTaskStore = defineStore("task", () => {
 
   async function getGitStat(taskId: number): Promise<GitNumstat | null> {
     return api("tasks.getGitStat", { taskId });
-  }
-
-  // ─── Get changed files (for badge) ───────────────────────────────────────
-
-  async function refreshChangedFiles(taskId: number) {
-    try {
-      const files = await api("tasks.getChangedFiles", { taskId });
-      changedFileCounts.value[taskId] = files.length;
-    } catch {
-      // ignore — badge stays stale
-    }
   }
 
   function hasUnread(taskId: number): boolean {
@@ -396,9 +377,6 @@ export const useTaskStore = defineStore("task", () => {
 
   function onTaskStreamEvent(event: StreamEvent): void {
     if (event.taskId == null) return;
-    if (event.type === "file_diff") {
-      refreshChangedFiles(event.taskId);
-    }
     // Fallback drain: fire when stream ends in case task.updated arrives with
     // unexpected prior state (e.g. WS reconnect missed the running broadcast).
     if (event.type === "done") {
@@ -417,9 +395,6 @@ export const useTaskStore = defineStore("task", () => {
 
   function onTaskNewMessage(message: ConversationMessage): void {
     if (message.taskId == null) return;
-    if (message.type === "file_diff") {
-      refreshChangedFiles(message.taskId);
-    }
     if (
       message.conversationId !== conversationStore.activeConversationId &&
       (message.type === "assistant" || message.type === "reasoning" || message.type === "system" || message.type === "file_diff")
@@ -434,7 +409,6 @@ export const useTaskStore = defineStore("task", () => {
     activeTask,
 
     loading,
-    changedFileCounts,
     taskIndex,
     unreadTaskIds,
     markTaskUnread,
@@ -461,7 +435,6 @@ export const useTaskStore = defineStore("task", () => {
     updateTask,
     deleteTask,
     getGitStat,
-    refreshChangedFiles,
     hasUnread,
     workspaceHasUnread,
     onTaskUpdated,

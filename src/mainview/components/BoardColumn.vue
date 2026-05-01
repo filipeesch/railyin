@@ -24,10 +24,9 @@
         v-for="task in tasks"
         :key="task.id"
         :task="task"
-        v-memo="[task, hasUnread(task.id), changedFileCounts[task.id]]"
+        v-memo="[task, hasUnread(task.id)]"
         @pointerdown="$emit('card-pointerdown', $event, task.id)"
         @click="$emit('card-click', task.id)"
-        @open-review="$emit('open-review', task.id)"
       />
       <div
         v-if="isDragOver"
@@ -53,14 +52,12 @@ defineProps<{
   isForbidden: boolean;
   dropIndicatorY: number;
   hasUnread: (taskId: number) => boolean;
-  changedFileCounts: Record<number, number | undefined>;
 }>();
 
 defineEmits<{
   "create-task": [];
   "card-pointerdown": [event: PointerEvent, taskId: number];
   "card-click": [taskId: number];
-  "open-review": [taskId: number];
 }>();
 </script>
 

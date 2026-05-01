@@ -83,11 +83,9 @@
           :is-forbidden="forbiddenColumnIds.has(slot.column.id)"
           :drop-indicator-y="dropIndicatorY"
           :has-unread="taskStore.hasUnread"
-          :changed-file-counts="taskStore.changedFileCounts"
           @create-task="openCreateOverlay"
           @card-pointerdown="onCardPointerDown"
           @card-click="onCardClick"
-          @open-review="onOpenReview"
         />
 
         <!-- Group column: stacked sub-columns, wrapper has NO data-column-id -->
@@ -103,11 +101,9 @@
             :is-forbidden="forbiddenColumnIds.has(col.id)"
             :drop-indicator-y="dropIndicatorY"
             :has-unread="taskStore.hasUnread"
-            :changed-file-counts="taskStore.changedFileCounts"
             @create-task="openCreateOverlay"
             @card-pointerdown="onCardPointerDown"
             @card-click="onCardClick"
-            @open-review="onOpenReview"
           />
         </div>
       </template>
@@ -193,7 +189,6 @@ import Badge from "primevue/badge";
 import { useBoardStore } from "../stores/board";
 import { useTaskStore } from "../stores/task";
 import { useProjectStore } from "../stores/project";
-import { useReviewStore } from "../stores/review";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useTerminalStore } from "../stores/terminal";
 import { useChatStore } from "../stores/chat";
@@ -220,7 +215,6 @@ const workspaceStore = useWorkspaceStore();
 const boardStore = useBoardStore();
 const taskStore = useTaskStore();
 const projectStore = useProjectStore();
-const reviewStore = useReviewStore();
 const terminalStore = useTerminalStore();
 const chatStore = useChatStore();
 const drawerStore = useDrawerStore();
@@ -614,11 +608,6 @@ function onCardClick(taskId: number) {
   const task = Object.values(taskStore.tasksByBoard).flat().find(t => t.id === taskId);
   taskStore.selectTask(taskId);
   if (task) drawerStore.openForTask(taskId, task.conversationId);
-}
-
-async function onOpenReview(taskId: number) {
-  const files = await api("tasks.getChangedFiles", { taskId });
-  reviewStore.openReview(taskId, files);
 }
 
 async function onTaskCreated() {
