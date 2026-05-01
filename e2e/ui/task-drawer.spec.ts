@@ -1,5 +1,5 @@
-import { test, expect, openTaskDrawer } from "./fixtures";
-import { makeAssistantMessage, makeTransitionMessage } from "./fixtures/mock-data";
+import { test, expect, openTaskDrawer, sendMessage } from "./fixtures";
+import { makeAssistantMessage, makeTransitionMessage, makeTask } from "./fixtures/mock-data";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -191,5 +191,53 @@ test.describe("TD-B — launch buttons", () => {
 
         // Verify drawer is still open (menu click shouldn't close it)
         await expect(page.locator(".task-detail")).toBeVisible();
+    });
+});
+
+// ─── Suite MSG — Message send / conversation-id sync ──────────────────────────
+//
+// Bug: when a task has conversationId=0 (null in DB), the first message sent
+// via tasks.sendMessage creates a real conversation on the backend (e.g. id=99).
+// The returned message has conversationId=99, but the store's activeConversationId
+// is still 0, so appendMessage silently drops the message.  The user doesn't see
+// their own message until they close and reopen the drawer (which reloads from API).
+//
+// Fix: after tasks.sendMessage returns, if message.conversationId ≠ activeConversationId,
+// call conversationStore.setActiveConversation(message.conversationId) before appendMessage.
+
+test.describe("MSG — user message appears immediately", () => {
+    test("MSG-1: user message appears in chat without reopening drawer (conversationId=0→real)", async ({
+        page,
+        api,
+    }) => {
+        // Task starts with conversationId=0 (DB has NULL conversation_id).
+        const task = makeTask({ id: 7, conversationId: 0 });
+        api.handle("tasks.list", () => [task]);
+        api.returns("conversations.getMessages", { messages: [], hasMore: false });
+
+        // Backend creates a real conversation (id=99) when the first message is sent.
+        api.handle("tasks.sendMessage", () => ({
+            executionId: 1,
+            message: {
+                id: 5001,
+                taskId: task.id,
+                conversationId: 99, // new real conversation — differs from task.conversationId (0)
+                type: "user" as const,
+                role: "user" as const,
+                content: "hello world",
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+        }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Send a message through the UI.
+        await sendMessage(page, "hello world");
+
+        // The user message must appear inside the open drawer — no reopen needed.
+        await expect(page.locator(".task-detail .conv-body .msg--user")).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".task-detail .conv-body .msg--user")).toContainText("hello world");
     });
 });

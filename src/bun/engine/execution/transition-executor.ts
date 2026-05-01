@@ -55,8 +55,8 @@ export class TransitionExecutor {
     if (!column?.on_enter_prompt) {
       appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
       db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
-      const updated = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-      return { task: mapTask(updated), executionId: null };
+      const freshIdleRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+      return { task: mapTask(freshIdleRow), executionId: null };
     }
 
     const resolvedPrompt = column.on_enter_prompt;
@@ -82,6 +82,8 @@ export class TransitionExecutor {
       [executionId, taskId],
     );
 
+    const freshTaskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+    const freshTask = mapTask(freshTaskRow);
     const signal = this.streamProcessor.createSignal(executionId);
     const execParams = {
       ...this.paramsBuilder.build(

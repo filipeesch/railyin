@@ -8,9 +8,14 @@
  *   D — Unread state (background task gets unread dot)
  *   E — Auto-scroll (conversation body scrolls to bottom during live stream)
  *   F — Progressive streaming (each token appears before the next arrives)
+ *
+ * Bug regression tests:
+ *   E-3 — Autoscroll disengages when user scrolls up during streaming
+ *   E-4 — Autoscroll re-engages when user scrolls back to bottom
+ *   E-5 — Reading position stays stable while streaming below the fold
  */
 import { test, expect } from "./fixtures";
-import { makeTask } from "./fixtures/mock-data";
+import { makeTask, makeAssistantMessage } from "./fixtures/mock-data";
 import type { StreamEvent } from "@shared/rpc-types";
 
 const EXEC_ID = 42;
@@ -358,6 +363,334 @@ test.describe("E — Auto-scroll", () => {
 
     // task1's scroll should not have changed due to task2's events
     expect(scrollAfter).toBe(scrollBefore);
+  });
+});
+
+// ─── Suite E (regression) — Auto-scroll stutter ────────────────────────────────
+//
+// Bug: during streaming the RAF loop calls scrollToBottom() every frame.
+// When the user scrolls up, the browser may fire the scroll event asynchronously,
+// creating a window where autoScroll is still true and the loop drags the
+// viewport back to the bottom before onScroll() has a chance to flip the flag.
+//
+// Key design decisions:
+//   - Content uses "overflow\n" (no spaces) so the typewriter reveals it immediately
+//     (word-split produces 1 token → pos >= wordCount → displayed = full text).
+//     All chunks from one execution append to the same block.
+//   - Overflow detection uses waitForFunction on scrollHeight, not toContainText,
+//     so there is no dependency on typewriter animation timing.
+//   - E-3 uses page.mouse.wheel() which dispatches a real WheelEvent; the browser
+//     initiates smooth-scroll asynchronously, recreating the RAF-vs-onScroll race.
+//   - E-4 uses evaluate() + dispatchEvent (synchronous) because re-engagement does
+//     not require the race condition to be present.
+
+test.describe("E (regression) — Auto-scroll stutter", () => {
+  test("E-3: autoscroll disengages when user scrolls up during streaming", async ({
+    page,
+    api,
+    ws,
+    task,
+  }) => {
+    api.returns("conversations.getMessages", { messages: [], hasMore: false });
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // Push 50 "overflow\n" chunks.  No spaces → typewriter reveals content
+    // immediately (one word-token per split).  All chunks accumulate into the
+    // same live block so the stream_tail grows tall quickly.
+    for (let i = 0; i < 50; i++) {
+      ws.pushStreamEvent(textChunk(task.id, task.conversationId, i, "overflow\n"));
+    }
+
+    // Wait for the virtual list to measure the tall stream_tail item so
+    // scrollHeight actually exceeds the visible viewport height.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector(".conv-body");
+        return !!el && el.scrollHeight > el.clientHeight + 100;
+      },
+      undefined,
+      { timeout: 8_000 },
+    );
+
+    // Confirm autoScroll is engaged: scroll is pinned at the bottom.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector(".conv-body");
+        if (!el) return false;
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+      },
+      undefined,
+      { timeout: 3_000 },
+    );
+
+    const scrollHeightBefore = await page.evaluate(
+      () => document.querySelector(".conv-body")?.scrollHeight ?? 0,
+    );
+
+    // Hover so the wheel event hits the right element, then fire a real
+    // WheelEvent.  Unlike evaluate()+dispatchEvent, mouse.wheel() goes through
+    // the browser's input pipeline: the scroll animation starts asynchronously,
+    // before onScroll() fires — this is the race that causes the stutter bug.
+    await page.locator(".task-detail .conv-body").hover();
+    await page.mouse.wheel(0, -5000);
+
+    // Give the browser time to process the wheel input and update scrollTop.
+    await page.waitForTimeout(200);
+
+    // Keep streaming so the RAF loop has the opportunity to drag scroll back.
+    for (let i = 50; i < 70; i++) {
+      ws.pushStreamEvent(textChunk(task.id, task.conversationId, i, "overflow\n"));
+    }
+
+    // Wait for new content to arrive: block grows → measureRef → scrollHeight grows.
+    await page.waitForFunction(
+      (prevH: number) => {
+        const el = document.querySelector(".conv-body");
+        return !!el && el.scrollHeight > prevH + 50;
+      },
+      scrollHeightBefore,
+      { timeout: 8_000 },
+    );
+
+    // Allow multiple RAF frames to potentially drag scroll back (~300 ms ≈ 18 frames).
+    await page.waitForTimeout(300);
+
+    // Scroll position must NOT have been dragged back to the bottom.
+    // A properly disengaged autoscroll leaves us far from the bottom (> 200 px).
+    const distFromBottom = await page.evaluate(() => {
+      const el = document.querySelector(".conv-body");
+      if (!el) return 0;
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    });
+    expect(distFromBottom).toBeGreaterThan(200);
+  });
+
+  test("E-4: autoscroll re-engages when user scrolls back to bottom after scrolling up", async ({
+    page,
+    api,
+    ws,
+    task,
+  }) => {
+    api.returns("conversations.getMessages", { messages: [], hasMore: false });
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    for (let i = 0; i < 50; i++) {
+      ws.pushStreamEvent(textChunk(task.id, task.conversationId, i, "overflow\n"));
+    }
+
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector(".conv-body");
+        return !!el && el.scrollHeight > el.clientHeight + 100;
+      },
+      undefined,
+      { timeout: 8_000 },
+    );
+
+    // User scrolls up (synchronous via evaluate — re-engagement does not need the race).
+    await page.locator(".task-detail .conv-body").evaluate((el) => {
+      el.scrollTop = 0;
+      el.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await page.waitForTimeout(100);
+
+    // User scrolls back to the bottom.
+    await page.locator(".task-detail .conv-body").evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      el.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await page.waitForTimeout(100);
+
+    const scrollHeightBefore = await page.evaluate(
+      () => document.querySelector(".conv-body")?.scrollHeight ?? 0,
+    );
+
+    for (let i = 50; i < 70; i++) {
+      ws.pushStreamEvent(textChunk(task.id, task.conversationId, i, "overflow\n"));
+    }
+
+    await page.waitForFunction(
+      (prevH: number) => {
+        const el = document.querySelector(".conv-body");
+        return !!el && el.scrollHeight > prevH + 50;
+      },
+      scrollHeightBefore,
+      { timeout: 8_000 },
+    );
+
+    await page.waitForTimeout(300);
+
+    const distFromBottom = await page.evaluate(() => {
+      const el = document.querySelector(".conv-body");
+      if (!el) return 0;
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    });
+    // Re-engaged autoscroll keeps viewport near the bottom (≤ 60 px).
+    expect(distFromBottom).toBeLessThanOrEqual(60);
+  });
+
+  test("E-5: reading position stays stable during the pendingScrollBottom race window", async ({
+    page,
+    api,
+    ws,
+    task,
+  }) => {
+    // 30 persisted messages give enough height for the user to scroll to mid-history.
+    const msgs = Array.from({ length: 30 }, (_, i) =>
+      makeAssistantMessage(task.id, `History message ${i + 1}`, {
+        id: i + 1,
+        conversationId: task.conversationId,
+      }),
+    );
+    api.returns("conversations.getMessages", { messages: msgs, hasMore: false });
+
+    await page.goto("/");
+
+    // Freeze page timers BEFORE opening the drawer so the 60ms pendingScrollBottom
+    // timer in scheduleScrollToBottom is queued but never fires.  This keeps the
+    // race-condition window (pendingScrollBottom=true) open indefinitely.
+    await page.clock.install();
+
+    // Click task card and wait for the drawer to be attached (visible=false is fine
+    // because conv-body--positioning hides it until initialScrollReady, which relies
+    // on the frozen setTimeout).
+    await page.locator(`[data-task-id="${task.id}"]`).click();
+    await page.locator(".task-detail").waitFor({ state: "visible", timeout: 5_000 });
+
+    // Allow Vue microtasks (nextTick, reactive updates) to settle.
+    // Real-time wait is unaffected by the frozen fake clock.
+    await page.waitForTimeout(150);
+
+    // The virtualizer should have content and be scrolled to the bottom.
+    const scrollInfo = await page.locator(".task-detail .conv-body").evaluate((el) => ({
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+
+    // Need enough height to scroll mid-way; skip if virtualizer is empty.
+    if (scrollInfo.scrollHeight < scrollInfo.clientHeight + 50) {
+      test.skip();
+      return;
+    }
+
+    // Simulate user scrolling up to read — sets autoScroll=false and (with fix)
+    // pendingScrollBottom=false.
+    const midPosition = Math.floor(scrollInfo.scrollHeight * 0.4);
+    await page.locator(".task-detail .conv-body").evaluate((el, mid) => {
+      el.scrollTop = mid;
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true }));
+      el.dispatchEvent(new Event("scroll", { bubbles: true }));
+    }, midPosition);
+    await page.waitForTimeout(80);
+
+    const scrollTopBefore = await page.locator(".task-detail .conv-body").evaluate(
+      (el) => el.scrollTop,
+    );
+    // Must not be at the bottom already.
+    const distFromBottom = scrollInfo.scrollHeight - scrollTopBefore - scrollInfo.clientHeight;
+    expect(distFromBottom).toBeGreaterThan(50);
+
+    // Push stream events while pendingScrollBottom is still true (timer frozen).
+    // BUG: getTotalSize watcher calls scrollToLatest() because autoScroll check missing.
+    // FIX: watcher now checks autoScroll.value — skips scrollToLatest when user scrolled up.
+    for (let i = 0; i < 12; i++) {
+      ws.pushStreamEvent(textChunk(task.id, task.conversationId, i, `word${i} `));
+    }
+
+    // Wait for Vue to process all reactive updates from the stream events.
+    await page.waitForTimeout(300);
+
+    const scrollTopAfter = await page.locator(".task-detail .conv-body").evaluate(
+      (el) => el.scrollTop,
+    );
+
+    // Reading position must NOT have drifted toward the bottom.
+    // Allow ≤ 5 px tolerance for sub-pixel rounding.
+    expect(Math.abs(scrollTopAfter - scrollTopBefore)).toBeLessThanOrEqual(5);
+  });
+
+  test("E-6: upward wheel prevents onScroll from re-engaging autoScroll within REENGAGE_THRESHOLD", async ({
+    page,
+    api,
+    ws,
+    task,
+  }) => {
+    // Bug: user is pinned to the bottom (distFromBottom ≈ 0).  They wheel up.
+    // onUserScroll fires (autoScroll=false, userScrolling=true).  But then the
+    // very first scroll event fires while the viewport is still within
+    // REENGAGE_THRESHOLD (1–4 px from bottom).  Without the fix, onScroll
+    // re-engages autoScroll=true, the SIZE/RAF loop re-scrolls to bottom — the
+    // user is trapped even 5+ lines above the bottom.
+    //
+    // Fix: onScroll captures userScrolling BEFORE resetting it and skips the
+    // re-engagement branch when scrollingByUser=true.
+
+    // 30 persisted messages give enough height for the body to overflow.
+    const msgs = Array.from({ length: 30 }, (_, i) =>
+      makeAssistantMessage(task.id, `Line ${i + 1}: the quick brown fox jumped\n`, {
+        id: i + 1,
+        conversationId: task.conversationId,
+      }),
+    );
+    api.returns("conversations.getMessages", { messages: msgs, hasMore: false });
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // Wait for the virtualizer to render content that overflows the viewport.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector(".conv-body");
+        return !!el && el.scrollHeight > el.clientHeight + 100;
+      },
+      undefined,
+      { timeout: 8_000 },
+    );
+
+    const scrollHeight = await page.locator(".task-detail .conv-body").evaluate((el) => el.scrollHeight);
+    const clientHeight = await page.locator(".task-detail .conv-body").evaluate((el) => el.clientHeight);
+    if (scrollHeight < clientHeight + 50) {
+      test.skip();
+      return;
+    }
+    const REENGAGE_THRESHOLD = 5;
+    // Place viewport exactly 3px from the bottom (inside the REENGAGE danger zone).
+    const dangerZoneTop = scrollHeight - clientHeight - (REENGAGE_THRESHOLD - 2);
+
+    // Step 1: Place viewport in the danger zone.  Setting scrollTop queues an async
+    // scroll event.  We wait for it to fire before proceeding so that autoScroll is
+    // re-engaged (distFromBottom < REENGAGE_THRESHOLD, userScrolling=false) — this
+    // is the "starting state" where the user is near-bottom and autoScroll=true.
+    await page.locator(".task-detail .conv-body").evaluate((el, top) => {
+      el.scrollTop = top;
+    }, dangerZoneTop);
+    await page.waitForTimeout(80); // let queued scroll event fire & onScroll settle
+
+    // Step 2: Simulate the user wheeling up while inside the danger zone.
+    // Dispatch WheelEvent → onUserScroll: autoScroll=false, userScrolling=true.
+    // Then immediately dispatch the scroll event the browser would produce —
+    // onScroll should see scrollingByUser=true and NOT re-engage autoScroll.
+    await page.locator(".task-detail .conv-body").evaluate((el) => {
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true }));
+      // Fire the paired scroll event in the same microtask so userScrolling is
+      // still true when onScroll runs (mirrors real browser interleaving).
+      el.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+
+    // Step 3: Push streaming content so the SIZE / RAF loop has a chance to snap
+    // the viewport back to the bottom (the bug: autoScroll re-engaged in step 2).
+    for (let i = 0; i < 8; i++) {
+      ws.pushStreamEvent(textChunk(task.id, task.conversationId, i, `word${i} `));
+    }
+    await page.waitForTimeout(300); // let RAF loop run
+
+    const distFromBottom = await page.locator(".task-detail .conv-body").evaluate((el) => {
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    });
+    // Viewport must NOT have been snapped back to the bottom by the SIZE/RAF watcher.
+    expect(distFromBottom).toBeGreaterThan(REENGAGE_THRESHOLD - 1);
   });
 });
 

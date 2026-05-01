@@ -11,10 +11,10 @@ import type {
 } from "../types.ts";
 import type { MessageType } from "../../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
-import { mapTask } from "../../db/mappers.ts";
 import { ConvMessageBuffer } from "../../conversation/conv-message-buffer.ts";
 import type { WriteBuffer } from "../../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "./raw-message-buffer.ts";
+import { mapTask } from "../../db/mappers.ts";
 import type { TaskRow } from "../../db/row-types.ts";
 
 /**
@@ -366,6 +366,8 @@ export class StreamProcessor {
                 [event.message, executionId],
               );
               this.onError(taskId, conversationId, executionId, event.message);
+              this.abortControllers.get(executionId)?.abort();
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
               return;
             }
             this.onError(taskId, conversationId, executionId, event.message);
@@ -466,7 +468,9 @@ export class StreamProcessor {
         "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
         [errMsg, executionId],
       );
+      this.abortControllers.get(executionId)?.abort();
       this.onError(taskId, conversationId, executionId, errMsg);
+      this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
     } finally {
       this.abortControllers.delete(executionId);
       this.rawMessageSeq.delete(executionId);
