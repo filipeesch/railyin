@@ -9,12 +9,13 @@ import type {
   UsageStats,
 } from "./types.ts";
 import { ProviderError } from "./retry.ts";
-import { log } from "../logger.ts";
+import { type Logger, realLogger } from "../logger.ts";
 import { type TextHasher, createBunHasher } from "./crypto.ts";
 
 // ─── Usage logging helper ─────────────────────────────────────────────────────
 
 function logUsage(
+  logger: Logger,
   model: string,
   inputTokens: number,
   cacheReadTokens: number,
@@ -30,7 +31,7 @@ function logUsage(
     (inputTokens * 3 + cacheWriteTokens * 6 + cacheReadTokens * 0.3 + outputTokens * 15) / 1_000_000
   ).toFixed(4);
   const prefix = agentLabel ? `[${agentLabel}] ` : "";
-  log("debug", `${prefix}Anthropic usage [${model}]: in=${inputTokens} cache_read=${cacheReadTokens} cache_write=${cacheWriteTokens} out=${outputTokens} | hit=${hitPct}% of ${total} input | ~$${costEst}`, {});
+  logger.log("debug", `${prefix}Anthropic usage [${model}]: in=${inputTokens} cache_read=${cacheReadTokens} cache_write=${cacheWriteTokens} out=${outputTokens} | hit=${hitPct}% of ${total} input | ~$${costEst}`, {});
   return parseFloat(costEst);
 }
 
@@ -388,6 +389,7 @@ export class AnthropicProvider implements AIProvider {
   /** When true, include the context-editing-2025-10-01 beta header and
    *  `context_edit_strategy` body param on every request. */
   readonly contextEditEnabled: boolean;
+  private readonly logger: Logger;
 
   /** Resolved to true when the model's capabilities endpoint confirms effort support. */
   private supportsEffort = false;
@@ -401,6 +403,7 @@ export class AnthropicProvider implements AIProvider {
     enableThinking = false,
     defaultEffort?: "low" | "medium" | "high" | "max",
     contextEditEnabled = false,
+    logger: Logger = realLogger,
   ) {
     this.apiKey = apiKey;
     this.model = model;
@@ -409,6 +412,7 @@ export class AnthropicProvider implements AIProvider {
     this.enableThinking = enableThinking;
     this.defaultEffort = defaultEffort;
     this.contextEditEnabled = contextEditEnabled;
+    this.logger = logger;
   }
 
   private getCapabilities(): Promise<void> {
@@ -527,6 +531,7 @@ export class AnthropicProvider implements AIProvider {
       const u = json.usage;
       checkCacheReadOnResponse(options.executionId, u.cache_read_input_tokens ?? 0);
       logUsage(
+        this.logger,
         this.model,
         u.input_tokens ?? 0,
         u.cache_read_input_tokens ?? 0,
@@ -540,7 +545,7 @@ export class AnthropicProvider implements AIProvider {
     // once with 64K. This eliminates the sub-agent truncation retry spiral.
     const initialMaxTokens = options.maxTokens ?? 8192;
     if (json.stop_reason === "max_tokens" && initialMaxTokens <= 16384) {
-      log("info", `[anthropic] max_tokens hit at ${initialMaxTokens}, retrying with 64000`, {});
+      this.logger.log("info", `[anthropic] max_tokens hit at ${initialMaxTokens}, retrying with 64000`, {});
       return this.turn(messages, { ...options, maxTokens: 64000 });
     }
 
@@ -711,7 +716,7 @@ export class AnthropicProvider implements AIProvider {
               const streamMaxTokens = options.maxTokens ?? 8192;
               // Log the truncation; streaming escalation not available because tokens
               // are already yielded live. Sub-agents use turn() which does escalate.
-              log("warn", `[anthropic] stream hit max_tokens at ${streamMaxTokens} — use turn() for automatic escalation`, {});
+              this.logger.log("warn", `[anthropic] stream hit max_tokens at ${streamMaxTokens} — use turn() for automatic escalation`, {});
             }
             if (stopReason && !standardStopReasons.has(stopReason)) {
               yield { type: "stop_reason", reason: stopReason };
@@ -733,7 +738,7 @@ export class AnthropicProvider implements AIProvider {
               toolAccum.clear();
             }
             if (eventType === "message_stop") {
-              const costEst = logUsage(this.model, usageInputTokens, usageCacheReadTokens, usageCacheWriteTokens, usageOutputTokens, options.agentLabel);
+              const costEst = logUsage(this.logger, this.model, usageInputTokens, usageCacheReadTokens, usageCacheWriteTokens, usageOutputTokens, options.agentLabel);
               const finalUsage: UsageStats = {
                 inputTokens: usageInputTokens,
                 outputTokens: usageOutputTokens,

@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, renameSync, existsSync, writeFileSync } from "
 import { getDb } from "../db/index.ts";
 import { resolveProvider } from "../ai/index.ts";
 import { getConfig } from "../config/index.ts";
-import { log } from "../logger.ts";
+import { realLogger, type Logger } from "../logger.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -84,11 +84,11 @@ Keep each section concise. Prune stale information from previous notes. This is 
 /** Fire-and-forget: extract session notes from the conversation and write to disk.
  *  Called after every SESSION_MEMORY_EXTRACTION_INTERVAL completed AI turns.
  *  Does not block the main execution loop. */
-export function extractSessionMemory(taskId: number): void {
-  void _doExtract(taskId);
+export function extractSessionMemory(taskId: number, logger: Logger = realLogger): void {
+  void _doExtract(taskId, logger);
 }
 
-async function _doExtract(taskId: number): Promise<void> {
+async function _doExtract(taskId: number, logger: Logger): Promise<void> {
   try {
     const db = getDb();
     const task = db
@@ -151,10 +151,10 @@ async function _doExtract(taskId: number): Promise<void> {
 
     if (result.type === "text" && result.content.trim()) {
       writeSessionMemory(taskId, result.content.trim());
-      log("debug", "Session memory extracted and written", { taskId });
+      logger.log("debug", "Session memory extracted and written", { taskId });
     }
   } catch (err) {
     // Background extraction must never crash the engine
-    log("debug", `Session memory extraction failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`, { taskId });
+    logger.log("debug", `Session memory extraction failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`, { taskId });
   }
 }
