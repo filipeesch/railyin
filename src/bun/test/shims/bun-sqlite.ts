@@ -11,12 +11,16 @@ import BetterSqlite3 from "better-sqlite3";
 
 type BindValue = string | number | bigint | Buffer | null;
 
-// Track every open Database so we can close them before V8 teardown.
-// better-sqlite3's native addon SIGSEGVs on macOS when open connections are
-// GC'd after the V8 shutdown sequence has begun (e.g. during Vitest perTest
-// coverage collection).  We expose closeAll() so the vitest setup file can
-// register an afterAll() hook — which fires inside vitest's lifecycle, while
-// V8 is still fully operational, earlier than process.on('exit').
+// Track every open Database so we can close them inside vitest's afterAll()
+// hook — while V8 is still fully operational — before process teardown begins.
+//
+// DO NOT register process.on("exit") or parentPort.once("close") hooks here.
+// Those fire during or after Node.js teardown, racing with better-sqlite3's
+// native C++ finalizers.  If our closeAll() runs after the native addon has
+// already started freeing its objects, calling db.close() segfaults on macOS.
+// The vitest-teardown.ts setupFile registers afterAll(closeAll) which fires at
+// the right time; better-sqlite3's own AddEnvironmentCleanupHook handles any
+// remaining connections on process exit.
 //
 // IMPORTANT: Use globalThis to store the Set so it persists across module
 // reloads.  Stryker forces pool:'threads' with reloadEnvironment:true, which
@@ -35,32 +39,6 @@ export function closeAll(): void {
     try { db.close(); } catch { /* already closed */ }
   }
   _openDatabases.clear();
-}
-
-// Belt-and-suspenders: also close on process exit for any code path that
-// bypasses vitest teardown (e.g. direct node invocations of the shim).
-// Guard with globalThis so reloadEnvironment module reloads don't accumulate
-// duplicate listeners (65 files = 65 reloads without this guard).
-if (!(_g.__sqliteExitHooked)) {
-  _g.__sqliteExitHooked = true;
-  process.on("exit", closeAll);
-}
-
-// In vitest worker threads (Stryker forces pool:'threads'), the worker is
-// terminated via worker.terminate() — process.on('exit') does NOT fire.
-// Hook parentPort.once('close') instead: it fires when the parent closes the
-// communication channel, which is BEFORE V8 isolate teardown.  This ensures
-// all DB connections are explicitly closed before C++ finalizers run.
-// Guard with globalThis so we only register once across module reloads.
-if (!(_g.__sqlitePortCloseHooked)) {
-  _g.__sqlitePortCloseHooked = true;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const wt = require("worker_threads") as typeof import("worker_threads");
-    wt.parentPort?.once("close", closeAll);
-  } catch {
-    // not in a worker thread context, ignore
-  }
 }
 
 interface QueryResult<T> {
