@@ -10,10 +10,12 @@
  *   PAG-6 — refreshLatestPage (stream done) preserves paged older history
  *   PAG-7 — Session chat pagination parity (same sentinel behaviour)
  *   PAG-8 — sentinel disappears when hasMore becomes false after loading
+ *   PAG-9 — sentinel triggers load-older without requiring manual scroll
+ *   PAG-10 — load-older uses task.conversationId, not task.id
  */
 
 import { test, expect } from "./fixtures";
-import { makeAssistantMessage, makeUserMessage } from "./fixtures/mock-data";
+import { makeAssistantMessage, makeUserMessage, makeTask } from "./fixtures/mock-data";
 import type { ConversationMessage, StreamEvent } from "@shared/rpc-types";
 
 const EXEC_ID = 70_001;
@@ -147,10 +149,12 @@ test.describe("PAG-3 — load older messages on scroll", () => {
 
 test.describe("PAG-5 — streaming with paginated history", () => {
     test("PAG-5: stream tail appears after paginated history, content is visible", async ({ page, api, ws, task }) => {
-        api.handle("conversations.getMessages", () => ({
-            messages: makeMessages(task.id, 5, 1),
-            hasMore: true,
-        }));
+        api.handle("conversations.getMessages", (params) => {
+            const p = params as { beforeMessageId?: number };
+            // Sentinel fires immediately (hasMore=true) — return empty so count stays at 5.
+            if (p.beforeMessageId != null) return { messages: [], hasMore: false };
+            return { messages: makeMessages(task.id, 5, 1), hasMore: true };
+        });
 
         api.handle("tasks.sendMessage", async () => {
             setTimeout(() => {
@@ -229,7 +233,44 @@ test.describe("PAG-6 — refreshLatestPage on stream done", () => {
     });
 });
 
-// ─── Suite PAG-8 — sentinel disappears when history exhausted ────────────────
+// ─── Suite PAG-9 — immediate sentinel trigger on short initial load ───────────
+//
+// Regression: when hasMoreBefore=true but the conversation is short enough
+// that the sentinel is visible immediately (autoScroll=true on mount), the
+// old !autoScroll.value guard in the IntersectionObserver callback prevented
+// load-older from firing. This test verifies the guard is gone.
+
+test.describe("PAG-9 — sentinel triggers load-older without requiring manual scroll", () => {
+    test("PAG-9: load-older fires on mount when sentinel is immediately visible", async ({ page, api, task }) => {
+        // A very short conversation (3 messages) so the sentinel is above the fold
+        // immediately after the drawer opens — no manual scroll required.
+        const initialMessages = makeMessages(task.id, 3, 10); // ids 10–12
+        let loadOlderCalled = false;
+
+        api.handle("conversations.getMessages", (params) => {
+            const p = params as { beforeMessageId?: number };
+            if (p.beforeMessageId != null) {
+                loadOlderCalled = true;
+                return { messages: makeMessages(task.id, 3, 1), hasMore: false }; // ids 1–3
+            }
+            return { messages: initialMessages, hasMore: true };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // The sentinel is visible immediately on mount (short conversation + autoScroll=true).
+        // Give the async IntersectionObserver callback time to fire and load older messages.
+        await page.waitForTimeout(500);
+
+        expect(loadOlderCalled).toBe(true);
+
+        // All 6 messages (3 initial + 3 older) should now be visible.
+        // We skip asserting the intermediate count of 3 because the sentinel fires
+        // synchronously enough that load-older may complete before the first assertion.
+        await expect(page.locator(".conv-body .msg")).toHaveCount(6, { timeout: 3_000 });
+    });
+});
 
 test.describe("PAG-8 — sentinel hidden when all history loaded", () => {
     test("PAG-8: loading spinner gone and sentinel empty after full history loaded", async ({ page, api, task }) => {
@@ -255,5 +296,67 @@ test.describe("PAG-8 — sentinel hidden when all history loaded", () => {
         await expect(page.locator(".conv-body__sentinel .conv-body__system")).not.toBeVisible({ timeout: 3_000 });
         await page.locator(".task-detail .conv-body").evaluate((el) => (el.scrollTop = 0));
         await expect(page.locator(".conv-body .msg").first()).toContainText("History message 1", { timeout: 5_000 });
+    });
+});
+
+// ─── Suite PAG-10 — load-older uses task.conversationId, not task.id ──────────
+//
+// Regression: TaskChatView.vue was passing task.id (the task PK, e.g. 5) instead
+// of task.conversationId (the FK, e.g. 999) to conversationStore.loadOlderMessages.
+// The guard `if (activeConversationId !== params.conversationId) return` would then
+// bail immediately because 999 ≠ 5, silently swallowing every load-older request.
+
+test.describe("PAG-10 — load-older uses task.conversationId", () => {
+    test("PAG-10: scroll-to-top triggers load-older when task.id !== task.conversationId", async ({ page, api }) => {
+        // Create a task where id and conversationId are intentionally different.
+        const task = makeTask({ id: 5, conversationId: 999 });
+
+        // Override the task list to return our specially-crafted task.
+        api.handle("tasks.list", () => [task]);
+
+        // Enough messages to scroll overflow so sentinel starts above the fold.
+        const initialMessages = Array.from({ length: 30 }, (_, i) =>
+            makeAssistantMessage(task.conversationId, `History message ${31 + i}`, {
+                id: 31 + i,
+                conversationId: task.conversationId,
+            }),
+        );
+
+        let loadOlderCalled = false;
+
+        api.handle("conversations.getMessages", (params) => {
+            const p = params as { beforeMessageId?: number };
+            if (p.beforeMessageId != null) {
+                loadOlderCalled = true;
+                return {
+                    messages: Array.from({ length: 10 }, (_, i) =>
+                        makeAssistantMessage(task.conversationId, `Old message ${i + 1}`, {
+                            id: i + 1,
+                            conversationId: task.conversationId,
+                        }),
+                    ),
+                    hasMore: false,
+                };
+            }
+            return { messages: initialMessages, hasMore: true };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Wait for initial messages to render
+        await expect(page.locator(".conv-body .msg").last()).toBeVisible({ timeout: 5_000 });
+
+        // Scroll to top — IntersectionObserver fires → @load-older → loadOlderMessages
+        await page.locator(".task-detail .conv-body").evaluate((el) => (el.scrollTop = 0));
+
+        // Give the async observer callback time to fire
+        await page.waitForTimeout(800);
+
+        // Older messages should have been loaded — this fails before the fix because
+        // task.id (5) ≠ activeConversationId (999) causes loadOlderMessages to return early.
+        expect(loadOlderCalled).toBe(true);
+
+        await expect(page.locator(".conv-body .msg").first()).toContainText("Old message 1", { timeout: 3_000 });
     });
 });

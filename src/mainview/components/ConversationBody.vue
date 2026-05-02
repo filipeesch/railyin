@@ -3,6 +3,8 @@
     :class="['conv-body', { 'conv-body--positioning': !initialScrollReady }]"
     ref="scrollEl"
     @scroll.passive="onScroll"
+    @wheel.passive="onUserScroll"
+    @touchstart.passive="onUserScroll"
   >
     <div class="conv-body__inner conversation-inner">
       <!-- Sentinel for loading older history via IntersectionObserver -->
@@ -203,16 +205,79 @@ function measureRef(el: Element | null) {
 
 // ─── Auto-scroll ─────────────────────────────────────────────────────────────
 
+// Disable autoscroll when user drifts this far from the bottom.
 const SCROLL_THRESHOLD = 60;
+// Re-engage autoscroll only when the user scrolls fully back to the bottom.
+// A tight value prevents flip-flopping when the user just started scrolling up
+// but hasn't moved far enough to cross SCROLL_THRESHOLD yet.
+const REENGAGE_THRESHOLD = 5;
+
 const autoScroll = ref(true);
 const pendingScrollBottom = ref(false);
 const initialScrollReady = ref(false);
 let initialScrollRun = 0;
 
+// Set synchronously on wheel/touch so the RAF loop sees it before the first
+// scroll event fires, eliminating the race where scrollToBottom() overrides the
+// user's intended scroll before onScroll() can set autoScroll=false.
+const userScrolling = ref(false);
+
+function onUserScroll(e: WheelEvent) {
+  // Immediately disengage autoscroll when the user scrolls upward.
+  // This is synchronous and fires before the RAF loop's next tick (~16ms),
+  // so the loop cannot scroll down between this event and the scroll event.
+  if (e.deltaY < 0) {
+    autoScroll.value = false;
+    // Cancel any pending initial scroll-to-bottom so the getTotalSize watcher
+    // does not re-engage autoscroll during the 60ms initialisation window.
+    pendingScrollBottom.value = false;
+    // Abort any in-flight native smooth-scroll animation (e.g. started by the
+    // message-arrival watcher calling scrollToLatest("smooth")).  Without this,
+    // the browser keeps animating toward the bottom even though autoScroll is
+    // already false, giving the impression of a "jump" the user cannot stop.
+    if (scrollEl.value) {
+      scrollEl.value.scrollTo({ top: scrollEl.value.scrollTop, behavior: "instant" });
+    }
+    // TanStack Virtual's internal RAF reconcile loop (scheduleScrollReconcile)
+    // keeps re-calling _scrollToOffset until scrollOffset ≈ targetOffset.
+    // Nulling scrollState cancels that loop so the virtualizer stops fighting
+    // the user's upward scroll.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (virtualizer.value && (virtualizer.value as any).scrollState) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (virtualizer.value as any).scrollState = null;
+    }
+  }
+  userScrolling.value = true;
+}
+
 function onScroll() {
   if (!scrollEl.value) return;
+  // Capture before reset: true means this scroll event was triggered by an
+  // upward wheel gesture already handled in onUserScroll.  Reading it here
+  // (before reset) lets us suppress the premature re-engagement that would
+  // otherwise happen when the very first scroll-event fires while the viewport
+  // is still within REENGAGE_THRESHOLD of the bottom (e.g. 1–4 px from bottom
+  // just after the user starts wheeling up from a pinned position).
+  const scrollingByUser = userScrolling.value;
+  userScrolling.value = false;
   const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
-  autoScroll.value = scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD;
+  const distFromBottom = scrollHeight - scrollTop - clientHeight;
+  // Dead zone [REENGAGE_THRESHOLD, SCROLL_THRESHOLD): don't change autoScroll.
+  // This prevents the RAF from re-engaging while the user just started scrolling
+  // up and hasn't crossed the disable threshold yet.
+  //
+  // Additionally guard re-engagement when the user is actively scrolling up
+  // (scrollingByUser). Without this guard, the very first scroll event after a
+  // wheel-up fires while the viewport is still ≤ REENGAGE_THRESHOLD px from the
+  // bottom (before the animation has moved the viewport far), causing
+  // autoScroll to be re-enabled immediately — then the SIZE watcher fires and
+  // snaps the viewport back to the bottom before the user can escape.
+  if (distFromBottom < REENGAGE_THRESHOLD && !scrollingByUser) {
+    autoScroll.value = true;
+  } else if (distFromBottom >= SCROLL_THRESHOLD) {
+    autoScroll.value = false;
+  }
 }
 
 function scrollToBottom(behavior: ScrollBehavior = "auto") {
@@ -240,11 +305,11 @@ async function scheduleScrollToBottom({ revealWhenDone = false }: { revealWhenDo
   scrollToLatest();
   requestAnimationFrame(() => {
     if (runId !== initialScrollRun) return;
-    scrollToLatest();
+    if (autoScroll.value) scrollToLatest();
   });
   setTimeout(() => {
     if (runId !== initialScrollRun) return;
-    scrollToLatest();
+    if (autoScroll.value) scrollToLatest();
     pendingScrollBottom.value = false;
     if (revealWhenDone) initialScrollReady.value = true;
   }, 60);
@@ -252,7 +317,7 @@ async function scheduleScrollToBottom({ revealWhenDone = false }: { revealWhenDo
 
 watch(
   () => virtualizer.value.getTotalSize(),
-  () => { if (pendingScrollBottom.value) scrollToLatest(); },
+  () => { if (pendingScrollBottom.value && !userScrolling.value && autoScroll.value) scrollToLatest(); },
 );
 
 // While there are live streaming blocks, run a requestAnimationFrame loop to
@@ -263,7 +328,7 @@ watch(
 
   function rafScrollLoop() {
     if (!hasLiveContent.value) { rafId = null; return; }
-    if (autoScroll.value) scrollToLatest();
+    if (autoScroll.value && !userScrolling.value) scrollToBottom();
     rafId = requestAnimationFrame(rafScrollLoop);
   }
 
@@ -284,7 +349,15 @@ watch(
     () => props.streamState?.roots.length,
   ],
   async ([newLastId], [oldLastId]) => {
+    // User has scrolled up — don't re-engage autoscroll on new messages.
+    if (!autoScroll.value) return;
     await nextTick();
+    // Re-check after the async suspension — the user may have scrolled up
+    // while we were waiting for nextTick, and onUserScroll sets autoScroll=false
+    // synchronously.  Without this guard the watcher would still call
+    // scrollToLatest("smooth"), starting a native scroll animation that fights
+    // the user's intended upward scroll.
+    if (!autoScroll.value) return;
     // Re-read scroll position from DOM instead of the stale autoScroll ref to
     // avoid a race where scroll restoration (post-flush) sets scrollTop near
     // the bottom after this callback was already suspended at nextTick.
@@ -326,13 +399,22 @@ function setupSentinelObserver() {
   if (!sentinelEl.value) return;
   sentinelObserver = new IntersectionObserver(
     ([entry]) => {
-      if (entry.isIntersecting && props.hasMoreBefore && !props.isLoadingOlder && !autoScroll.value) {
+      if (entry.isIntersecting && props.hasMoreBefore && !props.isLoadingOlder) {
         emit("load-older");
       }
     },
     { root: scrollEl.value, threshold: 0 },
   );
   sentinelObserver.observe(sentinelEl.value);
+  // The IntersectionObserver only fires on changes — if the sentinel is already
+  // visible when we attach (e.g. short conversation), trigger an immediate check.
+  if (props.hasMoreBefore && !props.isLoadingOlder && !autoScroll.value) {
+    const sentinel = sentinelEl.value.getBoundingClientRect();
+    const container = scrollEl.value?.getBoundingClientRect();
+    if (container && sentinel.top >= container.top && sentinel.bottom <= container.bottom) {
+      emit("load-older");
+    }
+  }
 }
 
 onMounted(setupSentinelObserver);
@@ -342,6 +424,17 @@ watch(
   () => props.hasMoreBefore,
   () => void nextTick(setupSentinelObserver),
 );
+
+watch(autoScroll, (newVal, oldVal) => {
+  if (!oldVal || newVal) return; // only act on true → false transition
+  if (!scrollEl.value || !sentinelEl.value) return;
+  if (!props.hasMoreBefore || props.isLoadingOlder) return;
+  const sentinel = sentinelEl.value.getBoundingClientRect();
+  const container = scrollEl.value.getBoundingClientRect();
+  if (sentinel.top >= container.top && sentinel.bottom <= container.bottom) {
+    emit("load-older");
+  }
+});
 
 // ─── Scroll restoration on older-message prepend ─────────────────────────────
 

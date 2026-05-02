@@ -182,6 +182,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useDarkMode } from "../composables/useDarkMode";
+import { useColumnTransitions } from "../composables/useColumnTransitions";
 import { api, onWorkflowReloaded } from "../rpc";
 import Select from "primevue/select";
 import Button from "primevue/button";
@@ -376,19 +377,10 @@ function columnAtCapacity(columnId: string): boolean {
 
 const draggingSourceColumnId = ref<string | null>(null);
 
-const forbiddenColumnIds = computed<Set<string>>(() => {
-  const sourceId = draggingSourceColumnId.value;
-  if (!sourceId) return new Set();
-  const template = boardStore.activeBoard?.template;
-  const sourceCol = template?.columns.find((c) => c.id === sourceId);
-  const allowed = sourceCol?.allowedTransitions;
-  if (allowed === undefined) return new Set();
-  return new Set(
-    (template?.columns ?? [])
-      .map((c) => c.id)
-      .filter((id) => id !== sourceId && !allowed.includes(id))
-  );
-});
+const { forbiddenColumnIds } = useColumnTransitions(
+  computed(() => boardStore.activeBoard?.template),
+  draggingSourceColumnId,
+);
 
 type RenderSlot =
   | { type: 'standalone'; column: import('../../shared/rpc-types.ts').WorkflowColumn }

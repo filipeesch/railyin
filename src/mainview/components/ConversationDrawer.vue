@@ -92,6 +92,9 @@ function handleOutsideClick(e: MouseEvent) {
     ".p-multiselect-overlay, .todo-overlay-backdrop, .task-overlay, " +
     ".p-popover, .file-editor-overlay, .p-tieredmenu"
   )) return;
+  // Belt-and-suspenders: skip if any select overlay is still mounted
+  // (e.g. when the click target was detached from the overlay before bubbling)
+  if (document.querySelector(".p-select-overlay")) return;
   // Skip if the click is inside the drawer panel itself
   const drawerPanel = document.querySelector(".p-drawer");
   if (drawerPanel && drawerPanel.contains(e.target as Node)) return;

@@ -9,7 +9,7 @@
       </span>
     </button>
 
-    <div v-if="open" class="rb__body">
+    <div v-if="open" ref="bodyEl" class="rb__body">
       <div class="rb__content" :class="{ 'rb__content--streaming': streaming }">{{ content }}</div>
       <slot />
     </div>
@@ -38,6 +38,17 @@ watch(
 function toggle() {
   open.value = !open.value;
 }
+
+const bodyEl = ref<HTMLElement | null>(null);
+
+watch(
+  () => props.content,
+  () => {
+    if (props.streaming && bodyEl.value) {
+      bodyEl.value.scrollTop = bodyEl.value.scrollHeight;
+    }
+  },
+);
 </script>
 
 <style scoped>

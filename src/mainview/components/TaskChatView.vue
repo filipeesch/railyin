@@ -55,16 +55,21 @@
       </div>
       <div class="toolbar-actions" v-if="task">
         <Select
-          v-if="columns.length"
+          v-if="selectableColumns.length"
           :model-value="task.workflowState"
-          :options="columns"
+          :options="selectableColumns"
           option-label="label"
           option-value="id"
+          option-disabled="disabled"
           size="small"
           class="workflow-select"
           :disabled="transitioning"
           @change="(e: { value: string }) => transition(e.value)"
-        />
+        >
+          <template #value>
+            {{ selectableColumns.find(c => c.id === task.workflowState)?.label ?? task.workflowState }}
+          </template>
+        </Select>
         <Button
           v-if="task.worktreePath"
           icon="pi pi-code"
@@ -110,7 +115,7 @@
         :self-id="task.conversationId"
         :has-more-before="conversationStore.hasMoreBefore"
         :is-loading-older="conversationStore.isLoadingOlder"
-        @load-older="task && conversationStore.loadOlderMessages({ conversationId: task.id })"
+        @load-older="task && conversationStore.loadOlderMessages({ conversationId: task.conversationId })"
       />
 
       <!-- Changed files panel -->
@@ -190,6 +195,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
+import { useColumnTransitions } from "../composables/useColumnTransitions";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Select from "primevue/select";
@@ -236,7 +242,10 @@ const taskWorkspaceKey = computed(() =>
   task.value ? (boardStore.boards.find(b => b.id === task.value!.boardId)?.workspaceKey ?? undefined) : undefined
 );
 
-const columns = computed(() => boardStore.activeBoard?.template.columns ?? []);
+const { selectableColumns } = useColumnTransitions(
+  computed(() => boardStore.activeBoard?.template),
+  computed(() => task.value?.workflowState),
+);
 
 const execLabel = computed(() => {
   const map: Record<string, string> = {
@@ -340,6 +349,9 @@ async function retry() {
 
 async function transition(toState: string) {
   if (!task.value) return;
+  // Guard against null emits (PrimeVue can emit null when model value isn't in
+  // options) and no-op transitions (current state re-selected).
+  if (!toState || toState === task.value.workflowState) return;
   transitioning.value = true;
   try {
     const boardId = boardStore.activeBoardId;

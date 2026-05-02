@@ -146,6 +146,14 @@ export const useTaskStore = defineStore("task", () => {
       ...(attachments?.length ? { attachments } : {}),
     });
     void executionId;
+    // The first message on a brand-new task creates a real conversation on the backend
+    // (conversationId changes from 0 → N).  Sync the store before appendMessage so the
+    // message isn't silently dropped by the conversationId guard in appendMessage.
+    if (message.conversationId !== conversationStore.activeConversationId) {
+      conversationStore.setActiveConversation(message.conversationId);
+      const task = taskIndex.value[taskId];
+      if (task) taskIndex.value[taskId] = { ...task, conversationId: message.conversationId };
+    }
     conversationStore.appendMessage(message);
   }
 

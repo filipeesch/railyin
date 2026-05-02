@@ -8,6 +8,7 @@ import type { TransitionEventMetadata } from "../../shared/rpc-types.ts";
 import { resetConfig } from "../config/index.ts";
 import { EngineRegistry } from "../engine/engine-registry.ts";
 import { TransitionExecutor } from "../engine/execution/transition-executor.ts";
+import { TaskRepository } from "../db/task-repository.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import { WorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
@@ -138,6 +139,7 @@ describe("TransitionExecutor", () => {
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
+      new TaskRepository(db),
     );
 
     const result = await executor.execute(taskId, "done");
@@ -191,6 +193,7 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
+      new TaskRepository(db),
     );
 
     const result = await executor.execute(taskId, "plan");
@@ -247,6 +250,7 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
+      new TaskRepository(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -282,6 +286,7 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
+      new TaskRepository(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -319,6 +324,7 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
+      new TaskRepository(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -354,6 +360,7 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
+      new TaskRepository(db),
     );
 
     await executor.execute(taskId, "plan");
