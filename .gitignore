@@ -52,3 +52,4 @@ reports/mutation/**/*.html
 reports/mutation/**/*.json
 playwright-report/
 test-results/
+.stryker-tmp/
