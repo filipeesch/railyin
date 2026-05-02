@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from "vitest";
 import { retryStream, retryTurn, ProviderError } from "../ai/retry.ts";
+import { noopLogger } from "../logger.ts";
 import type { AIProvider, AIMessage, AICallOptions, AITurnResult, StreamEvent } from "../ai/types.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -100,7 +101,7 @@ function okTurn(): Promise<AITurnResult> {
 describe("retryStream — retry logic (8.1)", () => {
   it("succeeds on first attempt with no errors", async () => {
     const provider = makeFakeProvider(() => okStream(), noTurn);
-    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     expect(events).toEqual([{ type: "token", content: "hello" }, { type: "done" }]);
     expect(provider.streamCalls).toBe(1);
   });
@@ -110,7 +111,7 @@ describe("retryStream — retry logic (8.1)", () => {
       if (n === 1) return throwingGen(new ProviderError(429, "rate limit"));
       return okStream();
     }, noTurn);
-    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     expect(provider.streamCalls).toBe(2);
     expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
   });
@@ -121,7 +122,7 @@ describe("retryStream — retry logic (8.1)", () => {
         if (n === 1) return throwingGen(new ProviderError(status, `error ${status}`));
         return okStream();
       }, noTurn);
-      const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+      const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
       expect(provider.streamCalls).toBe(2, `Expected 2 calls for status ${status}`);
       expect(events.some((e) => e.type === "token")).toBe(true);
     }
@@ -131,7 +132,7 @@ describe("retryStream — retry logic (8.1)", () => {
     const provider = makeFakeProvider(() => throwingGen(new ProviderError(400, "bad request")), noTurn);
     let err: unknown;
     try {
-      await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+      await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     } catch (e) {
       err = e;
     }
@@ -145,7 +146,7 @@ describe("retryStream — retry logic (8.1)", () => {
       const provider = makeFakeProvider(() => throwingGen(new ProviderError(status, "auth error")), noTurn);
       let err: unknown;
       try {
-        await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+        await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
       } catch (e) {
         err = e;
       }
@@ -161,7 +162,7 @@ describe("retryStream — retry logic (8.1)", () => {
     );
     let err: unknown;
     try {
-      await collect(retryStream(provider, MESSAGES, {}, 5, 10, { baseBackoffMs: 0 }));
+      await collect(retryStream(provider, MESSAGES, {}, 5, 10, { baseBackoffMs: 0, logger: noopLogger }));
     } catch (e) {
       err = e;
     }
@@ -181,7 +182,7 @@ describe("retryStream — retry logic (8.1)", () => {
       if (n === 3) return throwingGen(new ProviderError(500, "server error"));
       return okStream();
     }, noTurn);
-    const events = await collect(retryStream(provider, MESSAGES, {}, 5, 10, { baseBackoffMs: 0 }));
+    const events = await collect(retryStream(provider, MESSAGES, {}, 5, 10, { baseBackoffMs: 0, logger: noopLogger }));
     expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
     expect(provider.streamCalls).toBe(4);
   });
@@ -193,7 +194,7 @@ describe("retryStream — retry logic (8.1)", () => {
       if (n === 1) return throwingGen(new ProviderError(429, "rate limit", 0));
       return okStream();
     }, noTurn);
-    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     expect(provider.streamCalls).toBe(2);
     expect(events.some((e) => e.type === "token")).toBe(true);
   });
@@ -203,7 +204,7 @@ describe("retryStream — retry logic (8.1)", () => {
     const provider = makeFakeProvider(() => throwingGen(networkErr), noTurn);
     let err: unknown;
     try {
-      await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+      await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     } catch (e) {
       err = e;
     }
@@ -220,7 +221,7 @@ describe("retryStream — retry logic (8.1)", () => {
     let err: unknown;
     try {
       await collect(
-        retryStream(provider, MESSAGES, { signal: controller.signal }, 3, 10, { baseBackoffMs: 0 }),
+        retryStream(provider, MESSAGES, { signal: controller.signal }, 3, 10, { baseBackoffMs: 0, logger: noopLogger }),
       );
     } catch (e) {
       err = e;
@@ -241,7 +242,7 @@ describe("retryStream — watchdog behaviour (8.2)", () => {
     }, noTurn);
 
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 3, 10, { idleTimeoutMs: 50, baseBackoffMs: 0, stallWarnMs: 1000 }),
+      retryStream(provider, MESSAGES, {}, 3, 10, { idleTimeoutMs: 50, baseBackoffMs: 0, stallWarnMs: 1000, logger: noopLogger }),
     );
     expect(provider.streamCalls).toBe(2);
     expect(events.some((e) => e.type === "token" && e.content === "ok")).toBe(true);
@@ -257,7 +258,7 @@ describe("retryStream — watchdog behaviour (8.2)", () => {
     }
     const provider = makeFakeProvider(() => fastStream(), noTurn);
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 3, 10, { idleTimeoutMs: 200, baseBackoffMs: 0 }),
+      retryStream(provider, MESSAGES, {}, 3, 10, { idleTimeoutMs: 200, baseBackoffMs: 0, logger: noopLogger }),
     );
     expect(provider.streamCalls).toBe(1);
     expect(events.filter((e) => e.type === "token")).toHaveLength(2);
@@ -271,7 +272,7 @@ describe("retryStream — watchdog behaviour (8.2)", () => {
     }, noTurn);
 
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 3, 10, { idleTimeoutMs: 50, baseBackoffMs: 0, stallWarnMs: 1000 }),
+      retryStream(provider, MESSAGES, {}, 3, 10, { idleTimeoutMs: 50, baseBackoffMs: 0, stallWarnMs: 1000, logger: noopLogger }),
     );
     expect(provider.streamCalls).toBe(2);
     expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
@@ -290,7 +291,7 @@ describe("retryStream — watchdog behaviour (8.2)", () => {
     let err: unknown;
     try {
       await collect(
-        retryStream(provider, MESSAGES, { signal: controller.signal }, 3, 10, { baseBackoffMs: 0 }),
+        retryStream(provider, MESSAGES, { signal: controller.signal }, 3, 10, { baseBackoffMs: 0, logger: noopLogger }),
       );
     } catch (e) {
       err = e;
@@ -311,7 +312,7 @@ describe("retryStream — watchdog behaviour (8.2)", () => {
     );
 
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 2, 5, { idleTimeoutMs: 50, baseBackoffMs: 0, stallWarnMs: 1000 }),
+      retryStream(provider, MESSAGES, {}, 2, 5, { idleTimeoutMs: 50, baseBackoffMs: 0, stallWarnMs: 1000, logger: noopLogger }),
     );
     // 3 stream attempts (0, 1, 2 — maxStreamRetries=2 means attempts 0..2 = 3 total), then fallback
     expect(provider.streamCalls).toBe(3);
@@ -330,7 +331,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
       () => Promise.resolve({ type: "text", content: "fallback text" }),
     );
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 2, 5, { baseBackoffMs: 0 }),
+      retryStream(provider, MESSAGES, {}, 2, 5, { baseBackoffMs: 0, logger: noopLogger }),
     );
     // stream tried attempts 0,1,2 → 3 total. Then falls back
     // 503 is retryable: attempt 0 → retry, attempt 1 → retry, attempt 2 → retry budget=2 → exhausted → fallback
@@ -348,7 +349,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
       } as AITurnResult),
     );
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 0, 5, { baseBackoffMs: 0 }),
+      retryStream(provider, MESSAGES, {}, 0, 5, { baseBackoffMs: 0, logger: noopLogger }),
     );
     expect(events.some((e) => e.type === "tool_calls")).toBe(true);
     expect(events[events.length - 1]).toEqual({ type: "done" });
@@ -365,7 +366,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
       },
     );
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 0, 5, { baseBackoffMs: 0 }),
+      retryStream(provider, MESSAGES, {}, 0, 5, { baseBackoffMs: 0, logger: noopLogger }),
     );
     expect(provider.turnCalls).toBe(3);
     expect(events.some((e) => e.type === "token" && e.content === "recovered")).toBe(true);
@@ -384,7 +385,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
       () => Promise.resolve({ type: "text", content: "fast" }),
     );
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 0, 0, { baseBackoffMs: 0 }),
+      retryStream(provider, MESSAGES, {}, 0, 0, { baseBackoffMs: 0, logger: noopLogger }),
     );
     // Fast turn: no status events expected (turn completes in < 15s)
     expect(events.filter((e) => e.type === "status")).toHaveLength(0);
@@ -397,7 +398,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
       okTurn,
     );
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 0, 5, { baseBackoffMs: 0 }),
+      retryStream(provider, MESSAGES, {}, 0, 5, { baseBackoffMs: 0, logger: noopLogger }),
     );
     const statusEvents = events.filter((e) => e.type === "status");
     expect(statusEvents).toHaveLength(0);
@@ -410,7 +411,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
     );
     let err: unknown;
     try {
-      await collect(retryStream(provider, MESSAGES, {}, 0, 2, { baseBackoffMs: 0 }));
+      await collect(retryStream(provider, MESSAGES, {}, 0, 2, { baseBackoffMs: 0, logger: noopLogger }));
     } catch (e) {
       err = e;
     }
@@ -425,7 +426,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
     );
     let err: unknown;
     try {
-      await collect(retryStream(provider, MESSAGES, {}, 0, 10, { baseBackoffMs: 0 }));
+      await collect(retryStream(provider, MESSAGES, {}, 0, 10, { baseBackoffMs: 0, logger: noopLogger }));
     } catch (e) {
       err = e;
     }
@@ -442,7 +443,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
     );
     let err: unknown;
     try {
-      await collect(retryStream(provider, MESSAGES, {}, 0, 10, { baseBackoffMs: 0 }));
+      await collect(retryStream(provider, MESSAGES, {}, 0, 10, { baseBackoffMs: 0, logger: noopLogger }));
     } catch (e) {
       err = e;
     }
@@ -456,7 +457,7 @@ describe("retryStream — non-streaming fallback (8.3)", () => {
 describe("retryTurn (8.4)", () => {
   it("returns result on first success", async () => {
     const provider = makeFakeProvider(() => okStream(), okTurn);
-    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
     expect(result).toEqual({ type: "text", content: "hello" });
     expect(provider.turnCalls).toBe(1);
   });
@@ -469,7 +470,7 @@ describe("retryTurn (8.4)", () => {
         return okTurn();
       },
     );
-    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
     expect(result).toEqual({ type: "text", content: "hello" });
     expect(provider.turnCalls).toBe(3);
   });
@@ -483,7 +484,7 @@ describe("retryTurn (8.4)", () => {
           return okTurn();
         },
       );
-      const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+      const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
       expect(result.type).toBe("text");
       expect(provider.turnCalls).toBe(2, `Expected 2 turn calls for status ${status}`);
     }
@@ -496,7 +497,7 @@ describe("retryTurn (8.4)", () => {
     );
     let err: unknown;
     try {
-      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
     } catch (e) {
       err = e;
     }
@@ -513,7 +514,7 @@ describe("retryTurn (8.4)", () => {
       );
       let err: unknown;
       try {
-        await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+        await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
       } catch (e) {
         err = e;
       }
@@ -529,7 +530,7 @@ describe("retryTurn (8.4)", () => {
     );
     let err: unknown;
     try {
-      await retryTurn(provider, MESSAGES, {}, 2, { baseBackoffMs: 0 });
+      await retryTurn(provider, MESSAGES, {}, 2, { baseBackoffMs: 0, logger: noopLogger });
     } catch (e) {
       err = e;
     }
@@ -546,7 +547,7 @@ describe("retryTurn (8.4)", () => {
     );
     let err: unknown;
     try {
-      await retryTurn(provider, MESSAGES, { signal: controller.signal }, 10, { baseBackoffMs: 0 });
+      await retryTurn(provider, MESSAGES, { signal: controller.signal }, 10, { baseBackoffMs: 0, logger: noopLogger });
     } catch (e) {
       err = e;
     }
@@ -562,7 +563,7 @@ describe("retryTurn (8.4)", () => {
     );
     let err: unknown;
     try {
-      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
     } catch (e) {
       err = e;
     }
@@ -607,7 +608,7 @@ describe("Shared provider cooldown (8.6)", () => {
   it("no overhead when cooldownUntil is 0 (past)", async () => {
     const provider = makeFakeProvider(() => okStream(), noTurn);
     provider.cooldownUntil = 0; // no cooldown active
-    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
     expect(provider.streamCalls).toBe(1);
   });
@@ -617,7 +618,7 @@ describe("Shared provider cooldown (8.6)", () => {
     // Set a very short cooldown (50ms from now)
     provider.cooldownUntil = Date.now() + 50;
     const start = Date.now();
-    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     const elapsed = Date.now() - start;
     expect(elapsed).toBeGreaterThanOrEqual(40); // waited at least ~50ms
     expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
@@ -637,7 +638,7 @@ describe("Shared provider cooldown (8.6)", () => {
       },
     });
     const before = Date.now();
-    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     expect(base.streamCalls).toBe(2);
     expect(capturedCooldownValue).toBeGreaterThanOrEqual(before);
     expect(capturedCooldownValue).toBeLessThan(before + 5_000);
@@ -648,7 +649,7 @@ describe("Shared provider cooldown (8.6)", () => {
     const provider = makeFakeProvider(() => okStream(), noTurn);
     // Cooldown already expired (in the past)
     provider.cooldownUntil = Date.now() - 1000;
-    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }));
+    const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
     expect(provider.streamCalls).toBe(1);
     expect(events.some((e) => e.type === "token")).toBe(true);
   });
@@ -657,7 +658,7 @@ describe("Shared provider cooldown (8.6)", () => {
     const provider = makeFakeProvider(() => okStream(), okTurn);
     provider.cooldownUntil = Date.now() + 50;
     const start = Date.now();
-    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
     const elapsed = Date.now() - start;
     expect(elapsed).toBeGreaterThanOrEqual(40);
     expect(result.type).toBe("text");
@@ -679,7 +680,7 @@ describe("Shared provider cooldown (8.6)", () => {
       },
     });
     const before = Date.now();
-    await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 });
+    await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
     expect(base.turnCalls).toBe(2); // retried after 429
     // setCooldown was called with retryAfter=0.001, so cooldownUntil ≈ before + 1ms
     expect(capturedCooldownValue).toBeGreaterThanOrEqual(before);
@@ -694,8 +695,8 @@ describe("Shared provider cooldown (8.6)", () => {
     const start = Date.now();
     // Both start immediately — both should wait for cooldown
     const [e1, e2] = await Promise.all([
-      collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 })),
-      collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 })),
+      collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger })),
+      collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger })),
     ]);
     const elapsed = Date.now() - start;
     expect(elapsed).toBeGreaterThanOrEqual(50);
@@ -713,7 +714,7 @@ describe("Source-based retry priority (8.7)", () => {
       return okStream();
     }, noTurn);
     const events = await collect(
-      retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "foreground"),
+      retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }, "foreground"),
     );
     expect(provider.streamCalls).toBe(2);
     expect(events.some((e) => e.type === "token" && e.content === "hello")).toBe(true);
@@ -727,7 +728,7 @@ describe("Source-based retry priority (8.7)", () => {
     let err: unknown;
     try {
       await collect(
-        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "background"),
+        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }, "background"),
       );
     } catch (e) {
       err = e;
@@ -745,7 +746,7 @@ describe("Source-based retry priority (8.7)", () => {
     const before = Date.now();
     try {
       await collect(
-        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "background"),
+        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }, "background"),
       );
     } catch { /* expected */ }
     expect(provider.cooldownUntil).toBeGreaterThanOrEqual(before + 30_000 - 100);
@@ -759,7 +760,7 @@ describe("Source-based retry priority (8.7)", () => {
         return okStream();
       }, noTurn);
       const events = await collect(
-        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "background"),
+        retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }, "background"),
       );
       expect(provider.streamCalls).toBe(2); // Expected 2 calls for background source on non-429 retryable status
       expect(events.some((e) => e.type === "token")).toBe(true);
@@ -773,7 +774,7 @@ describe("Source-based retry priority (8.7)", () => {
     });
     let err: unknown;
     try {
-      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "background");
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger }, "background");
     } catch (e) {
       err = e;
     }
@@ -788,7 +789,7 @@ describe("Source-based retry priority (8.7)", () => {
     });
     const before = Date.now();
     try {
-      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "background");
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger }, "background");
     } catch { /* expected */ }
     expect(provider.cooldownUntil).toBeGreaterThanOrEqual(before + 60_000 - 100);
   });
@@ -798,7 +799,7 @@ describe("Source-based retry priority (8.7)", () => {
       if (n === 1) return Promise.reject(new ProviderError(429, "rate limit", 0));
       return okTurn();
     });
-    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "foreground");
+    const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger }, "foreground");
     expect(result.type).toBe("text");
     expect(provider.turnCalls).toBe(2);
   });
@@ -816,7 +817,7 @@ describe("computeBackoffMs jitter fix (8.8)", () => {
         return okTurn();
       });
       const start = Date.now();
-      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1 }); // attempt 0: delay = 1 + 1000 = ~1001ms
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1, logger: noopLogger }); // attempt 0: delay = 1 + 1000 = ~1001ms
       const elapsed = Date.now() - start;
       expect(elapsed).toBeGreaterThanOrEqual(900); // at least 1s with full jitter
     } finally {
@@ -842,7 +843,7 @@ describe("computeBackoffMs jitter fix (8.8)", () => {
         if (n === 1) return Promise.reject(new ProviderError(429, "err", 2)); // retryAfter=2s
         return okTurn();
       });
-      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1 });
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1, logger: noopLogger });
       // With new code: max(1, 2000) + 999 = 2999ms
       // With old code: max(1 + 999, 2000) = 2000ms (jitter absorbed)
       const backoffDelay = capturedDelays.find((d) => d > 100);
@@ -863,7 +864,7 @@ describe("computeBackoffMs jitter fix (8.8)", () => {
         return okTurn();
       });
       const start = Date.now();
-      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1 });
+      await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 1, logger: noopLogger });
       const elapsed = Date.now() - start;
       // delay = max(1, undefined) = 1 + 999 = 1000ms
       expect(elapsed).toBeGreaterThanOrEqual(900);
@@ -882,7 +883,7 @@ describe("model fallback on 529 exhaustion (4.1–4.4)", () => {
       () => Promise.reject(new ProviderError(529, "overloaded")),
     );
     const fallback = makeFakeProvider(() => okStream(), okTurn);
-    const result = await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "foreground", fallback);
+    const result = await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger }, "foreground", fallback);
     expect(result).toEqual({ type: "text", content: "hello" });
     expect(primary.turnCalls).toBe(3);
     expect(fallback.turnCalls).toBe(1);
@@ -900,7 +901,7 @@ describe("model fallback on 529 exhaustion (4.1–4.4)", () => {
     );
     let err: unknown;
     try {
-      await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "foreground", fallback);
+      await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger }, "foreground", fallback);
     } catch (e) {
       err = e;
     }
@@ -916,7 +917,7 @@ describe("model fallback on 529 exhaustion (4.1–4.4)", () => {
     );
     let err: unknown;
     try {
-      await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0 }, "foreground", null);
+      await retryTurn(primary, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger }, "foreground", null);
     } catch (e) {
       err = e;
     }
@@ -935,10 +936,53 @@ describe("model fallback on 529 exhaustion (4.1–4.4)", () => {
       noTurn,
     );
     const events = await collect(
-      retryStream(primary, MESSAGES, {}, 3, 10, { baseBackoffMs: 0 }, "foreground", fallback),
+      retryStream(primary, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }, "foreground", fallback),
     );
     expect(primary.streamCalls).toBe(3);
     expect(fallback.streamCalls).toBe(1);
     expect(events.some((e) => e.type === "token" && (e as { content?: string }).content === "fallback-ok")).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// retryStream — logger injection (injectable-logger-test-suite 4.1–4.3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { makeSpyLogger } from "./support/logger-test-utils.ts";
+
+describe("retryStream — logger injection", () => {
+  it("4.1 spy captures a warn entry on 429 retry path", async () => {
+    const spy = makeSpyLogger();
+    const provider = makeFakeProvider((n) => {
+      if (n === 1) return throwingGen(new ProviderError(429, "rate limit"));
+      return okStream();
+    }, noTurn);
+
+    await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: spy }));
+
+    expect(spy.calls.some((c) => c.level === "warn")).toBe(true);
+  });
+
+  it("4.2 spy captures a warn entry on watchdog timeout", async () => {
+    const spy = makeSpyLogger();
+    const provider = makeFakeProvider(
+      (_, opts) => stallingWithSignal(200, opts?.signal),
+      noTurn,
+    );
+
+    await collect(
+      retryStream(provider, MESSAGES, {}, 0, 0, { idleTimeoutMs: 50, baseBackoffMs: 0, logger: spy }),
+    ).catch(() => {});
+
+    expect(spy.calls.some((c) => c.level === "warn" && c.message.toLowerCase().includes("watchdog"))).toBe(true);
+  });
+
+  it("4.3 spy captures a warn entry when retries are exhausted", async () => {
+    const spy = makeSpyLogger();
+    const provider = makeFakeProvider(() => throwingGen(new ProviderError(503, "service unavailable")), noTurn);
+
+    await collect(retryStream(provider, MESSAGES, {}, 0, 1, { baseBackoffMs: 0, logger: spy })).catch(() => {});
+
+    expect(spy.calls.some((c) => c.level === "warn")).toBe(true);
   });
 });

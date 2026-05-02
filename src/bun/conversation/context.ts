@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { getConfig } from "../config/index.ts";
-import { log } from "../logger.ts";
+import { noopLogger, type Logger } from "../logger.ts";
 import { resolveProvider, retryTurn } from "../ai/index.ts";
 import type { AIMessage } from "../ai/types.ts";
 import type { ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
@@ -100,7 +100,7 @@ export const MICRO_COMPACT_CLEARABLE_TOOLS = new Set([
   "patch_file",
 ]);
 
-export function compactMessages(messages: ConversationMessageRow[], opts?: { quiet?: boolean }): AIMessage[] {
+export function compactMessages(messages: ConversationMessageRow[], opts?: { logger?: Logger }): AIMessage[] {
   const lastSummaryIdx = messages.map((message) => message.type).lastIndexOf("compaction_summary");
   let toProcess: ConversationMessageRow[];
   const prefixResult: AIMessage[] = [];
@@ -218,8 +218,8 @@ export function compactMessages(messages: ConversationMessageRow[], opts?: { qui
     index++;
   }
 
-  if (orphanedMessageIds.length > 0 && !opts?.quiet) {
-    log("warn", `compactMessages: skipped ${orphanedMessageIds.length} orphaned tool_call(s) with no following tool_result (msg ids: ${orphanedMessageIds.join(", ")})`, {});
+  if (orphanedMessageIds.length > 0) {
+    (opts?.logger ?? noopLogger).log("warn", `compactMessages: skipped ${orphanedMessageIds.length} orphaned tool_call(s) with no following tool_result (msg ids: ${orphanedMessageIds.join(", ")})`, {});
   }
 
   const collapsed: AIMessage[] = [...prefixResult];
@@ -257,7 +257,7 @@ export function estimateContextUsage(
     )
     .all(taskId);
 
-  const compacted = compactMessages(messages, { quiet: true });
+  const compacted = compactMessages(messages, { logger: noopLogger });
   const totalChars = compacted.reduce((sum, message) => {
     if (typeof message.content === "string") return sum + message.content.length;
     return sum + JSON.stringify(message.content ?? "").length;
@@ -301,7 +301,7 @@ export async function compactConversation(db: Database, taskId: number): Promise
     )
     .all(taskId);
 
-  const compacted = compactMessages(messages, { quiet: true });
+  const compacted = compactMessages(messages, { logger: noopLogger });
   const historyText = compacted
     .map((message) => {
       const role = message.role ?? "unknown";

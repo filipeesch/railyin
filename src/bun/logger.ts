@@ -8,6 +8,14 @@ export interface LogOptions {
   data?: unknown;
 }
 
+export interface Logger {
+  log(level: LogLevel, message: string, opts?: LogOptions): void;
+}
+
+export const noopLogger: Logger = {
+  log() {},
+};
+
 /**
  * Write a structured log entry to the `logs` table and echo to stdout.
  * Query examples:
@@ -34,3 +42,9 @@ export function log(level: LogLevel, message: string, opts?: LogOptions): void {
   parts.push(message);
   console.log(parts.join(" "));
 }
+
+export const realLogger: Logger = {
+  log(level, message, opts) {
+    log(level, message, opts);
+  },
+};

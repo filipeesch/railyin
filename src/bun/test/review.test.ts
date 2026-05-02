@@ -425,3 +425,41 @@ describe("handleCodeReview DB read", () => {
     expect(payload.manualEdits).toEqual(manualEdits);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// compactMessages — logger injection (injectable-logger-test-suite 5.1–5.3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { makeSpyLogger } from "./support/logger-test-utils.ts";
+import { noopLogger } from "../logger.ts";
+
+describe("compactMessages — logger injection", () => {
+  const orphanedMsgs = [
+    { id: 1, type: "user", role: "user", content: "Do something", taskId: 1, conversationId: 1, createdAt: "" },
+    // tool_call with no following tool_result → orphaned
+    { id: 2, type: "tool_call", role: "assistant", content: JSON.stringify([{ id: "tc1", function: { name: "read_file", arguments: "{}" } }]), taskId: 1, conversationId: 1, createdAt: "" },
+  ] as any[];
+
+  const pairedMsgs = [
+    { id: 1, type: "user", role: "user", content: "Do something", taskId: 1, conversationId: 1, createdAt: "" },
+    { id: 2, type: "tool_call", role: "assistant", content: JSON.stringify([{ id: "tc1", function: { name: "read_file", arguments: "{}" } }]), taskId: 1, conversationId: 1, createdAt: "" },
+    { id: 3, type: "tool_result", role: "user", content: JSON.stringify([{ tool_call_id: "tc1", content: "file content" }]), taskId: 1, conversationId: 1, createdAt: "" },
+  ] as any[];
+
+  it("5.1 spy captures a warn entry when there are orphaned tool_calls", () => {
+    const spy = makeSpyLogger();
+    compactMessages(orphanedMsgs, { logger: spy });
+    expect(spy.calls.some((c) => c.level === "warn" && c.message.toLowerCase().includes("orphan"))).toBe(true);
+  });
+
+  it("5.2 spy has no warn entries when every tool_call has a matching tool_result", () => {
+    const spy = makeSpyLogger();
+    compactMessages(pairedMsgs, { logger: spy });
+    expect(spy.calls.filter((c) => c.level === "warn")).toHaveLength(0);
+  });
+
+  it("5.3 noopLogger does not throw with orphaned tool_calls", () => {
+    expect(() => compactMessages(orphanedMsgs, { logger: noopLogger })).not.toThrow();
+  });
+});
+
