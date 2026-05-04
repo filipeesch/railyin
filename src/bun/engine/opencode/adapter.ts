@@ -17,10 +17,6 @@ interface ServerHandle {
   close(): void;
 }
 
-interface AbortHandlers {
-  resolve: () => void;
-}
-
 export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
   private readonly engineConfig: OpenCodeEngineConfig;
   private serverHandle: ServerHandle | null = null;
@@ -30,8 +26,6 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
   private readonly sessionMap = new Map<number, string>();
   /** conversationId → execution context for MCP tool dispatch */
   private readonly contextMap: Map<number, McpContextEntry> = new Map();
-  /** executionId → abort function */
-  private readonly abortMap = new Map<number, AbortHandlers>();
   private startPromise: Promise<void> | null = null;
 
   constructor(engineConfig: OpenCodeEngineConfig) {
@@ -134,16 +128,13 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
       }
     } finally {
       this.contextMap.delete(conversationId);
-      this.abortMap.delete(executionId);
     }
   }
 
   async cancel(executionId: number): Promise<void> {
-    const handler = this.abortMap.get(executionId);
-    if (handler) {
-      handler.resolve();
-      this.abortMap.delete(executionId);
-    }
+    // Cancellation is handled via the AbortSignal passed to run().
+    // The signal triggers client.session.abort() when aborted.
+    void executionId;
   }
 
   async compact(sessionId: string, workingDirectory: string): Promise<void> {
@@ -185,7 +176,6 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
   async shutdown(): Promise<void> {
     this.sessionMap.clear();
     this.contextMap.clear();
-    this.abortMap.clear();
     this.mcpServer?.close();
     this.mcpServer = null;
     this.serverHandle?.close();
