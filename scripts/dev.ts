@@ -14,9 +14,10 @@ const argv = process.argv.slice(2);
 const portArg = argv.find((a) => a.startsWith("--port="))?.split("=")[1] ?? "3000";
 const memoryDb = !argv.includes("--real-db");
 
-const cwd = process.cwd();
+const cwd = process.cwd().replace(/\\/g, "/");
+const bunBin = process.execPath;
 
-const vite = Bun.spawn(["bun", "x", "vite", "build", "--watch"], {
+const vite = Bun.spawn([bunBin, "x", "vite", "build", "--watch"], {
     cwd,
     stdout: "inherit",
     stderr: "inherit",
@@ -25,7 +26,7 @@ const vite = Bun.spawn(["bun", "x", "vite", "build", "--watch"], {
 
 const server = Bun.spawn(
     [
-        "bun",
+        bunBin,
         "--watch",
         "--define", "__RAILYN_FORCE_DEBUG__=false",
         "--define", `__RAILYN_FORCE_MEMORY_DB__=${memoryDb}`,
