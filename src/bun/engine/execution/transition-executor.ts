@@ -122,6 +122,7 @@ export class TransitionExecutor {
         effectiveModel ?? undefined,
       ),
       boardTools: this.boardTools,
+      onSoftCancel: () => this.streamProcessor.abort(executionId),
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
     };

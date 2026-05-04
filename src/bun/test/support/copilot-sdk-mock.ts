@@ -106,6 +106,7 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
     private readonly createOutcomes: CreateOutcome[] = [];
     private models: CopilotSdkModelInfo[] = [];
     private readonly statusListeners = new Set<(message: string) => void>();
+    private readonly beforeEvictListeners = new Map<string, Set<() => Promise<void>>>();
 
     readonly trace = {
         resumeCalls: [] as Array<{ sessionId: string; config: CopilotSdkResumeSessionConfig }>,
@@ -115,6 +116,7 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
         listModelsCalls: 0,
         shutdownCalls: 0,
         touchLeaseCalls: [] as Array<{ sessionId: string; state?: import("../../engine/types.ts").EngineLeaseState }>,
+        touchCalls: [] as Array<{ sessionId: string; state?: import("../../engine/types.ts").EngineLeaseState }>,
     };
 
     queueResumeSuccess(session: MockCopilotSession): this {
@@ -186,6 +188,7 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
 
     touchLease(sessionId: string, state?: import("../../engine/types.ts").EngineLeaseState): void {
         this.trace.touchLeaseCalls.push({ sessionId, state });
+        this.trace.touchCalls.push({ sessionId, state });
     }
 
     setLeaseState(_sessionId: string, _state: import("../../engine/types.ts").EngineLeaseState): void {
@@ -199,6 +202,23 @@ export class MockCopilotSdkAdapter implements CopilotSdkAdapter {
     onStatus(listener: (message: string) => void): () => void {
         this.statusListeners.add(listener);
         return () => this.statusListeners.delete(listener);
+    }
+
+    onBeforeEvict(sessionId: string, cb: () => Promise<void>): () => void {
+        if (!this.beforeEvictListeners.has(sessionId)) {
+            this.beforeEvictListeners.set(sessionId, new Set());
+        }
+        const callbacks = this.beforeEvictListeners.get(sessionId)!;
+        callbacks.add(cb);
+        return () => callbacks.delete(cb);
+    }
+
+    /** Test helper — not on the interface. Simulates the adapter firing the pre-eviction hook. */
+    async triggerBeforeEvict(sessionId: string): Promise<void> {
+        const callbacks = this.beforeEvictListeners.get(sessionId);
+        if (callbacks) {
+            await Promise.all([...callbacks].map((cb) => cb()));
+        }
     }
 }
 

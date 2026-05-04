@@ -164,6 +164,7 @@ export class CodeReviewExecutor {
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
       ),
       boardTools: this.boardTools,
+      onSoftCancel: () => this.streamProcessor.abort(executionId),
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 

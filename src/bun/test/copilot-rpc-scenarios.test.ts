@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { CopilotEngine } from "../engine/copilot/engine.ts";
+import { copilotSessionIdForConversation } from "../engine/copilot/session.ts";
 import type { BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import { createBackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import {
@@ -640,5 +641,44 @@ describe("Copilot engine — systemInstructions propagation", () => {
         if (call.config.systemMessage) {
             expect(call.config.systemMessage.content).not.toContain("planning assistant");
         }
+    });
+});
+
+describe("Copilot lease timeout fixes (Bug B + Bug C)", () => {
+    it("C1: execution ends as cancelled (not failed) when onBeforeEvict fires mid-stream", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("streaming"), waitForAbort()] }));
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId, conversationId } = await runtime.createTask();
+
+        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        // Wait until the stream is actually in-flight (live text_chunk emitted on first token).
+        await runtime.waitFor(() => runtime.getIpcEvents(result.executionId).some((e) => e.type === "text_chunk"));
+
+        const sdkSessionId = copilotSessionIdForConversation(taskId, conversationId);
+        await adapter.triggerBeforeEvict(sdkSessionId);
+
+        await runtime.waitForExecutionStatus(result.executionId, "cancelled");
+        expect(runtime.getExecutionStatus(result.executionId)).toBe("cancelled");
+    });
+
+    it("C2: touchCalls contains running state after a tool starts executing (heartbeat wiring smoke)", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({
+                steps: [toolStart("t1", "create_task"), toolResult("t1", "ok"), token("done"), done()],
+            }));
+        const runtime = createCopilotRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "work" });
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+        const runningCalls = adapter.trace.touchCalls.filter((c) => c.state === "running");
+        expect(runningCalls.length).toBeGreaterThan(0);
     });
 });

@@ -92,6 +92,12 @@ export interface ExecutionParams {
   onHumanTurn?: (taskId: number, message: string) => void;
   /** Board tool executor — injected by orchestrator, avoids getDb() inside engines. */
   boardTools?: IBoardToolExecutor;
+  /**
+   * Called by the engine to signal a soft cancellation (e.g. eviction).
+   * The stream-processor uses this to abort its own AbortController so the
+   * execution is marked as `cancelled` instead of being left in `running`.
+   */
+  onSoftCancel?: () => void;
 }
 
 export interface RawModelMessage {

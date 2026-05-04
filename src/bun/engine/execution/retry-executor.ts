@@ -81,6 +81,7 @@ export class RetryExecutor {
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
       ),
       boardTools: this.boardTools,
+      onSoftCancel: () => this.streamProcessor.abort(executionId),
       model: resolveModel(updatedRow, null, false) ?? "", // Use centralized resolver
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);

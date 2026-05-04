@@ -1,3 +1,6 @@
+import { LeaseRegistry } from "../lease-registry.ts";
+import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
+
 export interface CopilotSdkSessionConfig {
   sessionId?: string;
   model?: string;
@@ -96,13 +99,15 @@ export interface CopilotSdkAdapter {
   /** Release (evict) the CLI process associated with the given session, stopping it if idle. */
   releaseClient(sessionId: string): Promise<void>;
   /** Refresh lease activity timestamp for the given session. */
-  touchLease(sessionId: string, state?: import("../types.ts").EngineLeaseState): void;
+  touchLease(sessionId: string, state?: EngineLeaseState): void;
   /** Update lease state without resetting activity timeout. */
-  setLeaseState(sessionId: string, state: import("../types.ts").EngineLeaseState): void;
+  setLeaseState(sessionId: string, state: EngineLeaseState): void;
   /** Gracefully close all active leases for app-level shutdown. */
-  shutdownAll(options?: import("../types.ts").EngineShutdownOptions): Promise<void>;
+  shutdownAll(options?: EngineShutdownOptions): Promise<void>;
   /** Register a callback for setup progress (e.g. "Downloading engine..."). */
   onStatus(listener: (message: string) => void): () => void;
+  /** Register a callback to be awaited before a pool entry is evicted. Returns unsubscribe function. */
+  onBeforeEvict(sessionId: string, cb: () => Promise<void>): () => void;
 }
 
 type LoadedCopilotClient = {
@@ -135,25 +140,9 @@ type PoolEntry = {
   /** Number of SDK sessions currently active on this pool entry. Eviction is suppressed while > 0. */
   activeSessions: number;
 };
-const _taskCliPool = new Map<string, PoolEntry>();
-import { LeaseRegistry } from "../lease-registry.ts";
-import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
 
 const POOL_IDLE_TIMEOUT_MS = Number(process.env.RAILYN_ENGINE_IDLE_TIMEOUT_MS ?? 10 * 60 * 1000);
-const _leaseRegistry = new LeaseRegistry(
-  "copilot",
-  POOL_IDLE_TIMEOUT_MS,
-  async (leaseKey) => {
-    await evictPoolEntry(leaseKey);
-  },
-);
 
-// Status listeners waiting for progress updates from ensureCliBinary / getClient.
-let _statusListeners: Set<(message: string) => void> = new Set();
-
-function emitStatus(message: string): void {
-  for (const listener of _statusListeners) listener(message);
-}
 
 const PORT_FILE_NAME = "copilot-cli.port";
 const CLI_CACHE_DIR = "copilot-cli";
@@ -346,7 +335,6 @@ function getSharedClient(): Promise<LoadedCopilotClient> {
   if (!_sharedClientPromise) {
     _sharedClientPromise = (async () => {
       const binaryPath = await ensureCliBinary();
-      emitStatus("Starting Copilot engine...");
       console.log("[copilot] Connecting to shared CLI:", binaryPath);
       const port = await getOrSpawnCliPort(binaryPath);
       console.log("[copilot] Shared CLI port:", port);
@@ -359,48 +347,6 @@ function getSharedClient(): Promise<LoadedCopilotClient> {
   return _sharedClientPromise;
 }
 
-async function evictPoolEntry(sessionId: string): Promise<void> {
-  const entry = _taskCliPool.get(sessionId);
-  if (!entry) return;
-  _taskCliPool.delete(sessionId);
-  try {
-    const client = await entry.clientPromise;
-    await client.stop();
-  } catch { /* ignore errors during cleanup */ }
-}
-
-async function getOrCreatePoolEntry(sessionId: string): Promise<LoadedCopilotClient> {
-  const existing = _taskCliPool.get(sessionId);
-  if (existing) {
-    _leaseRegistry.touch(sessionId, "running");
-    return existing.clientPromise;
-  }
-
-  const clientPromise: Promise<LoadedCopilotClient> = (async () => {
-    const binaryPath = await ensureCliBinary();
-    emitStatus("Starting Copilot engine...");
-    console.log(`[copilot] Spawning dedicated CLI for session ${sessionId}`);
-    const port = await spawnCliAndGetPort(binaryPath);
-    console.log(`[copilot] Session ${sessionId} CLI port:`, port);
-    const mod = await import("@github/copilot-sdk");
-    const client = new mod.CopilotClient({ cliUrl: `localhost:${port}` }) as LoadedCopilotClient;
-    await client.start();
-    return client;
-  })();
-
-  const entry: PoolEntry = {
-    clientPromise,
-    activeSessions: 0,
-  };
-  _taskCliPool.set(sessionId, entry);
-  _leaseRegistry.touch(sessionId, "running");
-  // Remove entry on spawn failure so the next call retries cleanly
-  clientPromise.catch(() => {
-    _taskCliPool.delete(sessionId);
-    _leaseRegistry.release(sessionId);
-  });
-  return clientPromise;
-}
 
 /**
  * Derive a deterministic Copilot SDK session ID from a Railyin task ID.
@@ -423,7 +369,7 @@ export function copilotSessionIdForConversation(taskId: number | null, conversat
 class DefaultCopilotSdkSession implements CopilotSdkSession {
   constructor(
     private readonly session: LoadedCopilotSession,
-    private readonly sessionId: string,
+    private readonly onDisconnect: () => void,
   ) { }
 
   send(input: { prompt: string; attachments?: CopilotSdkAttachment[] }): Promise<unknown> {
@@ -443,37 +389,130 @@ class DefaultCopilotSdkSession implements CopilotSdkSession {
   }
 
   disconnect(): Promise<void> {
-    const entry = _taskCliPool.get(this.sessionId);
-    if (entry && entry.activeSessions > 0) {
-      entry.activeSessions--;
-      if (entry.activeSessions === 0) _leaseRegistry.setState(this.sessionId, "idle");
-    }
+    this.onDisconnect();
     return this.session.disconnect();
   }
 }
 
-class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
+export class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
+  private readonly taskCliPool = new Map<string, PoolEntry>();
+  private readonly statusListeners = new Set<(message: string) => void>();
+  private readonly beforeEvictListeners = new Map<string, Set<() => Promise<void>>>();
+  private readonly leaseRegistry: LeaseRegistry;
+
+  constructor(leaseRegistry?: LeaseRegistry, poolIdleTimeoutMs = POOL_IDLE_TIMEOUT_MS) {
+    this.leaseRegistry = leaseRegistry ?? new LeaseRegistry(
+      "copilot",
+      poolIdleTimeoutMs,
+      async (leaseKey) => {
+        const entry = this.taskCliPool.get(leaseKey);
+        if (entry && entry.activeSessions > 0) {
+          this.leaseRegistry.touch(leaseKey, "running");
+          return;
+        }
+        await this.evictPoolEntry(leaseKey);
+      },
+    );
+  }
+
+  private makeDisconnectCallback(sessionId: string): () => void {
+    return () => {
+      const entry = this.taskCliPool.get(sessionId);
+      if (entry && entry.activeSessions > 0) {
+        entry.activeSessions--;
+        if (entry.activeSessions === 0) this.leaseRegistry.setState(sessionId, "idle");
+      }
+    };
+  }
+
+  private async evictPoolEntry(sessionId: string): Promise<void> {
+    const callbacks = this.beforeEvictListeners.get(sessionId);
+    if (callbacks && callbacks.size > 0) {
+      let deadlineExceeded = false;
+      const deadlineTimer = new Promise<void>((resolve) =>
+        setTimeout(() => { deadlineExceeded = true; resolve(); }, 5_000)
+      );
+      await Promise.race([
+        Promise.all([...callbacks].map((cb) => cb())).catch(() => {}),
+        deadlineTimer,
+      ]);
+      if (deadlineExceeded) {
+        console.warn(`[copilot] onBeforeEvict deadline exceeded for session ${sessionId}`);
+      }
+    }
+    const entry = this.taskCliPool.get(sessionId);
+    if (!entry) return;
+    this.taskCliPool.delete(sessionId);
+    try {
+      const client = await entry.clientPromise;
+      await client.stop();
+    } catch { /* ignore errors during cleanup */ }
+  }
+
+  private async getOrCreatePoolEntry(sessionId: string): Promise<LoadedCopilotClient> {
+    const existing = this.taskCliPool.get(sessionId);
+    if (existing) {
+      this.leaseRegistry.touch(sessionId, "running");
+      return existing.clientPromise;
+    }
+
+    const clientPromise: Promise<LoadedCopilotClient> = (async () => {
+      const binaryPath = await ensureCliBinary();
+      for (const listener of this.statusListeners) listener("Starting Copilot engine...");
+      console.log(`[copilot] Spawning dedicated CLI for session ${sessionId}`);
+      const port = await spawnCliAndGetPort(binaryPath);
+      console.log(`[copilot] Session ${sessionId} CLI port:`, port);
+      const mod = await import("@github/copilot-sdk");
+      const client = new mod.CopilotClient({ cliUrl: `localhost:${port}` }) as LoadedCopilotClient;
+      await client.start();
+      return client;
+    })();
+
+    const entry: PoolEntry = {
+      clientPromise,
+      activeSessions: 0,
+    };
+    this.taskCliPool.set(sessionId, entry);
+    this.leaseRegistry.touch(sessionId, "running");
+    // Remove entry on spawn failure so the next call retries cleanly
+    clientPromise.catch(() => {
+      this.taskCliPool.delete(sessionId);
+      this.leaseRegistry.release(sessionId);
+    });
+    return clientPromise;
+  }
+
   onStatus(listener: (message: string) => void): () => void {
-    _statusListeners.add(listener);
-    return () => { _statusListeners.delete(listener); };
+    this.statusListeners.add(listener);
+    return () => { this.statusListeners.delete(listener); };
+  }
+
+  /** Register a callback to be awaited before a pool entry is evicted. Returns unsubscribe function. */
+  onBeforeEvict(sessionId: string, cb: () => Promise<void>): () => void {
+    if (!this.beforeEvictListeners.has(sessionId)) {
+      this.beforeEvictListeners.set(sessionId, new Set());
+    }
+    const callbacks = this.beforeEvictListeners.get(sessionId)!;
+    callbacks.add(cb);
+    return () => callbacks.delete(cb);
   }
 
   async createSession(config: CopilotSdkSessionConfig & { sessionId: string }): Promise<CopilotSdkSession> {
-    const client = await getOrCreatePoolEntry(config.sessionId);
-    const entry = _taskCliPool.get(config.sessionId);
+    const client = await this.getOrCreatePoolEntry(config.sessionId);
+    const entry = this.taskCliPool.get(config.sessionId);
     if (entry) entry.activeSessions++;
-    _leaseRegistry.touch(config.sessionId, "running");
+    this.leaseRegistry.touch(config.sessionId, "running");
     const session = await client.createSession(config);
-    return new DefaultCopilotSdkSession(session, config.sessionId);
+    return new DefaultCopilotSdkSession(session, this.makeDisconnectCallback(config.sessionId));
   }
 
   async resumeSession(sessionId: string, config: CopilotSdkResumeSessionConfig): Promise<CopilotSdkSession> {
-    const client = await getOrCreatePoolEntry(sessionId);
-    const entry = _taskCliPool.get(sessionId);
+    const client = await this.getOrCreatePoolEntry(sessionId);
+    const entry = this.taskCliPool.get(sessionId);
     if (entry) entry.activeSessions++;
-    _leaseRegistry.touch(sessionId, "running");
+    this.leaseRegistry.touch(sessionId, "running");
     const session = await client.resumeSession(sessionId, config);
-    return new DefaultCopilotSdkSession(session, sessionId);
+    return new DefaultCopilotSdkSession(session, this.makeDisconnectCallback(sessionId));
   }
 
   abortSession(session: CopilotSdkSession): Promise<void> {
@@ -485,7 +524,7 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
   }
 
   async pingClient(sessionId: string): Promise<boolean> {
-    const entry = _taskCliPool.get(sessionId);
+    const entry = this.taskCliPool.get(sessionId);
     if (!entry) return false;
     let timedOut = false;
     try {
@@ -505,21 +544,21 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
   }
 
   async releaseClient(sessionId: string): Promise<void> {
-    _leaseRegistry.release(sessionId, "manual");
-    await evictPoolEntry(sessionId);
+    this.leaseRegistry.release(sessionId, "manual");
+    await this.evictPoolEntry(sessionId);
   }
 
   touchLease(sessionId: string, state: EngineLeaseState = "running"): void {
-    _leaseRegistry.touch(sessionId, state);
+    this.leaseRegistry.touch(sessionId, state);
   }
 
   setLeaseState(sessionId: string, state: EngineLeaseState): void {
-    _leaseRegistry.setState(sessionId, state);
+    this.leaseRegistry.setState(sessionId, state);
   }
 
   async shutdownAll(options: EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
-    await _leaseRegistry.shutdownAll(async (leaseKey) => {
-      await evictPoolEntry(leaseKey);
+    await this.leaseRegistry.shutdownAll(async (leaseKey) => {
+      await this.evictPoolEntry(leaseKey);
     }, options);
   }
 
@@ -530,6 +569,6 @@ class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
   }
 }
 
-export function createDefaultCopilotSdkAdapter(): CopilotSdkAdapter {
-  return new DefaultCopilotSdkAdapter();
+export function createDefaultCopilotSdkAdapter(leaseRegistry?: LeaseRegistry): CopilotSdkAdapter {
+  return new DefaultCopilotSdkAdapter(leaseRegistry);
 }

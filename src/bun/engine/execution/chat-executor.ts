@@ -63,17 +63,20 @@ export class ChatExecutor {
 
     const signal = this.streamProcessor.createSignal(executionId);
     
-    const execParams = this.paramsBuilder.buildForChat(
-      conversationId,
-      executionId,
-      engineContent ?? content,
-      workingDirectory,
-      effectiveModel,
-      signal,
-      this.streamProcessor.makePersistCallback(null, conversationId, executionId),
-      enabledMcpTools ?? null,
-      attachments,
-    );
+    const execParams = {
+      ...this.paramsBuilder.buildForChat(
+        conversationId,
+        executionId,
+        engineContent ?? content,
+        workingDirectory,
+        effectiveModel,
+        signal,
+        this.streamProcessor.makePersistCallback(null, conversationId, executionId),
+        enabledMcpTools ?? null,
+        attachments,
+      ),
+      onSoftCancel: () => this.streamProcessor.abort(executionId),
+    };
 
     this.streamProcessor.runNonNative(null, conversationId, executionId, engine, execParams);
 
