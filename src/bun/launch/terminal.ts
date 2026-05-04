@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { spawnSync } from "child_process";
+import { getHomeDir } from "../utils/platform.ts";
 
 export type TerminalKind =
   | "iterm2"
@@ -25,18 +25,13 @@ export interface DetectedTerminal {
 let cached: DetectedTerminal | null | undefined = undefined;
 
 function commandExists(cmd: string): boolean {
-  try {
-    const result = spawnSync("which", [cmd], { encoding: "utf-8" });
-    return result.status === 0 && result.stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
+  return Bun.which(cmd) !== null;
 }
 
 function appExists(appName: string): boolean {
   return (
     existsSync(`/Applications/${appName}.app`) ||
-    existsSync(`${process.env.HOME}/Applications/${appName}.app`)
+    existsSync(`${getHomeDir()}/Applications/${appName}.app`)
   );
 }
 

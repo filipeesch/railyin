@@ -4,6 +4,7 @@ import { join, isAbsolute, resolve, relative } from "path";
 import { createHash } from "crypto";
 import yaml from "js-yaml";
 import { resolveConfigPath } from "./path-utils.ts";
+import { getDataDir as platformGetDataDir, getHomeDir } from "../utils/platform.ts";
 
 // ─── Config types ─────────────────────────────────────────────────────────────
 
@@ -256,7 +257,7 @@ export function getProjectIdForKey(workspaceKey: string, projectKey: string): nu
  *  Always reads from the real user data directory — intentionally bypasses the dev config dir
  *  override (__RAILYN_DEV_CONFIG_DIR__) since global config is machine-scoped, not project-scoped. */
 export function readGlobalConfig(): GlobalConfig {
-  const dataDir = process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
+  const dataDir = platformGetDataDir();
   const configPath = join(dataDir, "config", "config.yaml");
   if (!existsSync(configPath)) return {};
   try {
@@ -289,12 +290,11 @@ function getDefaultConfigDir(): string {
     return __RAILYN_DEV_CONFIG_DIR__;
   }
   // 3. Production: user's data directory
-  const dataDir = process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
-  return join(dataDir, "config");
+  return join(platformGetDataDir(), "config");
 }
 
 export function getDataDir(): string {
-  return process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
+  return platformGetDataDir();
 }
 
 export function getWorkspaceRootDir(): string {

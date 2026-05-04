@@ -7,6 +7,7 @@ import { readLaunchConfig } from "../launch/config.ts";
 import { launchApp, launchInTerminal } from "../launch/launcher.ts";
 import { createPtySession, killPtySession } from "../launch/pty.ts";
 import { getLoadedProjectByKey } from "../project-store.ts";
+import { getDefaultShell } from "../utils/platform.ts";
 
 export function launchHandlers(db: Database) {
   return {
@@ -80,7 +81,7 @@ export function launchHandlers(db: Database) {
     },
 
     "launch.shell": async (params: { cwd: string }): Promise<{ sessionId: string }> => {
-      const shell = process.env.SHELL ?? "/bin/bash";
+      const shell = getDefaultShell();
       const session = createPtySession(shell, params.cwd);
       return { sessionId: session.id };
     },

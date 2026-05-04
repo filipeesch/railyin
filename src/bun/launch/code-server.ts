@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as net from "net";
 import { spawn, type ChildProcess } from "child_process";
+import { isWindows } from "../utils/platform.ts";
 
 type CodeServerStatus = "starting" | "ready" | "error";
 
@@ -40,11 +41,9 @@ async function resolveCodeServerBinary(): Promise<string> {
   const localFile = Bun.file(localBin);
   if (await localFile.exists()) return localBin;
 
-  // Try system PATH
-  const which = Bun.spawnSync(["which", "code-server"], { env: process.env as Record<string, string> });
-  if (which.exitCode === 0) {
-    return which.stdout.toString().trim();
-  }
+  // Try system PATH via Bun.which (cross-platform)
+  const found = Bun.which("code-server");
+  if (found) return found;
 
   // Fall back to npx (will download on first use)
   return "npx";
@@ -69,6 +68,12 @@ export async function startCodeServer(
   worktreePath: string,
   railynApiPort: number,
 ): Promise<{ port: number }> {
+  if (isWindows()) {
+    throw new Error(
+      "code-server is not supported on Windows. Use an external editor instead (e.g. VS Code: 'code .').",
+    );
+  }
+
   const existing = registry.get(taskId);
   if (existing && existing.status === "ready") {
     return { port: existing.port };

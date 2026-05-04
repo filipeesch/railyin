@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { detectTerminal, type DetectedTerminal } from "./terminal.ts";
+import { getDefaultShell, getShellArgs } from "../utils/platform.ts";
 
 function runOsascript(script: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -92,7 +93,7 @@ function launchLinux(terminal: DetectedTerminal, command: string, cwd: string): 
  */
 export function launchApp(command: string, cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("sh", ["-c", command], {
+    const proc = spawn(getDefaultShell(), getShellArgs(command), {
       cwd,
       detached: true,
       stdio: ["ignore", "ignore", "pipe"],

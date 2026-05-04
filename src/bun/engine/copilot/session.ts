@@ -159,8 +159,8 @@ const NPM_PACKAGE_NAME = `@github/copilot-${process.platform}-${process.arch}`;
 const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 
 function getDataDir(): string {
-  const { join } = require("path") as typeof import("path");
-  return process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
+  const { getDataDir: platformGetDataDir } = require("../utils/platform.ts") as typeof import("../utils/platform.ts");
+  return platformGetDataDir();
 }
 
 /**

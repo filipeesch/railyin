@@ -17,11 +17,9 @@ const makeMockSession = (opts: { exited?: boolean; scrollback?: string } = {}): 
   scrollback: opts.scrollback ?? "scrollback-data",
   dataListeners: new Set(),
   exitListeners: new Set(),
-  terminal: {
-    write: (text: string) => { writeCalls.push(text); },
-    resize: (cols: number, rows: number) => { resizeCalls.push({ cols, rows }); },
-  } as unknown as PtySession["terminal"],
-  proc: undefined as unknown as PtySession["proc"],
+  write: (text: string) => { writeCalls.push(text); },
+  resize: (cols: number, rows: number) => { resizeCalls.push({ cols, rows }); },
+  kill: () => {},
   cwd: "/",
   command: "sh",
 });
@@ -121,7 +119,7 @@ describe("WebSocketHandler", () => {
   });
 
   // WS-7
-  test("pty message raw text forwards to terminal.write", () => {
+  test("pty message raw text forwards to session.write", () => {
     const session = makeMockSession();
     sessions.set("s4", session);
     const ws = makePtyWs("s4");
@@ -133,7 +131,7 @@ describe("WebSocketHandler", () => {
   });
 
   // WS-8
-  test("pty message resize JSON calls terminal.resize", () => {
+  test("pty message resize JSON calls session.resize", () => {
     const session = makeMockSession();
     sessions.set("s5", session);
     const ws = makePtyWs("s5");

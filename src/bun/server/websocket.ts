@@ -61,11 +61,11 @@ export class WebSocketHandler {
       try {
         const parsed = JSON.parse(text);
         if (parsed?.type === "resize" && typeof parsed.cols === "number" && typeof parsed.rows === "number") {
-          session.terminal?.resize(parsed.cols, parsed.rows);
+          session.resize(parsed.cols, parsed.rows);
           return;
         }
       } catch { /* not JSON — treat as raw input */ }
-      session.terminal?.write(text);
+      session.write(text);
     }
   }
 }
