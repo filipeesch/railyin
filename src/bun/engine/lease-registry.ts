@@ -11,7 +11,7 @@ export class LeaseRegistry {
   private readonly entries = new Map<string, LeaseEntry>();
 
   constructor(
-    private readonly engine: "copilot" | "claude",
+    private readonly engine: string,
     private readonly idleTimeoutMs: number,
     private readonly onExpire: (leaseKey: string, metadata: EngineLeaseMetadata) => Promise<void>,
     private readonly logger: Logger = (message, payload) => {
