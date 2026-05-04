@@ -13,7 +13,8 @@ import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } fr
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
-import { getBoardWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
+import type { IWorkspaceRepository } from "../db/workspace-repository.ts";
+import { getWorkspaceConfig } from "../workspace-context.ts";
 import { getLoadedProjectByKey } from "../project-store.ts";
 import { resolveContextWindow } from "../context-usage.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
@@ -47,7 +48,7 @@ function fetchTaskWithDetail(db: Database, taskId: number): Task | null {
   return row ? mapTask(row) : null;
 }
 
-export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated) {
+export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated) {
   const positionService = new PositionService(db);
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
@@ -91,7 +92,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
       description: string;
     }): Promise<Task> => {
 
-      const workspaceKey = getBoardWorkspaceKey(params.boardId);
+      const workspaceKey = wsRepo.getBoardWorkspaceKey(params.boardId);
       const project = getLoadedProjectByKey(workspaceKey, params.projectKey);
       if (!project) {
         throw new Error(`Project ${params.projectKey} not found in workspace ${workspaceKey}`);
@@ -102,7 +103,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
       const conversationId = convResult.lastInsertRowid as number;
 
       // Seed conversation model with workspace default (if configured)
-      seedConversationModel(db, conversationId, params.boardId);
+      seedConversationModel(db, conversationId, params.boardId, wsRepo);
 
       // Note: No automatic model seeding in new architecture
       // Model must be explicitly set via tasks.setModel after creation
@@ -203,7 +204,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
           [params.toState, params.taskId],
         );
 
-        const wsKey = getBoardWorkspaceKey(runningCheck.board_id);
+        const wsKey = wsRepo.getBoardWorkspaceKey(runningCheck.board_id);
         const config = getWorkspaceConfig(wsKey);
         const col = getColumnConfig(config, runningCheck.board_id, params.toState);
         if (col?.on_enter_prompt) {
@@ -240,7 +241,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         }
 
         // Backfill git context for tasks created before this was wired up
-        const wsKey = getTaskWorkspaceKey(params.taskId);
+        const wsKey = wsRepo.getTaskWorkspaceKey(params.taskId);
         const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
           registerProjectGitContext(params.taskId, project.gitRootPath);
@@ -294,7 +295,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         return requireOrchestrator(orchestrator).executeCodeReview(params.taskId, parsed.manualEdits);
       }
 
-      const taskWorkspaceKey = getTaskWorkspaceKey(params.taskId);
+      const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
       const taskRow2 = db.query<{ conversation_model: string | null }, [number]>(
         "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?"
       ).get(params.taskId);
@@ -334,7 +335,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
           db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [retryConvId, params.taskId]);
         }
 
-        const wsKey = getTaskWorkspaceKey(params.taskId);
+        const wsKey = wsRepo.getTaskWorkspaceKey(params.taskId);
         const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
           registerProjectGitContext(params.taskId, project.gitRootPath);
@@ -384,7 +385,7 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         )
         .get(params.taskId);
       const taskModel = task?.conversation_model ?? null;
-      const workspaceKey = getTaskWorkspaceKey(params.taskId);
+      const workspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
       const maxTokens = await runWithConfig(workspaceConfig, async () => (
         taskModel

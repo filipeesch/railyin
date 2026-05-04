@@ -54,7 +54,12 @@ export interface ClaudeEngineConfig {
   model?: string;
 }
 
-export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig;
+/** Scripted engine config — echoes prompts; no credentials required. For dev and test only. */
+export interface ScriptedEngineConfig {
+  type: "scripted";
+}
+
+export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig;
 
 /**
  * @deprecated Use `ProviderConfig` and `WorkspaceYaml.providers` instead.
@@ -498,10 +503,10 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     return { config: null, error: _configError };
   }
 
-  if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude") {
+  if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude" || workspace.engine?.type === "scripted") {
     engine = workspace.engine;
   } else {
-    _configError = `${workspaceFileName} is missing 'engine:'. Supported engines are 'copilot' and 'claude'.`;
+    _configError = `${workspaceFileName} is missing 'engine:'. Supported engines are 'copilot', 'claude', and 'scripted'.`;
     return { config: null, error: _configError };
   }
 

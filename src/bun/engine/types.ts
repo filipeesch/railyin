@@ -2,6 +2,7 @@ import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
 import type { TodoRepository } from "../db/todos.ts";
+import type { IBoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
 
@@ -88,6 +89,8 @@ export interface ExecutionParams {
   onTransition?: (taskId: number, toState: string) => void;
   /** Called when the engine tool sends a human-turn message to another task. */
   onHumanTurn?: (taskId: number, message: string) => void;
+  /** Board tool executor — injected by orchestrator, avoids getDb() inside engines. */
+  boardTools?: IBoardToolExecutor;
 }
 
 export interface RawModelMessage {
@@ -200,6 +203,7 @@ export interface CommonToolContext {
   onCancel: (executionId: number) => void;
   onTaskUpdated: (task: Task) => void;
   todoRepo: TodoRepository;
+  boardTools: IBoardToolExecutor;
   lspManager?: LSPServerManager;
   worktreePath?: string;
 }

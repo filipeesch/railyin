@@ -100,7 +100,7 @@ export class CopilotEngine implements ExecutionEngine {
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
-    const { executionId, taskId, boardId, prompt, systemInstructions, taskContext, workingDirectory, model } = params;
+    const { executionId, taskId, boardId, prompt, systemInstructions, taskContext, workingDirectory, model, boardTools } = params;
 
     // Collect status messages from the adapter (download/setup progress)
     // so we can yield them as engine events for the UI.
@@ -149,6 +149,7 @@ export class CopilotEngine implements ExecutionEngine {
         this._onTaskUpdated(task);
       },
       todoRepo: new TodoRepository(),
+      boardTools: boardTools!,
       lspManager,
       worktreePath: workingDirectory,
     };
@@ -441,7 +442,7 @@ export class CopilotEngine implements ExecutionEngine {
 
   async listCommands(taskId: number): Promise<CommandInfo[]> {
     const { getDb } = await import("../../db/index.ts");
-    const { getBoardWorkspaceKey } = await import("../../workspace-context.ts");
+    const { getDefaultWorkspaceKey } = await import("../../workspace-context.ts");
     const { getLoadedProjectByKey } = await import("../../project-store.ts");
 
     const db = getDb();
@@ -461,7 +462,10 @@ export class CopilotEngine implements ExecutionEngine {
 
     let projectPath: string | null = null;
     if (taskRow) {
-      const wsKey = getBoardWorkspaceKey(taskRow.board_id);
+      const wsKey =
+        db.query<{ workspace_key: string }, [number]>(
+          "SELECT workspace_key FROM boards WHERE id = ?",
+        ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
       const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
       if (project?.projectPath && project.projectPath !== worktreePath) {
         projectPath = project.projectPath;

@@ -1,6 +1,7 @@
 import type { TaskRow } from "../../db/row-types";
 import type { Database } from "bun:sqlite";
-import { getWorkspaceConfig, getBoardWorkspaceKey } from "../../workspace-context";
+import type { IWorkspaceRepository } from "../../db/workspace-repository";
+import { getWorkspaceConfig } from "../../workspace-context";
 
 /**
  * Resolves the effective model for a task based on conversation model and column configuration.
@@ -34,9 +35,10 @@ export function resolveModel(
 export function seedConversationModel(
   db: Database,
   conversationId: number,
-  boardId: number
+  boardId: number,
+  wsRepo: IWorkspaceRepository,
 ): void {
-  const workspaceKey = getBoardWorkspaceKey(boardId);
+  const workspaceKey = wsRepo.getBoardWorkspaceKey(boardId);
   const config = getWorkspaceConfig(workspaceKey);
   
   // Get workspace default model or engine model

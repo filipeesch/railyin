@@ -15,6 +15,7 @@ import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { EngineRegistry } from "../engine/engine-registry.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { Database } from "bun:sqlite";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
@@ -54,6 +55,7 @@ function makeOrchestrator(): Orchestrator {
     noop,
     (task) => taskUpdates.push(task),
     (msg) => newMessages.push(msg),
+    new WorkspaceRepository(db),
   );
 }
 
@@ -257,6 +259,7 @@ describe("Orchestrator.executeHumanTurn", () => {
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
+      new WorkspaceRepository(db),
     );
 
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
@@ -316,6 +319,7 @@ describe("Orchestrator.respondShellApproval", () => {
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
+      new WorkspaceRepository(db),
     );
 
     const { taskId } = seedProjectAndTask(db, gitDir);
@@ -410,6 +414,7 @@ describe("Orchestrator.cancel", () => {
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
+      new WorkspaceRepository(db),
     );
 
     const { taskId } = seedProjectAndTask(db, gitDir);
@@ -478,6 +483,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
+      new WorkspaceRepository(db),
     );
 
     await nonNative.shutdownNonNativeEngines({ reason: "app-exit", deadlineMs: 100 });
@@ -546,6 +552,7 @@ columns:
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
+      new WorkspaceRepository(db),
     );
   }
 

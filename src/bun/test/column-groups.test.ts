@@ -5,6 +5,8 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
+import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 import type { CommonToolContext } from "../engine/types.ts";
 import { TodoRepository } from "../db/todos.ts";
@@ -33,7 +35,7 @@ afterEach(() => {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeHandlers() {
-  return taskHandlers(db, null, () => {});
+  return taskHandlers(db, new WorkspaceRepository(db), null, () => {});
 }
 
 const EXTRA_WORKFLOW_WITH_LIMIT = `id: delivery-lim
@@ -246,6 +248,7 @@ const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
   onCancel: noop,
   onTaskUpdated: noop,
   todoRepo: new TodoRepository(db),
+  boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
 });
 
 describe("card limit enforcement in move_task", () => {

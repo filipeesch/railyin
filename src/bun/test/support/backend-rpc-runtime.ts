@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import type { ConversationMessage, StreamEvent, Task } from "../../../shared/rpc-types.ts";
 import { taskHandlers } from "../../handlers/tasks.ts";
+import { WorkspaceRepository } from "../../db/workspace-repository.ts";
 import { taskGitHandlers } from "../../handlers/task-git.ts";
 import { codeReviewHandlers } from "../../handlers/code-review.ts";
 import { todoHandlers } from "../../handlers/todos.ts";
@@ -101,6 +102,7 @@ export function createBackendRpcRuntime(options: {
         recorder.recordError,
         recorder.recordTaskUpdate,
         recorder.recordNewMessage,
+        new WorkspaceRepository(db),
     );
 
     coordinator.setOnStreamEvent((event: StreamEvent) => {
@@ -133,7 +135,7 @@ export function createBackendRpcRuntime(options: {
     });
 
     const handlers = {
-        ...taskHandlers(db, coordinator, recorder.recordTaskUpdate),
+        ...taskHandlers(db, new WorkspaceRepository(db), coordinator, recorder.recordTaskUpdate),
         ...taskGitHandlers(db, recorder.recordTaskUpdate),
         ...codeReviewHandlers(db),
         ...todoHandlers(db),

@@ -9,6 +9,7 @@ import { taskGitHandlers } from "../handlers/task-git.ts";
 import { codeReviewHandlers } from "../handlers/code-review.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { EngineRegistry } from "../engine/engine-registry.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { compactMessages } from "../conversation/context.ts";
 import type { Database } from "bun:sqlite";
@@ -56,9 +57,10 @@ function makeHandlers() {
     () => {},
     () => {},
     () => {},
+    new WorkspaceRepository(db),
   );
   return {
-    ...taskHandlers(db, orch, () => {}),
+    ...taskHandlers(db, new WorkspaceRepository(db), orch, () => {}),
     ...taskGitHandlers(db, () => {}),
     ...codeReviewHandlers(db),
   };

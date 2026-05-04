@@ -14,16 +14,6 @@ import { INTERVIEW_ME_TOOL_DEFINITION } from "./interview-tool-definition.ts";
 import { LSP_TOOL_DEFINITION } from "./lsp-tool-definition.ts";
 import { executeLspTool } from "../workflow/tools/lsp-tools.ts";
 import { validateToolArgs } from "./validate-tool-args.ts";
-import {
-  execGetTask,
-  execGetBoardSummary,
-  execListTasks,
-  execCreateTask,
-  execEditTask,
-  execDeleteTask,
-  execMoveTask,
-  execMessageTask,
-} from "../workflow/tools/board-tools.ts";
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
 
@@ -405,21 +395,21 @@ async function executeCommonToolText(
 ): Promise<string> {
   switch (name) {
     case "get_task":
-      return execGetTask(args, ctx);
+      return ctx.boardTools.execGetTask(args, ctx);
     case "get_board_summary":
-      return execGetBoardSummary(args, ctx);
+      return ctx.boardTools.execGetBoardSummary(args, ctx);
     case "list_tasks":
-      return execListTasks(args, ctx);
+      return ctx.boardTools.execListTasks(args, ctx);
     case "create_task":
-      return execCreateTask(args, ctx);
+      return ctx.boardTools.execCreateTask(args, ctx);
     case "edit_task":
-      return execEditTask(args, ctx);
+      return ctx.boardTools.execEditTask(args, ctx);
     case "delete_task":
-      return execDeleteTask(args, ctx);
+      return ctx.boardTools.execDeleteTask(args, ctx);
     case "move_task":
-      return execMoveTask(args, ctx);
+      return ctx.boardTools.execMoveTask(args, ctx);
     case "message_task":
-      return execMessageTask(args, ctx);
+      return ctx.boardTools.execMessageTask(args, ctx);
 
     case "create_todo": {
       const number = args.number != null ? Number(args.number) : NaN;

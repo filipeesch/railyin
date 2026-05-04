@@ -8,9 +8,10 @@ import type { TransitionEventMetadata } from "../../shared/rpc-types.ts";
 import { resetConfig } from "../config/index.ts";
 import { EngineRegistry } from "../engine/engine-registry.ts";
 import { TransitionExecutor } from "../engine/execution/transition-executor.ts";
-import { TaskRepository } from "../db/task-repository.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
+import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
-import { WorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
+import { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
@@ -22,6 +23,8 @@ const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 let db: Database;
 let gitDir: string;
 let configCleanup: () => void;
+let wsRepo: WorkspaceRepository;
+let boardTools: BoardToolExecutor;
 
 class TestEngine implements ExecutionEngine {
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -46,6 +49,7 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
     signal,
     onRawModelMessage,
     attachments,
+    model,
   ) {
     const params = super.build(
       task,
@@ -57,18 +61,17 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
       signal,
       onRawModelMessage,
       attachments,
+      model,
     );
     this.lastBuilt = params;
     return params;
   }
 }
 
-class StubWorkdirResolver extends WorkingDirectoryResolver {
-  constructor(private readonly dir: string) {
-    super();
-  }
+class StubWorkdirResolver implements IWorkingDirectoryResolver {
+  constructor(private readonly dir: string) {}
 
-  override resolve(): string {
+  resolve(): string {
     return this.dir;
   }
 }
@@ -111,6 +114,8 @@ function readLatestTransitionMetadata(taskId: number): TransitionEventMetadata {
 
 beforeEach(() => {
   db = initDb();
+  wsRepo = new WorkspaceRepository(db);
+  boardTools = new BoardToolExecutor(db, wsRepo);
   gitDir = mkdtempSync(join(tmpdir(), "railyn-transition-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
@@ -139,7 +144,8 @@ describe("TransitionExecutor", () => {
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
-      new TaskRepository(db),
+      boardTools,
+      wsRepo,
     );
 
     const result = await executor.execute(taskId, "done");
@@ -193,7 +199,8 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
-      new TaskRepository(db),
+      boardTools,
+      wsRepo,
     );
 
     const result = await executor.execute(taskId, "plan");
@@ -251,7 +258,8 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
-      new TaskRepository(db),
+      boardTools,
+      wsRepo,
     );
 
     await executor.execute(taskId, "plan");
@@ -288,7 +296,8 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
-      new TaskRepository(db),
+      boardTools,
+      wsRepo,
     );
 
     await executor.execute(taskId, "plan");
@@ -326,7 +335,8 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
-      new TaskRepository(db),
+      boardTools,
+      wsRepo,
     );
 
     await executor.execute(taskId, "plan");
@@ -362,7 +372,8 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
-      new TaskRepository(db),
+      boardTools,
+      wsRepo,
     );
 
     await executor.execute(taskId, "plan");
@@ -383,6 +394,8 @@ columns:
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
+      boardTools,
+      wsRepo,
     );
 
     const result = await executor.execute(taskId, "plan");

@@ -8,8 +8,10 @@ import { resetConfig } from "../config/index.ts";
 import { EngineRegistry } from "../engine/engine-registry.ts";
 import { HumanTurnExecutor } from "../engine/execution/human-turn-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
-import { WorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
+import { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
+import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
@@ -17,6 +19,8 @@ import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 let db: Database;
 let gitDir: string;
 let configCleanup: () => void;
+let wsRepo: WorkspaceRepository;
+let boardTools: BoardToolExecutor;
 
 class TestEngine implements ExecutionEngine {
   constructor(private readonly throwOnResume = false) {}
@@ -48,9 +52,9 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
   }
 }
 
-class StubWorkdirResolver extends WorkingDirectoryResolver {
-  constructor(private readonly dir: string) { super(); }
-  override resolve(): string { return this.dir; }
+class StubWorkdirResolver implements IWorkingDirectoryResolver {
+  constructor(private readonly dir: string) {}
+  resolve(): string { return this.dir; }
 }
 
 class StubStreamProcessor extends StreamProcessor {
@@ -73,6 +77,8 @@ class StubStreamProcessor extends StreamProcessor {
 
 beforeEach(() => {
   db = initDb();
+  wsRepo = new WorkspaceRepository(db);
+  boardTools = new BoardToolExecutor(db, wsRepo);
   gitDir = mkdtempSync(join(tmpdir(), "railyn-ht-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
@@ -96,6 +102,8 @@ function makeExecutor(engine: TestEngine) {
     new StubWorkdirResolver(gitDir),
     streamProcessor,
     () => {},
+    wsRepo,
+    boardTools,
   );
   return { builder, streamProcessor, executor };
 }

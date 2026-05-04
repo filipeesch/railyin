@@ -23,7 +23,9 @@ import type { Database } from "bun:sqlite";
 import type { TaskRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
-import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getTaskWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
+import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
+import type { IWorkspaceRepository } from "../db/workspace-repository.ts";
+import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 
 import { EngineRegistry } from "./engine-registry.ts";
 import { StreamProcessor } from "./stream/stream-processor.ts";
@@ -48,6 +50,7 @@ export class Orchestrator implements ExecutionCoordinator {
   private readonly retryExecutor: RetryExecutor;
   private readonly codeReviewExecutor: CodeReviewExecutor;
   private readonly chatExecutor: ChatExecutor;
+  private readonly wsRepo: IWorkspaceRepository;
 
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly onNewMessage: OnNewMessage;
@@ -62,15 +65,19 @@ export class Orchestrator implements ExecutionCoordinator {
     onError: OnError,
     onTaskUpdated: OnTaskUpdated,
     onNewMessage: OnNewMessage,
+    wsRepo: IWorkspaceRepository,
     onRawMessageEnqueued?: (item: RawMessageItem) => void,
   ) {
     this.db = db;
     this.registry = registry;
     this.onTaskUpdated = onTaskUpdated;
     this.onNewMessage = onNewMessage;
+    this.wsRepo = wsRepo;
 
     const rawBuffer = createRawMessageBuffer(db, { onEnqueue: onRawMessageEnqueued });
     rawBuffer.start();
+
+    const boardTools = new BoardToolExecutor(db, wsRepo);
 
     this.streamProcessor = new StreamProcessor(
       db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage,
@@ -78,20 +85,20 @@ export class Orchestrator implements ExecutionCoordinator {
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
     this.paramsBuilder = new ExecutionParamsBuilder();
-    this.workdirResolver = new WorkingDirectoryResolver();
+    this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
 
     this.transitionExecutor = new TransitionExecutor(
-      db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor,
+      db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, boardTools, wsRepo,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
     this.humanTurnExecutor = new HumanTurnExecutor(
-      db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated,
+      db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
-    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor);
-    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage);
+    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools);
+    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools);
     this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor);
   }
 
@@ -194,7 +201,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const db = this.db;
     const task = db.query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?").get(taskId);
     if (!task) return [];
-    const key = getBoardWorkspaceKey(task.board_id);
+    const key = this.wsRepo.getBoardWorkspaceKey(task.board_id);
     const config = getWorkspaceConfig(key);
     const engine = this.registry.getEngine(key);
     return runWithConfig(config, () => engine.listCommands(taskId));
@@ -216,7 +223,7 @@ export class Orchestrator implements ExecutionCoordinator {
       .get(taskId);
     if (!task?.current_execution_id) return;
 
-    const engine = this.registry.getEngine(getTaskWorkspaceKey(taskId));
+    const engine = this.registry.getEngine(this.wsRepo.getTaskWorkspaceKey(taskId));
     await engine.resume(task.current_execution_id, { type: "shell_approval", decision });
 
     db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
@@ -228,7 +235,7 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   async compactTask(taskId: number): Promise<void> {
-    const engine = this.registry.getEngine(getTaskWorkspaceKey(taskId));
+    const engine = this.registry.getEngine(this.wsRepo.getTaskWorkspaceKey(taskId));
     if (!engine.compact) {
       throw new Error(`Engine for task ${taskId} does not support manual compaction`);
     }

@@ -1,9 +1,9 @@
+import type { Database } from "bun:sqlite";
 import { getConfig } from "../config/index.ts";
 import type { Board, WorkflowTemplate } from "../../shared/rpc-types.ts";
 import type { BoardRow } from "../db/row-types.ts";
 import { mapBoard } from "../db/mappers.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
-import { getDb } from "../db/index.ts";
 
 function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"][0]): WorkflowTemplate {
   return {
@@ -20,10 +20,9 @@ function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"]
   };
 }
 
-export function boardHandlers() {
+export function boardHandlers(db: Database) {
   return {
     "boards.list": async (): Promise<Array<Board & { template: WorkflowTemplate }>> => {
-      const db = getDb();
       const rows = db
         .query<BoardRow & { task_count: number }, []>(
           "SELECT b.*, COUNT(t.id) as task_count FROM boards b LEFT JOIN tasks t ON t.board_id = b.id GROUP BY b.id ORDER BY b.created_at ASC",
@@ -45,7 +44,6 @@ export function boardHandlers() {
       projectKeys: string[];
       workflowTemplateId: string;
     }): Promise<Board> => {
-      const db = getDb();
       const config = getWorkspaceConfig(params.workspaceKey);
 
       // Validate that the workflow template exists; fall back to first available
@@ -65,7 +63,6 @@ export function boardHandlers() {
     },
 
     "boards.update": async (params: { id: number; name?: string; workflowTemplateId?: string; projectKeys?: string[] }): Promise<Board> => {
-      const db = getDb();
       const existingRow = db.query<BoardRow, [number]>("SELECT * FROM boards WHERE id = ?").get(params.id);
       if (!existingRow) throw new Error(`Board ${params.id} not found`);
 
@@ -93,7 +90,6 @@ export function boardHandlers() {
     },
 
     "boards.delete": async (params: { id: number }): Promise<Record<string, never>> => {
-      const db = getDb();
       const taskCount = db
         .query<{ count: number }, [number]>("SELECT COUNT(*) as count FROM tasks WHERE board_id = ?")
         .get(params.id);

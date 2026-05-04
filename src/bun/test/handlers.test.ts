@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { taskGitHandlers } from "../handlers/task-git.ts";
 import { codeReviewHandlers } from "../handlers/code-review.ts";
 import { todoHandlers } from "../handlers/todos.ts";
@@ -21,6 +22,7 @@ import type { TaskRow } from "../db/row-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 
 let db: Database;
+let wsRepo: WorkspaceRepository;
 let gitDir: string;
 let configCleanup: () => void;
 
@@ -33,6 +35,7 @@ beforeEach(() => {
   execSync("git add . && git commit -m init", { cwd: gitDir });
 
   db = initDb();
+  wsRepo = new WorkspaceRepository(db);
   const cfg = setupTestConfig("", gitDir);
   configCleanup = cfg.cleanup;
 });
@@ -48,7 +51,7 @@ function makeHandlers() {
   const updates: Task[] = [];
 
   const handlers = {
-    ...taskHandlers(db, null, (task) => updates.push(task)),
+    ...taskHandlers(db, wsRepo, null, (task) => updates.push(task)),
     ...taskGitHandlers(db, (task) => updates.push(task)),
     ...codeReviewHandlers(db),
     ...todoHandlers(db),
@@ -628,7 +631,7 @@ describe("tasks.transition / git context backfill", () => {
     const { projectKey, boardId, taskId, conversationId } = seedProjectAndTask(db, gitDir);
     // No task_git_context row exists yet
 
-    const handlers = taskHandlers(db, makeDbOrchestrator(), () => {});
+    const handlers = taskHandlers(db, wsRepo, makeDbOrchestrator(), () => {});
 
     // Transition — should backfill then create worktree
     await handlers["tasks.transition"]({ taskId, toState: "plan" });
@@ -654,7 +657,7 @@ describe("tasks.transition / running task deferred", () => {
     db.run("UPDATE tasks SET execution_state = 'running', workflow_state = 'backlog' WHERE id = ?", [taskId]);
 
     const taskUpdates: Task[] = [];
-    const handlers = taskHandlers(db, makeDbOrchestrator(), (t) => taskUpdates.push(t));
+    const handlers = taskHandlers(db, wsRepo, makeDbOrchestrator(), (t) => taskUpdates.push(t));
 
     const result = await handlers["tasks.transition"]({ taskId, toState: "plan" });
 
@@ -680,7 +683,7 @@ describe("tasks.transition / running task deferred", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET execution_state = 'running', workflow_state = 'plan' WHERE id = ?", [taskId]);
 
-    const handlers = taskHandlers(db, makeDbOrchestrator(), () => {});
+    const handlers = taskHandlers(db, wsRepo, makeDbOrchestrator(), () => {});
 
     const result = await handlers["tasks.transition"]({ taskId, toState: "done" });
 
@@ -983,7 +986,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-sonnet-4.6", contextWindow: 200_000 },
     ]);
-    const handlers = taskHandlers(db, orchestrator, () => {});
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(200_000);
@@ -997,7 +1000,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
     ]);
-    const handlers = taskHandlers(db, orchestrator, () => {});
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     // No matching model in orchestrator; resolveModelContextWindow also won't find
@@ -1009,7 +1012,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
-    const handlers = taskHandlers(db, null, () => {});
+    const handlers = taskHandlers(db, wsRepo, null, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
@@ -1023,7 +1026,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-opus", contextWindow: undefined },
     ]);
-    const handlers = taskHandlers(db, orchestrator, () => {});
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {});
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);

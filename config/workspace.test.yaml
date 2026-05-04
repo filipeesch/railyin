@@ -1,7 +1,4 @@
 name: Test Workspace
 
 engine:
-  type: native
-  providers:
-    - id: fake
-      type: fake
+  type: scripted

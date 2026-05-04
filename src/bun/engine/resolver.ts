@@ -13,6 +13,8 @@ import { createDefaultCopilotSdkAdapter } from "./copilot/session.ts";
 import { ClaudeEngine } from "./claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./claude/adapter.ts";
 
+import { MockExecutionEngine } from "../testing/mock-engine.ts";
+
 /**
  * Resolve and instantiate the correct engine based on workspace config.
  *
@@ -26,6 +28,10 @@ export function resolveEngine(
   onNewMessage: OnNewMessage,
 ): ExecutionEngine {
   const engine = config.engine;
+
+  if (engine.type === "scripted") {
+    return new MockExecutionEngine();
+  }
 
   if (engine.type === "copilot") {
     return new CopilotEngine(

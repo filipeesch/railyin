@@ -17,6 +17,7 @@ export class ExecutionParamsBuilder {
     signal: AbortSignal,
     onRawModelMessage: (raw: RawModelMessage) => void,
     attachments?: Attachment[],
+    model?: string,
   ): ExecutionParams {
     const taskContext: ExecutionParams["taskContext"] = {
       title: task.title,
@@ -32,7 +33,7 @@ export class ExecutionParamsBuilder {
       systemInstructions,
       taskContext,
       workingDirectory,
-      model: task.conversation_model ?? "",
+      model: model ?? task.conversation_model ?? "",
       signal,
       onRawModelMessage,
       enabledMcpTools: task.enabled_mcp_tools

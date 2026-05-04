@@ -9,6 +9,7 @@
  *   BD — boards.delete
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import type { Database } from "bun:sqlite";
 import { initDb, setupTestConfig, seedProjectAndTask } from "./helpers.ts";
 import { boardHandlers } from "../handlers/boards.ts";
 
@@ -20,11 +21,12 @@ columns:
 `;
 
 let cleanup: (() => void) | null = null;
+let db: Database;
 
 beforeEach(() => {
   const cfg = setupTestConfig("", undefined, [SECOND_WORKFLOW_YAML]);
   cleanup = cfg.cleanup;
-  initDb();
+  db = initDb();
 });
 
 afterEach(() => {
@@ -35,8 +37,8 @@ afterEach(() => {
 // ─── DR — DI regression ───────────────────────────────────────────────────────
 
 describe("DR — DI regression", () => {
-  it("DR-1: boardHandlers() with no args returns handlers after initDb()", async () => {
-    const handlers = boardHandlers();
+  it("DR-1: boardHandlers(db) returns handlers using injected db", async () => {
+    const handlers = boardHandlers(db);
     const boards = await handlers["boards.list"]();
     expect(Array.isArray(boards)).toBe(true);
   });
@@ -46,7 +48,7 @@ describe("DR — DI regression", () => {
 
 describe("BC — boards.create", () => {
   it("BC-1: returns board with taskCount 0", async () => {
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const board = await handlers["boards.create"]({
       workspaceKey: "default",
       name: "My Board",
@@ -59,7 +61,7 @@ describe("BC — boards.create", () => {
   });
 
   it("BC-2: invalid workflowTemplateId falls back to first available", async () => {
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const board = await handlers["boards.create"]({
       workspaceKey: "default",
       name: "Fallback Board",
@@ -75,29 +77,29 @@ describe("BC — boards.create", () => {
 
 describe("BL — boards.list taskCount", () => {
   it("BL-1: fresh board has taskCount 0", async () => {
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     await handlers["boards.create"]({ workspaceKey: "default", name: "Empty", projectKeys: [], workflowTemplateId: "delivery" });
     const boards = await handlers["boards.list"]();
     expect(boards[0]!.taskCount).toBe(0);
   });
 
   it("BL-2: board with 2 tasks has taskCount 2", async () => {
-    const db = initDb();
+
     const { boardId } = seedProjectAndTask(db, "");
     // Add a second task
     db.run("INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, 'test-project', 'Task 2', '', 'backlog', 'idle', 1, 'fake/fake')", [boardId]);
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const boards = await handlers["boards.list"]();
     const board = boards.find((b) => b.id === boardId);
     expect(board?.taskCount).toBe(2);
   });
 
   it("BL-3: multiple boards have independent taskCounts", async () => {
-    const db = initDb();
+
     const { boardId: b1 } = seedProjectAndTask(db, "");
     db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'Board 2', 'delivery')");
     const b2 = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const boards = await handlers["boards.list"]();
     expect(boards.find((b) => b.id === b1)?.taskCount).toBe(1);
     expect(boards.find((b) => b.id === b2)?.taskCount).toBe(0);
@@ -108,13 +110,13 @@ describe("BL — boards.list taskCount", () => {
 
 describe("BU — boards.update", () => {
   async function createTestBoard() {
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     return handlers["boards.create"]({ workspaceKey: "default", name: "Original", projectKeys: ["p1"], workflowTemplateId: "delivery" });
   }
 
   it("BU-1: name-only update leaves other fields unchanged", async () => {
     const board = await createTestBoard();
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const updated = await handlers["boards.update"]({ id: board.id, name: "Renamed" });
     expect(updated.name).toBe("Renamed");
     expect(updated.workflowTemplateId).toBe("delivery");
@@ -123,7 +125,7 @@ describe("BU — boards.update", () => {
 
   it("BU-2: workflowTemplateId-only update leaves name/projectKeys unchanged", async () => {
     const board = await createTestBoard();
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const updated = await handlers["boards.update"]({ id: board.id, workflowTemplateId: "sprint" });
     expect(updated.name).toBe("Original");
     expect(updated.workflowTemplateId).toBe("sprint");
@@ -132,7 +134,7 @@ describe("BU — boards.update", () => {
 
   it("BU-3: projectKeys-only update leaves name/template unchanged", async () => {
     const board = await createTestBoard();
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const updated = await handlers["boards.update"]({ id: board.id, projectKeys: ["p2", "p3"] });
     expect(updated.name).toBe("Original");
     expect(updated.workflowTemplateId).toBe("delivery");
@@ -141,14 +143,14 @@ describe("BU — boards.update", () => {
 
   it("BU-4: empty projectKeys sets to empty array", async () => {
     const board = await createTestBoard();
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const updated = await handlers["boards.update"]({ id: board.id, projectKeys: [] });
     expect(updated.projectKeys).toEqual([]);
   });
 
   it("BU-5: invalid workflowTemplateId throws without mutating board", async () => {
     const board = await createTestBoard();
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     await expect(
       handlers["boards.update"]({ id: board.id, workflowTemplateId: "nonexistent" })
     ).rejects.toThrow("nonexistent");
@@ -158,7 +160,7 @@ describe("BU — boards.update", () => {
   });
 
   it("BU-6: non-existent id throws", async () => {
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     await expect(
       handlers["boards.update"]({ id: 99999, name: "Ghost" })
     ).rejects.toThrow("99999");
@@ -169,7 +171,7 @@ describe("BU — boards.update", () => {
 
 describe("BD — boards.delete", () => {
   it("BD-1: empty board is deleted successfully", async () => {
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     const board = await handlers["boards.create"]({ workspaceKey: "default", name: "Temp", projectKeys: [], workflowTemplateId: "delivery" });
     await handlers["boards.delete"]({ id: board.id });
     const boards = await handlers["boards.list"]();
@@ -177,17 +179,17 @@ describe("BD — boards.delete", () => {
   });
 
   it("BD-2: board with 1 task throws with count in message", async () => {
-    const db = initDb();
+
     const { boardId } = seedProjectAndTask(db, "");
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     await expect(handlers["boards.delete"]({ id: boardId })).rejects.toThrow("1");
   });
 
   it("BD-3: board with multiple tasks throws with correct count", async () => {
-    const db = initDb();
+
     const { boardId } = seedProjectAndTask(db, "");
     db.run("INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, 'test-project', 'Task 2', '', 'backlog', 'idle', 1, 'fake/fake')", [boardId]);
-    const handlers = boardHandlers();
+    const handlers = boardHandlers(db);
     await expect(handlers["boards.delete"]({ id: boardId })).rejects.toThrow("2");
   });
 });

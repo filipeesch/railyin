@@ -1,20 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../engine/common-tools.ts";
 import { buildCopilotTools } from "../engine/copilot/tools.ts";
 import { buildClaudeToolServer } from "../engine/claude/tools.ts";
 import { TodoRepository } from "../db/todos.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
+import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
+import { initDb } from "./helpers.ts";
 
 import type { CommonToolContext } from "../engine/types.ts";
 
-const baseContext: CommonToolContext = {
-    taskId: 1,
-    boardId: 1,
-    onTransition: () => { },
-    onHumanTurn: () => { },
-    onCancel: () => { },
-    onTaskUpdated: () => { },
-    todoRepo: new TodoRepository(),
-};
+let baseContext: CommonToolContext;
+
+beforeEach(() => {
+    const db = initDb();
+    const wsRepo = new WorkspaceRepository(db);
+    baseContext = {
+        taskId: 1,
+        boardId: 1,
+        onTransition: () => { },
+        onHumanTurn: () => { },
+        onCancel: () => { },
+        onTaskUpdated: () => { },
+        todoRepo: new TodoRepository(db),
+        boardTools: new BoardToolExecutor(db, wsRepo),
+    };
+});
 
 describe("shared common tool registration", () => {
     it("includes interview_me in shared common tool definitions", () => {

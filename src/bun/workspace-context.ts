@@ -1,4 +1,3 @@
-import { getDb } from "./db/index.ts";
 import { getConfig, getWorkspaceRegistry, loadConfig, runWithConfig, type LoadedConfig } from "./config/index.ts";
 
 export function getDefaultWorkspaceKey(): string {
@@ -12,23 +11,4 @@ export function getWorkspaceConfig(workspaceKey: string): LoadedConfig {
 
 export function runWithWorkspaceKey<T>(workspaceKey: string, fn: () => T): T {
   return runWithConfig(getWorkspaceConfig(workspaceKey), fn);
-}
-
-export function getBoardWorkspaceKey(boardId: number): string {
-  const db = getDb();
-  return db
-    .query<{ workspace_key: string }, [number]>("SELECT workspace_key FROM boards WHERE id = ?")
-    .get(boardId)?.workspace_key ?? getDefaultWorkspaceKey();
-}
-
-export function getTaskWorkspaceKey(taskId: number): string {
-  const db = getDb();
-  return db
-    .query<{ workspace_key: string }, [number]>(
-      `SELECT b.workspace_key
-       FROM tasks t
-       JOIN boards b ON b.id = t.board_id
-       WHERE t.id = ?`,
-    )
-    .get(taskId)?.workspace_key ?? getDefaultWorkspaceKey();
 }

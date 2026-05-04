@@ -8,7 +8,8 @@ import { addServerToConfig } from "../lsp/config-writer.ts";
 import { LANGUAGE_REGISTRY } from "../lsp/registry.ts";
 import type { LanguageEntry, InstallOption } from "../lsp/registry.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
-import { getBoardWorkspaceKey, getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
+import type { IWorkspaceRepository } from "../db/workspace-repository.ts";
+import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 
 export interface DetectedLanguage {
   entry: LanguageEntry;
@@ -16,7 +17,7 @@ export interface DetectedLanguage {
   installOptions: InstallOption[];
 }
 
-export function lspHandlers(db: Database) {
+export function lspHandlers(db: Database, wsRepo: IWorkspaceRepository) {
   return {
     "lsp.detectLanguages": async (params: { projectPath: string }): Promise<DetectedLanguage[]> => {
       const entries = detectLanguages(params.projectPath);
@@ -81,7 +82,7 @@ export function lspHandlers(db: Database) {
           .get(params.taskId);
         if (!row) return [];
         worktreePath = row.worktree_path ?? process.cwd();
-        config = getConfig(getBoardWorkspaceKey(row.board_id));
+        config = getConfig(wsRepo.getBoardWorkspaceKey(row.board_id));
         scopeId = params.taskId;
       } else {
         const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();

@@ -27,6 +27,7 @@ import { Orchestrator } from "./engine/orchestrator.ts";
 import { EngineRegistry } from "./engine/engine-registry.ts";
 import { resolveEngine } from "./engine/resolver.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
+import { WorkspaceRepository } from "./db/workspace-repository.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
 import type { Task, ConversationMessage, ChatSession } from "../shared/rpc-types.ts";
 import { setupFileLogging } from "./server/file-logger.ts";
@@ -66,6 +67,7 @@ await runMigrations();
 seedDefaultWorkspace();
 
 const db = getDb();
+const wsRepo = new WorkspaceRepository(db);
 
 // 2. Load default workspace config (YAML files)
 const { error: configError } = loadConfig();
@@ -139,7 +141,7 @@ const engineRegistry = injectedEngine
   : new EngineRegistry((key) => resolveEngine(getWorkspaceConfig(key), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier)));
 
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), streamProc.onRawMessageEnqueued.bind(streamProc))
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc))
   : null;
 
 if (orchestrator) {
@@ -164,9 +166,9 @@ const serverPort = portArg ? Number(portArg.split("=")[1]) : 3000;
 
 const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...workspaceHandlers(db),
-  ...boardHandlers(),
+  ...boardHandlers(db),
   ...projectHandlers(),
-  ...taskHandlers(db, orchestrator, notifier.notifyTaskUpdated.bind(notifier)),
+  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier)),
   ...taskGitHandlers(db, notifier.notifyTaskUpdated.bind(notifier)),
   ...codeReviewHandlers(db),
   ...todoHandlers(db),
@@ -175,7 +177,7 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...conversationHandlers(db, orchestrator),
   ...workflowHandlers(notifier.notifyWorkflowReloaded.bind(notifier)),
   ...launchHandlers(db),
-  ...lspHandlers(db),
+  ...lspHandlers(db, wsRepo),
   ...codeServerHandlers(db, channel.broadcast.bind(channel), serverPort),
   ...mcpHandlers(db),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),

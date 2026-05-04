@@ -3,14 +3,16 @@ import type { Attachment } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
 import { mapTask, mapConversationMessage } from "../../db/mappers";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
-import { getTaskWorkspaceKey, getWorkspaceConfig } from "../../workspace-context";
+import { getWorkspaceConfig } from "../../workspace-context";
 import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry";
 import type { ExecutionParamsBuilder } from "./execution-params-builder";
-import type { WorkingDirectoryResolver } from "./working-directory-resolver";
+import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
 import type { StreamProcessor } from "../stream/stream-processor";
 import type { OnTaskUpdated } from "../types";
 import type { TaskRow, ConversationMessageRow } from "../../db/row-types";
+import type { IWorkspaceRepository } from "../../db/workspace-repository";
+import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor";
 import { resolveModel } from "./model-resolver";
 
 
@@ -20,9 +22,11 @@ export class HumanTurnExecutor {
     private readonly db: Database,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
-    private readonly workdirResolver: WorkingDirectoryResolver,
+    private readonly workdirResolver: IWorkingDirectoryResolver,
     private readonly streamProcessor: StreamProcessor,
     private readonly onTaskUpdated: OnTaskUpdated,
+    private readonly wsRepo: IWorkspaceRepository,
+    private readonly boardTools: IBoardToolExecutor,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
   ) {}
@@ -41,8 +45,8 @@ export class HumanTurnExecutor {
        WHERE t.id = ?`
     ).get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const config = getWorkspaceConfig(getTaskWorkspaceKey(taskId));
-    const engine = this.engineRegistry.getEngine(getTaskWorkspaceKey(taskId));
+    const config = getWorkspaceConfig(this.wsRepo.getTaskWorkspaceKey(taskId));
+    const engine = this.engineRegistry.getEngine(this.wsRepo.getTaskWorkspaceKey(taskId));
 
     const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
 
@@ -119,6 +123,7 @@ export class HumanTurnExecutor {
             this.streamProcessor.makePersistCallback(taskId, conversationId, newExecutionId),
             attachments,
           ),
+          boardTools: this.boardTools,
           ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
           ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
         };
@@ -174,6 +179,7 @@ export class HumanTurnExecutor {
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         attachments,
       ),
+      boardTools: this.boardTools,
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
     };

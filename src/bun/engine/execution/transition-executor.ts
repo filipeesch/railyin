@@ -2,15 +2,17 @@ import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
 import { mapTask } from "../../db/mappers";
 import { appendMessage } from "../../conversation/messages";
-import { getBoardWorkspaceKey, getWorkspaceConfig } from "../../workspace-context";
+import { getWorkspaceConfig } from "../../workspace-context";
 import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry";
 import type { ExecutionParamsBuilder } from "./execution-params-builder";
-import type { WorkingDirectoryResolver } from "./working-directory-resolver";
+import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
 import type { StreamProcessor } from "../stream/stream-processor";
 import type { TaskRow } from "../../db/row-types";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver";
 import { resolveModel } from "./model-resolver";
+import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor";
+import type { IWorkspaceRepository } from "../../db/workspace-repository";
 
 
 export class TransitionExecutor {
@@ -18,8 +20,10 @@ export class TransitionExecutor {
     private readonly db: Database,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
-    private readonly workdirResolver: WorkingDirectoryResolver,
+    private readonly workdirResolver: IWorkingDirectoryResolver,
     private readonly streamProcessor: StreamProcessor,
+    private readonly boardTools: IBoardToolExecutor,
+    private readonly wsRepo: IWorkspaceRepository,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
   ) {}
@@ -36,8 +40,8 @@ export class TransitionExecutor {
        WHERE t.id = ?`
     ).get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const config = getWorkspaceConfig(getBoardWorkspaceKey(task.board_id));
-    const engine = this.engineRegistry.getEngine(getBoardWorkspaceKey(task.board_id));
+    const config = getWorkspaceConfig(this.wsRepo.getBoardWorkspaceKey(task.board_id));
+    const engine = this.engineRegistry.getEngine(this.wsRepo.getBoardWorkspaceKey(task.board_id));
 
     let conversationId = task.conversation_id;
     if (conversationId == null) {
@@ -114,8 +118,10 @@ export class TransitionExecutor {
         workingDirectory,
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
+        undefined,
+        effectiveModel ?? undefined,
       ),
-      model: effectiveModel, // Use the resolved model directly
+      boardTools: this.boardTools,
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
     };

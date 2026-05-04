@@ -30,7 +30,7 @@ export class ClaudeEngine implements ExecutionEngine {
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
-    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, taskContext, enabledMcpTools } = params;
+    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, taskContext, enabledMcpTools, boardTools } = params;
 
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
@@ -69,6 +69,7 @@ export class ClaudeEngine implements ExecutionEngine {
         onCancel: (id) => this.cancel(id),
         onTaskUpdated: (task) => this._onTaskUpdated(task),
         todoRepo: new TodoRepository(),
+        boardTools: boardTools!,
         lspManager,
         worktreePath: workingDirectory,
       },
@@ -134,7 +135,7 @@ export class ClaudeEngine implements ExecutionEngine {
 
   async listCommands(taskId: number): Promise<CommandInfo[]> {
     const { getDb } = await import("../../db/index.ts");
-    const { getBoardWorkspaceKey } = await import("../../workspace-context.ts");
+    const { getDefaultWorkspaceKey } = await import("../../workspace-context.ts");
     const { getLoadedProjectByKey } = await import("../../project-store.ts");
 
     // ⚠️  INVARIANT: CWD priority here MUST match Orchestrator._resolveWorkingDirectory().
@@ -161,7 +162,10 @@ export class ClaudeEngine implements ExecutionEngine {
       )
       .get(taskId);
 
-    const wsKey = getBoardWorkspaceKey(taskRow.board_id);
+    const wsKey =
+      db.query<{ workspace_key: string }, [number]>(
+        "SELECT workspace_key FROM boards WHERE id = ?",
+      ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
     const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
     const cwd = project?.projectPath || gitRow?.worktree_path || process.cwd();
 

@@ -6,6 +6,7 @@
   "scripts": {
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true && (cd node_modules/code-server && FORCE_NODE_VERSION=20 npm_config_user_agent=\"npm/10 node/v20.0.0 darwin arm64\" sh ./postinstall.sh) 2>/dev/null || true",
     "dev": "bun scripts/dev.ts",
+    "prod": "bun src/bun/index.ts",
     "dev:kill": "pkill -f 'src/bun/index.ts' || true",
     "build": "vite build",
     "test": "bun test src/bun --timeout 20000",

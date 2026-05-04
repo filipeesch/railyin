@@ -7,6 +7,16 @@ bun install
 bun run dev
 ```
 
+> **Note:** `bun run dev` uses an **in-memory database** by default. Data is not persisted between runs. This prevents tests and development work from accidentally polluting your production data.
+
+To run with the real persistent database (e.g. to work on actual boards and tasks):
+
+```bash
+bun run prod
+# or during development with persistence:
+bun run dev -- --real-db
+```
+
 ## Testing
 
 ### Backend tests

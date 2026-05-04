@@ -1,8 +1,12 @@
 import { join } from "node:path";
-import { getDb } from "../../db/index.ts";
+import type { Database } from "bun:sqlite";
+import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import { getLoadedProjectByKey } from "../../project-store.ts";
-import { getTaskWorkspaceKey } from "../../workspace-context.ts";
 import type { TaskRow, TaskGitContextRow } from "../../db/row-types.ts";
+
+export interface IWorkingDirectoryResolver {
+  resolve(task: TaskRow): string;
+}
 
 /**
  * Resolves the working directory for a task execution.
@@ -12,14 +16,18 @@ import type { TaskRow, TaskGitContextRow } from "../../db/row-types.ts";
  *   2. projectPath                      — pre-worktree
  *   3. throw                            — neither found
  */
-export class WorkingDirectoryResolver {
+export class WorkingDirectoryResolver implements IWorkingDirectoryResolver {
+  constructor(
+    private readonly db: Database,
+    private readonly wsRepo: IWorkspaceRepository,
+  ) {}
+
   resolve(task: TaskRow): string {
-    const workspaceKey = getTaskWorkspaceKey(task.id);
+    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(task.id);
     const project = getLoadedProjectByKey(workspaceKey, task.project_key);
     const projectDirectory = project?.projectPath;
 
-    const db = getDb();
-    const gitRow = db
+    const gitRow = this.db
       .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
         "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
       )
@@ -46,3 +54,4 @@ export class WorkingDirectoryResolver {
     throw new Error(`Project directory not found for project_key=${task.project_key}`);
   }
 }
+

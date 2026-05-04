@@ -26,6 +26,7 @@ import type { Database } from "bun:sqlite";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
 import { WorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { TaskRow } from "../db/row-types.ts";
 
 const DELIVERY_WORKFLOW_YAML = [
@@ -106,7 +107,7 @@ describe("WorkingDirectoryResolver", () => {
         "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
         [taskId, projectDir, worktreeDir],
       );
-      expect(new WorkingDirectoryResolver().resolve(getTaskRow(localDb, taskId))).toBe(worktreeDir);
+      expect(new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId))).toBe(worktreeDir);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(worktreeDir, { recursive: true, force: true });
@@ -127,7 +128,7 @@ describe("WorkingDirectoryResolver", () => {
         "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
         [taskId, gitRootDir, worktreeDir],
       );
-      expect(new WorkingDirectoryResolver().resolve(getTaskRow(localDb, taskId))).toBe(
+      expect(new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId))).toBe(
         join(worktreeDir, "packages", "app"),
       );
     } finally {
@@ -150,7 +151,7 @@ describe("WorkingDirectoryResolver", () => {
         [taskId, gitRootDir, worktreeDir],
       );
       expect(() =>
-        new WorkingDirectoryResolver().resolve(getTaskRow(localDb, taskId)),
+        new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId)),
       ).toThrow("outside gitRootPath");
     } finally {
       rmSync(gitRootDir, { recursive: true, force: true });
@@ -170,7 +171,7 @@ describe("WorkingDirectoryResolver", () => {
         "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'not_created', 'test-branch')",
         [taskId, projectDir, null],
       );
-      expect(new WorkingDirectoryResolver().resolve(getTaskRow(localDb, taskId))).toBe(projectDir);
+      expect(new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId))).toBe(projectDir);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       localConfig.cleanup();
@@ -188,7 +189,7 @@ describe("WorkingDirectoryResolver", () => {
         "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
         [taskId, worktreeDir, worktreeDir],
       );
-      expect(new WorkingDirectoryResolver().resolve(getTaskRow(localDb, taskId))).toBe(worktreeDir);
+      expect(new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId))).toBe(worktreeDir);
     } finally {
       rmSync(worktreeDir, { recursive: true, force: true });
       localConfig.cleanup();
