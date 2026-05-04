@@ -400,7 +400,7 @@ export class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
   private readonly beforeEvictListeners = new Map<string, Set<() => Promise<void>>>();
   private readonly leaseRegistry: LeaseRegistry;
 
-  constructor(leaseRegistry?: LeaseRegistry, poolIdleTimeoutMs = POOL_IDLE_TIMEOUT_MS) {
+  constructor(leaseRegistry?: LeaseRegistry, poolIdleTimeoutMs = POOL_IDLE_TIMEOUT_MS, private readonly evictDeadlineMs = 5_000) {
     this.leaseRegistry = leaseRegistry ?? new LeaseRegistry(
       "copilot",
       poolIdleTimeoutMs,
@@ -430,7 +430,7 @@ export class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
     if (callbacks && callbacks.size > 0) {
       let deadlineExceeded = false;
       const deadlineTimer = new Promise<void>((resolve) =>
-        setTimeout(() => { deadlineExceeded = true; resolve(); }, 5_000)
+        setTimeout(() => { deadlineExceeded = true; resolve(); }, this.evictDeadlineMs)
       );
       await Promise.race([
         Promise.all([...callbacks].map((cb) => cb())).catch(() => {}),
