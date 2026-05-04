@@ -7,6 +7,11 @@ import { getDb, getDbPath } from "../index.ts";
 export interface Migration {
   readonly id: string;
   readonly managesTransaction?: boolean;
+  /** Old checksums for this file — used when a known-bugfix changes the file
+   * after it was already applied to some databases.  The runner will accept any
+   * stored checksum that appears in this list, update the record to the current
+   * checksum, and continue rather than aborting. */
+  readonly previousChecksums?: readonly string[];
   up(db: Database): void;
 }
 
@@ -125,6 +130,18 @@ export async function runMigrations(): Promise<void> {
     const entry = byId.get(id);
     if (!entry) continue; // file removed after apply — skip
     if (entry.checksum !== storedChecksum) {
+      // Allow intentional amendments: if the stored checksum is listed in the
+      // migration's previousChecksums, this is a known bugfix — update the
+      // stored checksum and continue.
+      const prev = entry.migration.previousChecksums;
+      if (prev && prev.includes(storedChecksum)) {
+        console.warn(
+          `[db] Migration "${id}" was amended after being applied (known bugfix). ` +
+            `Updating stored checksum from ${storedChecksum} to ${entry.checksum}.`,
+        );
+        db.run("UPDATE schema_migrations SET checksum = ? WHERE id = ?", [entry.checksum, id]);
+        continue;
+      }
       throw new Error(
         `Checksum mismatch for migration "${id}": stored ${storedChecksum}, file ${entry.checksum}. ` +
           `Migration files must not be modified after being applied to a database.`,

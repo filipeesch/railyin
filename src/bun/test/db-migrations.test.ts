@@ -290,4 +290,24 @@ describe("runMigrations", () => {
       .find((column) => column.name === "conversation_id");
     expect(conversationIdColumn?.notnull).toBe(1);
   });
+
+  it("previousChecksums: does not throw when a migration file was amended after being applied", async () => {
+    // Simulate a DB where migration 037 was applied with the OLD (buggy) checksum.
+    // The runner should accept it via previousChecksums and update the stored checksum.
+    await runMigrations();
+    const db = getDb();
+
+    // Overwrite the stored checksum for 037 with a value listed in its previousChecksums.
+    const oldChecksum = "ff09dd18e2e49e937ae505b9cc04d00f2b9977c61e254f80934d986292e3a1f0";
+    db.run("UPDATE schema_migrations SET checksum = ? WHERE id = ?", [oldChecksum, "037_remove_model_from_tasks"]);
+
+    // runMigrations should not throw — it recognises the old checksum and updates it.
+    await expect(runMigrations()).resolves.toBeUndefined();
+
+    // Stored checksum should now be the current file checksum (not the old one).
+    const row = db.query<{ checksum: string }, [string]>(
+      "SELECT checksum FROM schema_migrations WHERE id = ?",
+    ).get("037_remove_model_from_tasks");
+    expect(row?.checksum).not.toBe(oldChecksum);
+  });
 });
