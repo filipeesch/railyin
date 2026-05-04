@@ -165,6 +165,8 @@ export class CopilotEngine implements ExecutionEngine {
       },
     };
 
+    const tools = buildCopilotTools(toolContext, getMcpRegistry(), params.enabledMcpTools, onSuspend);
+
     // Build system message — prepend task identity then append stage_instructions
     const taskBlock = taskContext
       ? [`## Task`, `**Title:** ${taskContext.title}`, ...(taskContext.description ? [`**Description:** ${taskContext.description}`] : [])].join("\n")
