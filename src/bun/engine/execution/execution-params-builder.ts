@@ -1,12 +1,47 @@
 import type { ExecutionParams, RawModelMessage } from "../types.ts";
 import type { TaskRow } from "../../db/row-types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
+import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 
 /**
  * Assembles ExecutionParams from a task row + pre-created signal.
  * Pure: no side effects — AbortController registration is done by StreamProcessor.createSignal().
  */
 export class ExecutionParamsBuilder {
+  private decisionRepo: DecisionRepository;
+
+  constructor(decisionRepo?: DecisionRepository) {
+    this.decisionRepo = decisionRepo ?? new DecisionRepository();
+  }
+
+  private _buildBase(
+    conversationId: number,
+    executionId: number,
+    prompt: string,
+    systemInstructions: string | undefined,
+    workingDirectory: string,
+    signal: AbortSignal,
+    onRawModelMessage: (raw: RawModelMessage) => void,
+    attachments?: Attachment[],
+  ) {
+    const decisionBlock = this.decisionRepo.buildSystemBlock(conversationId);
+    const effectiveSystemInstructions = decisionBlock
+      ? systemInstructions !== undefined
+        ? systemInstructions + "\n\n" + decisionBlock
+        : decisionBlock
+      : systemInstructions;
+    return {
+      executionId,
+      conversationId,
+      prompt,
+      systemInstructions: effectiveSystemInstructions,
+      workingDirectory,
+      signal,
+      onRawModelMessage,
+      ...(attachments?.length ? { attachments } : {}),
+    };
+  }
+
   build(
     task: TaskRow,
     conversationId: number,
@@ -24,13 +59,12 @@ export class ExecutionParamsBuilder {
       ...(task.description?.trim() ? { description: task.description.trim() } : {}),
     };
 
+    const base = this._buildBase(conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments);
+
     return {
-      executionId,
+      ...base,
       taskId: task.id,
-      conversationId,
       boardId: task.board_id,
-      prompt,
-      systemInstructions,
       taskContext,
       workingDirectory,
       model: model ?? task.conversation_model ?? "",
@@ -39,7 +73,6 @@ export class ExecutionParamsBuilder {
       enabledMcpTools: task.enabled_mcp_tools
         ? (() => { try { return JSON.parse(task.enabled_mcp_tools!); } catch { return null; } })()
         : null,
-      ...(attachments?.length ? { attachments } : {}),
     };
   }
 
@@ -54,18 +87,13 @@ export class ExecutionParamsBuilder {
     enabledMcpTools: string[] | null,
     attachments?: Attachment[],
   ): ExecutionParams {
+    const base = this._buildBase(conversationId, executionId, prompt, undefined, workingDirectory, signal, onRawModelMessage, attachments);
+
     return {
-      executionId,
+      ...base,
       taskId: null,
-      conversationId,
-      prompt,
-      systemInstructions: undefined,
-      workingDirectory,
       model,
-      signal,
-      onRawModelMessage,
       enabledMcpTools,
-      ...(attachments?.length ? { attachments } : {}),
     };
   }
 }

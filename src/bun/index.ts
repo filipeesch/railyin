@@ -23,6 +23,7 @@ import { lspHandlers } from "./handlers/lsp.ts";
 import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mcpHandlers } from "./handlers/mcp.ts";
 import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
+import { decisionHandlers } from "./handlers/decisions.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import { EngineRegistry } from "./engine/engine-registry.ts";
 import { resolveEngine } from "./engine/resolver.ts";
@@ -181,6 +182,7 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...codeServerHandlers(db, channel.broadcast.bind(channel), serverPort),
   ...mcpHandlers(db),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
+  ...decisionHandlers(db),
 };
 
 const wsHandler = new WebSocketHandler(channel, getPtySession);

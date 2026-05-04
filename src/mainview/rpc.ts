@@ -121,3 +121,11 @@ connectWs();
 window.addEventListener("beforeunload", () => {
   if (_wsTimer !== null) clearTimeout(_wsTimer);
 });
+
+// ─── Decisions ────────────────────────────────────────────────────────────────
+
+export const listDecisions = (params: { conversationId: number }) =>
+  api("decisions.list", params);
+
+export const getDecisionRevisions = (params: { decisionId: number }) =>
+  api("decisions.getRevisions", params);

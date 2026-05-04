@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildClaudeToolServer, extractWrittenFilesFromResult } from "../engine/claude/tools.ts";
-import { INTERVIEW_ME_TOOL_DEFINITION } from "../engine/interview-tool-definition.ts";
+import { DECISION_REQUEST_TOOL_DEFINITION } from "../engine/decision-request-tool-definition.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 
 // ---------------------------------------------------------------------------
@@ -84,28 +84,28 @@ describe("buildClaudeToolServer — return contract", () => {
   });
 });
 
-describe("buildClaudeToolServer — interview_me schema shape", () => {
+describe("buildClaudeToolServer — decision_request schema shape", () => {
   const z = makeSpyZod();
   const tools = capturedTools(z);
 
-  it("registers interview_me tool", () => {
-    expect(tools["interview_me"]).toBeDefined();
+  it("registers decision_request tool", () => {
+    expect(tools["decision_request"]).toBeDefined();
   });
 
   it("questions is advertised as array (not any/{})", () => {
-    const shape = tools["interview_me"].shape;
+    const shape = tools["decision_request"].shape;
     const questions = strip(shape["questions"]);
     expect(questions.kind).toBe("array");
   });
 
   it("questions items is an object", () => {
-    const shape = tools["interview_me"].shape;
+    const shape = tools["decision_request"].shape;
     const questions = strip(shape["questions"]) as { kind: "array"; items: SpyNode };
     expect(questions.items.kind).toBe("object");
   });
 
   it("questions[].type is advertised as enum with correct values", () => {
-    const shape = tools["interview_me"].shape;
+    const shape = tools["decision_request"].shape;
     const questions = strip(shape["questions"]) as { kind: "array"; items: SpyNode };
     const itemShape = (questions.items as { kind: "object"; shape: Record<string, SpyNode> }).shape;
     const typeField = strip(itemShape["type"]) as { kind: "optional"; inner: SpyNode };
@@ -116,7 +116,7 @@ describe("buildClaudeToolServer — interview_me schema shape", () => {
   });
 
   it("questions[].weight is advertised as optional enum", () => {
-    const shape = tools["interview_me"].shape;
+    const shape = tools["decision_request"].shape;
     const questions = strip(shape["questions"]) as { kind: "array"; items: SpyNode };
     const itemShape = (questions.items as { kind: "object"; shape: Record<string, SpyNode> }).shape;
     const weightField = strip(itemShape["weight"]) as { kind: "optional"; inner: SpyNode };
@@ -125,9 +125,9 @@ describe("buildClaudeToolServer — interview_me schema shape", () => {
     expect((inner as { kind: "enum"; values: string[] }).values).toEqual(["critical", "medium", "easy"]);
   });
 
-  it("INTERVIEW_ME_TOOL_DEFINITION.parameters matches what buildClaudeToolServer advertises (regression guard)", () => {
+  it("DECISION_REQUEST_TOOL_DEFINITION.parameters matches what buildClaudeToolServer advertises (regression guard)", () => {
     // Verify the definition still has the enum inline so no future refactor silently breaks it
-    const questionItems = (INTERVIEW_ME_TOOL_DEFINITION.parameters as {
+    const questionItems = (DECISION_REQUEST_TOOL_DEFINITION.parameters as {
       properties: { questions: { items: { properties: { type: { type: string; enum: string[] } } } } };
     }).properties.questions.items.properties.type;
     expect(questionItems.type).toBe("string");
@@ -136,26 +136,26 @@ describe("buildClaudeToolServer — interview_me schema shape", () => {
 });
 
 // ---------------------------------------------------------------------------
-// executeCommonTool — interview_me input validation
+// executeCommonTool — decision_request input validation
 // ---------------------------------------------------------------------------
-describe("executeCommonTool — interview_me input validation", () => {
+describe("executeCommonTool — decision_request input validation", () => {
   const ctx = {} as never;
 
   it("returns error when questions is wrong type (not an array)", async () => {
-    const result = await executeCommonTool("interview_me", { questions: "not-an-array" }, ctx);
+    const result = await executeCommonTool("decision_request", { questions: "not-an-array" }, ctx);
     expect(result.type).toBe("result");
     expect((result as { type: "result"; text: string }).text).toMatch(/must be array|questions/);
   });
 
   it("returns error when questions array is empty", async () => {
-    const result = await executeCommonTool("interview_me", { questions: [] }, ctx);
+    const result = await executeCommonTool("decision_request", { questions: [] }, ctx);
     expect(result.type).toBe("result");
     expect((result as { type: "result"; text: string }).text).toMatch(/at least 1/);
   });
 
   it("returns clear error when question type is invalid (e.g. single_choice)", async () => {
     const questions = [{ question: "Pick one", type: "single_choice" }];
-    const result = await executeCommonTool("interview_me", { questions }, ctx);
+    const result = await executeCommonTool("decision_request", { questions }, ctx);
     expect(result.type).toBe("result");
     const text = (result as { type: "result"; text: string }).text;
     expect(text).toMatch(/single_choice/);
@@ -166,7 +166,7 @@ describe("executeCommonTool — interview_me input validation", () => {
 
   it("returns error when question.question field is missing", async () => {
     const questions = [{ type: "exclusive" }];
-    const result = await executeCommonTool("interview_me", { questions }, ctx);
+    const result = await executeCommonTool("decision_request", { questions }, ctx);
     expect(result.type).toBe("result");
     expect((result as { type: "result"; text: string }).text).toMatch(/question/);
   });
@@ -175,7 +175,7 @@ describe("executeCommonTool — interview_me input validation", () => {
     const questions = [
       { question: "Pick a DB", type: "exclusive", options: [{ title: "PG", description: "Postgres" }] },
     ];
-    const result = await executeCommonTool("interview_me", { questions }, ctx);
+    const result = await executeCommonTool("decision_request", { questions }, ctx);
     expect(result.type).toBe("suspend");
   });
 
@@ -183,13 +183,13 @@ describe("executeCommonTool — interview_me input validation", () => {
     const questions = [
       { question: "Pick strategies", type: "non_exclusive", options: [{ title: "A", description: "opt A" }] },
     ];
-    const result = await executeCommonTool("interview_me", { questions }, ctx);
+    const result = await executeCommonTool("decision_request", { questions }, ctx);
     expect(result.type).toBe("suspend");
   });
 
   it("suspends with valid freetext question", async () => {
     const questions = [{ question: "Any constraints?", type: "freetext" }];
-    const result = await executeCommonTool("interview_me", { questions }, ctx);
+    const result = await executeCommonTool("decision_request", { questions }, ctx);
     expect(result.type).toBe("suspend");
   });
 });

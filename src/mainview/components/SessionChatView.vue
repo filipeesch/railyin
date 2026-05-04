@@ -58,9 +58,19 @@
       <ProgressSpinner style="width: 32px; height: 32px" />
     </div>
 
+    <!-- Tab switcher (shown after loading) -->
+    <div v-else-if="session" class="scv-tabs">
+      <button :class="['scv-tab-btn', { 'scv-tab-btn--active': activeTab === 'chat' }]" @click="activeTab = 'chat'">
+        <i class="pi pi-comments" /> Chat
+      </button>
+      <button :class="['scv-tab-btn', { 'scv-tab-btn--active': activeTab === 'decisions' }]" @click="activeTab = 'decisions'">
+        <i class="pi pi-list-check" /> Decisions
+      </button>
+    </div>
+
     <!-- Body: conversation -->
     <ConversationBody
-      v-else-if="session"
+      v-if="session && !conversationStore.messagesLoading && activeTab === 'chat'"
       :messages="conversationStore.messages"
       :stream-state="conversationStore.activeStreamState"
       :execution-state="session.status"
@@ -70,9 +80,15 @@
       @load-older="session.conversationId && conversationStore.loadOlderMessages({ conversationId: session.conversationId })"
     />
 
+    <!-- Decisions panel -->
+    <DecisionsPanel
+      v-if="session && !conversationStore.messagesLoading && activeTab === 'decisions' && session.conversationId"
+      :conversation-id="session.conversationId"
+    />
+
     <!-- Input bar -->
     <ConversationInput
-      v-if="session && !conversationStore.messagesLoading"
+      v-if="session && !conversationStore.messagesLoading && activeTab === 'chat'"
       :execution-state="session.status"
       :session-id="session.id"
       :workspace-key="session.workspaceKey"
@@ -112,6 +128,7 @@ import ProgressSpinner from "primevue/progressspinner";
 import ConversationBody from "./ConversationBody.vue";
 import ConversationInput from "./ConversationInput.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
+import DecisionsPanel from "./DecisionsPanel.vue";
 import { useChatStore } from "../stores/chat";
 import { useDrawerStore } from "../stores/drawer";
 import { useConversationStore } from "../stores/conversation";
@@ -179,6 +196,7 @@ watch(
 
 const manageModelsOpen = ref(false);
 const compacting = ref(false);
+const activeTab = ref<"chat" | "decisions">("chat");
 
 // ─── Title editing ────────────────────────────────────────────────────────────
 
@@ -332,5 +350,38 @@ async function compactConversation() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.scv-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--p-content-border-color);
+  flex-shrink: 0;
+}
+
+.scv-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--p-text-muted-color);
+  transition: background 0.15s, color 0.15s;
+}
+
+.scv-tab-btn:hover {
+  background: var(--p-content-hover-background);
+  color: var(--p-text-color);
+}
+
+.scv-tab-btn--active {
+  background: var(--p-highlight-background);
+  color: var(--p-highlight-color);
+  font-weight: 600;
 }
 </style>

@@ -138,12 +138,13 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── Send message ─────────────────────────────────────────────────────────
 
-  async function sendMessage(taskId: number, content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[]) {
+  async function sendMessage(taskId: number, content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], decisionBatch?: { records: { question: string; answer: string; weight?: string }[] }) {
     const { message, executionId } = await api("tasks.sendMessage", {
       taskId,
       content,
       ...(engineContent != null ? { engineContent } : {}),
       ...(attachments?.length ? { attachments } : {}),
+      ...(decisionBatch ? { decisionBatch } : {}),
     });
     void executionId;
     // The first message on a brand-new task creates a real conversation on the backend

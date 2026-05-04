@@ -1,7 +1,7 @@
 import type { AIToolDefinition } from "../ai/types.ts";
 
-export const INTERVIEW_ME_TOOL_DEFINITION: AIToolDefinition = {
-    name: "interview_me",
+export const DECISION_REQUEST_TOOL_DEFINITION: AIToolDefinition = {
+    name: "decision_request",
     description:
         "Conduct a structured interview to gather direction on complex, high-stakes decisions.\n\n" +
         "ALWAYS use this tool - never plain prose - when the conversation requires architectural choices, technology selection, design tradeoffs, ASCII Art and layout options, or any decision where the implications are non-trivial and the user needs to understand what they are committing to.\n\n" +
@@ -19,7 +19,7 @@ export const INTERVIEW_ME_TOOL_DEFINITION: AIToolDefinition = {
         "Use 'context' to set the stage. Write it as structured markdown — use paragraphs and bullet lists. Explain why this decision is being made now, what constraints exist, what has already been decided.\n\n" +
         "Use 'non_exclusive' when the user can reasonably combine multiple options (e.g. testing strategies, feature flags). Use 'exclusive' when options are mutually incompatible.\n\n" +
         "Use 'freetext' for open-ended questions where no preset options make sense - e.g. 'Any additional constraints?' or 'What is your target timeline?'.\n\n" +
-        "ALWAYS batch all related decisions into one call. If more clarification is needed you can call interview_me again with follow-up questions in batch.",
+        "ALWAYS batch all related decisions into one call. If more clarification is needed you can call decision_request again with follow-up questions in batch.",
     parameters: {
         type: "object",
         properties: {
@@ -29,7 +29,7 @@ export const INTERVIEW_ME_TOOL_DEFINITION: AIToolDefinition = {
             },
             questions: {
                 type: "array",
-                description: "One or more questions. Batch all related decisions into a single call - do not call interview_me multiple times in sequence.",
+                description: "One or more questions. Batch all related decisions into a single call - do not call decision_request multiple times in sequence.",
                 minItems: 1,
                 items: {
                     type: "object",

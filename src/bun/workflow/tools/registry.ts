@@ -1,5 +1,5 @@
 import type { AIToolDefinition } from "../../ai/types.ts";
-import { INTERVIEW_ME_TOOL_DEFINITION } from "../../engine/interview-tool-definition.ts";
+import { DECISION_REQUEST_TOOL_DEFINITION } from "../../engine/decision-request-tool-definition.ts";
 import { LSP_TOOL_DEFINITION } from "../../engine/lsp-tool-definition.ts";
 
 export const TOOL_DEFINITIONS: AIToolDefinition[] = [
@@ -49,7 +49,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["questions"],
     },
   },
-  INTERVIEW_ME_TOOL_DEFINITION,
+  DECISION_REQUEST_TOOL_DEFINITION,
   {
     name: "spawn_agent",
     description:
@@ -437,6 +437,55 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["id", "status"],
     },
   },
+  // ── decision tools ────────────────────────────────────────────────────────
+  {
+    name: "list_decisions",
+    description: "List all active decision records for this conversation. Use this to review existing decisions before making new ones, or to find an ID for update_decision.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "record_decision",
+    description: "Silently record an AI-made decision without user interaction. Use when you've made a choice and want to persist it for future context. For user-interactive decisions, use decision_request instead.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "The decision question or context" },
+        answer: { type: "string", description: "The chosen answer or approach" },
+        weight: { type: "string", enum: ["critical", "medium", "easy"], description: "How hard this decision is to change later" },
+        notes: { type: "string", description: "Optional rationale or caveats" },
+      },
+      required: ["question", "answer"],
+    },
+  },
+  {
+    name: "update_decision",
+    description: "Revise an existing decision record. Always provide a reason — this prevents loops and documents why the approach changed. The old answer is preserved in revision history.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "Decision record ID (get from list_decisions)" },
+        answer: { type: "string", description: "The new answer replacing the previous one" },
+        reason: { type: "string", description: "Why this decision is being changed — required to prevent loops" },
+        notes: { type: "string", description: "Optional updated notes" },
+      },
+      required: ["id", "answer", "reason"],
+    },
+  },
+  {
+    name: "delete_decision",
+    description: "Soft-delete a decision record. The record is marked deleted and no longer injected into context. Use when a decision is no longer relevant.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "Decision record ID to delete (get from list_decisions)" },
+      },
+      required: ["id"],
+    },
+  },
   // ── lsp group ──────────────────────────────────────────────────────────────
   LSP_TOOL_DEFINITION,
 ];
@@ -444,12 +493,13 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
 /** Built-in tool groups. A column's `tools` array may use group names, individual
  * tool names, or a mix. Groups are expanded by resolveToolsForColumn. */
 export const TOOL_GROUPS: Map<string, string[]> = new Map([
-  ["interactions", ["ask_me", "interview_me"]],
+  ["interactions", ["ask_me", "decision_request"]],
   ["agents", ["spawn_agent"]],
   ["web", ["fetch_url", "search_internet"]],
   ["tasks_read", ["get_task", "get_board_summary", "list_tasks"]],
   ["tasks_write", ["create_task", "edit_task", "delete_task", "move_task", "message_task"]],
   ["todos", ["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"]],
+  ["decisions", ["list_decisions", "record_decision", "update_decision", "delete_decision"]],
   ["lsp", ["lsp"]],
 ]);
 
@@ -459,7 +509,7 @@ export const DEFAULT_TOOL_NAMES = ["tasks_read", "tasks_write"];
 /** One-line natural-language description for each tool, used in the worktree context block. */
 const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["ask_me", "ask_me(questions): pause and ask questions with structured options (label, description?, recommended?, preview?). Batch related decisions into one call."],
-  ["interview_me", "interview_me(questions, context?): ALWAYS use instead of prose for architectural decisions, technology choices, or any high-stakes direction. Each option has a rich markdown description explaining tradeoffs. Supports exclusive, non_exclusive, and freetext question types."],
+  ["decision_request", "decision_request(questions, context?): ALWAYS use instead of prose for architectural decisions, technology choices, or any high-stakes direction. Each option has a rich markdown description explaining tradeoffs. Supports exclusive, non_exclusive, and freetext question types."],
   ["spawn_agent", "spawn_agent(children): run parallel sub-agents. Each child needs self-contained instructions and tools array — no access to parent conversation. Returns JSON array of results."],
   ["fetch_url", "fetch_url(url): fetch a public URL and return its text content (HTML stripped to readable text). Use for documentation, API references, web pages."],
   ["search_internet", "search_internet(query): search the web for ranked results (title, URL, snippet). Requires search config in workspace.yaml. Follow up with fetch_url for full content."],
@@ -477,6 +527,10 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["get_todo", "get_todo(id): get full details including description for a todo item."],
   ["reorganize_todos", "reorganize_todos(items): atomically update execution order of multiple todos in one call."],
   ["update_todo_status", "update_todo_status(id, status): update a todo's status (pending/in-progress/done/blocked/deleted). Use 'deleted' to soft-delete. ALWAYS use this instead of edit_todo for status changes."],
+  ["list_decisions", "list_decisions(): list all active decision records for this conversation. Returns id, question, answer, weight, revisionCount, isSourceAi."],
+  ["record_decision", "record_decision(question, answer, weight?, notes?): silently record an AI-made decision without user interaction. weight: critical|medium|easy."],
+  ["update_decision", "update_decision(id, answer, reason, notes?): revise a decision record. reason is required to prevent loops. Old answer preserved in revision history."],
+  ["delete_decision", "delete_decision(id): soft-delete a decision record. Excluded from context injection after deletion."],
   ["lsp", "lsp(operation, file_path?, line?, character?, query?, new_name?): code intelligence — goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls, typeDefinition, rename. ALWAYS call documentSymbol first to get positions. workspaceSymbol: file_path optional."],
 ]);
 
@@ -488,6 +542,7 @@ const TOOL_GROUP_LABELS: Array<[groupName: string, label: string]> = [
   ["tasks_read", "Task read tools"],
   ["tasks_write", "Task write tools"],
   ["todos", "Todo tools"],
+  ["decisions", "Decision tools"],
   ["lsp", "LSP tool"],
 ];
 

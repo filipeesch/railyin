@@ -3,6 +3,7 @@ import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../engine/common-too
 import { buildCopilotTools } from "../engine/copilot/tools.ts";
 import { buildClaudeToolServer } from "../engine/claude/tools.ts";
 import { TodoRepository } from "../db/todos.ts";
+import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { initDb } from "./helpers.ts";
@@ -15,32 +16,37 @@ beforeEach(() => {
     const db = initDb();
     const wsRepo = new WorkspaceRepository(db);
     baseContext = {
-        taskId: 1,
-        boardId: 1,
-        onTransition: () => { },
-        onHumanTurn: () => { },
-        onCancel: () => { },
-        onTaskUpdated: () => { },
-        todoRepo: new TodoRepository(db),
-        boardTools: new BoardToolExecutor(db, wsRepo),
+        task: { id: 1, boardId: 1, conversationId: 1 },
+        repos: {
+            todos: new TodoRepository(db),
+            decisions: new DecisionRepository(db),
+            boardTools: new BoardToolExecutor(db, wsRepo),
+        },
+        workflow: {
+            onTransition: () => { },
+            onHumanTurn: () => { },
+            onCancel: () => { },
+            onTaskUpdated: () => { },
+        },
+        runtime: {},
     };
 });
 
 describe("shared common tool registration", () => {
-    it("includes interview_me in shared common tool definitions", () => {
+    it("includes decision_request in shared common tool definitions", () => {
         const names = COMMON_TOOL_DEFINITIONS.map((tool) => tool.name);
-        expect(names).toContain("interview_me");
-        expect(names.filter((name) => name === "interview_me")).toHaveLength(1);
+        expect(names).toContain("decision_request");
+        expect(names.filter((name) => name === "decision_request")).toHaveLength(1);
     });
 
-    it("registers interview_me through Copilot mapped common tools", () => {
+    it("registers decision_request through Copilot mapped common tools", () => {
         const tools = buildCopilotTools(baseContext);
         const names = tools.map((tool) => tool.name);
-        expect(names).toContain("interview_me");
-        expect(names.filter((name) => name === "interview_me")).toHaveLength(1);
+        expect(names).toContain("decision_request");
+        expect(names.filter((name) => name === "decision_request")).toHaveLength(1);
     });
 
-    it("registers interview_me through Claude shared tool server mapping", () => {
+    it("registers decision_request through Claude shared tool server mapping", () => {
         const registeredNames: string[] = [];
         const sdk = {
             tool: (
@@ -66,15 +72,15 @@ describe("shared common tool registration", () => {
         };
 
         buildClaudeToolServer(sdk, z, baseContext);
-        expect(registeredNames).toContain("interview_me");
-        expect(registeredNames.filter((name) => name === "interview_me")).toHaveLength(1);
+        expect(registeredNames).toContain("decision_request");
+        expect(registeredNames.filter((name) => name === "decision_request")).toHaveLength(1);
     });
 });
 
-describe("executeCommonTool / interview_me", () => {
+describe("executeCommonTool / decision_request", () => {
     it("returns a suspend result with the structured payload", async () => {
         const result = await executeCommonTool(
-            "interview_me",
+            "decision_request",
             {
                 context: "Need a decision",
                 questions: [
@@ -98,7 +104,7 @@ describe("executeCommonTool / interview_me", () => {
 
     it("returns a result error when questions is missing", async () => {
         const result = await executeCommonTool(
-            "interview_me",
+            "decision_request",
             {},
             baseContext,
         );

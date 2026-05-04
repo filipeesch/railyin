@@ -8,6 +8,7 @@ import { readdirSync, existsSync, readFileSync } from "fs";
 import { join, relative, extname, basename } from "path";
 import { getMcpRegistry } from "../../mcp/registry.ts";
 import { TodoRepository } from "../../db/todos.ts";
+import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -62,17 +63,26 @@ export class ClaudeEngine implements ExecutionEngine {
       signal,
       sessionId: claudeSessionIdForConversation(taskId, params.conversationId),
       commonToolContext: {
-        taskId,
-        boardId: boardId ?? 0,
-        onTransition: params.onTransition ?? (() => {}),
-        onHumanTurn: params.onHumanTurn ?? (() => {}),
-        onCancel: (id) => this.cancel(id),
-        onTaskUpdated: (task) => this._onTaskUpdated(task),
-        todoRepo: new TodoRepository(),
-        boardTools: boardTools!,
-        lspManager,
-        worktreePath: workingDirectory,
-      },
+        task: {
+          id: taskId,
+          boardId: boardId ?? null,
+          conversationId: params.conversationId,
+        },
+        repos: {
+          todos: new TodoRepository(),
+          decisions: new DecisionRepository(),
+          boardTools: boardTools!,
+        },
+        workflow: {
+          onTransition: params.onTransition ?? (() => {}),
+          onHumanTurn: params.onHumanTurn ?? (() => {}),
+          onCancel: (id) => this.cancel(id),
+          onTaskUpdated: (task) => this._onTaskUpdated(task),
+        },
+        runtime: {
+          lspManager,
+          worktreePath: workingDirectory,
+        },
       waitForResume: (request) => this.waitForResume(executionId, request, signal),
       onRawMessage: (message) => {
         params.onRawModelMessage?.({

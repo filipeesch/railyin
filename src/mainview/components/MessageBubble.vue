@@ -37,8 +37,8 @@
     />
   </div>
 
-  <div v-else-if="chunk.type === 'interview_prompt'" class="msg msg--interview-prompt">
-    <InterviewMe
+  <div v-else-if="chunk.type === 'decision_request_prompt'" class="msg msg--interview-prompt">
+    <DecisionRequest
       :questions="interviewPayload.questions"
       :context="interviewPayload.context"
       :answered-text="interviewAnsweredText"
@@ -67,10 +67,10 @@ import { useMarkdown } from "../composables/useMarkdown";
 import type {
   ConversationMessage,
   AskUserPromptContent,
-  InterviewPayload,
+  DecisionRequestPayload,
 } from "@shared/rpc-types";
 import AskUserPrompt from "./AskUserPrompt.vue";
-import InterviewMe from "./InterviewMe.vue";
+import DecisionRequest from "./DecisionRequest.vue";
 import InlineChipText from "./InlineChipText.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
@@ -192,12 +192,12 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
   await api("tasks.respondShellApproval", { taskId, decision });
 }
 
-// ─── interview_prompt support ─────────────────────────────────────────────────
+// ─── decision_request_prompt support ─────────────────────────────────────────
 
-const interviewPayload = computed<InterviewPayload>(() => {
-  if (props.chunk.type !== "interview_prompt") return { questions: [] };
+const interviewPayload = computed<DecisionRequestPayload>(() => {
+  if (props.chunk.type !== "decision_request_prompt") return { questions: [] };
   try {
-    const parsed = JSON.parse(props.chunk.content) as InterviewPayload;
+    const parsed = JSON.parse(props.chunk.content) as DecisionRequestPayload;
     return Array.isArray(parsed.questions) ? parsed : { ...parsed, questions: [] };
   } catch {
     return { questions: [] };
@@ -205,21 +205,25 @@ const interviewPayload = computed<InterviewPayload>(() => {
 });
 
 const interviewAnsweredText = computed(() => {
-  if (props.chunk.type !== "interview_prompt" || props.index === undefined) return undefined;
+  if (props.chunk.type !== "decision_request_prompt" || props.index === undefined) return undefined;
   const messages = messageList.value;
   const later = messages.slice(props.index + 1);
   const reply = later.find((m) => m.type === "user");
   return reply?.content;
 });
 
-async function onInterviewSubmit(answer: string) {
+async function onInterviewSubmit(payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string }> }) {
+  const { text: answer, decisions } = payload;
+  const decisionBatch = decisions.length
+    ? { records: decisions.map(d => ({ question: d.question, answer: d.answer, weight: d.weight })) }
+    : undefined;
   if (props.chunk.taskId != null) {
     const taskId = taskStore.activeTaskId;
     if (taskId === null) return;
     const queued = taskStore.takeQueue(taskId);
     const text = queued ? `${answer}\n\n---\n\n${queued.text}` : answer;
     const engineText = queued ? `${answer}\n\n---\n\n${queued.engineText}` : answer;
-    await taskStore.sendMessage(taskId, text, engineText, queued?.attachments.length ? queued.attachments : undefined);
+    await taskStore.sendMessage(taskId, text, engineText, queued?.attachments.length ? queued.attachments : undefined, decisionBatch);
     return;
   }
 
@@ -227,7 +231,7 @@ async function onInterviewSubmit(answer: string) {
   const queued = chatStore.takeQueue(chatStore.activeChatSessionId);
   const text = queued ? `${answer}\n\n---\n\n${queued.text}` : answer;
   const engineText = queued ? `${answer}\n\n---\n\n${queued.engineText}` : answer;
-  await chatStore.sendMessage(text, engineText, queued?.attachments.length ? queued.attachments : undefined);
+  await chatStore.sendMessage(text, engineText, queued?.attachments.length ? queued.attachments : undefined, undefined, decisionBatch);
 }
 </script>
 

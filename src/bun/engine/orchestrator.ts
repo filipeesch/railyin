@@ -31,6 +31,7 @@ import { EngineRegistry } from "./engine-registry.ts";
 import { StreamProcessor } from "./stream/stream-processor.ts";
 import { ExecutionParamsBuilder } from "./execution/execution-params-builder.ts";
 import { WorkingDirectoryResolver } from "./execution/working-directory-resolver.ts";
+import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 import { TransitionExecutor } from "./execution/transition-executor.ts";
 import { HumanTurnExecutor } from "./execution/human-turn-executor.ts";
 import { RetryExecutor } from "./execution/retry-executor.ts";
@@ -84,7 +85,7 @@ export class Orchestrator implements ExecutionCoordinator {
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
-    this.paramsBuilder = new ExecutionParamsBuilder();
+    this.paramsBuilder = new ExecutionParamsBuilder(new DecisionRepository());
     this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
 
     this.transitionExecutor = new TransitionExecutor(

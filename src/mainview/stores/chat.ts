@@ -89,7 +89,7 @@ export const useChatStore = defineStore("chat", () => {
     const sessionId = sessionIdForConversation(message.conversationId);
     if (sessionId == null) return;
 
-    if (message.type === "ask_user_prompt" || message.type === "interview_prompt") {
+    if (message.type === "ask_user_prompt" || message.type === "decision_request_prompt") {
       updateSession(sessionId, { status: "waiting_user" });
     }
 
@@ -170,7 +170,7 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null) {
+  async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null, decisionBatch?: { records: { question: string; answer: string; weight?: string }[] }) {
     if (!activeChatSessionId.value) return;
     const session = activeSession.value;
     if (!session) return;
@@ -188,6 +188,7 @@ export const useChatStore = defineStore("chat", () => {
       ...(engineContent != null ? { engineContent } : {}),
       model,
       ...(attachments?.length ? { attachments } : {}),
+      ...(decisionBatch ? { decisionBatch } : {}),
     });
   }
 

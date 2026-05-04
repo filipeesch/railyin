@@ -393,8 +393,8 @@ export class StreamProcessor {
             break;
           }
 
-          case "interview_me": {
-            convBuffer.enqueue({ taskId, conversationId, type: "interview_prompt", role: null, content: event.payload, notify: true });
+          case "decision_request": {
+            convBuffer.enqueue({ taskId, conversationId, type: "decision_request_prompt", role: null, content: event.payload, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             if (taskId != null) {
               db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);

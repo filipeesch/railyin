@@ -149,10 +149,10 @@ describe("Claude backend RPC scenarios", () => {
     await runtime.waitForExecutionStatus(first.executionId, "completed");
   });
 
-  it("transitions to waiting_user when Claude emits interview_me", async () => {
+  it("transitions to waiting_user when Claude emits decision_request", async () => {
     const adapter = new MockClaudeSdkAdapter();
     adapter.queueCreate({
-      steps: [{ kind: "emit", event: { type: "interview_me", payload: '{"questions":[{"question":"Decision?","type":"freetext"}]}' } }],
+      steps: [{ kind: "emit", event: { type: "decision_request", payload: '{"questions":[{"question":"Decision?","type":"freetext"}]}' } }],
     });
     const runtime = createClaudeRuntime(adapter);
     const { taskId } = await runtime.createTask();
@@ -161,7 +161,7 @@ describe("Claude backend RPC scenarios", () => {
     await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
 
     expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-    expect(runtime.getMessages(taskId).some((message) => message.type === "interview_prompt")).toBe(true);
+    expect(runtime.getMessages(taskId).some((message) => message.type === "decision_request_prompt")).toBe(true);
   });
 });
 

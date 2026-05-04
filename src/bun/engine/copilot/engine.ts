@@ -23,6 +23,7 @@ import { homedir, tmpdir } from "os";
 import { getMcpRegistry } from "../../mcp/registry.ts";
 import { parseFileRef } from "../../utils/resolve-file-attachments.ts";
 import { TodoRepository } from "../../db/todos.ts";
+import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 
 function utf16LineOffsets(text: string): number[] {
   const offsets = [0];
@@ -120,14 +121,14 @@ export class CopilotEngine implements ExecutionEngine {
     const rawModel = model;
     const resolvedModel = rawModel?.startsWith("copilot/") ? rawModel.slice("copilot/".length) : rawModel;
 
-    // When a suspend-loop tool fires (e.g. interview_me), store the payload and abort
+    // When a suspend-loop tool fires (e.g. decision_request), store the payload and abort
     // the session. The Copilot SDK provides no in-handler stop signal, so we abort
     // externally. The abort cuts the stream before the model generates a next turn.
-    let pendingInterviewPayload: string | null = null;
-    const interviewAbortController = new AbortController();
+    let pendingDecisionPayload: string | null = null;
+    const decisionAbortController = new AbortController();
     const onSuspend = (payload: string) => {
-      pendingInterviewPayload = payload;
-      interviewAbortController.abort();
+      pendingDecisionPayload = payload;
+      decisionAbortController.abort();
     };
 
     // Build tool context for common task-management tools
@@ -138,23 +139,31 @@ export class CopilotEngine implements ExecutionEngine {
       workingDirectory,
     );
     const toolContext = {
-      taskId,
-      boardId: boardId ?? 0,
-      onTransition: params.onTransition ?? (() => {}),
-      onHumanTurn: params.onHumanTurn ?? (() => {}),
-      onCancel: (_execId: number) => {
-        this.cancel(_execId);
+      task: {
+        id: taskId,
+        boardId: boardId ?? null,
+        conversationId: params.conversationId,
       },
-      onTaskUpdated: (task: import("../../../shared/rpc-types.ts").Task) => {
-        this._onTaskUpdated(task);
+      repos: {
+        todos: new TodoRepository(),
+        decisions: new DecisionRepository(),
+        boardTools: boardTools!,
       },
-      todoRepo: new TodoRepository(),
-      boardTools: boardTools!,
-      lspManager,
-      worktreePath: workingDirectory,
+      workflow: {
+        onTransition: params.onTransition ?? (() => {}),
+        onHumanTurn: params.onHumanTurn ?? (() => {}),
+        onCancel: (_execId: number) => {
+          this.cancel(_execId);
+        },
+        onTaskUpdated: (task: import("../../../shared/rpc-types.ts").Task) => {
+          this._onTaskUpdated(task);
+        },
+      },
+      runtime: {
+        lspManager,
+        worktreePath: workingDirectory,
+      },
     };
-
-    const tools = buildCopilotTools(toolContext, getMcpRegistry(), params.enabledMcpTools, onSuspend);
 
     // Build system message — prepend task identity then append stage_instructions
     const taskBlock = taskContext
@@ -221,14 +230,14 @@ export class CopilotEngine implements ExecutionEngine {
       while (nextPrompt != null) {
         // Fire the prompt; pass the promise into translateCopilotStream so a rejection
         // (e.g. CLI crash) is surfaced as a fatal error rather than silently hanging.
-        // Combine the external abort signal with the interview_me internal abort.
+        // Combine the external abort signal with the decision_request internal abort.
         // Guard: if the outer signal is already aborted (can happen on a second
         // turn if cancel fired while waitForResume was pending), abort immediately
         // instead of adding a listener that will never fire.
         if (params.signal?.aborted) return;
         const combinedController = new AbortController();
         params.signal?.addEventListener("abort", () => combinedController.abort(), { once: true });
-        interviewAbortController.signal.addEventListener("abort", () => {
+        decisionAbortController.signal.addEventListener("abort", () => {
           this.sdkAdapter.abortSession(session!).catch(() => { });
           combinedController.abort();
         }, { once: true });
@@ -317,8 +326,8 @@ export class CopilotEngine implements ExecutionEngine {
           }
         }
 
-        if (pendingInterviewPayload !== null) {
-          yield { type: "interview_me", payload: pendingInterviewPayload };
+        if (pendingDecisionPayload !== null) {
+          yield { type: "decision_request", payload: pendingDecisionPayload };
           return;
         }
 

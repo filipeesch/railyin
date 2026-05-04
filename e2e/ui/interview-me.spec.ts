@@ -11,7 +11,7 @@
  *
  * Backend is fully mocked. interview_prompt messages are seeded via
  * `conversations.getMessages` returning ConversationMessage objects
- * with type: "interview_prompt" and JSON-stringified payload as content.
+ * with type: "decision_request_prompt" and JSON-stringified payload as content.
  */
 
 import { test, expect } from "./fixtures";
@@ -34,7 +34,7 @@ function makeInterviewPrompt(
         id: _msgId++,
         taskId,
         conversationId: taskId,
-        type: "interview_prompt",
+        type: "decision_request_prompt",
         role: "assistant",
         content: JSON.stringify(payload),
         metadata: null,

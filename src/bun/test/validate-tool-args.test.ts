@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateToolArgs } from "../engine/validate-tool-args.ts";
 import type { AIToolDefinition } from "../ai/types.ts";
 import { COMMON_TOOL_DEFINITIONS } from "../engine/common-tools.ts";
-import { INTERVIEW_ME_TOOL_DEFINITION } from "../engine/interview-tool-definition.ts";
+import { DECISION_REQUEST_TOOL_DEFINITION } from "../engine/decision-request-tool-definition.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,11 +102,11 @@ describe("validateToolArgs — V-5: minItems violation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// V-6: interview_me — valid args pass
+// V-6: decision_request — valid args pass
 // ---------------------------------------------------------------------------
 
-describe("validateToolArgs — V-6: interview_me valid", () => {
-  it("returns null for valid interview_me args", () => {
+describe("validateToolArgs — V-6: decision_request valid", () => {
+  it("returns null for valid decision_request args", () => {
     const args = {
       questions: [
         {
@@ -116,41 +116,41 @@ describe("validateToolArgs — V-6: interview_me valid", () => {
         },
       ],
     };
-    expect(validateToolArgs(INTERVIEW_ME_TOOL_DEFINITION, args)).toBeNull();
+    expect(validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, args)).toBeNull();
   });
 });
 
 // ---------------------------------------------------------------------------
-// V-7: interview_me — missing questions
+// V-7: decision_request — missing questions
 // ---------------------------------------------------------------------------
 
-describe("validateToolArgs — V-7: interview_me missing questions", () => {
+describe("validateToolArgs — V-7: decision_request missing questions", () => {
   it("returns required error for missing questions", () => {
-    const err = validateToolArgs(INTERVIEW_ME_TOOL_DEFINITION, {});
+    const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, {});
     expect(err).not.toBeNull();
     expect(err).toContain("'questions' is required");
   });
 });
 
 // ---------------------------------------------------------------------------
-// V-8: interview_me — empty questions array
+// V-8: decision_request — empty questions array
 // ---------------------------------------------------------------------------
 
-describe("validateToolArgs — V-8: interview_me empty array", () => {
+describe("validateToolArgs — V-8: decision_request empty array", () => {
   it("returns minItems error for empty questions array", () => {
-    const err = validateToolArgs(INTERVIEW_ME_TOOL_DEFINITION, { questions: [] });
+    const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, { questions: [] });
     expect(err).not.toBeNull();
     expect(err).toContain("at least 1 item(s)");
   });
 });
 
 // ---------------------------------------------------------------------------
-// V-9: interview_me — invalid question.type enum
+// V-9: decision_request — invalid question.type enum
 // ---------------------------------------------------------------------------
 
-describe("validateToolArgs — V-9: interview_me invalid type enum", () => {
+describe("validateToolArgs — V-9: decision_request invalid type enum", () => {
   it("names the bad type value and lists valid options", () => {
-    const err = validateToolArgs(INTERVIEW_ME_TOOL_DEFINITION, {
+    const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, {
       questions: [{ question: "Pick one", type: "single_choice" }],
     });
     expect(err).not.toBeNull();

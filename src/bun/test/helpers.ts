@@ -200,6 +200,34 @@ export function initDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_model_raw_messages_execution_seq ON model_raw_messages (execution_id, stream_seq);
     CREATE INDEX IF NOT EXISTS idx_model_raw_messages_task_created ON model_raw_messages (task_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_model_raw_messages_engine_type ON model_raw_messages (engine, event_type);
+    CREATE TABLE IF NOT EXISTS decision_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      label TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS decision_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      batch_id INTEGER REFERENCES decision_batches(id) ON DELETE SET NULL,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      weight TEXT NOT NULL DEFAULT 'medium' CHECK (weight IN ('critical', 'medium', 'easy')),
+      notes TEXT,
+      revision_count INTEGER NOT NULL DEFAULT 0,
+      is_source_ai INTEGER NOT NULL DEFAULT 0,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS decision_revisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      decision_id INTEGER NOT NULL REFERENCES decision_records(id) ON DELETE CASCADE,
+      previous_answer TEXT NOT NULL,
+      previous_notes TEXT,
+      reason TEXT NOT NULL,
+      revised_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
   return db;
 }

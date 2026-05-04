@@ -5,6 +5,7 @@ import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { Orchestrator } from "../engine/orchestrator.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
+import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 
 function autoTitle(): string {
   const now = new Date();
@@ -112,6 +113,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       engineContent?: string;
       model?: string | null;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
+      decisionBatch?: { label?: string; records: import("../../shared/rpc-types.ts").DecisionInput[] };
     }): Promise<{ messageId: number; executionId: number }> => {
       const session = db.query<ChatSessionRow, [number]>(
         "SELECT * FROM chat_sessions WHERE id = ?"
@@ -157,6 +159,22 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       ).get(params.sessionId);
 
       if (updatedSession) onSessionUpdated(mapChatSession(updatedSession));
+
+      if (params.decisionBatch) {
+        const decisionRepo = new DecisionRepository(db);
+        const batch = decisionRepo.createBatch(session.conversation_id, params.decisionBatch.label);
+        for (const record of params.decisionBatch.records) {
+          decisionRepo.createRecord(session.conversation_id, {
+            batchId: batch.id,
+            question: record.question,
+            answer: record.answer,
+            weight: record.weight ?? "medium",
+            notes: record.notes,
+            isSourceAi: false,
+          });
+        }
+      }
+
       return { messageId: message.id, executionId };
     },
 

@@ -423,9 +423,10 @@ describe("executeLspTool", () => {
   it("executeCommonTool returns error when lspManager is not in context", async () => {
     const { executeCommonTool } = await import("../engine/common-tools.ts");
     const ctx = {
-      taskId: 0, boardId: 0,
-      onTransition: () => {}, onHumanTurn: () => {}, onCancel: () => {}, onTaskUpdated: () => {},
-      worktreePath: "/tmp",
+      task: { id: 0, boardId: 0, conversationId: 0 },
+      repos: { todos: null as any, decisions: null as any },
+      workflow: { onTransition: () => {}, onHumanTurn: () => {}, onCancel: () => {}, onTaskUpdated: () => {} },
+      runtime: { worktreePath: "/tmp" },
     };
     const result = await executeCommonTool("lsp", { operation: "hover", file_path: "src/foo.ts", line: 1, character: 1 }, ctx as any);
     expect(result.text).toContain("Error: LSP is not configured");

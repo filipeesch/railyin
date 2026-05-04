@@ -10,7 +10,8 @@
 
 import type { AIToolDefinition } from "../ai/types.ts";
 import type { CommonToolContext } from "./types.ts";
-import { INTERVIEW_ME_TOOL_DEFINITION } from "./interview-tool-definition.ts";
+import type { BoardToolContext } from "../workflow/tools/types.ts";
+import { DECISION_REQUEST_TOOL_DEFINITION } from "./decision-request-tool-definition.ts";
 import { LSP_TOOL_DEFINITION } from "./lsp-tool-definition.ts";
 import { executeLspTool } from "../workflow/tools/lsp-tools.ts";
 import { validateToolArgs } from "./validate-tool-args.ts";
@@ -159,7 +160,56 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["task_id", "message"],
     },
   },
-  INTERVIEW_ME_TOOL_DEFINITION,
+  DECISION_REQUEST_TOOL_DEFINITION,
+  // ── decision tools ───────────────────────────────────────────────────────────
+  {
+    name: "list_decisions",
+    description: "List all active decision records for this conversation. Use this to review existing decisions before making new ones, or to find an ID for update_decision.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "record_decision",
+    description: "Silently record an AI-made decision without user interaction. Use when you've made a choice and want to persist it for future context. For user-interactive decisions, use decision_request instead.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "The decision question or context" },
+        answer: { type: "string", description: "The chosen answer or approach" },
+        weight: { type: "string", enum: ["critical", "medium", "easy"], description: "How hard this decision is to change later" },
+        notes: { type: "string", description: "Optional rationale or caveats" },
+      },
+      required: ["question", "answer"],
+    },
+  },
+  {
+    name: "update_decision",
+    description: "Revise an existing decision record. Always provide a reason — this prevents loops and documents why the approach changed. The old answer is preserved in revision history.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "Decision record ID (get from list_decisions)" },
+        answer: { type: "string", description: "The new answer replacing the previous one" },
+        reason: { type: "string", description: "Why this decision is being changed — required to prevent loops" },
+        notes: { type: "string", description: "Optional updated notes" },
+      },
+      required: ["id", "answer", "reason"],
+    },
+  },
+  {
+    name: "delete_decision",
+    description: "Soft-delete a decision record. The record is marked deleted and no longer injected into context. Use when a decision is no longer relevant.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "Decision record ID to delete (get from list_decisions)" },
+      },
+      required: ["id"],
+    },
+  },
   // ── todo tools ───────────────────────────────────────────────────────────────
   {
     name: "create_todo",
@@ -330,8 +380,16 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
     }
     case "message_task":
       return { label: "message task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-    case "interview_me":
-      return { label: "interview me" };
+    case "decision_request":
+      return { label: "decision request" };
+    case "list_decisions":
+      return { label: "list decisions" };
+    case "record_decision":
+      return { label: "record decision", subject: args.question != null ? String(args.question).slice(0, 60) : undefined };
+    case "update_decision":
+      return { label: "update decision", subject: args.id != null ? `#${args.id}` : undefined };
+    case "delete_decision":
+      return { label: "delete decision", subject: args.id != null ? `#${args.id}` : undefined };
     case "create_todo":
     case "edit_todo": {
       const num = args.number != null ? String(args.number) : null;
@@ -378,7 +436,7 @@ export async function executeCommonTool(
     const err = validateToolArgs(def, args);
     if (err) return { type: "result", text: err };
   }
-  if (name === "interview_me") {
+  if (name === "decision_request") {
     const context = typeof args.context === "string" ? args.context.trim() : "";
     const payload: Record<string, unknown> = { questions: args.questions };
     if (context) payload.context = context;
@@ -393,23 +451,82 @@ async function executeCommonToolText(
   args: Record<string, unknown>,
   ctx: CommonToolContext,
 ): Promise<string> {
+  const boardCtx: BoardToolContext = {
+    taskId: ctx.task.id ?? undefined,
+    boardId: ctx.task.boardId ?? undefined,
+    onTransition: ctx.workflow.onTransition,
+    onHumanTurn: ctx.workflow.onHumanTurn,
+    onCancel: ctx.workflow.onCancel,
+    onTaskUpdated: ctx.workflow.onTaskUpdated,
+  };
+
   switch (name) {
     case "get_task":
-      return ctx.boardTools.execGetTask(args, ctx);
+      return ctx.repos.boardTools.execGetTask(args, boardCtx);
     case "get_board_summary":
-      return ctx.boardTools.execGetBoardSummary(args, ctx);
+      return ctx.repos.boardTools.execGetBoardSummary(args, boardCtx);
     case "list_tasks":
-      return ctx.boardTools.execListTasks(args, ctx);
+      return ctx.repos.boardTools.execListTasks(args, boardCtx);
     case "create_task":
-      return ctx.boardTools.execCreateTask(args, ctx);
+      return ctx.repos.boardTools.execCreateTask(args, boardCtx);
     case "edit_task":
-      return ctx.boardTools.execEditTask(args, ctx);
+      return ctx.repos.boardTools.execEditTask(args, boardCtx);
     case "delete_task":
-      return ctx.boardTools.execDeleteTask(args, ctx);
+      return ctx.repos.boardTools.execDeleteTask(args, boardCtx);
     case "move_task":
-      return ctx.boardTools.execMoveTask(args, ctx);
+      return ctx.repos.boardTools.execMoveTask(args, boardCtx);
     case "message_task":
-      return ctx.boardTools.execMessageTask(args, ctx);
+      return ctx.repos.boardTools.execMessageTask(args, boardCtx);
+
+    case "list_decisions": {
+      const records = ctx.repos.decisions.listByConversation(ctx.task.conversationId);
+      if (records.length === 0) return "No decision records found for this conversation.";
+      return JSON.stringify(records.map((r) => ({
+        id: r.id,
+        question: r.question,
+        answer: r.answer,
+        weight: r.weight,
+        notes: r.notes,
+        revisionCount: r.revisionCount,
+        isSourceAi: r.isSourceAi,
+      })));
+    }
+
+    case "record_decision": {
+      const question = args.question != null ? (args.question as string).trim() : "";
+      if (!question) return "Error: question is required";
+      const answer = args.answer != null ? (args.answer as string).trim() : "";
+      if (!answer) return "Error: answer is required";
+      const weight = args.weight != null ? (args.weight as string) : "medium";
+      const notes = args.notes != null ? (args.notes as string) : undefined;
+      ctx.repos.decisions.createRecord(ctx.task.conversationId, {
+        question,
+        answer,
+        weight: weight as import("../db/repositories/decision-repository.ts").DecisionWeight,
+        notes,
+        isSourceAi: true,
+      });
+      return `Decision recorded: ${question} → ${answer}`;
+    }
+
+    case "update_decision": {
+      const id = args.id != null ? Number(args.id) : NaN;
+      if (!id || isNaN(id)) return "Error: id is required";
+      const answer = args.answer != null ? (args.answer as string).trim() : "";
+      if (!answer) return "Error: answer is required";
+      const reason = args.reason != null ? (args.reason as string).trim() : "";
+      if (!reason) return "Error: reason is required";
+      const notes = args.notes != null ? (args.notes as string) : undefined;
+      const record = ctx.repos.decisions.updateRecord(id, answer, reason, notes);
+      return `Decision #${id} updated. Revision #${record.revisionCount}.`;
+    }
+
+    case "delete_decision": {
+      const id = args.id != null ? Number(args.id) : NaN;
+      if (!id || isNaN(id)) return "Error: id is required";
+      ctx.repos.decisions.deleteRecord(id);
+      return `Decision #${id} deleted.`;
+    }
 
     case "create_todo": {
       const number = args.number != null ? Number(args.number) : NaN;
@@ -419,66 +536,66 @@ async function executeCommonToolText(
       const description = args.description != null ? (args.description as string).trim() : "";
       if (!description) return "Error: description is required";
       const phase = args.phase != null ? String(args.phase) : undefined;
-      const item = ctx.todoRepo.createTodo(ctx.taskId, number, title, description, phase);
+      const item = ctx.repos.todos.createTodo(ctx.task.id, number, title, description, phase);
       return JSON.stringify(item);
     }
 
     case "edit_todo": {
-      if (!ctx.taskId) return "Error: edit_todo is only available within a task execution";
+      if (!ctx.task.id) return "Error: edit_todo is only available within a task execution";
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const update: Parameters<typeof ctx.todoRepo.editTodo>[2] = {};
+      const update: Parameters<typeof ctx.repos.todos.editTodo>[2] = {};
       if (args.number !== undefined) update.number = Number(args.number);
       if (args.title !== undefined) update.title = (args.title as string).trim();
       if (args.description !== undefined) update.description = args.description as string;
       if ("phase" in args) update.phase = args.phase === "null" || args.phase == null ? null : String(args.phase);
-      const result = ctx.todoRepo.editTodo(ctx.taskId, id, update);
+      const result = ctx.repos.todos.editTodo(ctx.task.id, id, update);
       if (!result) return `Error: todo ${id} not found`;
       return JSON.stringify(result);
     }
 
     case "list_todos": {
-      if (!ctx.taskId) return "Error: list_todos is only available within a task execution";
-      const todos = ctx.todoRepo.listTodos(ctx.taskId);
+      if (!ctx.task.id) return "Error: list_todos is only available within a task execution";
+      const todos = ctx.repos.todos.listTodos(ctx.task.id);
       return JSON.stringify(todos);
     }
 
     case "get_todo": {
-      if (!ctx.taskId) return "Error: get_todo is only available within a task execution";
+      if (!ctx.task.id) return "Error: get_todo is only available within a task execution";
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const todo = ctx.todoRepo.getTodo(ctx.taskId, id);
+      const todo = ctx.repos.todos.getTodo(ctx.task.id, id);
       if (!todo) return `Error: todo ${id} not found`;
       if ("deleted" in todo) return todo.message;
       return JSON.stringify(todo);
     }
 
     case "reorganize_todos": {
-      if (!ctx.taskId) return "Error: reorganize_todos is only available within a task execution";
+      if (!ctx.task.id) return "Error: reorganize_todos is only available within a task execution";
       const items = args.items as Array<{ id: number; number: number }>;
-      const updated = ctx.todoRepo.reprioritizeTodos(ctx.taskId, items);
+      const updated = ctx.repos.todos.reprioritizeTodos(ctx.task.id, items);
       return JSON.stringify(updated);
     }
 
     case "update_todo_status": {
-      if (!ctx.taskId) return "Error: update_todo_status is only available within a task execution";
+      if (!ctx.task.id) return "Error: update_todo_status is only available within a task execution";
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
       const status = args.status != null ? (args.status as string).trim() : "";
       if (!status) return "Error: status is required";
-      const result = ctx.todoRepo.editTodo(ctx.taskId, id, { status: status as import("../db/todos.ts").TodoStatus });
+      const result = ctx.repos.todos.editTodo(ctx.task.id, id, { status: status as import("../db/todos.ts").TodoStatus });
       if (!result) return `Error: todo ${id} not found`;
       return JSON.stringify(result);
     }
 
     case "lsp": {
-      if (!ctx.lspManager) {
+      if (!ctx.runtime.lspManager) {
         return "Error: LSP is not configured. Add lsp.servers to workspace.yaml.";
       }
-      if (!ctx.worktreePath) {
+      if (!ctx.runtime.worktreePath) {
         return "Error: worktreePath is not set in tool context";
       }
-      return executeLspTool(args, ctx.lspManager, ctx.worktreePath);
+      return executeLspTool(args, ctx.runtime.lspManager, ctx.runtime.worktreePath);
     }
 
     default:

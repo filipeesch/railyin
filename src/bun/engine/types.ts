@@ -1,8 +1,7 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
-import type { TodoRepository } from "../db/todos.ts";
-import type { IBoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
+
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
 
@@ -31,7 +30,7 @@ export type EngineEvent =
     writtenFiles?: Array<import("../../shared/rpc-types.ts").FileDiffPayload>;
   }
   | { type: "ask_user"; payload: string /* serialised AskUserPrompt JSON */ }
-  | { type: "interview_me"; payload: string /* serialised InterviewPayload JSON */ }
+  | { type: "decision_request"; payload: string /* serialised DecisionRequestPayload JSON */ }
   | { type: "shell_approval"; command: string; executionId: number }
   | { type: "status"; message: string }
   | { type: "usage"; inputTokens: number; outputTokens: number }
@@ -198,14 +197,24 @@ export interface ExecutionEngine {
  * Shared by task-oriented engine integrations via common-tools.ts.
  */
 export interface CommonToolContext {
-  taskId: number;
-  boardId: number;
-  onTransition: (taskId: number, toState: string) => void;
-  onHumanTurn: (taskId: number, message: string) => void;
-  onCancel: (executionId: number) => void;
-  onTaskUpdated: (task: Task) => void;
-  todoRepo: TodoRepository;
-  boardTools: IBoardToolExecutor;
-  lspManager?: LSPServerManager;
-  worktreePath?: string;
+  task: {
+    id: number | null;         // null for chat sessions
+    boardId: number | null;    // null for chat sessions
+    conversationId: number;    // ALWAYS set — universal routing key
+  };
+  repos: {
+    todos: import("../db/todos.ts").TodoRepository;
+    decisions: import("../db/repositories/decision-repository.ts").DecisionRepository;
+    boardTools: import("../workflow/tools/board-tool-executor.ts").IBoardToolExecutor;
+  };
+  workflow: {
+    onTransition: (taskId: number, toState: string) => void;
+    onHumanTurn: (taskId: number, message: string) => void;
+    onCancel: (executionId: number) => void;
+    onTaskUpdated: (task: Task) => void;
+  };
+  runtime: {
+    lspManager?: LSPServerManager;
+    worktreePath?: string;
+  };
 }

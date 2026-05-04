@@ -124,7 +124,7 @@
 import { ref, computed, watch, nextTick } from "vue";
 import { Marked } from "marked";
 import mermaid from "mermaid";
-import type { InterviewQuestion } from "@shared/rpc-types";
+import type { DecisionRequestQuestion } from "@shared/rpc-types";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark" });
 
@@ -146,13 +146,13 @@ function renderMd(content: string): string {
 }
 
 const props = defineProps<{
-  questions: InterviewQuestion[];
+  questions: DecisionRequestQuestion[];
   context?: string;
   answeredText?: string;
 }>();
 
 const emit = defineEmits<{
-  submit: [answer: string];
+  submit: [payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string }> }];
 }>();
 
 const answered = computed(() => props.answeredText !== undefined);
@@ -195,16 +195,16 @@ function weightLabel(weight: string): string {
   return "💡 Easy to revisit";
 }
 
-function descriptionFor(q: InterviewQuestion, title: string): string {
+function descriptionFor(q: DecisionRequestQuestion, title: string): string {
   return q.options?.find((o) => o.title === title)?.description ?? "";
 }
 
-function isSelected(qi: number, q: InterviewQuestion, title: string): boolean {
+function isSelected(qi: number, q: DecisionRequestQuestion, title: string): boolean {
   if (q.type === "exclusive") return singleSelected.value[qi] === title;
   return multiSelected.value[qi]?.includes(title) ?? false;
 }
 
-function onRowClick(qi: number, q: InterviewQuestion, title: string) {
+function onRowClick(qi: number, q: DecisionRequestQuestion, title: string) {
   focusedOption.value[qi] = title;
   if (q.type === "exclusive") {
     singleSelected.value[qi] = title;
@@ -212,7 +212,7 @@ function onRowClick(qi: number, q: InterviewQuestion, title: string) {
   // non_exclusive: row click only focuses preview; selection requires clicking the checkbox
 }
 
-function onCheckboxClick(qi: number, q: InterviewQuestion, title: string) {
+function onCheckboxClick(qi: number, q: DecisionRequestQuestion, title: string) {
   const arr = multiSelected.value[qi] ?? [];
   const idx = arr.indexOf(title);
   if (idx >= 0) {
@@ -285,7 +285,23 @@ function submit() {
     return part;
   });
 
-  emit("submit", parts.join("\n\n"));
+  const decisions = props.questions.map((q, qi) => {
+    let answer = "";
+    if (q.type === "freetext") {
+      answer = freetextValues.value[qi].trim();
+    } else if (q.type === "exclusive") {
+      const sel = singleSelected.value[qi];
+      answer = sel === "__other__" ? otherValues.value[qi].trim() : sel;
+    } else {
+      const sel = multiSelected.value[qi].map((v) =>
+        v === "__other__" ? otherValues.value[qi].trim() : v,
+      );
+      answer = sel.join(", ");
+    }
+    return { question: q.question, answer, weight: q.weight ?? "medium" };
+  });
+
+  emit("submit", { text: parts.join("\n\n"), decisions });
 }
 </script>
 
@@ -295,7 +311,7 @@ function submit() {
   border: 1px solid var(--p-primary-200, #c7d2fe);
   border-radius: 10px;
   padding: 16px 18px;
-  max-width: 660px;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 20px;

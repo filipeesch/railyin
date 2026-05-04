@@ -386,7 +386,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             // When active, ALL MCP tool definitions are withheld from Claude's context window —
             // Claude discovers them on demand via a search step. This means Claude never "sees"
             // mcp__railyin__* tools unless it thinks to search for them, which it won't for
-            // domain-specific tools like interview_me.
+            // domain-specific tools like decision_request.
             //
             // Fix: disable tool search so all tool definitions are loaded into context upfront.
             // Docs: "With fewer than ~10 tools, loading everything upfront is typically faster."
@@ -430,7 +430,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
                   // If the handler set a suspend payload, emit the event and stop the loop.
                   const payload = takePendingSuspend();
                   if (payload !== undefined) {
-                    emit({ type: "interview_me", payload });
+                    emit({ type: "decision_request", payload });
                     return { continue: false };
                   }
                   return {};

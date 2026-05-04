@@ -188,7 +188,7 @@ describe("Copilot backend RPC scenarios", () => {
         expect(session.disconnectCalls).toBeGreaterThanOrEqual(1);
     });
 
-    it("transitions to waiting_user when interview_me is triggered via shared tool handler", async () => {
+    it("transitions to waiting_user when decision_request is triggered via shared tool handler", async () => {
         const interviewArgs = {
             questions: [
                 {
@@ -202,7 +202,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("no session"))
             .queueCreateSuccess(
-                new MockCopilotSession().queueTurn({ steps: [toolCall("interview_me", interviewArgs)] }),
+                new MockCopilotSession().queueTurn({ steps: [toolCall("decision_request", interviewArgs)] }),
             );
         const runtime = createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
@@ -211,7 +211,7 @@ describe("Copilot backend RPC scenarios", () => {
 
         await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
         expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-        expect(runtime.getMessages(taskId).some((message) => message.type === "interview_prompt")).toBe(true);
+        expect(runtime.getMessages(taskId).some((message) => message.type === "decision_request_prompt")).toBe(true);
     });
 
     it("stores raw slash prompts while executing the resolved prompt body", async () => {

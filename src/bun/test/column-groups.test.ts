@@ -10,6 +10,7 @@ import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 import type { CommonToolContext } from "../engine/types.ts";
 import { TodoRepository } from "../db/todos.ts";
+import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 import type { Database } from "bun:sqlite";
 
 let db: Database;
@@ -241,14 +242,19 @@ describe("card limit enforcement in tasks.transition", () => {
 
 const noop = () => { };
 const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
-  taskId,
-  boardId,
-  onTransition: noop,
-  onHumanTurn: noop,
-  onCancel: noop,
-  onTaskUpdated: noop,
-  todoRepo: new TodoRepository(db),
-  boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+  task: { id: taskId, boardId, conversationId: 0 },
+  repos: {
+    todos: new TodoRepository(db),
+    decisions: new DecisionRepository(db),
+    boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+  },
+  workflow: {
+    onTransition: noop,
+    onHumanTurn: noop,
+    onCancel: noop,
+    onTaskUpdated: noop,
+  },
+  runtime: {},
 });
 
 describe("card limit enforcement in move_task", () => {

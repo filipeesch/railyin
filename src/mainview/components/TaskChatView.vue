@@ -52,6 +52,9 @@
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'info' }]" @click="activeTab = 'info'">
           <i class="pi pi-info-circle" /> Info
         </button>
+        <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'decisions' }]" @click="activeTab = 'decisions'">
+          <i class="pi pi-list-check" /> Decisions
+        </button>
       </div>
       <div class="toolbar-actions" v-if="task">
         <Select
@@ -163,6 +166,9 @@
     <!-- Info tab -->
     <TaskInfoPanel v-else-if="activeTab === 'info' && task" :task-id="task.id" />
 
+    <!-- Decisions tab -->
+    <DecisionsPanel v-else-if="activeTab === 'decisions' && task" :conversation-id="task.conversationId" />
+
     <!-- Manage Models modal -->
     <ManageModelsModal
       v-model="manageModelsOpen"
@@ -207,6 +213,7 @@ import ChangedFilesPanel from "./ChangedFilesPanel.vue";
 import TodoPanel from "./TodoPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
+import DecisionsPanel from "./DecisionsPanel.vue";
 import { useTaskStore } from "../stores/task";
 import { useConversationStore } from "../stores/conversation";
 import { useBoardStore } from "../stores/board";
@@ -265,7 +272,7 @@ const execSeverity = computed((): "secondary" | "info" | "warn" | "danger" | "su
 
 // ─── UI state ─────────────────────────────────────────────────────────────────
 
-const activeTab = ref<"chat" | "info">("chat");
+const activeTab = ref<"chat" | "info" | "decisions">("chat");
 const compacting = ref(false);
 const manageModelsOpen = ref(false);
 const retrying = ref(false);

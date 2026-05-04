@@ -49,7 +49,7 @@ function stubSessionMessages(api: ApiMock, conversationId: number, messages: Ret
 
 function sessionInterviewPrompt(conversationId: number, content: string): ReturnType<typeof makeChatMessage> {
     return makeChatMessage(0, conversationId, content, "assistant", {
-        type: "interview_prompt",
+        type: "decision_request_prompt",
         role: null,
     });
 }

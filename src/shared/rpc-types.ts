@@ -77,7 +77,7 @@ export type MessageType =
   | "tool_result"
   | "transition_event"
   | "ask_user_prompt"
-  | "interview_prompt"
+  | "decision_request_prompt"
   | "file_diff"
   | "reasoning"
   | "compaction_summary"
@@ -184,26 +184,68 @@ export interface AskUserPromptContent {
   questions: AskUserQuestion[];
 }
 
-// ─── Interview prompt types ───────────────────────────────────────────────────
+// ─── Decision request prompt types ───────────────────────────────────────────
 
-export interface InterviewOption {
+export interface DecisionRequestOption {
   title: string;
   description: string;
 }
 
-export interface InterviewQuestion {
+export interface DecisionRequestQuestion {
   question: string;
   type: "exclusive" | "non_exclusive" | "freetext";
   weight?: "critical" | "medium" | "easy";
   model_lean?: string;
   model_lean_reason?: string;
   answers_affect_followup?: boolean;
-  options?: InterviewOption[];
+  options?: DecisionRequestOption[];
 }
 
-export interface InterviewPayload {
+export interface DecisionRequestPayload {
   context?: string;
-  questions: InterviewQuestion[];
+  questions: DecisionRequestQuestion[];
+}
+
+// ─── Decision record types ────────────────────────────────────────────────────
+
+export type DecisionWeight = "critical" | "medium" | "easy";
+
+export interface DecisionRecord {
+  id: number;
+  conversationId: number;
+  batchId: number | null;
+  question: string;
+  answer: string;
+  weight: DecisionWeight;
+  notes: string | null;
+  revisionCount: number;
+  isSourceAi: boolean;
+  isDeleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DecisionRevision {
+  id: number;
+  decisionId: number;
+  previousAnswer: string;
+  previousNotes: string | null;
+  reason: string;
+  revisedAt: string;
+}
+
+export interface DecisionBatch {
+  id: number;
+  conversationId: number;
+  label: string | null;
+  createdAt: string;
+}
+
+export interface DecisionInput {
+  question: string;
+  answer: string;
+  weight?: DecisionWeight;
+  notes?: string | null;
 }
 
 // ─── Code review types ──────────────────────────────────────────────────────
@@ -611,7 +653,7 @@ export type RailynAPI = {
     response: { task: Task; executionId: number };
   };
   "tasks.sendMessage": {
-    params: { taskId: number; content: string; engineContent?: string; attachments?: Attachment[] };
+    params: { taskId: number; content: string; engineContent?: string; attachments?: Attachment[]; decisionBatch?: { label?: string; records: DecisionInput[] } };
     response: { message: ConversationMessage; executionId: number };
   };
 
@@ -895,7 +937,7 @@ export type RailynAPI = {
     response: ChatSession;
   };
   "chatSessions.sendMessage": {
-    params: { sessionId: number; content: string; engineContent?: string; model?: string | null; attachments?: Attachment[] };
+    params: { sessionId: number; content: string; engineContent?: string; model?: string | null; attachments?: Attachment[]; decisionBatch?: { label?: string; records: DecisionInput[] } };
     response: { messageId: number; executionId: number };
   };
   "chatSessions.setModel": {
@@ -917,6 +959,16 @@ export type RailynAPI = {
   "mcp.setSessionTools": {
     params: { sessionId: number; enabledTools: string[] | null };
     response: ChatSession;
+  };
+
+  // Decisions
+  "decisions.list": {
+    params: { conversationId: number };
+    response: DecisionRecord[];
+  };
+  "decisions.getRevisions": {
+    params: { decisionId: number };
+    response: DecisionRevision[];
   };
 };
 

@@ -5,6 +5,7 @@ import { executeCommonTool } from "../engine/common-tools.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import type { CommonToolContext } from "../engine/types.ts";
 import { TodoRepository } from "../db/todos.ts";
+import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 
@@ -22,15 +23,31 @@ const noop = () => { };
 
 /** Build a CommonToolContext wired to the test task.
  *  Pass { boardId: undefined } to explicitly omit boardId (triggers board_id-required errors). */
-const commonCtx = (overrides?: { taskId?: number; boardId?: number }): CommonToolContext => ({
-    taskId: overrides?.taskId ?? taskId,
-    boardId: overrides && "boardId" in overrides ? overrides.boardId : boardId,
-    onTransition: noop,
-    onHumanTurn: noop,
-    onCancel: noop,
-    onTaskUpdated: noop,
-    todoRepo: new TodoRepository(db),
-    boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+const commonCtx = (overrides?: {
+    taskId?: number;
+    boardId?: number;
+    onTransition?: (taskId: number, toState: string) => void;
+    onHumanTurn?: (taskId: number, message: string) => void;
+    onCancel?: (executionId: number) => void;
+    onTaskUpdated?: (task: import("../db/tasks.ts").Task) => void;
+}): CommonToolContext => ({
+    task: {
+      id: overrides?.taskId ?? taskId,
+      boardId: overrides && "boardId" in overrides ? (overrides.boardId ?? null) : boardId,
+      conversationId,
+    },
+    repos: {
+      todos: new TodoRepository(db),
+      decisions: new DecisionRepository(db),
+      boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+    },
+    workflow: {
+      onTransition: overrides?.onTransition ?? noop,
+      onHumanTurn: overrides?.onHumanTurn ?? noop,
+      onCancel: overrides?.onCancel ?? noop,
+      onTaskUpdated: overrides?.onTaskUpdated ?? noop,
+    },
+    runtime: {},
 });
 
 beforeEach(() => {
@@ -382,7 +399,7 @@ describe("executeCommonTool / delete_task", () => {
         await executeCommonTool(
             "delete_task",
             { task_id: taskId },
-            { ...commonCtx(), onCancel: (id) => { cancelledId = id; } },
+            commonCtx({ onCancel: (id) => { cancelledId = id; } }),
         );
 
         expect(cancelledId).toBe(execId);
@@ -429,7 +446,7 @@ describe("executeCommonTool / move_task", () => {
         await executeCommonTool(
             "move_task",
             { task_id: otherTaskId, workflow_state: "plan" },
-            { ...commonCtx(), onTransition: (id, state) => { calledWith = [id, state]; } },
+            commonCtx({ onTransition: (id, state) => { calledWith = [id, state]; } }),
         );
         expect(calledWith).toEqual([otherTaskId, "plan"]);
     });
@@ -455,7 +472,7 @@ describe("executeCommonTool / move_task", () => {
         await executeCommonTool(
             "move_task",
             { task_id: taskId, workflow_state: "done" },
-            { ...commonCtx(), onTransition: (id, state) => { calledWith = [id, state]; } },
+            commonCtx({ onTransition: (id, state) => { calledWith = [id, state]; } }),
         );
         expect(calledWith).toBeNull();
         const row = db
@@ -476,7 +493,7 @@ describe("executeCommonTool / move_task", () => {
         await executeCommonTool(
             "move_task",
             { task_id: runningTaskId, workflow_state: "plan" },
-            { ...commonCtx(), onTransition: (id, state) => { calledWith = [id, state]; } },
+            commonCtx({ onTransition: (id, state) => { calledWith = [id, state]; } }),
         );
         expect(calledWith).toBeNull();
         const row = db
@@ -522,7 +539,7 @@ describe("executeCommonTool / message_task", () => {
         const result = await executeCommonTool(
             "message_task",
             { task_id: taskId, message: "Please review" },
-            { ...commonCtx(), onHumanTurn: (id, msg) => { deliveredTo = id; deliveredMsg = msg; } },
+            commonCtx({ onHumanTurn: (id, msg) => { deliveredTo = id; deliveredMsg = msg; } }),
         );
         const res = JSON.parse(result.text);
         expect(res.status).toBe("delivered");
