@@ -24,6 +24,7 @@ test.describe("SE — session sidebar edge cases", () => {
     test("SE-2: blur commits session rename without pressing Enter", async ({ page, api }) => {
         const session = makeChatSession({ id: 402, title: "Old Name" });
         api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
         api.handle("chatSessions.getMessages", () => ({ messages: [], hasMore: false }));
         const renameCalls = api.capture("chatSessions.rename", undefined);
 

@@ -262,20 +262,20 @@ describe("executeCommonTool / create_task", () => {
         expect(result.text).toContain("Error: project nonexistent-proj not found");
     });
 
-    it("inherits the configured engine model when no model arg is given", async () => {
+    it("creates task without model when no model arg is given", async () => {
         const result = await executeCommonTool(
             "create_task",
-            { project_key: projectKey, title: "Default model task", description: "" },
+            { project_key: projectKey, title: "No model task", description: "" },
             commonCtx(),
         );
         const task = JSON.parse(result.text);
-        expect(task.model).toBe("copilot/mock-model");
+        expect(task.model).toBeNull(); // No automatic model assignment
     });
 
-    it("explicit model arg overrides the configured engine model", async () => {
+    it("uses explicit model arg when provided", async () => {
         const result = await executeCommonTool(
             "create_task",
-            { project_key: projectKey, title: "Override model task", description: "", model: "copilot/explicit" },
+            { project_key: projectKey, title: "Explicit model task", description: "", model: "copilot/explicit" },
             commonCtx(),
         );
         const task = JSON.parse(result.text);

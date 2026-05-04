@@ -222,8 +222,8 @@ columns:
     expect(promptRows?.count).toBe(0);
   });
 
-  // T-3: task has model, column has no model → task.model is used
-  it("uses task.model when column has no model configured", async () => {
+  // T-3: conversation has model, column has no model → conversation.model is used
+  it("uses conversation.model when column has no model configured", async () => {
     const cfg = setupTestConfig("", gitDir, [
       `id: no-col-model
 name: NoColModel
@@ -239,7 +239,8 @@ columns:
     configCleanup = cfg.cleanup;
 
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog', model = 'task/custom-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'conversation/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
     db.run("UPDATE boards SET workflow_template_id = 'no-col-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
@@ -255,14 +256,14 @@ columns:
 
     await executor.execute(taskId, "plan");
 
-    expect(builder.lastBuilt?.model).toBe("task/custom-model");
+    expect(builder.lastBuilt?.model).toBe("conversation/custom-model");
   });
 
   // T-4: task has no model, engine.model is configured → engine.model is used as fallback
-  it("falls back to engine.model when task and column have no model", async () => {
+  it("uses empty string when conversation and column have no model", async () => {
     const cfg = setupTestConfig("", gitDir, [
-      `id: fallback-engine
-name: FallbackEngine
+      `id: no-fallback
+name: NoFallback
 columns:
   - id: backlog
     label: Backlog
@@ -275,8 +276,9 @@ columns:
     configCleanup = cfg.cleanup;
 
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog', model = NULL WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'fallback-engine' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'no-fallback' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -291,8 +293,8 @@ columns:
 
     await executor.execute(taskId, "plan");
 
-    // engine.model is "copilot/mock-model" (set by setupTestConfig default)
-    expect(builder.lastBuilt?.model).toBe("copilot/mock-model");
+    // No fallback to engine model in new architecture
+    expect(builder.lastBuilt?.model).toBe("");
   });
 
   // T-5: column has model → column.model overrides task.model

@@ -395,11 +395,11 @@ export const useConversationStore = defineStore("conversation", () => {
 
   function onNewMessage(message: ConversationMessage) {
     if (message.conversationId !== activeConversationId.value) return;
-
+    // Only skip appending if there's an active stream and this is NOT a user message
+    // User messages should always be appended immediately, even while assistant is streaming
     const streamState = streamStates.value.get(message.conversationId);
-    if (streamState && !streamState.isDone) return;
+    if (streamState && !streamState.isDone && message.type !== "user") return;
     if (messages.value.some((entry) => entry.id === message.id)) return;
-
     messages.value.push(message);
     sortMessagesInPlace();
   }

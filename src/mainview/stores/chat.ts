@@ -125,8 +125,24 @@ export const useChatStore = defineStore("chat", () => {
     const drawerStore = useDrawerStore();
     activeChatSessionId.value = sessionId;
     clearUnread(sessionId);
-    // Open the drawer immediately so the loading spinner is visible while messages load
-    const session = sessions.value.find(s => s.id === sessionId);
+
+    // Start with the cached session so the drawer can open even if the fetch fails
+    let session: ChatSession | null = sessions.value.find(s => s.id === sessionId) ?? null;
+    try {
+      // Refetch the session to ensure we have the latest data (including model).
+      // conversationId is assigned once at creation and never changes — always prefer
+      // the cached value to guard against stale or test-fixture data.
+      const fetched = await api("chatSessions.get", { sessionId });
+      if (fetched) {
+        session = session
+          ? { ...fetched, conversationId: session.conversationId }
+          : fetched;
+        onChatSessionUpdated(session);
+      }
+    } catch {
+      // Use cached session — fetch failure must not block the drawer
+    }
+
     if (session) {
       drawerStore.openForSession(sessionId, session.conversationId);
       conversationStore.setActiveConversation(session.conversationId);
@@ -164,16 +180,15 @@ export const useChatStore = defineStore("chat", () => {
       lastActivityAt: now,
       lastReadAt: now,
     });
-    const { message } = await api("chatSessions.sendMessage", {
+    // The API returns only { messageId, executionId } — the full message arrives
+    // via the WebSocket message.new push event and is appended by conversationStore.onNewMessage.
+    await api("chatSessions.sendMessage", {
       sessionId: activeChatSessionId.value,
       content,
       ...(engineContent != null ? { engineContent } : {}),
       model,
       ...(attachments?.length ? { attachments } : {}),
     });
-    if (message) {
-      conversationStore.appendMessage(message);
-    }
   }
 
   async function renameSession(sessionId: number, title: string) {
@@ -259,7 +274,6 @@ export const useChatStore = defineStore("chat", () => {
     if (!session) return;
     await api("chatSessions.sendMessage", {
       sessionId,
-      conversationId: session.conversationId,
       content: payload.text,
       engineContent: payload.engineText,
       attachments: payload.attachments.length ? payload.attachments : undefined,

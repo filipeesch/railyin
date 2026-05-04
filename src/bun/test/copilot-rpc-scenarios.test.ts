@@ -128,8 +128,11 @@ describe("Copilot backend RPC scenarios", () => {
         await runFatalFailureScenario(runtime);
         await runModelListingScenario(runtime);
 
+        // Enable auto model explicitly since it's now treated as an ordinary model
+        await runtime.handlers["models.setEnabled"]({ qualifiedModelId: "copilot/auto", enabled: true });
+
         const enabled = await runtime.handlers["models.listEnabled"]();
-        expect(enabled[0]?.id).toBeNull();
+        expect(enabled[0]?.id).toBe("copilot/auto");
         expect(enabled[0]?.displayName).toBe("Auto");
         expect(enabled[0]?.description ?? "").toContain("Copilot will automatically choose");
     });

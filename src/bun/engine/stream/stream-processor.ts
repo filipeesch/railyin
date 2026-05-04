@@ -477,7 +477,12 @@ export class StreamProcessor {
       this.clearClaudeExecution(executionId);
 
       if (taskId != null) {
-        const finalRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+        const finalRow = db.query<TaskRow, [number]>(
+          `SELECT t.*, c.model AS conversation_model
+           FROM tasks t
+           LEFT JOIN conversations c ON c.id = t.conversation_id
+           WHERE t.id = ?`,
+        ).get(taskId);
         if (finalRow) {
           this.onTaskUpdated(mapTask(finalRow));
 

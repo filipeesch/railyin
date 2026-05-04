@@ -287,11 +287,16 @@ export function extractSummaryBlock(raw: string): string {
 }
 
 export async function compactConversation(db: Database, taskId: number): Promise<ConversationMessage> {
-  const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+  const task = db.query<TaskRow, [number]>(
+    `SELECT t.*, c.model AS conversation_model 
+     FROM tasks t 
+     LEFT JOIN conversations c ON c.id = t.conversation_id 
+     WHERE t.id = ?`
+  ).get(taskId);
   if (!task?.conversation_id) throw new Error(`Task ${taskId} not found`);
 
   const config = getConfig();
-  const resolvedModel = task.model ?? config.workspace.default_model ?? "";
+  const resolvedModel = (task as any).conversation_model ?? config.workspace.default_model ?? "";
   if (!resolvedModel) throw new Error(`Task ${taskId} has no model configured for compaction`);
 
   const { provider } = resolveProvider(resolvedModel, config.providers);

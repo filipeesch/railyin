@@ -1,0 +1,3 @@
+name: move-model-to-conversation-table
+description: Move model column from tasks table to conversations table to unify model storage for task chats and chat sessions
+status: proposed

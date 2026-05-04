@@ -57,14 +57,14 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       conversationId: number;
     }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
       const row = db.query<{
-        task_model: string | null;
+        conversation_model: string | null;
         task_workspace_key: string | null;
         session_workspace_key: string | null;
       }, [number]>(
-        `SELECT
-           t.model AS task_model,
-           b.workspace_key AS task_workspace_key,
-           cs.workspace_key AS session_workspace_key
+        `SELECT 
+           c.model AS conversation_model,
+           b.workspace_key AS task_workspace_key, 
+           cs.workspace_key AS session_workspace_key 
          FROM conversations c
          LEFT JOIN tasks t ON t.conversation_id = c.id
          LEFT JOIN boards b ON b.id = t.board_id
@@ -74,16 +74,13 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
 
       const workspaceKey = row?.task_workspace_key ?? row?.session_workspace_key ?? getDefaultWorkspaceKey();
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
-      const configuredModel =
-        row?.task_model
-        ?? workspaceConfig.engine.model
-        ?? workspaceConfig.workspace.default_model
-        ?? null;
-
-      const maxTokens = configuredModel
-        ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator))
+      
+      // Model resolution: conversation.model (centralized storage for both tasks and chat sessions)
+      const configuredModel = row?.conversation_model ?? workspaceConfig.workspace.default_model ?? null;
+      const maxTokens = configuredModel 
+        ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator)) 
         : 128_000;
-
+      
       return new ContextEstimator(db).estimate(params.conversationId, maxTokens);
     },
   };

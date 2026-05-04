@@ -27,7 +27,13 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated) {
         path: params.path,
         sourceBranch: params.sourceBranch,
       });
-      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
+      const row = db.query<TaskRow, [number]>(
+        `SELECT t.*, gc.worktree_status, gc.branch_name, gc.worktree_path, c.model AS conversation_model
+         FROM tasks t
+         LEFT JOIN task_git_context gc ON gc.task_id = t.id
+         LEFT JOIN conversations c ON c.id = t.conversation_id
+         WHERE t.id = ?`,
+      ).get(params.taskId);
       if (!row) throw new Error(`Task ${params.taskId} not found`);
       const task = mapTask(row);
       onTaskUpdated(task);
@@ -37,7 +43,13 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated) {
     // ─── tasks.removeWorktree ──────────────────────────────────────────────────
     "tasks.removeWorktree": async (params: { taskId: number }): Promise<{ warning?: string }> => {
       const { warning } = await removeWorktree(params.taskId);
-      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
+      const row = db.query<TaskRow, [number]>(
+        `SELECT t.*, gc.worktree_status, gc.branch_name, gc.worktree_path, c.model AS conversation_model
+         FROM tasks t
+         LEFT JOIN task_git_context gc ON gc.task_id = t.id
+         LEFT JOIN conversations c ON c.id = t.conversation_id
+         WHERE t.id = ?`,
+      ).get(params.taskId);
       if (row) onTaskUpdated(mapTask(row));
       return { ...(warning ? { warning } : {}) };
     },

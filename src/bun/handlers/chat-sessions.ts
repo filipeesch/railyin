@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { ChatSession, ConversationMessage } from "../../shared/rpc-types.ts";
-import type { ChatSessionRow, ConversationMessageRow } from "../db/row-types.ts";
+import type { ChatSessionRow } from "../db/row-types.ts";
 import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { Orchestrator } from "../engine/orchestrator.ts";
@@ -21,8 +21,16 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const rows = db.query<ChatSessionRow, [string]>(
         params.includeArchived
-          ? "SELECT * FROM chat_sessions WHERE workspace_key = ? ORDER BY last_activity_at DESC"
-          : "SELECT * FROM chat_sessions WHERE workspace_key = ? AND status != 'archived' ORDER BY last_activity_at DESC"
+          ? `SELECT cs.*, c.model AS conversation_model 
+             FROM chat_sessions cs 
+             LEFT JOIN conversations c ON c.id = cs.conversation_id 
+             WHERE cs.workspace_key = ? 
+             ORDER BY cs.last_activity_at DESC`
+          : `SELECT cs.*, c.model AS conversation_model 
+             FROM chat_sessions cs 
+             LEFT JOIN conversations c ON c.id = cs.conversation_id 
+             WHERE cs.workspace_key = ? AND cs.status != 'archived' 
+             ORDER BY cs.last_activity_at DESC`
       ).all(wsKey);
       return rows.map(mapChatSession);
     },
@@ -36,6 +44,14 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         // Create conversation with no task
         const convResult = db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
         const conversationId = convResult.lastInsertRowid as number;
+
+        // Seed the conversation model with the workspace default or engine model
+        const workspaceConfig = getWorkspaceConfig(wsKey);
+        const engineModel = "model" in workspaceConfig.engine ? (workspaceConfig.engine.model || null) : null;
+        const modelToSet = workspaceConfig.workspace.default_model ?? engineModel ?? null;
+        if (modelToSet) {
+          db.run("UPDATE conversations SET model = ? WHERE id = ?", [modelToSet, conversationId]);
+        }
 
         const sessionResult = db.run(
           `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES (?, ?, 'idle', ?)`,
@@ -79,6 +95,17 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       );
     },
 
+    "chatSessions.get": async (params: { sessionId: number }): Promise<ChatSession> => {
+      const row = db.query<ChatSessionRow, [number]>(
+        `SELECT cs.*, c.model AS conversation_model 
+         FROM chat_sessions cs 
+         LEFT JOIN conversations c ON c.id = cs.conversation_id 
+         WHERE cs.id = ?`
+      ).get(params.sessionId);
+      if (!row) throw new Error(`Session ${params.sessionId} not found`);
+      return mapChatSession(row);
+    },
+
     "chatSessions.sendMessage": async (params: {
       sessionId: number;
       content: string;
@@ -109,17 +136,27 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         session.conversation_id,
         params.content,
         params.model ?? undefined,
-        (() => { try { return session.enabled_mcp_tools ? JSON.parse(session.enabled_mcp_tools) : null; } catch { return null; } })(),
+        (() => {
+          try {
+            return session.enabled_mcp_tools ? JSON.parse(session.enabled_mcp_tools) : null;
+          } catch {
+            return null;
+          }
+        })(),
         session.workspace_key,
         prepared.attachments,
         prepared.content,
       );
 
+      // Fetch updated session with model from conversation
       const updatedSession = db.query<ChatSessionRow, [number]>(
-        "SELECT * FROM chat_sessions WHERE id = ?"
+        `SELECT cs.*, c.model AS conversation_model 
+         FROM chat_sessions cs 
+         LEFT JOIN conversations c ON c.id = cs.conversation_id 
+         WHERE cs.id = ?`
       ).get(params.sessionId);
-      if (updatedSession) onSessionUpdated(mapChatSession(updatedSession));
 
+      if (updatedSession) onSessionUpdated(mapChatSession(updatedSession));
       return { messageId: message.id, executionId };
     },
 
@@ -175,6 +212,19 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
       await orchestrator.compactConversation(session.conversation_id, session.workspace_key);
+    },
+    // ─── chatSessions.setModel ───────────────────────────────────────────────
+    "chatSessions.setModel": async (params: { sessionId: number; model: string | null }): Promise<ChatSession> => {
+      const session = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
+      if (session.conversation_id === null) {
+        throw new Error(`Chat session ${params.sessionId} has no conversation`);
+      }
+      db.run("UPDATE conversations SET model = ? WHERE id = ?", [params.model, session.conversation_id]);
+      const updated = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      if (!updated) throw new Error(`Chat session ${params.sessionId} not found after update`);
+      onSessionUpdated(mapChatSession(updated));
+      return mapChatSession(updated);
     },
   };
 }

@@ -62,6 +62,7 @@ test.describe("SS — stream state isolation", () => {
         api.handle("conversations.getMessages", () => ({ messages: [], hasMore: false }));
         api.handle("chatSessions.getMessages", () => ({ messages: [], hasMore: false }));
         api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
 
         await page.goto("/");
         await openTaskDrawer(page, taskA.id);

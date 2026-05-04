@@ -32,7 +32,7 @@ export class ExecutionParamsBuilder {
       systemInstructions,
       taskContext,
       workingDirectory,
-      model: task.model ?? "",
+      model: task.conversation_model ?? "",
       signal,
       onRawModelMessage,
       enabledMcpTools: task.enabled_mcp_tools

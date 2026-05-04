@@ -14,6 +14,7 @@ export interface BoardRow {
 export interface ConversationRow {
   id: number;
   task_id: number | null;
+  model: string | null;
 }
 
 export interface TaskRow {
@@ -30,7 +31,6 @@ export interface TaskRow {
   created_from_task_id: number | null;
   created_from_execution_id: number | null;
   created_at: string;
-  model: string | null;
   shell_auto_approve: number;
   approved_commands: string;
   // Fields from LEFT JOIN task_git_context (populated by extended queries)
@@ -41,6 +41,8 @@ export interface TaskRow {
   position: number;
   enabled_mcp_tools?: string | null;
   needs_column_prompt: number;
+  // Field from LEFT JOIN conversations (populated by extended queries)
+  conversation_model?: string | null;
 }
 
 export interface TaskGitContextRow {
@@ -112,6 +114,19 @@ export interface TaskTodoRow {
   result: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ChatSessionRow {
+  id: number;
+  workspace_key: string;
+  title: string;
+  status: string;
+  conversation_id: number;
+  enabled_mcp_tools?: string | null;
+  last_activity_at: string;
+  last_read_at: string | null;
+  archived_at: string | null;
+  created_at: string;
 }
 
 export interface ChatSessionRow {

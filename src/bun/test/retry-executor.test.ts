@@ -99,29 +99,29 @@ describe("RetryExecutor — model resolution", () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = 'task/custom-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'task/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
 
     expect(builder.lastBuilt?.model).toBe("task/custom-model");
-    const row = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(taskId)!;
+    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
     expect(row.model).toBe("task/custom-model");
   });
 
-  // RT-2: task.model null, engine.model configured → engine.model used + written to DB
-  it("falls back to engine.model and writes it back to DB when task has no model", async () => {
+  // RT-2: task.model null, engine.model configured → uses empty string (no fallback)
+  it("uses empty string when task has no model (no fallback to engine defaults)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
 
-    expect(builder.lastBuilt?.model).toBe("copilot/mock-model");
-    const row = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(taskId)!;
-    expect(row.model).toBe("copilot/mock-model");
+    expect(builder.lastBuilt?.model).toBe(""); // No fallback to engine model
+    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    expect(row.model).toBeNull(); // DB remains NULL
   });
 
   // RT-3: no model anywhere → empty string, DB stays NULL
@@ -129,13 +129,13 @@ describe("RetryExecutor — model resolution", () => {
     const cfg = setupTestConfig("", gitDir, [], null);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
 
     expect(builder.lastBuilt?.model).toBe("");
-    const row = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(taskId)!;
+    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
     expect(row.model).toBeNull();
   });
 });

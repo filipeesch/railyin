@@ -23,7 +23,8 @@ export function initDb(): Database {
     );
     CREATE TABLE IF NOT EXISTS conversations (
        id      INTEGER PRIMARY KEY AUTOINCREMENT,
-       task_id INTEGER
+       task_id INTEGER,
+       model   TEXT
      );
     CREATE TABLE IF NOT EXISTS tasks (
       id                        INTEGER PRIMARY KEY AUTOINCREMENT,

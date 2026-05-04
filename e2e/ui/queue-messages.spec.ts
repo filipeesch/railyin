@@ -476,6 +476,7 @@ test.describe("QS — queue messages (session context)", () => {
     test("QS-1: queue button shown instead of send when session is running", async ({ page, api, ws }) => {
         const session = makeChatSession({ id: 901, title: "Test Chat", status: "running" });
         api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
         api.returns("conversations.getMessages", { messages: [], hasMore: false });
         api.returns("conversations.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 });
 
@@ -492,6 +493,7 @@ test.describe("QS — queue messages (session context)", () => {
         const sentContents: string[] = [];
 
         api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
         api.returns("conversations.getMessages", { messages: [], hasMore: false });
         api.returns("conversations.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 });
         api.handle("chatSessions.sendMessage", (body) => {
@@ -522,6 +524,7 @@ test.describe("QS — queue messages (session context)", () => {
         const sentContents: string[] = [];
 
         api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
         api.returns("conversations.getMessages", { messages: [], hasMore: false });
         api.returns("conversations.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 });
         api.handle("chatSessions.sendMessage", (body) => {

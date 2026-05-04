@@ -132,24 +132,426 @@ describe("tasks.create", () => {
     expect(msgs[0].content).toContain("My description");
   });
 
-  // TC-1: engine.model is set → task.model seeded at creation
-  it("seeds task.model from engine.model when engine.model is configured", async () => {
-    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
-    const { handlers } = makeHandlers();
-
-    const task = await handlers["tasks.create"]({
-      boardId,
-      projectKey,
-      title: "Model task",
-      description: "Should inherit engine model",
-    });
-
-    const row = db
-      .query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?")
-      .get(task.id);
-
-    expect(row!.model).toBe("copilot/mock-model");
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
   });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
+// TC-1: engine.model is set → conversation.model IS automatically seeded (new behavior)
+it("automatically seeds conversation.model from engine.model or workspace.default_model", async () => {
+  const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+  const { handlers } = makeHandlers();
+  const task = await handlers["tasks.create"]({
+    boardId,
+    projectKey,
+    title: "Model task",
+    description: "Should inherit engine model automatically",
+  });
+  const row = db
+    .query<{ model: string | null }, [number]>(
+      "SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?",
+    )
+    .get(task.id);
+
+  // With seedConversationModel, model is seeded with workspace.default_model or engine.model
+  // Test config has engine.model = "copilot/mock-model", so it should be seeded
+  expect(row!.model).toBe("copilot/mock-model");
+});
 
   // TC-2: engine.model is null → task.model remains NULL
   it("leaves task.model as NULL when engine.model is not configured", async () => {
@@ -576,7 +978,7 @@ function makeMockOrchestrator(models: Array<{ qualifiedId: string | null; contex
 describe("tasks.contextUsage — resolveContextWindow", () => {
   it("uses contextWindow from orchestrator.listModels() when model is found", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = 'copilot/claude-sonnet-4.6' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'copilot/claude-sonnet-4.6' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     const orchestrator = makeMockOrchestrator([
       { qualifiedId: "copilot/claude-sonnet-4.6", contextWindow: 200_000 },
@@ -589,7 +991,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
 
   it("falls back to 128_000 when orchestrator returns no matching model", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = 'copilot/unknown-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'copilot/unknown-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     // Orchestrator returns a different model — no match
     const orchestrator = makeMockOrchestrator([
@@ -605,7 +1007,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
 
   it("falls back to 128_000 when no model is set on the task", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     const handlers = taskHandlers(db, null, () => {});
 
@@ -615,7 +1017,7 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
 
   it("uses contextWindow = null entry but still falls back to 128_000", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = 'copilot/claude-opus' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'copilot/claude-opus' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     // Model found but contextWindow is null/undefined
     const orchestrator = makeMockOrchestrator([
@@ -667,7 +1069,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
 describe("tasks.list — ESP-1: executionCount JOIN", () => {
   it("returns correct executionCount for tasks with multiple executions", async () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'copilot/mock-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
     const boardId = db
       .query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?")
       .get(taskId)!.board_id;
@@ -689,7 +1091,7 @@ describe("tasks.list — ESP-1: executionCount JOIN", () => {
 
   it("returns 0 executionCount when task has no executions", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'copilot/mock-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
     const boardId = db
       .query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?")
       .get(taskId)!.board_id;
@@ -707,7 +1109,7 @@ describe("tasks.list — ESP-1: executionCount JOIN", () => {
 describe("tasks.delete — ESP-2: cascade atomicity", () => {
   it("removes task and all related rows from every related table", async () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = 'copilot/mock-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'copilot/mock-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     // Seed related rows
     db.run(

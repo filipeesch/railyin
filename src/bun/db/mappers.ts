@@ -27,7 +27,7 @@ export function mapTask(row: TaskRow): Task {
     retryCount: row.retry_count,
     createdFromTaskId: row.created_from_task_id,
     createdFromExecutionId: row.created_from_execution_id,
-    model: row.model ?? null,
+    model: (row as any).conversation_model ?? null,
     shellAutoApprove: row.shell_auto_approve === 1,
     approvedCommands: (() => { try { return JSON.parse(row.approved_commands ?? "[]"); } catch { return []; } })(),
     worktreeStatus: row.worktree_status ?? null,
@@ -84,7 +84,14 @@ export function mapChatSession(row: ChatSessionRow): ChatSession {
     title: row.title,
     status: row.status as ChatSession['status'],
     conversationId: row.conversation_id,
-    enabledMcpTools: (() => { try { return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : null; } catch { return null; } })(),
+    model: row.conversation_model ?? null,
+    enabledMcpTools: (() => {
+      try {
+        return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : null;
+      } catch {
+        return null;
+      }
+    })(),
     lastActivityAt: row.last_activity_at,
     lastReadAt: row.last_read_at,
     archivedAt: row.archived_at,

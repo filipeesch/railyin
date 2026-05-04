@@ -13,9 +13,11 @@ import { getColumnConfig } from "../column-config.ts";
 const TASK_WITH_GIT = `
   SELECT t.*,
          gc.worktree_status, gc.branch_name, gc.worktree_path,
+         c.model AS conversation_model,
          (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
   FROM tasks t
   LEFT JOIN task_git_context gc ON gc.task_id = t.id
+  LEFT JOIN conversations c ON c.id = t.conversation_id
   WHERE t.id = ?`;
 
 export async function execGetTask(
@@ -121,15 +123,17 @@ export async function execCreateTask(
   if (!project) return `Error: project ${projectKey} not found`;
   const convRes = db.run("INSERT INTO conversations (task_id) VALUES (0)");
   const convId = convRes.lastInsertRowid as number;
-  const config = getConfig();
-  const engineDefaultModel = "model" in config.engine ? (config.engine.model ?? null) : null;
-  const effectiveModel = (args.model as string) || engineDefaultModel || config.workspace.default_model || null;
+  
+  // Set conversation model if explicitly provided (no engine fallback in new architecture)
+  const explicitModel = args.model as string;
+  if (explicitModel) {
+    db.run("UPDATE conversations SET model = ? WHERE id = ?", [explicitModel, convId]);
+  }
+  
   const taskRes = db.run(
-    `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id${effectiveModel ? ", model" : ""})
-     VALUES (?, ?, ?, ?, 'backlog', 'idle', ?${effectiveModel ? ", ?" : ""})`,
-    effectiveModel
-      ? [boardId, projectKey, title, description, convId, effectiveModel]
-      : [boardId, projectKey, title, description, convId],
+    `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id)
+     VALUES (?, ?, ?, ?, 'backlog', 'idle', ?)`,
+    [boardId, projectKey, title, description, convId],
   );
   const newTaskId = taskRes.lastInsertRowid as number;
   db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [newTaskId, convId]);

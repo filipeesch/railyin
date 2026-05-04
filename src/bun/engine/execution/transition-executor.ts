@@ -1,16 +1,17 @@
-import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types.ts";
+import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
-import { mapTask } from "../../db/mappers.ts";
-import { appendMessage } from "../../conversation/messages.ts";
-import { getBoardWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
-import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config.ts";
-import type { EngineRegistry } from "../engine-registry.ts";
-import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
-import type { WorkingDirectoryResolver } from "./working-directory-resolver.ts";
-import type { StreamProcessor } from "../stream/stream-processor.ts";
-import type { TaskRow } from "../../db/row-types.ts";
-import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
-import { resolveTaskModel } from "./model-resolver.ts";
+import { mapTask } from "../../db/mappers";
+import { appendMessage } from "../../conversation/messages";
+import { getBoardWorkspaceKey, getWorkspaceConfig } from "../../workspace-context";
+import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config";
+import type { EngineRegistry } from "../engine-registry";
+import type { ExecutionParamsBuilder } from "./execution-params-builder";
+import type { WorkingDirectoryResolver } from "./working-directory-resolver";
+import type { StreamProcessor } from "../stream/stream-processor";
+import type { TaskRow } from "../../db/row-types";
+import { resolvePrompt } from "../dialects/copilot-prompt-resolver";
+import { resolveModel } from "./model-resolver";
+
 
 export class TransitionExecutor {
   constructor(
@@ -28,7 +29,12 @@ export class TransitionExecutor {
     toState: string,
   ): Promise<{ task: Task; executionId: number | null }> {
     const db = this.db;
-    const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+    const task = db.query<TaskRow, [number]>(
+      `SELECT t.*, c.model AS conversation_model 
+       FROM tasks t 
+       LEFT JOIN conversations c ON c.id = t.conversation_id 
+       WHERE t.id = ?`
+    ).get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const config = getWorkspaceConfig(getBoardWorkspaceKey(task.board_id));
     const engine = this.engineRegistry.getEngine(getBoardWorkspaceKey(task.board_id));
@@ -45,22 +51,35 @@ export class TransitionExecutor {
 
     const column = getColumnConfig(config, task.board_id, toState);
 
-    const resolvedModel = resolveTaskModel(column?.model, task.model, config.engine);
-    if (column?.model != null) {
-      db.run("UPDATE tasks SET model = ? WHERE id = ?", [column.model, taskId]);
-    } else if (resolvedModel) {
-      db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedModel, taskId]);
-    }
+    // Use centralized model resolver with isColumnTransition=true
+    const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
+    const effectiveModel = resolveModel(taskWithModel, column?.model, true);
+
+    // Persist column model during transition if (column?.model != null) {
+    //   db.run("UPDATE conversations SET model = ? WHERE id = ?", [column.model, conversationId]);
+    // }
+    // Note: No else-if for effectiveModel - we only update when column.model is defined
+    // This preserves user's conversation model when column has no model defined
 
     if (!column?.on_enter_prompt) {
       appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
       db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
-      const freshIdleRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+      const freshIdleRow = db.query<TaskRow, [number]>(
+        `SELECT t.*, c.model AS conversation_model 
+         FROM tasks t 
+         LEFT JOIN conversations c ON c.id = t.conversation_id 
+         WHERE t.id = ?`
+      ).get(taskId)!;
       return { task: mapTask(freshIdleRow), executionId: null };
     }
 
     const resolvedPrompt = column.on_enter_prompt;
-    const updatedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+    const updatedRow = db.query<TaskRow, [number]>(
+      `SELECT t.*, c.model AS conversation_model 
+       FROM tasks t 
+       LEFT JOIN conversations c ON c.id = t.conversation_id 
+       WHERE t.id = ?`
+    ).get(taskId)!;
     const workingDirectory = this.workdirResolver.resolve(updatedRow);
     const transitionMetadata = await this.buildTransitionMetadata(
       config.engine.type,
@@ -96,6 +115,7 @@ export class TransitionExecutor {
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
       ),
+      model: effectiveModel, // Use the resolved model directly
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
     };

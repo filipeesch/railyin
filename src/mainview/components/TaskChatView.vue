@@ -148,11 +148,11 @@
         @send="onSend"
         @enqueue="onEnqueue"
         @confirm-edit="onConfirmEdit"
+        @update:model-id="onModelSelected"
         @dequeue="(msgId) => taskStore.dequeueMessage(task!.id, msgId)"
         @start-edit="(msgId) => taskStore.startEdit(task!.id, msgId)"
         @cancel-edit="() => task && taskStore.cancelEdit(task.id)"
         @cancel="cancel"
-        @update:model-id="onModelChange"
         @compact="compactConversation"
         @manage-models="manageModelsOpen = true"
         @tools-changed="taskStore.onTaskUpdated"
@@ -339,6 +339,20 @@ function onConfirmEdit(msgId: string, text: string, engineText: string, attachme
 async function cancel() {
   if (!task.value) return;
   await taskStore.cancelTask(task.value.id);
+}
+
+// Handle model selection changes
+const previousModelId = ref<string | null>(null);
+async function onModelSelected(newModel: string | null) {
+  if (!task.value || newModel === previousModelId.value) return;
+  
+  try {
+    console.log('[TaskChatView] Setting model for task', task.value.id, 'to', newModel);
+    await taskStore.setModel(task.value.id, newModel);
+    previousModelId.value = newModel;
+  } catch (err) {
+    console.error('[TaskChatView] Failed to set model:', err);
+  }
 }
 
 async function retry() {

@@ -66,8 +66,8 @@
               <Select
                 v-model="wsForm.engineModel"
                 :options="groupedModels"
-                option-group-label="label"
-                option-group-children="items"
+                optionGroupLabel="label"
+                optionGroupChildren="items"
                 option-label="label"
                 option-value="id"
                 :placeholder="modelsLoading ? 'Loading models…' : 'Engine default'"

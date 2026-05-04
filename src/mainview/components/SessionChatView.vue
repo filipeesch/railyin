@@ -104,7 +104,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from "vue";
+import { ref, computed, nextTick, watch } from "vue";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import InputText from "primevue/inputtext";
@@ -131,7 +131,52 @@ const workspaceStore = useWorkspaceStore();
 const toast = useToast();
 
 const session = computed(() => chatStore.activeSession);
-const selectedModelId = ref<string | null>(workspaceStore.availableModels[0]?.id ?? null);
+
+// Local model selection that syncs with session.model
+const selectedModelId = ref<string | null>(null);
+const isUserChangingModel = ref(false);
+
+// Sync selectedModelId when session changes (but not during user-initiated changes)
+watch(
+  () => session.value?.model,
+  (newModel) => {
+    console.log('[SessionChatView] session.model changed:', newModel, 'isUserChangingModel:', isUserChangingModel.value);
+    // Only sync if we're not in the middle of a user-initiated change
+    if (!isUserChangingModel.value) {
+      selectedModelId.value = newModel ?? workspaceStore.availableModels[0]?.id ?? null;
+    }
+  },
+  { immediate: true }
+);
+
+// Persist model changes to backend
+const previousModelId = ref<string | null>(null);
+watch(
+  () => selectedModelId.value,
+  async (newModel, oldModel) => {
+    console.log('[SessionChatView] selectedModelId changed:', oldModel, '->', newModel);
+    if (newModel !== oldModel && session.value && newModel !== previousModelId.value) {
+      try {
+        console.log('[SessionChatView] Calling chatSessions.setModel for session', session.value.id);
+        isUserChangingModel.value = true;
+        await api("chatSessions.setModel", {
+          sessionId: session.value.id,
+          model: newModel,
+        });
+        previousModelId.value = newModel;
+        console.log('[SessionChatView] Model persisted successfully');
+        // Reset the flag after a short delay to allow the session update to propagate
+        setTimeout(() => {
+          isUserChangingModel.value = false;
+        }, 100);
+      } catch (err) {
+        console.error('[SessionChatView] Failed to set model:', err);
+        isUserChangingModel.value = false;
+      }
+    }
+  }
+);
+
 const manageModelsOpen = ref(false);
 const compacting = ref(false);
 

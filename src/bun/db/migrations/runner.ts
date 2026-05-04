@@ -141,16 +141,27 @@ export async function runMigrations(): Promise<void> {
   backupDb();
 
   for (const { migration, checksum } of pending) {
-    if (migration.managesTransaction) {
-      // Migration owns its transaction lifecycle and inserts its own schema_migrations row.
-      migration.up(db);
-    } else {
-      db.transaction(() => {
+    try {
+      if (migration.managesTransaction) {
+        // Migration owns its transaction lifecycle and inserts its own schema_migrations row.
         migration.up(db);
-        db.run("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)", [migration.id, checksum]);
-      })();
+      } else {
+        db.transaction(() => {
+          migration.up(db);
+          db.run("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)", [migration.id, checksum]);
+        })();
+      }
+      console.log(`[db] Applied migration: ${migration.id}`);
+    } catch (error) {
+      console.error(`[db] Failed to apply migration: ${migration.id}`);
+      console.error(`[db] Error: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`[db] Stack trace:`);
+        console.error(error.stack);
+      }
+      console.error(`[db] Rolling back and exiting...`);
+      process.exit(1);
     }
-    console.log(`[db] Applied migration: ${migration.id}`);
   }
 
   // Backfill checksums for managesTransaction migrations that inserted (id, NULL)

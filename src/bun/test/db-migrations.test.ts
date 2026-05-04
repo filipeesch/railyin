@@ -103,6 +103,19 @@ describe("runMigrations", () => {
         status TEXT,
         conversation_id INTEGER
       );
+      CREATE TABLE boards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_key TEXT NOT NULL DEFAULT 'default',
+        name TEXT NOT NULL,
+        workflow_template_id TEXT NOT NULL,
+        project_keys TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE enabled_models (
+        workspace_key TEXT NOT NULL,
+        qualified_model_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_key, qualified_model_id)
+      );
       INSERT INTO workspaces (id, name, config_key) VALUES (1, 'My Workspace', 'default');
     `);
     rawDb.close();
@@ -133,7 +146,7 @@ describe("runMigrations", () => {
     // Insert a task with an arbitrary project_key — no compat row required
     expect(() =>
       db.run(
-        "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state, conversation_id) VALUES (?, 'nonexistent-proj', 'FK-Free Task', 'backlog', 'idle', ?)",
+        "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state, conversation_id, created_at) VALUES (?, 'nonexistent-proj', 'FK-Free Task', 'backlog', 'idle', ?, datetime('now'))",
         [boardId, convId],
       )
     ).not.toThrow();
@@ -224,6 +237,19 @@ describe("runMigrations", () => {
         (11, 1, 101),
         (12, 2, NULL),
         (13, 3, NULL);
+      CREATE TABLE boards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_key TEXT NOT NULL DEFAULT 'default',
+        name TEXT NOT NULL,
+        workflow_template_id TEXT NOT NULL,
+        project_keys TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE enabled_models (
+        workspace_key TEXT NOT NULL,
+        qualified_model_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_key, qualified_model_id)
+      );
       INSERT INTO stream_events (id, task_id, execution_id, seq, block_id, type, content) VALUES
         (201, 1, 11, 0, 'exec-first', 'assistant', 'alpha'),
         (202, 2, 12, 0, 'task-fallback', 'assistant', 'beta'),

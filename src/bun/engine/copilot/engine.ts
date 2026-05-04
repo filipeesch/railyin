@@ -420,7 +420,7 @@ export class CopilotEngine implements ExecutionEngine {
       );
     }
     const autoModel: EngineModelInfo = {
-      qualifiedId: null,
+      qualifiedId: "copilot/auto",
       displayName: "Auto",
       description: "Copilot will automatically choose the best available model for your request.",
       contextWindow: undefined,

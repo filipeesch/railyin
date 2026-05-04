@@ -165,10 +165,10 @@
         <Select
           :model-value="props.modelId ?? workspaceStore.availableModels[0]?.id ?? null"
           :options="groupedModels"
-          option-group-label="label"
-          option-group-children="items"
-          option-label="label"
-          option-value="id"
+          optionGroupLabel="label"
+          optionGroupChildren="items"
+          optionLabel="label"
+          optionValue="id"
           filter
           filter-placeholder="Search models…"
           size="small"
@@ -407,9 +407,9 @@ const mcpHasWarning = computed(() => mcpStatuses.value.some((status) => status.s
 const groupedModels = computed(() => {
   const groups: Record<string, Array<{ id: string | null; label: string; description?: string; contextWindow: number | null }>> = {};
   for (const model of workspaceStore.availableModels) {
-    const provider = model.id == null
-      ? "copilot"
-      : (model.id.includes("/") ? model.id.slice(0, model.id.indexOf("/")) : "other");
+    const provider = model.id?.includes("/") 
+      ? model.id.slice(0, model.id.indexOf("/")) 
+      : "other";
     if (!groups[provider]) groups[provider] = [];
     groups[provider].push({
       id: model.id,

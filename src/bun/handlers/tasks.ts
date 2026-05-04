@@ -20,6 +20,7 @@ import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { validateTransition } from "../workflow/transition-validator.ts";
 import { getColumnConfig } from "../workflow/column-config.ts";
 import { PositionService } from "./position-service.ts";
+import { seedConversationModel } from "../engine/execution/model-resolver";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────
 
@@ -34,10 +35,12 @@ function fetchTaskWithDetail(db: Database, taskId: number): Task | null {
   const row = db
     .query<TaskRow, [number]>(
       `SELECT t.*,
-              gc.worktree_status, gc.branch_name, gc.worktree_path,
-              (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
-       FROM tasks t
+              gc.worktree_status, gc.branch_name, gc.worktree_path, 
+              (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count,
+              c.model AS conversation_model
+       FROM tasks t 
        LEFT JOIN task_git_context gc ON gc.task_id = t.id
+       LEFT JOIN conversations c ON c.id = t.conversation_id
        WHERE t.id = ?`,
     )
     .get(taskId);
@@ -52,9 +55,11 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         .query<TaskRow, [number]>(
           `SELECT t.*,
                   gc.worktree_status, gc.branch_name, gc.worktree_path,
+                  c.model AS conversation_model,
                   (SELECT COUNT(*) FROM executions WHERE task_id = t.id) AS execution_count
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
+           LEFT JOIN conversations c ON c.id = t.conversation_id
            WHERE t.board_id = ?
            ORDER BY t.position ASC`,
         )
@@ -96,41 +101,26 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
       const convResult = db.run("INSERT INTO conversations (task_id) VALUES (0)");
       const conversationId = convResult.lastInsertRowid as number;
 
-      const engineModel = (() => {
-        const engine = getWorkspaceConfig(workspaceKey).engine;
-        return "model" in engine ? (engine.model || null) : null;
-      })();
+      // Seed conversation model with workspace default (if configured)
+      seedConversationModel(db, conversationId, params.boardId);
 
-      const taskResult = engineModel
-        ? db.run(
-            `INSERT INTO tasks
-               (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position, model)
-             VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
-               COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000, ?)`,
-            [
-              params.boardId,
-              params.projectKey,
-              params.title.trim(),
-              params.description.trim(),
-              conversationId,
-              params.boardId,
-              engineModel,
-            ],
-          )
-        : db.run(
-            `INSERT INTO tasks
-               (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position)
-             VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
-               COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000)`,
-            [
-              params.boardId,
-              params.projectKey,
-              params.title.trim(),
-              params.description.trim(),
-              conversationId,
-              params.boardId,
-            ],
-          );
+      // Note: No automatic model seeding in new architecture
+      // Model must be explicitly set via tasks.setModel after creation
+
+      const taskResult = db.run(
+        `INSERT INTO tasks
+           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position)
+         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
+           COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000)`,
+        [
+          params.boardId,
+          params.projectKey,
+          params.title.trim(),
+          params.description.trim(),
+          conversationId,
+          params.boardId,
+        ],
+      );
       const taskId = taskResult.lastInsertRowid as number;
 
       // Fix up conversation → task link
@@ -154,12 +144,11 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
         `Task: ${params.title}\n\n${params.description}`,
       );
 
-      const row = db
-        .query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?")
-        .get(taskId)!;
+      const row = fetchTaskWithDetail(db, taskId);
+      if (!row) throw new Error(`Task ${taskId} not found after creation`);
 
-      onTaskUpdated(mapTask(row));
-      return mapTask(row);
+      onTaskUpdated(row);
+      return row;
     },
 
     "tasks.transition": async (params: {
@@ -229,9 +218,10 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
           } as unknown as Record<string, unknown>);
         }
 
-        const deferredRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId)!;
-        onTaskUpdated(mapTask(deferredRow));
-        return { task: mapTask(deferredRow), executionId: null };
+        const deferredRow = fetchTaskWithDetail(db, params.taskId);
+        if (!deferredRow) throw new Error(`Task ${params.taskId} not found`);
+        onTaskUpdated(deferredRow);
+        return { task: deferredRow, executionId: null };
       }
 
       const taskRow = db
@@ -279,9 +269,10 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
             null,
             `Worktree setup failed: ${errMsg}`,
           );
-          const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId)!;
-          onTaskUpdated(mapTask(failedRow));
-          return { task: mapTask(failedRow), executionId: null };
+          const failedRow = fetchTaskWithDetail(db, params.taskId);
+          if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
+          onTaskUpdated(failedRow);
+          return { task: failedRow, executionId: null };
         }
       }
 
@@ -304,9 +295,11 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
       }
 
       const taskWorkspaceKey = getTaskWorkspaceKey(params.taskId);
-      const taskRow2 = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
-      const resolvedCtxWindow = taskRow2?.model
-        ? await resolveContextWindow(taskRow2.model, taskWorkspaceKey, orchestrator)
+      const taskRow2 = db.query<{ conversation_model: string | null }, [number]>(
+        "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?"
+      ).get(params.taskId);
+      const resolvedCtxWindow = taskRow2?.conversation_model
+        ? await resolveContextWindow(taskRow2.conversation_model, taskWorkspaceKey, orchestrator)
         : 128_000;
       const warning = estimateContextWarning(db, params.taskId, resolvedCtxWindow);
       if (warning) {
@@ -349,8 +342,8 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
 
         const postStatus = (msg: string) => {
           appendMessage(db, params.taskId, retryConvId!, "system", null, msg);
-          const updated = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
-          if (updated) onTaskUpdated(mapTask(updated));
+          const updated = fetchTaskWithDetail(db, params.taskId);
+          if (updated) onTaskUpdated(updated);
         };
 
         try {
@@ -359,10 +352,11 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
           appendMessage(db, params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
-          const failedRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId)!;
-          onTaskUpdated(mapTask(failedRow));
+          const failedRow = fetchTaskWithDetail(db, params.taskId);
+          if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
+          onTaskUpdated(failedRow);
           // Return a fake execution id of -1 since we can't proceed — caller won't use it
-          return { task: mapTask(failedRow), executionId: -1 };
+          return { task: failedRow, executionId: -1 };
         }
       }
 
@@ -371,18 +365,25 @@ export function taskHandlers(db: Database, orchestrator: ExecutionCoordinator | 
 
     // ─── tasks.setModel ──────────────────────────────────────────────────────
     "tasks.setModel": async (params: { taskId: number; model: string | null }): Promise<Task> => {
-
-      db.run("UPDATE tasks SET model = ? WHERE id = ?", [params.model, params.taskId]);
       const task = fetchTaskWithDetail(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
-      return task;
+      if (task.conversationId === null) {
+        throw new Error(`Task ${params.taskId} has no conversation`);
+      }
+      db.run("UPDATE conversations SET model = ? WHERE id = ?", [params.model, task.conversationId]);
+      // Return updated task with the new model
+      return { ...task, model: params.model };
     },
 
     // ─── tasks.contextUsage ──────────────────────────────────────────────────
     "tasks.contextUsage": async (params: { taskId: number }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
 
-      const task = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(params.taskId);
-      const taskModel = task?.model ?? null;
+      const task = db
+        .query<{ conversation_model: string | null }, [number]>(
+          "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?",
+        )
+        .get(params.taskId);
+      const taskModel = task?.conversation_model ?? null;
       const workspaceKey = getTaskWorkspaceKey(params.taskId);
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
       const maxTokens = await runWithConfig(workspaceConfig, async () => (

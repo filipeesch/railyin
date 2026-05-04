@@ -61,6 +61,7 @@ export interface ChatSession {
   title: string;
   status: 'idle' | 'running' | 'waiting_user' | 'archived';
   conversationId: number;
+  model: string | null;
   enabledMcpTools: string[] | null;
   lastActivityAt: string;
   lastReadAt: string | null;
@@ -884,9 +885,17 @@ export type RailynAPI = {
     params: { sessionId: number };
     response: void;
   };
+  "chatSessions.get": {
+    params: { sessionId: number };
+    response: ChatSession;
+  };
   "chatSessions.sendMessage": {
     params: { sessionId: number; content: string; engineContent?: string; model?: string | null; attachments?: Attachment[] };
     response: { messageId: number; executionId: number };
+  };
+  "chatSessions.setModel": {
+    params: { sessionId: number; model: string | null };
+    response: ChatSession;
   };
   "chatSessions.getMessages": {
     params: { sessionId: number; beforeMessageId?: number; limit?: number };

@@ -102,15 +102,18 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
       // No overlap → engine switched or first use; treat all engine models as enabled.
       const activeIds = enabledIds.length > 0 ? enabledIds : [...concreteEngineIds];
 
-      return engineModels
-        .filter((m) => m.qualifiedId == null || activeIds.includes(m.qualifiedId))
-        .map((m) => ({
-          id: m.qualifiedId,
-          displayName: m.displayName,
-          description: m.description,
-          contextWindow: m.contextWindow ?? null,
-          supportsManualCompact: m.supportsManualCompact,
-        }));
+      // Filter models by enabled status - all models treated equally
+      const filteredModels = engineModels.filter((m) => 
+        m.qualifiedId == null || activeIds.includes(m.qualifiedId)
+      );
+      
+      return filteredModels.map((m) => ({
+        id: m.qualifiedId,
+        displayName: m.displayName,
+        description: m.description,
+        contextWindow: m.contextWindow ?? null,
+        supportsManualCompact: m.supportsManualCompact,
+      }));
     },
   };
 }

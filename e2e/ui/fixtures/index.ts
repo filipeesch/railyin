@@ -71,6 +71,19 @@ export const test = base.extend<Fixtures>({
             // Chat sessions — tests override as needed
             .returns("chatSessions.list", [])
             .returns("chatSessions.create", { id: 900, workspaceKey: "test-workspace", title: "New Chat", status: "idle", conversationId: 900, enabledMcpTools: null, lastActivityAt: new Date().toISOString(), lastReadAt: null, archivedAt: null, createdAt: new Date().toISOString() })
+            .handle("chatSessions.get", ({ sessionId }) => ({
+                id: sessionId,
+                conversationId: sessionId,
+                title: `Session ${sessionId}`,
+                workspaceKey: "test-workspace",
+                status: "idle",
+                enabledMcpTools: null,
+                lastActivityAt: new Date().toISOString(),
+                lastReadAt: null,
+                archivedAt: null,
+                createdAt: new Date().toISOString(),
+                model: null,
+            }))
             .returns("chatSessions.getMessages", { messages: [], hasMore: false })
             .returns("chatSessions.rename", undefined)
             .returns("chatSessions.archive", undefined)

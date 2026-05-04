@@ -160,7 +160,8 @@ export function createBackendRpcRuntime(options: {
          VALUES (?, ?, ?, 'ready', 'test-branch')`,
                 [taskId, gitDir, gitDir],
             );
-            db.run("UPDATE tasks SET model = ?, workflow_state = 'plan', execution_state = 'idle' WHERE id = ?", [model, taskId]);
+            db.run("UPDATE conversations SET model = ? WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [model, taskId]);
+            db.run("UPDATE tasks SET workflow_state = 'plan', execution_state = 'idle' WHERE id = ?", [taskId]);
             db.run(
                 "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ('default', ?)",
                 [model],

@@ -106,30 +106,30 @@ describe("HumanTurnExecutor — model resolution (normal path)", () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = 'task/custom-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'task/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "hello");
 
     expect(builder.lastBuilt?.model).toBe("task/custom-model");
     // No write-back needed since task already had model
-    const row = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(taskId)!;
+    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
     expect(row.model).toBe("task/custom-model");
   });
 
-  // HT-2: task.model null, engine.model configured → engine.model used + written back to DB
-  it("falls back to engine.model and writes it back to DB when task has no model", async () => {
+  // HT-2: task.model null, engine.model configured → uses empty string (no fallback)
+  it("uses empty string when task has no model (no fallback to engine defaults)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "hello");
 
-    expect(builder.lastBuilt?.model).toBe("copilot/mock-model");
-    const row = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(taskId)!;
-    expect(row.model).toBe("copilot/mock-model");
+    expect(builder.lastBuilt?.model).toBe(""); // No fallback to engine model
+    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    expect(row.model).toBeNull(); // DB remains NULL
   });
 
   // HT-4: no model anywhere → empty string, no DB write-back
@@ -137,13 +137,13 @@ describe("HumanTurnExecutor — model resolution (normal path)", () => {
     const cfg = setupTestConfig("", gitDir, [], null);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "hello");
 
     expect(builder.lastBuilt?.model).toBe("");
-    const row = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(taskId)!;
+    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
     expect(row.model).toBeNull();
   });
 });
@@ -162,18 +162,18 @@ describe("HumanTurnExecutor — model resolution (engine-lost fallback path)", (
   }
 
   // HT-3: engine-lost fallback — task.model null, engine.model configured → write-back + engine.model used
-  it("falls back to engine.model in engine-lost path and writes it back to DB", async () => {
+  it("uses empty string in engine-lost path when no model is configured", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
     seedWaitingUserTask(taskId);
 
     const { builder, executor } = makeExecutor(new TestEngine(true));
     await executor.execute(taskId, "continue please");
 
-    expect(builder.lastBuilt?.model).toBe("copilot/mock-model");
-    const row = db.query<{ model: string | null }, [number]>("SELECT model FROM tasks WHERE id = ?").get(taskId)!;
-    expect(row.model).toBe("copilot/mock-model");
+    expect(builder.lastBuilt?.model).toBe(""); // No fallback to engine model
+    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    expect(row.model).toBeNull(); // DB remains NULL
   });
 });

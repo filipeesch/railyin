@@ -1,19 +1,21 @@
-import type { ConversationMessage } from "../../../shared/rpc-types.ts";
-import type { Attachment } from "../../../shared/rpc-types.ts";
+import type { ConversationMessage } from "../../../shared/rpc-types";
+import type { Attachment } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
-import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
-import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
-import { getTaskWorkspaceKey, getWorkspaceConfig } from "../../workspace-context.ts";
-import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config.ts";
-import type { EngineRegistry } from "../engine-registry.ts";
-import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
-import type { WorkingDirectoryResolver } from "./working-directory-resolver.ts";
-import type { StreamProcessor } from "../stream/stream-processor.ts";
-import type { OnTaskUpdated } from "../types.ts";
-import type { TaskRow, ConversationMessageRow } from "../../db/row-types.ts";
-import { resolveTaskModel } from "./model-resolver.ts";
+import { mapTask, mapConversationMessage } from "../../db/mappers";
+import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
+import { getTaskWorkspaceKey, getWorkspaceConfig } from "../../workspace-context";
+import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config";
+import type { EngineRegistry } from "../engine-registry";
+import type { ExecutionParamsBuilder } from "./execution-params-builder";
+import type { WorkingDirectoryResolver } from "./working-directory-resolver";
+import type { StreamProcessor } from "../stream/stream-processor";
+import type { OnTaskUpdated } from "../types";
+import type { TaskRow, ConversationMessageRow } from "../../db/row-types";
+import { resolveModel } from "./model-resolver";
+
 
 export class HumanTurnExecutor {
+
   constructor(
     private readonly db: Database,
     private readonly engineRegistry: EngineRegistry,
@@ -32,7 +34,12 @@ export class HumanTurnExecutor {
     engineContent?: string,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = this.db;
-    const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+    const task = db.query<TaskRow, [number]>(
+      `SELECT t.*, c.model AS conversation_model 
+       FROM tasks t 
+       LEFT JOIN conversations c ON c.id = t.conversation_id 
+       WHERE t.id = ?`
+    ).get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const config = getWorkspaceConfig(getTaskWorkspaceKey(taskId));
     const engine = this.engineRegistry.getEngine(getTaskWorkspaceKey(taskId));
@@ -46,7 +53,12 @@ export class HumanTurnExecutor {
         "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
         [task.current_execution_id],
       );
-      this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
+      this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>(
+        `SELECT t.*, c.model AS conversation_model 
+         FROM tasks t 
+         LEFT JOIN conversations c ON c.id = t.conversation_id 
+         WHERE t.id = ?`
+      ).get(taskId)!));
       try {
         await engine.resume(task.current_execution_id, { type: "ask_user", content: engineContent ?? content });
         const msgRow = db
@@ -65,12 +77,18 @@ export class HumanTurnExecutor {
           [taskId],
         );
 
+        // Get the model from the conversation
+        const conversationModel = db
+          .prepare("SELECT model FROM conversations WHERE id = ?")
+          .get(task.conversation_id) as { model: string | null } | undefined;
+        const modelValue = conversationModel?.model ?? null;
+
         const column = getColumnConfig(config, task.board_id, task.workflow_state);
-        const resolvedFallbackModel = resolveTaskModel(column?.model, task.model, config.engine);
-        if (resolvedFallbackModel && !task.model) {
-          db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedFallbackModel, taskId]);
-        }
-        const taskForFallback: TaskRow = resolvedFallbackModel ? { ...task, model: resolvedFallbackModel } : task;
+        // Use centralized model resolver with isColumnTransition=false
+        const taskWithModelFallback = { ...task, conversation_model: modelValue };
+        const effectiveModel = resolveModel(taskWithModelFallback, column?.model, false);
+        // Note: No model updates during fallback - conversation model is authoritative
+        const taskForFallback: TaskRow = { ...task, conversation_model: modelValue };
         const execResult = db.run(
           `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
            VALUES (?, ?, ?, ?, 'human-turn', 'running', ?)`,
@@ -81,7 +99,12 @@ export class HumanTurnExecutor {
           "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
           [newExecutionId, taskId],
         );
-        this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
+        this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>(
+          `SELECT t.*, c.model AS conversation_model 
+           FROM tasks t 
+           LEFT JOIN conversations c ON c.id = t.conversation_id 
+           WHERE t.id = ?`
+        ).get(taskId)!));
 
         const signal = this.streamProcessor.createSignal(newExecutionId);
         const execParams = {
@@ -109,11 +132,14 @@ export class HumanTurnExecutor {
     }
 
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
-    const resolvedModel = resolveTaskModel(column?.model, task.model, config.engine);
-    if (resolvedModel && !task.model) {
-      db.run("UPDATE tasks SET model = ? WHERE id = ?", [resolvedModel, taskId]);
+    // Use centralized model resolver with isColumnTransition=false (not a transition)
+    const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
+    const resolvedModel = resolveModel(taskWithModel, column?.model, false);
+    // Persist column model if it resolved to one and conversation doesn't have it
+    if (resolvedModel && !task.conversation_model) {
+      db.run("UPDATE conversations SET model = ? WHERE id = ?", [resolvedModel, task.conversation_id]);
     }
-    const taskWithModel: TaskRow = resolvedModel ? { ...task, model: resolvedModel } : task;
+    const taskForExecution: TaskRow = resolvedModel ? { ...task, conversation_model: resolvedModel } : task;
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -125,7 +151,12 @@ export class HumanTurnExecutor {
       "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
       [executionId, taskId],
     );
-    this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
+    this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>(
+      `SELECT t.*, c.model AS conversation_model 
+       FROM tasks t 
+       LEFT JOIN conversations c ON c.id = t.conversation_id 
+       WHERE t.id = ?`
+    ).get(taskId)!));
 
     const resolvedPrompt = engineContent ?? content;
     const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);
@@ -133,12 +164,12 @@ export class HumanTurnExecutor {
         const signal = this.streamProcessor.createSignal(executionId);
     const execParams = {
       ...this.paramsBuilder.build(
-        taskWithModel,
+        taskForExecution,
         conversationId,
         executionId,
         resolvedPrompt,
         buildSystemInstructions(config, task.board_id, task.workflow_state),
-        this.workdirResolver.resolve(taskWithModel),
+        this.workdirResolver.resolve(taskForExecution),
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         attachments,

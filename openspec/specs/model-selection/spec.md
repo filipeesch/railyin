@@ -4,7 +4,7 @@ Allows the user to select the AI model used for a task from the chat drawer, and
 ## Requirements
 
 ### Requirement: User can select the AI model for a task from the chat drawer
-The system SHALL allow the user to select an AI model from a searchable dropdown in the task detail drawer. The dropdown SHALL show models returned by the active engine's `listModels()`. For Copilot, the dropdown SHALL always include `Auto` as the first selectable option, and that option SHALL represent a null model identity (no pinned model). The selected model SHALL be persisted on the task and used for all subsequent executions of that task.
+The system SHALL allow the user to select an AI model from a searchable dropdown in the task detail drawer. The dropdown SHALL show models returned by the active engine's `listModels()`. For Copilot, the dropdown SHALL always include `Auto` as the first selectable option, and that option SHALL represent a null model identity (no pinned model). The selected model SHALL be persisted on the conversation and used for all subsequent executions of that task.
 
 #### Scenario: Searchable model dropdown shows engine models grouped by provider
 - **WHEN** the task detail drawer opens and `models.listEnabled` returns a non-empty list
@@ -20,41 +20,37 @@ The system SHALL allow the user to select an AI model from a searchable dropdown
 - **WHEN** the user opens the model dropdown and types a search string
 - **THEN** only models whose id contains the typed string (case-insensitive) are shown
 
-#### Scenario: Model selection persisted to task
+#### Scenario: Model selection persisted to conversation
 - **WHEN** the user selects a different model from the dropdown
-- **THEN** the task's `model` field is updated via `tasks.setModel` and all subsequent executions use that model
+- **THEN** the conversation's `model` field is updated and all subsequent executions use that model
 
-#### Scenario: Auto selection persists as null task model
+#### Scenario: Auto selection persists as null conversation model
 - **WHEN** the user selects `Auto` in the Copilot model dropdown
-- **THEN** `tasks.setModel` persists `task.model = null`
+- **THEN** the conversation's `model` is persisted as `null`
 - **AND** subsequent executions run without a pinned Copilot model
 
 #### Scenario: Model resets to column default on column transition
-- **WHEN** a task is moved to a new workflow column
-- **THEN** the task's `model` is set to the column's configured `model` field, or the workspace default if the column has none
+- **WHEN** a task is moved to a new workflow column AND the column has a model defined
+- **THEN** the conversation's `model` is set to the column's configured `model` field
+
+#### Scenario: Model preserved when column has no model
+- **WHEN** a task is moved to a new workflow column AND the column has NO model defined
+- **THEN** the conversation's `model` remains unchanged (user's selection is preserved)
 
 ### Requirement: Workflow column can declare a preferred model as a fully-qualified ID
-The system SHALL allow each workflow column to declare an optional `model` field in the workflow YAML. When a task transitions into a column, the effective model SHALL be resolved in priority order: `column.model → task.model → engine.model → ""`. Column model takes precedence over all other sources. When a column has no model configured, `task.model` is preserved; the `engine.model` from workspace config is used as a fallback only when `task.model` is also null.
+The system SHALL allow each workflow column to declare an optional `model` field in the workflow YAML. When a task transitions into a column that has a model defined, the conversation's model SHALL be updated to the column's model. When a task transitions into a column with no model defined, the conversation's model SHALL be left unchanged. The effective model for execution SHALL be: `conversation.model → engine.model → ""`. When a column has no model configured, `conversation.model` is preserved; the `engine.model` from workspace config is used as a fallback only when `conversation.model` is also null.
 
 #### Scenario: Column model applied on entry as fully-qualified ID
 - **WHEN** a task transitions into a column that has `model: "anthropic/claude-opus-4-5"` defined
-- **THEN** the task's `model` is updated to `"anthropic/claude-opus-4-5"` before any execution is started
+- **THEN** the conversation's `model` is updated to `"anthropic/claude-opus-4-5"` before any execution is started
 
 #### Scenario: Column model applied on entry (Claude)
 - **WHEN** a task transitions into a column that has `model: "claude-sonnet-4-6"` and the active engine is Claude
-- **THEN** the task's `model` is updated to `"claude-sonnet-4-6"` and passed to the Claude engine
+- **THEN** the conversation's `model` is updated to `"claude-sonnet-4-6"` and passed to the Claude engine
 
-#### Scenario: Task model preserved when column has no model
-- **WHEN** a task transitions into a column with no `model` field and the task has `model: "gpt-4.1"` set
-- **THEN** the task's `model` remains `"gpt-4.1"` and subsequent executions use that model
-
-#### Scenario: Column default falls back to engine.model when task model is null
-- **WHEN** a task transitions into a column with no `model` field, `task.model` is null, and `engine.model` is set to `"gpt-4.1"` in workspace config
-- **THEN** the task's `model` is set to `"gpt-4.1"` before execution
-
-#### Scenario: Column default falls back to null when neither column nor task nor engine specifies a model
-- **WHEN** a task transitions into a column with no `model` field, `task.model` is null, and `engine.model` is not set in workspace config
-- **THEN** the task's `model` is left unchanged (null) and the engine uses its built-in default
+#### Scenario: Conversation model preserved when column has no model
+- **WHEN** a task transitions into a column with no `model` field and the conversation has `model: "gpt-4.1"` set
+- **THEN** the conversation's `model` remains `"gpt-4.1"` and subsequent executions use that model
 
 ### Requirement: Available models are fetched dynamically from the provider
 The system SHALL expose a `models.list` RPC that delegates to the active engine's `listModels()` method. For the native engine, this calls `GET {base_url}/v1/models` on each configured provider. For the Copilot engine, this returns models available through the Copilot subscription. For the Claude engine, this returns models available through the Claude Agent SDK in the same provider-grouped shape used by the rest of the product, with a single Claude provider group.
