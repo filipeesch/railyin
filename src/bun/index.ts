@@ -53,8 +53,8 @@ declare const __RAILYN_FORCE_DEBUG__: boolean | undefined;
 declare const __RAILYN_FORCE_MEMORY_DB__: boolean | undefined;
 
 const argv = process.argv.slice(2);
-if (__RAILYN_FORCE_DEBUG__) process.env.RAILYN_DEBUG = "1";
-if (__RAILYN_FORCE_MEMORY_DB__) process.env.RAILYN_DB = ":memory:";
+if (typeof __RAILYN_FORCE_DEBUG__ !== "undefined" && __RAILYN_FORCE_DEBUG__) process.env.RAILYN_DEBUG = "1";
+if (typeof __RAILYN_FORCE_MEMORY_DB__ !== "undefined" && __RAILYN_FORCE_MEMORY_DB__) process.env.RAILYN_DB = ":memory:";
 if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
