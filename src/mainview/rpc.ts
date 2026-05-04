@@ -47,6 +47,9 @@ let _onCodeRef: (ref: CodeRef) => void = () => { };
 let _onChatSessionUpdated: (session: ChatSession) => void = () => { };
 let _onChatSessionCreated: (session: ChatSession) => void = () => { };
 
+// Per-token install line listeners — keyed by token, auto-cleaned when unregistered
+const _installLineListeners = new Map<string, (line: string) => void>();
+
 export function onStreamError(cb: (payload: StreamError) => void) { _onStreamError = cb; }
 export function onStreamEventMessage(cb: (payload: StreamEvent) => void) { _onStreamEvent = cb; }
 export function onTaskUpdated(cb: (task: Task) => void) { _onTaskUpdated = cb; }
@@ -55,6 +58,11 @@ export function onWorkflowReloaded(cb: () => void) { _onWorkflowReloaded = cb; }
 export function onCodeRef(cb: (ref: CodeRef) => void) { _onCodeRef = cb; }
 export function onChatSessionUpdated(cb: (session: ChatSession) => void) { _onChatSessionUpdated = cb; }
 export function onChatSessionCreated(cb: (session: ChatSession) => void) { _onChatSessionCreated = cb; }
+
+export function onInstallLine(token: string, cb: (line: string) => void) {
+  _installLineListeners.set(token, cb);
+  return () => _installLineListeners.delete(token);
+}
 
 // ─── WebSocket push connection ────────────────────────────────────────────────
 
@@ -87,6 +95,11 @@ function connectWs(): void {
       case "code.ref": _onCodeRef(msg.payload); break;
       case "chatSession.updated": _onChatSessionUpdated(msg.payload); break;
       case "chatSession.created": _onChatSessionCreated(msg.payload); break;
+      case "lsp.install.line": {
+        const listener = _installLineListeners.get(msg.payload.token);
+        if (listener) listener(msg.payload.line);
+        break;
+      }
     }
   };
 

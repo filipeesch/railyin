@@ -102,6 +102,52 @@ export const LANGUAGE_REGISTRY: LanguageEntry[] = [
     ],
   },
   {
+    name: "Java",
+    detectionGlobs: ["pom.xml", "build.gradle", "build.gradle.kts", "gradlew", "*.java"],
+    serverName: "jdtls",
+    extensions: [".java"],
+    installOptions: [
+      {
+        label: "Homebrew",
+        command: "brew install jdtls",
+        platforms: ["macos"],
+      },
+      {
+        label: "SDKMAN",
+        command: "sdk install jdtls",
+        platforms: ["linux", "macos"],
+      },
+      {
+        label: "Download from Eclipse",
+        command: "echo 'Download jdtls from https://download.eclipse.org/jdtls/ and add to PATH'",
+        platforms: ["*"],
+      },
+    ],
+  },
+  {
+    name: "Kotlin",
+    detectionGlobs: ["*.kt", "*.kts", "settings.gradle.kts", "build.gradle.kts"],
+    serverName: "kotlin-language-server",
+    extensions: [".kt", ".kts"],
+    installOptions: [
+      {
+        label: "Homebrew",
+        command: "brew install kotlin-language-server",
+        platforms: ["macos"],
+      },
+      {
+        label: "GitHub releases",
+        command: "curl -L https://github.com/fwcd/kotlin-language-server/releases/latest/download/server.zip -o /tmp/kls.zip && unzip /tmp/kls.zip -d ~/.local/kotlin-language-server",
+        platforms: ["linux"],
+      },
+      {
+        label: "Download from GitHub",
+        command: "echo 'Download kotlin-language-server from https://github.com/fwcd/kotlin-language-server/releases and add to PATH'",
+        platforms: ["*"],
+      },
+    ],
+  },
+  {
     name: "Ruby",
     detectionGlobs: ["Gemfile", "*.gemspec", ".ruby-version"],
     serverName: "solargraph",

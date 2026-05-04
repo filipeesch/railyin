@@ -177,7 +177,7 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...conversationHandlers(db, orchestrator),
   ...workflowHandlers(notifier.notifyWorkflowReloaded.bind(notifier)),
   ...launchHandlers(db),
-  ...lspHandlers(db, wsRepo),
+  ...lspHandlers(db, wsRepo, undefined, undefined, channel.broadcast.bind(channel)),
   ...codeServerHandlers(db, channel.broadcast.bind(channel), serverPort),
   ...mcpHandlers(db),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),

@@ -46,6 +46,7 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
     prompt,
     systemInstructions,
     workingDirectory,
+    workspaceKey,
     signal,
     onRawModelMessage,
     attachments,
@@ -58,6 +59,7 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
       prompt,
       systemInstructions,
       workingDirectory,
+      workspaceKey,
       signal,
       onRawModelMessage,
       attachments,
@@ -324,7 +326,7 @@ columns:
     configCleanup = cfg.cleanup;
 
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog', model = 'task/custom-model' WHERE id = ?", [taskId]);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
     db.run("UPDATE boards SET workflow_template_id = 'col-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
@@ -341,7 +343,7 @@ columns:
 
     await executor.execute(taskId, "plan");
 
-    expect(builder.lastBuilt?.model).toBe("column/specific-model");
+    expect(streamProcessor.lastRun?.params.model).toBe("column/specific-model");
   });
 
   // T-6: no model anywhere (task=null, column=none, engine.model=null) → empty string
@@ -361,7 +363,7 @@ columns:
     configCleanup = cfg.cleanup;
 
     const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog', model = NULL WHERE id = ?", [taskId]);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
     db.run("UPDATE boards SET workflow_template_id = 'no-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
@@ -378,7 +380,7 @@ columns:
 
     await executor.execute(taskId, "plan");
 
-    expect(builder.lastBuilt?.model).toBe("");
+    expect(streamProcessor.lastRun?.params.model).toBe("");
   });
 
   it("TE-BADGE: returned task has execution_state='running' (not stale 'idle')", async () => {

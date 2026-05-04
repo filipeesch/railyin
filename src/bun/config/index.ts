@@ -97,7 +97,7 @@ export interface WorkspaceYaml {
   search?: SearchConfig;
   /** @deprecated Legacy native-engine config. No longer supported. */
   anthropic?: AnthropicConfig;
-  /** @deprecated Legacy native-engine config. No longer supported. */
+  /** LSP language server configuration for this workspace. */
   lsp?: LspConfig;
 }
 

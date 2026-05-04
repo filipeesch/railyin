@@ -42,7 +42,7 @@
         />
       </div>
 
-      <TabView v-model:activeIndex="activeTab" @tab-change="onTabChange">
+      <TabView v-model:activeIndex="activeTab" :scrollable="true" @tab-change="onTabChange">
 
         <TabPanel header="Workspace">
           <div class="setup-section">
@@ -139,6 +139,34 @@
                   <span class="project-item__name">{{ p.name }}</span>
                   <code class="project-item__path">{{ p.projectPath.relative }}</code>
                 </div>
+                <!-- Per-language badges -->
+                <div class="project-item__badges">
+                  <template v-if="projectLanguages.get(p.key)?.scanned">
+                    <template v-for="lang in projectLanguages.get(p.key)!.languages" :key="lang.entry.serverName">
+                      <!-- Green: installed and in config -->
+                      <Tag
+                        v-if="lang.alreadyInstalled && lang.inConfig"
+                        :value="lang.entry.name"
+                        severity="success"
+                        class="project-item__lang-badge"
+                      />
+                      <!-- Orange: detected but not fully set up — explicit install button -->
+                      <Button
+                        v-else
+                        :label="`Install ${lang.entry.name} LSP`"
+                        icon="pi pi-download"
+                        severity="warn"
+                        size="small"
+                        outlined
+                        class="project-item__lang-install-btn"
+                        @click="openInstallModal(lang, p.key, p.projectPath.absolute)"
+                      />
+                    </template>
+                    <!-- No languages detected -->
+                    <span v-if="!projectLanguages.get(p.key)!.languages.length" class="project-item__no-lang">—</span>
+                  </template>
+                  <i v-else class="pi pi-spin pi-spinner project-item__scan-spinner" />
+                </div>
                 <div class="project-item__actions">
                   <Button icon="pi pi-pencil" severity="secondary" text rounded size="small" aria-label="Edit project" @click="openEditProject(p)" />
                   <Button icon="pi pi-trash" severity="danger" text rounded size="small" aria-label="Delete project" @click="confirmDeleteProject(p)" />
@@ -148,10 +176,51 @@
             <div class="add-project-row">
               <Button label="Add project" icon="pi pi-plus" severity="secondary" outlined @click="openAddProject" />
             </div>
+          </div>
+        </TabPanel>
+
+        <TabPanel header="Language Servers">
+          <div class="setup-section">
+            <h3>Language Servers</h3>
+            <p class="setup-hint">Detect and configure workspace-wide language servers for code navigation and completions.</p>
+
+            <!-- Existing configured servers -->
+            <div v-if="lspServerCount > 0" class="ls-configured-list">
+              <p class="ls-configured-label">Configured servers ({{ lspServerCount }})</p>
+              <div
+                v-for="server in workspaceStore.config?.lsp?.servers"
+                :key="server.name"
+                class="ls-configured-item"
+              >
+                <i class="pi pi-check-circle ls-configured-item__icon" />
+                <span class="ls-configured-item__name">{{ server.name }}</span>
+                <code class="ls-configured-item__cmd">{{ server.command }}</code>
+              </div>
+            </div>
+
+            <Button
+              label="Scan for languages"
+              icon="pi pi-search"
+              severity="secondary"
+              outlined
+              :loading="lsScanning"
+              class="mb-4"
+              @click="scanLanguages"
+            />
+            <div v-if="lsNoLanguages" class="ls-empty-msg">
+              <template v-if="!visibleProjects.length">
+                <i class="pi pi-info-circle" /> Add projects first so Railyn knows where to scan.
+              </template>
+              <template v-else>
+                <i class="pi pi-info-circle" /> No supported languages detected in your projects.
+              </template>
+            </div>
             <LspSetupPrompt
-              v-if="showLspPrompt"
-              :detected-languages="lspLanguages"
-              :project-path="lastRegisteredPath"
+              v-if="lsLanguages.length > 0"
+              :detected-languages="lsLanguages"
+              :project-path="wsForm.workspacePath || lastKnownProjectPath"
+              :workspace-key="workspaceStore.activeWorkspaceKey ?? 'default'"
+              @done="lsLanguages = []"
             />
           </div>
         </TabPanel>
@@ -201,6 +270,16 @@
     </template>
   </Dialog>
 
+  <LspInstallModal
+    v-if="installModalLang"
+    :lang="installModalLang"
+    :project-key="installModalProjectKey"
+    :project-path="installModalProjectPath"
+    :workspace-key="workspaceStore.activeWorkspaceKey ?? 'default'"
+    @done="onInstallDone(installModalProjectKey, installModalProjectPath)"
+    @cancel="closeInstallModal"
+  />
+
   <Dialog v-model:visible="deleteConfirmVisible" header="Delete Project" :modal="true" :style="{ width: '420px' }">
     <p v-if="deletingProject" style="line-height:1.6">
       Delete <strong>{{ deletingProject.name }}</strong>?
@@ -227,6 +306,7 @@ import Select from "primevue/select";
 import Button from "primevue/button";
 import Message from "primevue/message";
 import Dialog from "primevue/dialog";
+import Tag from "primevue/tag";
 import { api } from "../rpc";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useBoardStore } from "../stores/board";
@@ -234,6 +314,7 @@ import { useProjectStore } from "../stores/project";
 import { useTaskStore } from "../stores/task";
 import ModelTreeView from "../components/ModelTreeView.vue";
 import LspSetupPrompt from "../components/LspSetupPrompt.vue";
+import LspInstallModal from "../components/LspInstallModal.vue";
 import ProjectDetailDialog from "../components/ProjectDetailDialog.vue";
 import BoardSetupTab from "../components/BoardSetupTab.vue";
 import type { LspDetectedLanguage, ModelInfo, Project } from "../../shared/rpc-types";
@@ -246,12 +327,16 @@ const taskStore = useTaskStore();
 
 const activeTab = ref(0);
 
-// Boards tab is index 2; reload boards when the user switches to it so the
-// list is always fresh (and works correctly in tests that set the mock after navigation).
-const BOARDS_TAB_INDEX = 2;
+// Tab indices: 0=Workspace, 1=Projects, 2=Language Servers, 3=Boards, 4=Models
+const LS_TAB_INDEX = 2;
+const PROJECTS_TAB_INDEX = 1;
+const BOARDS_TAB_INDEX = 3;
 function onTabChange(event: { index: number }) {
   if (event.index === BOARDS_TAB_INDEX) {
     boardStore.loadBoards();
+  }
+  if (event.index === PROJECTS_TAB_INDEX) {
+    scanProjectLanguages();
   }
 }
 
@@ -405,9 +490,131 @@ async function createWorkspace() {
 const projectDialogVisible = ref(false);
 const editingProject = ref<Project | null>(null);
 const projectDialogRef = ref<InstanceType<typeof ProjectDetailDialog> | null>(null);
-const lspLanguages = ref<LspDetectedLanguage[]>([]);
-const lastRegisteredPath = ref("");
-const showLspPrompt = ref(false);
+
+// Tracks the last known project path for the Language Servers tab scan fallback
+const lastKnownProjectPath = ref("");
+
+// ── Language Servers tab ─────────────────────────────────────────────────────
+
+/** Per-project language scan cache. Key = project.key */
+interface ProjectScanEntry { scanned: boolean; languages: LspDetectedLanguage[] }
+const projectLanguages = ref(new Map<string, ProjectScanEntry>());
+
+const lsLanguages = ref<LspDetectedLanguage[]>([]);
+const lsScanning = ref(false);
+const lsNoLanguages = ref(false);
+
+const lspServerCount = computed(() =>
+  workspaceStore.config?.lsp?.servers?.length ?? 0,
+);
+
+/** Modal state for per-project install */
+const installModalLang = ref<LspDetectedLanguage | null>(null);
+const installModalProjectKey = ref("");
+const installModalProjectPath = ref("");
+
+function openInstallModal(lang: LspDetectedLanguage, projectKey: string, projectPath: string) {
+  installModalLang.value = lang;
+  installModalProjectKey.value = projectKey;
+  installModalProjectPath.value = projectPath;
+}
+
+function closeInstallModal() {
+  installModalLang.value = null;
+}
+
+async function onInstallDone(projectKey: string, projectPath: string) {
+  installModalLang.value = null;
+  // Re-scan the project to refresh its badges
+  const entry: ProjectScanEntry = { scanned: false, languages: [] };
+  projectLanguages.value.set(projectKey, entry);
+  try {
+    const detected = await api("lsp.detectLanguages", {
+      projectPath,
+      workspaceKey: workspaceStore.activeWorkspaceKey ?? "default",
+    });
+    projectLanguages.value.set(projectKey, { scanned: true, languages: detected });
+  } catch {
+    projectLanguages.value.set(projectKey, { scanned: true, languages: [] });
+  }
+  // Force reactivity
+  projectLanguages.value = new Map(projectLanguages.value);
+  // Reload workspace config to update the LS tab configured list
+  await workspaceStore.load();
+}
+
+function goToLsTab() {
+  activeTab.value = LS_TAB_INDEX;
+}
+
+/** Scan languages for projects that haven't been scanned yet. */
+async function scanProjectLanguages() {
+  const wsKey = workspaceStore.activeWorkspaceKey ?? "default";
+  const projects = visibleProjects.value;
+  if (!projects.length) return;
+
+  const pending = projects.filter((p) => !projectLanguages.value.get(p.key)?.scanned);
+  if (!pending.length) return;
+
+  await Promise.all(
+    pending.map(async (p) => {
+      try {
+        const detected = await api("lsp.detectLanguages", {
+          projectPath: p.projectPath.absolute,
+          workspaceKey: wsKey,
+        });
+        projectLanguages.value.set(p.key, { scanned: true, languages: detected });
+      } catch {
+        projectLanguages.value.set(p.key, { scanned: true, languages: [] });
+      }
+    }),
+  );
+  // Force reactivity
+  projectLanguages.value = new Map(projectLanguages.value);
+}
+
+/** Full re-scan for the Language Servers tab. */
+async function scanLanguages() {
+  lsScanning.value = true;
+  lsNoLanguages.value = false;
+  lsLanguages.value = [];
+  const projects = visibleProjects.value;
+  if (!projects.length) {
+    lsNoLanguages.value = true;
+    lsScanning.value = false;
+    return;
+  }
+  const wsKey = workspaceStore.activeWorkspaceKey ?? "default";
+  try {
+    const results = await Promise.all(
+      projects.map((p) =>
+        api("lsp.detectLanguages", {
+          projectPath: p.projectPath.absolute,
+          workspaceKey: wsKey,
+        }),
+      ),
+    );
+    // Merge by serverName, prefer already-installed entries
+    const merged = new Map<string, LspDetectedLanguage>();
+    for (const langs of results) {
+      for (const lang of langs) {
+        const existing = merged.get(lang.entry.serverName);
+        if (!existing || lang.alreadyInstalled) {
+          merged.set(lang.entry.serverName, lang);
+        }
+      }
+    }
+    const deduped = [...merged.values()];
+    if (deduped.length > 0) {
+      lsLanguages.value = deduped;
+    } else {
+      lsNoLanguages.value = true;
+    }
+  } catch {
+    lsNoLanguages.value = true;
+  }
+  lsScanning.value = false;
+}
 
 function openAddProject() {
   editingProject.value = null;
@@ -442,17 +649,9 @@ async function onProjectSave(data: {
         workspaceKey: workspaceStore.activeWorkspaceKey ?? "default",
         ...data,
       });
+      lastKnownProjectPath.value = registeredProject.projectPath.absolute;
       projectDialogVisible.value = false;
-      try {
-        const detected = await api("lsp.detectLanguages", { projectPath: registeredProject.projectPath.absolute });
-        if (detected.length > 0) {
-          lastRegisteredPath.value = registeredProject.projectPath.absolute;
-          lspLanguages.value = detected;
-          showLspPrompt.value = true;
-          return;
-        }
-      } catch { /* non-fatal */ }
-      if (!visibleBoards.value.length) activeTab.value = 2;
+      if (!visibleBoards.value.length) activeTab.value = BOARDS_TAB_INDEX;
     }
   } catch (e) {
     dialog?.setSaveError(e instanceof Error ? e.message : String(e));
@@ -511,7 +710,11 @@ onMounted(async () => {
   await loadModelsForEngine();
   syncWsForm();
   if (!visibleProjects.value.length) activeTab.value = 1;
-  else if (!visibleBoards.value.length) activeTab.value = 2;
+  else if (!visibleBoards.value.length) activeTab.value = BOARDS_TAB_INDEX;
+  // Trigger background scan for projects tab (default view when projects exist)
+  if (visibleProjects.value.length) {
+    scanProjectLanguages();
+  }
 });
 
 watch(() => workspaceStore.config, () => { syncWsForm(); });
@@ -521,6 +724,12 @@ watch(
   async () => {
     await loadModelsForEngine();
     syncWsForm();
+    // Clear per-project language scan cache when workspace changes
+    projectLanguages.value = new Map();
+    // Re-scan immediately if the Projects tab is already open
+    if (activeTab.value === PROJECTS_TAB_INDEX) {
+      await scanProjectLanguages();
+    }
   },
   { immediate: true },
 );
@@ -560,7 +769,7 @@ async function goToBoard() {
   border-radius: 14px;
   padding: 32px;
   width: 100%;
-  max-width: 600px;
+  max-width: 900px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.07);
 }
 .setup-card__logo { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
@@ -601,6 +810,36 @@ async function goToBoard() {
 .project-item__path { font-size: 0.75rem; color: var(--p-text-muted-color, #94a3b8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-item__actions { display: flex; gap: 2px; flex-shrink: 0; }
 .add-project-row { margin-top: 8px; }
+.project-item__lsp-badge { font-size: 0.72rem; flex-shrink: 0; }
+
+.project-item__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: center;
+  min-width: 60px;
+}
+
+.project-item__lang-badge { font-size: 0.7rem; }
+
+.project-item__lang-install-btn {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  height: auto;
+  line-height: 1.4;
+}
+
+.project-item__no-lang {
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color, #94a3b8);
+}
+
+.project-item__scan-spinner {
+  font-size: 0.8rem;
+  color: var(--p-text-muted-color, #94a3b8);
+}
+.ls-empty-msg { font-size: 0.85rem; color: var(--p-text-muted-color, #94a3b8); display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .new-ws-key-preview { font-size: 0.85rem; color: var(--p-text-muted-color, #64748b); margin-bottom: 4px; }
 .new-ws-key-preview code { font-size: 0.82rem; background: var(--p-surface-100, #f1f5f9); padding: 1px 5px; border-radius: 4px; }
 .mb-2 { margin-bottom: 8px; } .mb-3 { margin-bottom: 12px; } .mb-4 { margin-bottom: 16px; }
@@ -612,6 +851,35 @@ async function goToBoard() {
 .model-select__option-title { font-size: 0.85rem; font-weight: 500; }
 .model-select__option-description { font-size: 0.7rem; color: var(--p-text-muted-color); }
 .model-select__option-id { font-size: 0.68rem; color: var(--p-text-muted-color); font-family: monospace; }
+
+.ls-configured-list {
+  margin-bottom: 16px;
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ls-configured-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--p-text-muted-color, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 12px;
+  background: var(--p-surface-50, #f8fafc);
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  margin: 0;
+}
+.ls-configured-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--p-surface-100, #f1f5f9);
+}
+.ls-configured-item:last-child { border-bottom: none; }
+.ls-configured-item__icon { color: var(--p-green-500, #22c55e); font-size: 0.85rem; }
+.ls-configured-item__name { font-size: 0.85rem; font-weight: 500; flex: 1; }
+.ls-configured-item__cmd { font-size: 0.75rem; color: var(--p-text-muted-color, #64748b); }
 </style>
 
 <style>
@@ -621,4 +889,7 @@ html.dark-mode .project-list { border-color: var(--p-surface-700, #334155); }
 html.dark-mode .project-item { border-bottom-color: var(--p-surface-700, #334155); }
 html.dark-mode .new-ws-key-preview code { background: var(--p-surface-800, #1e293b); }
 html.dark-mode .setup-native-select { background: var(--p-surface-900, #0f172a); border-color: var(--p-surface-700, #334155); color: var(--p-text-color, #e2e8f0); }
+html.dark-mode .ls-configured-list { border-color: var(--p-surface-700, #334155); }
+html.dark-mode .ls-configured-label { background: var(--p-surface-800, #1e293b); border-bottom-color: var(--p-surface-700, #334155); }
+html.dark-mode .ls-configured-item { border-bottom-color: var(--p-surface-700, #334155); }
 </style>

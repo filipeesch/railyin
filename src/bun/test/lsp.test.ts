@@ -50,6 +50,27 @@ describe("detectLanguages", () => {
     const result = detectLanguages(dir);
     expect(result.some((e) => e.serverName === "pyright-langserver")).toBe(true);
   });
+
+  it("detects Java when pom.xml is present", async () => {
+    writeFileSync(join(dir, "pom.xml"), "<project/>");
+    const { detectLanguages } = await import("../lsp/detect.ts");
+    const result = detectLanguages(dir);
+    expect(result.some((e) => e.serverName === "jdtls")).toBe(true);
+  });
+
+  it("detects Java when build.gradle is present", async () => {
+    writeFileSync(join(dir, "build.gradle"), "apply plugin: 'java'");
+    const { detectLanguages } = await import("../lsp/detect.ts");
+    const result = detectLanguages(dir);
+    expect(result.some((e) => e.serverName === "jdtls")).toBe(true);
+  });
+
+  it("detects Kotlin when build.gradle.kts is present", async () => {
+    writeFileSync(join(dir, "build.gradle.kts"), 'plugins { kotlin("jvm") }');
+    const { detectLanguages } = await import("../lsp/detect.ts");
+    const result = detectLanguages(dir);
+    expect(result.some((e) => e.serverName === "kotlin-language-server")).toBe(true);
+  });
 });
 
 // ─── probeInstalled ───────────────────────────────────────────────────────────

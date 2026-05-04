@@ -45,17 +45,18 @@
         <p class="lsp-lang-card__installed-note">
           {{ lang.entry.serverName }} is already on your PATH.
         </p>
-        <Button
-          label="Add to workspace config"
-          icon="pi pi-file-edit"
-          size="small"
-          severity="secondary"
-          :loading="states[lang.entry.serverName]?.adding"
-          :disabled="!!states[lang.entry.serverName]?.added"
-          @click="addToConfig(lang)"
-        />
-        <span v-if="states[lang.entry.serverName]?.added" class="lsp-lang-card__ok">
-          ✓ Added to workspace.yaml
+        <template v-if="!lang.inConfig && !states[lang.entry.serverName]?.added">
+          <Button
+            label="Add to workspace config"
+            icon="pi pi-file-edit"
+            size="small"
+            severity="secondary"
+            :loading="states[lang.entry.serverName]?.adding"
+            @click="addToConfig(lang)"
+          />
+        </template>
+        <span v-else class="lsp-lang-card__ok">
+          ✓ In workspace config
         </span>
       </template>
 
@@ -87,17 +88,18 @@
           <code>{{ lang.entry.serverName }}</code> manually and click
           "Add to config".
         </p>
-        <Button
-          label="Add to workspace config"
-          icon="pi pi-file-edit"
-          size="small"
-          severity="secondary"
-          :loading="states[lang.entry.serverName]?.adding"
-          :disabled="!!states[lang.entry.serverName]?.added"
-          @click="addToConfig(lang)"
-        />
-        <span v-if="states[lang.entry.serverName]?.added" class="lsp-lang-card__ok">
-          ✓ Added to workspace.yaml
+        <template v-if="!lang.inConfig && !states[lang.entry.serverName]?.added">
+          <Button
+            label="Add to workspace config"
+            icon="pi pi-file-edit"
+            size="small"
+            severity="secondary"
+            :loading="states[lang.entry.serverName]?.adding"
+            @click="addToConfig(lang)"
+          />
+        </template>
+        <span v-else class="lsp-lang-card__ok">
+          ✓ In workspace config
         </span>
       </template>
 
@@ -120,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, computed } from "vue";
+import { reactive, computed, watch } from "vue";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Select from "primevue/select";
@@ -132,6 +134,8 @@ import type { LspDetectedLanguage, LspInstallOption } from "../../shared/rpc-typ
 const props = defineProps<{
   detectedLanguages: LspDetectedLanguage[];
   projectPath: string;
+  workspaceKey: string;
+  dismissOnly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -152,13 +156,19 @@ const states = reactive<Record<string, LangState>>({});
 const outputs = reactive<Record<string, string>>({});
 
 /** Selected install option per server name. */
-const selectedOption = reactive<Record<string, LspInstallOption | undefined>>(() => {
-  const init: Record<string, LspInstallOption | undefined> = {};
-  for (const lang of props.detectedLanguages) {
-    init[lang.entry.serverName] = lang.installOptions[0];
-  }
-  return init;
-});
+const selectedOption = reactive<Record<string, LspInstallOption | undefined>>({});
+
+watch(
+  () => props.detectedLanguages,
+  (langs) => {
+    for (const lang of langs) {
+      if (selectedOption[lang.entry.serverName] === undefined) {
+        selectedOption[lang.entry.serverName] = lang.installOptions[0];
+      }
+    }
+  },
+  { immediate: true },
+);
 
 // ─── Derived ───────────────────────────────────────────────────────────────
 
@@ -166,6 +176,7 @@ const allDone = computed(() =>
   props.detectedLanguages.every(
     (lang) =>
       lang.alreadyInstalled ||
+      lang.inConfig ||
       states[lang.entry.serverName]?.installed ||
       states[lang.entry.serverName]?.added
   )
@@ -187,6 +198,7 @@ async function install(lang: LspDetectedLanguage) {
     const result = await api("lsp.runInstall", {
       command: option.command,
       projectPath: props.projectPath,
+      workspaceKey: props.workspaceKey,
     });
     outputs[key] = result.output;
     if (result.success) {
@@ -211,6 +223,7 @@ async function addToConfig(lang: LspDetectedLanguage) {
     await api("lsp.addToConfig", {
       projectPath: props.projectPath,
       languageServerName: key,
+      workspaceKey: props.workspaceKey,
     });
     states[key].added = true;
   } finally {

@@ -11,6 +11,8 @@ export interface LspServerConfig {
   command: string;
   args: string[];
   extensions: string[];
+  /** Optional list of project keys this server is scoped to. Undefined = all projects. */
+  projects?: string[];
 }
 
 // ─── Server state machine ─────────────────────────────────────────────────────

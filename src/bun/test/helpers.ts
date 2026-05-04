@@ -259,6 +259,8 @@ export function setupTestConfig(
   extraWorkflows: string[] = [],
   /** Override the engine model. Pass null to omit the `model:` line entirely (simulates unconfigured engine model). Defaults to "copilot/mock-model". */
   engineModel: string | null = "copilot/mock-model",
+  /** Optional extra workspace YAML files to write alongside workspace.yaml. Each entry is written as workspace.<key>.yaml. */
+  extraWorkspaces: { key: string; yaml: string }[] = [],
 ): { configDir: string; cleanup: () => void } {
   const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
 
@@ -298,6 +300,10 @@ export function setupTestConfig(
   writeFileSync(join(workflowsDir, "delivery.yaml"), DEFAULT_WORKFLOWS_YAML);
   extraWorkflows.forEach((yaml, idx) => {
     writeFileSync(join(workflowsDir, `extra-${idx}.yaml`), yaml);
+  });
+
+  extraWorkspaces.forEach(({ key, yaml }) => {
+    writeFileSync(join(configDir, `workspace.${key}.yaml`), yaml);
   });
 
   process.env.RAILYN_DB = ":memory:";

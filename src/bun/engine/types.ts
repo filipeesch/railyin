@@ -75,6 +75,8 @@ export interface ExecutionParams {
   /** AbortSignal — abort to cancel this execution. */
   signal: AbortSignal;
 
+  /** Workspace key for the task's workspace. Used by engines to load the correct workspace config (e.g. LSP servers). */
+  workspaceKey?: string;
   /**
    * Optional sink for raw model events/messages (provider-native payloads).
    * Used for debugging and incident forensics.

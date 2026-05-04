@@ -46,6 +46,7 @@ export function workspaceHandlers(db: Database) {
           type: config.engine.type,
           model: config.engine.model,
         },
+        lsp: config.workspace.lsp,
       };
     },
 

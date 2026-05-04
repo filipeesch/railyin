@@ -74,3 +74,88 @@ The system SHALL display the list of already-registered projects at the top of t
 #### Scenario: Existing projects shown with edit and delete actions
 - **WHEN** the Projects tab is open and at least one project is registered for the active workspace
 - **THEN** each project appears as a row with its name, project path (shown as relative), and Edit / Delete action buttons
+
+### Requirement: User can configure LSP for an existing project
+The system SHALL provide a "Configure LSP" action in the project list row of the Setup view. Activating this action SHALL trigger language detection for the project's path and, if languages are detected, display the `LspSetupPrompt` component inline. The prompt SHALL operate in dismiss-only mode so that completing setup closes the prompt without navigating away from the Setup view.
+
+#### Scenario: Configure LSP button triggers language detection
+- **WHEN** the user clicks the "Configure LSP" icon button in a project's row
+- **THEN** the system calls `lsp.detectLanguages` with the project's absolute path and shows a loading indicator
+
+#### Scenario: Languages detected — LSP prompt shown
+- **WHEN** `lsp.detectLanguages` returns one or more detected languages for a project
+- **THEN** `LspSetupPrompt` is displayed with the detected languages, the project path, and the active `workspaceKey`
+
+#### Scenario: No languages detected — feedback shown
+- **WHEN** `lsp.detectLanguages` returns no languages for a project
+- **THEN** the prompt is not shown and the user receives inline feedback indicating no supported languages were detected
+
+#### Scenario: LSP prompt dismissed after setup completes
+- **WHEN** the user completes or skips LSP setup via `LspSetupPrompt` in dismiss-only mode
+- **THEN** the prompt is hidden and the user remains on the Setup view (no navigation occurs)
+
+#### Scenario: SCENARIO-PM-L1 — Button visible per project row (Playwright)
+- **GIVEN** the Projects tab is open with at least one project registered
+- **THEN** each project row shows a "Configure LSP" icon button
+
+#### Scenario: SCENARIO-PM-L2 — Click triggers detectLanguages for that project's path (Playwright)
+- **GIVEN** `api.capture("lsp.detectLanguages")` is set up
+- **WHEN** the "Configure LSP" button for project `app` is clicked
+- **THEN** `detectLanguages` is called with `{ projectPath: <app path> }`
+
+#### Scenario: SCENARIO-PM-L3 — No languages detected shows feedback (Playwright)
+- **GIVEN** `api.stub("lsp.detectLanguages", [])` returns empty array
+- **WHEN** the "Configure LSP" button is clicked
+- **THEN** a "No languages detected" message is shown
+- **AND** the LSP setup prompt is NOT shown
+
+#### Scenario: SCENARIO-PM-L4 — Languages detected shows LspSetupPrompt (Playwright)
+- **GIVEN** `api.stub("lsp.detectLanguages", ["typescript"])` returns a language
+- **WHEN** the "Configure LSP" button is clicked
+- **THEN** the `LspSetupPrompt` overlay is shown
+
+#### Scenario: SCENARIO-PM-L5 — addToConfig called with correct workspaceKey (Playwright)
+- **GIVEN** `api.capture("lsp.addToConfig")` is set up
+- **AND** the user selects a server and clicks Install
+- **THEN** `addToConfig` is called with `workspaceKey` matching the active workspace
+
+#### Scenario: SCENARIO-PM-L6 — Dismiss stays on /setup (Playwright)
+- **GIVEN** the LSP setup prompt is shown in dismissOnly mode
+- **WHEN** the user clicks Done/Dismiss
+- **THEN** the route remains `/setup`
+- **AND** the prompt is closed
+
+#### Scenario: SCENARIO-PM-L7 — Two project rows operate independently (Playwright)
+- **GIVEN** two projects `app` and `lib`
+- **WHEN** "Configure LSP" for `app` is clicked and detected languages loaded
+- **AND** then "Configure LSP" for `lib` is clicked
+- **THEN** `detectLanguages` is called a second time with `lib`'s path
+
+#### Scenario: SCENARIO-PM-LP1 — Default mode navigates to /boards on done (Playwright)
+- **GIVEN** `LspSetupPrompt` is shown without `dismissOnly`
+- **WHEN** the user clicks Done
+- **THEN** the route changes to `/boards`
+
+#### Scenario: SCENARIO-PM-LP2 — dismissOnly mode stays on /setup on done (Playwright)
+- **GIVEN** `LspSetupPrompt` is shown with `dismissOnly=true`
+- **WHEN** the user clicks Done
+- **THEN** the route remains `/setup`
+
+### Requirement: User can configure LSP for an existing project
+The system SHALL provide a "Configure LSP" action in the project list row of the Setup view. Activating this action SHALL trigger language detection for the project's path and, if languages are detected, display the `LspSetupPrompt` component inline. The prompt SHALL operate in dismiss-only mode so that completing setup closes the prompt without navigating away from the Setup view.
+
+#### Scenario: Configure LSP button triggers language detection
+- **WHEN** the user clicks the "Configure LSP" icon button in a project's row
+- **THEN** the system calls `lsp.detectLanguages` with the project's absolute path and shows a loading indicator
+
+#### Scenario: Languages detected — LSP prompt shown
+- **WHEN** `lsp.detectLanguages` returns one or more detected languages for a project
+- **THEN** `LspSetupPrompt` is displayed with the detected languages, the project path, and the active `workspaceKey`
+
+#### Scenario: No languages detected — feedback shown
+- **WHEN** `lsp.detectLanguages` returns no languages for a project
+- **THEN** the prompt is not shown and the user receives inline feedback indicating no supported languages were detected
+
+#### Scenario: LSP prompt dismissed after setup completes
+- **WHEN** the user completes or skips LSP setup via `LspSetupPrompt` in dismiss-only mode
+- **THEN** the prompt is hidden and the user remains on the Setup view (no navigation occurs)

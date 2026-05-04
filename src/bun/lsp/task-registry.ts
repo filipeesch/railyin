@@ -1,7 +1,9 @@
 import { LSPServerManager } from "./manager.ts";
 import type { LspServerConfig } from "./manager.ts";
 
-const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
+type ManagerFactory = (configs: LspServerConfig[], path: string) => LSPServerManager;
 
 interface RegistryEntry {
   manager: LSPServerManager | null;
@@ -12,17 +14,31 @@ interface RegistryEntry {
 
 class TaskLSPRegistry {
   private entries = new Map<string, RegistryEntry>();
+  private readonly managerFactory: ManagerFactory;
+
+  constructor(managerFactory: ManagerFactory = (c, p) => new LSPServerManager(c, p)) {
+    this.managerFactory = managerFactory;
+  }
 
   getManager(scopeId: string | number, serverConfigs: LspServerConfig[], worktreePath: string): LSPServerManager | null {
     if (serverConfigs.length === 0) return null;
     const registryKey = String(scopeId);
     let entry = this.entries.get(registryKey);
+
+    // Stale path: shut down old manager and start fresh
+    if (entry && entry.worktreePath !== worktreePath) {
+      if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
+      entry.manager?.shutdown().catch(() => {});
+      this.entries.delete(registryKey);
+      entry = undefined;
+    }
+
     if (!entry) {
       entry = { manager: null, idleTimer: null, serverConfigs, worktreePath };
       this.entries.set(registryKey, entry);
     }
     if (!entry.manager) {
-      entry.manager = new LSPServerManager(entry.serverConfigs, entry.worktreePath);
+      entry.manager = this.managerFactory(entry.serverConfigs, entry.worktreePath);
     }
     // Reset idle timer
     if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);

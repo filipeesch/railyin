@@ -400,6 +400,10 @@ export interface WorkspaceConfig {
     type: "copilot" | "claude";
     model?: string;
   };
+  /** Configured LSP servers for this workspace. */
+  lsp?: {
+    servers?: Array<{ name: string; command: string; args: string[]; extensions: string[]; projects?: string[] }>;
+  };
 }
 
 export interface WorkspaceSummary {
@@ -447,6 +451,7 @@ export interface LspLanguageEntry {
 export interface LspDetectedLanguage {
   entry: LspLanguageEntry;
   alreadyInstalled: boolean;
+  inConfig: boolean;
   installOptions: LspInstallOption[];
 }
 
@@ -834,15 +839,15 @@ export type RailynAPI = {
 
   // LSP setup
   "lsp.detectLanguages": {
-    params: { projectPath: string };
+    params: { projectPath: string; workspaceKey: string };
     response: LspDetectedLanguage[];
   };
   "lsp.addToConfig": {
-    params: { projectPath: string; languageServerName: string };
+    params: { projectPath: string; languageServerName: string; workspaceKey: string; projectKey?: string };
     response: { ok: boolean };
   };
   "lsp.runInstall": {
-    params: { command: string; projectPath: string };
+    params: { command: string; projectPath: string; workspaceKey: string; token?: string };
     response: { success: boolean; output: string };
   };
 
@@ -925,4 +930,5 @@ export type PushMessage =
   | { type: "workflow.reloaded"; payload: Record<string, never> }
   | { type: "code.ref"; payload: CodeRef }
   | { type: "chatSession.updated"; payload: ChatSession }
-  | { type: "chatSession.created"; payload: ChatSession };
+  | { type: "chatSession.created"; payload: ChatSession }
+  | { type: "lsp.install.line"; payload: { token: string; line: string } };
