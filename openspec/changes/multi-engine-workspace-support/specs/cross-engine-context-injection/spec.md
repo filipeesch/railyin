@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: CrossEngineContextInjector detects engine switches and injects DB history
-The system SHALL provide a `CrossEngineContextInjector` in `src/bun/conversation/cross-engine-context.ts`. Before each execution, it SHALL compare `conversations.last_engine_type` with the target `QualifiedModelId.engineId`. If different and non-null, it SHALL fetch conversation messages from the last `compaction_summary` DB anchor and return them as a formatted string to prepend to `systemInstructions`.
+The system SHALL provide a `CrossEngineContextInjector` in `src/bun/conversation/cross-engine-context.ts`. Before each execution, it SHALL compare `conversations.last_engine_type` with the target `QualifiedModelId.engineId`. If different and non-null, it SHALL fetch conversation messages from the last `compaction_summary` DB anchor and return them as a `<message_history>` XML block prepended to the first user message of the new session. The system prompt SHALL NOT be modified, preserving its cacheability with providers that support prompt caching.
 
 #### Scenario: Same engine — no injection
 - **WHEN** `last_engine_type` equals the target engine ID
@@ -13,11 +13,11 @@ The system SHALL provide a `CrossEngineContextInjector` in `src/bun/conversation
 
 #### Scenario: Engine switch triggers context injection
 - **WHEN** `last_engine_type` is `"copilot"` and target engine is `"claude"`
-- **THEN** messages since the last `compaction_summary` anchor are formatted and returned as a context block
+- **THEN** messages since the last `compaction_summary` anchor are formatted and returned as a `{ prefixedUserContent: string }` result
 
-#### Scenario: Injected block is prepended to systemInstructions
-- **WHEN** the injector returns a non-null block
-- **THEN** the executor prepends it to `ExecutionParams.systemInstructions` before calling `engine.execute()`
+#### Scenario: Injected block is prepended to first user message content
+- **WHEN** the injector returns a non-null result
+- **THEN** the executor prepends the `<message_history>` XML block to the original user message content before calling `engine.execute()`; `systemInstructions` is unchanged
 
 ### Requirement: Pre-switch compaction when token usage exceeds threshold
 Before injecting context, the injector SHALL estimate token usage of the messages-to-inject against the target model's `contextWindow`. If usage exceeds 75% AND the source engine implements `compact?()`, it SHALL trigger compaction on the source engine first, then re-fetch messages from the new anchor. If the source engine has no `compact()` (e.g. Claude), it SHALL proceed without compaction and log a warning.

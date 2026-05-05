@@ -11,7 +11,7 @@ This single-engine constraint prevents users from choosing a model from a differ
 - `QualifiedModelId` value object that encodes `{engineId}/{providerId?}/{modelId}` — all routing layers above the engine tier treat it as opaque
 - Engine instances are singletons: one per `engines.yaml` entry, shared across all workspaces
 - `EngineRegistry` routes executions to the correct engine by parsing `QualifiedModelId.engineId` — no knowledge of Copilot/Claude/OpenCode internals
-- Cross-engine context injection: when the active engine changes mid-conversation, DB messages since the last compaction anchor are prepended to the new engine's first turn
+- Cross-engine context injection: when the active engine changes mid-conversation, DB messages since the last compaction anchor are injected as a `<message_history>` XML block prepended to the first user message of the new session (not the system prompt), preserving system prompt cacheability
 - Pre-switch compaction: if estimated token usage exceeds 75% of target model's context window, compact the source engine before switching
 - Workspace `allowed_engines` optional filter; absent = all engines available
 - Full backward compatibility: `engines.yaml` absent → fall back to `engine:` block in `workspace.yaml`
@@ -115,12 +115,13 @@ const contextBlock = await injector.prepareSwitch(conversationId, targetQmid, db
   3. Estimate tokens via ContextEstimator vs target contextWindow
   4. If > 75% AND sourceEngine?.compact → await compact(); re-fetch messages
      If > 75% AND no compact (Claude / null) → proceed with warning
-  5. Format as "## Context from previous conversation\n<turns>"
-  6. Return as string to prepend to systemInstructions
+  5. Format as XML block prepended to the original user message content:
+     "<message_history>\n<turns>...</turns>\n</message_history>\n\n{originalUserContent}"
+  6. Return as { prefixedUserContent: string } — executor replaces the first user message content
 After execution: UPDATE conversations SET last_engine_type = engineId
 ```
 
-**Rationale**: ISP compliance — the injector receives only what it needs (`ExecutionEngine | null`) and never depends on `EngineRegistry`. This makes unit testing trivial (pass mock engines directly). The executor already has the registry reference, so the lookup is free.
+**Rationale**: ISP compliance — the injector receives only what it needs (`ExecutionEngine | null`) and never depends on `EngineRegistry`. Delivering context as a prefixed user message (not `systemInstructions`) keeps the system prompt static and cacheable by providers like Anthropic (prompt caching) and Copilot. The `<message_history>` XML tag makes the injected block structurally distinguishable from the real user prompt. Unit testing remains trivial — pass mock engines directly.
 
 **Note on Claude**: `ClaudeEngine` has no explicit `compact()` method (auto-compacts internally). If over threshold on a Claude→X switch, we proceed without pre-compaction and log a warning.
 

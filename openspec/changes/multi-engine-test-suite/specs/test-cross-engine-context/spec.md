@@ -13,7 +13,7 @@
 
 #### Scenario: CEC-3 engine type changes — context block returned
 - **WHEN** `last_engine_type === "copilot"` and `targetQmid.engineId === "claude"`
-- **THEN** `prepareSwitch()` returns a non-empty string starting with `## Context from previous conversation`
+- **THEN** `prepareSwitch()` returns a `{ prefixedUserContent: string }` where content starts with `<message_history>`
 
 #### Scenario: CEC-4 context block contains messages since last compaction anchor
 - **WHEN** DB has a `compaction_summary` message and later assistant/user turns
@@ -55,9 +55,9 @@ Pre-switch compaction is triggered when token estimate exceeds 75% of target con
 
 ---
 
-### Requirement: CEC-system-instructions-placement
-Injected context block is prepended to `systemInstructions`; existing instructions follow.
+### Requirement: CEC-user-message-injection
+Injected context block is prepended to the first user message content; `systemInstructions` is NOT modified.
 
-#### Scenario: CEC-11 injected block precedes existing systemInstructions
-- **WHEN** executor has existing `systemInstructions` and `prepareSwitch()` returns a context block
-- **THEN** final `systemInstructions` starts with the context block, followed by the original instructions
+#### Scenario: CEC-11 injected block prepended to user message content, system prompt unchanged
+- **WHEN** executor has existing `systemInstructions` and `prepareSwitch()` returns a `{ prefixedUserContent }` result
+- **THEN** the user message sent to the engine starts with `<message_history>`, followed by the original user content; `systemInstructions` is identical to what it would be without injection
