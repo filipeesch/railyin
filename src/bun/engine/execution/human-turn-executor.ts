@@ -124,6 +124,7 @@ export class HumanTurnExecutor {
             attachments,
           ),
           boardTools: this.boardTools,
+          onSoftCancel: () => this.streamProcessor.abort(newExecutionId),
           ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
           ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
         };
@@ -180,6 +181,7 @@ export class HumanTurnExecutor {
         attachments,
       ),
       boardTools: this.boardTools,
+      onSoftCancel: () => this.streamProcessor.abort(executionId),
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
     };

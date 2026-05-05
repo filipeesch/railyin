@@ -36,6 +36,9 @@ export async function* translateCopilotStream(
   sendPromise?: Promise<unknown>,
   onWatchdogFire?: () => Promise<boolean>,
   onRawEvent?: (event: CopilotSdkEvent) => void,
+  onHeartbeat?: () => void,
+  idleTimeoutMs = 120_000,
+  maxSilenceCount = 3,
 ): AsyncGenerator<EngineEvent> {
   // Use a queue + promise to bridge the callback-based session.on() API
   // into an async generator.
@@ -81,8 +84,6 @@ export async function* translateCopilotStream(
   });
 
   // Watchdog configuration and per-execution state
-  const IDLE_TIMEOUT_MS = 120_000;
-  const MAX_SILENCE_COUNT = 3;
   let silenceCount = 0;
   // Count of tool calls that have started but not yet completed. The watchdog
   // is suppressed while any tool is in-flight — a long-running tool (e.g.
@@ -145,6 +146,7 @@ export async function* translateCopilotStream(
         notify = r;
         const t = setTimeout(async () => {
           notify = null; // prevent double-resolve if an event arrives during the async check
+          onHeartbeat?.();
           // A tool is currently running — silence is expected; just restart the timer.
           if (toolsInFlight > 0) {
             r();
@@ -160,17 +162,17 @@ export async function* translateCopilotStream(
             done = true;
           } else {
             silenceCount++;
-            if (silenceCount >= MAX_SILENCE_COUNT) {
+            if (silenceCount >= maxSilenceCount) {
               queue.push({
                 type: "error",
-                message: `Copilot session unresponsive (no events for ${(IDLE_TIMEOUT_MS * MAX_SILENCE_COUNT) / 1000}s, CLI healthy)`,
+                message: `Copilot session unresponsive (no events for ${(idleTimeoutMs * maxSilenceCount) / 1000}s, CLI healthy)`,
                 fatal: true,
               });
               done = true;
             }
           }
           r();
-        }, IDLE_TIMEOUT_MS);
+        }, idleTimeoutMs);
         // Store a reference so the timeout can be cancelled when an event arrives
         // naturally. We patch wake() to clear it.
         const origNotify = notify;

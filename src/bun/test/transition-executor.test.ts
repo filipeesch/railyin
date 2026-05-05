@@ -16,6 +16,7 @@ import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
+import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 
 const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
@@ -40,17 +41,16 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
   lastBuilt: ExecutionParams | null = null;
 
   override build(
-    task,
-    conversationId,
-    executionId,
-    prompt,
-    systemInstructions,
-    workingDirectory,
-    workspaceKey,
-    signal,
-    onRawModelMessage,
-    attachments,
-    model,
+    task: TaskRow,
+    conversationId: number,
+    executionId: number,
+    prompt: string,
+    systemInstructions: string | undefined,
+    workingDirectory: string,
+    signal: AbortSignal,
+    onRawModelMessage: (raw: RawModelMessage) => void,
+    attachments?: import("../../shared/rpc-types.ts").Attachment[],
+    model?: string,
   ) {
     const params = super.build(
       task,
@@ -59,7 +59,6 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
       prompt,
       systemInstructions,
       workingDirectory,
-      workspaceKey,
       signal,
       onRawModelMessage,
       attachments,
@@ -128,7 +127,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(gitDir, { recursive: true, force: true });
   configCleanup?.();
-  resetConfig("default");
+  resetConfig();
 });
 
 describe("TransitionExecutor", () => {

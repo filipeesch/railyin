@@ -107,6 +107,9 @@ type ZodRuntime = {
     number: () => { optional: () => unknown };
     boolean: () => { optional: () => unknown };
     any: () => { optional: () => unknown };
+    array: (item: unknown) => { optional: () => unknown };
+    object: (shape: Record<string, unknown>) => { optional: () => unknown };
+    enum: (values: [string, ...string[]]) => { optional: () => unknown };
   };
 };
 

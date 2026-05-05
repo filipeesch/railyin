@@ -37,11 +37,11 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
         return Array.from(byProvider.entries()).map(([providerId, models]) => ({
           id: providerId,
           models: models.map((m) => ({
-            id: m.qualifiedId,
+            id: m.qualifiedId!,
             displayName: m.displayName,
             description: m.description,
-            contextWindow: m.contextWindow,
-            enabled: enabledSet.has(m.qualifiedId),
+            contextWindow: m.contextWindow ?? null,
+            enabled: enabledSet.has(m.qualifiedId!),
             ...(m.supportsThinking ? { supportsAdaptiveThinking: true } : {}),
             ...(m.supportsManualCompact ? { supportsManualCompact: true } : {}),
           })),

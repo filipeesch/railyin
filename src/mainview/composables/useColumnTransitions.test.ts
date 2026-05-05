@@ -9,7 +9,7 @@ function makeTemplate(cols: Array<{ id: string; allowedTransitions?: string[] }>
   return {
     id: "test",
     name: "Test",
-    columns: cols.map((c) => ({ id: c.id, label: c.id, ...c })),
+    columns: cols.map((c) => ({ label: c.id, ...c })),
   } as WorkflowTemplate;
 }
 

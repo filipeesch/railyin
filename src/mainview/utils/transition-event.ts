@@ -31,7 +31,7 @@ export function normalizeTransitionEventMetadata(value: unknown): TransitionEven
 
   return {
     ...(from ? { from } : {}),
-    ...(to ? { to } : {}),
+    to: to ?? "",
     ...(displayText || sourceText || sourceKind || sourceRef
       ? {
         instructionDetail: {

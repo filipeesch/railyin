@@ -134,7 +134,7 @@ export class CopilotEngine implements ExecutionEngine {
     // Build tool context for common task-management tools
     const config = getConfig();
     const lspManager = taskLspRegistry.getManager(
-      taskId,
+      taskId ?? 0,
       config.workspace.lsp?.servers ?? [],
       workingDirectory,
     );
@@ -160,10 +160,12 @@ export class CopilotEngine implements ExecutionEngine {
         },
       },
       runtime: {
-        lspManager,
+        lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
       },
     };
+
+    const tools = buildCopilotTools(toolContext, getMcpRegistry(), params.enabledMcpTools, onSuspend);
 
     // Build system message — prepend task identity then append stage_instructions
     const taskBlock = taskContext
@@ -191,6 +193,8 @@ export class CopilotEngine implements ExecutionEngine {
     const sdkSessionId = copilotSessionIdForConversation(taskId, params.conversationId);
 
     let session: CopilotSdkSession | undefined;
+    const evictionController = new AbortController();
+    let unsubEvict: () => void = () => {};
     try {
       try {
         yield* flushStatus();
@@ -207,6 +211,13 @@ export class CopilotEngine implements ExecutionEngine {
       this.sessions.set(executionId, session);
       this.executionSessionIds.set(executionId, sdkSessionId);
       this.sdkAdapter.touchLease(sdkSessionId, "running");
+
+      // Register eviction hook: abort the engine cleanly before the pool entry is killed.
+      unsubEvict = this.sdkAdapter.onBeforeEvict(sdkSessionId, async () => {
+        params.onSoftCancel?.();
+        evictionController.abort();
+        await this.sdkAdapter.abortSession(session!).catch(() => {});
+      });
 
       // Bail early if the execution was cancelled while we were creating the session
       // (user clicked stop before session creation completed).
@@ -237,6 +248,7 @@ export class CopilotEngine implements ExecutionEngine {
         if (params.signal?.aborted) return;
         const combinedController = new AbortController();
         params.signal?.addEventListener("abort", () => combinedController.abort(), { once: true });
+        evictionController.signal.addEventListener("abort", () => combinedController.abort(), { once: true });
         decisionAbortController.signal.addEventListener("abort", () => {
           this.sdkAdapter.abortSession(session!).catch(() => { });
           combinedController.abort();
@@ -304,6 +316,7 @@ export class CopilotEngine implements ExecutionEngine {
               payload: rawEvent as unknown as Record<string, unknown>,
             });
           },
+          () => this.sdkAdapter.touchLease(sdkSessionId, "running"),
         )) {
           if (event.type === "ask_user" || event.type === "shell_approval") {
             this.sdkAdapter.touchLease(sdkSessionId, "waiting_user");
@@ -345,6 +358,7 @@ export class CopilotEngine implements ExecutionEngine {
     } catch (err) {
       if (
         params.signal?.aborted ||
+        evictionController.signal.aborted ||
         (err instanceof Error && (
           err.message.includes("cancelled") ||
           err.message.includes("aborted while waiting for input")
@@ -358,6 +372,7 @@ export class CopilotEngine implements ExecutionEngine {
         fatal: true,
       };
     } finally {
+      unsubEvict();
       unsubStatus();
       const pending = this.pendingResumes.get(executionId);
       if (pending) {

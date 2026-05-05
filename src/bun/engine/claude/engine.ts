@@ -38,7 +38,7 @@ export class ClaudeEngine implements ExecutionEngine {
 
     const config = getConfig();
     const lspManager = taskLspRegistry.getManager(
-      taskId,
+      taskId ?? 0,
       config.workspace.lsp?.servers ?? [],
       workingDirectory,
     );
@@ -54,7 +54,7 @@ export class ClaudeEngine implements ExecutionEngine {
 
     const runConfig: ClaudeRunConfig = {
       executionId,
-      taskId,
+      taskId: taskId ?? 0,
       prompt,
       workingDirectory,
       model: model || this.defaultModel,
@@ -80,9 +80,10 @@ export class ClaudeEngine implements ExecutionEngine {
           onTaskUpdated: (task) => this._onTaskUpdated(task),
         },
         runtime: {
-          lspManager,
+          lspManager: lspManager ?? undefined,
           worktreePath: workingDirectory,
         },
+      },
       waitForResume: (request) => this.waitForResume(executionId, request, signal),
       onRawMessage: (message) => {
         params.onRawModelMessage?.({

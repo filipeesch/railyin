@@ -130,7 +130,7 @@ export class StdioMcpClient extends McpClient {
 
   private _startReading(): void {
     if (!this.proc?.stdout) return;
-    const reader = this.proc.stdout.getReader();
+    const reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     const pump = async () => {
       try {
@@ -179,14 +179,14 @@ export class StdioMcpClient extends McpClient {
       const req = this.buildRequest(method, params);
       this._pendingRequests.set(req.id, { resolve, reject });
       const line = JSON.stringify(req) + "\n";
-      void this.proc.stdin.write(line);
+      void (this.proc.stdin as import("bun").FileSink).write(line);
     });
   }
 
   private async _sendNotification(method: string, params: unknown): Promise<void> {
     if (!this.proc?.stdin) return;
     const notif = this.buildNotification(method, params);
-    await this.proc.stdin.write(JSON.stringify(notif) + "\n");
+    await (this.proc.stdin as import("bun").FileSink).write(JSON.stringify(notif) + "\n");
   }
 }
 

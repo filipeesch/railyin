@@ -123,7 +123,7 @@ describe("retryStream — retry logic (8.1)", () => {
         return okStream();
       }, noTurn);
       const events = await collect(retryStream(provider, MESSAGES, {}, 3, 10, { baseBackoffMs: 0, logger: noopLogger }));
-      expect(provider.streamCalls).toBe(2, `Expected 2 calls for status ${status}`);
+      expect(provider.streamCalls).toBe(2);
       expect(events.some((e) => e.type === "token")).toBe(true);
     }
   });
@@ -486,7 +486,7 @@ describe("retryTurn (8.4)", () => {
       );
       const result = await retryTurn(provider, MESSAGES, {}, 10, { baseBackoffMs: 0, logger: noopLogger });
       expect(result.type).toBe("text");
-      expect(provider.turnCalls).toBe(2, `Expected 2 turn calls for status ${status}`);
+      expect(provider.turnCalls).toBe(2);
     }
   });
 
@@ -633,7 +633,7 @@ describe("Shared provider cooldown (8.6)", () => {
     const provider = new Proxy(base, {
       set(target, prop, value) {
         if (prop === "cooldownUntil") capturedCooldownValue = value as number;
-        (target as Record<string, unknown>)[prop as string] = 0;
+        (target as unknown as Record<string, unknown>)[prop as string] = 0;
         return true;
       },
     });
@@ -675,7 +675,7 @@ describe("Shared provider cooldown (8.6)", () => {
     const provider = new Proxy(base, {
       set(target, prop, value) {
         if (prop === "cooldownUntil") capturedCooldownValue = value as number;
-        (target as Record<string, unknown>)[prop as string] = 0; // immediately expire so no real wait
+        (target as unknown as Record<string, unknown>)[prop as string] = 0; // immediately expire so no real wait
         return true;
       },
     });

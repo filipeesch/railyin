@@ -108,6 +108,8 @@ export class CodeReviewExecutor {
         filePath: row.file_path,
         lineStart: row.line_start,
         lineEnd: row.line_end,
+        colStart: 0,
+        colEnd: 0,
         lineText: JSON.parse(row.line_text),
         contextLines: JSON.parse(row.context_lines),
         comment: row.comment,
@@ -164,6 +166,7 @@ export class CodeReviewExecutor {
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
       ),
       boardTools: this.boardTools,
+      onSoftCancel: () => this.streamProcessor.abort(executionId),
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 

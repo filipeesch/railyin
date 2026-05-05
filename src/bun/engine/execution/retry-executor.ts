@@ -59,7 +59,7 @@ export class RetryExecutor {
     );
     appendMessage(db, taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
 
-    const updatedRow = db.query<TaskRow, [number]>(
+    const updatedRow = db.query<TaskRow & { conversation_model: string | null }, [number]>(
       `SELECT t.*, c.model AS conversation_model 
        FROM tasks t 
        LEFT JOIN conversations c ON c.id = t.conversation_id 
@@ -81,6 +81,7 @@ export class RetryExecutor {
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
       ),
       boardTools: this.boardTools,
+      onSoftCancel: () => this.streamProcessor.abort(executionId),
       model: resolveModel(updatedRow, null, false) ?? "", // Use centralized resolver
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);

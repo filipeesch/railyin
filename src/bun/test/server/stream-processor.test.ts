@@ -3,6 +3,7 @@ import { StreamEventProcessor } from "../../server/stream-processor.ts";
 import type { IBroadcastChannel } from "../../server/broadcast-channel.ts";
 import { initDb } from "../helpers.ts";
 import type { Database } from "bun:sqlite";
+import type { StreamEvent, StreamEventType } from "../../../shared/rpc-types.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -15,24 +16,24 @@ function makeStreamEvent(overrides: Partial<{
   executionId: number;
   conversationId: number;
   taskId: number;
-  type: string;
+  type: StreamEventType;
   content: string;
   done: boolean;
-}> = {}) {
+}> = {}): StreamEvent {
   return {
     taskId: 1,
     conversationId: 1,
     executionId: 1,
     seq: 0,
     blockId: "",
-    type: "assistant" as const,
+    type: "assistant" as StreamEventType,
     content: "hello",
     metadata: null,
     parentBlockId: null,
     subagentId: null,
     done: false,
     ...overrides,
-  };
+  } as StreamEvent;
 }
 
 function makeClaudeDelta(text: string, executionId = 1) {

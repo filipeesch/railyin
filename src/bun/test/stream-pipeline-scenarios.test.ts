@@ -43,6 +43,7 @@ import {
 import { ClaudeEngine } from "../engine/claude/engine.ts";
 import type { ClaudeSdkAdapter, ClaudeRunConfig, ClaudeSdkModelInfo } from "../engine/claude/adapter.ts";
 import type { EngineEvent } from "../engine/types.ts";
+import type { StreamEvent } from "../../shared/rpc-types.ts";
 
 // Helpers
 
@@ -673,8 +674,9 @@ describe("S-14 [stream_event]: token events from ClaudeEngine flow through to te
 
         // done must arrive after all text_chunks
         const doneIndex = ipc.findIndex((e) => e.type === "done");
-        const lastChunkIndex = ipc.findLastIndex((e) => e.type === "text_chunk");
-        expect(doneIndex).toBeGreaterThan(lastChunkIndex);
+        const lastChunkIndex = [...ipc].reverse().findIndex((e: StreamEvent) => e.type === "text_chunk");
+        const normalizedLastChunkIndex = lastChunkIndex === -1 ? -1 : ipc.length - 1 - lastChunkIndex;
+        expect(doneIndex).toBeGreaterThan(normalizedLastChunkIndex);
     });
 
     it("reasoning_chunk events arrive on IPC for each reasoning event yielded by adapter", async () => {

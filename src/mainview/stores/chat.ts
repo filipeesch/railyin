@@ -170,7 +170,7 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null, decisionBatch?: { records: { question: string; answer: string; weight?: string }[] }) {
+  async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null, decisionBatch?: { label?: string; records: import("@shared/rpc-types").DecisionInput[] }) {
     if (!activeChatSessionId.value) return;
     const session = activeSession.value;
     if (!session) return;

@@ -29,7 +29,7 @@ const commonCtx = (overrides?: {
     onTransition?: (taskId: number, toState: string) => void;
     onHumanTurn?: (taskId: number, message: string) => void;
     onCancel?: (executionId: number) => void;
-    onTaskUpdated?: (task: import("../db/tasks.ts").Task) => void;
+    onTaskUpdated?: (task: import("../../shared/rpc-types.ts").Task) => void;
 }): CommonToolContext => ({
     task: {
       id: overrides?.taskId ?? taskId,
@@ -457,7 +457,7 @@ describe("executeCommonTool / move_task", () => {
         await executeCommonTool(
             "move_task",
             { task_id: taskId, workflow_state: "plan" },
-            { ...commonCtx({ taskId }), onTransition: (id, state) => { calledWith = [id, state]; } },
+            { ...commonCtx({ taskId }), workflow: { ...commonCtx({ taskId }).workflow, onTransition: (id: number, state: string) => { calledWith = [id, state]; } } },
         );
         // onTransition should NOT be called immediately — deferred via needs_column_prompt flag
         expect(calledWith).toBeNull();

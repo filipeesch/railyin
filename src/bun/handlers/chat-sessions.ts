@@ -1,9 +1,9 @@
 import type { Database } from "bun:sqlite";
 import type { ChatSession, ConversationMessage } from "../../shared/rpc-types.ts";
-import type { ChatSessionRow } from "../db/row-types.ts";
+import type { ChatSessionRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
-import type { Orchestrator } from "../engine/orchestrator.ts";
+import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 
@@ -16,7 +16,7 @@ function autoTitle(): string {
 
 export type OnChatSessionUpdated = (session: ChatSession) => void;
 
-export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessionUpdated, orchestrator: Orchestrator | null) {
+export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessionUpdated, orchestrator: ExecutionCoordinator | null) {
   return {
     "chatSessions.list": async (params: { workspaceKey?: string; includeArchived?: boolean }): Promise<ChatSession[]> => {
       const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();

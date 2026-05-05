@@ -1,7 +1,7 @@
 import { resolve, join } from "path";
 import { pathToFileURL } from "url";
 import type { LSPServerManager } from "../../lsp/manager.ts";
-import type { CallHierarchyItem } from "../../lsp/types.ts";
+import type { CallHierarchyItem, Location, LocationLink, Hover, DocumentSymbol, SymbolInformation, CallHierarchyIncomingCall, CallHierarchyOutgoingCall } from "../../lsp/types.ts";
 import { applyWorkspaceEdit } from "../../lsp/apply-edits.ts";
 import {
   formatDefinition,
@@ -41,29 +41,29 @@ export async function executeLspTool(
   switch (op) {
     case "goToDefinition": {
       const result = await lspManager.request(abs, "textDocument/definition", { textDocument: { uri: docUri }, position: pos });
-      return formatDefinition(result, worktreePath);
+      return formatDefinition(result as Location | Location[] | LocationLink[] | null, worktreePath);
     }
     case "findReferences": {
       const result = await lspManager.request(abs, "textDocument/references", { textDocument: { uri: docUri }, position: pos, context: { includeDeclaration: true } });
-      return formatReferences(result, worktreePath);
+      return formatReferences(result as Location[] | null, worktreePath);
     }
     case "hover": {
       const result = await lspManager.request(abs, "textDocument/hover", { textDocument: { uri: docUri }, position: pos });
-      return formatHover(result);
+      return formatHover(result as Hover | null);
     }
     case "documentSymbol": {
       const result = await lspManager.request(abs, "textDocument/documentSymbol", { textDocument: { uri: docUri } });
-      return formatDocumentSymbols(result, worktreePath);
+      return formatDocumentSymbols(result as DocumentSymbol[] | SymbolInformation[] | null, worktreePath);
     }
     case "workspaceSymbol": {
       const query = (args.query as string) ?? "";
       const anchorPath = filePath ? abs : resolve(worktreePath);
       const result = await lspManager.requestWorkspaceSymbol(anchorPath, query);
-      return formatWorkspaceSymbols(result, worktreePath);
+      return formatWorkspaceSymbols(result as SymbolInformation[] | null, worktreePath);
     }
     case "goToImplementation": {
       const result = await lspManager.request(abs, "textDocument/implementation", { textDocument: { uri: docUri }, position: pos });
-      return formatDefinition(result, worktreePath, "Implemented");
+      return formatDefinition(result as Location | Location[] | LocationLink[] | null, worktreePath, "Implemented");
     }
     case "prepareCallHierarchy": {
       const result = await lspManager.request(abs, "textDocument/prepareCallHierarchy", { textDocument: { uri: docUri }, position: pos });
@@ -73,17 +73,17 @@ export async function executeLspTool(
       const items = (await lspManager.request(abs, "textDocument/prepareCallHierarchy", { textDocument: { uri: docUri }, position: pos })) as CallHierarchyItem[] | null;
       if (!items || items.length === 0) return "No call hierarchy item found at that position";
       const result = await lspManager.request(abs, "callHierarchy/incomingCalls", { item: items[0] });
-      return formatIncomingCalls(result, worktreePath);
+      return formatIncomingCalls(result as CallHierarchyIncomingCall[] | null, worktreePath);
     }
     case "outgoingCalls": {
       const items = (await lspManager.request(abs, "textDocument/prepareCallHierarchy", { textDocument: { uri: docUri }, position: pos })) as CallHierarchyItem[] | null;
       if (!items || items.length === 0) return "No call hierarchy item found at that position";
       const result = await lspManager.request(abs, "callHierarchy/outgoingCalls", { item: items[0] });
-      return formatOutgoingCalls(result, worktreePath);
+      return formatOutgoingCalls(result as CallHierarchyOutgoingCall[] | null, worktreePath);
     }
     case "typeDefinition": {
       const result = await lspManager.request(abs, "textDocument/typeDefinition", { textDocument: { uri: docUri }, position: pos });
-      return formatDefinition(result, worktreePath, "Type defined");
+      return formatDefinition(result as Location | Location[] | LocationLink[] | null, worktreePath, "Type defined");
     }
     case "rename": {
       const newName = args.new_name as string;

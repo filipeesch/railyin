@@ -7,6 +7,7 @@ export interface ExecutionCoordinator {
     executeRetry(taskId: number): Promise<{ task: Task; executionId: number }>;
     respondShellApproval(taskId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void>;
     executeCodeReview(taskId: number, manualEdits?: ManualEdit[]): Promise<{ message: ConversationMessage; executionId: number }>;
+    executeChatTurn(sessionId: number, conversationId: number, content: string, model?: string, enabledMcpTools?: string[] | null, workspaceKey?: string, attachments?: import("../../shared/rpc-types.ts").Attachment[], engineContent?: string): Promise<{ message: ConversationMessage; executionId: number }>;
     cancel(executionId: number): void;
     listModels(workspaceKey?: string): Promise<EngineModelInfo[]>;
     compactTask(taskId: number): Promise<void>;
