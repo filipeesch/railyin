@@ -123,15 +123,15 @@ export class TransitionExecutor {
       targetModelInfo,
       workingDirectory,
     );
-    const baseInstructions = buildSystemInstructions(config, task.board_id, toState);
-    const systemInstructions = historyBlock ? `${historyBlock}\n\n${baseInstructions}` : baseInstructions;
+    const systemInstructions = buildSystemInstructions(config, task.board_id, toState);
+    const userContent = historyBlock ? `${historyBlock}\n\n${resolvedPrompt}` : resolvedPrompt;
 
     const execParams = {
       ...this.paramsBuilder.build(
         updatedRow,
         conversationId,
         executionId,
-        resolvedPrompt,
+        userContent,
         systemInstructions,
         workingDirectory,
         signal,

@@ -184,15 +184,15 @@ export class HumanTurnExecutor {
       targetModelInfo,
       workingDirectory,
     );
-    const baseInstructions = buildSystemInstructions(config, task.board_id, task.workflow_state);
-    const systemInstructions = historyBlock ? `${historyBlock}\n\n${baseInstructions}` : baseInstructions;
+    const systemInstructions = buildSystemInstructions(config, task.board_id, task.workflow_state);
+    const userContent = historyBlock ? `${historyBlock}\n\n${resolvedPrompt}` : resolvedPrompt;
 
     const execParams = {
       ...this.paramsBuilder.build(
         taskForExecution,
         conversationId,
         executionId,
-        resolvedPrompt,
+        userContent,
         systemInstructions,
         workingDirectory,
         signal,

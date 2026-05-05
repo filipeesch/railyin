@@ -117,7 +117,7 @@ const contextBlock = await injector.prepareSwitch(conversationId, targetQmid, db
      If > 75% AND no compact (Claude / null) → proceed with warning
   5. Format as XML block prepended to the original user message content:
      "<message_history>\n<turns>...</turns>\n</message_history>\n\n{originalUserContent}"
-  6. Return as { prefixedUserContent: string } — executor replaces the first user message content
+  6. Return as { historyBlock: string | undefined } — executor prepends block to the trigger/user message (`userContent = historyBlock + resolvedPrompt`)
 After execution: UPDATE conversations SET last_engine_type = engineId
 ```
 
