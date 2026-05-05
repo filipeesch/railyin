@@ -612,7 +612,8 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     return { config: null, error: _configError };
   }
 
-  const enginesYamlPresent = existsSync(join(configDir, "engines.yaml"));
+  const globalConfigDir = getDefaultConfigDir();
+  const enginesYamlPresent = existsSync(join(configDir, "engines.yaml")) || existsSync(join(globalConfigDir, "engines.yaml"));
 
   if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude" || workspace.engine?.type === "scripted" || workspace.engine?.type === "opencode") {
     engine = workspace.engine;
@@ -740,7 +741,7 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     providers: deduped,
     workflows,
     engine,
-    engines: loadEnginesConfig(configDir, workspace.engine) ?? [{ id: engine.type, config: engine }],
+    engines: loadEnginesConfig(configDir, workspace.engine) ?? loadEnginesConfig(globalConfigDir, workspace.engine) ?? [{ id: engine.type, config: engine }],
     allowedEngineIds: workspace.allowed_engines?.length ? workspace.allowed_engines : null,
   };
   _configsByKey.set(cacheKey, _config);
