@@ -19,6 +19,16 @@ import { WriteBuffer } from "../../pipeline/write-buffer.ts";
 import { appendStreamEventBatch, type PersistedStreamEvent } from "../../db/stream-events.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { CallbackRecorder } from "./callback-recorder.ts";
+import { WorktreeManager } from "../../git/WorktreeManager.ts";
+import { GitRepositoryManager } from "../../git/GitRepositoryManager.ts";
+import { TaskGitContextRepository } from "../../db/repositories/TaskGitContextRepository.ts";
+import type { IProjectResolver } from "../../git/IProjectResolver.ts";
+
+/** Minimal project resolver for tests — no real config lookup needed */
+const TEST_PROJECT_RESOLVER: IProjectResolver = {
+    getDefaultBranch: () => "main",
+    getWorktreeBasePath: (_wsKey, _projectKey, gitRootPath) => `${gitRootPath}/../worktrees`,
+};
 
 type AllHandlersMap = ReturnType<typeof taskHandlers> &
     ReturnType<typeof taskGitHandlers> &
@@ -134,9 +144,18 @@ export function createBackendRpcRuntime(options: {
         }
     });
 
+    const wsRepo = new WorkspaceRepository(db);
+    const worktreeManager = new WorktreeManager(
+        db,
+        wsRepo,
+        TEST_PROJECT_RESOLVER,
+        new GitRepositoryManager(),
+        new TaskGitContextRepository(db),
+    );
+
     const handlers = {
-        ...taskHandlers(db, new WorkspaceRepository(db), coordinator, recorder.recordTaskUpdate),
-        ...taskGitHandlers(db, recorder.recordTaskUpdate),
+        ...taskHandlers(db, wsRepo, coordinator, recorder.recordTaskUpdate, worktreeManager),
+        ...taskGitHandlers(db, recorder.recordTaskUpdate, worktreeManager, new GitRepositoryManager()),
         ...codeReviewHandlers(db),
         ...todoHandlers(db),
         ...modelHandlers(db, coordinator),

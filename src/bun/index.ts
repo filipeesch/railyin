@@ -37,6 +37,10 @@ import { NotificationService } from "./server/notifications.ts";
 import { StreamEventProcessor } from "./server/stream-processor.ts";
 import { WebSocketHandler } from "./server/websocket.ts";
 import { createShutdownHandler } from "./server/shutdown.ts";
+import { ProjectResolver } from "./git/ProjectResolver.ts";
+import { TaskGitContextRepository } from "./db/repositories/TaskGitContextRepository.ts";
+import { GitRepositoryManager } from "./git/GitRepositoryManager.ts";
+import { WorktreeManager } from "./git/WorktreeManager.ts";
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 setupFileLogging();
@@ -69,6 +73,11 @@ seedDefaultWorkspace();
 
 const db = getDb();
 const wsRepo = new WorkspaceRepository(db);
+
+const projectResolver = new ProjectResolver();
+const taskGitContextRepo = new TaskGitContextRepository(db);
+const gitRepo = new GitRepositoryManager();
+const worktreeManager = new WorktreeManager(db, wsRepo, projectResolver, gitRepo, taskGitContextRepo);
 
 // 2. Load default workspace config (YAML files)
 const { error: configError } = loadConfig();
@@ -142,7 +151,7 @@ const engineRegistry = injectedEngine
   : new EngineRegistry((key) => resolveEngine(getWorkspaceConfig(key), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier)));
 
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc))
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager)
   : null;
 
 if (orchestrator) {
@@ -169,8 +178,8 @@ const allHandlers = {
   ...workspaceHandlers(db),
   ...boardHandlers(db),
   ...projectHandlers(),
-  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier)),
-  ...taskGitHandlers(db, notifier.notifyTaskUpdated.bind(notifier)),
+  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier), worktreeManager),
+  ...taskGitHandlers(db, notifier.notifyTaskUpdated.bind(notifier), worktreeManager, gitRepo),
   ...codeReviewHandlers(db),
   ...todoHandlers(db),
   ...modelHandlers(db, orchestrator),

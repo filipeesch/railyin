@@ -9,7 +9,7 @@ import {
 import { appendMessage } from "../conversation/messages.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
-import { triggerWorktreeIfNeeded, registerProjectGitContext, removeWorktree } from "../git/worktree.ts";
+import type { WorktreeManager } from "../git/WorktreeManager.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
@@ -49,7 +49,7 @@ function fetchTaskWithDetail(db: Database, taskId: number): Task | null {
   return row ? mapTask(row) : null;
 }
 
-export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated) {
+export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager) {
   const positionService = new PositionService(db);
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
@@ -131,7 +131,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       // Register git context for this task so tool calling works (best-effort)
       try {
         if (project.gitRootPath) {
-          registerProjectGitContext(taskId, project.gitRootPath);
+          worktreeManager.registerContext(taskId, project.gitRootPath);
         }
       } catch (err) {
         console.warn("[railyn] failed to register git context for task", taskId, err);
@@ -245,7 +245,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         const wsKey = wsRepo.getTaskWorkspaceKey(params.taskId);
         const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
-          registerProjectGitContext(params.taskId, project.gitRootPath);
+          worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
         const postStatus = (msg: string) => {
@@ -259,7 +259,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         };
 
         try {
-          await triggerWorktreeIfNeeded(params.taskId, postStatus);
+          await worktreeManager.triggerWorktreeIfNeeded(params.taskId, postStatus);
         } catch (err) {
           // Worktree is required — fail the task so the user sees the error in the UI
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -365,7 +365,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         const wsKey = wsRepo.getTaskWorkspaceKey(params.taskId);
         const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
-          registerProjectGitContext(params.taskId, project.gitRootPath);
+          worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
         const postStatus = (msg: string) => {
@@ -375,7 +375,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         };
 
         try {
-          await triggerWorktreeIfNeeded(params.taskId, postStatus);
+          await worktreeManager.triggerWorktreeIfNeeded(params.taskId, postStatus);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
@@ -480,7 +480,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       }
 
       // Remove worktree (no-op if not created, returns warning if directory is gone)
-      const { warning } = await removeWorktree(params.taskId);
+      const { warning } = await worktreeManager.removeWorktree(params.taskId);
 
       // Cascade delete — tasks must be deleted before conversations (FK ref)
       db.transaction(() => {

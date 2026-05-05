@@ -2,14 +2,15 @@ import type { Database } from "bun:sqlite";
 import type { Task } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
-import { triggerWorktreeIfNeeded, removeWorktree, createWorktree, listBranches } from "../git/worktree.ts";
+import type { WorktreeManager } from "../git/WorktreeManager.ts";
+import type { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
 
-export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated) {
+export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, gitRepo: GitRepositoryManager) {
   return {
     // ─── tasks.listBranches ────────────────────────────────────────────────────
     "tasks.listBranches": async (params: { taskId: number }): Promise<{ branches: string[] }> => {
-      const branches = await listBranches(params.taskId);
+      const branches = await worktreeManager.listBranches(params.taskId);
       return { branches };
     },
 
@@ -21,7 +22,7 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated) {
       branchName: string;
       sourceBranch?: string;
     }): Promise<Task> => {
-      await createWorktree(params.taskId, {
+      await worktreeManager.createWorktree(params.taskId, {
         mode: params.mode,
         branchName: params.branchName,
         path: params.path,
@@ -42,7 +43,7 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated) {
 
     // ─── tasks.removeWorktree ──────────────────────────────────────────────────
     "tasks.removeWorktree": async (params: { taskId: number }): Promise<{ warning?: string }> => {
-      const { warning } = await removeWorktree(params.taskId);
+      const { warning } = await worktreeManager.removeWorktree(params.taskId);
       const row = db.query<TaskRow, [number]>(
         `SELECT t.*, gc.worktree_status, gc.branch_name, gc.worktree_path, c.model AS conversation_model
          FROM tasks t

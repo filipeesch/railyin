@@ -6,6 +6,10 @@ import { execSync } from "child_process";
 import { initDb, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
+import { WorktreeManager } from "../git/WorktreeManager.ts";
+import { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
+import { TaskGitContextRepository } from "../db/repositories/TaskGitContextRepository.ts";
+import type { IProjectResolver } from "../git/IProjectResolver.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 import type { CommonToolContext } from "../engine/types.ts";
@@ -16,6 +20,16 @@ import type { Database } from "bun:sqlite";
 let db: Database;
 let gitDir: string;
 let configCleanup: () => void;
+
+const TEST_PROJECT_RESOLVER: IProjectResolver = {
+  getDefaultBranch: () => "main",
+  getWorktreeBasePath: (_wsKey, _projectKey, gitRootPath) => `${gitRootPath}/../worktrees`,
+};
+
+function makeWorktreeManager(db: Database) {
+  const wsRepo = new WorkspaceRepository(db);
+  return new WorktreeManager(db, wsRepo, TEST_PROJECT_RESOLVER, new GitRepositoryManager(), new TaskGitContextRepository(db));
+}
 
 beforeEach(() => {
   gitDir = mkdtempSync(join(tmpdir(), "railyn-cg-"));
@@ -36,7 +50,7 @@ afterEach(() => {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeHandlers() {
-  return taskHandlers(db, new WorkspaceRepository(db), null, () => {});
+  return taskHandlers(db, new WorkspaceRepository(db), null, () => {}, makeWorktreeManager(db));
 }
 
 const EXTRA_WORKFLOW_WITH_LIMIT = `id: delivery-lim

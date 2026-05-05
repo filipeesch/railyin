@@ -26,6 +26,7 @@ import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { IWorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
+import type { WorktreeManager } from "../git/WorktreeManager.ts";
 
 import { EngineRegistry } from "./engine-registry.ts";
 import { StreamProcessor } from "./stream/stream-processor.ts";
@@ -68,6 +69,7 @@ export class Orchestrator implements ExecutionCoordinator {
     onNewMessage: OnNewMessage,
     wsRepo: IWorkspaceRepository,
     onRawMessageEnqueued?: (item: RawMessageItem) => void,
+    worktreeManager?: WorktreeManager,
   ) {
     this.db = db;
     this.registry = registry;
@@ -78,7 +80,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const rawBuffer = createRawMessageBuffer(db, { onEnqueue: onRawMessageEnqueued });
     rawBuffer.start();
 
-    const boardTools = new BoardToolExecutor(db, wsRepo);
+    const boardTools = new BoardToolExecutor(db, wsRepo, worktreeManager);
 
     this.streamProcessor = new StreamProcessor(
       db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage,
