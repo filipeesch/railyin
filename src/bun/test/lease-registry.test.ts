@@ -69,4 +69,22 @@ describe("LeaseRegistry", () => {
     expect(logs.some((line) => line.includes("shutdown requested"))).toBe(true);
     expect(logs.some((line) => line.includes("lease shutdown timed out"))).toBe(true);
   });
+
+  it("accepts 'opencode' as engine type and expires leases correctly (task 7.1)", async () => {
+    let expiredKey = "";
+    const registry = new LeaseRegistry(
+      "opencode",
+      20,
+      async (leaseKey) => {
+        expiredKey = leaseKey;
+      },
+      () => {},
+    );
+
+    registry.touch("opencode:workspace-a:task-42", "running");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(expiredKey).toBe("opencode:workspace-a:task-42");
+    expect(registry.getAll()).toHaveLength(0);
+  });
 });
