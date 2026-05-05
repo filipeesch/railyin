@@ -50,3 +50,16 @@
 ## 8. Raw Message Logging
 
 - [x] 8.1 Call `params.onRawModelMessage?.()` in `execute()` for each SSE event with `engine: "opencode"` — redact `apiKey` values before passing payload
+
+## 9. ask_user / decision_request Bug Fix (D8)
+
+- [x] 9.1 Add `onAskUser` callback and `pendingQuestion` to `McpContextEntry` — MCP server calls `onAskUser(payload)` instead of returning `"Suspended: ..."` immediately
+- [x] 9.2 Implement `respondAskUser(executionId, content)` on `OpenCodeSdkAdapter` — looks up `pendingQuestion` by executionId, resolves the MCP long-poll HTTP response with the user's answer
+- [x] 9.3 Refactor `adapter.ts` event loop to use `Promise.race(nextSseEvent, waitForWakeUp())` — side-channel events from MCP are drained before re-entering the race so the generator never deadlocks
+- [x] 9.4 Route `ask_user` resume through `sdkAdapter.respondAskUser()` in `engine.resume()` — same execution reused (no new execution created after restart unless adapter throws)
+
+## 10. shell_approval / permission.reply Bug Fix (D9)
+
+- [x] 10.1 Store `{ requestId, sessionId }` from `permission.asked` SSE events in `adapter.pendingPermissions` keyed by `executionId`
+- [x] 10.2 Implement `respondPermission(executionId, decision)` — calls `client.permission.reply({ requestID, sessionID, reply })` with mapped decision value
+- [x] 10.3 Call `sdkAdapter.respondPermission()` from `engine.resume()` after resolving in-memory `waitForResume` promise so both the engine generator and OpenCode agent loop are unblocked

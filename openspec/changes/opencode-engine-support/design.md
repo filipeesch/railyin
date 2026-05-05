@@ -92,6 +92,20 @@ engine:
 
 **Rationale**: OpenCode exposes a `/skill` endpoint that returns `Array<{ name, description, location, content }>`. This is a clean, first-class API — no frontmatter parsing needed.
 
+### D8: `decision_request` uses MCP long-poll + same-execution resume
+
+**Decision**: When the AI calls `decision_request` via MCP, the MCP HTTP handler creates a Promise and stores its resolver as `entry.pendingQuestion`. It then calls `entry.onAskUser(payload)`, which pushes an `ask_user` engine event onto a side-channel queue and triggers a wake-up signal. The adapter's event loop (using `Promise.race` between the SSE stream and the wake-up signal) drains the side-channel and yields the `ask_user` event to the stream-processor. The adapter's event loop continues waiting while OpenCode is blocked on the MCP response. When the user replies, `engine.resume({ type: "ask_user", content })` calls `sdkAdapter.respondAskUser(executionId, content)`, which resolves the MCP promise — returning the answer to OpenCode's AI so it can continue. The same execution ID is reused throughout.
+
+**Rationale**: OpenCode AI is blocked (no SSE events flow) until the MCP tool call returns. A simple `return "Suspended: ..."` caused OpenCode AI to continue without waiting. Long-poll is the only mechanism that genuinely pauses the agent loop. Using `Promise.race` between SSE and a side-channel wake-up avoids the deadlock that would occur with a plain `for await` over the SSE stream.
+
+**Contrast with Claude/Copilot**: Those engines use a `decision_request` event that ends the stream and creates a *new* execution on resume. OpenCode keeps the execution alive because its server-side session context is preserved — the in-memory adapter can deliver the answer directly.
+
+### D9: `shell_approval` requires `permission.reply()` to unblock OpenCode agent loop
+
+**Decision**: When `permission.asked` fires as an SSE event, the adapter stores `{ requestId, sessionId }` in `pendingPermissions` keyed by `executionId`. `engine.resume({ type: "shell_approval", decision })` resolves the in-memory `waitForResume` promise (unblocking the engine's yield loop) AND calls `sdkAdapter.respondPermission(executionId, decision)`, which calls `client.permission.reply({ requestID, sessionID, reply })` to unblock OpenCode's internal agent loop. The two steps must happen together: resolving only the in-memory promise does nothing to OpenCode, and calling only `permission.reply()` without resolving the promise leaves the engine generator stuck.
+
+**Rationale**: OpenCode's permission system is native and separate from the MCP tool channel. The SSE event signals the engine to pause; `permission.reply()` is the correct SDK API to approve/deny. Omitting it caused a deadlock where the engine resumed but OpenCode's agent remained blocked waiting for a permission response that never came.
+
 ## Component Layout
 
 ```
