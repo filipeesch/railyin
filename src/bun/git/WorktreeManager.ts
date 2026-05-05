@@ -23,9 +23,9 @@ function buildBranchName(taskId: number, title: string): string {
 // ─── Options ──────────────────────────────────────────────────────────────────
 
 export interface CreateWorktreeOptions {
-  mode: "new" | "existing";
-  branchName: string;
-  path: string;
+  mode?: "new" | "existing";
+  branchName?: string;
+  path?: string;
   sourceBranch?: string;
 }
 

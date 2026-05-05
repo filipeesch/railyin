@@ -217,5 +217,40 @@ describe("triggerWorktreeIfNeeded", () => {
     const worktreeSha = execSync("git rev-parse HEAD", { cwd: row!.worktree_path }).toString().trim();
     expect(worktreeSha).toBe(mainSha);
   }, 15_000);
+
+  it("uses explicit sourceBranch from options, overriding IProjectResolver.getDefaultBranch", async () => {
+    // Create a second branch with a distinct commit
+    execSync("git checkout -b alt-branch", { cwd: gitDir });
+    writeFileSync(join(gitDir, "alt.txt"), "alt content");
+    execSync("git add .", { cwd: gitDir });
+    execSync('git commit -m "alt commit"', { cwd: gitDir });
+    const altSha = execSync("git rev-parse HEAD", { cwd: gitDir }).toString().trim();
+    execSync("git checkout main 2>/dev/null || git checkout master", { cwd: gitDir, shell: "/bin/sh" });
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+
+    // Resolver returns 'main', but we pass sourceBranch: 'alt-branch' explicitly
+    const managerWithMain = new WorktreeManager(
+      db,
+      new WorkspaceRepository(db),
+      makeProjectResolver("main", worktreesBase),
+      new GitRepositoryManager(),
+      new TaskGitContextRepository(db),
+    );
+    managerWithMain.registerContext(taskId, gitDir);
+
+    // Call createWorktree directly with an explicit sourceBranch override
+    await managerWithMain.createWorktree(taskId, { sourceBranch: "alt-branch" });
+
+    const row = db
+      .query<{ worktree_path: string }, [number]>(
+        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+      )
+      .get(taskId);
+    expect(row!.worktree_path).toBeTruthy();
+
+    const worktreeSha = execSync("git rev-parse HEAD", { cwd: row!.worktree_path }).toString().trim();
+    expect(worktreeSha).toBe(altSha);
+  }, 15_000);
 });
 
