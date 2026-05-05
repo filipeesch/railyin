@@ -612,8 +612,13 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     return { config: null, error: _configError };
   }
 
+  const enginesYamlPresent = existsSync(join(configDir, "engines.yaml"));
+
   if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude" || workspace.engine?.type === "scripted" || workspace.engine?.type === "opencode") {
     engine = workspace.engine;
+  } else if (enginesYamlPresent) {
+    // engines.yaml is the source of truth — workspace.yaml engine: is optional
+    engine = { type: "copilot" }; // placeholder; overridden by loadEnginesConfig below
   } else {
     _configError = `${workspaceFileName} is missing 'engine:'. Supported engines are 'copilot', 'claude', 'opencode', and 'scripted'.`;
     return { config: null, error: _configError };
