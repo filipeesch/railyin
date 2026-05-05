@@ -8,22 +8,36 @@ The system SHALL define an `ExecutionEngine` interface that all supported engine
 - `execute(params: ExecutionParams): AsyncIterable<EngineEvent>` — run an agentic execution
 - `cancel(executionId: number): void` — abort a running execution
 - `resume(executionId: number, input: EngineResumeInput): Promise<void>` — resume a paused execution with user input or a permission decision when the engine supports in-loop pauses
-- `listModels(): Promise<EngineModelInfo[]>` — return models available through this engine
-- `shutdown?(options?: { reason: "app-exit" | "workspace-reload" | "lifecycle-timeout"; deadlineMs?: number }): Promise<void>` — optional engine-wide graceful shutdown hook used by orchestrator for non-execution lifecycle cleanup
+- `listModels(): Promise<EngineModelInfo[]>` — return models available through this engine; each model's `qualifiedId` SHALL use the `QualifiedModelId` format (`{engineId}/{providerId?}/{modelId}`)
+- `compact?(taskId: number | null, conversationId: number, workingDirectory: string): Promise<void>` — optional; trigger manual context compaction; engines that do not support explicit compaction (e.g. Claude) leave this `undefined`
+- `shutdown?(options?: { reason: "app-exit" | "workspace-reload" | "lifecycle-timeout"; deadlineMs?: number }): Promise<void>` — optional graceful shutdown hook
 
-Every supported engine implementation SHALL conform to this interface in a way that preserves the shared orchestrator contract. The interface SHALL be defined in `src/bun/engine/types.ts`.
+Every supported engine implementation SHALL conform to this interface. The interface SHALL be defined in `src/bun/engine/types.ts`.
 
 #### Scenario: Copilot engine implements ExecutionEngine
-- **WHEN** the engine resolver instantiates the copilot engine
-- **THEN** the returned object satisfies the `ExecutionEngine` interface and supports graceful shutdown through the shared lifecycle contract
+- **WHEN** the engine factory constructs the copilot engine
+- **THEN** the returned object satisfies the `ExecutionEngine` interface, including `compact()` and graceful shutdown
 
-#### Scenario: Claude engine implements ExecutionEngine
-- **WHEN** the engine resolver instantiates the Claude engine
-- **THEN** the returned object satisfies the shared `ExecutionEngine` contract, including execution resumption for paused Claude flows and graceful shutdown support
+#### Scenario: Claude engine implements ExecutionEngine without compact
+- **WHEN** the engine factory constructs the Claude engine
+- **THEN** the returned object satisfies the `ExecutionEngine` interface
+- **AND** `compact` is `undefined` (Claude auto-compacts internally)
+
+#### Scenario: OpenCode engine implements ExecutionEngine with compact
+- **WHEN** the engine factory constructs the OpenCode engine
+- **THEN** the returned object satisfies the `ExecutionEngine` interface, including `compact()` that calls `client.session.summarize()`
 
 #### Scenario: execute returns an async iterable of EngineEvent
 - **WHEN** `engine.execute(params)` is called
 - **THEN** the return value is an `AsyncIterable<EngineEvent>` that yields events until the execution completes or is cancelled
+
+#### Scenario: listModels returns QualifiedModelId-formatted qualifiedIds
+- **WHEN** `engine.listModels()` is called on any engine
+- **THEN** every returned `EngineModelInfo.qualifiedId` is a valid `QualifiedModelId` string parseable without error
+
+#### Scenario: OpenCode listModels wraps IDs with opencode/ prefix
+- **WHEN** `OpenCodeEngine.listModels()` is called and the SDK returns `anthropic/claude-sonnet-4-5`
+- **THEN** the returned `qualifiedId` is `"opencode/anthropic/claude-sonnet-4-5"`
 
 ### Requirement: Orchestrator SHALL perform graceful non-native shutdown on app exit
 On application exit, the orchestrator SHALL invoke graceful engine shutdown for all active non-native engine leases before hard process termination fallback.
@@ -97,7 +111,7 @@ The `EngineEvent` type SHALL remain the shared event contract for all engines, i
 - **THEN** the orchestrator serializes the `tool_call` message without a `display` field and the UI falls back to showing the raw tool name
 
 ### Requirement: Engine resolver instantiates the correct engine from workspace config
-The system SHALL resolve the execution engine from the workspace that owns the task being executed, not from a single global workspace config. Supported engine types SHALL include `copilot` and `claude`.
+The system SHALL resolve the execution engine from the workspace that owns the task being executed, not from a single global workspace config. Supported engine types SHALL include `copilot`, `claude`, and `opencode`.
 
 #### Scenario: Task execution uses owning workspace config
 - **WHEN** a task belongs to a board in workspace A
@@ -110,6 +124,10 @@ The system SHALL resolve the execution engine from the workspace that owns the t
 #### Scenario: Claude engine resolved from config
 - **WHEN** `workspace.yaml` has `engine.type: claude`
 - **THEN** `resolveEngine` returns an instance of `ClaudeEngine`
+
+#### Scenario: OpenCode engine resolved from config
+- **WHEN** `workspace.yaml` has `engine.type: opencode`
+- **THEN** `resolveEngine` returns an instance of `OpenCodeEngine`
 
 #### Scenario: Unknown engine type rejected
 - **WHEN** `workspace.yaml` has `engine.type: unsupported`
@@ -170,3 +188,17 @@ The orchestrator SHALL detect when an `on_enter_prompt` or user message begins w
 #### Scenario: Non-slash messages passed unchanged
 - **WHEN** a user sends "Please fix the bug in parser.ts"
 - **THEN** the orchestrator passes the text unchanged as `ExecutionParams.prompt`
+
+### Requirement: Engine identification fields accept any engine type string
+
+The system SHALL define `RawModelMessage.engine` and `EngineLeaseMetadata.engine` as `string` rather than a closed literal union, so that new engine types can be added without requiring changes to the shared `types.ts` contract.
+
+#### Scenario: OpenCode raw messages use engine identifier string
+
+- **WHEN** `OpenCodeEngine` emits a raw model message via `onRawModelMessage`
+- **THEN** the `engine` field is set to `"opencode"` and the orchestrator persists it without error
+
+#### Scenario: Existing engines unaffected by type widening
+
+- **WHEN** `ClaudeEngine` or `CopilotEngine` emits a raw model message
+- **THEN** the `engine` field continues to be set to `"claude"` or `"copilot"` respectively, and all existing consumers behave identically

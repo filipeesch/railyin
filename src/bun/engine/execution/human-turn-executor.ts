@@ -14,6 +14,8 @@ import type { TaskRow, ConversationMessageRow } from "../../db/row-types";
 import type { IWorkspaceRepository } from "../../db/workspace-repository";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor";
 import { resolveModel } from "./model-resolver";
+import { QualifiedModelId } from "../qualified-model-id";
+import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 
 
 export class HumanTurnExecutor {
@@ -27,6 +29,7 @@ export class HumanTurnExecutor {
     private readonly onTaskUpdated: OnTaskUpdated,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
+    private readonly crossEngineInjector: CrossEngineContextInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
   ) {}
@@ -45,8 +48,8 @@ export class HumanTurnExecutor {
        WHERE t.id = ?`
     ).get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const config = getWorkspaceConfig(this.wsRepo.getTaskWorkspaceKey(taskId));
-    const engine = this.engineRegistry.getEngine(this.wsRepo.getTaskWorkspaceKey(taskId));
+    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const config = getWorkspaceConfig(workspaceKey);
 
     const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
 
@@ -63,8 +66,9 @@ export class HumanTurnExecutor {
          LEFT JOIN conversations c ON c.id = t.conversation_id 
          WHERE t.id = ?`
       ).get(taskId)!));
+      const resumeEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
       try {
-        await engine.resume(task.current_execution_id, { type: "ask_user", content: engineContent ?? content });
+        await resumeEngine.resume(task.current_execution_id, { type: "ask_user", content: engineContent ?? content });
         const msgRow = db
           .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
           .get(msgId)!;
@@ -128,7 +132,7 @@ export class HumanTurnExecutor {
           ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
           ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
         };
-        this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, engine, execParams);
+        this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel), execParams);
 
         const msgRow = db
           .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
@@ -167,15 +171,30 @@ export class HumanTurnExecutor {
     const resolvedPrompt = engineContent ?? content;
     const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);
 
-        const signal = this.streamProcessor.createSignal(executionId);
+    const signal = this.streamProcessor.createSignal(executionId);
+    const workingDirectory = this.workdirResolver.resolve(taskForExecution);
+    const targetEngineId = QualifiedModelId.tryParse(resolvedModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
+    const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, resolvedModel);
+    const sourceEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
+    const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === resolvedModel);
+    const { historyBlock } = await this.crossEngineInjector.prepareSwitch(
+      conversationId,
+      targetEngineId,
+      sourceEngine,
+      targetModelInfo,
+      workingDirectory,
+    );
+    const systemInstructions = buildSystemInstructions(config, task.board_id, task.workflow_state);
+    const userContent = historyBlock ? `${historyBlock}\n\n${resolvedPrompt}` : resolvedPrompt;
+
     const execParams = {
       ...this.paramsBuilder.build(
         taskForExecution,
         conversationId,
         executionId,
-        resolvedPrompt,
-        buildSystemInstructions(config, task.board_id, task.workflow_state),
-        this.workdirResolver.resolve(taskForExecution),
+        userContent,
+        systemInstructions,
+        workingDirectory,
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         attachments,
@@ -186,6 +205,7 @@ export class HumanTurnExecutor {
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
+    db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
 
     const msgRow = db
       .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")

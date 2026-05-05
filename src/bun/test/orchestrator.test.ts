@@ -11,10 +11,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
-import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
-import { EngineRegistry } from "../engine/engine-registry.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { Database } from "bun:sqlite";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
@@ -51,7 +50,7 @@ function makeOrchestrator(): Orchestrator {
 
   return new Orchestrator(
     db,
-    EngineRegistry.fromFixed(new TestEngine()),
+    makeTestRegistry(new TestEngine()),
     noop,
     (task) => taskUpdates.push(task),
     (msg) => newMessages.push(msg),
@@ -256,7 +255,7 @@ describe("Orchestrator.executeHumanTurn", () => {
 
     const nonNative = new Orchestrator(
       db,
-      EngineRegistry.fromFixed(new StubEngine()),
+      makeTestRegistry(new StubEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -317,7 +316,7 @@ describe("Orchestrator.respondShellApproval", () => {
 
     const approvalOrchestrator = new Orchestrator(
       db,
-      EngineRegistry.fromFixed(new RejectingResumeEngine()),
+      makeTestRegistry(new RejectingResumeEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -413,7 +412,7 @@ describe("Orchestrator.cancel", () => {
 
     const nonNative = new Orchestrator(
       db,
-      EngineRegistry.fromFixed(new CancelStubEngine()),
+      makeTestRegistry(new CancelStubEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -483,7 +482,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
 
     const nonNative = new Orchestrator(
       db,
-      EngineRegistry.fromFixed(new ShutdownStubEngine()),
+      makeTestRegistry(new ShutdownStubEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),
@@ -552,7 +551,7 @@ columns:
     capturedParams = [];
     return new Orchestrator(
       db,
-      EngineRegistry.fromFixed(new CapturingEngine()),
+      makeTestRegistry(new CapturingEngine()),
       noop,
       (task) => taskUpdates.push(task),
       (msg) => newMessages.push(msg),

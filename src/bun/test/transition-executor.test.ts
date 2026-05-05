@@ -6,8 +6,8 @@ import { tmpdir } from "os";
 import { join } from "path";
 import type { TransitionEventMetadata } from "../../shared/rpc-types.ts";
 import { resetConfig } from "../config/index.ts";
-import { EngineRegistry } from "../engine/engine-registry.ts";
 import { TransitionExecutor } from "../engine/execution/transition-executor.ts";
+import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
@@ -17,7 +17,7 @@ import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
-import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 
 const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 
@@ -141,12 +141,13 @@ describe("TransitionExecutor", () => {
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
       db,
-      EngineRegistry.fromFixed(new TestEngine()),
+      makeTestRegistry(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
       boardTools,
       wsRepo,
+      new CrossEngineContextInjector(db),
     );
 
     const result = await executor.execute(taskId, "done");
@@ -196,12 +197,13 @@ columns:
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
       db,
-      EngineRegistry.fromFixed(new TestEngine()),
+      makeTestRegistry(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
       boardTools,
       wsRepo,
+      new CrossEngineContextInjector(db),
     );
 
     const result = await executor.execute(taskId, "plan");
@@ -255,12 +257,13 @@ columns:
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
       db,
-      EngineRegistry.fromFixed(new TestEngine()),
+      makeTestRegistry(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
       boardTools,
       wsRepo,
+      new CrossEngineContextInjector(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -293,12 +296,13 @@ columns:
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
       db,
-      EngineRegistry.fromFixed(new TestEngine()),
+      makeTestRegistry(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
       boardTools,
       wsRepo,
+      new CrossEngineContextInjector(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -332,12 +336,13 @@ columns:
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
       db,
-      EngineRegistry.fromFixed(new TestEngine()),
+      makeTestRegistry(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
       boardTools,
       wsRepo,
+      new CrossEngineContextInjector(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -369,12 +374,13 @@ columns:
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
       db,
-      EngineRegistry.fromFixed(new TestEngine()),
+      makeTestRegistry(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
       boardTools,
       wsRepo,
+      new CrossEngineContextInjector(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -391,12 +397,13 @@ columns:
     const streamProcessor = new StubStreamProcessor();
     const executor = new TransitionExecutor(
       db,
-      EngineRegistry.fromFixed(new TestEngine()),
+      makeTestRegistry(new TestEngine()),
       builder,
       new StubWorkdirResolver(gitDir),
       streamProcessor,
       boardTools,
       wsRepo,
+      new CrossEngineContextInjector(db),
     );
 
     const result = await executor.execute(taskId, "plan");

@@ -57,8 +57,12 @@ export class CodeReviewExecutor {
     const db = this.db;
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const config = getWorkspaceConfig(this.wsRepo.getTaskWorkspaceKey(taskId));
-    const engine = this.engineRegistry.getEngine(this.wsRepo.getTaskWorkspaceKey(taskId));
+    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const config = getWorkspaceConfig(workspaceKey);
+    const conversationModel = task.conversation_id
+      ? (db.prepare("SELECT model FROM conversations WHERE id = ?").get(task.conversation_id) as { model: string | null } | undefined)?.model
+      : null;
+    const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, conversationModel);
 
     const decisions = db
       .query<DecisionRow, [number]>(

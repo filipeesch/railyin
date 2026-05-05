@@ -13,6 +13,8 @@ import { resolvePrompt } from "../dialects/copilot-prompt-resolver";
 import { resolveModel } from "./model-resolver";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor";
 import type { IWorkspaceRepository } from "../../db/workspace-repository";
+import { QualifiedModelId } from "../qualified-model-id";
+import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 
 
 export class TransitionExecutor {
@@ -24,6 +26,7 @@ export class TransitionExecutor {
     private readonly streamProcessor: StreamProcessor,
     private readonly boardTools: IBoardToolExecutor,
     private readonly wsRepo: IWorkspaceRepository,
+    private readonly crossEngineInjector: CrossEngineContextInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
   ) {}
@@ -40,8 +43,8 @@ export class TransitionExecutor {
        WHERE t.id = ?`
     ).get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const config = getWorkspaceConfig(this.wsRepo.getBoardWorkspaceKey(task.board_id));
-    const engine = this.engineRegistry.getEngine(this.wsRepo.getBoardWorkspaceKey(task.board_id));
+    const workspaceKey = this.wsRepo.getBoardWorkspaceKey(task.board_id);
+    const config = getWorkspaceConfig(workspaceKey);
 
     let conversationId = task.conversation_id;
     if (conversationId == null) {
@@ -58,6 +61,7 @@ export class TransitionExecutor {
     // Use centralized model resolver with isColumnTransition=true
     const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
     const effectiveModel = resolveModel(taskWithModel, column?.model, true);
+    const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
     // Persist column model during transition if (column?.model != null) {
     //   db.run("UPDATE conversations SET model = ? WHERE id = ?", [column.model, conversationId]);
@@ -85,8 +89,9 @@ export class TransitionExecutor {
        WHERE t.id = ?`
     ).get(taskId)!;
     const workingDirectory = this.workdirResolver.resolve(updatedRow);
+    const targetEngineId = QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
     const transitionMetadata = await this.buildTransitionMetadata(
-      config.engine.type as "copilot" | "claude",
+      targetEngineId,
       fromState,
       toState,
       resolvedPrompt,
@@ -108,13 +113,26 @@ export class TransitionExecutor {
     const freshTaskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
     const freshTask = mapTask(freshTaskRow);
     const signal = this.streamProcessor.createSignal(executionId);
+
+    const sourceEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
+    const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === effectiveModel);
+    const { historyBlock } = await this.crossEngineInjector.prepareSwitch(
+      conversationId,
+      targetEngineId,
+      sourceEngine,
+      targetModelInfo,
+      workingDirectory,
+    );
+    const systemInstructions = buildSystemInstructions(config, task.board_id, toState);
+    const userContent = historyBlock ? `${historyBlock}\n\n${resolvedPrompt}` : resolvedPrompt;
+
     const execParams = {
       ...this.paramsBuilder.build(
         updatedRow,
         conversationId,
         executionId,
-        resolvedPrompt,
-        buildSystemInstructions(config, task.board_id, toState),
+        userContent,
+        systemInstructions,
         workingDirectory,
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
@@ -128,19 +146,20 @@ export class TransitionExecutor {
     };
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
+    db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
     const runningRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
     return { task: mapTask(runningRow), executionId };
   }
 
   private async buildTransitionMetadata(
-    engineType: "copilot" | "claude",
+    engineId: string,
     fromState: string,
     toState: string,
     prompt: string,
     workingDirectory: string,
   ): Promise<TransitionEventMetadata> {
     const sourceKind = prompt.trimStart().startsWith("/") ? "slash" : "inline";
-    const displayText = engineType === "copilot"
+    const displayText = engineId === "copilot"
       ? await resolvePrompt(prompt, workingDirectory)
       : prompt;
 

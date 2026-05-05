@@ -3,12 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
-import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
 import { taskGitHandlers } from "../handlers/task-git.ts";
 import { codeReviewHandlers } from "../handlers/code-review.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
-import { EngineRegistry } from "../engine/engine-registry.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { WorktreeManager } from "../git/WorktreeManager.ts";
 import { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
@@ -69,7 +68,7 @@ function makeHandlers() {
   const { worktreeManager, gitRepo } = makeWorktreeManager(db);
   const orch = new Orchestrator(
     db,
-    EngineRegistry.fromFixed(new NoopEngine()),
+    makeTestRegistry(new NoopEngine()),
     () => {},
     () => {},
     () => {},

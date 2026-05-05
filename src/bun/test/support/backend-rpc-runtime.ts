@@ -23,6 +23,7 @@ import { WorktreeManager } from "../../git/WorktreeManager.ts";
 import { GitRepositoryManager } from "../../git/GitRepositoryManager.ts";
 import { TaskGitContextRepository } from "../../db/repositories/TaskGitContextRepository.ts";
 import type { IProjectResolver } from "../../git/IProjectResolver.ts";
+import { getWorkspaceConfig, getDefaultWorkspaceKey } from "../../workspace-context.ts";
 
 /** Minimal project resolver for tests — no real config lookup needed */
 const TEST_PROJECT_RESOLVER: IProjectResolver = {
@@ -108,7 +109,10 @@ export function createBackendRpcRuntime(options: {
 
     const coordinator = new Orchestrator(
         db,
-        EngineRegistry.fromFixed(engine),
+        new EngineRegistry(
+          new Map([[getWorkspaceConfig(getDefaultWorkspaceKey()).engines[0]?.id ?? "copilot", engine]]),
+          getWorkspaceConfig,
+        ),
         recorder.recordError,
         recorder.recordTaskUpdate,
         recorder.recordNewMessage,
