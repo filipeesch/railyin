@@ -9,6 +9,10 @@ import { taskGitHandlers } from "../handlers/task-git.ts";
 import { codeReviewHandlers } from "../handlers/code-review.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
+import { WorktreeManager } from "../git/WorktreeManager.ts";
+import { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
+import { TaskGitContextRepository } from "../db/repositories/TaskGitContextRepository.ts";
+import type { IProjectResolver } from "../git/IProjectResolver.ts";
 import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { compactMessages } from "../conversation/context.ts";
 import type { Database } from "bun:sqlite";
@@ -38,6 +42,17 @@ afterEach(() => {
   configCleanup();
 });
 
+const TEST_PROJECT_RESOLVER: IProjectResolver = {
+  getDefaultBranch: () => "main",
+  getWorktreeBasePath: (_wsKey, _projectKey, gitRootPath) => `${gitRootPath}/../worktrees`,
+};
+
+function makeWorktreeManager(db: Database) {
+  const wsRepo = new WorkspaceRepository(db);
+  const gitRepo = new GitRepositoryManager();
+  return { worktreeManager: new WorktreeManager(db, wsRepo, TEST_PROJECT_RESOLVER, gitRepo, new TaskGitContextRepository(db)), gitRepo };
+}
+
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 function makeHandlers() {
@@ -50,6 +65,7 @@ function makeHandlers() {
     async listModels() { return []; }
     async listCommands() { return []; }
   }
+  const { worktreeManager, gitRepo } = makeWorktreeManager(db);
   const orch = new Orchestrator(
     db,
     makeTestRegistry(new NoopEngine()),
@@ -59,8 +75,8 @@ function makeHandlers() {
     new WorkspaceRepository(db),
   );
   return {
-    ...taskHandlers(db, new WorkspaceRepository(db), orch, () => {}),
-    ...taskGitHandlers(db, () => {}),
+    ...taskHandlers(db, new WorkspaceRepository(db), orch, () => {}, worktreeManager),
+    ...taskGitHandlers(db, () => {}, worktreeManager, gitRepo),
     ...codeReviewHandlers(db),
   };
 }

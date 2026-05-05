@@ -5,13 +5,24 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskGitHandlers } from "../handlers/task-git.ts";
-import { registerProjectGitContext } from "../git/worktree.ts";
+import { WorktreeManager } from "../git/WorktreeManager.ts";
+import { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
+import { TaskGitContextRepository } from "../db/repositories/TaskGitContextRepository.ts";
+import { WorkspaceRepository } from "../db/workspace-repository.ts";
+import type { IProjectResolver } from "../git/IProjectResolver.ts";
 import type { Database } from "bun:sqlite";
 
 let db: Database;
 let gitDir: string;
 let worktreesBase: string;
 let configCleanup: () => void;
+let worktreeManager: WorktreeManager;
+let gitRepo: GitRepositoryManager;
+
+const TEST_PROJECT_RESOLVER: IProjectResolver = {
+  getDefaultBranch: () => "main",
+  getWorktreeBasePath: (_wsKey, _projectKey, gitRootPath) => `${gitRootPath}/../worktrees`,
+};
 
 beforeEach(() => {
   gitDir = mkdtempSync(join(tmpdir(), "railyn-git-"));
@@ -19,6 +30,14 @@ beforeEach(() => {
   const cfg = setupTestConfig(`worktree_base_path: "${worktreesBase}"`, gitDir);
   configCleanup = cfg.cleanup;
   db = initDb();
+  gitRepo = new GitRepositoryManager();
+  worktreeManager = new WorktreeManager(
+    db,
+    new WorkspaceRepository(db),
+    TEST_PROJECT_RESOLVER,
+    gitRepo,
+    new TaskGitContextRepository(db),
+  );
 
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "test@test.com"', { cwd: gitDir });
@@ -41,7 +60,7 @@ describe("tasks.listBranches", () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     // No registerProjectGitContext call — task has no task_git_context row
 
-    const handlers = taskGitHandlers(db, () => {});
+    const handlers = taskGitHandlers(db, () => {}, worktreeManager, gitRepo);
     const result = await handlers["tasks.listBranches"]({ taskId });
 
     expect(result).toEqual({ branches: [] });
@@ -53,10 +72,10 @@ describe("tasks.listBranches", () => {
 describe("tasks.getChangedFiles", () => {
   it("returns empty array when worktree is not ready", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    registerProjectGitContext(taskId, gitDir);
+    worktreeManager.registerContext(taskId, gitDir);
     // worktree_status defaults to 'not_created' after registerProjectGitContext
 
-    const handlers = taskGitHandlers(db, () => {});
+    const handlers = taskGitHandlers(db, () => {}, worktreeManager, gitRepo);
     const result = await handlers["tasks.getChangedFiles"]({ taskId });
 
     expect(result).toEqual([]);
@@ -66,7 +85,7 @@ describe("tasks.getChangedFiles", () => {
 
   it("returns untracked files when worktree is ready", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    registerProjectGitContext(taskId, gitDir);
+    worktreeManager.registerContext(taskId, gitDir);
 
     // Create a git worktree directory and mark it ready in the DB
     const wtPath = join(worktreesBase, `task-${taskId}`);
@@ -80,7 +99,7 @@ describe("tasks.getChangedFiles", () => {
     // Add an untracked file to the worktree
     writeFileSync(join(wtPath, "new-file.ts"), "export const x = 1;");
 
-    const handlers = taskGitHandlers(db, () => {});
+    const handlers = taskGitHandlers(db, () => {}, worktreeManager, gitRepo);
     const result = await handlers["tasks.getChangedFiles"]({ taskId });
 
     expect(result).toContain("new-file.ts");

@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { TaskRow, ConversationMessageRow } from "../../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
-import { removeWorktree } from "../../git/worktree.ts";
+import type { WorktreeManager } from "../../git/WorktreeManager.ts";
 import { getProjectByKey, getLoadedProjectByKey } from "../../project-store.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import type { BoardToolContext } from "./types.ts";
@@ -35,6 +35,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
   constructor(
     private readonly db: Database,
     private readonly wsRepo: IWorkspaceRepository,
+    private readonly worktreeManager?: WorktreeManager,
   ) {}
 
   async execGetTask(args: Record<string, unknown>, _ctx: BoardToolContext): Promise<string> {
@@ -184,7 +185,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
       ctx.onCancel(row.current_execution_id);
     }
     try {
-      await removeWorktree(taskId);
+      await this.worktreeManager?.removeWorktree(taskId);
     } catch { /* deletion continues regardless */ }
     this.db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [taskId]);
     this.db.run("DELETE FROM conversation_messages WHERE task_id = ?", [taskId]);
