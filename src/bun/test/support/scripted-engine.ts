@@ -92,6 +92,8 @@ export class ScriptedEngine implements ExecutionEngine {
 
     async listModels(): Promise<import("../../engine/types.ts").EngineModelInfo[]> { return []; }
 
+    async listCommands(): Promise<import("../../engine/types.ts").CommandInfo[]> { return []; }
+
     private async *emit(steps: ScriptStep[], signal: AbortSignal): AsyncGenerator<EngineEvent> {
         for (const step of steps) {
             if (step.type === "wait_for_abort") {

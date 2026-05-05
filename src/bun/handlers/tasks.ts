@@ -172,7 +172,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.targetPosition, params.taskId]);
       } else {
         const minRow = db
-          .query<{ min_pos: number | null }, [string, number]>(
+          .query<{ min_pos: number | null }, [number, string]>(
             "SELECT MIN(position) as min_pos FROM tasks WHERE board_id = (SELECT board_id FROM tasks WHERE id = ?) AND workflow_state = ?",
           )
           .get(params.taskId, params.toState);
@@ -289,12 +289,14 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       decisionBatch?: { label?: string; records: import("../../shared/rpc-types.ts").DecisionInput[] };
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       // Check if content is a code review trigger
-      let parsed: { _type?: string; manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[] } | null = null;
+      type ParsedCodeReview = { _type?: string; manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[] };
+      let parsed: ParsedCodeReview | null = null;
       try {
-        parsed = JSON.parse(params.content) as typeof parsed;
+        parsed = JSON.parse(params.content) as ParsedCodeReview;
       } catch { /* not JSON — treat as plain text */ }
-      if (parsed?._type === "code_review") {
-        return requireOrchestrator(orchestrator).executeCodeReview(params.taskId, parsed.manualEdits);
+      const codeReviewData = parsed;
+      if (codeReviewData !== null && codeReviewData._type === "code_review") {
+        return requireOrchestrator(orchestrator).executeCodeReview(params.taskId, codeReviewData.manualEdits);
       }
 
       const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
@@ -464,7 +466,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
     },
 
     // ─── tasks.delete ────────────────────────────────────────────────────────
-    "tasks.delete": async (params: { taskId: number }): Promise<{ success: boolean }> => {
+    "tasks.delete": async (params: { taskId: number }): Promise<{ success: boolean; warning?: string }> => {
 
 
       // Cancel any running execution first

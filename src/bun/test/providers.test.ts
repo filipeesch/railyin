@@ -20,7 +20,7 @@ import type { AIMessage, AIToolDefinition } from "../ai/types.ts";
 function fakeProviders(overrides: Partial<ProviderConfig>[] = []): ProviderConfig[] {
   return [
     { id: "fake", type: "fake" } as ProviderConfig,
-    ...overrides,
+    ...(overrides as ProviderConfig[]),
   ];
 }
 
@@ -789,11 +789,11 @@ describe("OpenAICompatibleProvider — provider_args passthrough", () => {
       providerArgs,
     );
 
-    const messages: AIMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    const messages: AIMessage[] = [{ role: "user", content: "hello" }];
     // drain the stream
     for await (const _ of provider.stream(messages)) { /* noop */ }
 
-    expect(capturedBody?.provider).toEqual(providerArgs);
+    expect((capturedBody as unknown as Record<string, unknown>)?.provider).toEqual(providerArgs);
   });
 
   it("forwards provider_args as body.provider in turn()", async () => {
@@ -815,10 +815,10 @@ describe("OpenAICompatibleProvider — provider_args passthrough", () => {
       providerArgs,
     );
 
-    const messages: AIMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    const messages: AIMessage[] = [{ role: "user", content: "hello" }];
     await provider.turn(messages);
 
-    expect(capturedBody?.provider).toEqual(providerArgs);
+    expect((capturedBody as unknown as Record<string, unknown>)?.provider).toEqual(providerArgs);
   });
 
   it("omits body.provider when provider_args is not set in stream()", async () => {
@@ -839,7 +839,7 @@ describe("OpenAICompatibleProvider — provider_args passthrough", () => {
       // no provider_args
     );
 
-    const messages: AIMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    const messages: AIMessage[] = [{ role: "user", content: "hello" }];
     for await (const _ of provider.stream(messages)) { /* noop */ }
 
     expect(capturedBody).not.toBeNull();
@@ -864,7 +864,7 @@ describe("OpenAICompatibleProvider — provider_args passthrough", () => {
       // no provider_args
     );
 
-    const messages: AIMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    const messages: AIMessage[] = [{ role: "user", content: "hello" }];
     await provider.turn(messages);
 
     expect(capturedBody).not.toBeNull();

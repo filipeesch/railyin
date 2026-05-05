@@ -45,11 +45,13 @@ describe("SU — updateBoard", () => {
   it("SU-1: calls boards.update with correct params", async () => {
     const store = useBoardStore();
     const updatedBoard = makeBoard({ name: "Renamed" });
-    apiMock.mockImplementation(async (method: string, params: unknown) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    apiMock.mockImplementation((async (method: string, params: unknown) => {
+      void params;
       if (method === "boards.update") return updatedBoard;
       if (method === "boards.list") return [updatedBoard];
       return [];
-    });
+    }) as any);
 
     await store.updateBoard(1, { name: "Renamed" });
 
@@ -59,11 +61,11 @@ describe("SU — updateBoard", () => {
   it("SU-2: calls boards.list to refresh after update", async () => {
     const store = useBoardStore();
     const updatedBoard = makeBoard({ name: "Renamed" });
-    apiMock.mockImplementation(async (method: string) => {
+    apiMock.mockImplementation((async (method: string) => {
       if (method === "boards.update") return updatedBoard;
       if (method === "boards.list") return [updatedBoard];
       return [];
-    });
+    }) as any);
 
     await store.updateBoard(1, { name: "Renamed" });
 
@@ -73,19 +75,19 @@ describe("SU — updateBoard", () => {
   it("SU-3: store reflects updated board name after update", async () => {
     const store = useBoardStore();
     // First load with original board
-    apiMock.mockImplementation(async (method: string) => {
+    apiMock.mockImplementation((async (method: string) => {
       if (method === "boards.list") return [makeBoard({ name: "Original" })];
       return makeBoard({ name: "Original" });
-    });
+    }) as any);
     await store.loadBoards();
     expect(store.boards[0]?.name).toBe("Original");
 
     // Now update — list returns updated name
-    apiMock.mockImplementation(async (method: string) => {
+    apiMock.mockImplementation((async (method: string) => {
       if (method === "boards.update") return makeBoard({ name: "Renamed" });
       if (method === "boards.list") return [makeBoard({ name: "Renamed" })];
       return makeBoard({ name: "Renamed" });
-    });
+    }) as any);
     await store.updateBoard(1, { name: "Renamed" });
 
     expect(store.boards[0]?.name).toBe("Renamed");

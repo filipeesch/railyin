@@ -251,6 +251,7 @@ describe("Orchestrator.executeHumanTurn", () => {
       async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
       cancel(_executionId: number): void { }
       async listModels() { return []; }
+      async listCommands() { return []; }
     }
 
     const nonNative = new Orchestrator(
@@ -311,6 +312,7 @@ describe("Orchestrator.respondShellApproval", () => {
       }
       cancel(_executionId: number): void { }
       async listModels() { return []; }
+      async listCommands() { return []; }
     }
 
     const approvalOrchestrator = new Orchestrator(
@@ -406,6 +408,7 @@ describe("Orchestrator.cancel", () => {
       async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
       cancel(_executionId: number): void { }
       async listModels() { return []; }
+      async listCommands() { return []; }
     }
 
     const nonNative = new Orchestrator(
@@ -455,7 +458,7 @@ describe("Orchestrator.listModels", () => {
     expect(Array.isArray(models)).toBe(true);
     for (const m of models) {
       expect(typeof m.qualifiedId).toBe("string");
-      expect(m.qualifiedId.length).toBeGreaterThan(0);
+      expect(m.qualifiedId!.length).toBeGreaterThan(0);
       expect(m.contextWindow === null || typeof m.contextWindow === "number").toBe(true);
     }
   });
@@ -474,6 +477,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
       async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
       cancel(_executionId: number): void { }
       async listModels() { return []; }
+      async listCommands() { return []; }
       async shutdown(): Promise<void> { shutdownCalls += 1; }
     }
 
@@ -645,7 +649,7 @@ columns:
     const { taskId, conversationId } = seedBoardAndTask("wf-both", "col-both");
     const orc = makeCapturingOrchestrator();
 
-    await orc.executeHumanTurn(taskId, conversationId, "hello");
+    await orc.executeHumanTurn(taskId, "hello");
 
     expect(capturedParams.length).toBeGreaterThan(0);
     expect(capturedParams[0].systemInstructions).toBe("Workflow context.\n\nStage context.");

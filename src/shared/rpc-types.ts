@@ -81,7 +81,8 @@ export type MessageType =
   | "file_diff"
   | "reasoning"
   | "compaction_summary"
-  | "code_review";
+  | "code_review"
+  | "status";
 
 export interface ModelInfo {
   id: string | null;
@@ -150,17 +151,17 @@ export interface ToolCallDisplay {
 
 export interface TransitionInstructionDetail {
   /** Prompt text shown in the transition-card disclosure. */
-  displayText: string;
+  displayText?: string;
   /** Original authored prompt text kept for hidden metadata/debug parity. */
-  sourceText: string;
+  sourceText?: string;
   /** Whether the source prompt came from inline workflow text or slash indirection. */
-  sourceKind: "inline" | "slash";
+  sourceKind?: "inline" | "slash";
   /** Original slash reference, when the source was slash-based. */
   sourceRef?: string;
 }
 
 export interface TransitionEventMetadata {
-  from: string | null;
+  from?: string | null;
   to: string;
   instructionDetail?: TransitionInstructionDetail;
 }

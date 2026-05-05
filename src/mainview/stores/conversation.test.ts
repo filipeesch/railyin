@@ -59,11 +59,11 @@ describe("conversationStore", () => {
   it("refreshes context usage when the active conversation stream completes", async () => {
     const store = useConversationStore();
     store.setActiveConversation(42);
-    apiMock.mockImplementation(async (method) => {
+    apiMock.mockImplementation((async (method: string) => {
       if (method === "conversations.getMessages") return { messages: [], hasMore: false };
       if (method === "conversations.contextUsage") return { usedTokens: 10, maxTokens: 100, fraction: 0.1 };
       return [];
-    });
+    }) as any);
 
     store.onStreamEvent({
       taskId: null,
@@ -76,6 +76,7 @@ describe("conversationStore", () => {
       metadata: null,
       parentBlockId: null,
       subagentId: null,
+      done: true,
     });
 
     await Promise.resolve();
@@ -134,7 +135,7 @@ describe("conversationStore", () => {
     await store.loadMessages({ conversationId: 1 });
 
     // Now loadOlderMessages should fetch beforeMessageId=6
-    apiMock.mockImplementation(async (method, params: Record<string, unknown>) => {
+    apiMock.mockImplementation((async (method: string, params: Record<string, unknown>) => {
       if (method === "conversations.getMessages") {
         expect((params as Record<string, unknown>).beforeMessageId).toBe(6);
         return {
@@ -143,7 +144,7 @@ describe("conversationStore", () => {
         };
       }
       return { messages: [], hasMore: false };
-    });
+    }) as any);
 
     await store.loadOlderMessages({ conversationId: 1 });
 
@@ -357,11 +358,11 @@ describe("stream block state", () => {
     store.setActiveConversation(42);
     const mapRef = store.contextUsageByConversation;
 
-    apiMock.mockImplementation(async (method: string) => {
+    apiMock.mockImplementation((async (method: string) => {
       if (method === "conversations.contextUsage")
         return { usedTokens: 5, maxTokens: 100, fraction: 0.05 };
       return { messages: [], hasMore: false };
-    });
+    }) as any);
 
     await store.fetchContextUsage({ conversationId: 42 });
 
@@ -377,11 +378,11 @@ describe("stream block state", () => {
     const store = useConversationStore();
     store.setActiveConversation(1);
 
-    apiMock.mockImplementation(async (method: string) => {
+    apiMock.mockImplementation((async (method: string) => {
       if (method === "conversations.contextUsage")
         return { usedTokens: 10, maxTokens: 100, fraction: 0.1 };
       return { messages: [], hasMore: false };
-    });
+    }) as any);
     await store.fetchContextUsage({ conversationId: 1 });
     expect(store.contextUsageByConversation.has(1)).toBe(true);
 

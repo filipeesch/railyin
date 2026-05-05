@@ -244,7 +244,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const workingDirectory = this.workdirResolver.resolve(task);
-    await engine.compact(taskId, task.conversation_id, workingDirectory);
+    await engine.compact(taskId, task.conversation_id ?? 0, workingDirectory);
   }
 
   async compactConversation(conversationId: number, workspaceKey = getDefaultWorkspaceKey()): Promise<void> {

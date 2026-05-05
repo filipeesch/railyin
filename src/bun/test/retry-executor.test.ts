@@ -36,7 +36,7 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
   lastBuilt: ExecutionParams | null = null;
 
   override build(
-    task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments,
+    task: TaskRow, conversationId: number, executionId: number, prompt: string, systemInstructions: string | undefined, workingDirectory: string, signal: AbortSignal, onRawModelMessage: (raw: RawModelMessage) => void, attachments?: import("../../shared/rpc-types.ts").Attachment[],
   ) {
     const params = super.build(
       task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments,
@@ -54,7 +54,11 @@ class StubWorkdirResolver implements IWorkingDirectoryResolver {
 class StubStreamProcessor extends StreamProcessor {
   lastRun: { taskId: number | null; params: ExecutionParams } | null = null;
 
-  constructor() { super(() => {}, () => {}, () => {}, () => {}); }
+  constructor() {
+    const _db = initDb();
+    const _rawBuf = { enqueue() {}, flush: async () => {} } as unknown as import("../pipeline/write-buffer.ts").WriteBuffer<import("../engine/stream/raw-message-buffer.ts").RawMessageItem>;
+    super(_db, _rawBuf, () => {}, () => {}, () => {}, () => {});
+  }
 
   override createSignal(_executionId: number): AbortSignal {
     return new AbortController().signal;
@@ -83,7 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(gitDir, { recursive: true, force: true });
   configCleanup?.();
-  resetConfig("default");
+  resetConfig();
 });
 
 function makeExecutor() {

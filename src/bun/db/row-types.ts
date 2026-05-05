@@ -127,17 +127,5 @@ export interface ChatSessionRow {
   last_read_at: string | null;
   archived_at: string | null;
   created_at: string;
-}
-
-export interface ChatSessionRow {
-  id: number;
-  workspace_key: string;
-  title: string;
-  status: string;
-  conversation_id: number;
-  enabled_mcp_tools?: string | null;
-  last_activity_at: string;
-  last_read_at: string | null;
-  archived_at: string | null;
-  created_at: string;
+  conversation_model?: string | null;
 }

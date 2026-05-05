@@ -226,13 +226,27 @@ export function createBackendRpcRuntime(options: {
                 `DB stream_event type="${type}" for execution ${executionId}`,
                 timeoutMs,
             );
-            return db.query<{
+            const row = db.query<{
                 id: number; task_id: number; execution_id: number; seq: number;
                 block_id: string; type: string; content: string;
                 metadata: string | null; subagent_id: string | null; created_at: string;
+                conversation_id: number; parent_block_id: string | null;
             }, [number, string]>(
                 "SELECT * FROM stream_events WHERE execution_id = ? AND type = ? ORDER BY seq ASC LIMIT 1",
             ).get(executionId, type)!;
+            return {
+                id: row.id,
+                conversationId: row.conversation_id,
+                executionId: row.execution_id,
+                seq: row.seq,
+                blockId: row.block_id,
+                type: row.type,
+                content: row.content,
+                metadata: row.metadata,
+                parentBlockId: row.parent_block_id,
+                subagentId: row.subagent_id,
+                createdAt: row.created_at,
+            };
         },
         waitFor: async (predicate: () => boolean, description = "condition", timeoutMs = 5_000) => {
             await waitUntil(predicate, description, timeoutMs);

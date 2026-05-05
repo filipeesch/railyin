@@ -43,21 +43,25 @@ function makeTask(boardId = 1, id = 1): import("@shared/rpc-types").Task {
     id,
     boardId,
     title: "Task",
-    description: null,
+    description: "",
     workflowState: "backlog",
     position: 0,
     executionState: "idle",
     executionCount: 0,
     projectKey: "test",
-    workspaceKey: "default",
     model: null,
     worktreeStatus: "not_created",
     branchName: null,
     worktreePath: null,
     conversationId: 1,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
+    currentExecutionId: null,
+    retryCount: 0,
+    createdFromTaskId: null,
+    createdFromExecutionId: null,
+    shellAutoApprove: false,
+    approvedCommands: [],
+    enabledMcpTools: null,
+  } as unknown as import("@shared/rpc-types").Task;
 }
 
 /** Simulates the App.vue dispatch sequence for a stream event */

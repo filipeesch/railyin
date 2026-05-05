@@ -516,7 +516,7 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
   let engine: EngineConfig;
   const providers: ProviderConfig[] = [];
 
-  if (workspace.engine?.type === "native") {
+  if ((workspace.engine?.type as string) === "native") {
     _configError = `${workspaceFileName}: engine.type:native is no longer supported. Migrate this workspace to engine.type: copilot or engine.type: claude.`;
     return { config: null, error: _configError };
   }

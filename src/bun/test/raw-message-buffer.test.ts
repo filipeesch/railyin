@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { createRawMessageBuffer } from "../engine/stream/raw-message-buffer.ts";
-import type { RawModelMessage } from "../types.ts";
+import type { RawModelMessage } from "../engine/types.ts";
 import { createMockWait } from "./support/mock-wait.ts";
 
 let db: Database;
@@ -12,11 +12,11 @@ let cleanup: () => void;
 
 function makeRawMsg(tag: string): RawModelMessage {
   return {
-    engine: "test-engine",
-    sessionId: null,
-    direction: "in" as const,
+    engine: "claude",
+    sessionId: undefined,
+    direction: "inbound",
     eventType: "token",
-    eventSubtype: null,
+    eventSubtype: undefined,
     payload: { text: tag },
   };
 }
@@ -52,7 +52,7 @@ describe("RawMessageBuffer — count-based loop wakeup at maxBatch:50", () => {
   it("49 enqueues do not flush", () => {
     const buf = createRawMessageBuffer(db);
     for (let i = 0; i < 49; i++) {
-      buf.enqueue({ taskId, executionId, seq: i, raw: makeRawMsg(`item-${i}`) });
+      buf.enqueue({ taskId, conversationId: 1, executionId, seq: i, raw: makeRawMsg(`item-${i}`) });
     }
     expect(countRaw(db, executionId)).toBe(0);
   });
@@ -61,7 +61,7 @@ describe("RawMessageBuffer — count-based loop wakeup at maxBatch:50", () => {
     // enqueue() must never flush synchronously to avoid blocking WS broadcasts.
     const buf = createRawMessageBuffer(db);
     for (let i = 0; i < 50; i++) {
-      buf.enqueue({ taskId, executionId, seq: i, raw: makeRawMsg(`item-${i}`) });
+      buf.enqueue({ taskId, conversationId: 1, executionId, seq: i, raw: makeRawMsg(`item-${i}`) });
     }
     // Immediately after enqueue — still zero because flush is async
     expect(countRaw(db, executionId)).toBe(0);
@@ -69,10 +69,10 @@ describe("RawMessageBuffer — count-based loop wakeup at maxBatch:50", () => {
 
   it("50th enqueue wakes the loop to flush soon", async () => {
     const { waitFn } = createMockWait();
-    const buf = createRawMessageBuffer(db, waitFn);
+    const buf = createRawMessageBuffer(db, { waitFn });
     buf.start();
     for (let i = 0; i < 50; i++) {
-      buf.enqueue({ taskId, executionId, seq: i, raw: makeRawMsg(`item-${i}`) });
+      buf.enqueue({ taskId, conversationId: 1, executionId, seq: i, raw: makeRawMsg(`item-${i}`) });
     }
     // The loop is woken via _tick() — wait for macrotask to complete
     await new Promise((r) => setTimeout(r, 10));
@@ -84,8 +84,8 @@ describe("RawMessageBuffer — count-based loop wakeup at maxBatch:50", () => {
 describe("RawMessageBuffer — manual flush", () => {
   it("flush() persists all pending rows and returns them", () => {
     const buf = createRawMessageBuffer(db);
-    buf.enqueue({ taskId, executionId, seq: 0, raw: makeRawMsg("alpha") });
-    buf.enqueue({ taskId, executionId, seq: 1, raw: makeRawMsg("beta") });
+    buf.enqueue({ taskId, conversationId: 1, executionId, seq: 0, raw: makeRawMsg("alpha") });
+    buf.enqueue({ taskId, conversationId: 1, executionId, seq: 1, raw: makeRawMsg("beta") });
 
     const items = buf.flush();
     expect(items).toHaveLength(2);
@@ -103,7 +103,7 @@ describe("RawMessageBuffer — manual flush", () => {
 describe("RawMessageBuffer — data integrity", () => {
   it("fields preserved after round-trip", () => {
     const buf = createRawMessageBuffer(db);
-    buf.enqueue({ taskId, executionId, seq: 7, raw: makeRawMsg("payload-check") });
+    buf.enqueue({ taskId, conversationId: 1, executionId, seq: 7, raw: makeRawMsg("payload-check") });
     buf.flush();
 
     const row = db

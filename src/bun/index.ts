@@ -165,7 +165,7 @@ const DIST_DIR = path.join(import.meta.dir, "../../dist");
 const portArg = process.argv.find(a => a.startsWith("--port="));
 const serverPort = portArg ? Number(portArg.split("=")[1]) : 3000;
 
-const allHandlers: Record<string, (params: unknown) => unknown> = {
+const allHandlers = {
   ...workspaceHandlers(db),
   ...boardHandlers(db),
   ...projectHandlers(),
@@ -183,7 +183,7 @@ const allHandlers: Record<string, (params: unknown) => unknown> = {
   ...mcpHandlers(db),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
   ...decisionHandlers(db),
-};
+} as Record<string, (params: unknown) => unknown>;
 
 const wsHandler = new WebSocketHandler(channel, getPtySession);
 
