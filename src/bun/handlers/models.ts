@@ -113,6 +113,7 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
         description: m.description,
         contextWindow: m.contextWindow ?? null,
         supportsManualCompact: m.supportsManualCompact,
+        engineId: m.qualifiedId != null ? m.qualifiedId.split("/")[0] : "copilot",
       }));
     },
   };

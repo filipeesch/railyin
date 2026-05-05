@@ -19,6 +19,7 @@ import { WriteBuffer } from "../../pipeline/write-buffer.ts";
 import { appendStreamEventBatch, type PersistedStreamEvent } from "../../db/stream-events.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { CallbackRecorder } from "./callback-recorder.ts";
+import { getWorkspaceConfig, getDefaultWorkspaceKey } from "../../workspace-context.ts";
 
 type AllHandlersMap = ReturnType<typeof taskHandlers> &
     ReturnType<typeof taskGitHandlers> &
@@ -98,7 +99,10 @@ export function createBackendRpcRuntime(options: {
 
     const coordinator = new Orchestrator(
         db,
-        EngineRegistry.fromFixed(engine),
+        new EngineRegistry(
+          new Map([[getWorkspaceConfig(getDefaultWorkspaceKey()).engines[0]?.id ?? "copilot", engine]]),
+          getWorkspaceConfig,
+        ),
         recorder.recordError,
         recorder.recordTaskUpdate,
         recorder.recordNewMessage,

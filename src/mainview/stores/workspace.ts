@@ -100,6 +100,17 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     () => workspaces.value.find((workspace) => workspace.key === activeWorkspaceKey.value) ?? null,
   );
 
+  /** Models grouped by engineId. Keys are engine IDs (e.g. "copilot", "claude"). */
+  const modelsByEngine = computed(() => {
+    const map = new Map<string, ModelInfo[]>();
+    for (const model of availableModels.value) {
+      const key = model.engineId ?? (model.id != null ? model.id.split("/")[0] : "copilot");
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(model);
+    }
+    return map;
+  });
+
   return {
     workspaces,
     activeWorkspaceKey,
@@ -107,6 +118,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     config,
     availableModels,
     allProviderModels,
+    modelsByEngine,
     loading,
     error,
     loadWorkspaces,

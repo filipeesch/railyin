@@ -1,30 +1,44 @@
-## ADDED Requirements
+## Purpose
+Defines the behavioral contract for `EngineRegistry` — pre-constructed singleton engine instances, routing by `QualifiedModelId`, cancel delegation, test injection patterns, and engine-type acceptance rules for leases.
+
+## Requirements
 
 ### Requirement: EngineRegistry creates engines lazily via injected factory
-`EngineRegistry` SHALL accept a factory function `(workspaceKey: string) => ExecutionEngine` in its constructor. On the first call to `getEngine(workspaceKey)`, it SHALL invoke the factory and cache the result. Subsequent calls with the same key SHALL return the cached instance without invoking the factory again.
+**Superseded**: Registry no longer uses a lazy factory. It receives pre-constructed singleton instances keyed by engine ID.
 
-#### Scenario: Factory called once per workspace key
-- **WHEN** `getEngine("ws-a")` is called twice with the same key
-- **THEN** the factory is invoked exactly once and the same engine instance is returned both times
+The system SHALL replace the lazy-factory `EngineRegistry` constructor with one that accepts a `Map<engineId, ExecutionEngine>` of pre-constructed instances and a `getWorkspaceConfig` accessor for `allowed_engines` filtering. The factory-based constructor SHALL be removed.
 
-#### Scenario: Separate factory call per distinct workspace key
-- **WHEN** `getEngine("ws-a")` and `getEngine("ws-b")` are each called once
-- **THEN** the factory is invoked once for each key, returning independent engine instances
+#### Scenario: Registry constructed with pre-built instances
+- **WHEN** `new EngineRegistry(new Map([["copilot", copilotEngine], ["claude", claudeEngine]]), getConfig)` is called
+- **THEN** both engines are immediately available for routing without any factory invocation
+
+#### Scenario: getEngineForModel routes by engineId
+- **WHEN** `getEngineForModel("ws-a", QualifiedModelId.parse("claude/claude-sonnet"))` is called
+- **THEN** the `ClaudeEngine` instance is returned
 
 ### Requirement: EngineRegistry delegates cancelAll to the cached engine
-`EngineRegistry.cancelAll(executionId, workspaceKey)` SHALL call `engine.cancel(executionId)` on the cached engine for that workspace key. If no engine is cached for the key, it SHALL be a no-op.
+`EngineRegistry.cancelAll(executionId)` SHALL call `engine.cancel(executionId)` on ALL registered engine instances, regardless of workspace. If no engines are registered, it SHALL be a no-op.
 
-#### Scenario: Cancel delegates to resolved engine
-- **WHEN** `getEngine("ws-a")` has been called (engine cached) and `cancelAll(42, "ws-a")` is called
-- **THEN** the engine's `cancel(42)` method is invoked
+#### Scenario: cancelAll dispatches to all engines
+- **WHEN** the registry holds copilot and claude engines and `cancelAll(42)` is called
+- **THEN** both engines' `cancel(42)` methods are invoked
 
-#### Scenario: Cancel is no-op for unknown key
-- **WHEN** `cancelAll(42, "unknown-key")` is called with no prior `getEngine` call for that key
-- **THEN** no error is thrown and no factory call is made
+#### Scenario: cancelAll is no-op when no engines registered
+- **WHEN** the registry has an empty instance map and `cancelAll(1)` is called
+- **THEN** no error is thrown
 
-### Requirement: Tests inject engines via factory without static helpers
-All test construction of `EngineRegistry` SHALL use the constructor directly with a factory lambda. No static factory methods (`fromFixed`, `fromEnvironment`) SHALL be added to `EngineRegistry`.
+### Requirement: Tests inject engines directly without static helpers
+All test construction of `EngineRegistry` SHALL pass a `Map<engineId, ExecutionEngine>` of mock instances directly to the constructor. The `fromFixed` static helper SHALL be removed.
 
-#### Scenario: Single-engine test injection
-- **WHEN** a test constructs `new EngineRegistry(() => new TestEngine())`
-- **THEN** every `getEngine()` call returns an instance of `TestEngine`
+#### Scenario: Test constructs registry with mock map
+- **WHEN** a test calls `new EngineRegistry(new Map([["mock", mockEngine]]), () => config)`
+- **THEN** `getEngineForModel("ws", QualifiedModelId.parse("mock/model"))` returns `mockEngine`
+
+### Requirement: LeaseRegistry accepts any engine type string
+
+The test suite SHALL contain a test that constructs a `LeaseRegistry` with `engine: "opencode"` and verifies that lease creation, state transitions, and expiry work identically to existing engine types.
+
+#### Scenario: LeaseRegistry created with opencode engine type
+
+- **WHEN** a `LeaseRegistry` is constructed with `engine: "opencode"`
+- **THEN** `touch()`, `setState()`, and `release()` all behave correctly and the lease expires after the configured timeout

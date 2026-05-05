@@ -1,0 +1,28 @@
+# engines.yaml — global engine configuration for Railyin
+#
+# Declares all engine instances available across all workspaces.
+# Engines are constructed once at startup and shared.
+#
+# To restrict which engines a workspace can use, add `allowed_engines:` to workspace.yaml.
+# When this file is absent, Railyin falls back to the `engine:` block in workspace.yaml.
+
+engines:
+  # GitHub Copilot — uses the GitHub Copilot SDK (requires Copilot auth)
+  - id: copilot
+    type: copilot
+    # model: gpt-4.1
+
+  # Claude — uses the Claude Agent SDK / Claude Code environment (requires Claude Code auth)
+  - id: claude
+    type: claude
+    # model: claude-sonnet-4-6
+
+  # OpenCode — local/remote LLM router via the OpenCode AI SDK
+  # - id: opencode
+  #   type: opencode
+  #   model: anthropic/claude-sonnet-4-5
+  #   providers:
+  #     anthropic:
+  #       api_key: ${ANTHROPIC_API_KEY}
+  #     ollama:
+  #       base_url: http://localhost:11434/v1

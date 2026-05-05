@@ -233,7 +233,7 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     for (const provider of data.all as Array<{ id: string; name: string; models?: Record<string, { id: string; name: string; capabilities?: { reasoning?: boolean; contextWindow?: number } }> }>) {
       for (const [, model] of Object.entries(provider.models ?? {})) {
         models.push({
-          qualifiedId: `${provider.id}/${model.id}`,
+          qualifiedId: `opencode/${provider.id}/${model.id}`,
           displayName: model.name ?? model.id,
           contextWindow: model.capabilities?.contextWindow,
           supportsThinking: model.capabilities?.reasoning,

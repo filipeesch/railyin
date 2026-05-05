@@ -5,7 +5,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { resetConfig } from "../config/index.ts";
-import { EngineRegistry } from "../engine/engine-registry.ts";
 import { RetryExecutor } from "../engine/execution/retry-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
@@ -14,7 +13,7 @@ import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
-import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 
 let db: Database;
 let gitDir: string;
@@ -95,7 +94,7 @@ function makeExecutor() {
   const streamProcessor = new StubStreamProcessor();
   const executor = new RetryExecutor(
     db,
-    EngineRegistry.fromFixed(new TestEngine()),
+    makeTestRegistry(new TestEngine()),
     builder,
     new StubWorkdirResolver(gitDir),
     streamProcessor,

@@ -85,6 +85,17 @@ export interface OpenCodeProviderConfig {
 export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig;
 
 /**
+ * A single engine entry from `engines.yaml`.
+ * The `id` field must match the engine type (e.g. "copilot", "claude", "opencode").
+ */
+export interface EngineEntry {
+  /** Unique identifier for this engine — equals the engine type in v1. */
+  id: string;
+  /** Merged engine configuration (type + model + any provider-specific fields). */
+  config: EngineConfig;
+}
+
+/**
  * @deprecated Use `ProviderConfig` and `WorkspaceYaml.providers` instead.
  * Kept for backward-compat auto-migration of old `ai:` blocks.
  */
@@ -105,6 +116,8 @@ export interface WorkspaceYaml {
    *   - `claude`: Claude Agent SDK / Claude Code
    */
   engine?: EngineConfig;
+  /** Optional list of engine IDs (from engines.yaml) that are available in this workspace. When absent, all engines are available. */
+  allowed_engines?: string[];
   /** @deprecated Legacy native-engine config. No longer supported. */
   providers?: ProviderConfig[];
   /** @deprecated Legacy native-engine config. No longer supported. */
@@ -172,8 +185,18 @@ export interface LoadedConfig {
   /** Normalized, de-duplicated provider list for legacy helpers; supported engines do not rely on it. */
   providers: ProviderConfig[];
   workflows: WorkflowTemplateConfig[];
-  /** Resolved engine config — always present after load */
+  /** Resolved engine config — always present after load (the default engine for this workspace). */
   engine: EngineConfig;
+  /**
+   * Ordered list of all engine instances available in this workspace.
+   * Populated from `engines.yaml`; falls back to a single-entry list derived from `engine` when absent.
+   */
+  engines: EngineEntry[];
+  /**
+   * Subset of engine IDs permitted for this workspace (from `allowed_engines` in workspace.yaml).
+   * `null` means no restriction — all engines from `engines.yaml` are available.
+   */
+  allowedEngineIds: string[] | null;
 }
 
 // ─── Global config (config.yaml) ────────────────────────────────────────────
@@ -460,6 +483,69 @@ columns:
     description: Task complete
 `.trimStart();
 
+/**
+ * Parsed shape of a single entry in `engines.yaml`.
+ * The raw YAML has `id` plus all engine config fields at the top level.
+ */
+interface RawEngineYamlEntry {
+  id: string;
+  type: string;
+  model?: string;
+  providers?: Record<string, OpenCodeProviderConfig>;
+  [key: string]: unknown;
+}
+
+interface EnginesYaml {
+  engines: RawEngineYamlEntry[];
+}
+
+/**
+ * Load the global `engines.yaml` from the config directory.
+ *
+ * - If `engines.yaml` is present: returns parsed `EngineEntry[]` (order preserved).
+ * - If absent: returns `null` so the caller can fall back to `workspace.yaml engine:`.
+ * - Logs a warning if both are present (engines.yaml wins).
+ */
+export function loadEnginesConfig(configDir: string, workspaceEngine?: EngineConfig): EngineEntry[] | null {
+  const enginesFile = join(configDir, "engines.yaml");
+  if (!existsSync(enginesFile)) return null;
+
+  if (workspaceEngine) {
+    console.warn(`[config] Both engines.yaml and workspace.yaml engine: are present — engines.yaml takes precedence.`);
+  }
+
+  let raw: EnginesYaml | null = null;
+  try {
+    const content = readFileSync(enginesFile, "utf-8");
+    raw = yaml.load(content) as EnginesYaml;
+  } catch (err) {
+    console.warn(`[config] Failed to parse engines.yaml: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+
+  if (!raw || !Array.isArray(raw.engines) || raw.engines.length === 0) {
+    console.warn("[config] engines.yaml is empty or missing 'engines:' list — ignoring.");
+    return null;
+  }
+
+  const entries: EngineEntry[] = [];
+  for (const entry of raw.engines) {
+    if (!entry.id || !entry.type) {
+      console.warn("[config] engines.yaml entry missing 'id' or 'type' — skipping:", entry);
+      continue;
+    }
+    const { id, ...rest } = entry;
+    entries.push({ id, config: rest as EngineConfig });
+  }
+
+  if (entries.length === 0) {
+    console.warn("[config] engines.yaml contained no valid engine entries — ignoring.");
+    return null;
+  }
+
+  return entries;
+}
+
 export function ensureConfigExists(configDir: string): void {
   const workspaceFile = join(configDir, getWorkspaceFileName());
   const workflowsDir = join(configDir, "workflows");
@@ -526,8 +612,14 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     return { config: null, error: _configError };
   }
 
+  const globalConfigDir = getDefaultConfigDir();
+  const enginesYamlPresent = existsSync(join(configDir, "engines.yaml")) || existsSync(join(globalConfigDir, "engines.yaml"));
+
   if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude" || workspace.engine?.type === "scripted" || workspace.engine?.type === "opencode") {
     engine = workspace.engine;
+  } else if (enginesYamlPresent) {
+    // engines.yaml is the source of truth — workspace.yaml engine: is optional
+    engine = { type: "copilot" }; // placeholder; overridden by loadEnginesConfig below
   } else {
     _configError = `${workspaceFileName} is missing 'engine:'. Supported engines are 'copilot', 'claude', 'opencode', and 'scripted'.`;
     return { config: null, error: _configError };
@@ -649,6 +741,8 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     providers: deduped,
     workflows,
     engine,
+    engines: loadEnginesConfig(configDir, workspace.engine) ?? (workspace.engine == null ? loadEnginesConfig(globalConfigDir) : null) ?? [{ id: engine.type, config: engine }],
+    allowedEngineIds: workspace.allowed_engines?.length ? workspace.allowed_engines : null,
   };
   _configsByKey.set(cacheKey, _config);
   _configError = null;

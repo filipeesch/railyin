@@ -31,7 +31,6 @@ export class ChatExecutor {
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = this.db;
     const config = getWorkspaceConfig(workspaceKey);
-    const engine = this.engineRegistry.getEngine(workspaceKey);
 
     const msgId = appendMessage(db, null, conversationId, "user", "user", content);
 
@@ -51,6 +50,7 @@ export class ChatExecutor {
       db.run("UPDATE conversations SET model = ? WHERE id = ?", [effectiveModel, conversationId]);
     }
     const workingDirectory = getEffectiveWorkspacePath(config);
+    const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)

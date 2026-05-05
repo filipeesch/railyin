@@ -91,6 +91,8 @@ export interface ModelInfo {
   contextWindow: number | null;
   /** True when the engine supports manual context compaction for this model. */
   supportsManualCompact?: boolean;
+  /** Engine that provides this model, parsed from qualifiedId prefix (e.g. "copilot", "claude", "opencode"). */
+  engineId?: string;
 }
 
 export interface ProviderModelList {

@@ -185,6 +185,9 @@
             </span>
             <span v-else class="p-select-label p-placeholder">{{ placeholder }}</span>
           </template>
+          <template #optiongroup="{ option }">
+            <div v-if="option.label" class="model-select__group-header">{{ option.label }}</div>
+          </template>
           <template #option="{ option }">
             <div
               class="model-select__option"
@@ -407,18 +410,21 @@ const mcpHasWarning = computed(() => mcpStatuses.value.some((status) => status.s
 const groupedModels = computed(() => {
   const groups: Record<string, Array<{ id: string | null; label: string; description?: string; contextWindow: number | null }>> = {};
   for (const model of workspaceStore.availableModels) {
-    const provider = model.id?.includes("/") 
-      ? model.id.slice(0, model.id.indexOf("/")) 
-      : "other";
-    if (!groups[provider]) groups[provider] = [];
-    groups[provider].push({
+    const engineId = model.engineId ?? (model.id != null ? model.id.split("/")[0] : "copilot");
+    if (!groups[engineId]) groups[engineId] = [];
+    groups[engineId].push({
       id: model.id,
       label: model.displayName ?? model.id ?? "Auto",
       description: model.description,
       contextWindow: model.contextWindow,
     });
   }
-  return Object.entries(groups).map(([label, items]) => ({ label, items }));
+  const engineCount = Object.keys(groups).length;
+  // Only show engine group headers when there are multiple engines configured
+  return Object.entries(groups).map(([engineId, items]) => ({
+    label: engineCount > 1 ? engineId : "",
+    items,
+  }));
 });
 
 const selectedModelOption = computed(() => {
