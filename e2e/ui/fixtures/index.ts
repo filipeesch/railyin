@@ -97,7 +97,10 @@ export const test = base.extend<Fixtures>({
             .returns("workspace.openFolderDialog", { path: null })
             .returns("projects.register", { key: "new-project", workspaceKey: "test-workspace", name: "New Project", projectPath: { absolute: "/tmp/new", relative: "new" }, gitRootPath: { absolute: "/tmp/new", relative: "new" }, defaultBranch: "main" })
             .returns("projects.update", { key: "test-project", workspaceKey: "test-workspace", name: "Test Project", projectPath: { absolute: "/home/user/projects/test", relative: "test" }, gitRootPath: { absolute: "/home/user/projects/test", relative: "test" }, defaultBranch: "main" })
-            .returns("projects.delete", undefined);
+            .returns("projects.delete", undefined)
+            // Decision records — tests override as needed
+            .returns("decisions.list", [])
+            .returns("decisions.getRevisions", []);
 
         await api.install();
         await use(api);

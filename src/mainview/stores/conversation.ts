@@ -198,6 +198,7 @@ export const useConversationStore = defineStore("conversation", () => {
       if (activeConversationId.value !== params.conversationId) return;
       const pivot = loaded.messages[0]?.id ?? 0;
       const oldHistory = messages.value.filter((m) => m.id < pivot);
+      console.debug("[conversation] refreshLatestPage loaded", loaded.messages.length, "messages, types:", loaded.messages.map(m => m.type).join(","));
       messages.value = [...oldHistory, ...loaded.messages];
       // When oldHistory is non-empty we've already loaded those pages; preserve
       // the existing hasMoreBefore instead of overwriting it with loaded.hasMore
@@ -398,8 +399,12 @@ export const useConversationStore = defineStore("conversation", () => {
     // Only skip appending if there's an active stream and this is NOT a user message
     // User messages should always be appended immediately, even while assistant is streaming
     const streamState = streamStates.value.get(message.conversationId);
-    if (streamState && !streamState.isDone && message.type !== "user") return;
+    if (streamState && !streamState.isDone && message.type !== "user") {
+      console.debug("[conversation] onNewMessage DROPPED (stream not done)", message.type, message.id);
+      return;
+    }
     if (messages.value.some((entry) => entry.id === message.id)) return;
+    console.debug("[conversation] onNewMessage ACCEPTED", message.type, message.id);
     messages.value.push(message);
     sortMessagesInPlace();
   }
