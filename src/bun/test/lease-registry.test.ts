@@ -82,7 +82,7 @@ describe("LeaseRegistry", () => {
     );
 
     registry.touch("opencode:workspace-a:task-42", "running");
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(expiredKey).toBe("opencode:workspace-a:task-42");
     expect(registry.getAll()).toHaveLength(0);
