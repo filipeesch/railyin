@@ -78,7 +78,7 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
       let promptText = prompt;
 
       if (attachments?.length) {
-        const { fileParts, extraText } = mapAttachments(attachments);
+        const { fileParts, extraText } = mapAttachments(attachments, workingDirectory);
         if (extraText) promptText = `${extraText}\n\n${promptText}`;
         parts.push(...fileParts);
       }
