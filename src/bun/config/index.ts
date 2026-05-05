@@ -741,7 +741,7 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     providers: deduped,
     workflows,
     engine,
-    engines: loadEnginesConfig(configDir, workspace.engine) ?? loadEnginesConfig(globalConfigDir, workspace.engine) ?? [{ id: engine.type, config: engine }],
+    engines: loadEnginesConfig(configDir, workspace.engine) ?? (workspace.engine == null ? loadEnginesConfig(globalConfigDir) : null) ?? [{ id: engine.type, config: engine }],
     allowedEngineIds: workspace.allowed_engines?.length ? workspace.allowed_engines : null,
   };
   _configsByKey.set(cacheKey, _config);
