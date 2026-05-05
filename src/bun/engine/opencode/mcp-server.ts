@@ -16,6 +16,18 @@ import { DecisionRepository } from "../../db/repositories/decision-repository.ts
 
 export interface McpContextEntry {
   commonToolContext: CommonToolContext;
+  /** The executionId active for this context entry. */
+  executionId: number;
+  /**
+   * Set when `decision_request` MCP tool is called and the HTTP response is held open
+   * awaiting the user's answer. Resolved by `respondAskUser()` on the adapter.
+   */
+  pendingQuestion: { resolve: (answer: string) => void } | null;
+  /**
+   * Called by the adapter to subscribe to ask_user events emitted via MCP.
+   * The adapter pushes the event into its side-channel and wakes up its event loop.
+   */
+  onAskUser: ((payload: string) => void) | null;
 }
 
 type ContextMap = Map<number, McpContextEntry>;
@@ -146,8 +158,22 @@ async function callTool(
   const { conversationId: _ignored, ...toolArgs } = args;
 
   const result = await executeCommonTool(name, toolArgs, entry.commonToolContext);
-  const text = result.type === "result" ? result.text : `Suspended: ${result.payload}`;
-  return { content: [{ type: "text", text }] };
+  if (result.type !== "suspend") {
+    return { content: [{ type: "text", text: result.text }] };
+  }
+
+  // Hold the HTTP response open until the user answers (MCP long-poll).
+  // The adapter will yield an ask_user engine event and call respondAskUser()
+  // when the user replies, which resolves this promise.
+  return new Promise<{ content: Array<{ type: "text"; text: string }> }>((resolve) => {
+    entry.pendingQuestion = {
+      resolve: (answer: string) => {
+        entry.pendingQuestion = null;
+        resolve({ content: [{ type: "text", text: answer }] });
+      },
+    };
+    entry.onAskUser?.(result.payload);
+  });
 }
 
 function jsonRpcOk(id: number | string | null, result: unknown): Response {

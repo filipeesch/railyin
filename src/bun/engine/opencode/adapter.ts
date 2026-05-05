@@ -26,6 +26,8 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
   private readonly sessionMap = new Map<number, string>();
   /** conversationId → execution context for MCP tool dispatch */
   private readonly contextMap: Map<number, McpContextEntry> = new Map();
+  /** executionId → pending OpenCode permission request info */
+  private readonly pendingPermissions = new Map<number, { requestId: string; sessionId: string }>();
   private startPromise: Promise<void> | null = null;
 
   constructor(engineConfig: OpenCodeEngineConfig) {
@@ -64,7 +66,30 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
       onRawEvent,
     } = params;
 
-    this.contextMap.set(conversationId, { commonToolContext });
+    // Side-channel for events injected by the MCP server (e.g. ask_user from decision_request).
+    // Uses a wake-up signal so the event loop can unblock even when no SSE events arrive.
+    const sideEvents: EngineEvent[] = [];
+    let pendingWakeUp = false;
+    let wakeUpResolve: (() => void) | null = null;
+
+    const triggerWakeUp = () => {
+      if (wakeUpResolve) { wakeUpResolve(); wakeUpResolve = null; }
+      else { pendingWakeUp = true; }
+    };
+    const waitForWakeUp = (): Promise<void> => {
+      if (pendingWakeUp) { pendingWakeUp = false; return Promise.resolve(); }
+      return new Promise<void>(r => { wakeUpResolve = r; });
+    };
+
+    this.contextMap.set(conversationId, {
+      commonToolContext,
+      executionId,
+      pendingQuestion: null,
+      onAskUser: (payload: string) => {
+        sideEvents.push({ type: "ask_user" as const, payload });
+        triggerWakeUp();
+      },
+    });
 
     try {
       // Subscribe to events before prompting to avoid missing early events
@@ -105,11 +130,35 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
       try {
         await promptCall;
 
-        // Process events filtered to our session
-        for await (const rawEvent of stream) {
-          const event = rawEvent as OpenCodeEvent;
+        const sseIter = stream[Symbol.asyncIterator]();
+        let nextSse = sseIter.next();
+
+        while (true) {
+          // Drain any side-channel events (e.g. ask_user from MCP) before processing SSE
+          while (sideEvents.length > 0) {
+            yield sideEvents.shift()!;
+          }
+
+          const result = await Promise.race([
+            nextSse.then(v => ({ tag: "sse" as const, val: v })),
+            waitForWakeUp().then(() => ({ tag: "wake" as const })),
+          ]);
+
+          if (result.tag === "wake") continue;
+          if (result.val.done) break;
+
+          nextSse = sseIter.next();
+          const event = result.val.value as OpenCodeEvent;
 
           onRawEvent?.(sanitizeForLogging(event as Record<string, unknown>));
+
+          // Store permission info so respondPermission() can call permission.reply() later
+          if (event.type === "permission.asked" && event.properties.sessionID === sessionId) {
+            this.pendingPermissions.set(executionId, {
+              requestId: event.properties.id,
+              sessionId: event.properties.sessionID,
+            });
+          }
 
           const engineEvents = translateEvent(event, sessionId, executionId);
           for (const e of engineEvents) {
@@ -127,7 +176,14 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
         yield { type: "done" };
       }
     } finally {
+      // Resolve any pending ask_user so the MCP HTTP response isn't left open
+      const entry = this.contextMap.get(conversationId);
+      if (entry?.pendingQuestion) {
+        entry.pendingQuestion.resolve("cancelled");
+        entry.pendingQuestion = null;
+      }
       this.contextMap.delete(conversationId);
+      this.pendingPermissions.delete(executionId);
     }
   }
 
@@ -135,6 +191,30 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     // Cancellation is handled via the AbortSignal passed to run().
     // The signal triggers client.session.abort() when aborted.
     void executionId;
+  }
+
+  async respondAskUser(executionId: number, content: string): Promise<void> {
+    for (const entry of this.contextMap.values()) {
+      if (entry.executionId === executionId && entry.pendingQuestion) {
+        entry.pendingQuestion.resolve(content);
+        entry.pendingQuestion = null;
+        return;
+      }
+    }
+    throw new Error(`No pending ask_user for execution ${executionId}`);
+  }
+
+  async respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void> {
+    await this.ensureStarted();
+    const pending = this.pendingPermissions.get(executionId);
+    if (!pending) throw new Error(`No pending permission for execution ${executionId}`);
+    this.pendingPermissions.delete(executionId);
+    const reply = decision === "approve_all" ? "always" : decision === "approve_once" ? "once" : "reject" as const;
+    await this.client!.permission.reply({
+      requestID: pending.requestId,
+      sessionID: pending.sessionId,
+      reply,
+    });
   }
 
   async compact(sessionId: string, workingDirectory: string): Promise<void> {

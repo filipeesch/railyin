@@ -4,6 +4,7 @@ import type { OpenCodeSdkAdapter, OpenCodeRunParams } from "../../engine/opencod
 type MockTurnStep =
   | { kind: "emit"; event: EngineEvent }
   | { kind: "shell_approval"; command: string }
+  | { kind: "ask_user"; payload: string }
   | { kind: "waitForAbort" };
 
 export interface MockOpenCodeTurnScript {
@@ -15,6 +16,8 @@ export class MockOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
   private readonly createScripts: MockOpenCodeTurnScript[] = [];
   private readonly resumeScripts: MockOpenCodeTurnScript[] = [];
   private readonly activeControllers = new Map<number, { abort: () => void }>();
+  /** executionId → resolver called by respondAskUser() */
+  private readonly pendingAskUsers = new Map<number, () => void>();
   private sessionCounter = 1;
   private models: EngineModelInfo[] = [];
   private skills: Array<{ name: string; description: string }> = [];
@@ -27,6 +30,8 @@ export class MockOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     resumeCalls: [] as Array<{ conversationId: number; sessionId: string }>,
     listModelsCalls: 0,
     listCommandsCalls: [] as Array<{ directory: string }>,
+    respondAskUserCalls: [] as Array<{ executionId: number; content: string }>,
+    respondPermissionCalls: [] as Array<{ executionId: number; decision: string }>,
   };
 
   /** Set of conversationIds currently registered in an active run */
@@ -107,6 +112,15 @@ export class MockOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
             yield { type: "shell_approval", command: step.command, executionId: params.executionId };
             break;
 
+          case "ask_user":
+            yield { type: "ask_user", payload: step.payload };
+            // Block until respondAskUser() is called — mirrors the real adapter which
+            // holds the MCP HTTP response open until the user answers.
+            await new Promise<void>((resolve) => {
+              this.pendingAskUsers.set(params.executionId, resolve);
+            });
+            break;
+
           case "waitForAbort":
             await new Promise<void>((resolve) => {
               if (aborted) {
@@ -126,6 +140,26 @@ export class MockOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
 
   async cancel(executionId: number): Promise<void> {
     this.activeControllers.get(executionId)?.abort();
+    // Unblock any pending ask_user
+    const resolve = this.pendingAskUsers.get(executionId);
+    if (resolve) {
+      this.pendingAskUsers.delete(executionId);
+      resolve();
+    }
+  }
+
+  async respondAskUser(executionId: number, content: string): Promise<void> {
+    const resolve = this.pendingAskUsers.get(executionId);
+    if (!resolve) {
+      throw new Error(`No pending ask_user for execution ${executionId}`);
+    }
+    this.pendingAskUsers.delete(executionId);
+    resolve();
+    this.trace.respondAskUserCalls.push({ executionId, content });
+  }
+
+  async respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void> {
+    this.trace.respondPermissionCalls.push({ executionId, decision });
   }
 
   async listModels(_workingDirectory: string): Promise<EngineModelInfo[]> {
@@ -146,6 +180,7 @@ export class MockOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     this.sessionMap.clear();
     this.activeContexts.clear();
     this.activeControllers.clear();
+    this.pendingAskUsers.clear();
   }
 }
 
@@ -180,7 +215,7 @@ export function shellApproval(command: string): MockTurnStep {
 }
 
 export function askUser(payload = '{"question":"Need input"}'): MockTurnStep {
-  return { kind: "emit", event: { type: "ask_user", payload } };
+  return { kind: "ask_user", payload };
 }
 
 export function fatal(message: string): MockTurnStep {

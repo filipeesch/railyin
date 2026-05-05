@@ -17,6 +17,7 @@ import {
 } from "./support/opencode-sdk-mock.ts";
 import {
   runAskUserScenario,
+  runAskUserResumeScenario,
   runCancellationScenario,
   runFatalFailureScenario,
   runModelListingScenario,
@@ -84,7 +85,8 @@ describe("OpenCode backend RPC scenarios", () => {
 
   it("covers ask-user suspension via shared scenario", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
-    adapter.queueCreate({ steps: [token("Need input"), askUser('{"question":"Need input"}')] });
+    // No preceding token — ask_user is the first event so no assistant message is flushed
+    adapter.queueCreate({ steps: [askUser('{"question":"Need input"}')] });
     const runtime = createOpenCodeRuntime(adapter);
 
     await runAskUserScenario(runtime);
@@ -123,35 +125,22 @@ describe("OpenCode backend RPC scenarios", () => {
   });
 });
 
-// ── OpenCode-specific: ask_user resume (creates new execution) ────────────────
+// ── OpenCode-specific: ask_user resume (same execution continues) ─────────────
 
 describe("OpenCode ask_user resume", () => {
-  it("resumes after ask-user with a fresh execution (new executionId)", async () => {
+  it("resumes after ask-user with the same execution (same executionId)", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
-    // First turn: pauses at ask_user
-    adapter.queueCreate({ steps: [token("Need clarification"), askUser('{"question":"Which option?","options":["A","B"]}')] });
-    // Second turn: fresh session call (resume) with reply
-    adapter.queueResume({ steps: [token("Continuing with option A"), done()] });
+    // Single script: blocks at ask_user, then continues with reply after respondAskUser()
+    adapter.queueCreate({
+      steps: [
+        askUser('{"question":"Which option?","options":["A","B"]}'),
+        token("Continuing with option A"),
+        done(),
+      ],
+    });
 
     const runtime = createOpenCodeRuntime(adapter);
-    const { taskId } = await runtime.createTask();
-
-    const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "What should I do?" });
-    await runtime.waitForExecutionStatus(first.executionId, "waiting_user");
-    await runtime.waitForTaskState(taskId, "waiting_user");
-
-    const second = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Use option A" });
-    // OpenCode's ask_user resume path creates a new execution (engine.resume() throws, fallback path)
-    expect(second.executionId).not.toBe(first.executionId);
-
-    await runtime.recorder.waitForStreamDone(second.executionId);
-    await runtime.waitForExecutionStatus(second.executionId, "completed");
-    await runtime.waitForTaskState(taskId, "completed");
-
-    const messages = runtime.getMessages(taskId);
-    expect(messages.some((m) => m.type === "ask_user_prompt")).toBe(true);
-    expect(messages.some((m) => m.type === "user" && m.content === "Use option A")).toBe(true);
-    expect(messages.some((m) => m.type === "assistant")).toBe(true);
+    await runAskUserResumeScenario(runtime);
   });
 });
 

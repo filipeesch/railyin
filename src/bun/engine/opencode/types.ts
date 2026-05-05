@@ -23,4 +23,15 @@ export interface OpenCodeSdkAdapter {
   listCommands(workingDirectory: string): Promise<CommandInfo[]>;
   compact(sessionId: string, workingDirectory: string): Promise<void>;
   shutdown(): Promise<void>;
+  /**
+   * Resolve a pending ask_user question: sends the user's answer back through
+   * the MCP long-poll HTTP response so OpenCode can continue the agent loop.
+   * Throws if no ask_user is pending for this executionId (e.g. after server restart).
+   */
+  respondAskUser(executionId: number, content: string): Promise<void>;
+  /**
+   * Reply to a pending OpenCode permission request so the agent loop can continue.
+   * Must be called after engine.resume() resolves the in-memory shell_approval promise.
+   */
+  respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void>;
 }

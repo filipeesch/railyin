@@ -126,12 +126,21 @@ export class OpenCodeEngine implements ExecutionEngine {
   }
 
   async resume(executionId: number, input: EngineResumeInput): Promise<void> {
+    if (input.type === "ask_user") {
+      // Route through the adapter: resolves the MCP long-poll HTTP response so OpenCode
+      // can continue the agent loop. Throws if no pending ask_user (e.g. after restart),
+      // which causes human-turn-executor to create a fresh execution.
+      await this.sdkAdapter.respondAskUser(executionId, input.content);
+      return;
+    }
+    // shell_approval: unblock the in-engine waitForResume AND reply to OpenCode's permission request
     const pending = this.pendingResumes.get(executionId);
     if (!pending) {
       throw new Error(`Execution ${executionId} is not waiting for resume input`);
     }
     this.pendingResumes.delete(executionId);
     pending.resolve(input);
+    await this.sdkAdapter.respondPermission(executionId, input.decision);
   }
 
   cancel(executionId: number): void {
