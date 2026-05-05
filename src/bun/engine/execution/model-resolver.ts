@@ -44,7 +44,8 @@ export function seedConversationModel(
   
   // Use workspace-level default, then fall back to the first engine's configured model
   const workspaceDefaultModel = config.workspace.default_model ?? null;
-  const firstEngineModel = config.engines[0]?.config.model ?? null;
+  const firstEngineConfig = config.engines[0]?.config;
+  const firstEngineModel = (firstEngineConfig && "model" in firstEngineConfig ? firstEngineConfig.model : undefined) ?? null;
   
   const modelToSet = workspaceDefaultModel ?? firstEngineModel ?? null;
   
