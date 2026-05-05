@@ -1,5 +1,5 @@
 /**
- * interview-me.spec.ts — UI tests for the InterviewMe component.
+ * interview-me.spec.ts — UI tests for the DecisionRequest component and Decisions tab.
  *
  * T-A: Render exclusive question, select option, submit enabled
  * T-B: Render non_exclusive question, check a checkbox, submit enabled
@@ -8,6 +8,10 @@
  * T-E: Submit sends message to the task
  * T-F: Already-answered interview shows read-only state
  * T-G: Interview prompt followed by streaming — answered detection
+ * T-H: Decisions tab button visible in task toolbar
+ * T-I: Decisions tab loads DecisionsPanel, calls decisions.list
+ * T-J: Full streaming flow — decision_request_prompt appears after done event via refreshLatestPage
+ * T-K: message.new push event delivers decision_request_prompt when stream is already done
  *
  * Backend is fully mocked. interview_prompt messages are seeded via
  * `conversations.getMessages` returning ConversationMessage objects
@@ -29,6 +33,7 @@ function messagePage(messages: ConversationMessage[]) {
 function makeInterviewPrompt(
     taskId: number,
     payload: { questions: object[]; context?: string },
+    overrides?: Partial<ConversationMessage>,
 ): ConversationMessage {
     return {
         id: _msgId++,
@@ -39,6 +44,7 @@ function makeInterviewPrompt(
         content: JSON.stringify(payload),
         metadata: null,
         createdAt: new Date().toISOString(),
+        ...overrides,
     };
 }
 
@@ -309,5 +315,185 @@ test.describe("T-G — answered detection with streaming", () => {
         // Still read-only
         await expect(page.locator(".interview--answered")).toBeVisible();
         await expect(page.locator(".interview__submit")).not.toBeVisible();
+    });
+});
+
+// ─── T-H: Decisions tab button visible in task toolbar ───────────────────────
+
+test.describe("T-H — Decisions tab button visibility", () => {
+    test("T-H: Decisions tab button is visible when a task drawer is open", async ({ page, api, task }) => {
+        api.handle("conversations.getMessages", () => messagePage([]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // The Decisions tab button must be visible in the toolbar
+        const decisionsTab = page.locator(".tab-switcher button", { hasText: "Decisions" });
+        await expect(decisionsTab).toBeVisible();
+    });
+
+    test("T-H2: All three tab buttons (Chat, Info, Decisions) are visible", async ({ page, api, task }) => {
+        api.handle("conversations.getMessages", () => messagePage([]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".tab-switcher button", { hasText: "Chat" })).toBeVisible();
+        await expect(page.locator(".tab-switcher button", { hasText: "Info" })).toBeVisible();
+        await expect(page.locator(".tab-switcher button", { hasText: "Decisions" })).toBeVisible();
+    });
+});
+
+// ─── T-I: Decisions tab loads DecisionsPanel and calls decisions.list ─────────
+
+test.describe("T-I — Decisions tab panel", () => {
+    test("T-I: clicking Decisions tab shows empty state when no decisions exist", async ({ page, api, task }) => {
+        api.handle("conversations.getMessages", () => messagePage([]));
+        const decisionsListCalls: unknown[] = [];
+        api.handle("decisions.list", (params) => {
+            decisionsListCalls.push(params);
+            return [];
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".tab-switcher button", { hasText: "Decisions" }).click();
+
+        // Panel should show empty state
+        await expect(page.locator(".decisions-panel")).toBeVisible();
+        await expect(page.locator(".decisions-empty")).toBeVisible();
+
+        // decisions.list should have been called with the task's conversationId
+        await expect.poll(() => decisionsListCalls.length).toBeGreaterThan(0);
+        expect((decisionsListCalls[0] as { conversationId: number }).conversationId).toBe(task.conversationId);
+    });
+
+    test("T-I2: clicking Decisions tab shows recorded decisions", async ({ page, api, task }) => {
+        api.handle("conversations.getMessages", () => messagePage([]));
+        api.handle("decisions.list", () => [
+            {
+                id: 1,
+                conversationId: task.conversationId,
+                batchId: null,
+                question: "Which database?",
+                answer: "SQLite",
+                weight: "critical",
+                notes: null,
+                revisionCount: 0,
+                isSourceAi: true,
+                isDeleted: false,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+            },
+        ]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".tab-switcher button", { hasText: "Decisions" }).click();
+
+        await expect(page.locator(".decision-item")).toBeVisible();
+        await expect(page.locator(".decision-item")).toContainText("Which database?");
+        await expect(page.locator(".decision-item")).toContainText("SQLite");
+    });
+});
+
+// ─── T-J: Full streaming flow — decision_request_prompt via refreshLatestPage ─
+
+test.describe("T-J — streaming flow renders decision_request_prompt", () => {
+    test("T-J: decision_request_prompt appears after done event triggers refreshLatestPage", async ({ page, api, ws, task }) => {
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+
+        // Initially empty — no prompt seeded
+        let servePrompt = false;
+        api.handle("conversations.getMessages", () =>
+            messagePage(servePrompt ? [promptMsg] : []),
+        );
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // No form yet
+        await expect(page.locator(".interview__submit")).not.toBeVisible();
+
+        // Simulate: agent sends tool_call stream event for decision_request
+        ws.pushStreamEvent({
+            taskId: task.id,
+            executionId: 7001,
+            seq: 1,
+            blockId: "7001-tc",
+            type: "tool_call",
+            content: JSON.stringify({ name: "decision_request", display: { label: "decision request" } }),
+            metadata: null,
+            parentBlockId: null,
+            subagentId: null,
+            done: false,
+        });
+
+        // Now update the API to include the prompt (simulating DB write that happened on backend)
+        servePrompt = true;
+
+        // Push the done event — this triggers refreshLatestPage in conversation store
+        ws.pushDone(task.id, 7001);
+
+        // The form should now appear (via refreshLatestPage fetching the prompt from API)
+        await expect(page.locator(".interview__submit")).toBeVisible({ timeout: 5000 });
+        await expect(page.locator(".interview__submit")).toBeDisabled();
+    });
+
+    test("T-J2: decision_request_prompt is interactive — can select option and submit", async ({ page, api, ws, task }) => {
+        const promptId = 6000;
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: promptId });
+        const replyMsg = makeUserMessage(task.id, "A: SQLite", { id: promptId + 1 });
+
+        let serveMessages: ConversationMessage[] = [];
+        api.handle("conversations.getMessages", () => messagePage(serveMessages));
+        api.handle("tasks.sendMessage", () => ({ message: replyMsg, executionId: 9999 }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Trigger the streaming flow to make the prompt appear
+        serveMessages = [promptMsg];
+        ws.pushDone(task.id, 7002);
+
+        await expect(page.locator(".interview__submit")).toBeVisible({ timeout: 5000 });
+
+        // Select an option and submit
+        await page.locator(".interview__option").filter({ hasText: "SQLite" }).click();
+        await expect(page.locator(".interview__submit")).toBeEnabled();
+
+        // Update the messages to include the user reply (simulates what the backend would do)
+        serveMessages = [promptMsg, replyMsg];
+        await page.locator(".interview__submit").click();
+
+        // Push the reply via WS so conversation re-renders in answered state
+        ws.pushNewMessage(replyMsg);
+
+        // After submit + user message arrives, form should show answered (read-only) state
+        await expect(page.locator(".interview--answered")).toBeVisible({ timeout: 5000 });
+    });
+});
+
+// ─── T-K: message.new push delivers decision_request_prompt when stream done ──
+
+test.describe("T-K — message.new push event", () => {
+    test("T-K: message.new with decision_request_prompt renders form (no active stream)", async ({ page, api, ws, task }) => {
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [freetextQuestion] });
+
+        api.handle("conversations.getMessages", () => messagePage([]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // No form yet
+        await expect(page.locator(".interview__submit")).not.toBeVisible();
+
+        // Push message.new directly — simulates server broadcasting a persisted message
+        // when there is no active stream (isDone guard should not block this)
+        ws.pushNewMessage(promptMsg);
+
+        await expect(page.locator(".interview__submit")).toBeVisible({ timeout: 5000 });
     });
 });
