@@ -12,7 +12,7 @@ beforeEach(() => {
   gitDir = mkdtempSync(join(tmpdir(), "railyn-grm-"));
   gitManager = new GitRepositoryManager();
 
-  execSync("git init", { cwd: gitDir });
+  execSync("git init -b main", { cwd: gitDir });
   execSync('git config user.email "test@test.com"', { cwd: gitDir });
   execSync('git config user.name "Test"', { cwd: gitDir });
   writeFileSync(join(gitDir, "README.md"), "initial");
@@ -47,7 +47,7 @@ describe("addWorktree", () => {
     execSync("git add .", { cwd: gitDir });
     execSync('git commit -m "branch commit"', { cwd: gitDir });
     const branchSha = execSync("git rev-parse HEAD", { cwd: gitDir }).toString().trim();
-    execSync("git checkout main 2>/dev/null || git checkout master", { cwd: gitDir, shell: "/bin/sh" });
+    execSync("git checkout main", { cwd: gitDir, shell: "/bin/sh" });
 
     const worktreePath = mkdtempSync(join(tmpdir(), "railyn-wt-"));
     try {
