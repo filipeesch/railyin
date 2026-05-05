@@ -1,6 +1,7 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
+import type { IBoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
@@ -13,7 +14,7 @@ export interface AskUserOption {
 
 // ─── EngineEvent — emitted by any engine implementation ──────────────────────
 
-export type EngineEvent =
+export type EngineEvent = (
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
   | { type: "tool_start"; name: string; arguments: string; callId?: string; parentCallId?: string; isInternal?: boolean; display?: ToolCallDisplay }
@@ -39,7 +40,8 @@ export type EngineEvent =
   | { type: "compaction_start" }
   | { type: "compaction_done" }
   | { type: "done" }
-  | { type: "error"; message: string; fatal?: boolean };
+  | { type: "error"; message: string; fatal?: boolean }
+) & { isError?: boolean };
 
 // ─── Execution parameters ─────────────────────────────────────────────────────
 
@@ -211,7 +213,7 @@ export interface CommonToolContext {
   repos: {
     todos: import("../db/todos.ts").TodoRepository;
     decisions: import("../db/repositories/decision-repository.ts").DecisionRepository;
-    boardTools: import("../workflow/tools/board-tool-executor.ts").IBoardToolExecutor;
+    boardTools: IBoardToolExecutor;
   };
   workflow: {
     onTransition: (taskId: number, toState: string) => void;

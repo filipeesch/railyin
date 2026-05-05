@@ -74,6 +74,7 @@ function makeDbOrchestrator(): ExecutionCoordinator {
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
     respondShellApproval: async () => { throw new Error("not implemented"); },
+    executeChatTurn: async () => { throw new Error("not implemented"); },
     cancel: () => {},
     listModels: async () => [],
     compactTask: async () => {},
@@ -974,7 +975,12 @@ function makeMockOrchestrator(models: Array<{ qualifiedId: string | null; contex
     executeHumanTurn: async () => { throw new Error("not implemented"); },
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
+    respondShellApproval: async () => { throw new Error("not implemented"); },
+    executeChatTurn: async () => { throw new Error("not implemented"); },
     cancel: () => {},
+    compactTask: async () => {},
+    compactConversation: async () => {},
+    listCommands: async () => [],
   };
 }
 
@@ -1041,7 +1047,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
     ]);
     const handlers = modelHandlers(db, orchestrator);
 
-    const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
+    const enabled = await handlers["models.listEnabled"]({ workspaceKey: "1" });
 
     expect(enabled.length).toBeGreaterThan(0);
     expect(enabled[0].id).toBeNull();
@@ -1060,7 +1066,7 @@ describe("models.listEnabled — Copilot Auto option", () => {
     ]);
     const handlers = modelHandlers(db, orchestrator);
 
-    const enabled = await handlers["models.listEnabled"]({ workspaceId: 1 });
+    const enabled = await handlers["models.listEnabled"]({ workspaceKey: "1" });
 
     expect(enabled.some((m) => m.id === null)).toBe(true);
     expect(enabled.some((m) => m.id === "copilot/mock-model")).toBe(true);

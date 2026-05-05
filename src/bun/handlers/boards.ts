@@ -83,7 +83,7 @@ export function boardHandlers(db: Database) {
       }
 
       values.push(params.id);
-      db.run(`UPDATE boards SET ${updates.join(", ")} WHERE id = ?`, values);
+      db.run(`UPDATE boards SET ${updates.join(", ")} WHERE id = ?`, values as import("bun:sqlite").SQLQueryBindings[]);
 
       const updatedRow = db.query<BoardRow, [number]>("SELECT * FROM boards WHERE id = ?").get(params.id)!;
       return mapBoard(updatedRow, 0);

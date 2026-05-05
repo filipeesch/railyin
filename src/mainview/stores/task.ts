@@ -138,7 +138,7 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── Send message ─────────────────────────────────────────────────────────
 
-  async function sendMessage(taskId: number, content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], decisionBatch?: { records: { question: string; answer: string; weight?: string }[] }) {
+  async function sendMessage(taskId: number, content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], decisionBatch?: { label?: string; records: import("@shared/rpc-types").DecisionInput[] }) {
     const { message, executionId } = await api("tasks.sendMessage", {
       taskId,
       content,

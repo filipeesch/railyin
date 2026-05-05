@@ -94,6 +94,8 @@ export class MockCopilotSession implements CopilotSdkSession {
         this.disconnectCalls += 1;
     }
 
+    async compact(): Promise<void> {}
+
     private emit(event: CopilotSdkEvent): void {
         for (const listener of this.listeners) {
             listener(event);

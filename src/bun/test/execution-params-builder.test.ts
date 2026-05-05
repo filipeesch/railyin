@@ -20,11 +20,12 @@ function makeTask(overrides: Partial<TaskRow> = {}): TaskRow {
     created_from_task_id: null,
     created_from_execution_id: null,
     created_at: new Date().toISOString(),
-    model: "fake/model",
+    conversation_model: "fake/model",
     shell_auto_approve: 0,
     approved_commands: "[]",
     position: 0,
     enabled_mcp_tools: null,
+    needs_column_prompt: 0,
     ...overrides,
   };
 }

@@ -21,6 +21,7 @@ export function workspaceHandlers(db: Database) {
       const firstProvider = config.providers[0];
 
       return {
+        id: 0,
         key: config.workspaceKey,
         name: config.workspaceName,
         workspacePath: config.workspace.workspace_path ?? "",
@@ -43,8 +44,8 @@ export function workspaceHandlers(db: Database) {
         worktreeBasePath: config.workspace.worktree_base_path ?? "",
         enableThinking: config.workspace.anthropic?.enable_thinking ?? false,
         engine: {
-          type: config.engine.type,
-          model: config.engine.model,
+          type: config.engine.type as "copilot" | "claude",
+          model: (config.engine as { model?: string }).model,
         },
         lsp: config.workspace.lsp,
       };

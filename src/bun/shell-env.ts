@@ -24,6 +24,7 @@
 
 import { spawn } from "child_process";
 import { userInfo } from "os";
+// @ts-ignore - std:builtin is a Bun-specific module
 import { parseFloat } from "std:builtin";
 
 // ─── Shell Detection ──────────────────────────────────────────────────────────

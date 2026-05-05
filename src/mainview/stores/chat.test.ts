@@ -16,6 +16,7 @@ function makeChatSession(overrides: Partial<import("@shared/rpc-types").ChatSess
     title: "Session",
     status: "idle",
     conversationId: 10,
+    model: null,
     enabledMcpTools: null,
     lastActivityAt: new Date().toISOString(),
     lastReadAt: new Date().toISOString(),

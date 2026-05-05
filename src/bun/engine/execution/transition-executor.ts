@@ -86,7 +86,7 @@ export class TransitionExecutor {
     ).get(taskId)!;
     const workingDirectory = this.workdirResolver.resolve(updatedRow);
     const transitionMetadata = await this.buildTransitionMetadata(
-      config.engine.type,
+      config.engine.type as "copilot" | "claude",
       fromState,
       toState,
       resolvedPrompt,

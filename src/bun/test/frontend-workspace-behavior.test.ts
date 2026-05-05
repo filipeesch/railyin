@@ -29,6 +29,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     branchName: null,
     worktreePath: null,
     executionCount: 0,
+    position: 0,
+    enabledMcpTools: null,
     ...overrides,
   };
 }

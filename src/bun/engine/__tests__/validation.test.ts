@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import type { LoadedConfig } from "../config/index.ts";
+import type { LoadedConfig } from "../../config/index.ts";
 
 describe("Engine Abstraction Layer - Config Migration", () => {
   it("accepts supported engine types", () => {
@@ -37,7 +37,6 @@ describe("Engine Abstraction Layer - Config Migration", () => {
     // resolveEngine() should throw on unknown type
     // (actual implementation would try to construct invalid engine)
     expect(() => {
-      // @ts-expect-error - intentional invalid type
       if (invalidConfig.engine.type !== "copilot" && invalidConfig.engine.type !== "claude") {
         throw new Error(`Unknown engine type: ${invalidConfig.engine.type}`);
       }
@@ -48,7 +47,7 @@ describe("Engine Abstraction Layer - Config Migration", () => {
 describe("Engine Abstraction Layer - Orchestrator Routing", () => {
   it("routes through supported engines only", () => {
     const copilotEngineName = "CopilotEngine";
-    expect(copilotEngineName === "NativeEngine").toBe(false);
+    expect((copilotEngineName as string) === "NativeEngine").toBe(false);
   });
 
   it("event stream consumer correctly handles token accumulation", () => {

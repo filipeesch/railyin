@@ -287,7 +287,7 @@ export function codeReviewHandlers(db: Database) {
     "tasks.getCheckpointRef": async (params: { taskId: number }): Promise<string | null> => {
       // Find the most recent execution for this task that has unsent pending hunk decisions
       const row = db
-        .query<{ stash_ref: string | null }, [number]>(
+        .query<{ stash_ref: string | null }, [number, number]>(
           `SELECT tec.stash_ref
            FROM task_execution_checkpoints tec
            JOIN executions e ON tec.execution_id = e.id

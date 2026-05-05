@@ -134,7 +134,7 @@ export class CopilotEngine implements ExecutionEngine {
     // Build tool context for common task-management tools
     const config = getConfig();
     const lspManager = taskLspRegistry.getManager(
-      taskId,
+      taskId ?? 0,
       config.workspace.lsp?.servers ?? [],
       workingDirectory,
     );
@@ -160,7 +160,7 @@ export class CopilotEngine implements ExecutionEngine {
         },
       },
       runtime: {
-        lspManager,
+        lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
       },
     };

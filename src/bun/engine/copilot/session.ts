@@ -7,7 +7,7 @@ export interface CopilotSdkSessionConfig {
   tools?: unknown[];
   systemMessage?: { mode: "append"; content: string };
   onPermissionRequest?: (request: unknown, invocation: unknown) => unknown;
-  workingDirectory: string;
+  workingDirectory?: string;
   streaming?: boolean;
 }
 
@@ -133,6 +133,11 @@ type LoadedCopilotSession = {
 
 // Shared singleton — used only for listModels(), reuses an existing CLI via port file.
 let _sharedClientPromise: Promise<LoadedCopilotClient> | undefined;
+
+let _statusListeners: Set<(message: string) => void> = new Set();
+function emitStatus(message: string): void {
+  for (const listener of _statusListeners) listener(message);
+}
 
 // Per-task CLI pool — each session gets its own isolated CLI process.
 type PoolEntry = {

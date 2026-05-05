@@ -48,7 +48,7 @@ interface StreamEventLike {
   type: string;
   content: string;
   metadata: string | null;
-  parentBlockId: string | null;
+  parentBlockId?: string | null;
 }
 
 const SKIP_TYPES = new Set(["done", "status_chunk", "text_chunk", "reasoning_chunk"]);
@@ -74,7 +74,7 @@ export function buildStreamTree(events: StreamEventLike[]): StreamTree {
       type: event.type,
       content: event.content,
       metadata: event.metadata,
-      parentBlockId: event.parentBlockId,
+      parentBlockId: event.parentBlockId ?? null,
       children: [],
     };
     blocks.set(event.blockId, block);

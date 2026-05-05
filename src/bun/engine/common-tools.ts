@@ -356,7 +356,7 @@ export const COMMON_TOOL_NAMES = new Set(COMMON_TOOL_DEFINITIONS.map((t) => t.na
 
 // ─── Display builder ──────────────────────────────────────────────────────────
 
-import type { ToolCallDisplay } from "./types.ts";
+import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 
 export function buildCommonToolDisplay(name: string, args: Record<string, unknown>): ToolCallDisplay {
   const str = (v: unknown): string => (v != null ? String(v) : "");
@@ -396,7 +396,7 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
       const title = args.title != null ? String(args.title) : null;
       const subject = num && title ? `${num}. ${title}` : title ?? num ?? undefined;
       const content = args.description != null ? String(args.description) : undefined;
-      return { label: name === "create_todo" ? "create todo" : "edit todo", subject, content };
+      return { label: name === "create_todo" ? "create todo" : "edit todo", subject };
     }
     case "list_todos":
       return { label: "todo list" };
@@ -419,7 +419,7 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
  */
 export type ToolExecutionResult =
   | { type: "result"; text: string }
-  | { type: "suspend"; payload: string };
+  | { type: "suspend"; text: string; payload: string };
 
 /**
  * Execute a common tool and return a typed result.
@@ -440,7 +440,7 @@ export async function executeCommonTool(
     const context = typeof args.context === "string" ? args.context.trim() : "";
     const payload: Record<string, unknown> = { questions: args.questions };
     if (context) payload.context = context;
-    return { type: "suspend", payload: JSON.stringify(payload) };
+    return { type: "suspend", text: "", payload: JSON.stringify(payload) };
   }
   const text = await executeCommonToolText(name, args, ctx);
   return { type: "result", text };
@@ -536,7 +536,7 @@ async function executeCommonToolText(
       const description = args.description != null ? (args.description as string).trim() : "";
       if (!description) return "Error: description is required";
       const phase = args.phase != null ? String(args.phase) : undefined;
-      const item = ctx.repos.todos.createTodo(ctx.task.id, number, title, description, phase);
+      const item = ctx.repos.todos.createTodo(ctx.task.id!, number, title, description, phase);
       return JSON.stringify(item);
     }
 

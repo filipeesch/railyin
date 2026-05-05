@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
-import { TaskRepository } from "../db/task-repository.ts";
 import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
@@ -64,7 +63,7 @@ afterEach(() => {
 
 describe("StreamProcessor", () => {
   it("SP-1: createSignal / abort round-trip", () => {
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, new TaskRepository(db));
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
     const signal = sp.createSignal(executionId);
     expect(signal.aborted).toBe(false);
     sp.abort(executionId);
@@ -72,7 +71,7 @@ describe("StreamProcessor", () => {
   });
 
   it("SP-2: abortControllers cleaned up after done, subsequent createSignal returns fresh signal", async () => {
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, new TaskRepository(db));
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
     sp.createSignal(executionId);
 
     const engine = new NoopEngine();
@@ -106,7 +105,7 @@ describe("StreamProcessor", () => {
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, new TaskRepository(db));
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
     const signal = sp.createSignal(executionId);
     const params = makeParams(taskId, conversationId, executionId, signal);
     const engine = new PausableEngine();
@@ -146,7 +145,7 @@ describe("StreamProcessor", () => {
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, new TaskRepository(db));
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
     const signal = sp.createSignal(executionId);
     const params = makeParams(taskId, conversationId, executionId, signal);
     const engine = new PausableReasoningEngine();
@@ -178,7 +177,7 @@ describe("StreamProcessor", () => {
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, new TaskRepository(db));
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
     const engine = new FatalErrorEngine();
     const params = makeParams(taskId, conversationId, executionId);
 
@@ -215,7 +214,7 @@ describe("StreamProcessor", () => {
       noop as never,
       noop as never,
       (msg) => newMessages.push(msg),
-      new TaskRepository(db),
+      () => {},
     );
 
     await sp.consume(taskId, conversationId, executionId, new TextEngine().execute(makeParams(taskId, conversationId, executionId)));
