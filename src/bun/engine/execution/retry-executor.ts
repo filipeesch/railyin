@@ -34,8 +34,8 @@ export class RetryExecutor {
        WHERE t.id = ?`
     ).get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const config = getWorkspaceConfig(this.wsRepo.getTaskWorkspaceKey(taskId));
-    const engine = this.engineRegistry.getEngine(this.wsRepo.getTaskWorkspaceKey(taskId));
+    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const config = getWorkspaceConfig(workspaceKey);
 
     const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
     db.run("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ?", [taskId]);
@@ -46,6 +46,7 @@ export class RetryExecutor {
     const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
     const effectiveModel = resolveModel(taskWithModel, column?.model, false);
     // Note: No model updates during retry - conversation model is authoritative
+    const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)

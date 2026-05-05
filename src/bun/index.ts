@@ -1,7 +1,7 @@
 import { runMigrations } from "./db/migrations/runner.ts";
 import { seedDefaultWorkspace } from "./db/seed.ts";
 import { getDb } from "./db/index.ts";
-import { loadConfig, getDataDir } from "./config/index.ts";
+import { loadConfig, getDataDir, type EngineConfig, type EngineEntry } from "./config/index.ts";
 import * as path from "path";
 import { getPtySession } from "./launch/pty.ts";
 import { initMcpRegistry } from "./mcp/registry.ts";
@@ -26,7 +26,12 @@ import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/
 import { decisionHandlers } from "./handlers/decisions.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import { EngineRegistry } from "./engine/engine-registry.ts";
-import { resolveEngine } from "./engine/resolver.ts";
+import { CopilotEngine } from "./engine/copilot/engine.ts";
+import { createDefaultCopilotSdkAdapter } from "./engine/copilot/session.ts";
+import { ClaudeEngine } from "./engine/claude/engine.ts";
+import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
+import { OpenCodeEngine } from "./engine/opencode/engine.ts";
+import { createDefaultOpenCodeSdkAdapter } from "./engine/opencode/adapter.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
 import { WorkspaceRepository } from "./db/workspace-repository.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
@@ -37,6 +42,8 @@ import { NotificationService } from "./server/notifications.ts";
 import { StreamEventProcessor } from "./server/stream-processor.ts";
 import { WebSocketHandler } from "./server/websocket.ts";
 import { createShutdownHandler } from "./server/shutdown.ts";
+import type { ExecutionEngine } from "./engine/types.ts";
+import type { OnTaskUpdated, OnNewMessage } from "./engine/types.ts";
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 setupFileLogging();
@@ -132,14 +139,72 @@ const channel = new BroadcastChannel();
 const notifier = new NotificationService(channel);
 const streamProc = new StreamEventProcessor(channel, db);
 
+// ─── Engine factory map (composition root) ───────────────────────────────────
+
+type EngineFactory = (cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) => ExecutionEngine;
+
+const engineFactories: Record<string, EngineFactory> = {
+  copilot: (_cfg, onTaskUpdated, onNewMessage) =>
+    new CopilotEngine(onTaskUpdated, onNewMessage, createDefaultCopilotSdkAdapter()),
+  claude: (cfg, onTaskUpdated, onNewMessage) =>
+    new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
+  opencode: (cfg, onTaskUpdated, onNewMessage) =>
+    new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
+  scripted: () => new MockExecutionEngine(),
+};
+
+function buildEngineInstances(
+  engines: EngineEntry[],
+  factories: Record<string, EngineFactory>,
+  onTaskUpdated: OnTaskUpdated,
+  onNewMessage: OnNewMessage,
+): Map<string, ExecutionEngine> {
+  const map = new Map<string, ExecutionEngine>();
+  for (const entry of engines) {
+    const factory = factories[entry.config.type];
+    if (!factory) {
+      console.warn(`[engine] No factory for engine type '${entry.config.type}' (id: ${entry.id}) — skipping.`);
+      continue;
+    }
+    try {
+      map.set(entry.id, factory(entry.config, onTaskUpdated, onNewMessage));
+    } catch (err) {
+      console.error(`[engine] Failed to construct engine '${entry.id}':`, err);
+    }
+  }
+  return map;
+}
+
 // ─── Engine + Orchestrator ────────────────────────────────────────────────────
 const injectedEngine = process.env.RAILYN_TEST_EXECUTION_ENGINE === "mock"
   ? new MockExecutionEngine()
   : null;
 
-const engineRegistry = injectedEngine
-  ? EngineRegistry.fromFixed(injectedEngine)
-  : new EngineRegistry((key) => resolveEngine(getWorkspaceConfig(key), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier)));
+let engineRegistry: EngineRegistry;
+
+if (injectedEngine) {
+  const mockMap = new Map<string, ExecutionEngine>([["scripted", injectedEngine]]);
+  engineRegistry = new EngineRegistry(mockMap, getWorkspaceConfig);
+} else {
+  // Collect all unique engines across all workspaces, deduplicated by id.
+  // In practice, engines.yaml is global so a single-pass over the default workspace is enough.
+  const { config: defaultConfig } = loadConfig();
+  const allEngines: EngineEntry[] = defaultConfig?.engines ?? [];
+  const seenIds = new Set<string>();
+  const uniqueEngines = allEngines.filter((e) => {
+    if (seenIds.has(e.id)) return false;
+    seenIds.add(e.id);
+    return true;
+  });
+
+  const instanceMap = buildEngineInstances(
+    uniqueEngines,
+    engineFactories,
+    notifier.notifyTaskUpdated.bind(notifier),
+    notifier.notifyNewMessage.bind(notifier),
+  );
+  engineRegistry = new EngineRegistry(instanceMap, getWorkspaceConfig);
+}
 
 const orchestrator: Orchestrator | null = !configError
   ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc))

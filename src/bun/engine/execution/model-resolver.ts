@@ -27,6 +27,7 @@ export function resolveModel(
 
 /**
  * Seeds the conversation model with workspace default if not already set.
+ * Uses the first allowed engine's configured model (multi-engine aware).
  * 
  * @param db - Database instance
  * @param conversationId - The conversation ID to seed
@@ -41,14 +42,12 @@ export function seedConversationModel(
   const workspaceKey = wsRepo.getBoardWorkspaceKey(boardId);
   const config = getWorkspaceConfig(workspaceKey);
   
-  // Get workspace default model or engine model
+  // Use workspace-level default, then fall back to the first engine's configured model
   const workspaceDefaultModel = config.workspace.default_model ?? null;
-  const engineModel = "model" in config.engine ? (config.engine.model ?? null) : null;
+  const firstEngineModel = config.engines[0]?.config.model ?? null;
   
-  // Determine which model to use
-  const modelToSet = workspaceDefaultModel ?? engineModel ?? null;
+  const modelToSet = workspaceDefaultModel ?? firstEngineModel ?? null;
   
-  // Only set if we have a model and conversation doesn't already have one
   if (modelToSet) {
     const current = db.query<{ model: string | null }, [number]>(
       "SELECT model FROM conversations WHERE id = ?"

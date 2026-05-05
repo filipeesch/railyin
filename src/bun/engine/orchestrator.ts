@@ -39,6 +39,7 @@ import { CodeReviewExecutor } from "./execution/code-review-executor.ts";
 import { ChatExecutor } from "./execution/chat-executor.ts";
 import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
 import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
+import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -90,11 +91,13 @@ export class Orchestrator implements ExecutionCoordinator {
 
     this.transitionExecutor = new TransitionExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, boardTools, wsRepo,
+      new CrossEngineContextInjector(db),
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
     this.humanTurnExecutor = new HumanTurnExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
+      new CrossEngineContextInjector(db),
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
@@ -189,22 +192,30 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Model listing ─────────────────────────────────────────────────────────
 
-  listModels(workspaceKey?: string) {
+  async listModels(workspaceKey?: string) {
     const key = workspaceKey ?? getDefaultWorkspaceKey();
     const config = getWorkspaceConfig(key);
-    const engine = this.registry.getEngine(key);
-    return runWithConfig(config, () => engine.listModels());
+    const engines = this.registry.listAllEngines(key);
+    const results = await Promise.all(
+      engines.map((engine) => runWithConfig(config, () => engine.listModels())),
+    );
+    return results.flat();
   }
 
   // ─── Command listing ────────────────────────────────────────────────────────
 
   async listCommands(taskId: number) {
     const db = this.db;
-    const task = db.query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?").get(taskId);
+    const task = db.query<{ board_id: number; conversation_id: number | null }, [number]>(
+      "SELECT board_id, conversation_id FROM tasks WHERE id = ?",
+    ).get(taskId);
     if (!task) return [];
     const key = this.wsRepo.getBoardWorkspaceKey(task.board_id);
     const config = getWorkspaceConfig(key);
-    const engine = this.registry.getEngine(key);
+    const conversationModel = task.conversation_id
+      ? (db.prepare("SELECT model FROM conversations WHERE id = ?").get(task.conversation_id) as { model: string | null } | undefined)?.model
+      : null;
+    const engine = this.registry.resolveEngineForModel(key, conversationModel);
     return runWithConfig(config, () => engine.listCommands(taskId));
   }
 
@@ -220,11 +231,14 @@ export class Orchestrator implements ExecutionCoordinator {
   ): Promise<void> {
     const db = this.db;
     const task = db
-      .query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?")
+      .query<TaskRow & { conversation_model: string | null }, [number]>(
+        `SELECT t.*, c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?`,
+      )
       .get(taskId);
     if (!task?.current_execution_id) return;
 
-    const engine = this.registry.getEngine(this.wsRepo.getTaskWorkspaceKey(taskId));
+    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const engine = this.registry.resolveEngineForModel(workspaceKey, task.conversation_model);
     await engine.resume(task.current_execution_id, { type: "shell_approval", decision });
 
     db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
@@ -236,20 +250,24 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   async compactTask(taskId: number): Promise<void> {
-    const engine = this.registry.getEngine(this.wsRepo.getTaskWorkspaceKey(taskId));
+    const db = this.db;
+    const task = db.query<TaskRow & { conversation_model: string | null }, [number]>(
+      `SELECT t.*, c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?`,
+    ).get(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const engine = this.registry.resolveEngineForModel(workspaceKey, task.conversation_model);
     if (!engine.compact) {
       throw new Error(`Engine for task ${taskId} does not support manual compaction`);
     }
-    const db = this.db;
-    const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
     const workingDirectory = this.workdirResolver.resolve(task);
     await engine.compact(taskId, task.conversation_id ?? 0, workingDirectory);
   }
 
   async compactConversation(conversationId: number, workspaceKey = getDefaultWorkspaceKey()): Promise<void> {
     const config = getWorkspaceConfig(workspaceKey);
-    const engine = this.registry.getEngine(workspaceKey);
+    const conversationModel = (this.db.prepare("SELECT model FROM conversations WHERE id = ?").get(conversationId) as { model: string | null } | undefined)?.model;
+    const engine = this.registry.resolveEngineForModel(workspaceKey, conversationModel);
     if (!engine.compact) {
       throw new Error(`Engine for conversation ${conversationId} does not support manual compaction`);
     }

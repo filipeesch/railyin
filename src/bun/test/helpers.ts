@@ -24,7 +24,8 @@ export function initDb(): Database {
     CREATE TABLE IF NOT EXISTS conversations (
        id      INTEGER PRIMARY KEY AUTOINCREMENT,
        task_id INTEGER,
-       model   TEXT
+       model   TEXT,
+       last_engine_type TEXT NULL
      );
     CREATE TABLE IF NOT EXISTS tasks (
       id                        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -289,6 +290,8 @@ export function setupTestConfig(
   engineModel: string | null = "copilot/mock-model",
   /** Optional extra workspace YAML files to write alongside workspace.yaml. Each entry is written as workspace.<key>.yaml. */
   extraWorkspaces: { key: string; yaml: string }[] = [],
+  /** Optional raw YAML content to write as `engines.yaml` in the config dir. When provided, this file takes precedence over the workspace.yaml `engine:` block. */
+  enginesYaml?: string,
 ): { configDir: string; cleanup: () => void } {
   const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
 
@@ -334,6 +337,10 @@ export function setupTestConfig(
     writeFileSync(join(configDir, `workspace.${key}.yaml`), yaml);
   });
 
+  if (enginesYaml !== undefined) {
+    writeFileSync(join(configDir, "engines.yaml"), enginesYaml);
+  }
+
   process.env.RAILYN_DB = ":memory:";
   process.env.RAILYN_CONFIG_DIR = configDir;
   process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");
@@ -350,4 +357,22 @@ export function setupTestConfig(
       resetConfig();
     },
   };
+}
+
+// ─── Test registry factory ────────────────────────────────────────────────────
+
+import { EngineRegistry } from "../engine/engine-registry.ts";
+import type { ExecutionEngine } from "../engine/types.ts";
+import { getWorkspaceConfig, getDefaultWorkspaceKey } from "../workspace-context.ts";
+
+/**
+ * Build an `EngineRegistry` containing a single engine for unit tests.
+ * Must be called AFTER `setupTestConfig()` so the workspace config is loaded.
+ * The engine is registered under the first engine ID declared in the loaded config
+ * (backward-compat: `engine.type` from workspace.yaml, typically "copilot").
+ */
+export function makeTestRegistry(engine: ExecutionEngine): EngineRegistry {
+  const config = getWorkspaceConfig(getDefaultWorkspaceKey());
+  const engineId = config.engines[0]?.id ?? "copilot";
+  return new EngineRegistry(new Map([[engineId, engine]]), getWorkspaceConfig);
 }
