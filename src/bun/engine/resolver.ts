@@ -12,6 +12,8 @@ import { CopilotEngine } from "./copilot/engine.ts";
 import { createDefaultCopilotSdkAdapter } from "./copilot/session.ts";
 import { ClaudeEngine } from "./claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./claude/adapter.ts";
+import { OpenCodeEngine } from "./opencode/engine.ts";
+import { createDefaultOpenCodeSdkAdapter } from "./opencode/adapter.ts";
 
 import { MockExecutionEngine } from "../testing/mock-engine.ts";
 
@@ -47,6 +49,14 @@ export function resolveEngine(
       onTaskUpdated,
       onNewMessage,
       createDefaultClaudeSdkAdapter(),
+    );
+  }
+
+  if (engine.type === "opencode") {
+    return new OpenCodeEngine(
+      onTaskUpdated,
+      onNewMessage,
+      createDefaultOpenCodeSdkAdapter(engine),
     );
   }
 

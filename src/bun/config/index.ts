@@ -59,7 +59,30 @@ export interface ScriptedEngineConfig {
   type: "scripted";
 }
 
-export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig;
+/** OpenCode engine config — uses the OpenCode AI SDK with configurable providers. */
+export interface OpenCodeEngineConfig {
+  type: "opencode";
+  /** Default model in "providerID/modelID" format, e.g. "anthropic/claude-sonnet-4-5". */
+  model?: string;
+  /**
+   * Provider configuration map. Keys are OpenCode provider IDs (e.g. "anthropic", "openai", "ollama").
+   * Supports custom base URLs for local LLMs (Ollama, LM Studio, OpenAI-compatible endpoints).
+   */
+  providers?: Record<string, OpenCodeProviderConfig>;
+}
+
+export interface OpenCodeProviderConfig {
+  /** API key for the provider. */
+  api_key?: string;
+  /** Custom base URL, useful for local LLMs (e.g. http://localhost:11434/v1). */
+  base_url?: string;
+  /** Optional npm package override for the provider SDK. */
+  npm?: string;
+  /** Per-model configuration overrides. */
+  models?: Record<string, { name?: string }>;
+}
+
+export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig;
 
 /**
  * @deprecated Use `ProviderConfig` and `WorkspaceYaml.providers` instead.
@@ -503,10 +526,10 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     return { config: null, error: _configError };
   }
 
-  if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude" || workspace.engine?.type === "scripted") {
+  if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude" || workspace.engine?.type === "scripted" || workspace.engine?.type === "opencode") {
     engine = workspace.engine;
   } else {
-    _configError = `${workspaceFileName} is missing 'engine:'. Supported engines are 'copilot', 'claude', and 'scripted'.`;
+    _configError = `${workspaceFileName} is missing 'engine:'. Supported engines are 'copilot', 'claude', 'opencode', and 'scripted'.`;
     return { config: null, error: _configError };
   }
 

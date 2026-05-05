@@ -42,6 +42,20 @@ name: My Workspace
 # engine:
 #   type: copilot
 #   model: gpt-4.1  # optional; defaults to Copilot's default model
+#
+# OpenCode engine: use the OpenCode SDK with full provider flexibility.
+# Supports Anthropic, OpenAI-compatible APIs, Ollama, and other providers.
+# engine:
+#   type: opencode
+#   model: anthropic/claude-sonnet-4-5  # optional default model (providerID/modelID)
+#   providers:
+#     anthropic:                         # Anthropic (cloud)
+#       api_key: sk-ant-YOUR_KEY_HERE
+#     openai:                            # OpenAI or any OpenAI-compatible API
+#       api_key: sk-YOUR_KEY_HERE
+#       base_url: https://api.openai.com/v1  # optional; override for local/custom endpoints
+#     ollama:                            # Ollama (local LLMs — no api_key needed)
+#       base_url: http://localhost:11434
 
 # ─── Legacy top-level providers (still supported, auto-migrated to native engine) ───
 # List all AI providers you want to use simultaneously.

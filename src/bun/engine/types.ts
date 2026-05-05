@@ -103,7 +103,7 @@ export interface ExecutionParams {
 }
 
 export interface RawModelMessage {
-  engine: "claude" | "copilot";
+  engine: string;
   sessionId?: string;
   direction: "inbound" | "outbound" | "control";
   eventType: string;
@@ -142,7 +142,7 @@ export type EngineLeaseState = "running" | "waiting_user" | "idle" | "closing";
 
 export interface EngineLeaseMetadata {
   leaseKey: string;
-  engine: "copilot" | "claude";
+  engine: string;
   lastActivityAt: number;
   state: EngineLeaseState;
 }
