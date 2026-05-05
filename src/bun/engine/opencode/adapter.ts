@@ -212,7 +212,6 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     const reply = decision === "approve_all" ? "always" : decision === "approve_once" ? "once" : "reject" as const;
     await this.client!.permission.reply({
       requestID: pending.requestId,
-      sessionID: pending.sessionId,
       reply,
     });
   }

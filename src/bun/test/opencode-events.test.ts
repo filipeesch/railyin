@@ -159,7 +159,8 @@ describe("translatePermissionAsked", () => {
     } as unknown as EventPermissionAsked;
 
     const result = translatePermissionAsked(event, 7);
-    expect(result.command).toBe("network");
+    expect(result.type).toBe("shell_approval");
+    expect((result as { type: "shell_approval"; command: string; executionId: number }).command).toBe("network");
   });
 });
 
