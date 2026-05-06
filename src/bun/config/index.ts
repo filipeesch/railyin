@@ -82,7 +82,24 @@ export interface OpenCodeProviderConfig {
   models?: Record<string, { name?: string }>;
 }
 
-export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig;
+/** Pi engine config — uses the Pi agent SDK for local LLMs (LM Studio, Ollama, OpenAI-compatible). */
+export interface PiEngineConfig {
+  type: "pi";
+  /** Default model in "provider/model" format, e.g. "lmstudio/qwen3-8b". */
+  model?: string;
+  /**
+   * OpenAI-compatible provider endpoints keyed by provider name.
+   * e.g. lmstudio: { base_url: "http://localhost:1234/v1" }
+   */
+  providers?: Record<string, { base_url: string; api_key?: string }>;
+  /** Harness-level tuning options. */
+  harness?: {
+    /** Maximum undo stack depth per conversation. Default: 50. */
+    undo_stack_size?: number;
+  };
+}
+
+export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig | PiEngineConfig;
 
 /**
  * A single engine entry from `engines.yaml`.

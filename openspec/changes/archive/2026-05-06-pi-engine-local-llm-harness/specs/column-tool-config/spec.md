@@ -1,8 +1,4 @@
-## Purpose
-
-Per-column tool configuration allows workflow designers to declare which tools the AI model may call when operating in a given column. This enables fine-grained control over model capabilities at each workflow stage.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Workflow columns declare available tools
 
@@ -23,27 +19,3 @@ The Pi engine SHALL register a `PI_TOOL_GROUPS` map that expands the following g
 #### Scenario: Pi engine column configured with named groups gets expanded tools
 - **WHEN** a column for a Pi engine execution defines `tools: ["read", "search"]`
 - **THEN** the Pi execution receives `read_file`, `list_dir`, `search_text`, `find_files` plus board and interaction tools
-
-#### Scenario: Empty tools array means no tools
-
-- **WHEN** a column defines `tools: []`
-- **THEN** the AI request includes no tool definitions
-
-#### Scenario: `todos` group resolves to todo tool definitions
-
-- **WHEN** a column defines `tools: [todos]`
-- **THEN** `resolveToolsForColumn(["todos"])` returns a non-empty list containing the todo tools (`create_todo`, `edit_todo`, `list_todos`, `get_todo`, `reorganize_todos`, `update_todo_status`)
-
-#### Scenario: All known group names expand without warnings
-
-- **WHEN** `resolveToolsForColumn` is called with any group name defined in `TOOL_GROUPS`
-- **THEN** the result is non-empty and no `[tools] Unknown tool` warning is logged
-
-### Requirement: Tool names in column config are validated
-
-The system SHALL log a warning at startup (or config load) when a column's `tools` array contains an unknown tool name. Unknown names SHALL be silently skipped so a typo does not break the column entirely.
-
-#### Scenario: Unknown tool name is skipped with warning
-
-- **WHEN** a column's `tools` list contains a name that does not match any registered tool or group
-- **THEN** the system logs a warning identifying the unknown tool name and continues without it
