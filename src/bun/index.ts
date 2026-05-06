@@ -2,6 +2,7 @@ import { runMigrations } from "./db/migrations/runner.ts";
 import { seedDefaultWorkspace } from "./db/seed.ts";
 import { getDb } from "./db/index.ts";
 import { loadConfig, getDataDir, type EngineConfig, type EngineEntry } from "./config/index.ts";
+import { getTmpDir } from "./utils/platform.ts";
 import * as path from "path";
 import { getPtySession } from "./launch/pty.ts";
 import { initMcpRegistry } from "./mcp/registry.ts";
@@ -326,7 +327,7 @@ const server = Bun.serve({
   websocket: wsHandler,
 });
 
-await Bun.write("/tmp/railyn.port", String(server.port)).catch(() => { });
+await Bun.write(path.join(getTmpDir(), "railyn.port"), String(server.port)).catch(() => { });
 console.log(`Railyn server listening on http://127.0.0.1:${server.port}`);
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
@@ -351,7 +352,7 @@ if (process.env.RAILYN_DEBUG) {
       return new Response("paths: /shutdown", { status: 200 });
     },
   });
-  Bun.write("/tmp/railyn-debug.port", String(debugServer.port)).catch(() => { });
+  Bun.write(path.join(getTmpDir(), "railyn-debug.port"), String(debugServer.port)).catch(() => { });
   console.log(`DEBUG_PORT=${debugServer.port}`);
 }
 

@@ -7,6 +7,7 @@ import { readLaunchConfig } from "../launch/config.ts";
 import { launchApp, launchInTerminal } from "../launch/launcher.ts";
 import { createPtySession, killPtySession } from "../launch/pty.ts";
 import { getLoadedProjectByKey } from "../project-store.ts";
+import { getDefaultShell, getShellArgs } from "../utils/platform.ts";
 
 export function launchHandlers(db: Database) {
   return {
@@ -69,8 +70,8 @@ export function launchHandlers(db: Database) {
           await launchInTerminal(params.command, cwd);
           return { ok: true };
         } else {
-          // mode === "terminal" — inline PTY session
-          const session = createPtySession(params.command, cwd);
+          // mode === "terminal" — inline PTY session running a one-shot command
+          const session = createPtySession([getDefaultShell(), ...getShellArgs(params.command)], cwd);
           return { ok: true, sessionId: session.id };
         }
       } catch (err) {
@@ -80,8 +81,9 @@ export function launchHandlers(db: Database) {
     },
 
     "launch.shell": async (params: { cwd: string }): Promise<{ sessionId: string }> => {
-      const shell = process.env.SHELL ?? "/bin/bash";
-      const session = createPtySession(shell, params.cwd);
+      // Spawn the user's shell directly with no arguments — this gives a clean
+      // interactive session. Bun uses ConPTY on Windows and openpty on Unix.
+      const session = createPtySession([getDefaultShell()], params.cwd);
       return { sessionId: session.id };
     },
 

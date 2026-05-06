@@ -1,13 +1,14 @@
 import { Database } from "bun:sqlite";
 import { join } from "path";
 import { mkdirSync } from "fs";
+import { getDataDir } from "../utils/platform.ts";
 
 let _db: Database | null = null;
 
 export function getDbPath(): string {
   // RAILYN_DB can be set to ":memory:" for tests or an explicit file path
   if (process.env.RAILYN_DB) return process.env.RAILYN_DB;
-  const dataDir = process.env.RAILYN_DATA_DIR ?? join(process.env.HOME ?? "~", ".railyn");
+  const dataDir = getDataDir();
   mkdirSync(dataDir, { recursive: true });
   return join(dataDir, "railyn.db");
 }

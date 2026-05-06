@@ -1,7 +1,6 @@
 import { existsSync } from "fs";
 import { getConfig } from "../config/index.ts";
-
-const FALLBACK_GIT_PATHS = ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"];
+import { getPathDelimiter, getGitFallbacks, isWindows } from "../utils/platform.ts";
 
 export class GitRepositoryManager {
   private resolveGit(): string {
@@ -11,19 +10,23 @@ export class GitRepositoryManager {
       if (gitPath) return gitPath;
     } catch { /* config not loaded yet — fall through */ }
 
+    const extraPaths = isWindows()
+      ? []
+      : ["/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin"];
     const found = Bun.which("git", {
-      PATH: [process.env.PATH, "/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin"]
-        .filter(Boolean)
-        .join(":"),
+      PATH: [process.env.PATH, ...extraPaths].filter(Boolean).join(getPathDelimiter()),
     });
     if (found) return found;
 
-    for (const p of FALLBACK_GIT_PATHS) {
+    for (const p of getGitFallbacks()) {
       if (existsSync(p)) return p;
     }
 
+    const examplePath = isWindows()
+      ? "C:\\Program Files\\Git\\bin\\git.exe"
+      : "/usr/bin/git";
     throw new Error(
-      "git not found. Set workspace.git_path in railyn.yaml (e.g. git_path: /usr/bin/git)",
+      `git not found. Set workspace.git_path in railyn.yaml (e.g. git_path: ${examplePath})`,
     );
   }
 

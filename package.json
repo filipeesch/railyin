@@ -4,7 +4,7 @@
   "type": "module",
   "description": "AI-assisted delivery orchestration for software teams",
   "scripts": {
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true && (cd node_modules/code-server && FORCE_NODE_VERSION=20 npm_config_user_agent=\"npm/10 node/v20.0.0 darwin arm64\" sh ./postinstall.sh) 2>/dev/null || true",
+    "postinstall": "bun scripts/postinstall.ts",
     "dev": "bun scripts/dev.ts",
     "prod": "bun src/bun/index.ts",
     "dev:kill": "pkill -f 'src/bun/index.ts' || true",
@@ -48,7 +48,6 @@
     "marked": "^17.0.5",
     "mermaid": "^11.14.0",
     "monaco-editor": "^0.55.1",
-    "node-pty": "^1.0.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync } from "fs";
 import { join } from "path";
 import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml, sanitizeWorkspaceKey, ensureConfigExists, type WorkspaceYaml } from "../config/index.ts";
+import { getHomeDir, getDataDir } from "../utils/platform.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { clearProviderCache } from "../ai/index.ts";
 import type { WorkspaceConfig, WorkspaceSummary } from "../../shared/rpc-types.ts";
@@ -69,7 +70,7 @@ export function workspaceHandlers(db: Database) {
     },
 
     "workspace.create": async (params: { name: string }): Promise<WorkspaceSummary> => {
-      const workspacesRoot = process.env.RAILYN_WORKSPACES_DIR ?? join(process.env.HOME ?? "~", ".railyn", "workspaces");
+      const workspacesRoot = process.env.RAILYN_WORKSPACES_DIR ?? join(getDataDir(), "workspaces");
       const key = sanitizeWorkspaceKey(params.name, "workspace");
       const configDir = join(workspacesRoot, key);
       if (existsSync(configDir)) throw new Error(`Workspace already exists: ${key}`);
@@ -114,11 +115,11 @@ export function workspaceHandlers(db: Database) {
     "workspace.openFolderDialog": async (params: { initialPath?: string }): Promise<{ path: string | null }> => {
       const platform = process.platform;
       const expandHome = (p: string) => p.startsWith("~/") || p === "~"
-        ? p.replace("~", process.env.HOME ?? "/tmp")
+        ? p.replace("~", getHomeDir())
         : p;
       try {
         if (platform === "darwin") {
-          const initial = expandHome(params.initialPath?.trim() || process.env.HOME || "/tmp");
+          const initial = expandHome(params.initialPath?.trim() || getHomeDir());
           const script = `POSIX path of (choose folder with prompt "Select folder:" default location POSIX file "${initial}" without multiple selections allowed)`;
           const proc = Bun.spawn(["osascript", "-e", script], { stdout: "pipe", stderr: "ignore" });
           const text = (await new Response(proc.stdout).text()).trim();
