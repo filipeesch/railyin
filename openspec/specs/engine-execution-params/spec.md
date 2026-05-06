@@ -1,19 +1,26 @@
-## ADDED Requirements
+## Purpose
+Defines the contract for `ExecutionParamsBuilder` — how task and chat execution parameters are constructed, including working directory resolution, AbortSignal handling, and callback injection. Decision record injection is handled by `DecisionContextInjector` at the user-prompt layer, not here.
+
+## Requirements
 
 ### Requirement: ExecutionParamsBuilder.build() is a pure function
-`ExecutionParamsBuilder` SHALL accept a `DecisionRepository` instance via constructor injection. `build()` SHALL accept a pre-created `AbortSignal` as a parameter, SHALL NOT register or mutate any `AbortController` map, and SHALL call `decisionRepo.buildSystemBlock(conversationId)` to append the decision block to `systemInstructions` before returning `ExecutionParams`.
+`ExecutionParamsBuilder` SHALL NOT accept or use a `DecisionRepository` parameter. `build()` and `buildForChat()` SHALL NOT call any decision repository method and SHALL NOT append any decision block to `systemInstructions`. All other behavior (AbortSignal, prompt resolution, attachments) remains unchanged.
 
-#### Scenario: Task execution params include decision block
-- **WHEN** `build(task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, attachments?)` is called and the conversation has decision records
-- **THEN** it returns an `ExecutionParams` where `systemInstructions` ends with the formatted decision block produced by `buildSystemBlock`
+#### Scenario: build() does not append decision block
+- **WHEN** `build(task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, attachments?)` is called
+- **THEN** `systemInstructions` in the returned `ExecutionParams` does not contain any decision-related content
 
-#### Scenario: Task execution params with no decisions appends nothing
-- **WHEN** `build(...)` is called and the conversation has no decision records
-- **THEN** `systemInstructions` is returned unchanged (empty string from `buildSystemBlock` is not appended)
+#### Scenario: buildForChat() does not append decision block
+- **WHEN** `buildForChat(conversationId, executionId, prompt, workingDirectory, model, signal, enabledMcpTools?, attachments?)` is called
+- **THEN** `systemInstructions` in the returned `ExecutionParams` does not contain any decision-related content
 
-#### Scenario: Chat execution params include decision block
-- **WHEN** `buildForChat(conversationId, executionId, prompt, workingDirectory, model, signal, enabledMcpTools?, attachments?)` is called and the conversation has decision records
-- **THEN** it returns an `ExecutionParams` with `taskId: null` and `systemInstructions` appended with the decision block
+#### Scenario: build() — no decisions in systemInstructions
+- **WHEN** `ExecutionParamsBuilder.build()` is called with an active conversation that has decision records
+- **THEN** the returned `ExecutionParams.systemInstructions` does NOT contain any decision record text
+
+#### Scenario: buildForChat() — no decisions in systemInstructions
+- **WHEN** `ExecutionParamsBuilder.buildForChat()` is called with a conversation that has decision records
+- **THEN** the returned params have no decision content in `systemInstructions`
 
 ### Requirement: WorkingDirectoryResolver resolves the agent CWD
 `WorkingDirectoryResolver.resolve(task: TaskRow): string` SHALL implement the priority order: worktree_path + relative(gitRootPath, projectPath) → projectPath → throw.
@@ -33,25 +40,6 @@
 #### Scenario: Neither worktree nor projectPath throws
 - **WHEN** the task has no ready worktree and no configured projectPath
 - **THEN** `resolve()` throws with a message referencing the `project_key`
-
-### Requirement: ExecutionParamsBuilder injects decision records into systemInstructions
-`ExecutionParamsBuilder` SHALL accept a `DecisionRepository` constructor parameter and append the formatted decision block to `systemInstructions` in both `build()` and `buildForChat()` when non-empty.
-
-#### Scenario: build() appends decision block when records exist
-- **WHEN** `build()` is called and the injected `DecisionRepository.buildSystemBlock()` returns a non-empty string
-- **THEN** `systemInstructions` in the returned `ExecutionParams` ends with the decision block
-
-#### Scenario: build() does not append when no records exist
-- **WHEN** `build()` is called and `buildSystemBlock()` returns `""`
-- **THEN** `systemInstructions` does not contain `## Decision Records` and has no trailing whitespace added
-
-#### Scenario: buildForChat() appends decision block when records exist
-- **WHEN** `buildForChat()` is called and `buildSystemBlock()` returns a non-empty string
-- **THEN** `systemInstructions` in the result ends with the decision block
-
-#### Scenario: buildForChat() does not append when no records exist
-- **WHEN** `buildForChat()` is called and `buildSystemBlock()` returns `""`
-- **THEN** `systemInstructions` is unchanged relative to the no-decisions baseline
 
 ### Requirement: ExecutionParams carries onTransition and onHumanTurn callbacks
 `ExecutionParams` SHALL include two optional callback fields: `onTransition?: (taskId: number, toState: string) => void` and `onHumanTurn?: (taskId: number, message: string) => void`. Both engines (Claude and Copilot) SHALL read these from params and pass them into `commonToolContext` on every execution, defaulting to `() => {}` if absent. The Orchestrator SHALL populate these callbacks when building params via `ExecutionParamsBuilder`.

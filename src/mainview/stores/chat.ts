@@ -170,7 +170,7 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null, decisionBatch?: { label?: string; records: import("@shared/rpc-types").DecisionInput[] }) {
+  async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null) {
     if (!activeChatSessionId.value) return;
     const session = activeSession.value;
     if (!session) return;
@@ -188,8 +188,19 @@ export const useChatStore = defineStore("chat", () => {
       ...(engineContent != null ? { engineContent } : {}),
       model,
       ...(attachments?.length ? { attachments } : {}),
-      ...(decisionBatch ? { decisionBatch } : {}),
     });
+  }
+
+  async function submitDecisions(sessionId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string) {
+    const session = activeSession.value;
+    if (!session) return;
+    const now = new Date().toISOString();
+    updateSession(session.id, {
+      status: "running",
+      lastActivityAt: now,
+      lastReadAt: now,
+    });
+    await api("chatSessions.submitDecisions", { sessionId, answers, generalNotes });
   }
 
   async function renameSession(sessionId: number, title: string) {
@@ -292,6 +303,7 @@ export const useChatStore = defineStore("chat", () => {
     closeSession,
     cancelSession,
     sendMessage,
+    submitDecisions,
     renameSession,
     archiveSession,
     hasUnread,

@@ -138,18 +138,27 @@ export const useTaskStore = defineStore("task", () => {
 
   // ─── Send message ─────────────────────────────────────────────────────────
 
-  async function sendMessage(taskId: number, content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], decisionBatch?: { label?: string; records: import("@shared/rpc-types").DecisionInput[] }) {
+  async function sendMessage(taskId: number, content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[]) {
     const { message, executionId } = await api("tasks.sendMessage", {
       taskId,
       content,
       ...(engineContent != null ? { engineContent } : {}),
       ...(attachments?.length ? { attachments } : {}),
-      ...(decisionBatch ? { decisionBatch } : {}),
     });
     void executionId;
     // The first message on a brand-new task creates a real conversation on the backend
     // (conversationId changes from 0 → N).  Sync the store before appendMessage so the
     // message isn't silently dropped by the conversationId guard in appendMessage.
+    if (message.conversationId !== conversationStore.activeConversationId) {
+      conversationStore.setActiveConversation(message.conversationId);
+      const task = taskIndex.value[taskId];
+      if (task) taskIndex.value[taskId] = { ...task, conversationId: message.conversationId };
+    }
+    conversationStore.appendMessage(message);
+  }
+
+  async function submitDecisions(taskId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string) {
+    const { message } = await api("tasks.submitDecisions", { taskId, answers, generalNotes });
     if (message.conversationId !== conversationStore.activeConversationId) {
       conversationStore.setActiveConversation(message.conversationId);
       const task = taskIndex.value[taskId];
@@ -422,6 +431,7 @@ export const useTaskStore = defineStore("task", () => {
     transitionTask,
     retryTask,
     sendMessage,
+    submitDecisions,
     loadMessages,
     loadOlderMessages,
     selectTask,

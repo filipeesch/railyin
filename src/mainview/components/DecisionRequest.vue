@@ -114,6 +114,18 @@
       </div>
     </div>
 
+    <!-- General notes -->
+    <div class="interview__general-notes">
+      <label class="interview__notes-label">
+        Additional context <span class="interview__notes-optional">(optional)</span>
+      </label>
+      <textarea
+        v-model="generalNotes"
+        class="interview__textarea interview__textarea--notes"
+        placeholder="Anything else the AI should know when recording these decisions…"
+      />
+    </div>
+
     <button class="interview__submit" :disabled="!canSubmit" @click="submit">
       Submit
     </button>
@@ -152,7 +164,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  submit: [payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string }> }];
+  submit: [payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string; notes?: string }>; generalNotes?: string }];
 }>();
 
 const answered = computed(() => props.answeredText !== undefined);
@@ -176,6 +188,7 @@ const multiSelected = ref<string[][]>(props.questions.map(() => []));
 const otherValues = ref<string[]>(props.questions.map(() => ""));
 const notesValues = ref<string[]>(props.questions.map(() => ""));
 const freetextValues = ref<string[]>(props.questions.map(() => ""));
+const generalNotes = ref("");
 
 watch(
   () => props.questions,
@@ -186,6 +199,7 @@ watch(
     otherValues.value = newQuestions.map(() => "");
     notesValues.value = newQuestions.map(() => "");
     freetextValues.value = newQuestions.map(() => "");
+    generalNotes.value = "";
   },
 );
 
@@ -298,10 +312,17 @@ function submit() {
       );
       answer = sel.join(", ");
     }
-    return { question: q.question, answer, weight: q.weight ?? "medium" };
+    const notes = q.type !== "freetext" && focusedOption.value[qi] !== "__other__"
+      ? (notesValues.value[qi] ?? "").trim() || undefined
+      : undefined;
+    return { question: q.question, answer, weight: q.weight ?? "medium", notes };
   });
 
-  emit("submit", { text: parts.join("\n\n"), decisions });
+  let text = parts.join("\n\n");
+  const trimmedNotes = generalNotes.value.trim();
+  if (trimmedNotes) text += `\n\n---\n\nGeneral notes: ${trimmedNotes}`;
+
+  emit("submit", { text, decisions, generalNotes: trimmedNotes || undefined });
 }
 </script>
 
@@ -527,6 +548,15 @@ function submit() {
   font-style: italic;
 }
 
+/* ── General notes ────────────────────────────────── */
+.interview__general-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--p-surface-200, #e2e8f0);
+}
+
 /* ── Submit ───────────────────────────────────────── */
 .interview__submit {
   align-self: flex-end;
@@ -624,6 +654,10 @@ html.dark-mode .interview__weight-badge--medium {
 html.dark-mode .interview__weight-badge--easy {
   background: #14532d;
   color: #86efac;
+}
+
+html.dark-mode .interview__general-notes {
+  border-top-color: var(--p-surface-600, #475569);
 }
 
 html.dark-mode .interview__answered-value {

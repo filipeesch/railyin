@@ -15,6 +15,7 @@ import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, 
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
+import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 
 let db: Database;
 let gitDir: string;
@@ -109,6 +110,7 @@ function makeExecutor(engine: TestEngine) {
     wsRepo,
     boardTools,
     new CrossEngineContextInjector(db),
+    new DecisionContextInjector(db),
   );
   return { builder, streamProcessor, executor };
 }
@@ -188,5 +190,57 @@ describe("HumanTurnExecutor — model resolution (engine-lost fallback path)", (
     expect(builder.lastBuilt?.model).toBe(""); // No fallback to engine model
     const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
     expect(row.model).toBeNull(); // DB remains NULL
+  });
+});
+
+describe("HumanTurnExecutor — decision context injection", () => {
+  it("HT-D-1: decisions block is prepended to prompt when decisions exist (first turn)", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+
+    // Seed a decision record
+    const convRow = db.query<{conversation_id: number}, [number]>("SELECT conversation_id FROM tasks WHERE id = ?").get(taskId)!;
+    db.run(
+      "INSERT INTO decision_records (conversation_id, question, answer, weight) VALUES (?, ?, ?, ?)",
+      [convRow.conversation_id, "Test question?", "Test answer", "medium"],
+    );
+
+    const { builder, executor } = makeExecutor(new TestEngine());
+    await executor.execute(taskId, "user prompt");
+
+    expect(builder.lastBuilt?.prompt).toContain("## Decision Records");
+    expect(builder.lastBuilt?.prompt).toContain("<decisions>");
+  });
+
+  it("HT-D-2: decisions block is NOT included when no decisions exist", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+
+    const { builder, executor } = makeExecutor(new TestEngine());
+    await executor.execute(taskId, "user prompt");
+
+    expect(builder.lastBuilt?.prompt).not.toContain("## Decision Records");
+    expect(builder.lastBuilt?.prompt).not.toContain("<decisions>");
+  });
+
+  it("HT-D-3: decisions not injected again on second turn (sentinel skips re-injection)", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+
+    const convRow = db.query<{conversation_id: number}, [number]>("SELECT conversation_id FROM tasks WHERE id = ?").get(taskId)!;
+    db.run(
+      "INSERT INTO decision_records (conversation_id, question, answer, weight) VALUES (?, ?, ?, ?)",
+      [convRow.conversation_id, "Test question?", "Test answer", "medium"],
+    );
+
+    const { builder, executor } = makeExecutor(new TestEngine());
+    await executor.execute(taskId, "first message");
+    expect(builder.lastBuilt?.prompt).toContain("## Decision Records");
+
+    await executor.execute(taskId, "second message");
+    expect(builder.lastBuilt?.prompt).not.toContain("## Decision Records");
   });
 });

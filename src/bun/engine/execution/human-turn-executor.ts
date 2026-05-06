@@ -16,6 +16,7 @@ import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executo
 import { resolveModel } from "./model-resolver";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
+import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
 
 
 export class HumanTurnExecutor {
@@ -30,6 +31,7 @@ export class HumanTurnExecutor {
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
     private readonly crossEngineInjector: CrossEngineContextInjector,
+    private readonly decisionInjector: DecisionContextInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
   ) {}
@@ -184,8 +186,9 @@ export class HumanTurnExecutor {
       targetModelInfo,
       workingDirectory,
     );
+    const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
     const systemInstructions = buildSystemInstructions(config, task.board_id, task.workflow_state);
-    const userContent = historyBlock ? `${historyBlock}\n\n${resolvedPrompt}` : resolvedPrompt;
+    const userContent = [historyBlock, decisionsBlock, resolvedPrompt].filter(Boolean).join("\n\n");
 
     const execParams = {
       ...this.paramsBuilder.build(
