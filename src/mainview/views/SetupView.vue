@@ -389,11 +389,14 @@ const selectedModelOption = computed(() => {
 const browsingWorktreePath = ref(false);
 const browsingWorkspacePath = ref(false);
 
-async function loadModelsForEngine() {
+async function loadModelsForEngine(engineType?: string) {
   modelsLoading.value = true;
   modelsError.value = null;
   try {
-    const providerLists = await api("models.list", { workspaceKey: workspaceStore.activeWorkspaceKey ?? undefined });
+    const providerLists = await api("models.list", {
+      workspaceKey: workspaceStore.activeWorkspaceKey ?? undefined,
+      ...(engineType ? { engineType } : {}),
+    });
     allModelsFlat.value = providerLists.flatMap((p) =>
       p.models.map((m): ModelInfo => ({ id: m.id, displayName: m.displayName ?? m.id, contextWindow: m.contextWindow })),
     );
@@ -417,7 +420,7 @@ function syncWsForm() {
 
 async function onEngineTypeChange() {
   wsForm.engineModel = null;
-  await loadModelsForEngine();
+  await loadModelsForEngine(wsForm.engineType);
 }
 
 async function browseWorkspacePath() {
@@ -452,6 +455,7 @@ async function saveWorkspaceSettings() {
       worktreeBasePath: wsForm.worktreeBasePath || undefined,
       workspacePath: wsForm.workspacePath || undefined,
     });
+    await loadModelsForEngine();
     wsSaveSuccess.value = true;
     setTimeout(() => { wsSaveSuccess.value = false; }, 3000);
   } catch (e) {

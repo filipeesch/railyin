@@ -673,7 +673,7 @@ export type RailynAPI = {
 
   // Models
   "models.list": {
-    params: { workspaceKey?: string };
+    params: { workspaceKey?: string; engineType?: string };
     response: ProviderModelList[];
   };
   "models.setEnabled": {

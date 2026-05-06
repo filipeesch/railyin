@@ -9,7 +9,7 @@ export interface ExecutionCoordinator {
     executeCodeReview(taskId: number, manualEdits?: ManualEdit[]): Promise<{ message: ConversationMessage; executionId: number }>;
     executeChatTurn(sessionId: number, conversationId: number, content: string, model?: string, enabledMcpTools?: string[] | null, workspaceKey?: string, attachments?: import("../../shared/rpc-types.ts").Attachment[], engineContent?: string): Promise<{ message: ConversationMessage; executionId: number }>;
     cancel(executionId: number): void;
-    listModels(workspaceKey?: string): Promise<EngineModelInfo[]>;
+    listModels(workspaceKey?: string, engineType?: string): Promise<EngineModelInfo[]>;
     compactTask(taskId: number): Promise<void>;
     compactConversation(conversationId: number, workspaceKey?: string): Promise<void>;
     listCommands(taskId: number): Promise<CommandInfo[]>;
