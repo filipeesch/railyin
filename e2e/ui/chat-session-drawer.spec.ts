@@ -510,7 +510,7 @@ test.describe("CD-D — waiting_user states", () => {
         expect(renameCalled).toBe(true);
     });
 
-    test("CD-D-6: interview prompt submit sends the answer through chatSessions.sendMessage", async ({ page, api }) => {
+    test("CD-D-6: interview prompt submit sends the answer through chatSessions.submitDecisions", async ({ page, api }) => {
         const session = makeChatSession({ id: 435, status: "waiting_user" });
         const prompt = sessionInterviewPrompt(session.conversationId, JSON.stringify({
             questions: [
@@ -528,12 +528,9 @@ test.describe("CD-D — waiting_user states", () => {
         stubSessionMessages(api, session.conversationId, [prompt]);
 
         let sentBody: Record<string, unknown> | null = null;
-        api.handle("chatSessions.sendMessage", (body) => {
+        api.handle("chatSessions.submitDecisions", (body) => {
             sentBody = body as Record<string, unknown>;
-            return {
-                executionId: SESSION_EXEC_ID,
-                message: makeChatMessage(session.id, session.conversationId, String(sentBody.content ?? ""), "user"),
-            };
+            return { messageId: 1, executionId: SESSION_EXEC_ID };
         });
 
         await page.goto("/");
@@ -542,7 +539,9 @@ test.describe("CD-D — waiting_user states", () => {
         await page.locator(".session-chat-view .interview__option-title", { hasText: "Use unified flow" }).click();
         await page.locator(".session-chat-view .interview__submit").click();
 
-        await expect.poll(() => sentBody?.content).toContain("Use unified flow");
+        await expect.poll(() => sentBody).toBeTruthy();
+        const answers = (sentBody?.answers as Array<{ answer: string }>) ?? [];
+        expect(answers[0].answer).toContain("Use unified flow");
     });
 });
 

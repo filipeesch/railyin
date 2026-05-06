@@ -27,7 +27,7 @@ A DB migration SHALL create all three tables with correct FK constraints and ind
 - **THEN** all three tables are created with correct columns, FKs, and indexes
 
 ### Requirement: DecisionRepository encapsulates all decision persistence logic
-The system SHALL provide a `DecisionRepository` class that exposes: `createBatch(conversationId, label?)`, `createRecord(conversationId, question, answer, weight, isSourceAi, batchId?)`, `updateRecord(id, newAnswer, reason)`, `deleteRecord(id)`, `listByConversation(conversationId)`, `getRevisions(recordId)`, and `buildSystemBlock(conversationId)`. The repository SHALL be constructed with a `Database` instance injected via constructor. No method SHALL access global state.
+The system SHALL provide a `DecisionRepository` class that exposes: `createRecord(conversationId, question, answer, weight, isSourceAi, batchId?)`, `updateRecord(id, newAnswer, reason)`, `deleteRecord(id)`, `listByConversation(conversationId)`, `getRevisions(recordId)`, `buildContextBlock(conversationId)`, `markDecisionsInjected(conversationId, compactionSummaryId)`, and `getLastInjectedCompactionId(conversationId)`. The method `buildSystemBlock` SHALL be removed. The repository SHALL be constructed with a `Database` instance injected via constructor. No method SHALL access global state.
 
 #### Scenario: createRecord persists a new decision
 - **WHEN** `createRecord(conversationId, "Should we use DI?", "Yes", "critical", false)` is called
@@ -43,44 +43,20 @@ The system SHALL provide a `DecisionRepository` class that exposes: `createBatch
 
 #### Scenario: listByConversation excludes deleted records
 - **WHEN** `listByConversation(conversationId)` is called
-- **THEN** only records with `is_deleted = 0` are returned, ordered by `weight` descending (critical first)
+- **THEN** only records with `is_deleted = 0` are returned, ordered by weight descending (critical first)
 
-### Requirement: Decision records are injected into systemInstructions at execution time
-The system SHALL have `DecisionRepository.buildSystemBlock(conversationId)` return a formatted string block suitable for appending to `systemInstructions`. If no non-deleted records exist for the conversation, the method SHALL return an empty string. When records exist, the block SHALL begin with `## Decision Records`, followed by records grouped by weight descending, each formatted as `[WEIGHT] question → answer` with `(revised Nx · reason)` appended when `revision_count > 0` and `[AI-recorded]` appended when `is_source_ai = 1`.
+#### Scenario: buildContextBlock returns XML decisions block
+- **WHEN** `buildContextBlock(conversationId)` is called and non-deleted records exist
+- **THEN** it returns a string starting with `<decisions>` and ending with `</decisions>` containing one line per record formatted as `[WEIGHT] question → answer`
 
-`ExecutionParamsBuilder` SHALL receive a `DecisionRepository` via constructor injection and SHALL call `buildSystemBlock(conversationId)` in both `build()` and `buildForChat()`, appending the result to `systemInstructions` before returning `ExecutionParams`.
-
-#### Scenario: Empty conversation produces no block
-- **WHEN** `buildSystemBlock(conversationId)` is called for a conversation with no decision records
+#### Scenario: buildContextBlock returns empty string for no records
+- **WHEN** `buildContextBlock(conversationId)` is called for a conversation with no non-deleted records
 - **THEN** it returns an empty string
 
-#### Scenario: Critical decisions appear before easy decisions
-- **WHEN** a conversation has records with mixed weights
-- **THEN** `buildSystemBlock` returns critical-weight records before easy-weight records in the formatted block
+#### Scenario: markDecisionsInjected updates the tracking column
+- **WHEN** `markDecisionsInjected(conversationId, 42)` is called
+- **THEN** `conversations.decisions_injected_after_compaction_id` is set to `42` for that conversation
 
-#### Scenario: Revised record includes revision metadata
-- **WHEN** a record has been updated once with reason "Changed after test"
-- **THEN** the line in the system block ends with `(revised 1x · Changed after test)`
-
-#### Scenario: AI-recorded decision includes tag
-- **WHEN** a record was created via `record_decision` (is_source_ai = 1)
-- **THEN** the line in the system block ends with `[AI-recorded]`
-
-#### Scenario: Deleted records are excluded from injection
-- **WHEN** a record is deleted and `buildSystemBlock` is called
-- **THEN** the deleted record does not appear in the returned block
-
-#### Scenario: Decision block survives execution compaction
-- **WHEN** execution context is rebuilt for a conversation where previous messages were compacted
-- **THEN** systemInstructions includes the decision block because it is rebuilt from DB on every execution
-
-### Requirement: Decision records are persisted atomically with message dispatch
-The `tasks.sendMessage` and `chatSessions.sendMessage` handlers SHALL accept an optional `decisionBatch` payload parameter. When present, the handler SHALL persist the batch and its records in the same SQLite transaction as the conversation message write, before execution is triggered. If the transaction fails, neither the message nor the decisions SHALL be persisted.
-
-#### Scenario: Decision batch persisted with message in same transaction
-- **WHEN** `sendMessage` is called with a `decisionBatch` containing two records
-- **THEN** the `decision_batches` row and two `decision_records` rows are written in the same transaction as the conversation message
-
-#### Scenario: Transaction rollback discards both message and decisions
-- **WHEN** the message insert fails within the transaction
-- **THEN** neither the conversation message nor any decision records are written to the database
+#### Scenario: getLastInjectedCompactionId returns current column value
+- **WHEN** `getLastInjectedCompactionId(conversationId)` is called after `markDecisionsInjected(conversationId, 42)`
+- **THEN** it returns `42`

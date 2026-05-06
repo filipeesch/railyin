@@ -131,3 +131,24 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     expect(params.signal).toBe(controller.signal);
   });
 });
+
+describe("ExecutionParamsBuilder — decisions NOT in systemInstructions", () => {
+  it("EPB-D-1: build() does not append any decisions block to systemInstructions", () => {
+    const task = makeTask();
+    const params = builder.build(
+      task, 1, 1, "prompt", "base system instructions", "/w",
+      new AbortController().signal, noop,
+    );
+    expect(params.systemInstructions).not.toContain("<decisions>");
+    expect(params.systemInstructions).toBe("base system instructions");
+  });
+
+  it("EPB-D-2: buildForChat() does not append any decisions block to systemInstructions", () => {
+    const params = builder.buildForChat(
+      1, 1, "prompt", "/w", "fake/model",
+      new AbortController().signal, noop, null,
+    );
+    // systemInstructions is undefined when no instructions are provided — no decisions injection
+    expect(params.systemInstructions ?? "").not.toContain("<decisions>");
+  });
+});
