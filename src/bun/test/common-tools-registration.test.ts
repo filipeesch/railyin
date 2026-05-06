@@ -115,3 +115,22 @@ describe("executeCommonTool / decision_request", () => {
         }
     });
 });
+
+describe("record_decision tool description enforcement", () => {
+    it("CTR-D-1: record_decision description contains ALWAYS/NEVER enforcement language", () => {
+        const tool = COMMON_TOOL_DEFINITIONS.find(t => t.name === "record_decision");
+        expect(tool).toBeDefined();
+        expect(tool!.description).toContain("ALWAYS");
+        expect(tool!.description).toContain("NEVER");
+    });
+
+    it("CTR-D-2: record_decision description mentions list_decisions before calling record_decision", () => {
+        const tool = COMMON_TOOL_DEFINITIONS.find(t => t.name === "record_decision");
+        expect(tool!.description).toContain("list_decisions()");
+    });
+
+    it("CTR-D-3: record_decision description mentions update_decision to avoid duplicates", () => {
+        const tool = COMMON_TOOL_DEFINITIONS.find(t => t.name === "record_decision");
+        expect(tool!.description).toContain("update_decision");
+    });
+});

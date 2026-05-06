@@ -33,6 +33,8 @@ import { ClaudeEngine } from "./engine/claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
 import { createDefaultOpenCodeSdkAdapter } from "./engine/opencode/adapter.ts";
+import { PiEngine } from "./engine/pi/engine.ts";
+import type { PiEngineConfig } from "./config/index.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
 import { WorkspaceRepository } from "./db/workspace-repository.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
@@ -160,6 +162,8 @@ const engineFactories: Record<string, EngineFactory> = {
     new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
   opencode: (cfg, onTaskUpdated, onNewMessage) =>
     new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
+  pi: (cfg, onTaskUpdated, onNewMessage) =>
+    new PiEngine(cfg as PiEngineConfig, onTaskUpdated, onNewMessage),
   scripted: () => new MockExecutionEngine(),
 };
 

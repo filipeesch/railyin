@@ -15,6 +15,7 @@ export interface ConversationRow {
   id: number;
   task_id: number | null;
   model: string | null;
+  decisions_injected_after_compaction_id: number | null;
 }
 
 export interface TaskRow {

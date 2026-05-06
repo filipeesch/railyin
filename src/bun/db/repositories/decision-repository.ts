@@ -29,13 +29,6 @@ export interface DecisionRevision {
   revisedAt: string;
 }
 
-export interface DecisionBatch {
-  id: number;
-  conversationId: number;
-  label: string | null;
-  createdAt: string;
-}
-
 // ─── Row types ────────────────────────────────────────────────────────────────
 
 interface DecisionRecordRow {
@@ -60,13 +53,6 @@ interface DecisionRevisionRow {
   previous_notes: string | null;
   reason: string;
   revised_at: string;
-}
-
-interface DecisionBatchRow {
-  id: number;
-  conversation_id: number;
-  label: string | null;
-  created_at: string;
 }
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
@@ -99,15 +85,6 @@ function mapRevisionRow(row: DecisionRevisionRow): DecisionRevision {
   };
 }
 
-function mapBatchRow(row: DecisionBatchRow): DecisionBatch {
-  return {
-    id: row.id,
-    conversationId: row.conversation_id,
-    label: row.label,
-    createdAt: row.created_at,
-  };
-}
-
 // ─── DecisionRepository ───────────────────────────────────────────────────────
 
 export class DecisionRepository {
@@ -115,19 +92,6 @@ export class DecisionRepository {
 
   constructor(db?: Database) {
     this.db = db ?? getDb();
-  }
-
-  createBatch(conversationId: number, label?: string): DecisionBatch {
-    const res = this.db.run(
-      "INSERT INTO decision_batches (conversation_id, label) VALUES (?, ?)",
-      [conversationId, label ?? null],
-    );
-    const row = this.db
-      .query<DecisionBatchRow, [number]>(
-        "SELECT * FROM decision_batches WHERE id = ?",
-      )
-      .get(res.lastInsertRowid as number);
-    return mapBatchRow(row!);
   }
 
   createRecord(
@@ -225,16 +189,11 @@ export class DecisionRepository {
       .map(mapRevisionRow);
   }
 
-  buildSystemBlock(conversationId: number): string {
+  buildContextBlock(conversationId: number): string {
     const records = this.listByConversation(conversationId);
     if (records.length === 0) return "";
 
-    const lines: string[] = [
-      "## Decision Records",
-      "These decisions were made for this task. Honor them unless explicitly asked to reconsider.",
-      "Use list_decisions() to review all details. Use update_decision(id, answer, reason) to revise.",
-      "",
-    ];
+    const lines: string[] = [];
 
     let prevWeight: DecisionWeight | null = null;
     for (const record of records) {
@@ -245,20 +204,37 @@ export class DecisionRepository {
 
       const weightLabel = `[${record.weight.toUpperCase()}]`;
       const aiSuffix = record.isSourceAi ? "  [AI-recorded]" : "";
-      lines.push(`${weightLabel} ${record.question}${aiSuffix}`);
-      lines.push(`→ ${record.answer}`);
+      let line = `${weightLabel} ${record.question}${aiSuffix}\n→ ${record.answer}`;
 
       if (record.notes !== null) {
-        lines.push(`  Notes: ${record.notes}`);
+        line += `\n  Notes: ${record.notes}`;
       }
 
       if (record.revisionCount > 0) {
         const revisions = this.getRevisions(record.id);
         const last = revisions[revisions.length - 1];
-        lines.push(`  (revised ${record.revisionCount}x · last reason: "${last.reason}")`);
+        line += `\n  (revised ${record.revisionCount}x · last reason: "${last.reason}")`;
       }
+
+      lines.push(line);
     }
 
-    return lines.join("\n");
+    return `<decisions>\n${lines.join("\n")}\n</decisions>`;
+  }
+
+  markDecisionsInjected(conversationId: number, compactionSummaryId: number): void {
+    this.db.run(
+      "UPDATE conversations SET decisions_injected_after_compaction_id = ? WHERE id = ?",
+      [compactionSummaryId, conversationId],
+    );
+  }
+
+  getLastInjectedCompactionId(conversationId: number): number | null {
+    const row = this.db
+      .query<{ decisions_injected_after_compaction_id: number | null }, [number]>(
+        "SELECT decisions_injected_after_compaction_id FROM conversations WHERE id = ?",
+      )
+      .get(conversationId);
+    return row?.decisions_injected_after_compaction_id ?? null;
   }
 }

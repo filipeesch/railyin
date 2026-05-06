@@ -5,7 +5,6 @@ import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
-import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 
 function autoTitle(): string {
   const now = new Date();
@@ -113,7 +112,6 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       engineContent?: string;
       model?: string | null;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
-      decisionBatch?: { label?: string; records: import("../../shared/rpc-types.ts").DecisionInput[] };
     }): Promise<{ messageId: number; executionId: number }> => {
       const session = db.query<ChatSessionRow, [number]>(
         "SELECT * FROM chat_sessions WHERE id = ?"
@@ -160,20 +158,56 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
       if (updatedSession) onSessionUpdated(mapChatSession(updatedSession));
 
-      if (params.decisionBatch) {
-        const decisionRepo = new DecisionRepository(db);
-        const batch = decisionRepo.createBatch(session.conversation_id, params.decisionBatch.label);
-        for (const record of params.decisionBatch.records) {
-          decisionRepo.createRecord(session.conversation_id, {
-            batchId: batch.id,
-            question: record.question,
-            answer: record.answer,
-            weight: record.weight ?? "medium",
-            notes: record.notes,
-            isSourceAi: false,
-          });
-        }
-      }
+      return { messageId: message.id, executionId };
+    },
+
+    "chatSessions.submitDecisions": async (params: {
+      sessionId: number;
+      answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
+      generalNotes?: string;
+    }): Promise<{ messageId: number; executionId: number }> => {
+      const session = db.query<ChatSessionRow, [number]>(
+        "SELECT * FROM chat_sessions WHERE id = ?"
+      ).get(params.sessionId);
+      if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
+      if (!orchestrator) throw new Error("Orchestrator not available");
+
+      db.run(
+        "UPDATE chat_sessions SET last_activity_at = datetime('now') WHERE id = ?",
+        [params.sessionId]
+      );
+
+      const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
+      const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
+
+      const workspaceConfig = getWorkspaceConfig(session.workspace_key);
+      const engine = workspaceConfig.engine.type;
+      const prepared = await prepareMessageForEngine(engine, engineContent, undefined);
+      const { message, executionId } = await orchestrator.executeChatTurn(
+        params.sessionId,
+        session.conversation_id,
+        userContent,
+        undefined,
+        (() => {
+          try {
+            return session.enabled_mcp_tools ? JSON.parse(session.enabled_mcp_tools) : null;
+          } catch {
+            return null;
+          }
+        })(),
+        session.workspace_key,
+        prepared.attachments,
+        prepared.content,
+      );
+
+      const updatedSession = db.query<ChatSessionRow, [number]>(
+        `SELECT cs.*, c.model AS conversation_model 
+         FROM chat_sessions cs 
+         LEFT JOIN conversations c ON c.id = cs.conversation_id 
+         WHERE cs.id = ?`
+      ).get(params.sessionId);
+
+      if (updatedSession) onSessionUpdated(mapChatSession(updatedSession));
 
       return { messageId: message.id, executionId };
     },

@@ -237,14 +237,7 @@ export interface DecisionRevision {
   revisedAt: string;
 }
 
-export interface DecisionBatch {
-  id: number;
-  conversationId: number;
-  label: string | null;
-  createdAt: string;
-}
-
-export interface DecisionInput {
+export interface DecisionAnswer {
   question: string;
   answer: string;
   weight?: DecisionWeight;
@@ -656,7 +649,11 @@ export type RailynAPI = {
     response: { task: Task; executionId: number };
   };
   "tasks.sendMessage": {
-    params: { taskId: number; content: string; engineContent?: string; attachments?: Attachment[]; decisionBatch?: { label?: string; records: DecisionInput[] } };
+    params: { taskId: number; content: string; engineContent?: string; attachments?: Attachment[] };
+    response: { message: ConversationMessage; executionId: number };
+  };
+  "tasks.submitDecisions": {
+    params: { taskId: number; answers: DecisionAnswer[]; generalNotes?: string };
     response: { message: ConversationMessage; executionId: number };
   };
 
@@ -940,7 +937,11 @@ export type RailynAPI = {
     response: ChatSession;
   };
   "chatSessions.sendMessage": {
-    params: { sessionId: number; content: string; engineContent?: string; model?: string | null; attachments?: Attachment[]; decisionBatch?: { label?: string; records: DecisionInput[] } };
+    params: { sessionId: number; content: string; engineContent?: string; model?: string | null; attachments?: Attachment[] };
+    response: { messageId: number; executionId: number };
+  };
+  "chatSessions.submitDecisions": {
+    params: { sessionId: number; answers: DecisionAnswer[]; generalNotes?: string };
     response: { messageId: number; executionId: number };
   };
   "chatSessions.setModel": {

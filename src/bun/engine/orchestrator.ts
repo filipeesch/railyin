@@ -32,7 +32,6 @@ import { EngineRegistry } from "./engine-registry.ts";
 import { StreamProcessor } from "./stream/stream-processor.ts";
 import { ExecutionParamsBuilder } from "./execution/execution-params-builder.ts";
 import { WorkingDirectoryResolver } from "./execution/working-directory-resolver.ts";
-import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 import { TransitionExecutor } from "./execution/transition-executor.ts";
 import { HumanTurnExecutor } from "./execution/human-turn-executor.ts";
 import { RetryExecutor } from "./execution/retry-executor.ts";
@@ -41,6 +40,7 @@ import { ChatExecutor } from "./execution/chat-executor.ts";
 import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
 import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
+import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -88,18 +88,20 @@ export class Orchestrator implements ExecutionCoordinator {
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
-    this.paramsBuilder = new ExecutionParamsBuilder(new DecisionRepository());
+    this.paramsBuilder = new ExecutionParamsBuilder();
     this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
 
     this.transitionExecutor = new TransitionExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, boardTools, wsRepo,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
     this.humanTurnExecutor = new HumanTurnExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );

@@ -19,7 +19,8 @@ export const DECISION_REQUEST_TOOL_DEFINITION: AIToolDefinition = {
         "Use 'context' to set the stage. Write it as structured markdown — use paragraphs and bullet lists. Explain why this decision is being made now, what constraints exist, what has already been decided.\n\n" +
         "Use 'non_exclusive' when the user can reasonably combine multiple options (e.g. testing strategies, feature flags). Use 'exclusive' when options are mutually incompatible.\n\n" +
         "Use 'freetext' for open-ended questions where no preset options make sense - e.g. 'Any additional constraints?' or 'What is your target timeline?'.\n\n" +
-        "ALWAYS batch all related decisions into one call. If more clarification is needed you can call decision_request again with follow-up questions in batch.",
+        "ALWAYS batch all related decisions into one call. If more clarification is needed you can call decision_request again with follow-up questions in batch.\n\n" +
+        "IMPORTANT: After the user submits their answers, you MUST call record_decision (or update_decision if a record already exists) for EVERY question answered — never skip this step.",
     parameters: {
         type: "object",
         properties: {
