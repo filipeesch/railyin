@@ -1,19 +1,7 @@
-import { chmodSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 
 const platform = process.platform;
-
-// Make node-pty spawn-helper executable on macOS (required for openpty)
-if (platform === "darwin") {
-  const spawnHelper = join(
-    import.meta.dir,
-    "../node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
-  );
-  if (existsSync(spawnHelper)) {
-    chmodSync(spawnHelper, 0o755);
-    console.log("[postinstall] chmod +x node-pty spawn-helper (darwin-arm64)");
-  }
-}
 
 // Run code-server's own postinstall on non-Windows platforms
 if (platform !== "win32") {
