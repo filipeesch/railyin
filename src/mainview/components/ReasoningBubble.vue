@@ -4,7 +4,7 @@
       <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right', 'rb__chevron']" />
       <i :class="['pi', 'pi-microchip-ai', 'rb__icon', streaming && 'rb__icon--pulse']" />
       <span class="rb__label">
-        <span v-if="streaming" class="rb__thinking">Thinking…</span>
+        <span v-if="streaming" class="rb__thinking">Reasoning…</span>
         <span v-else>Reasoned</span>
       </span>
     </button>
@@ -24,16 +24,7 @@ const props = defineProps<{
   streaming: boolean;
 }>();
 
-// Auto-expand while streaming, auto-collapse when streaming ends
-const open = ref(props.streaming);
-
-watch(
-  () => props.streaming,
-  (active) => {
-    if (active) open.value = true;
-    else open.value = false;
-  },
-);
+const open = ref(false);
 
 function toggle() {
   open.value = !open.value;

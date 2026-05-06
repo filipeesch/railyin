@@ -19,7 +19,7 @@ describe("Claude message translator - tool events", () => {
         },
       };
 
-      const events = translateClaudeMessage(message as any, toolMetaMap);
+      const events = translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
       expect(events).toHaveLength(1);
       expect(events[0]).toEqual({
@@ -48,7 +48,7 @@ describe("Claude message translator - tool events", () => {
         },
       };
 
-      translateClaudeMessage(message as any, toolMetaMap);
+      translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
       expect(toolMetaMap.get("call_xyz789")).toEqual({
         name: "read_file",
@@ -81,7 +81,7 @@ describe("Claude message translator - tool events", () => {
           },
         };
 
-        const events = translateClaudeMessage(message as any, new Map());
+        const events = translateClaudeMessage(message as any, { toolMetaByCallId: new Map() });
         const toolStart = events.find((e) => e.type === "tool_start");
         expect(toolStart?.isInternal).toBe(isInternal);
       }
@@ -109,7 +109,7 @@ describe("Claude message translator - tool events", () => {
         },
       };
 
-      const events = translateClaudeMessage(message as any, toolMetaMap);
+      const events = translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
       expect(events).toHaveLength(2);
       expect(events.every((e) => e.type === "tool_start")).toBe(true);
@@ -136,7 +136,7 @@ describe("Claude message translator - tool events", () => {
         },
       };
 
-      const events = translateClaudeMessage(message as any, toolMetaMap);
+      const events = translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
       expect(events).toHaveLength(1);
       expect(events[0]).toEqual({
@@ -165,7 +165,7 @@ describe("Claude message translator - tool events", () => {
         },
       };
 
-      translateClaudeMessage(message as any, toolMetaMap);
+      translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
       expect(toolMetaMap.has("call_123")).toBe(false);
     });
@@ -186,7 +186,7 @@ describe("Claude message translator - tool events", () => {
         },
       };
 
-      const events = translateClaudeMessage(message as any, toolMetaMap);
+      const events = translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
       expect(events).toHaveLength(1);
       expect(events[0]).toEqual({
@@ -216,7 +216,7 @@ describe("Claude message translator - tool events", () => {
         },
       };
 
-      const events = translateClaudeMessage(message as any, toolMetaMap);
+      const events = translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
       expect(events[0].isError).toBe(true);
     });
@@ -303,7 +303,7 @@ describe("Claude message translator - tool events", () => {
         },
       };
 
-      const events = translateClaudeMessage(message as any, toolMetaMap);
+      const events = translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
       // With includePartialMessages: true, text and thinking arrive via stream_event deltas.
       // The final assembled assistant message suppresses them to avoid double-emit.
@@ -411,7 +411,7 @@ describe("Claude message translator - assistant dedup (text/thinking suppression
       },
     };
 
-    const events = translateClaudeMessage(message as any, toolMetaMap);
+    const events = translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("tool_start");
@@ -429,7 +429,7 @@ describe("Claude message translator - assistant dedup (text/thinking suppression
       },
     };
 
-    const events = translateClaudeMessage(message as any, toolMetaMap);
+    const events = translateClaudeMessage(message as any, { toolMetaByCallId: toolMetaMap });
 
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("tool_start");

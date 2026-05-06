@@ -5,9 +5,7 @@
   </div>
 
   <div v-else-if="chunk.type === 'user'" class="msg msg--user">
-    <div class="msg__bubble">
-      <InlineChipText :text="displayContent" />
-    </div>
+    <div class="msg__bubble prose" v-html="renderMd(displayContent)" />
     <div class="msg__meta">You</div>
   </div>
 

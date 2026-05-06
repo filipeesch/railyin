@@ -302,12 +302,12 @@ export class CopilotEngine implements ExecutionEngine {
         let paused = false;
         let terminal = false;
 
-        for await (const event of translateCopilotStream(
-          session,
-          combinedController.signal,
+        for await (const event of translateCopilotStream(session, {
+          signal: combinedController.signal,
           sendPromise,
+          worktreePath: workingDirectory,
           onWatchdogFire,
-          (rawEvent) => {
+          onRawEvent: (rawEvent) => {
             params.onRawModelMessage?.({
               engine: "copilot",
               sessionId: sdkSessionId,
@@ -316,8 +316,8 @@ export class CopilotEngine implements ExecutionEngine {
               payload: rawEvent as unknown as Record<string, unknown>,
             });
           },
-          () => this.sdkAdapter.touchLease(sdkSessionId, "running"),
-        )) {
+          onHeartbeat: () => this.sdkAdapter.touchLease(sdkSessionId, "running"),
+        })) {
           if (event.type === "ask_user" || event.type === "shell_approval") {
             this.sdkAdapter.touchLease(sdkSessionId, "waiting_user");
           } else {

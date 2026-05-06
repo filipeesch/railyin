@@ -476,6 +476,7 @@ const { renderMd } = useMarkdown();
 .conv-body {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 8px 4px 8px 12px;
   will-change: scroll-position;
   overflow-anchor: none;

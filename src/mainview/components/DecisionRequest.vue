@@ -1,16 +1,6 @@
 <template>
-  <!-- Read-only (already answered) -->
-  <div v-if="answered" class="interview interview--answered">
-    <div v-for="(q, qi) in questions" :key="qi" class="interview__answered-row">
-      <span class="interview__answered-check">✓</span>
-      <span class="interview__answered-question">{{ q.question }}</span>
-      <span class="interview__answered-arrow">→</span>
-      <span class="interview__answered-value">{{ answeredSummary[qi] }}</span>
-    </div>
-  </div>
-
   <!-- Interactive -->
-  <div v-else ref="interviewEl" class="interview">
+  <div v-if="!answered" ref="interviewEl" class="interview">
     <!-- Context preamble -->
     <div v-if="context" class="interview__context prose" v-html="renderMd(context)" />
 
@@ -170,8 +160,6 @@ const emit = defineEmits<{
 const answered = computed(() => props.answeredText !== undefined);
 
 const interviewEl = ref<HTMLElement>();
-
-// Per-question state
 const focusedOption = ref<string[]>(props.questions.map(() => ""));
 
 watch(
@@ -253,26 +241,6 @@ const canSubmit = computed(() => {
   });
 });
 
-// Build answered summary for read-only display
-const answeredSummary = computed<string[]>(() => {
-  if (!props.answeredText) return [];
-  // Parse the structured Q/A/Notes format
-  const lines = props.answeredText.split("\n");
-  const summaries: string[] = [];
-  let current = "";
-  for (const line of lines) {
-    if (line.startsWith("A: ")) current = line.slice(3);
-    else if (line.startsWith("Q: ") && current) {
-      summaries.push(current);
-      current = "";
-    }
-  }
-  if (current) summaries.push(current);
-  // Pad to questions length
-  while (summaries.length < props.questions.length) summaries.push("—");
-  return summaries;
-});
-
 function submit() {
   if (!canSubmit.value) return;
 
@@ -338,13 +306,7 @@ function submit() {
   gap: 20px;
 }
 
-.interview--answered {
-  opacity: 0.75;
-  gap: 6px;
-}
-
-.interview__context {
-  font-size: 0.88rem;
+.interview__context {  font-size: 0.88rem;
   color: var(--p-surface-700, #334155);
   padding-bottom: 4px;
   border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
@@ -557,8 +519,7 @@ function submit() {
   border-top: 1px solid var(--p-surface-200, #e2e8f0);
 }
 
-/* ── Submit ───────────────────────────────────────── */
-.interview__submit {
+/* ── Submit ───────────────────────────────────────── */.interview__submit {
   align-self: flex-end;
   padding: 7px 20px;
   background: var(--p-primary-color, #6366f1);
@@ -573,35 +534,6 @@ function submit() {
 .interview__submit:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-/* ── Read-only ────────────────────────────────────── */
-.interview__answered-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 0.875rem;
-  flex-wrap: wrap;
-}
-
-.interview__answered-check {
-  color: var(--p-primary-color, #6366f1);
-  flex-shrink: 0;
-}
-
-.interview__answered-question {
-  color: var(--p-surface-600, #475569);
-  flex-shrink: 0;
-}
-
-.interview__answered-arrow {
-  color: var(--p-surface-400, #94a3b8);
-  flex-shrink: 0;
-}
-
-.interview__answered-value {
-  color: var(--p-surface-800, #1e293b);
-  font-weight: 500;
 }
 </style>
 
@@ -658,9 +590,5 @@ html.dark-mode .interview__weight-badge--easy {
 
 html.dark-mode .interview__general-notes {
   border-top-color: var(--p-surface-600, #475569);
-}
-
-html.dark-mode .interview__answered-value {
-  color: var(--p-surface-100, #f1f5f9);
 }
 </style>
