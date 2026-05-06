@@ -19,15 +19,19 @@ The system SHALL spawn a code-server process for a task when the user opens the 
 - **THEN** the code editor button SHALL NOT be available and no code-server process is spawned
 
 ### Requirement: code-server binary is fetched and cached automatically
-The system SHALL use `npx --yes code-server` on first use and SHALL cache the resolved binary path so subsequent starts do not re-download.
+The system SHALL discover the `code-server` binary using a cross-platform strategy: prefer the locally-installed `node_modules/.bin/code-server`, then `Bun.which("code-server")`, then fall back to `npx --yes code-server`. The previous `which code-server` shell-out is removed so binary discovery works on Windows even though the runtime feature is gated.
 
-#### Scenario: First-time start triggers download
-- **WHEN** code-server is started for the first time and no cached binary exists
-- **THEN** the system runs `npx --yes code-server` to install it, shows a "Installing code-server…" status in the UI, and proceeds once ready
+#### Scenario: Binary discovered via local node_modules on every platform
+- **WHEN** `code-server` is installed under `node_modules/.bin/`
+- **THEN** that path is used regardless of host platform
 
-#### Scenario: Subsequent starts use cached binary
-- **WHEN** code-server has been installed previously
-- **THEN** the system starts directly using the cached binary without downloading
+#### Scenario: Binary discovered via Bun.which on Unix
+- **WHEN** `code-server` is on `$PATH` (e.g. via Homebrew)
+- **THEN** `Bun.which` returns the absolute path and it is used
+
+#### Scenario: npx fallback used when no local install
+- **WHEN** `code-server` is not in `node_modules` and not on PATH
+- **THEN** the system invokes `npx --yes code-server ...` and code-server is downloaded on first use
 
 ### Requirement: railyin-ref VS Code extension is auto-installed on spawn
 The system SHALL pass `--install-extension <path-to-railyin-ref.vsix>` when spawning code-server so the "Send to Railyin" command is always available.
@@ -71,3 +75,18 @@ The system SHALL verify port availability before assigning it to a new code-serv
 #### Scenario: Port conflict is handled gracefully
 - **WHEN** the first candidate port is in use
 - **THEN** the system tries subsequent ports until one is available (up to 10 attempts), returning an error if none are found
+
+### Requirement: code-server is unavailable on Windows
+The system SHALL detect the Windows platform at the start of `startCodeServer` and SHALL throw a descriptive error rather than spawning the binary. The error message SHALL guide the user to use an external editor instead. The frontend SHALL surface this error as a user-facing notice (e.g. toast) without leaving the UI in a broken state.
+
+#### Scenario: Starting code-server on Windows throws a friendly error
+- **WHEN** the user clicks the code-server launch button on Windows
+- **THEN** `startCodeServer` throws an error containing the text "not supported on Windows" and suggesting an external editor
+
+#### Scenario: Other code-server entry points are no-ops on Windows
+- **WHEN** `stopCodeServer`, `getCodeServerEntry`, or `stopAllCodeServers` are called on Windows
+- **THEN** they return safely without error (no entry exists in the registry, so the existing implementation is already correct)
+
+#### Scenario: External editor launch still works on Windows
+- **WHEN** the user invokes "Open in external editor" with VS Code on PATH
+- **THEN** `launchApp("code .", cwd)` runs successfully via the platform-aware shell, independently of code-server availability
