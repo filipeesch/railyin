@@ -13,21 +13,44 @@ import { buildShellTools } from "./shell.ts";
 import { buildWebTools } from "./web.ts";
 import { buildCommonTools } from "./common.ts";
 
+/**
+ * Maps workflow column tool group names (from `tools:` in workflow YAML) to
+ * the builder functions that produce the corresponding Pi AgentTool instances.
+ * Board/interaction tools from common-tools are always injected regardless of column config.
+ */
+export const PI_TOOL_GROUPS = {
+  read: (harnessCtx: HarnessContext) => buildReadTools(harnessCtx),
+  write: (harnessCtx: HarnessContext) => [...buildWriteTools(harnessCtx), ...buildUndoTool(harnessCtx)],
+  search: (harnessCtx: HarnessContext) => buildSearchTools(harnessCtx),
+  shell: (harnessCtx: HarnessContext) => buildShellTools(harnessCtx),
+  web: (harnessCtx: HarnessContext) => buildWebTools(harnessCtx),
+} as const satisfies Record<string, (harnessCtx: HarnessContext) => AgentTool<any>[]>;
+
+/** Default tool groups when a column has no explicit `tools:` config. */
+export const DEFAULT_PI_TOOL_GROUPS: (keyof typeof PI_TOOL_GROUPS)[] = ["read", "write", "search", "shell"];
+
+export type PiToolGroupName = keyof typeof PI_TOOL_GROUPS;
+
 export interface AllToolsOptions {
   harnessCtx: HarnessContext;
   commonCtx: CommonToolContext;
+  /** Tool group names from the workflow column's `tools:` config. When omitted, uses DEFAULT_PI_TOOL_GROUPS. */
+  columnGroups?: string[];
 }
 
-/** Build the full tool set for a Pi agent session. */
+/**
+ * Build the tool set for a Pi agent session.
+ * When `columnGroups` is provided, only tools belonging to those groups are included.
+ * Board and interaction tools (common-tools) are always included.
+ */
 export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
-  const { harnessCtx, commonCtx } = opts;
-  return [
-    ...buildReadTools(harnessCtx),
-    ...buildWriteTools(harnessCtx),
-    ...buildUndoTool(harnessCtx),
-    ...buildSearchTools(harnessCtx),
-    ...buildShellTools(harnessCtx),
-    ...buildWebTools(harnessCtx),
-    ...buildCommonTools(commonCtx),
-  ];
+  const { harnessCtx, commonCtx, columnGroups } = opts;
+
+  const activeGroups = (columnGroups ?? DEFAULT_PI_TOOL_GROUPS).filter(
+    (g): g is PiToolGroupName => g in PI_TOOL_GROUPS,
+  );
+
+  const harnesTools = activeGroups.flatMap((group) => PI_TOOL_GROUPS[group](harnessCtx));
+
+  return [...harnesTools, ...buildCommonTools(commonCtx)];
 }
