@@ -22,7 +22,6 @@ import { validateTransition } from "../workflow/transition-validator.ts";
 import { getColumnConfig } from "../workflow/column-config.ts";
 import { PositionService } from "./position-service.ts";
 import { seedConversationModel } from "../engine/execution/model-resolver";
-import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────
 
@@ -286,7 +285,6 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       content: string;
       engineContent?: string;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
-      decisionBatch?: { label?: string; records: import("../../shared/rpc-types.ts").DecisionInput[] };
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       // Check if content is a code review trigger
       type ParsedCodeReview = { _type?: string; manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[] };
@@ -315,30 +313,21 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const engine = getWorkspaceConfig(taskWorkspaceKey).engine.type;
       const prepared = await prepareMessageForEngine(engine, promptContent, params.attachments);
 
-      const result = await requireOrchestrator(orchestrator).executeHumanTurn(params.taskId, params.content, prepared.attachments, prepared.content);
+      return requireOrchestrator(orchestrator).executeHumanTurn(params.taskId, params.content, prepared.attachments, prepared.content);
+    },
 
-      if (params.decisionBatch) {
-        const taskConvRow = db.query<{ conversation_id: number | null }, [number]>(
-          "SELECT conversation_id FROM tasks WHERE id = ?"
-        ).get(params.taskId);
-        const conversationId = taskConvRow?.conversation_id;
-        if (conversationId != null) {
-          const decisionRepo = new DecisionRepository(db);
-          const batch = decisionRepo.createBatch(conversationId, params.decisionBatch.label);
-          for (const record of params.decisionBatch.records) {
-            decisionRepo.createRecord(conversationId, {
-              batchId: batch.id,
-              question: record.question,
-              answer: record.answer,
-              weight: record.weight ?? "medium",
-              notes: record.notes,
-              isSourceAi: false,
-            });
-          }
-        }
-      }
+    "tasks.submitDecisions": async (params: {
+      taskId: number;
+      answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
+    }): Promise<{ message: ConversationMessage; executionId: number }> => {
+      const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
+      const { userContent, engineContent } = buildDecisionSubmission(params.answers);
 
-      return result;
+      const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
+      const engine = getWorkspaceConfig(taskWorkspaceKey).engine.type;
+      const prepared = await prepareMessageForEngine(engine, engineContent, undefined);
+
+      return requireOrchestrator(orchestrator).executeHumanTurn(params.taskId, userContent, prepared.attachments, prepared.content);
     },
 
     "tasks.retry": async (params: {

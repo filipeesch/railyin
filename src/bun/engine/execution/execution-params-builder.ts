@@ -1,18 +1,14 @@
 import type { ExecutionParams, RawModelMessage } from "../types.ts";
 import type { TaskRow } from "../../db/row-types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
-import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 
 /**
  * Assembles ExecutionParams from a task row + pre-created signal.
  * Pure: no side effects — AbortController registration is done by StreamProcessor.createSignal().
  */
 export class ExecutionParamsBuilder {
-  private decisionRepo: DecisionRepository;
 
-  constructor(decisionRepo?: DecisionRepository) {
-    this.decisionRepo = decisionRepo ?? new DecisionRepository();
-  }
+  constructor() {}
 
   private _buildBase(
     conversationId: number,
@@ -24,17 +20,11 @@ export class ExecutionParamsBuilder {
     onRawModelMessage: (raw: RawModelMessage) => void,
     attachments?: Attachment[],
   ) {
-    const decisionBlock = this.decisionRepo.buildSystemBlock(conversationId);
-    const effectiveSystemInstructions = decisionBlock
-      ? systemInstructions !== undefined
-        ? systemInstructions + "\n\n" + decisionBlock
-        : decisionBlock
-      : systemInstructions;
     return {
       executionId,
       conversationId,
       prompt,
-      systemInstructions: effectiveSystemInstructions,
+      systemInstructions,
       workingDirectory,
       signal,
       onRawModelMessage,

@@ -213,25 +213,17 @@ const interviewAnsweredText = computed(() => {
 });
 
 async function onInterviewSubmit(payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string }> }) {
-  const { text: answer, decisions } = payload;
-  const decisionBatch = decisions.length
-    ? { records: decisions.map(d => ({ question: d.question, answer: d.answer, weight: d.weight })) }
-    : undefined;
+  const { decisions } = payload;
+  const answers = decisions.map(d => ({ question: d.question, answer: d.answer, weight: d.weight }));
   if (props.chunk.taskId != null) {
     const taskId = taskStore.activeTaskId;
     if (taskId === null) return;
-    const queued = taskStore.takeQueue(taskId);
-    const text = queued ? `${answer}\n\n---\n\n${queued.text}` : answer;
-    const engineText = queued ? `${answer}\n\n---\n\n${queued.engineText}` : answer;
-    await taskStore.sendMessage(taskId, text, engineText, queued?.attachments.length ? queued.attachments : undefined, decisionBatch);
+    await taskStore.submitDecisions(taskId, answers);
     return;
   }
 
   if (chatStore.activeChatSessionId == null) return;
-  const queued = chatStore.takeQueue(chatStore.activeChatSessionId);
-  const text = queued ? `${answer}\n\n---\n\n${queued.text}` : answer;
-  const engineText = queued ? `${answer}\n\n---\n\n${queued.engineText}` : answer;
-  await chatStore.sendMessage(text, engineText, queued?.attachments.length ? queued.attachments : undefined, undefined, decisionBatch);
+  await chatStore.submitDecisions(chatStore.activeChatSessionId, answers);
 }
 </script>
 

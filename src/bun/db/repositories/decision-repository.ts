@@ -225,16 +225,11 @@ export class DecisionRepository {
       .map(mapRevisionRow);
   }
 
-  buildSystemBlock(conversationId: number): string {
+  buildContextBlock(conversationId: number): string {
     const records = this.listByConversation(conversationId);
     if (records.length === 0) return "";
 
-    const lines: string[] = [
-      "## Decision Records",
-      "These decisions were made for this task. Honor them unless explicitly asked to reconsider.",
-      "Use list_decisions() to review all details. Use update_decision(id, answer, reason) to revise.",
-      "",
-    ];
+    const lines: string[] = [];
 
     let prevWeight: DecisionWeight | null = null;
     for (const record of records) {
@@ -245,20 +240,37 @@ export class DecisionRepository {
 
       const weightLabel = `[${record.weight.toUpperCase()}]`;
       const aiSuffix = record.isSourceAi ? "  [AI-recorded]" : "";
-      lines.push(`${weightLabel} ${record.question}${aiSuffix}`);
-      lines.push(`→ ${record.answer}`);
+      let line = `${weightLabel} ${record.question}${aiSuffix}\n→ ${record.answer}`;
 
       if (record.notes !== null) {
-        lines.push(`  Notes: ${record.notes}`);
+        line += `\n  Notes: ${record.notes}`;
       }
 
       if (record.revisionCount > 0) {
         const revisions = this.getRevisions(record.id);
         const last = revisions[revisions.length - 1];
-        lines.push(`  (revised ${record.revisionCount}x · last reason: "${last.reason}")`);
+        line += `\n  (revised ${record.revisionCount}x · last reason: "${last.reason}")`;
       }
+
+      lines.push(line);
     }
 
-    return lines.join("\n");
+    return `<decisions>\n${lines.join("\n")}\n</decisions>`;
+  }
+
+  markDecisionsInjected(conversationId: number, compactionSummaryId: number): void {
+    this.db.run(
+      "UPDATE conversations SET decisions_injected_after_compaction_id = ? WHERE id = ?",
+      [compactionSummaryId, conversationId],
+    );
+  }
+
+  getLastInjectedCompactionId(conversationId: number): number | null {
+    const row = this.db
+      .query<{ decisions_injected_after_compaction_id: number | null }, [number]>(
+        "SELECT decisions_injected_after_compaction_id FROM conversations WHERE id = ?",
+      )
+      .get(conversationId);
+    return row?.decisions_injected_after_compaction_id ?? null;
   }
 }

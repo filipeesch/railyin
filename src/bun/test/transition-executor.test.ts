@@ -8,6 +8,7 @@ import type { TransitionEventMetadata } from "../../shared/rpc-types.ts";
 import { resetConfig } from "../config/index.ts";
 import { TransitionExecutor } from "../engine/execution/transition-executor.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
+import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
@@ -148,6 +149,7 @@ describe("TransitionExecutor", () => {
       boardTools,
       wsRepo,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
     );
 
     const result = await executor.execute(taskId, "done");
@@ -204,6 +206,7 @@ columns:
       boardTools,
       wsRepo,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
     );
 
     const result = await executor.execute(taskId, "plan");
@@ -264,6 +267,7 @@ columns:
       boardTools,
       wsRepo,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -303,6 +307,7 @@ columns:
       boardTools,
       wsRepo,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -343,6 +348,7 @@ columns:
       boardTools,
       wsRepo,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -381,6 +387,7 @@ columns:
       boardTools,
       wsRepo,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
     );
 
     await executor.execute(taskId, "plan");
@@ -404,6 +411,7 @@ columns:
       boardTools,
       wsRepo,
       new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
     );
 
     const result = await executor.execute(taskId, "plan");

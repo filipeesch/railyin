@@ -240,13 +240,13 @@ test.describe("T-D — multi-question batch", () => {
 // ─── T-E: Submit sends message to the task ───────────────────────────────────
 
 test.describe("T-E — submit sends message", () => {
-    test("T-E: clicking submit calls tasks.sendMessage with answer", async ({ page, api, task }) => {
+    test("T-E: clicking submit calls tasks.submitDecisions with answer", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
         api.handle("conversations.getMessages", () => messagePage([msg]));
 
         let sentBody: unknown;
         const replyMsg = makeUserMessage(task.id, "A: PostgreSQL");
-        api.handle("tasks.sendMessage", (body) => {
+        api.handle("tasks.submitDecisions", (body) => {
             sentBody = body;
             return { message: replyMsg, executionId: 9999 };
         });
@@ -257,10 +257,10 @@ test.describe("T-E — submit sends message", () => {
         await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).click();
         await page.locator(".interview__submit").click();
 
-        // Verify the message was sent with a non-empty answer
+        // Verify answers were sent with the selected option title
         await expect.poll(() => sentBody).toBeTruthy();
-        const body = sentBody as { taskId: number; content: string };
-        expect(body.content).toContain("PostgreSQL");
+        const body = sentBody as { taskId: number; answers: Array<{ answer: string }> };
+        expect(body.answers[0].answer).toContain("PostgreSQL");
     });
 });
 
@@ -449,7 +449,7 @@ test.describe("T-J — streaming flow renders decision_request_prompt", () => {
 
         let serveMessages: ConversationMessage[] = [];
         api.handle("conversations.getMessages", () => messagePage(serveMessages));
-        api.handle("tasks.sendMessage", () => ({ message: replyMsg, executionId: 9999 }));
+        api.handle("tasks.submitDecisions", () => ({ message: replyMsg, executionId: 9999 }));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
