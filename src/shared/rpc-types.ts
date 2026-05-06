@@ -653,7 +653,7 @@ export type RailynAPI = {
     response: { message: ConversationMessage; executionId: number };
   };
   "tasks.submitDecisions": {
-    params: { taskId: number; answers: DecisionAnswer[] };
+    params: { taskId: number; answers: DecisionAnswer[]; generalNotes?: string };
     response: { message: ConversationMessage; executionId: number };
   };
 
@@ -941,7 +941,7 @@ export type RailynAPI = {
     response: { messageId: number; executionId: number };
   };
   "chatSessions.submitDecisions": {
-    params: { sessionId: number; answers: DecisionAnswer[] };
+    params: { sessionId: number; answers: DecisionAnswer[]; generalNotes?: string };
     response: { messageId: number; executionId: number };
   };
   "chatSessions.setModel": {

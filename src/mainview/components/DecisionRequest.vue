@@ -164,7 +164,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  submit: [payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string }> }];
+  submit: [payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string; notes?: string }>; generalNotes?: string }];
 }>();
 
 const answered = computed(() => props.answeredText !== undefined);
@@ -312,14 +312,17 @@ function submit() {
       );
       answer = sel.join(", ");
     }
-    return { question: q.question, answer, weight: q.weight ?? "medium" };
+    const notes = q.type !== "freetext" && focusedOption.value[qi] !== "__other__"
+      ? (notesValues.value[qi] ?? "").trim() || undefined
+      : undefined;
+    return { question: q.question, answer, weight: q.weight ?? "medium", notes };
   });
 
   let text = parts.join("\n\n");
   const trimmedNotes = generalNotes.value.trim();
   if (trimmedNotes) text += `\n\n---\n\nGeneral notes: ${trimmedNotes}`;
 
-  emit("submit", { text, decisions });
+  emit("submit", { text, decisions, generalNotes: trimmedNotes || undefined });
 }
 </script>
 

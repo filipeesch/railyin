@@ -12,7 +12,7 @@ const HIDDEN_INSTRUCTION =
   "3. If no record exists → call record_decision(question, answer, weight, notes?) to create one.\n" +
   "NEVER call record_decision when a record already exists — this creates duplicate records.";
 
-export function buildDecisionSubmission(answers: DecisionAnswer[]): DecisionSubmission {
+export function buildDecisionSubmission(answers: DecisionAnswer[], generalNotes?: string): DecisionSubmission {
   const lines: string[] = [];
 
   for (const a of answers) {
@@ -22,6 +22,12 @@ export function buildDecisionSubmission(answers: DecisionAnswer[]): DecisionSubm
     if (a.notes) {
       lines.push(`*Notes: ${a.notes}*`);
     }
+    lines.push("");
+  }
+
+  if (generalNotes?.trim()) {
+    lines.push("---");
+    lines.push(`**General notes:** ${generalNotes.trim()}`);
     lines.push("");
   }
 

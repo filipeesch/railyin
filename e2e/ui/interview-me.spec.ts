@@ -497,3 +497,107 @@ test.describe("T-K — message.new push event", () => {
         await expect(page.locator(".interview__submit")).toBeVisible({ timeout: 5000 });
     });
 });
+
+// ─── T-L: General notes textarea is always visible ───────────────────────────
+
+test.describe("T-L — general notes textarea visibility", () => {
+    test("T-L: general notes textarea is visible in a decision form", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".interview__general-notes")).toBeVisible();
+    });
+
+    test("T-L2: general notes textarea is visible even before selecting an answer", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [freetextQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".interview__general-notes")).toBeVisible();
+    });
+});
+
+// ─── T-M: General notes are included in submitDecisions payload ───────────────
+
+test.describe("T-M — general notes in submission payload", () => {
+    test("T-M: general notes typed in textarea are sent in submitDecisions request", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [freetextQuestion] });
+        const replyMsg = makeUserMessage(task.id, "Test reply");
+
+        let capturedBody: { answers: Array<{ question: string; answer: string }>; generalNotes?: string } | null = null;
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+        api.handle("tasks.submitDecisions", (body) => {
+            capturedBody = body as typeof capturedBody;
+            return { message: replyMsg, executionId: 1 };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Fill in freetext answer
+        await page.locator(".interview__textarea--freetext").fill("My use case is building a CLI tool.");
+        // Fill in general notes
+        await page.locator(".interview__textarea--notes").fill("These are overarching notes.");
+
+        await page.locator(".interview__submit").click();
+
+        expect(capturedBody).not.toBeNull();
+        expect(capturedBody!.generalNotes).toBe("These are overarching notes.");
+    });
+});
+
+// ─── T-N: Empty general notes are not sent in payload ────────────────────────
+
+test.describe("T-N — empty general notes omitted", () => {
+    test("T-N: generalNotes is undefined when textarea is left empty", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [freetextQuestion] });
+        const replyMsg = makeUserMessage(task.id, "Test reply");
+
+        let capturedBody: { answers: Array<{ question: string; answer: string }>; generalNotes?: string } | null = null;
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+        api.handle("tasks.submitDecisions", (body) => {
+            capturedBody = body as typeof capturedBody;
+            return { message: replyMsg, executionId: 1 };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".interview__textarea--freetext").fill("My use case.");
+        // Do NOT fill general notes — leave empty
+
+        await page.locator(".interview__submit").click();
+
+        expect(capturedBody).not.toBeNull();
+        expect(capturedBody!.generalNotes).toBeUndefined();
+    });
+});
+
+// ─── T-O: Submit calls tasks.submitDecisions (not sendMessage) ───────────────
+
+test.describe("T-O — submitDecisions endpoint used on submit", () => {
+    test("T-O: submit button calls tasks.submitDecisions endpoint", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        const replyMsg = makeUserMessage(task.id, "Answered");
+
+        let submitDecisionsCalled = false;
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+        api.handle("tasks.submitDecisions", () => {
+            submitDecisionsCalled = true;
+            return { message: replyMsg, executionId: 1 };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".interview__option").filter({ hasText: "SQLite" }).click();
+        await page.locator(".interview__submit").click();
+
+        expect(submitDecisionsCalled).toBe(true);
+    });
+});

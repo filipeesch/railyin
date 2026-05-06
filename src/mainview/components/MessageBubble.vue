@@ -212,18 +212,18 @@ const interviewAnsweredText = computed(() => {
   return reply?.content;
 });
 
-async function onInterviewSubmit(payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string }> }) {
-  const { decisions } = payload;
-  const answers = decisions.map(d => ({ question: d.question, answer: d.answer, weight: d.weight }));
+async function onInterviewSubmit(payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string; notes?: string }>; generalNotes?: string }) {
+  const { decisions, generalNotes } = payload;
+  const answers = decisions.map(d => ({ question: d.question, answer: d.answer, weight: d.weight, notes: d.notes }));
   if (props.chunk.taskId != null) {
     const taskId = taskStore.activeTaskId;
     if (taskId === null) return;
-    await taskStore.submitDecisions(taskId, answers);
+    await taskStore.submitDecisions(taskId, answers, generalNotes);
     return;
   }
 
   if (chatStore.activeChatSessionId == null) return;
-  await chatStore.submitDecisions(chatStore.activeChatSessionId, answers);
+  await chatStore.submitDecisions(chatStore.activeChatSessionId, answers, generalNotes);
 }
 </script>
 

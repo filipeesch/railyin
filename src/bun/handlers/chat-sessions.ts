@@ -164,6 +164,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
     "chatSessions.submitDecisions": async (params: {
       sessionId: number;
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
+      generalNotes?: string;
     }): Promise<{ messageId: number; executionId: number }> => {
       const session = db.query<ChatSessionRow, [number]>(
         "SELECT * FROM chat_sessions WHERE id = ?"
@@ -177,7 +178,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       );
 
       const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
-      const { userContent, engineContent } = buildDecisionSubmission(params.answers);
+      const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
 
       const workspaceConfig = getWorkspaceConfig(session.workspace_key);
       const engine = workspaceConfig.engine.type;

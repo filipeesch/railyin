@@ -157,8 +157,8 @@ export const useTaskStore = defineStore("task", () => {
     conversationStore.appendMessage(message);
   }
 
-  async function submitDecisions(taskId: number, answers: import("@shared/rpc-types").DecisionAnswer[]) {
-    const { message } = await api("tasks.submitDecisions", { taskId, answers });
+  async function submitDecisions(taskId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string) {
+    const { message } = await api("tasks.submitDecisions", { taskId, answers, generalNotes });
     if (message.conversationId !== conversationStore.activeConversationId) {
       conversationStore.setActiveConversation(message.conversationId);
       const task = taskIndex.value[taskId];

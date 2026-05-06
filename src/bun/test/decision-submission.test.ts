@@ -42,4 +42,30 @@ describe("buildDecisionSubmission", () => {
     expect(result.engineContent).toContain("update_decision");
     expect(result.engineContent).toContain("record_decision");
   });
+
+  it("DS-9: generalNotes is appended as a separate section after answers", () => {
+    const result = buildDecisionSubmission(
+      [{ question: "DB?", answer: "SQLite" }],
+      "These choices are temporary"
+    );
+    expect(result.userContent).toContain("**General notes:** These choices are temporary");
+  });
+
+  it("DS-10: empty generalNotes does not add a general notes section", () => {
+    const result = buildDecisionSubmission([{ question: "DB?", answer: "SQLite" }], "");
+    expect(result.userContent).not.toContain("General notes");
+  });
+
+  it("DS-11: whitespace-only generalNotes does not add a general notes section", () => {
+    const result = buildDecisionSubmission([{ question: "DB?", answer: "SQLite" }], "   ");
+    expect(result.userContent).not.toContain("General notes");
+  });
+
+  it("DS-12: generalNotes appears after answer sections (separator line present)", () => {
+    const result = buildDecisionSubmission(
+      [{ question: "DB?", answer: "SQLite" }],
+      "Extra context"
+    );
+    expect(result.userContent).toContain("---");
+  });
 });

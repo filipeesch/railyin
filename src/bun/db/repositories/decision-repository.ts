@@ -29,13 +29,6 @@ export interface DecisionRevision {
   revisedAt: string;
 }
 
-export interface DecisionBatch {
-  id: number;
-  conversationId: number;
-  label: string | null;
-  createdAt: string;
-}
-
 // ─── Row types ────────────────────────────────────────────────────────────────
 
 interface DecisionRecordRow {
@@ -60,13 +53,6 @@ interface DecisionRevisionRow {
   previous_notes: string | null;
   reason: string;
   revised_at: string;
-}
-
-interface DecisionBatchRow {
-  id: number;
-  conversation_id: number;
-  label: string | null;
-  created_at: string;
 }
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
@@ -99,15 +85,6 @@ function mapRevisionRow(row: DecisionRevisionRow): DecisionRevision {
   };
 }
 
-function mapBatchRow(row: DecisionBatchRow): DecisionBatch {
-  return {
-    id: row.id,
-    conversationId: row.conversation_id,
-    label: row.label,
-    createdAt: row.created_at,
-  };
-}
-
 // ─── DecisionRepository ───────────────────────────────────────────────────────
 
 export class DecisionRepository {
@@ -115,19 +92,6 @@ export class DecisionRepository {
 
   constructor(db?: Database) {
     this.db = db ?? getDb();
-  }
-
-  createBatch(conversationId: number, label?: string): DecisionBatch {
-    const res = this.db.run(
-      "INSERT INTO decision_batches (conversation_id, label) VALUES (?, ?)",
-      [conversationId, label ?? null],
-    );
-    const row = this.db
-      .query<DecisionBatchRow, [number]>(
-        "SELECT * FROM decision_batches WHERE id = ?",
-      )
-      .get(res.lastInsertRowid as number);
-    return mapBatchRow(row!);
   }
 
   createRecord(
