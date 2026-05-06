@@ -182,8 +182,41 @@ export class PiEngine implements ExecutionEngine {
   }
 
   async listModels(): Promise<EngineModelInfo[]> {
-    const model = this.config.model ?? "local/default";
-    return [{ qualifiedId: model, displayName: model }];
+    const providers = this.config.providers ?? {};
+    if (Object.keys(providers).length === 0) {
+      // No providers configured — surface the static model from config (if any)
+      const model = this.config.model ?? "local/default";
+      return [{ qualifiedId: model, displayName: model }];
+    }
+
+    const results: EngineModelInfo[] = [];
+    for (const [providerId, providerCfg] of Object.entries(providers)) {
+      const baseUrl = providerCfg.base_url.replace(/\/$/, "");
+      try {
+        const res = await fetch(`${baseUrl}/models`, {
+          headers: providerCfg.api_key ? { Authorization: `Bearer ${providerCfg.api_key}` } : {},
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!res.ok) continue;
+        const json = (await res.json()) as { data?: { id: string }[] };
+        for (const m of json.data ?? []) {
+          // Skip embedding models — they can't be used for text generation
+          if (m.id.includes("embed")) continue;
+          const qualifiedId = `${providerId}/${m.id}`;
+          results.push({ qualifiedId, displayName: m.id });
+        }
+      } catch {
+        // Provider unreachable — skip silently
+      }
+    }
+
+    // Fall back to static model if no provider returned anything
+    if (results.length === 0) {
+      const model = this.config.model ?? "local/default";
+      return [{ qualifiedId: model, displayName: model }];
+    }
+
+    return results;
   }
 
   async listCommands(_taskId: number): Promise<CommandInfo[]> {
