@@ -26,12 +26,8 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
 
-function piSessionPathForConversation(taskId: number | null, conversationId: number): string {
-  const key =
-    taskId != null
-      ? `railyin-pi-task-${taskId}`
-      : `railyin-pi-conversation-${conversationId}`;
-  const hash = createHash("sha1").update(key).digest("hex");
+function piSessionPathForConversation(conversationId: number): string {
+  const hash = createHash("sha1").update(`railyin-pi-conversation-${conversationId}`).digest("hex");
   return join(homedir(), ".railyin", "pi-sessions", `${hash}.json`);
 }
 
@@ -136,7 +132,7 @@ export class PiEngine implements ExecutionEngine {
 
     const tools = buildAllTools({ harnessCtx, commonCtx });
     const piModel = this.buildModel(modelOverride);
-    const agent = await this.getOrCreateAgent(taskId, conversationId, piModel, tools, enrichedSystem);
+    const agent = await this.getOrCreateAgent(conversationId, piModel, tools, enrichedSystem);
 
     const events: EngineEvent[] = [];
     let agentError: Error | undefined;
@@ -224,7 +220,7 @@ export class PiEngine implements ExecutionEngine {
     }
 
     // Persist session messages to disk so they survive server restarts
-    const sessionPath = piSessionPathForConversation(taskId, conversationId);
+    const sessionPath = piSessionPathForConversation(conversationId);
     await saveSessionMessages(sessionPath, agent.state.messages as unknown[]);
 
     yield { type: "done" };
@@ -329,7 +325,6 @@ export class PiEngine implements ExecutionEngine {
   }
 
   private async getOrCreateAgent(
-    taskId: number | null,
     conversationId: number,
     model: Model<"openai-completions">,
     tools: ReturnType<typeof buildAllTools>,
@@ -345,7 +340,7 @@ export class PiEngine implements ExecutionEngine {
     }
 
     // Try to restore from disk (session survives server restarts)
-    const sessionPath = piSessionPathForConversation(taskId, conversationId);
+    const sessionPath = piSessionPathForConversation(conversationId);
     const savedMessages = await loadSessionMessages(sessionPath);
 
     const agent = new Agent({
