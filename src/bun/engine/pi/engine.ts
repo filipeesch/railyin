@@ -21,6 +21,39 @@ import { UndoStack } from "./harness/undo-stack.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
 import { translateEvent } from "./event-translator.ts";
+import { createHash } from "crypto";
+import { mkdir, readFile, writeFile } from "fs/promises";
+import { homedir } from "os";
+import { join } from "path";
+
+function piSessionPathForConversation(taskId: number | null, conversationId: number): string {
+  const key =
+    taskId != null
+      ? `railyin-pi-task-${taskId}`
+      : `railyin-pi-conversation-${conversationId}`;
+  const hash = createHash("sha1").update(key).digest("hex");
+  return join(homedir(), ".railyin", "pi-sessions", `${hash}.json`);
+}
+
+async function loadSessionMessages(sessionPath: string): Promise<unknown[] | null> {
+  try {
+    const data = await readFile(sessionPath, "utf8");
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // file not found or corrupt — fresh session
+  }
+  return null;
+}
+
+async function saveSessionMessages(sessionPath: string, messages: unknown[]): Promise<void> {
+  try {
+    await mkdir(join(homedir(), ".railyin", "pi-sessions"), { recursive: true });
+    await writeFile(sessionPath, JSON.stringify(messages), "utf8");
+  } catch {
+    // non-fatal — next restart will just start fresh
+  }
+}
 
 /** Default context window used when the config doesn't specify one. */
 const DEFAULT_CONTEXT_WINDOW = 32_768;
@@ -103,7 +136,7 @@ export class PiEngine implements ExecutionEngine {
 
     const tools = buildAllTools({ harnessCtx, commonCtx });
     const piModel = this.buildModel(modelOverride);
-    const agent = this.getOrCreateAgent(conversationId, piModel, tools, enrichedSystem);
+    const agent = await this.getOrCreateAgent(taskId, conversationId, piModel, tools, enrichedSystem);
 
     const events: EngineEvent[] = [];
     let agentError: Error | undefined;
@@ -189,6 +222,10 @@ export class PiEngine implements ExecutionEngine {
       yield { type: "error", message, fatal: false };
       return;
     }
+
+    // Persist session messages to disk so they survive server restarts
+    const sessionPath = piSessionPathForConversation(taskId, conversationId);
+    await saveSessionMessages(sessionPath, agent.state.messages as unknown[]);
 
     yield { type: "done" };
   }
@@ -291,12 +328,13 @@ export class PiEngine implements ExecutionEngine {
     return ctx;
   }
 
-  private getOrCreateAgent(
+  private async getOrCreateAgent(
+    taskId: number | null,
     conversationId: number,
     model: Model<"openai-completions">,
     tools: ReturnType<typeof buildAllTools>,
     systemPrompt?: string,
-  ): Agent {
+  ): Promise<Agent> {
     const existing = this.sessions.get(conversationId);
     if (existing) {
       existing.state.model = model as any;
@@ -306,12 +344,17 @@ export class PiEngine implements ExecutionEngine {
       return existing;
     }
 
+    // Try to restore from disk (session survives server restarts)
+    const sessionPath = piSessionPathForConversation(taskId, conversationId);
+    const savedMessages = await loadSessionMessages(sessionPath);
+
     const agent = new Agent({
       initialState: {
         model: model as any,
         tools: tools as any,
         systemPrompt,
         thinkingLevel: "auto",
+        messages: (savedMessages ?? []) as any,
       },
       streamFn: streamSimple as any,
       getApiKey: (provider) => this.config.providers?.[provider]?.api_key || "no-key",
