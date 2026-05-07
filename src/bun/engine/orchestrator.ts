@@ -59,6 +59,10 @@ export class Orchestrator implements ExecutionCoordinator {
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly onNewMessage: OnNewMessage;
 
+  // ─── listModels cache: deduplicate concurrent calls, cache for 30s ─────────
+  private readonly _listModelsCache = new Map<string, { result: EngineModelInfo[]; expiresAt: number }>();
+  private readonly _listModelsInFlight = new Map<string, Promise<EngineModelInfo[]>>();
+
   setOnStreamEvent(cb: OnStreamEvent): void {
     this.streamProcessor.setOnStreamEvent(cb);
   }
@@ -199,6 +203,22 @@ export class Orchestrator implements ExecutionCoordinator {
 
   async listModels(workspaceKey?: string) {
     const key = workspaceKey ?? getDefaultWorkspaceKey();
+
+    // Return cached result if still fresh
+    const cached = this._listModelsCache.get(key);
+    if (cached && Date.now() < cached.expiresAt) return cached.result;
+
+    // Deduplicate concurrent calls — return the in-flight promise if one exists
+    const inFlight = this._listModelsInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    const promise = this._fetchModels(key);
+    this._listModelsInFlight.set(key, promise);
+    promise.finally(() => this._listModelsInFlight.delete(key));
+    return promise;
+  }
+
+  private async _fetchModels(key: string): Promise<EngineModelInfo[]> {
     const config = getWorkspaceConfig(key);
     const engines = this.registry.listAllEngines(key);
     const results = await Promise.all(
@@ -213,7 +233,9 @@ export class Orchestrator implements ExecutionCoordinator {
         });
       }),
     );
-    return results.flat();
+    const result = results.flat();
+    this._listModelsCache.set(key, { result, expiresAt: Date.now() + 30_000 });
+    return result;
   }
 
   // ─── Command listing ────────────────────────────────────────────────────────

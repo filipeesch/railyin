@@ -159,7 +159,14 @@ export class PiEngine implements ExecutionEngine {
     if (events.length > 0) yield* events;
 
     if (agentError) {
-      yield { type: "error", message: agentError.message, fatal: false };
+      // Provide a clear hint for the known LM Studio MLX backend bug
+      const isTreeReduceBug = agentError.message.includes("tree_reduce");
+      const message = isTreeReduceBug
+        ? `LM Studio MLX backend error: '${agentError.message}'. ` +
+          "This is a known bug in MLX models with conversation history. " +
+          "Switch to a GGUF model (llama.cpp backend) in LM Studio to fix this."
+        : agentError.message;
+      yield { type: "error", message, fatal: false };
       return;
     }
 
@@ -269,8 +276,8 @@ export class PiEngine implements ExecutionEngine {
   ): Agent {
     const existing = this.sessions.get(conversationId);
     if (existing) {
-      // Update tools in case conversation state changed
       existing.state.tools = tools as any;
+      if (systemPrompt !== undefined) existing.state.systemPrompt = systemPrompt;
       return existing;
     }
 
