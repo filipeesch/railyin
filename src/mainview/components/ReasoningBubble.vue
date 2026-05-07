@@ -38,19 +38,29 @@ export function consumeRecentOpen(): boolean {
 </script>
 
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from "vue";
+import { ref, watch, onMounted, onUnmounted } from "vue";
 
 const props = defineProps<{
   content: string;
   streaming: boolean;
 }>();
 
-// Start open if streaming now OR if we just finished streaming (store reload path).
-const open = ref(props.streaming || consumeRecentOpen());
+// Start open if streaming now. The "stay open after done" path is handled
+// in onMounted below (must run after the old streaming component unmounts).
+const open = ref(props.streaming);
 // Track whether this instance was ever streaming so we can mark the flag on unmount.
 const wasStreaming = ref(props.streaming);
 
 watch(() => props.streaming, (v) => { if (v) wasStreaming.value = true; });
+
+onMounted(() => {
+  // Vue 3 mounts new nodes before unmounting old ones in the same patch cycle.
+  // onMounted runs in post-flush — after all onUnmounted hooks from the same
+  // update have fired. So we can safely consume the flag set by markRecentOpen().
+  if (!open.value && consumeRecentOpen()) {
+    open.value = true;
+  }
+});
 
 onUnmounted(() => {
   if (wasStreaming.value && open.value) markRecentOpen();

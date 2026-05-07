@@ -435,6 +435,8 @@ watch(
 );
 
 const { renderMd } = useMarkdown();
+
+defineExpose({ scrollToBottom });
 </script>
 
 <style scoped>
