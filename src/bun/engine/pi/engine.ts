@@ -17,6 +17,7 @@ import {
   createAgentSession,
   defineTool,
   DefaultResourceLoader,
+  getAgentDir,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
@@ -324,7 +325,10 @@ export class PiEngine implements ExecutionEngine {
     const sessionPath = piSessionPathForConversation(conversationId);
     const sessionManager = SessionManager.open(sessionPath);
 
+    const agentDir = getAgentDir();
     const resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
       systemPromptOverride: () => systemPrompt,
     });
     await resourceLoader.reload();
@@ -349,6 +353,7 @@ export class PiEngine implements ExecutionEngine {
 
     const { session } = await createAgentSession({
       cwd,
+      agentDir,
       model: model as any,
       customTools: piTools,
       sessionManager,
