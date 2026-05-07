@@ -321,6 +321,12 @@ watch(
     await nextTick();
     if (!autoScroll.value) return;
     if (!scrollEl.value) return;
+    // On initial load (oldLastId undefined) always scroll to bottom regardless
+    // of current position — the user just opened the view and needs to see latest.
+    if (oldLastId == null) {
+      scrollToLatest("auto");
+      return;
+    }
     const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
     if (scrollHeight - scrollTop - clientHeight >= SCROLL_THRESHOLD) return;
     scrollToLatest(newLastId !== oldLastId ? "smooth" : "auto");

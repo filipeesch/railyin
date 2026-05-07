@@ -16,15 +16,45 @@
   </div>
 </template>
 
+<script lang="ts">
+// Module-level: shared across all ReasoningBubble instances in the app.
+// When a streaming bubble unmounts while open (store reload after done), the
+// next bubble mounted within a short window starts open instead of collapsed.
+let _recentFlag = false;
+let _recentTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function markRecentOpen() {
+  if (_recentTimer) clearTimeout(_recentTimer);
+  _recentFlag = true;
+  _recentTimer = setTimeout(() => { _recentFlag = false; _recentTimer = null; }, 3000);
+}
+
+export function consumeRecentOpen(): boolean {
+  if (!_recentFlag) return false;
+  _recentFlag = false;
+  if (_recentTimer) { clearTimeout(_recentTimer); _recentTimer = null; }
+  return true;
+}
+</script>
+
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, onUnmounted } from "vue";
 
 const props = defineProps<{
   content: string;
   streaming: boolean;
 }>();
 
-const open = ref(props.streaming);
+// Start open if streaming now OR if we just finished streaming (store reload path).
+const open = ref(props.streaming || consumeRecentOpen());
+// Track whether this instance was ever streaming so we can mark the flag on unmount.
+const wasStreaming = ref(props.streaming);
+
+watch(() => props.streaming, (v) => { if (v) wasStreaming.value = true; });
+
+onUnmounted(() => {
+  if (wasStreaming.value && open.value) markRecentOpen();
+});
 
 function toggle() {
   open.value = !open.value;

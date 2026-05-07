@@ -41,14 +41,18 @@ The system SHALL display "Reasoning…" (not "Thinking…") in the `ReasoningBub
 - **THEN** the label displays "Reasoned"
 
 ### Requirement: ReasoningBubble open state depends on source
-The system SHALL open the `ReasoningBubble` by default when it is first rendered with `streaming: true` (live stream). It SHALL start collapsed when rendered with `streaming: false` (loaded from the database). After initial render, user clicks are the only mechanism to open or close it — no auto-expand or auto-collapse.
+The system SHALL open the `ReasoningBubble` by default when streaming is active. When streaming ends and the store reloads from the database (re-creating the component), the bubble SHALL remain open because the user was already watching it. It SHALL start collapsed only when loaded fresh from the database (e.g., on page reload or when switching to a different task). After initial render, user clicks are the only mechanism to open or close it — no auto-expand or auto-collapse.
 
 #### Scenario: Bubble starts open during live streaming
 - **WHEN** a `ReasoningBubble` is first rendered with `streaming: true`
 - **THEN** it is in open (expanded) state, showing content as it streams
 
-#### Scenario: Bubble starts collapsed when loaded from DB
-- **WHEN** a `ReasoningBubble` is first rendered with `streaming: false` (persisted message)
+#### Scenario: Bubble stays open after streaming ends (store reload)
+- **WHEN** streaming ends and the store re-creates the component with `streaming: false` immediately after it was open
+- **THEN** the new component starts in open state (user was watching it stream)
+
+#### Scenario: Bubble starts collapsed when loaded fresh from DB
+- **WHEN** a `ReasoningBubble` is rendered with `streaming: false` on a fresh page load or task switch
 - **THEN** it is in collapsed state
 
 #### Scenario: User opens bubble
