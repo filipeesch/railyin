@@ -114,8 +114,8 @@ test.describe("CB — conversation body coverage", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        await expect(page.locator(".conv-body .tcg")).toHaveCount(1);
-        await expect(page.locator(".conv-body .tcg .tcg__tool-name")).toContainText("read_file");
+        await expect(page.locator(".conv-body .tc")).toHaveCount(1);
+        await expect(page.locator(".conv-body .tc .tc__tool-name")).toContainText("read_file");
         await expect(page.locator(".conv-body .msg--assistant")).toContainText("Tool output summarized");
         await expect(page.locator(".conv-body .msg--user")).toContainText("follow-up question");
     });
