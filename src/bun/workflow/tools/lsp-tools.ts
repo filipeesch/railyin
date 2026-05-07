@@ -1,6 +1,5 @@
 import { resolve, join, relative } from "path";
 import { pathToFileURL } from "url";
-import { randomBytes } from "crypto";
 import type { LSPServerManager } from "../../lsp/manager.ts";
 import type { CallHierarchyItem, Location, LocationLink, Hover, DocumentSymbol, SymbolInformation, CallHierarchyIncomingCall, CallHierarchyOutgoingCall } from "../../lsp/types.ts";
 import type { ToolExecutionResult } from "../common-tools.ts";
@@ -135,9 +134,7 @@ export async function executeLspRename(
     lspManager.markStale(resolve(worktreePath, relPath));
   }
 
-  const operationId = randomBytes(2).toString("hex");
-  const opTag = `op:${operationId}`;
-  const text = `Renamed to "${newName}": ${applyResult.summary} [${opTag}]`;
+  const text = `Renamed to "${newName}": ${applyResult.summary}`;
 
   return {
     type: "result",

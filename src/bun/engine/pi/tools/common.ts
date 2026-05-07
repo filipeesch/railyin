@@ -30,11 +30,11 @@ export function buildCommonTools(ctx: CommonToolContext, harnessCtx?: HarnessCon
         let text = result.text ?? JSON.stringify(result);
 
         if (result.type === "result" && result.beforeFiles && harnessCtx) {
-          const opTag = harnessCtx.undoStack.push({
+          const opId = harnessCtx.undoStack.push({
             type: "lsp_rename",
             beforeFiles: result.beforeFiles,
           });
-          text = `${text}\n${opTag}`;
+          text = `${text} [${opId}]`;
         }
 
         return {
