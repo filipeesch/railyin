@@ -159,6 +159,26 @@ export class PiEngine implements ExecutionEngine {
     if (events.length > 0) yield* events;
 
     if (agentError) {
+      // Pi pushes a { stopReason: "error" } message into agent._state.messages on failure.
+      // If we reuse this agent on the next turn, that poison message is included in the
+      // context snapshot sent to the LLM — causing the same error to repeat forever.
+      // Fix: strip trailing error messages so the next turn starts from valid state.
+      // Rollback to the last complete turn: strip the error assistant message AND
+      // any trailing user/tool messages that have no valid assistant reply, so the
+      // next turn doesn't send two consecutive user messages to the LLM.
+      const agent = this.sessions.get(conversationId);
+      if (agent) {
+        const msgs = agent.state.messages as any[];
+        // Walk backwards past the error message and any orphaned non-assistant messages
+        let end = msgs.length;
+        while (end > 0) {
+          const last = msgs[end - 1];
+          if (last.role === "assistant" && last.stopReason !== "error") break;
+          end--;
+        }
+        agent.state.messages = msgs.slice(0, end) as any;
+      }
+
       // Provide a clear hint for the known LM Studio MLX backend bug
       const isTreeReduceBug = agentError.message.includes("tree_reduce");
       const message = isTreeReduceBug
@@ -264,6 +284,9 @@ export class PiEngine implements ExecutionEngine {
         worktreePath,
       };
       this.harnessContexts.set(conversationId, ctx);
+    } else {
+      // Always update worktreePath — it may have changed (e.g. worktree became ready since first call)
+      ctx.worktreePath = worktreePath;
     }
     return ctx;
   }
@@ -276,6 +299,7 @@ export class PiEngine implements ExecutionEngine {
   ): Agent {
     const existing = this.sessions.get(conversationId);
     if (existing) {
+      existing.state.model = model as any;
       existing.state.tools = tools as any;
       if (systemPrompt !== undefined) existing.state.systemPrompt = systemPrompt;
       return existing;
