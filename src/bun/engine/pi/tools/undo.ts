@@ -79,10 +79,29 @@ ALWAYS check the write result for op:XXXX before calling undo_write.`,
       }
 
       const opId = snapshot.operationId;
+
+      if (snapshot.type === "lsp_rename") {
+        let restored = 0;
+        for (const [absPath, beforeContent] of Object.entries(snapshot.beforeFiles)) {
+          if (beforeContent === null) {
+            if (existsSync(absPath)) unlinkSync(absPath);
+          } else {
+            mkdirSync(dirname(absPath), { recursive: true });
+            writeFileSync(absPath, beforeContent, "utf-8");
+          }
+          harnessCtx.hashCache.invalidate(absPath);
+          restored++;
+        }
+        return {
+          content: [{ type: "text", text: `OK: reverted lsp_rename [op:${opId}] — restored ${restored} file${restored !== 1 ? "s" : ""}` }],
+          details: { operationId: opId },
+        };
+      }
+
       const rel = relative(harnessCtx.worktreePath, snapshot.path);
 
       if (snapshot.type === "rename_file") {
-        const toPath = snapshot.toPath!;
+        const toPath = snapshot.toPath;
         if (existsSync(toPath)) {
           mkdirSync(dirname(snapshot.path), { recursive: true });
           renameSync(toPath, snapshot.path);

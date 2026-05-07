@@ -52,5 +52,5 @@ export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
 
   const harnesTools = activeGroups.flatMap((group) => PI_TOOL_GROUPS[group](harnessCtx));
 
-  return [...harnesTools, ...buildCommonTools(commonCtx)];
+  return [...harnesTools, ...buildCommonTools(commonCtx, harnessCtx)];
 }

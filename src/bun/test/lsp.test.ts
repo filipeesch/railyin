@@ -417,9 +417,9 @@ describe("formatDocumentSymbols", () => {
   });
 });
 
-// ─── 6.4 executeLspTool – dispatcher & lsp-tools coverage ────────────────────
+// ─── 6.4 LSP split tools – dispatcher & lsp-tools coverage ──────────────────
 
-describe("executeLspTool", () => {
+describe("LSP split tools", () => {
   it("executeCommonTool returns error when lspManager is not in context", async () => {
     const { executeCommonTool } = await import("../engine/common-tools.ts");
     const ctx = {
@@ -428,33 +428,25 @@ describe("executeLspTool", () => {
       workflow: { onTransition: () => {}, onHumanTurn: () => {}, onCancel: () => {}, onTaskUpdated: () => {} },
       runtime: { worktreePath: "/tmp" },
     };
-    const result = await executeCommonTool("lsp", { operation: "hover", file_path: "src/foo.ts", line: 1, character: 1 }, ctx as any);
+    const result = await executeCommonTool("lsp_hover", { file_path: "src/foo.ts", line: 1, character: 1 }, ctx as any);
     expect(result.text).toContain("Error: LSP is not configured");
   });
 
-  it("returns error when file_path is outside the worktree", async () => {
-    const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
+  it("lsp_hover returns error when file_path is outside the worktree", async () => {
+    const { executeLspHover } = await import("../workflow/tools/lsp-tools.ts");
     const mockManager = { request: vi.fn(async () => null), shutdown: () => {} };
-    const result = await executeLspTool({ operation: "hover", file_path: "../../etc/passwd", line: 1, character: 1 }, mockManager as any, "/tmp/project");
+    const result = await executeLspHover({ file_path: "../../etc/passwd", line: 1, character: 1 }, mockManager as any, "/tmp/project");
     expect(result).toContain("Error: file_path is outside the worktree");
   });
 
-  it("returns error for unknown lsp operation", async () => {
-    const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
-    const mockManager = { request: vi.fn(async () => null), shutdown: () => {} };
-    // Use a valid path inside the worktree (doesn't need to exist for routing)
-    const result = await executeLspTool({ operation: "unknownOp", file_path: "src/foo.ts" }, mockManager as any, "/tmp/project");
-    expect(result).toContain("Error: unknown lsp operation");
-  });
-
   it("calls lspManager.request with correct LSP method for hover", async () => {
-    const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
+    const { executeLspHover } = await import("../workflow/tools/lsp-tools.ts");
     const mockRequest = vi.fn(async () => ({ contents: "hover text", range: undefined }));
     const mockManager = { request: mockRequest, shutdown: () => {} };
     const dir = mkdtempSync(join(tmpdir(), "railyn-tool-lsp-"));
     writeFileSync(join(dir, "foo.ts"), "const x = 1;\n");
 
-    const result = await executeLspTool({ operation: "hover", file_path: "foo.ts", line: 1, character: 1 }, mockManager as any, dir);
+    const result = await executeLspHover({ file_path: "foo.ts", line: 1, character: 1 }, mockManager as any, dir);
 
     expect(mockRequest).toHaveBeenCalledWith(
       join(dir, "foo.ts"),
@@ -467,13 +459,13 @@ describe("executeLspTool", () => {
   });
 
   it("converts 1-based line/char to 0-based for the LSP request", async () => {
-    const { executeLspTool } = await import("../workflow/tools/lsp-tools.ts");
+    const { executeLspHover } = await import("../workflow/tools/lsp-tools.ts");
     const mockRequest = vi.fn(async () => null);
     const mockManager = { request: mockRequest, shutdown: () => {} };
     const dir = mkdtempSync(join(tmpdir(), "railyn-tool-lsp2-"));
     writeFileSync(join(dir, "bar.ts"), "const y = 2;\n");
 
-    await executeLspTool({ operation: "hover", file_path: "bar.ts", line: 5, character: 10 }, mockManager as any, dir);
+    await executeLspHover({ file_path: "bar.ts", line: 5, character: 10 }, mockManager as any, dir);
 
     expect(mockRequest).toHaveBeenCalledWith(
       join(dir, "bar.ts"),

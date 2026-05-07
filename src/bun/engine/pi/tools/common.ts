@@ -5,15 +5,18 @@
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { CommonToolContext } from "../../types.ts";
+import type { HarnessContext } from "../harness/context.ts";
 import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from "../../common-tools.ts";
-import { Type } from "@mariozechner/pi-ai";
 
 /**
  * Build Pi AgentTool wrappers for every common Railyin tool.
  * The tool metadata (name, description, parameters schema) comes from
  * COMMON_TOOL_DEFINITIONS — execution delegates to executeCommonTool.
+ *
+ * When harnessCtx is provided, write-producing tools (e.g. lsp_rename) that
+ * return beforeFiles will push a snapshot to the UndoStack automatically.
  */
-export function buildCommonTools(ctx: CommonToolContext): AgentTool<any>[] {
+export function buildCommonTools(ctx: CommonToolContext, harnessCtx?: HarnessContext): AgentTool<any>[] {
   return COMMON_TOOL_DEFINITIONS.map((def) => {
     const tool: AgentTool<any> = {
       name: def.name,
@@ -24,10 +27,22 @@ export function buildCommonTools(ctx: CommonToolContext): AgentTool<any>[] {
       parameters: def.parameters as any,
       execute: async (_toolCallId, args, _signal) => {
         const result = await executeCommonTool(def.name, args as Record<string, unknown>, ctx);
-        const text = result.text ?? JSON.stringify(result);
+        let text = result.text ?? JSON.stringify(result);
+
+        if (result.type === "result" && result.beforeFiles && harnessCtx) {
+          const opTag = harnessCtx.undoStack.push({
+            type: "lsp_rename",
+            beforeFiles: result.beforeFiles,
+          });
+          text = `${text}\n${opTag}`;
+        }
+
         return {
           content: [{ type: "text", text }],
-          details: { toolName: def.name },
+          details: {
+            toolName: def.name,
+            ...(result.type === "result" && result.writtenFiles ? { writtenFiles: result.writtenFiles } : {}),
+          },
         };
       },
     };

@@ -1,6 +1,6 @@
 import type { AIToolDefinition } from "../../ai/types.ts";
 import { DECISION_REQUEST_TOOL_DEFINITION } from "../../engine/decision-request-tool-definition.ts";
-import { LSP_TOOL_DEFINITION } from "../../engine/lsp-tool-definition.ts";
+import { LSP_TOOL_DEFINITIONS } from "../../engine/lsp-tool-definitions.ts";
 
 export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
@@ -487,7 +487,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
     },
   },
   // ── lsp group ──────────────────────────────────────────────────────────────
-  LSP_TOOL_DEFINITION,
+  ...LSP_TOOL_DEFINITIONS,
 ];
 
 /** Built-in tool groups. A column's `tools` array may use group names, individual
@@ -500,7 +500,18 @@ export const TOOL_GROUPS: Map<string, string[]> = new Map([
   ["tasks_write", ["create_task", "edit_task", "delete_task", "move_task", "message_task"]],
   ["todos", ["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"]],
   ["decisions", ["list_decisions", "record_decision", "update_decision", "delete_decision"]],
-  ["lsp", ["lsp"]],
+  ["lsp", [
+    "lsp_go_to_definition",
+    "lsp_find_references",
+    "lsp_document_symbols",
+    "lsp_workspace_symbols",
+    "lsp_hover",
+    "lsp_rename",
+    "lsp_incoming_calls",
+    "lsp_outgoing_calls",
+    "lsp_diagnostics",
+    "lsp_type_definition",
+  ]],
 ]);
 
 /** Default tool names used when a column has no explicit 'tools' config. */
@@ -531,7 +542,16 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["record_decision", "record_decision(question, answer, weight?, notes?): silently record an AI-made decision without user interaction. weight: critical|medium|easy."],
   ["update_decision", "update_decision(id, answer, reason, notes?): revise a decision record. reason is required to prevent loops. Old answer preserved in revision history."],
   ["delete_decision", "delete_decision(id): soft-delete a decision record. Excluded from context injection after deletion."],
-  ["lsp", "lsp(operation, file_path?, line?, character?, query?, new_name?): code intelligence — goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls, typeDefinition, rename. ALWAYS call documentSymbol first to get positions. workspaceSymbol: file_path optional."],
+  ["lsp_go_to_definition", "lsp_go_to_definition(file_path, line, character): navigate to where a symbol is defined. ALWAYS call lsp_document_symbols first to get positions."],
+  ["lsp_find_references", "lsp_find_references(file_path, line, character, include_declaration?, limit?, offset?): find all usages of a symbol. Paginated (default limit=50). Use before renaming or removing."],
+  ["lsp_document_symbols", "lsp_document_symbols(file_path): list all symbols in a file with 1-based positions. ALWAYS call first before any position-based LSP operation."],
+  ["lsp_workspace_symbols", "lsp_workspace_symbols(query, limit?, offset?): search symbols by name across the project. Paginated (default limit=20)."],
+  ["lsp_hover", "lsp_hover(file_path, line, character): get type information and docs for a symbol. ALWAYS call lsp_document_symbols first."],
+  ["lsp_rename", "lsp_rename(file_path, line, character, new_name): rename a symbol across the project — scope-aware, all cross-file refs updated atomically. ALWAYS save op:XXXX for undo_write."],
+  ["lsp_incoming_calls", "lsp_incoming_calls(file_path, line, character): find all callers of a function (who calls this)."],
+  ["lsp_outgoing_calls", "lsp_outgoing_calls(file_path, line, character): find all functions called by a function (what this calls)."],
+  ["lsp_diagnostics", "lsp_diagnostics(file_path): get errors, warnings, and hints from the language server. Use after editing to verify correctness."],
+  ["lsp_type_definition", "lsp_type_definition(file_path, line, character): navigate to the type definition of a symbol (the type declaration, not value)."],
 ]);
 
 /** Ordered group definitions for the worktree context tool description block. */
@@ -543,7 +563,7 @@ const TOOL_GROUP_LABELS: Array<[groupName: string, label: string]> = [
   ["tasks_write", "Task write tools"],
   ["todos", "Todo tools"],
   ["decisions", "Decision tools"],
-  ["lsp", "LSP tool"],
+  ["lsp", "LSP tools"],
 ];
 
 /**
