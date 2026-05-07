@@ -118,7 +118,7 @@ export class PiEngine implements ExecutionEngine {
           payload: event as unknown as Record<string, unknown>,
         });
       }
-      for (const engineEvent of translateEvent(event)) {
+      for (const engineEvent of translateEvent(event, workingDirectory)) {
         events.push(engineEvent);
       }
     });

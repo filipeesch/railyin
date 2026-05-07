@@ -5,12 +5,13 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EngineEvent } from "../types.ts";
 import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
+import { buildPiToolDisplay } from "./tools/display.ts";
 
 /**
  * Translate a single Pi AgentEvent into zero or more EngineEvents.
  * Returns an array because some Pi events map to multiple engine events.
  */
-export function translateEvent(event: AgentEvent): EngineEvent[] {
+export function translateEvent(event: AgentEvent, worktreePath?: string): EngineEvent[] {
   switch (event.type) {
     case "message_update": {
       const ae = event.assistantMessageEvent;
@@ -24,12 +25,17 @@ export function translateEvent(event: AgentEvent): EngineEvent[] {
     }
 
     case "tool_execution_start": {
+      const args: Record<string, unknown> =
+        typeof event.args === "string"
+          ? (() => { try { return JSON.parse(event.args); } catch { return {}; } })()
+          : (event.args as Record<string, unknown>) ?? {};
       return [
         {
           type: "tool_start",
           name: event.toolName,
           arguments: typeof event.args === "string" ? event.args : JSON.stringify(event.args),
           callId: event.toolCallId,
+          display: buildPiToolDisplay(event.toolName, args, worktreePath),
         },
       ];
     }
