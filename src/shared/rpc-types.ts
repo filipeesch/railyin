@@ -435,9 +435,12 @@ export interface WorkspaceConfig {
   enableThinking: boolean;
   /** Resolved engine configuration for this workspace. */
   engine: {
-    type: "copilot" | "claude";
     model?: string;
   };
+  /** All engine instances available in this installation (from engines.yaml or fallback). */
+  availableEngines: { id: string; type: string }[];
+  /** Engine IDs allowed in this workspace. Empty means all available engines are allowed. */
+  allowedEngines: string[];
   /** Configured LSP servers for this workspace. */
   lsp?: {
     servers?: Array<{ name: string; command: string; args: string[]; extensions: string[]; projects?: string[] }>;
@@ -549,7 +552,7 @@ export type RailynAPI = {
     response: WorkspaceSummary;
   };
   "workspace.update": {
-    params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string; workspacePath?: string };
+    params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; engineModel?: string; worktreeBasePath?: string; workspacePath?: string };
     response: Record<string, never>;
   };
   "workspace.resolveGitRoot": {
