@@ -327,8 +327,13 @@ watch(
       scrollToLatest("auto");
       return;
     }
-    const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
-    if (scrollHeight - scrollTop - clientHeight >= SCROLL_THRESHOLD) return;
+    // Always scroll when the user sends a message, regardless of current position.
+    const lastMessage = props.messages.at(-1);
+    const isSentByUser = lastMessage?.role === "user" || lastMessage?.type === "user";
+    if (!isSentByUser) {
+      const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
+      if (scrollHeight - scrollTop - clientHeight >= SCROLL_THRESHOLD) return;
+    }
     scrollToLatest(newLastId !== oldLastId ? "smooth" : "auto");
   },
 );
