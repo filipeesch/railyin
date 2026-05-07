@@ -60,7 +60,7 @@ export interface ToolCallProps {
   subject?: string;
   contentType?: string;
   startLine?: number;
-  status: "pending" | "done" | "error";
+  status: "pending" | "done" | "error" | "unknown";
   result?: string;
   diffPayloads?: FileDiffPayload[];
   children?: ToolCallProps[];
@@ -95,6 +95,7 @@ const formattedSubject = computed(() => {
 const statusIcon = computed(() => {
   if (props.status === "error") return "pi-times-circle";
   if (props.status === "done") return "pi-check-circle";
+  if (props.status === "unknown") return "pi-question-circle";
   return "pi-spin pi-spinner";
 });
 

@@ -167,13 +167,13 @@ test("S-24: batched tool calls pair results by id, preserving call order", async
     await page.goto("/");
     await openTaskDrawer(page, task.id);
 
-    const cards = page.locator(".conversation-inner .tcg");
+    const cards = page.locator(".conversation-inner .tc");
     await expect(cards).toHaveCount(4, { timeout: 3_000 });
 
-    const toolNames = await cards.locator(".tcg__tool-name").allTextContents();
+    const toolNames = await cards.locator(".tc__tool-name").allTextContents();
     expect(toolNames.map((t) => t.trim())).toEqual(["read_file", "read_file", "read_file", "read_file"]);
 
-    const args = await cards.locator(".tcg__primary-arg").allTextContents();
+    const args = await cards.locator(".tc__primary-arg").allTextContents();
     expect(args.map((a) => a.trim())).toEqual(["alpha.ts", "beta.ts", "gamma.ts", "delta.ts"]);
 });
 
@@ -184,12 +184,12 @@ test("S-25: Copilot-style rawDiff payload renders as a parsed file diff", async 
     await openTaskDrawer(page, task.id);
 
     // Expand the diff card
-    const header = page.locator(".conversation-inner .tcg .tcg__header");
+    const header = page.locator(".conversation-inner .tc .tc__header");
     await expect(header).toBeVisible({ timeout: 3_000 });
     await header.click();
 
-    await expect(page.locator(".tcg__stat--added")).toContainText("+1", { timeout: 3_000 });
-    await expect(page.locator(".tcg__stat--removed")).toContainText("-1");
+    await expect(page.locator(".tc__stat--added")).toContainText("+1", { timeout: 3_000 });
+    await expect(page.locator(".tc__stat--removed")).toContainText("-1");
     await expect(page.locator(".fdiff__line--added .fdiff__content")).toContainText("return 'alpha'");
     await expect(page.locator(".fdiff__line--removed .fdiff__content")).toContainText("return 1");
 });
@@ -201,21 +201,21 @@ test("S-26: subagent tool calls render nested under spawn_agent", async ({ page,
     await openTaskDrawer(page, task.id);
 
     // Top level: 1 spawn_agent card
-    const topLevel = page.locator(".conversation-inner .tcg");
+    const topLevel = page.locator(".conversation-inner .tc");
     await expect(topLevel).toHaveCount(1, { timeout: 3_000 });
 
     // Badge should show child count
-    const badge = topLevel.locator(".tcg__badge").first();
+    const badge = topLevel.locator(".tc__badge").first();
     await expect(badge).toContainText("3");
 
     // Nested children hidden until expanded
-    await expect(topLevel.locator(".tcg__children > .tcg")).toHaveCount(0);
+    await expect(topLevel.locator(".tc__children > .tc")).toHaveCount(0);
 
     // Expand
-    await topLevel.locator(".tcg__header").click();
-    await expect(topLevel.locator(".tcg__children > .tcg")).toHaveCount(3, { timeout: 2_000 });
+    await topLevel.locator(".tc__header").click();
+    await expect(topLevel.locator(".tc__children > .tc")).toHaveCount(3, { timeout: 2_000 });
 
-    const childNames = await topLevel.locator(".tcg__children > .tcg .tcg__tool-name").allTextContents();
+    const childNames = await topLevel.locator(".tc__children > .tc .tc__tool-name").allTextContents();
     expect(childNames.map((t) => t.trim())).toEqual(["read_file", "list_dir", "edit_file"]);
 });
 
@@ -225,7 +225,7 @@ test("S-27: stale orphaned tool call shows unknown state (not spinning)", async 
     await page.goto("/");
     await openTaskDrawer(page, task.id);
 
-    const iconClasses = await page.locator(".conversation-inner .tcg .tcg__tool-icon").evaluate(
+    const iconClasses = await page.locator(".conversation-inner .tc .tc__tool-icon").evaluate(
         (el) => Array.from(el.classList),
     );
 

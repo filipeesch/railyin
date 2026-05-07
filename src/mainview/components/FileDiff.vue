@@ -252,6 +252,10 @@ function loadMoreDown() {
   flex-shrink: 0;
 }
 
+.fdiff__gutter--old {
+  border-right: 1px solid var(--p-surface-300, #cbd5e1);
+}
+
 .fdiff__sign {
   width: 1.5ch;
   text-align: center;

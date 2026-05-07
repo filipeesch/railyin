@@ -22,8 +22,13 @@ function toolEntryToProps(entry: ToolEntry): ToolCallProps {
     try { parsedResult = JSON.parse(entry.result.content); } catch { /* non-JSON result */ }
   }
 
+  const STALE_MS = 30_000;
+  const isStale = !entry.result && entry.call.createdAt
+    ? Date.now() - new Date(entry.call.createdAt).getTime() > STALE_MS
+    : false;
+
   const status: ToolCallProps["status"] = !entry.result
-    ? "pending"
+    ? (isStale ? "unknown" : "pending")
     : parsedResult?.is_error
       ? "error"
       : "done";
