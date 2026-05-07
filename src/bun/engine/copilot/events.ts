@@ -353,14 +353,14 @@ function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>, 
     case "read_file":
       return {
         label: canonicalToolDisplayLabel(name),
-        subject: str(args.path) || undefined,
+        subject: stripWorktreePath(str(args.path) || undefined, worktreePath),
         contentType: "file",
         startLine: typeof args.startLine === "number" && args.startLine > 0 ? args.startLine : undefined,
       };
     case "view":
       return {
         label: canonicalToolDisplayLabel(name),
-        subject: str(args.path) || undefined,
+        subject: stripWorktreePath(str(args.path) || undefined, worktreePath),
         contentType: "file",
       };
     case "bash": {
@@ -373,11 +373,11 @@ function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>, 
     }
     case "create":
     case "write_file":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(args.path) || undefined, worktreePath), contentType: "file" };
     case "edit":
       return {
         label: canonicalToolDisplayLabel(name),
-        subject: str(args.path) || undefined,
+        subject: stripWorktreePath(str(args.path) || undefined, worktreePath),
         contentType: "file",
         startLine: typeof args.startLine === "number" && args.startLine > 0 ? args.startLine : undefined,
       };
@@ -397,9 +397,9 @@ function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>, 
     case "find":
       return { label: canonicalToolDisplayLabel(name), subject: str(args.pattern || args.path as string) || undefined };
     case "delete_file":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(args.path) || undefined, worktreePath) };
     case "rename_file":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(args.path) || undefined, worktreePath) };
     default:
       return { label: name };
   }

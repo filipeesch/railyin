@@ -37,10 +37,10 @@
       v-else-if="block.type === 'tool_call'"
       v-bind="streamToolCallProps"
     >
-      <template v-if="block.children.length > 0" #children>
+      <template v-if="nonDiffChildIds.length > 0" #children>
         <div class="tcg__children">
           <StreamBlockNode
-            v-for="childId in block.children"
+            v-for="childId in nonDiffChildIds"
             :key="childId"
             :blockId="childId"
             :blocks="blocks"
@@ -153,9 +153,29 @@ const streamToolCallProps = computed((): ToolCallProps => {
   const meta = b?.metadata ? tryParseJson(b.metadata) : null;
   const resultContent: string = (meta?.resultContent as string) ?? "";
   const hasResult = b?.done ?? false;
-  const hasFileDiffChildren = b
-    ? b.children.some((id) => props.blocks.get(id)?.type === "file_diff")
-    : false;
+
+  const fileDiffChildBlocks = b
+    ? b.children
+        .map((id) => props.blocks.get(id))
+        .filter((child): child is StreamBlock => child?.type === "file_diff")
+    : [];
+
+  const diffPayloads: FileDiffPayload[] | undefined =
+    fileDiffChildBlocks.length > 0
+      ? fileDiffChildBlocks.flatMap((child) => {
+          try {
+            const parsed = JSON.parse(child.content) as FileDiffPayload & { rawDiff?: string };
+            if (typeof parsed.rawDiff === "string") {
+              return [parseUnifiedDiff(parsed.rawDiff, parsed.path, parsed.operation)];
+            }
+            return [parsed as FileDiffPayload];
+          } catch {
+            return [];
+          }
+        })
+      : undefined;
+
+  const hasFileDiffChildren = fileDiffChildBlocks.length > 0;
 
   return {
     callId: b?.blockId ?? "",
@@ -165,9 +185,15 @@ const streamToolCallProps = computed((): ToolCallProps => {
     startLine: display?.startLine,
     status: hasResult ? "done" : "pending",
     result: hasFileDiffChildren ? undefined : (resultContent || undefined),
-    diffPayloads: undefined,
+    diffPayloads,
     children: [],
   };
+});
+
+const nonDiffChildIds = computed(() => {
+  const b = block.value;
+  if (!b) return [];
+  return b.children.filter((id) => props.blocks.get(id)?.type !== "file_diff");
 });
 
 function parseUnifiedDiff(

@@ -253,24 +253,24 @@ function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>,
     case "read":
       return {
         label: canonicalToolDisplayLabel(name),
-        subject: str(input.file_path || input.path) || undefined,
+        subject: stripWorktreePath(str(input.file_path || input.path) || undefined, worktreePath),
         contentType: "file",
         startLine: typeof input.start_line === "number" && input.start_line > 0 ? input.start_line : undefined,
       };
     case "write":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.file_path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.file_path) || undefined, worktreePath), contentType: "file" };
     case "edit":
     case "multiedit":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.file_path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.file_path) || undefined, worktreePath), contentType: "file" };
     case "glob":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.pattern) || undefined };
     case "grep":
     case "rg":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.pattern) || undefined };
     case "ls":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.path) || undefined, worktreePath) };
     case "view":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.path) || undefined, worktreePath), contentType: "file" };
     case "webfetch":
     case "web_fetch":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.url) || undefined };
@@ -281,7 +281,7 @@ function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>,
     case "apply_patch":
       return { label: canonicalToolDisplayLabel(name) };
     case "create":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.path || input.name) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.path || input.name) || undefined, worktreePath), contentType: "file" };
     case "skill":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.name) || undefined };
     case "store_memory":
