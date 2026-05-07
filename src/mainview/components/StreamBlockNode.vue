@@ -164,7 +164,7 @@ const streamToolCallProps = computed((): ToolCallProps => {
     contentType: hasFileDiffChildren ? undefined : display?.contentType,
     startLine: display?.startLine,
     status: hasResult ? "done" : "pending",
-    result: resultContent || undefined,
+    result: hasFileDiffChildren ? undefined : (resultContent || undefined),
     diffPayloads: undefined,
     children: [],
   };

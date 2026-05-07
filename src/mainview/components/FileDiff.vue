@@ -147,7 +147,7 @@ function loadMoreDown() {
 
 .fdiff__body {
   max-height: 280px;
-  overflow-y: auto;
+  overflow: auto;
 }
 
 .fdiff__empty {
@@ -262,9 +262,10 @@ function loadMoreDown() {
 
 .fdiff__content {
   flex: 1;
+  min-width: 0;
   padding: 0 4px;
   white-space: pre;
-  overflow-x: auto;
+  overflow-x: visible;
 }
 </style>
 

@@ -73,7 +73,7 @@ function loadMoreDown() {
 <style scoped>
 .rv__body {
   max-height: 280px;
-  overflow-y: auto;
+  overflow: auto;
   font-size: 0.75rem;
   font-family: monospace;
 }
@@ -97,8 +97,9 @@ function loadMoreDown() {
 
 .rv__content {
   flex: 1;
+  min-width: 0;
   white-space: pre;
-  overflow-x: auto;
+  overflow-x: visible;
   color: var(--p-text-color, #1e293b);
   padding: 0 4px;
 }

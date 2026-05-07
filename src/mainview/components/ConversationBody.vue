@@ -4,7 +4,7 @@
     ref="scrollEl"
     @scroll.passive="onScroll"
     @wheel.passive="onUserScroll"
-    @touchstart.passive="onUserScroll"
+    @touchmove.passive="onTouchMove"
   >
     <div class="conv-body__inner conversation-inner">
       <!-- Sentinel for loading older history via IntersectionObserver -->
@@ -207,9 +207,7 @@ function measureRef(el: Element | null) {
 
 // Disable autoscroll when user drifts this far from the bottom.
 const SCROLL_THRESHOLD = 60;
-// Re-engage autoscroll only when the user scrolls fully back to the bottom.
-// A tight value prevents flip-flopping when the user just started scrolling up
-// but hasn't moved far enough to cross SCROLL_THRESHOLD yet.
+// Re-engage autoscroll when the user scrolls back within this distance.
 const REENGAGE_THRESHOLD = 5;
 
 const autoScroll = ref(true);
@@ -217,83 +215,57 @@ const pendingScrollBottom = ref(false);
 const initialScrollReady = ref(false);
 let initialScrollRun = 0;
 
-// Set synchronously on wheel/touch so the RAF loop sees it before the first
-// scroll event fires, eliminating the race where scrollToBottom() overrides the
-// user's intended scroll before onScroll() can set autoScroll=false.
-const userScrolling = ref(false);
-
-function onUserScroll(e: WheelEvent) {
-  // Immediately disengage autoscroll when the user scrolls upward.
-  // This is synchronous and fires before the RAF loop's next tick (~16ms),
-  // so the loop cannot scroll down between this event and the scroll event.
-  if (e.deltaY < 0) {
-    autoScroll.value = false;
-    // Cancel any pending initial scroll-to-bottom so the getTotalSize watcher
-    // does not re-engage autoscroll during the 60ms initialisation window.
-    pendingScrollBottom.value = false;
-    // Abort any in-flight native smooth-scroll animation (e.g. started by the
-    // message-arrival watcher calling scrollToLatest("smooth")).  Without this,
-    // the browser keeps animating toward the bottom even though autoScroll is
-    // already false, giving the impression of a "jump" the user cannot stop.
-    if (scrollEl.value) {
-      scrollEl.value.scrollTo({ top: scrollEl.value.scrollTop, behavior: "instant" });
-    }
-    // TanStack Virtual's internal RAF reconcile loop (scheduleScrollReconcile)
-    // keeps re-calling _scrollToOffset until scrollOffset ≈ targetOffset.
-    // Nulling scrollState cancels that loop so the virtualizer stops fighting
-    // the user's upward scroll.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (virtualizer.value && (virtualizer.value as any).scrollState) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (virtualizer.value as any).scrollState = null;
-    }
-  }
-  userScrolling.value = true;
-}
-
-function onScroll() {
-  if (!scrollEl.value) return;
-  // Capture before reset: true means this scroll event was triggered by an
-  // upward wheel gesture already handled in onUserScroll.  Reading it here
-  // (before reset) lets us suppress the premature re-engagement that would
-  // otherwise happen when the very first scroll-event fires while the viewport
-  // is still within REENGAGE_THRESHOLD of the bottom (e.g. 1–4 px from bottom
-  // just after the user starts wheeling up from a pinned position).
-  const scrollingByUser = userScrolling.value;
-  userScrolling.value = false;
-  const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
-  const distFromBottom = scrollHeight - scrollTop - clientHeight;
-  // Dead zone [REENGAGE_THRESHOLD, SCROLL_THRESHOLD): don't change autoScroll.
-  // This prevents the RAF from re-engaging while the user just started scrolling
-  // up and hasn't crossed the disable threshold yet.
-  //
-  // Additionally guard re-engagement when the user is actively scrolling up
-  // (scrollingByUser). Without this guard, the very first scroll event after a
-  // wheel-up fires while the viewport is still ≤ REENGAGE_THRESHOLD px from the
-  // bottom (before the animation has moved the viewport far), causing
-  // autoScroll to be re-enabled immediately — then the SIZE watcher fires and
-  // snaps the viewport back to the bottom before the user can escape.
-  if (distFromBottom < REENGAGE_THRESHOLD && !scrollingByUser) {
-    autoScroll.value = true;
-  } else if (distFromBottom >= SCROLL_THRESHOLD) {
-    autoScroll.value = false;
-  }
-}
+// True while we are programmatically scrolling — suppresses onScroll handler
+// so it cannot accidentally disengage autoscroll.
+let programmaticScrolling = false;
 
 function scrollToBottom(behavior: ScrollBehavior = "auto") {
   if (!scrollEl.value) return;
+  programmaticScrolling = true;
   scrollEl.value.scrollTo({ top: scrollEl.value.scrollHeight, behavior });
+  requestAnimationFrame(() => { programmaticScrolling = false; });
 }
 
 function scrollToLatest(behavior: ScrollBehavior = "auto") {
-  const lastIndex = displayItems.value.length - 1;
-  if (lastIndex >= 0) {
-    virtualizer.value.scrollToIndex(lastIndex, {
-      align: "end",
-      behavior: behavior === "smooth" ? "smooth" : "auto",
-    });
-  }
   scrollToBottom(behavior);
+}
+
+// Disengage autoscroll on upward wheel. Only set for upward direction so
+// downward wheel (returning to bottom) doesn't block re-engagement.
+function onUserScroll(e: WheelEvent) {
+  if (e.deltaY >= 0) return;
+  autoScroll.value = false;
+  pendingScrollBottom.value = false;
+  // Abort any in-flight smooth-scroll animation so the browser stops
+  // animating toward the bottom and the user's upward scroll takes effect.
+  if (scrollEl.value) {
+    scrollEl.value.scrollTo({ top: scrollEl.value.scrollTop, behavior: "instant" });
+  }
+  // Cancel TanStack Virtual's internal RAF reconcile loop.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (virtualizer.value && (virtualizer.value as any).scrollState) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (virtualizer.value as any).scrollState = null;
+  }
+}
+
+// For touch (trackpad / mobile): disengage only when swiping upward.
+let touchStartY = 0;
+function onTouchMove(e: TouchEvent) {
+  const y = e.touches[0]?.clientY ?? 0;
+  if (y > touchStartY) {
+    autoScroll.value = false;
+    pendingScrollBottom.value = false;
+  }
+  touchStartY = y;
+}
+
+function onScroll() {
+  if (!scrollEl.value || programmaticScrolling) return;
+  const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
+  const distFromBottom = scrollHeight - scrollTop - clientHeight;
+  if (distFromBottom < REENGAGE_THRESHOLD) autoScroll.value = true;
+  else if (distFromBottom >= SCROLL_THRESHOLD) autoScroll.value = false;
 }
 
 async function scheduleScrollToBottom({ revealWhenDone = false }: { revealWhenDone?: boolean } = {}) {
@@ -302,33 +274,29 @@ async function scheduleScrollToBottom({ revealWhenDone = false }: { revealWhenDo
   pendingScrollBottom.value = true;
   await nextTick();
   if (runId !== initialScrollRun) return;
-  scrollToLatest();
+  scrollToBottom();
   requestAnimationFrame(() => {
     if (runId !== initialScrollRun) return;
-    if (autoScroll.value) scrollToLatest();
-  });
-  setTimeout(() => {
-    if (runId !== initialScrollRun) return;
-    if (autoScroll.value) scrollToLatest();
+    if (autoScroll.value) scrollToBottom();
     pendingScrollBottom.value = false;
     if (revealWhenDone) initialScrollReady.value = true;
-  }, 60);
+  });
 }
 
+// During initial load: scroll to bottom once virtualizer measures its content.
 watch(
   () => virtualizer.value.getTotalSize(),
-  () => { if (pendingScrollBottom.value && !userScrolling.value && autoScroll.value) scrollToLatest(); },
+  () => { if (pendingScrollBottom.value && autoScroll.value) scrollToBottom(); },
 );
 
-// While there are live streaming blocks, run a requestAnimationFrame loop to
-// keep the scroll position at the bottom as the typewriter animation grows the
-// DOM height. The loop stops automatically when streaming ends.
+// RAF loop keeps scroll pinned to bottom during live streaming.
+// This is the single authority during streaming — other watchers step aside.
 {
   let rafId: number | null = null;
 
   function rafScrollLoop() {
     if (!hasLiveContent.value) { rafId = null; return; }
-    if (autoScroll.value && !userScrolling.value) scrollToBottom();
+    if (autoScroll.value) scrollToBottom();
     rafId = requestAnimationFrame(rafScrollLoop);
   }
 
@@ -341,26 +309,17 @@ watch(
 
 watch(
   [
-    // Track the last message's ID rather than array length so that prepending
-    // older messages (loadOlderMessages) does not trigger a scroll-to-bottom.
-    // Prepend leaves at(-1)?.id unchanged; append/refresh changes it.
+    // Track last message ID — prepending older messages doesn't trigger scroll.
     () => props.messages.at(-1)?.id,
     () => props.executionState,
     () => props.streamState?.roots.length,
   ],
   async ([newLastId], [oldLastId]) => {
-    // User has scrolled up — don't re-engage autoscroll on new messages.
     if (!autoScroll.value) return;
+    // Skip during active streaming — the RAF loop handles it.
+    if (hasLiveContent.value) return;
     await nextTick();
-    // Re-check after the async suspension — the user may have scrolled up
-    // while we were waiting for nextTick, and onUserScroll sets autoScroll=false
-    // synchronously.  Without this guard the watcher would still call
-    // scrollToLatest("smooth"), starting a native scroll animation that fights
-    // the user's intended upward scroll.
     if (!autoScroll.value) return;
-    // Re-read scroll position from DOM instead of the stale autoScroll ref to
-    // avoid a race where scroll restoration (post-flush) sets scrollTop near
-    // the bottom after this callback was already suspended at nextTick.
     if (!scrollEl.value) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
     if (scrollHeight - scrollTop - clientHeight >= SCROLL_THRESHOLD) return;
@@ -477,9 +436,10 @@ const { renderMd } = useMarkdown();
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px 4px 8px 12px;
+  padding: 8px 12px 8px 12px;
   will-change: scroll-position;
   overflow-anchor: none;
+  scrollbar-gutter: stable;
 }
 
 .conv-body--positioning {
