@@ -34,10 +34,23 @@ export class ChatExecutor {
 
     const msgId = appendMessage(db, null, conversationId, "user", "user", content);
 
-    // Get the model from the conversation
-    const conversationModel = db
-      .prepare("SELECT model FROM conversations WHERE id = ?")
-      .get(conversationId) as { model: string | null } | undefined;
+    // Get the model and associated task (if any) from the conversation
+    const conversationRow = db
+      .prepare(`
+        SELECT c.model, t.title, t.description
+        FROM conversations c
+        LEFT JOIN tasks t ON t.id = c.task_id
+        WHERE c.id = ?
+      `)
+      .get(conversationId) as { model: string | null; title: string | null; description: string | null } | undefined;
+
+    const conversationModel = conversationRow;
+    const taskContext = conversationRow?.title
+      ? {
+          title: conversationRow.title,
+          ...(conversationRow.description?.trim() ? { description: conversationRow.description.trim() } : {}),
+        }
+      : undefined;
     const modelValue = conversationModel?.model ?? null;
 
     // Use simplified model resolution for chat sessions
@@ -74,6 +87,7 @@ export class ChatExecutor {
         this.streamProcessor.makePersistCallback(null, conversationId, executionId),
         enabledMcpTools ?? null,
         attachments,
+        taskContext,
       ),
       onSoftCancel: () => this.streamProcessor.abort(executionId),
     };
