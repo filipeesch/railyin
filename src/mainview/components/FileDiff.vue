@@ -244,9 +244,9 @@ function loadMoreDown() {
 .fdiff__line--context { background: transparent; }
 
 .fdiff__gutter {
-  width: 3ch;
+  min-width: 4ch;
   text-align: right;
-  padding: 0 4px;
+  padding: 0 6px;
   color: var(--p-text-muted-color, #888);
   user-select: none;
   flex-shrink: 0;

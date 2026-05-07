@@ -83,8 +83,9 @@ test.describe("A — Live streaming", () => {
 
     ws.pushStreamEvent(toolCallEvent(task.id, task.conversationId, 1));
 
-    // Tool block label "bash" should appear in the .tcg__tool-name element
-    await expect(page.locator(".conv-body .tcg__tool-name").first()).toContainText("bash", {
+    // Tool block label "bash" should appear in the streaming .tc__tool-name element
+    // (block starts as pending=done:false, so it renders via StreamBlockNode/ToolCallBlock)
+    await expect(page.locator(".conv-body .tc__tool-name").first()).toContainText("bash", {
       timeout: 5_000,
     });
   });
