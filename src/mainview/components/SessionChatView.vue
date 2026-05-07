@@ -294,6 +294,7 @@ const conversationBodyRef = ref<InstanceType<typeof ConversationBody> | null>(nu
 
 defineExpose({
   scrollToBottom: () => conversationBodyRef.value?.scrollToBottom(),
+  scheduleScrollToBottomIfAuto: () => conversationBodyRef.value?.scheduleScrollToBottomIfAuto(),
 });
 </script>
 

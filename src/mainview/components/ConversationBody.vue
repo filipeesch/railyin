@@ -219,6 +219,10 @@ let initialScrollRun = 0;
 // so it cannot accidentally disengage autoscroll.
 let programmaticScrolling = false;
 
+// True during the wheel+scroll event pair that fires when the user scrolls up.
+// Prevents onScroll from immediately re-engaging autoScroll via REENGAGE_THRESHOLD.
+let userScrolling = false;
+
 function scrollToBottom(behavior: ScrollBehavior = "auto") {
   if (!scrollEl.value) return;
   programmaticScrolling = true;
@@ -234,6 +238,9 @@ function scrollToLatest(behavior: ScrollBehavior = "auto") {
 // downward wheel (returning to bottom) doesn't block re-engagement.
 function onUserScroll(e: WheelEvent) {
   if (e.deltaY >= 0) return;
+  // Mark that this scroll event is user-initiated so onScroll won't
+  // immediately re-engage autoScroll via REENGAGE_THRESHOLD.
+  userScrolling = true;
   autoScroll.value = false;
   pendingScrollBottom.value = false;
   // Abort any in-flight smooth-scroll animation so the browser stops
@@ -262,9 +269,13 @@ function onTouchMove(e: TouchEvent) {
 
 function onScroll() {
   if (!scrollEl.value || programmaticScrolling) return;
+  const scrollingByUser = userScrolling;
+  userScrolling = false;
   const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
   const distFromBottom = scrollHeight - scrollTop - clientHeight;
-  if (distFromBottom < REENGAGE_THRESHOLD) autoScroll.value = true;
+  // Skip re-engagement if this scroll event is paired with an upward wheel
+  // (the viewport hasn't moved yet so distFromBottom is still near zero).
+  if (!scrollingByUser && distFromBottom < REENGAGE_THRESHOLD) autoScroll.value = true;
   else if (distFromBottom >= SCROLL_THRESHOLD) autoScroll.value = false;
 }
 
@@ -441,7 +452,36 @@ watch(
 
 const { renderMd } = useMarkdown();
 
-defineExpose({ scrollToBottom });
+// Called by ConversationDrawer.onAfterShow — scroll to bottom only when the
+// user hasn't manually scrolled away (autoScroll still engaged).
+// Runs a multi-frame RAF loop: reads scrollHeight at the top of each frame
+// (after DOM/ResizeObserver have settled) so the virtualizer can finish
+// measuring items (e.g. 240-message initial loads) before we stop.
+function scheduleScrollToBottomIfAuto() {
+  if (!autoScroll.value) return;
+  pendingScrollBottom.value = true;
+  let stableFrames = 0;
+  let lastScrollHeight = -1;
+  let maxFrames = 60; // safety valve: ~1 s at 60 fps
+  const stabilize = () => {
+    // Read scrollHeight FIRST (DOM is settled at the top of each RAF, after
+    // microtasks + ResizeObserver from the previous frame's scroll have run).
+    const sh = scrollEl.value?.scrollHeight ?? 0;
+    if (sh === lastScrollHeight) stableFrames++;
+    else { stableFrames = 0; lastScrollHeight = sh; }
+    maxFrames--;
+    if (!autoScroll.value || maxFrames <= 0 || stableFrames >= 3) {
+      pendingScrollBottom.value = false;
+      return;
+    }
+    // Scroll to current bottom, then wait one frame for DOM to update.
+    scrollToBottom();
+    requestAnimationFrame(stabilize);
+  };
+  requestAnimationFrame(stabilize);
+}
+
+defineExpose({ scrollToBottom, scheduleScrollToBottomIfAuto });
 </script>
 
 <style scoped>

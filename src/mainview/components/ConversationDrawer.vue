@@ -47,7 +47,7 @@ const drawerStore = useDrawerStore();
 const taskStore = useTaskStore();
 const chatStore = useChatStore();
 
-type ChatViewInstance = { scrollToBottom: () => void };
+type ChatViewInstance = { scrollToBottom: () => void; scheduleScrollToBottomIfAuto?: () => void };
 const activeChatRef = ref<ChatViewInstance | null>(null);
 
 const open = computed({
@@ -68,7 +68,7 @@ function onHide() {
 }
 
 function onAfterShow() {
-  activeChatRef.value?.scrollToBottom();
+  activeChatRef.value?.scheduleScrollToBottomIfAuto?.();
 }
 
 // ─── Resize logic ─────────────────────────────────────────────────────────────

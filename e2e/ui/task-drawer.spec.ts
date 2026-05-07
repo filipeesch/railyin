@@ -63,6 +63,12 @@ test.describe("TD — task drawer coverage", () => {
         await openTaskDrawer(page, task.id);
 
         await expect(page.locator(".task-chat-view .msg__bubble").last()).toContainText("Task message 240");
+        // Wait for scroll to stabilize (scheduleScrollToBottomIfAuto runs after @after-show)
+        await page.waitForFunction(() => {
+            const el = document.querySelector(".task-chat-view .conv-body") as HTMLElement | null;
+            if (!el) return false;
+            return el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+        }, { timeout: 3000 }).catch(() => null); // don't fail here, let the expect below report
         const isAtBottom = await page.locator(".task-chat-view .conv-body").evaluate((el) => {
             const node = el as HTMLElement;
             return node.scrollTop + node.clientHeight >= node.scrollHeight - 40;
