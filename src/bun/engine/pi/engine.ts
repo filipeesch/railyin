@@ -108,7 +108,7 @@ export class PiEngine implements ExecutionEngine {
     const events: EngineEvent[] = [];
     let agentError: Error | undefined;
 
-    const unsubscribe = agent.subscribe((event) => {
+    agent.subscribe((event) => {
       if (onRawModelMessage) {
         onRawModelMessage({
           engine: "pi",
@@ -151,7 +151,6 @@ export class PiEngine implements ExecutionEngine {
       }
     } finally {
       await promptPromise;
-      unsubscribe();
       this.pendingResumes.delete(executionId);
     }
 
