@@ -338,14 +338,22 @@ watch(
       scrollToLatest("auto");
       return;
     }
+    // Skip when stream blocks just cleared but no new persisted message arrived yet.
+    // The RAF loop was tracking scroll during streaming; when roots go to 0 the stream
+    // DOM is removed but message.new hasn't fired yet, so scrollHeight only reaches the
+    // user's last message. The watch will fire again with a new newLastId once the
+    // assistant's persisted message arrives.
+    if (newLastId === oldLastId) return;
     // Always scroll when the user sends a message, regardless of current position.
     const lastMessage = props.messages.at(-1);
     const isSentByUser = lastMessage?.role === "user" || lastMessage?.type === "user";
-    if (!isSentByUser) {
-      const { scrollTop, scrollHeight, clientHeight } = scrollEl.value;
-      if (scrollHeight - scrollTop - clientHeight >= SCROLL_THRESHOLD) return;
+    if (isSentByUser) {
+      scrollToLatest("smooth");
+      return;
     }
-    scrollToLatest(newLastId !== oldLastId ? "smooth" : "auto");
+    // A new persisted assistant message arrived — scroll to it.
+    // No threshold guard: autoScroll is already the guard (user is near the bottom).
+    scrollToLatest("smooth");
   },
 );
 

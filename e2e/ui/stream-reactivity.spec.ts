@@ -13,9 +13,10 @@
  *   E-3 — Autoscroll disengages when user scrolls up during streaming
  *   E-4 — Autoscroll re-engages when user scrolls back to bottom
  *   E-5 — Reading position stays stable while streaming below the fold
+ *   E-7 — Scroll stays at bottom after stream ends and persisted message arrives
  */
 import { test, expect } from "./fixtures";
-import { makeTask, makeAssistantMessage } from "./fixtures/mock-data";
+import { makeTask, makeAssistantMessage, makeUserMessage } from "./fixtures/mock-data";
 import type { StreamEvent } from "@shared/rpc-types";
 
 const EXEC_ID = 42;
@@ -692,6 +693,90 @@ test.describe("E (regression) — Auto-scroll stutter", () => {
     });
     // Viewport must NOT have been snapped back to the bottom by the SIZE/RAF watcher.
     expect(distFromBottom).toBeGreaterThan(REENGAGE_THRESHOLD - 1);
+  });
+
+  test("E-7: scroll stays at bottom after stream ends and persisted assistant message arrives", async ({
+    page,
+    api,
+    ws,
+    task,
+  }) => {
+    // Bug: when the stream ends, stream blocks are removed from the DOM before
+    // the persisted assistant message arrives via message.new. The messages watcher
+    // fired on the streamState.roots.length change, calling scrollToLatest() while
+    // scrollHeight only reached the user's last message — jumping scroll there.
+    //
+    // Fix: skip the scroll when newLastId === oldLastId (no new persisted message
+    // yet). The watcher fires again with the new ID once message.new arrives.
+
+    // 20 persisted messages to ensure the body overflows.
+    const msgs = Array.from({ length: 20 }, (_, i) =>
+      makeAssistantMessage(task.id, `Baseline line ${i + 1}: ${"x".repeat(60)}\n`, {
+        id: i + 1,
+        conversationId: task.conversationId,
+      }),
+    );
+    // The last user message — the one scroll would jump to if the bug is present.
+    const userMsg = makeUserMessage(task.id, "Please do a thing", {
+      id: 21,
+      conversationId: task.conversationId,
+    });
+    api.returns("conversations.getMessages", { messages: [...msgs, userMsg], hasMore: false });
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // Wait for virtualizer to overflow and auto-scroll to engage at the bottom.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector(".conv-body");
+        return !!el && el.scrollHeight > el.clientHeight + 100;
+      },
+      undefined,
+      { timeout: 8_000 },
+    );
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector(".conv-body");
+        return !!el && el.scrollHeight - el.scrollTop - el.clientHeight < 10;
+      },
+      undefined,
+      { timeout: 3_000 },
+    );
+
+    // Push streaming chunks to simulate an assistant turn.
+    for (let i = 0; i < 10; i++) {
+      ws.pushStreamEvent(textChunk(task.id, task.conversationId, i, `Assistant reply line ${i}\n`));
+    }
+    await expect(page.locator(".conv-body")).toContainText("Assistant reply line 9", { timeout: 5_000 });
+
+    // Signal stream done — this clears stream blocks from the DOM.
+    ws.pushDone(task.id, EXEC_ID, 100, task.conversationId);
+    await page.waitForTimeout(100); // let Vue flush the stream-clear
+
+    // At this point the bug would snap scroll to the user message position.
+    // Verify scroll is still at (or near) the absolute bottom.
+    const distAfterDone = await page.locator(".task-detail .conv-body").evaluate((el) => {
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    });
+    expect(distAfterDone).toBeLessThan(50);
+
+    // Now deliver the persisted assistant message (simulating message.new).
+    const assistantMsg = makeAssistantMessage(task.id, "Assistant reply line 9\n", {
+      id: 22,
+      conversationId: task.conversationId,
+    });
+    ws.pushNewMessage(assistantMsg);
+    await page.waitForTimeout(200); // let Vue flush
+
+    // Scroll must still be at the bottom after the persisted message arrives.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector(".conv-body");
+        return !!el && el.scrollHeight - el.scrollTop - el.clientHeight < 10;
+      },
+      undefined,
+      { timeout: 3_000 },
+    );
   });
 });
 
