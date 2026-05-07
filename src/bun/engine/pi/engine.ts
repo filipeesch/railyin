@@ -11,9 +11,15 @@ import type {
 } from "../types.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import { QualifiedModelId } from "../qualified-model-id.ts";
-import { Agent } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
-import type { Model } from "@mariozechner/pi-ai";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import {
+  AuthStorage,
+  createAgentSession,
+  defineTool,
+  DefaultResourceLoader,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { ContentHashCache } from "./harness/hash-cache.ts";
@@ -22,33 +28,15 @@ import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
 import { translateEvent } from "./event-translator.ts";
 import { createHash } from "crypto";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
 
+const PI_SESSIONS_DIR = join(homedir(), ".railyin", "pi-sessions");
+
 function piSessionPathForConversation(conversationId: number): string {
   const hash = createHash("sha1").update(`railyin-pi-conversation-${conversationId}`).digest("hex");
-  return join(homedir(), ".railyin", "pi-sessions", `${hash}.json`);
-}
-
-async function loadSessionMessages(sessionPath: string): Promise<unknown[] | null> {
-  try {
-    const data = await readFile(sessionPath, "utf8");
-    const parsed = JSON.parse(data);
-    if (Array.isArray(parsed)) return parsed;
-  } catch {
-    // file not found or corrupt — fresh session
-  }
-  return null;
-}
-
-async function saveSessionMessages(sessionPath: string, messages: unknown[]): Promise<void> {
-  try {
-    await mkdir(join(homedir(), ".railyin", "pi-sessions"), { recursive: true });
-    await writeFile(sessionPath, JSON.stringify(messages), "utf8");
-  } catch {
-    // non-fatal — next restart will just start fresh
-  }
+  return join(PI_SESSIONS_DIR, `${hash}.jsonl`);
 }
 
 /** Default context window used when the config doesn't specify one. */
@@ -59,8 +47,8 @@ export class PiEngine implements ExecutionEngine {
   private readonly engineId: string;
   private readonly config: PiEngineConfig;
   private readonly _onTaskUpdated: OnTaskUpdated;
-  /** Map<conversationId, Agent> — one Pi Agent per conversation. */
-  private readonly sessions = new Map<number, Agent>();
+  /** Map<conversationId, AgentSession> — one Pi session per conversation. */
+  private readonly sessions = new Map<number, AgentSession>();
   private readonly pendingResumes = new Map<
     number,
     { resolve: (input: EngineResumeInput) => void; reject: (error: Error) => void }
@@ -132,12 +120,12 @@ export class PiEngine implements ExecutionEngine {
 
     const tools = buildAllTools({ harnessCtx, commonCtx });
     const piModel = this.buildModel(modelOverride);
-    const agent = await this.getOrCreateAgent(conversationId, piModel, tools, enrichedSystem);
+    const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd());
 
     const events: EngineEvent[] = [];
     let agentError: Error | undefined;
 
-    const unsubscribe = agent.subscribe((event) => {
+    const unsubscribe = session.subscribe((event) => {
       if (onRawModelMessage) {
         onRawModelMessage({
           engine: "pi",
@@ -147,12 +135,12 @@ export class PiEngine implements ExecutionEngine {
           payload: event as unknown as Record<string, unknown>,
         });
       }
-      for (const engineEvent of translateEvent(event, workingDirectory)) {
+      for (const engineEvent of translateEvent(event as any, workingDirectory)) {
         events.push(engineEvent);
       }
     });
 
-    const promptPromise = agent.prompt(prompt).catch((err: unknown) => {
+    const promptPromise = session.prompt(prompt).catch((err: unknown) => {
       agentError = err instanceof Error ? err : new Error(String(err));
     });
 
@@ -168,7 +156,7 @@ export class PiEngine implements ExecutionEngine {
 
         // Check if agent is done
         const isIdle = await Promise.race([
-          agent.waitForIdle().then(() => true),
+          session.agent.waitForIdle().then(() => true),
           new Promise<boolean>((res) => setTimeout(() => res(false), 10)),
         ]);
 
@@ -192,13 +180,9 @@ export class PiEngine implements ExecutionEngine {
       // If we reuse this agent on the next turn, that poison message is included in the
       // context snapshot sent to the LLM — causing the same error to repeat forever.
       // Fix: strip trailing error messages so the next turn starts from valid state.
-      // Rollback to the last complete turn: strip the error assistant message AND
-      // any trailing user/tool messages that have no valid assistant reply, so the
-      // next turn doesn't send two consecutive user messages to the LLM.
-      const agent = this.sessions.get(conversationId);
+      const agent = this.sessions.get(conversationId)?.agent;
       if (agent) {
         const msgs = agent.state.messages as any[];
-        // Walk backwards past the error message and any orphaned non-assistant messages
         let end = msgs.length;
         while (end > 0) {
           const last = msgs[end - 1];
@@ -219,10 +203,6 @@ export class PiEngine implements ExecutionEngine {
       return;
     }
 
-    // Persist session messages to disk so they survive server restarts
-    const sessionPath = piSessionPathForConversation(conversationId);
-    await saveSessionMessages(sessionPath, agent.state.messages as unknown[]);
-
     yield { type: "done" };
   }
 
@@ -239,10 +219,8 @@ export class PiEngine implements ExecutionEngine {
       this.pendingResumes.delete(executionId);
       pending.reject(new Error(`Execution ${executionId} cancelled`));
     }
-    // Abort the agent for this execution's conversation if we can find it.
-    // We don't track executionId→conversationId here, so we abort all idle agents.
-    for (const agent of this.sessions.values()) {
-      try { agent.abort(); } catch { /* ignore */ }
+    for (const session of this.sessions.values()) {
+      try { session.abort(); } catch { /* ignore */ }
     }
   }
 
@@ -296,8 +274,8 @@ export class PiEngine implements ExecutionEngine {
   }
 
   async shutdown(): Promise<void> {
-    for (const agent of this.sessions.values()) {
-      try { agent.abort(); } catch { /* ignore */ }
+    for (const session of this.sessions.values()) {
+      try { session.dispose(); } catch { /* ignore */ }
     }
     this.sessions.clear();
     this.harnessContexts.clear();
@@ -324,39 +302,64 @@ export class PiEngine implements ExecutionEngine {
     return ctx;
   }
 
-  private async getOrCreateAgent(
+  private async getOrCreateSession(
     conversationId: number,
     model: Model<"openai-completions">,
     tools: ReturnType<typeof buildAllTools>,
-    systemPrompt?: string,
-  ): Promise<Agent> {
+    systemPrompt: string | undefined,
+    cwd: string,
+  ): Promise<AgentSession> {
     const existing = this.sessions.get(conversationId);
     if (existing) {
-      existing.state.model = model as any;
-      existing.state.tools = tools as any;
-      existing.state.thinkingLevel = "auto";
-      if (systemPrompt !== undefined) existing.state.systemPrompt = systemPrompt;
+      existing.agent.state.model = model as any;
+      existing.agent.state.tools = tools as any;
+      existing.agent.state.thinkingLevel = "auto";
+      if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
       return existing;
     }
 
-    // Try to restore from disk (session survives server restarts)
-    const sessionPath = piSessionPathForConversation(conversationId);
-    const savedMessages = await loadSessionMessages(sessionPath);
+    // Ensure sessions dir exists
+    await mkdir(PI_SESSIONS_DIR, { recursive: true });
 
-    const agent = new Agent({
-      initialState: {
-        model: model as any,
-        tools: tools as any,
-        systemPrompt,
-        thinkingLevel: "auto",
-        messages: (savedMessages ?? []) as any,
-      },
-      streamFn: streamSimple as any,
-      getApiKey: (provider) => this.config.providers?.[provider]?.api_key || "no-key",
+    const sessionPath = piSessionPathForConversation(conversationId);
+    const sessionManager = SessionManager.open(sessionPath);
+
+    const resourceLoader = new DefaultResourceLoader({
+      systemPromptOverride: () => systemPrompt,
+    });
+    await resourceLoader.reload();
+
+    const piTools = tools.map((t) =>
+      defineTool({
+        name: t.name,
+        label: t.label ?? t.name,
+        description: t.description,
+        parameters: t.parameters as any,
+        execute: t.execute as any,
+      }),
+    );
+
+    const authStorage = AuthStorage.inMemory();
+    // Inject provider API keys so Pi can authenticate with LM Studio / other OpenAI-compat providers
+    for (const [provider, cfg] of Object.entries(this.config.providers ?? {})) {
+      if (cfg.api_key) authStorage.setRuntimeApiKey(provider, cfg.api_key);
+    }
+    // "default" provider key for providers without an explicit api_key
+    authStorage.setRuntimeApiKey("default", "no-key");
+
+    const { session } = await createAgentSession({
+      cwd,
+      model: model as any,
+      customTools: piTools,
+      sessionManager,
+      resourceLoader,
+      authStorage,
     });
 
-    this.sessions.set(conversationId, agent);
-    return agent;
+    session.agent.state.thinkingLevel = "auto";
+
+    this.sessions.set(conversationId, session);
+    return session;
   }
 
   private buildModel(modelOverride?: string): Model<"openai-completions"> {

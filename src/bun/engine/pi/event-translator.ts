@@ -2,7 +2,7 @@
  * Translates Pi SDK AgentEvents into Railyin EngineEvents.
  */
 
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { EngineEvent } from "../types.ts";
 import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 import { buildPiToolDisplay } from "./tools/display.ts";

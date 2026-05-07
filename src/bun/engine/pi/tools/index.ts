@@ -2,7 +2,7 @@
  * Aggregates all Pi harness tool builders into a single factory.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
 import type { CommonToolContext } from "../../types.ts";
 import { buildReadTools } from "./read.ts";
