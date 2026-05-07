@@ -301,6 +301,7 @@ export class PiEngine implements ExecutionEngine {
     if (existing) {
       existing.state.model = model as any;
       existing.state.tools = tools as any;
+      existing.state.thinkingLevel = "auto";
       if (systemPrompt !== undefined) existing.state.systemPrompt = systemPrompt;
       return existing;
     }
@@ -310,6 +311,7 @@ export class PiEngine implements ExecutionEngine {
         model: model as any,
         tools: tools as any,
         systemPrompt,
+        thinkingLevel: "auto",
       },
       streamFn: streamSimple as any,
       getApiKey: (provider) => this.config.providers?.[provider]?.api_key || "no-key",
@@ -339,7 +341,7 @@ export class PiEngine implements ExecutionEngine {
       api: "openai-completions",
       provider: providerName ?? "default",
       baseUrl,
-      reasoning: false,
+      reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: DEFAULT_CONTEXT_WINDOW,
