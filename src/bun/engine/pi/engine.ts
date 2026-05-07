@@ -28,6 +28,7 @@ import { UndoStack } from "./harness/undo-stack.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
 import { translateEvent } from "./event-translator.ts";
+import { AsyncQueue } from "./async-queue.ts";
 import { createHash } from "crypto";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
@@ -50,6 +51,8 @@ export class PiEngine implements ExecutionEngine {
   private readonly _onTaskUpdated: OnTaskUpdated;
   /** Map<conversationId, AgentSession> — one Pi session per conversation. */
   private readonly sessions = new Map<number, AgentSession>();
+  /** Map<executionId, conversationId> — lets cancel() find the right session. */
+  private readonly executionToConversation = new Map<number, number>();
   private readonly pendingResumes = new Map<
     number,
     { resolve: (input: EngineResumeInput) => void; reject: (error: Error) => void }
@@ -90,6 +93,12 @@ export class PiEngine implements ExecutionEngine {
       boardTools,
     } = params;
 
+    // Bail immediately if already cancelled before we even start.
+    if (signal?.aborted) {
+      yield { type: "done" } as EngineEvent;
+      return;
+    }
+
     // Build task context prefix for the system prompt
     const taskBlock = taskContext
       ? [
@@ -123,8 +132,21 @@ export class PiEngine implements ExecutionEngine {
     const piModel = this.buildModel(modelOverride);
     const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd());
 
-    const events: EngineEvent[] = [];
+    this.executionToConversation.set(executionId, conversationId);
+
+    // Use a buffered AsyncQueue as the push-to-pull bridge.
+    // Unlike a single-callback approach, push() never loses a notification:
+    // items buffer when nobody is waiting and are delivered immediately when consumed.
+    // close() terminates the for-await instantly regardless of timing.
+    const queue = new AsyncQueue<EngineEvent>();
     let agentError: Error | undefined;
+
+    // Abort: tell Pi to stop AND close the queue so the for-await exits immediately.
+    const onAbort = () => {
+      session.abort().catch(() => {});
+      queue.close();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     const unsubscribe = session.subscribe((event) => {
       if (onRawModelMessage) {
@@ -137,44 +159,31 @@ export class PiEngine implements ExecutionEngine {
         });
       }
       for (const engineEvent of translateEvent(event as any, workingDirectory)) {
-        events.push(engineEvent);
+        queue.push(engineEvent);
       }
     });
 
-    const promptPromise = session.prompt(prompt).catch((err: unknown) => {
-      agentError = err instanceof Error ? err : new Error(String(err));
-    });
+    // Start the prompt. On error, push an error event and then close the queue.
+    // On success, close the queue to signal end-of-stream.
+    session
+      .prompt(prompt)
+      .catch((err: unknown) => {
+        agentError = err instanceof Error ? err : new Error(String(err));
+      })
+      .finally(() => {
+        queue.close();
+      });
 
-    // Drain events as they arrive, respecting abort
     try {
-      while (true) {
-        if (signal?.aborted) break;
-
-        if (events.length > 0) {
-          yield* events.splice(0);
-          continue;
-        }
-
-        // Check if agent is done
-        const isIdle = await Promise.race([
-          session.agent.waitForIdle().then(() => true),
-          new Promise<boolean>((res) => setTimeout(() => res(false), 10)),
-        ]);
-
-        if (events.length > 0) {
-          yield* events.splice(0);
-        }
-
-        if (isIdle) break;
+      for await (const event of queue) {
+        yield event;
       }
     } finally {
-      await promptPromise;
+      signal?.removeEventListener("abort", onAbort);
       unsubscribe();
       this.pendingResumes.delete(executionId);
+      this.executionToConversation.delete(executionId);
     }
-
-    // Drain any remaining events
-    if (events.length > 0) yield* events;
 
     if (agentError) {
       // Pi pushes a { stopReason: "error" } message into agent._state.messages on failure.
@@ -220,8 +229,12 @@ export class PiEngine implements ExecutionEngine {
       this.pendingResumes.delete(executionId);
       pending.reject(new Error(`Execution ${executionId} cancelled`));
     }
-    for (const session of this.sessions.values()) {
-      try { session.abort(); } catch { /* ignore */ }
+    const conversationId = this.executionToConversation.get(executionId);
+    if (conversationId !== undefined) {
+      const session = this.sessions.get(conversationId);
+      if (session) {
+        session.abort().catch(() => {});
+      }
     }
   }
 
@@ -344,18 +357,20 @@ export class PiEngine implements ExecutionEngine {
     );
 
     const authStorage = AuthStorage.inMemory();
-    // Inject provider API keys so Pi can authenticate with LM Studio / other OpenAI-compat providers
+    // Pi always requires an API key value — local providers (LM Studio, Ollama) ignore it, so "no-key" is fine.
+    // Set for all configured providers AND ensure model.provider always has a key.
     for (const [provider, cfg] of Object.entries(this.config.providers ?? {})) {
-      if (cfg.api_key) authStorage.setRuntimeApiKey(provider, cfg.api_key);
+      authStorage.setRuntimeApiKey(provider, cfg.api_key ?? "no-key");
     }
-    // "default" provider key for providers without an explicit api_key
-    authStorage.setRuntimeApiKey("default", "no-key");
+    authStorage.setRuntimeApiKey(model.provider, this.config.providers?.[model.provider]?.api_key ?? "no-key");
 
     const { session } = await createAgentSession({
       cwd,
       agentDir,
       model: model as any,
       customTools: piTools,
+      // Disable Pi's built-in read/bash/edit/write — our harness tools replace them.
+      noTools: "builtin",
       sessionManager,
       resourceLoader,
       authStorage,
