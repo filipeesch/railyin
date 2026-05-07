@@ -82,6 +82,8 @@ function loadMoreDown() {
   display: flex;
   line-height: 1.4;
   background: transparent;
+  min-width: max-content;
+  width: 100%;
 }
 
 .rv__gutter {
@@ -97,9 +99,7 @@ function loadMoreDown() {
 
 .rv__content {
   flex: 1;
-  min-width: 0;
   white-space: pre;
-  overflow-x: visible;
   color: var(--p-text-color, #1e293b);
   padding: 0 4px;
 }

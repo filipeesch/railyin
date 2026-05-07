@@ -235,6 +235,8 @@ function loadMoreDown() {
   font-family: monospace;
   font-size: 0.75rem;
   line-height: 1.4;
+  min-width: max-content;
+  width: 100%;
 }
 
 .fdiff__line--added   { background: #e6ffed; }
@@ -262,10 +264,8 @@ function loadMoreDown() {
 
 .fdiff__content {
   flex: 1;
-  min-width: 0;
   padding: 0 4px;
   white-space: pre;
-  overflow-x: visible;
 }
 </style>
 

@@ -7,7 +7,8 @@ export interface ToolResultDisplayInput {
 
 /**
  * Resolves the best display text for a tool result.
- * Priority: detailedContent JSON field → contents[].text → plain content → empty string
+ * For file content tools: use the raw content field (actual file text), not a summary.
+ * For other tools: priority is detailedContent → contents[].text → content → raw
  */
 export function useToolResultDisplay(input: Ref<ToolResultDisplayInput>) {
   const displayText = computed<string>(() => {
@@ -15,8 +16,9 @@ export function useToolResultDisplay(input: Ref<ToolResultDisplayInput>) {
     if (!raw) return "";
     try {
       const parsed = JSON.parse(raw);
-      // detailedContent takes priority (human-readable summary)
-      if (parsed.detailedContent && typeof parsed.detailedContent === "string") {
+      const isFile = input.value.contentType === "file";
+      // For file tools, skip detailedContent (summary) and return actual file text
+      if (!isFile && parsed.detailedContent && typeof parsed.detailedContent === "string") {
         return parsed.detailedContent;
       }
       // contents array (Claude-style)
