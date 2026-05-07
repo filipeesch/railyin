@@ -24,7 +24,7 @@ const props = defineProps<{
   streaming: boolean;
 }>();
 
-const open = ref(false);
+const open = ref(props.streaming);
 
 function toggle() {
   open.value = !open.value;

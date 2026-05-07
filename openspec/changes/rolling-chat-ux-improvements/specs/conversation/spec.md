@@ -40,11 +40,15 @@ The system SHALL display "Reasoning…" (not "Thinking…") in the `ReasoningBub
 - **WHEN** `ReasoningBubble` has `streaming: false`
 - **THEN** the label displays "Reasoned"
 
-### Requirement: ReasoningBubble is fully manually controlled
-The system SHALL NOT auto-expand or auto-collapse the `ReasoningBubble`. It SHALL start collapsed. User clicks are the only mechanism to open or close it.
+### Requirement: ReasoningBubble open state depends on source
+The system SHALL open the `ReasoningBubble` by default when it is first rendered with `streaming: true` (live stream). It SHALL start collapsed when rendered with `streaming: false` (loaded from the database). After initial render, user clicks are the only mechanism to open or close it — no auto-expand or auto-collapse.
 
-#### Scenario: Bubble starts collapsed
-- **WHEN** a `ReasoningBubble` is first rendered (streaming or not)
+#### Scenario: Bubble starts open during live streaming
+- **WHEN** a `ReasoningBubble` is first rendered with `streaming: true`
+- **THEN** it is in open (expanded) state, showing content as it streams
+
+#### Scenario: Bubble starts collapsed when loaded from DB
+- **WHEN** a `ReasoningBubble` is first rendered with `streaming: false` (persisted message)
 - **THEN** it is in collapsed state
 
 #### Scenario: User opens bubble
