@@ -10,6 +10,7 @@ import type {
   CommonToolContext,
 } from "../types.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
+import { QualifiedModelId } from "../qualified-model-id.ts";
 import { Agent } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { Model } from "@mariozechner/pi-ai";
@@ -26,6 +27,7 @@ const DEFAULT_CONTEXT_WINDOW = 32_768;
 const DEFAULT_MAX_TOKENS = 8_192;
 
 export class PiEngine implements ExecutionEngine {
+  private readonly engineId: string;
   private readonly config: PiEngineConfig;
   private readonly _onTaskUpdated: OnTaskUpdated;
   /** Map<conversationId, Agent> — one Pi Agent per conversation. */
@@ -36,10 +38,12 @@ export class PiEngine implements ExecutionEngine {
   >();
 
   constructor(
+    engineId: string,
     config: PiEngineConfig,
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
   ) {
+    this.engineId = engineId;
     this.config = config;
     this._onTaskUpdated = onTaskUpdated;
   }
@@ -202,7 +206,7 @@ export class PiEngine implements ExecutionEngine {
         for (const m of json.data ?? []) {
           // Skip embedding models — they can't be used for text generation
           if (m.id.includes("embed")) continue;
-          const qualifiedId = `${providerId}/${m.id}`;
+          const qualifiedId = `${this.engineId}/${providerId}/${m.id}`;
           results.push({ qualifiedId, displayName: m.id });
         }
       } catch {
@@ -276,6 +280,7 @@ export class PiEngine implements ExecutionEngine {
         systemPrompt,
       },
       streamFn: streamSimple as any,
+      getApiKey: (provider) => this.config.providers?.[provider]?.api_key || "no-key",
     });
 
     this.sessions.set(conversationId, agent);
@@ -284,17 +289,23 @@ export class PiEngine implements ExecutionEngine {
 
   private buildModel(modelOverride?: string): Model<"openai-completions"> {
     const modelStr = modelOverride ?? this.config.model ?? "default";
-    const [providerName, ...rest] = modelStr.split("/");
-    const modelId = rest.join("/") || providerName;
 
-    const providerConfig = this.config.providers?.[providerName];
+    // Expects 3-part format: engineId/providerName/modelId (as returned by listModels).
+    // nativeModelId() strips the engine prefix, giving providerName/modelId.
+    const qmid = QualifiedModelId.tryParse(modelStr);
+    const nativeId = qmid?.nativeModelId() ?? modelStr;
+    const slash = nativeId.indexOf("/");
+    const providerName = slash !== -1 ? nativeId.slice(0, slash) : undefined;
+    const modelId = slash !== -1 ? nativeId.slice(slash + 1) : nativeId;
+
+    const providerConfig = providerName ? this.config.providers?.[providerName] : undefined;
     const baseUrl = providerConfig?.base_url ?? "http://localhost:1234/v1";
 
     return {
       id: modelId,
-      name: modelStr,
+      name: nativeId,
       api: "openai-completions",
-      provider: providerName,
+      provider: providerName ?? "default",
       baseUrl,
       reasoning: false,
       input: ["text"],
