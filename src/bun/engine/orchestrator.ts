@@ -201,7 +201,7 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Model listing ─────────────────────────────────────────────────────────
 
-  async listModels(workspaceKey?: string) {
+  async listModels(workspaceKey?: string, engineType?: string) {
     const key = workspaceKey ?? getDefaultWorkspaceKey();
 
     // Return cached result if still fresh
@@ -220,6 +220,13 @@ export class Orchestrator implements ExecutionCoordinator {
 
   private async _fetchModels(key: string): Promise<EngineModelInfo[]> {
     const config = getWorkspaceConfig(key);
+
+    if (engineType) {
+      const engine = this.registry.getEngineById(engineType);
+      if (!engine) throw new Error(`Engine '${engineType}' is not registered`);
+      return runWithConfig(config, () => engine.listModels());
+    }
+
     const engines = this.registry.listAllEngines(key);
     const results = await Promise.all(
       engines.map((engine) => {

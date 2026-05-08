@@ -202,8 +202,18 @@ if (injectedEngine) {
 } else {
   // Collect all unique engines across all workspaces, deduplicated by id.
   // In practice, engines.yaml is global so a single-pass over the default workspace is enough.
+  // copilot and claude are always included as core fallbacks even when absent from config.
   const { config: defaultConfig } = loadConfig();
-  const allEngines: EngineEntry[] = defaultConfig?.engines ?? [];
+  const configEngines: EngineEntry[] = defaultConfig?.engines ?? [];
+  const configIds = new Set(configEngines.map((e) => e.id));
+  const coreFallbacks: EngineEntry[] = [
+    { id: "copilot", config: { type: "copilot" } },
+    { id: "claude", config: { type: "claude" } },
+  ];
+  const allEngines: EngineEntry[] = [
+    ...configEngines,
+    ...coreFallbacks.filter((e) => !configIds.has(e.id)),
+  ];
   const seenIds = new Set<string>();
   const uniqueEngines = allEngines.filter((e) => {
     if (seenIds.has(e.id)) return false;
