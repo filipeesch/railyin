@@ -1,3 +1,4 @@
 [install.scopes]
 # These packages are not available on the internal Nexus proxy — install from public npm.
 "@xterm" = { registry = "https://registry.npmjs.org/" }
+"@earendil-works" = { registry = "https://registry.npmjs.org/" }

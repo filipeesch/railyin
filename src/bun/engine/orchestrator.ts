@@ -15,6 +15,7 @@ import type {
   OnNewMessage,
   OnStreamEvent,
   EngineShutdownOptions,
+  EngineModelInfo,
 } from "./types.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
@@ -107,7 +108,7 @@ export class Orchestrator implements ExecutionCoordinator {
     );
     this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools);
     this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools);
-    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────
@@ -196,7 +197,7 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Model listing ─────────────────────────────────────────────────────────
 
-  async listModels(workspaceKey?: string, engineType?: string) {
+  async listModels(workspaceKey?: string, engineType?: string): Promise<EngineModelInfo[]> {
     const key = workspaceKey ?? getDefaultWorkspaceKey();
     const config = getWorkspaceConfig(key);
 
@@ -208,7 +209,16 @@ export class Orchestrator implements ExecutionCoordinator {
 
     const engines = this.registry.listAllEngines(key);
     const results = await Promise.all(
-      engines.map((engine) => runWithConfig(config, () => engine.listModels())),
+      engines.map((engine) => {
+        const call = runWithConfig(config, () => engine.listModels());
+        const timeout = new Promise<EngineModelInfo[]>((_, reject) =>
+          setTimeout(() => reject(new Error("listModels timed out")), 8_000),
+        );
+        return Promise.race([call, timeout]).catch((err: unknown) => {
+          console.error("[orchestrator] listModels failed for engine:", err instanceof Error ? err.message : err);
+          return [] as EngineModelInfo[];
+        });
+      }),
     );
     return results.flat();
   }

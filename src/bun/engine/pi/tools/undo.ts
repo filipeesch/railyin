@@ -1,6 +1,6 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import { existsSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "node:fs";
 import { relative, dirname } from "node:path";
 import { safePath } from "./read.ts";

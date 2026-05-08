@@ -153,17 +153,17 @@ const streamProc = new StreamEventProcessor(channel, db);
 
 // ─── Engine factory map (composition root) ───────────────────────────────────
 
-type EngineFactory = (cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) => ExecutionEngine;
+type EngineFactory = (engineId: string, cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) => ExecutionEngine;
 
 const engineFactories: Record<string, EngineFactory> = {
-  copilot: (_cfg, onTaskUpdated, onNewMessage) =>
+  copilot: (_engineId, _cfg, onTaskUpdated, onNewMessage) =>
     new CopilotEngine(onTaskUpdated, onNewMessage, createDefaultCopilotSdkAdapter()),
-  claude: (cfg, onTaskUpdated, onNewMessage) =>
+  claude: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
     new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
-  opencode: (cfg, onTaskUpdated, onNewMessage) =>
+  opencode: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
     new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
-  pi: (cfg, onTaskUpdated, onNewMessage) =>
-    new PiEngine(cfg as PiEngineConfig, onTaskUpdated, onNewMessage),
+  pi: (engineId, cfg, onTaskUpdated, onNewMessage) =>
+    new PiEngine(engineId, cfg as PiEngineConfig, onTaskUpdated, onNewMessage),
   scripted: () => new MockExecutionEngine(),
 };
 
@@ -181,7 +181,7 @@ function buildEngineInstances(
       continue;
     }
     try {
-      map.set(entry.id, factory(entry.config, onTaskUpdated, onNewMessage));
+      map.set(entry.id, factory(entry.id, entry.config, onTaskUpdated, onNewMessage));
     } catch (err) {
       console.error(`[engine] Failed to construct engine '${entry.id}':`, err);
     }

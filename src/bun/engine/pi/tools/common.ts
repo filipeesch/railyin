@@ -3,10 +3,10 @@
  * as Pi AgentTool instances for use in the Pi engine.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { CommonToolContext } from "../../types.ts";
 import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from "../../common-tools.ts";
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 
 /**
  * Build Pi AgentTool wrappers for every common Railyin tool.

@@ -1,7 +1,7 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
 import type { ContentHashCache } from "../harness/hash-cache.ts";
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import { spawnSync } from "node:child_process";
 import { relative } from "node:path";
 import picomatch from "picomatch";
