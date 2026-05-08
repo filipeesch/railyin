@@ -78,7 +78,7 @@
 
     <!-- User message -->
     <div v-else-if="block.type === 'user'" class="msg msg--user">
-      <div class="msg__bubble prose" v-html="renderMd(block.content)" />
+      <div class="msg__bubble prose" v-html="renderUserMd(block.content)" />
     </div>
 
     <!-- Children for non-tool, non-reasoning blocks (those render children in their own body) -->
@@ -100,6 +100,7 @@ import type { FileDiffPayload, Hunk } from "@shared/rpc-types";
 import type { StreamBlock } from "../stores/conversation";
 import { parseToolCallDisplay } from "../utils/toolCallDisplay";
 import { useTypewriter } from "../composables/useTypewriter";
+import { useMarkdown } from "../composables/useMarkdown";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import FileDiff from "./FileDiff.vue";
 import ToolCallBlock, { type ToolCallProps } from "./ToolCallBlock.vue";
@@ -123,6 +124,7 @@ const blockContent = computed(() => block.value?.content ?? "");
 const blockDone = computed(() => block.value?.done ?? true);
 const isLiveAtMount = !!(props.blocks.get(props.blockId) && !props.blocks.get(props.blockId)!.done);
 const { displayed: displayedContent } = useTypewriter(blockContent, blockDone, isLiveAtMount);
+const { renderUserMd } = useMarkdown();
 
 const fileDiffPayload = computed<FileDiffPayload | null>(() => {
   const b = block.value;
