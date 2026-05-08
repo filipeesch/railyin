@@ -322,6 +322,33 @@ describe("stream block state", () => {
     expect(block!.type).toBe("tool_call");
   });
 
+  it("SB-4b: tool_call block starts as pending (done=false) until tool_result arrives", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.onStreamEvent(
+      makeStreamEvent(1, "tool_call", {
+        blockId: "tc-pending",
+        content: "bash",
+        metadata: JSON.stringify({ tool: "bash", tool_call_id: "tcp1" }),
+      }),
+    );
+
+    const state = store.streamStates.get(1)!;
+    const block = state.blocks.get("tc-pending")!;
+    expect(block.done).toBe(false);
+
+    // tool_result arrives → block should be marked done
+    store.onStreamEvent(
+      makeStreamEvent(1, "tool_result", {
+        blockId: "tc-pending",
+        content: "exit 0",
+        metadata: null,
+      }),
+    );
+    expect(block.done).toBe(true);
+  });
+
   it("SB-5: done for NON-active conversation clears blocks/roots but retains shell with isDone:true", () => {
     const store = useConversationStore();
     store.setActiveConversation(99); // different conversation is active

@@ -513,7 +513,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           // A "failed" status means the MCP server process didn't start or the in-process
           // bridge failed — this is the definitive signal that railyin tools won't be available.
           // Ref: https://code.claude.com/docs/en/agent-sdk/mcp#error-handling
-          for (const event of translateClaudeMessage(message as { type: string }, config.toolMetaByCallId)) {
+          for (const event of translateClaudeMessage(message as { type: string }, { toolMetaByCallId: config.toolMetaByCallId, worktreePath: config.workingDirectory })) {
             emit(event);
           }
         }

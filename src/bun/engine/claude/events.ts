@@ -11,6 +11,7 @@ interface ClaudeContentBlock {
   name?: string;  // tool_use blocks have a name
   input?: Record<string, unknown>;  // tool_use blocks have input
   tool_use_id?: string;  // tool_result blocks reference a tool_use_id
+  content?: string | Array<{ type: string; text?: string }>;
 }
 
 interface ClaudeAssistantMessage {
@@ -46,7 +47,12 @@ export interface ToolMetadata {
 
 type ClaudeSdkMessage = ClaudeAssistantMessage | ClaudeResultMessage | ClaudeSystemMessage | { type: string;[key: string]: unknown };
 
-export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCallId?: Map<string, ToolMetadata>): EngineEvent[] {
+export function translateClaudeMessage(
+  message: ClaudeSdkMessage,
+  options?: { toolMetaByCallId?: Map<string, ToolMetadata>; worktreePath?: string },
+): EngineEvent[] {
+  const toolMetaByCallId = options?.toolMetaByCallId;
+  const worktreePath = options?.worktreePath;
   const raw = message as Record<string, unknown>;
   // For system/init log the slash_commands list specifically; for everything else truncate
   if (raw["type"] === "system" && raw["subtype"] === "init") {
@@ -81,7 +87,7 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
             isInternal: isInternalClaudeToolName(block.name),
             display: COMMON_TOOL_NAMES.has(block.name)
               ? buildCommonToolDisplay(block.name, block.input ?? {})
-              : buildClaudeBuiltinDisplay(block.name, block.input ?? {}),
+              : buildClaudeBuiltinDisplay(block.name, block.input ?? {}, worktreePath),
           });
         }
       }
@@ -159,11 +165,29 @@ export function translateClaudeMessage(message: ClaudeSdkMessage, toolMetaByCall
           }
 
           // Emit tool_result event
+          const rawContent = block.content;
+          const normalizedContent: string = Array.isArray(rawContent)
+            ? (rawContent as Array<{ type: string; text?: string }>)
+                .filter((b) => b.type === "text" && typeof b.text === "string")
+                .map((b) => b.text as string)
+                .join("\n")
+            : (rawContent ?? "");
+
+          // Extract detailedContent from JSON envelope if present (common tools wrap results)
+          let detailedResult: string | undefined;
+          try {
+            const parsed = JSON.parse(normalizedContent);
+            if (parsed && typeof parsed.detailedContent === "string" && parsed.detailedContent) {
+              detailedResult = parsed.detailedContent;
+            }
+          } catch { /* not JSON envelope */ }
+
           events.push({
             type: "tool_result",
             callId: block.tool_use_id,
             name: toolName,
-            result: block.content ?? "",
+            result: normalizedContent,
+            detailedResult,
             isError: block.is_error ?? false,
             writtenFiles: extractWrittenFilesFromClaudeToolArgs(toolName, meta?.arguments),
           });
@@ -209,32 +233,44 @@ function extractWrittenFilesFromClaudeToolArgs(
   return undefined;
 }
 
-function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>): ToolCallDisplay {
+function stripWorktreePath(subject: string | undefined, worktreePath?: string): string | undefined {
+  if (!subject || !worktreePath) return subject;
+  const prefix = worktreePath.endsWith("/") ? worktreePath : worktreePath + "/";
+  if (subject.startsWith(prefix)) return subject.slice(prefix.length);
+  if (subject.startsWith(worktreePath)) return subject.slice(worktreePath.length).replace(/^\//, "");
+  return subject;
+}
+
+function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>, worktreePath?: string): ToolCallDisplay {
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name.toLowerCase()) {
     case "bash":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.command || input.cmd) || undefined, contentType: "terminal" };
+      return {
+        label: canonicalToolDisplayLabel(name),
+        subject: stripWorktreePath(str(input.command || input.cmd) || undefined, worktreePath),
+        contentType: "terminal",
+      };
     case "read":
       return {
         label: canonicalToolDisplayLabel(name),
-        subject: str(input.file_path || input.path) || undefined,
+        subject: stripWorktreePath(str(input.file_path || input.path) || undefined, worktreePath),
         contentType: "file",
         startLine: typeof input.start_line === "number" && input.start_line > 0 ? input.start_line : undefined,
       };
     case "write":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.file_path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.file_path) || undefined, worktreePath), contentType: "file" };
     case "edit":
     case "multiedit":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.file_path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.file_path) || undefined, worktreePath), contentType: "file" };
     case "glob":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.pattern) || undefined };
     case "grep":
     case "rg":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.pattern) || undefined };
     case "ls":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.path) || undefined, worktreePath) };
     case "view":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.path) || undefined, worktreePath), contentType: "file" };
     case "webfetch":
     case "web_fetch":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.url) || undefined };
@@ -245,7 +281,7 @@ function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>)
     case "apply_patch":
       return { label: canonicalToolDisplayLabel(name) };
     case "create":
-      return { label: canonicalToolDisplayLabel(name), subject: str(input.path || input.name) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(input.path || input.name) || undefined, worktreePath), contentType: "file" };
     case "skill":
       return { label: canonicalToolDisplayLabel(name), subject: str(input.name) || undefined };
     case "store_memory":

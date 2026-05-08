@@ -78,6 +78,34 @@ test.describe("CB — conversation body coverage", () => {
         const blocks = page.locator(".conv-body .rb, .conv-body .msg__bubble.streaming");
         await expect(blocks.nth(0)).toHaveClass(/rb/);
         await expect(blocks.nth(1)).toHaveClass(/streaming/);
+
+        // Reasoning bubble is open by default during streaming — content visible without clicking
+        await expect(page.locator(".rb__content")).toContainText("Thinking through the request");
+    });
+
+    test("CB-1b: reasoning bubble loaded from DB starts collapsed", async ({ page, api, task }) => {
+        api.handle("conversations.getMessages", () => ({
+            messages: [
+                {
+                    id: 9001,
+                    taskId: task.id,
+                    conversationId: task.id,
+                    type: "reasoning" as const,
+                    role: "assistant" as const,
+                    content: "Some persisted reasoning content",
+                    metadata: null,
+                    createdAt: new Date().toISOString(),
+                },
+            ],
+            hasMore: false,
+        }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".rb")).toBeVisible({ timeout: 3_000 });
+        // Persisted reasoning bubble starts collapsed — content NOT visible
+        await expect(page.locator(".rb__content")).not.toBeVisible();
     });
 
     test("CB-2: virtualized conversation only renders a subset of a long history at once", async ({ page, api, task }) => {
@@ -114,8 +142,8 @@ test.describe("CB — conversation body coverage", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        await expect(page.locator(".conv-body .tcg")).toHaveCount(1);
-        await expect(page.locator(".conv-body .tcg .tcg__tool-name")).toContainText("read_file");
+        await expect(page.locator(".conv-body .tc")).toHaveCount(1);
+        await expect(page.locator(".conv-body .tc .tc__tool-name")).toContainText("read_file");
         await expect(page.locator(".conv-body .msg--assistant")).toContainText("Tool output summarized");
         await expect(page.locator(".conv-body .msg--user")).toContainText("follow-up question");
     });

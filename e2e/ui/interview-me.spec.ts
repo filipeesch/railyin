@@ -277,7 +277,7 @@ test.describe("T-F — answered read-only state", () => {
         await openTaskDrawer(page, task.id);
 
         // Should show the answered read-only view, not the interactive form
-        await expect(page.locator(".interview--answered")).toBeVisible();
+        await expect(page.locator(".interview")).not.toBeVisible();
         await expect(page.locator(".interview__submit")).not.toBeVisible();
     });
 });
@@ -295,8 +295,8 @@ test.describe("T-G — answered detection with streaming", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        // Verify read-only
-        await expect(page.locator(".interview--answered")).toBeVisible();
+        // Verify read-only — form hidden because answered
+        await expect(page.locator(".interview")).not.toBeVisible();
 
         // Push a streaming event — should not un-answer the interview
         ws.pushStreamEvent({
@@ -312,8 +312,8 @@ test.describe("T-G — answered detection with streaming", () => {
             done: false,
         });
 
-        // Still read-only
-        await expect(page.locator(".interview--answered")).toBeVisible();
+        // Still read-only — form still hidden after streaming event
+        await expect(page.locator(".interview")).not.toBeVisible();
         await expect(page.locator(".interview__submit")).not.toBeVisible();
     });
 });
@@ -471,8 +471,8 @@ test.describe("T-J — streaming flow renders decision_request_prompt", () => {
         // Push the reply via WS so conversation re-renders in answered state
         ws.pushNewMessage(replyMsg);
 
-        // After submit + user message arrives, form should show answered (read-only) state
-        await expect(page.locator(".interview--answered")).toBeVisible({ timeout: 5000 });
+        // After submit + user message arrives, form should be hidden (answered state)
+        await expect(page.locator(".interview")).not.toBeVisible({ timeout: 5000 });
     });
 });
 

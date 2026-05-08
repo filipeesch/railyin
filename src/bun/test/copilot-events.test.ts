@@ -12,7 +12,7 @@ import type { EngineEvent } from "../engine/types.ts";
 async function collectEvents(session: MockCopilotSession): Promise<EngineEvent[]> {
   const sendPromise = session.send({ prompt: "test" });
   const events: EngineEvent[] = [];
-  for await (const event of translateCopilotStream(session, undefined, sendPromise)) {
+  for await (const event of translateCopilotStream(session, { sendPromise })) {
     events.push(event);
   }
   return events;
@@ -125,13 +125,13 @@ describe("Copilot watchdog heartbeat (Bug B)", () => {
 
     const gen = translateCopilotStream(
       session,
-      ctrl.signal,
-      sendPromise,
-      undefined,
-      undefined,
-      () => { heartbeatCount.value++; },
-      10, // idleTimeoutMs
-      3,
+      {
+        signal: ctrl.signal,
+        sendPromise,
+        onHeartbeat: () => { heartbeatCount.value++; },
+        idleTimeoutMs: 10,
+        maxSilenceCount: 3,
+      },
     );
 
     // Let the stream run for 35ms — should fire at least 2 heartbeats (every 10ms).
@@ -159,13 +159,13 @@ describe("Copilot watchdog heartbeat (Bug B)", () => {
 
     const gen = translateCopilotStream(
       session,
-      ctrl.signal,
-      sendPromise,
-      undefined,
-      undefined,
-      () => { heartbeatCount.value++; },
-      10,
-      3,
+      {
+        signal: ctrl.signal,
+        sendPromise,
+        onHeartbeat: () => { heartbeatCount.value++; },
+        idleTimeoutMs: 10,
+        maxSilenceCount: 3,
+      },
     );
 
     // Let the watchdog fire at least once while a tool is in flight.

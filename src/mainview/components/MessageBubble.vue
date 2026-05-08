@@ -5,9 +5,7 @@
   </div>
 
   <div v-else-if="chunk.type === 'user'" class="msg msg--user">
-    <div class="msg__bubble">
-      <InlineChipText :text="displayContent" />
-    </div>
+    <div class="msg__bubble prose" v-html="renderUserMd(displayContent)" />
     <div class="msg__meta">You</div>
   </div>
 
@@ -89,7 +87,7 @@ const chatStore = useChatStore();
 const taskStore = useTaskStore();
 const conversationStore = useConversationStore();
 
-const { renderMd } = useMarkdown();
+const { renderMd, renderUserMd } = useMarkdown();
 
 const displayContent = computed(() => props.chunk.content);
 const messageList = computed(() => conversationStore.messages);
