@@ -294,8 +294,9 @@ describe("PiEngine abort & cancel", () => {
     const gen = engine.execute({
       executionId: 1,
       taskId: null,
-      boardId: null,
+      boardId: undefined,
       conversationId: 101,
+      model: "lmstudio/qwen2.5-coder",
       workingDirectory: process.cwd(),
       prompt: "hello",
       signal: controller.signal,
@@ -366,8 +367,9 @@ describe("PiEngine abort & cancel", () => {
     const gen = engine.execute({
       executionId: 42,
       taskId: null,
-      boardId: null,
+      boardId: undefined,
       conversationId: 200,
+      model: "lmstudio/qwen2.5-coder",
       workingDirectory: process.cwd(),
       prompt: "hello",
       signal: controller.signal,

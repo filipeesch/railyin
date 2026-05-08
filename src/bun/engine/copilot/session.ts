@@ -125,7 +125,7 @@ type LoadedCopilotSession = {
   abort(): Promise<void>;
   disconnect(): Promise<void>;
   rpc: {
-    compaction: {
+    history: {
       compact(): Promise<unknown>;
     };
   };
@@ -289,7 +289,7 @@ class DefaultCopilotSdkSession implements CopilotSdkSession {
   }
 
   async compact(): Promise<void> {
-    await this.session.rpc.compaction.compact();
+    await this.session.rpc.history.compact();
   }
 
   disconnect(): Promise<void> {

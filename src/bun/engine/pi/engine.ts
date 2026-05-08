@@ -327,7 +327,7 @@ export class PiEngine implements ExecutionEngine {
     if (existing) {
       existing.agent.state.model = model as any;
       existing.agent.state.tools = tools as any;
-      existing.agent.state.thinkingLevel = "auto";
+      existing.agent.state.thinkingLevel = "low";
       if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
       return existing;
     }
@@ -376,7 +376,7 @@ export class PiEngine implements ExecutionEngine {
       authStorage,
     });
 
-    session.agent.state.thinkingLevel = "auto";
+    session.agent.state.thinkingLevel = "low";
 
     this.sessions.set(conversationId, session);
     return session;
