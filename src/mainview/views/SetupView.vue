@@ -51,15 +51,19 @@
               <InputText v-model="wsForm.name" placeholder="My Workspace" class="w-full" />
             </div>
             <div class="field">
-              <label>Engine</label>
-              <Select
-                v-model="wsForm.engineType"
-                :options="engineOptions"
-                option-label="label"
-                option-value="value"
-                class="w-full"
-                @change="onEngineTypeChange"
-              />
+              <label>Engines</label>
+              <div class="engine-checkbox-list">
+                <div v-for="engine in availableEngines" :key="engine.id" class="engine-checkbox-item">
+                  <Checkbox
+                    v-model="wsForm.allowedEngines"
+                    :value="engine.id"
+                    :inputId="`engine-${engine.id}`"
+                    @change="onAllowedEnginesChange"
+                  />
+                  <label :for="`engine-${engine.id}`">{{ engineLabel(engine) }}</label>
+                </div>
+                <small v-if="availableEngines.length === 0" class="field-hint">No engines configured in engines.yaml</small>
+              </div>
             </div>
             <div class="field">
               <label>Default model <span class="field-hint">(optional)</span></label>
@@ -303,6 +307,7 @@ import TabView from "primevue/tabview";
 import TabPanel from "primevue/tabpanel";
 import InputText from "primevue/inputtext";
 import Select from "primevue/select";
+import Checkbox from "primevue/checkbox";
 import Button from "primevue/button";
 import Message from "primevue/message";
 import Dialog from "primevue/dialog";
@@ -343,7 +348,7 @@ function onTabChange(event: { index: number }) {
 // ── Workspace settings form ──────────────────────────────────────────────────
 const wsForm = reactive({
   name: "",
-  engineType: "copilot" as "copilot" | "claude",
+  allowedEngines: [] as string[],
   engineModel: null as string | null,
   worktreeBasePath: "",
   workspacePath: "",
@@ -352,10 +357,17 @@ const wsSaving = ref(false);
 const wsSaveError = ref<string | null>(null);
 const wsSaveSuccess = ref(false);
 
-const engineOptions = [
-  { label: "GitHub Copilot", value: "copilot" },
-  { label: "Claude Code", value: "claude" },
-];
+const availableEngines = computed(() => workspaceStore.config?.availableEngines ?? []);
+
+const ENGINE_LABELS: Record<string, string> = {
+  copilot: "GitHub Copilot",
+  claude: "Claude Code",
+  opencode: "OpenCode",
+  pi: "Pi",
+};
+function engineLabel(engine: { id: string; type: string }): string {
+  return ENGINE_LABELS[engine.type] ?? engine.id;
+}
 
 const modelsLoading = ref(false);
 const modelsError = ref<string | null>(null);
@@ -389,11 +401,24 @@ const selectedModelOption = computed(() => {
 const browsingWorktreePath = ref(false);
 const browsingWorkspacePath = ref(false);
 
-async function loadModelsForEngine() {
+async function loadModelsForEngines(engineIds?: string[]) {
   modelsLoading.value = true;
   modelsError.value = null;
   try {
-    const providerLists = await api("models.list", { workspaceKey: workspaceStore.activeWorkspaceKey ?? undefined });
+    const workspaceKey = workspaceStore.activeWorkspaceKey ?? undefined;
+    let providerLists;
+    if (engineIds !== undefined) {
+      if (engineIds.length === 0) {
+        allModelsFlat.value = [];
+        return;
+      }
+      const results = await Promise.all(
+        engineIds.map((id) => api("models.list", { workspaceKey, engineType: id })),
+      );
+      providerLists = results.flat();
+    } else {
+      providerLists = await api("models.list", { workspaceKey });
+    }
     allModelsFlat.value = providerLists.flatMap((p) =>
       p.models.map((m): ModelInfo => ({ id: m.id, displayName: m.displayName ?? m.id, contextWindow: m.contextWindow })),
     );
@@ -409,15 +434,15 @@ function syncWsForm() {
   const cfg = workspaceStore.config;
   if (!cfg) return;
   wsForm.name = cfg.name ?? "";
-  wsForm.engineType = (cfg.engine?.type ?? "copilot") as "copilot" | "claude";
+  wsForm.allowedEngines = cfg.allowedEngines ?? [];
   wsForm.engineModel = cfg.engine?.model ?? null;
   wsForm.worktreeBasePath = cfg.worktreeBasePath ?? "";
   wsForm.workspacePath = cfg.workspacePath ?? "";
 }
 
-async function onEngineTypeChange() {
+async function onAllowedEnginesChange() {
   wsForm.engineModel = null;
-  await loadModelsForEngine();
+  await loadModelsForEngines(wsForm.allowedEngines);
 }
 
 async function browseWorkspacePath() {
@@ -447,11 +472,12 @@ async function saveWorkspaceSettings() {
   try {
     await workspaceStore.update({
       name: wsForm.name || undefined,
-      engineType: wsForm.engineType,
+      allowedEngines: wsForm.allowedEngines,
       engineModel: wsForm.engineModel ?? undefined,
       worktreeBasePath: wsForm.worktreeBasePath || undefined,
       workspacePath: wsForm.workspacePath || undefined,
     });
+    await loadModelsForEngines();
     wsSaveSuccess.value = true;
     setTimeout(() => { wsSaveSuccess.value = false; }, 3000);
   } catch (e) {
@@ -707,7 +733,7 @@ const visibleBoards = computed(() =>
 onMounted(async () => {
   await workspaceStore.loadWorkspaces();
   await Promise.all([projectStore.loadProjects(), boardStore.loadBoards(), workspaceStore.load()]);
-  await loadModelsForEngine();
+  await loadModelsForEngines();
   syncWsForm();
   if (!visibleProjects.value.length) activeTab.value = 1;
   else if (!visibleBoards.value.length) activeTab.value = BOARDS_TAB_INDEX;
@@ -722,7 +748,7 @@ watch(() => workspaceStore.config, () => { syncWsForm(); });
 watch(
   () => workspaceStore.activeWorkspaceKey,
   async () => {
-    await loadModelsForEngine();
+    await loadModelsForEngines();
     syncWsForm();
     // Clear per-project language scan cache when workspace changes
     projectLanguages.value = new Map();
@@ -791,6 +817,9 @@ async function goToBoard() {
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
 .field label { font-size: 0.85rem; font-weight: 500; }
 .field-hint { font-weight: 400; color: var(--p-text-muted-color, #94a3b8); }
+.engine-checkbox-list { display: flex; flex-direction: column; gap: 8px; }
+.engine-checkbox-item { display: flex; align-items: center; gap: 8px; }
+.engine-checkbox-item label { font-size: 0.9rem; font-weight: 400; cursor: pointer; }
 .field-error { font-size: 0.8rem; color: var(--p-red-500, #ef4444); }
 .setup-native-select {
   width: 100%; min-height: 2.5rem;

@@ -21,6 +21,7 @@ export function workspaceHandlers(db: Database) {
       const legacyAi = config.workspace.ai;
       const firstProvider = config.providers[0];
 
+      const allEngineIds = config.engines.map((e) => e.id);
       return {
         id: 0,
         key: config.workspaceKey,
@@ -45,9 +46,10 @@ export function workspaceHandlers(db: Database) {
         worktreeBasePath: config.workspace.worktree_base_path ?? "",
         enableThinking: config.workspace.anthropic?.enable_thinking ?? false,
         engine: {
-          type: config.engine.type as "copilot" | "claude",
           model: (config.engine as { model?: string }).model,
         },
+        availableEngines: config.engines.map((e) => ({ id: e.id, type: e.config.type })),
+        allowedEngines: config.allowedEngineIds ?? allEngineIds,
         lsp: config.workspace.lsp,
       };
     },
@@ -79,18 +81,24 @@ export function workspaceHandlers(db: Database) {
       return { key, name: params.name.trim() };
     },
 
-    "workspace.update": async (params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string; workspacePath?: string }): Promise<Record<string, never>> => {
+    "workspace.update": async (params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; engineModel?: string; worktreeBasePath?: string; workspacePath?: string }): Promise<Record<string, never>> => {
       resetConfig();
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const patch: Partial<WorkspaceYaml> = {};
       if (params.name !== undefined) patch.name = params.name;
       if (params.worktreeBasePath !== undefined) patch.worktree_base_path = params.worktreeBasePath;
       if (params.workspacePath !== undefined) patch.workspace_path = params.workspacePath;
-      if (params.engineType !== undefined || params.engineModel !== undefined) {
+      if (params.allowedEngines !== undefined) {
+        patch.allowed_engines = params.allowedEngines.length > 0 ? params.allowedEngines : undefined;
+      }
+      if (params.engineModel !== undefined) {
         const existing = getConfig(workspaceKey).engine;
+        const model = params.engineModel || undefined;
+        // Derive engine type from qualified model prefix (e.g. "copilot/gpt-4.1" → "copilot")
+        const derivedType = model?.includes("/") ? model.split("/")[0] : undefined;
         patch.engine = {
-          type: (params.engineType ?? existing.type) as "copilot" | "claude",
-          ...(params.engineModel ? { model: params.engineModel } : {}),
+          type: (derivedType ?? existing.type) as "copilot" | "claude",
+          ...(model ? { model } : {}),
         };
       }
       patchWorkspaceYaml(patch, workspaceKey);

@@ -103,22 +103,24 @@ describe("workspaceHandlers", () => {
     cleanupConfig = setupTestConfig().cleanup;
   });
 
-  it("workspace.getConfig returns engine type and model", async () => {
+  it("workspace.getConfig returns engine model and available engines", async () => {
     const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.getConfig"]({});
     expect(result.engine).toBeDefined();
-    expect(result.engine.type).toBe("copilot");
     expect(result.engine.model).toBe("copilot/mock-model");
+    expect(result.availableEngines).toBeDefined();
+    expect(result.allowedEngines).toBeDefined();
   });
 
-  it("workspace.update patches name and engine in workspace yaml", async () => {
+  it("workspace.update patches name and derives engine type from model prefix", async () => {
     const configDir = process.env.RAILYN_CONFIG_DIR!;
     const handlers = workspaceHandlers(db);
-    await handlers["workspace.update"]({ name: "Updated Workspace", engineType: "claude" });
+    await handlers["workspace.update"]({ name: "Updated Workspace", engineModel: "claude/claude-sonnet-4-6" });
     const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
     const parsed = yaml.load(raw) as Record<string, unknown>;
     expect(parsed.name).toBe("Updated Workspace");
     expect((parsed.engine as Record<string, unknown>).type).toBe("claude");
+    expect((parsed.engine as Record<string, unknown>).model).toBe("claude/claude-sonnet-4-6");
   });
 
   it("workspace.update deep-merges engine block (preserves type when only model is updated)", async () => {
