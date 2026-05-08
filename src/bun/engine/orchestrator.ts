@@ -59,10 +59,6 @@ export class Orchestrator implements ExecutionCoordinator {
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly onNewMessage: OnNewMessage;
 
-  // ─── listModels cache: deduplicate concurrent calls, cache for 30s ─────────
-  private readonly _listModelsCache = new Map<string, { result: EngineModelInfo[]; expiresAt: number }>();
-  private readonly _listModelsInFlight = new Map<string, Promise<EngineModelInfo[]>>();
-
   setOnStreamEvent(cb: OnStreamEvent): void {
     this.streamProcessor.setOnStreamEvent(cb);
   }
@@ -201,24 +197,8 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Model listing ─────────────────────────────────────────────────────────
 
-  async listModels(workspaceKey?: string, engineType?: string) {
+  async listModels(workspaceKey?: string, engineType?: string): Promise<EngineModelInfo[]> {
     const key = workspaceKey ?? getDefaultWorkspaceKey();
-
-    // Return cached result if still fresh
-    const cached = this._listModelsCache.get(key);
-    if (cached && Date.now() < cached.expiresAt) return cached.result;
-
-    // Deduplicate concurrent calls — return the in-flight promise if one exists
-    const inFlight = this._listModelsInFlight.get(key);
-    if (inFlight) return inFlight;
-
-    const promise = this._fetchModels(key, engineType);
-    this._listModelsInFlight.set(key, promise);
-    promise.finally(() => this._listModelsInFlight.delete(key));
-    return promise;
-  }
-
-  private async _fetchModels(key: string, engineType?: string): Promise<EngineModelInfo[]> {
     const config = getWorkspaceConfig(key);
 
     if (engineType) {
@@ -240,9 +220,7 @@ export class Orchestrator implements ExecutionCoordinator {
         });
       }),
     );
-    const result = results.flat();
-    this._listModelsCache.set(key, { result, expiresAt: Date.now() + 30_000 });
-    return result;
+    return results.flat();
   }
 
   // ─── Command listing ────────────────────────────────────────────────────────
