@@ -212,13 +212,13 @@ export class Orchestrator implements ExecutionCoordinator {
     const inFlight = this._listModelsInFlight.get(key);
     if (inFlight) return inFlight;
 
-    const promise = this._fetchModels(key);
+    const promise = this._fetchModels(key, engineType);
     this._listModelsInFlight.set(key, promise);
     promise.finally(() => this._listModelsInFlight.delete(key));
     return promise;
   }
 
-  private async _fetchModels(key: string): Promise<EngineModelInfo[]> {
+  private async _fetchModels(key: string, engineType?: string): Promise<EngineModelInfo[]> {
     const config = getWorkspaceConfig(key);
 
     if (engineType) {
