@@ -41,8 +41,7 @@ export class ChatExecutor {
       .prepare(`
         SELECT c.model, t.id as task_id, t.title, t.description,
                t.project_key, t.board_id, t.conversation_id as task_conv_id,
-               t.conversation_model, t.enabled_mcp_tools, t.execution_state,
-               t.created_at, t.updated_at
+               t.execution_state, t.created_at
         FROM conversations c
         LEFT JOIN tasks t ON t.id = c.task_id
         WHERE c.id = ?
