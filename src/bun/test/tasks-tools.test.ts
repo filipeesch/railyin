@@ -603,7 +603,7 @@ describe("executeCommonTool / create_todo", () => {
             { number: 10, title: "My todo", description: "Do the thing" },
             commonCtx(),
         );
-        const item = JSON.parse(result.text);
+        const item = JSON.parse(result.text).data;
         expect(item.title).toBe("My todo");
         expect(item.number).toBe(10);
         expect(item.phase).toBeNull();
@@ -615,7 +615,7 @@ describe("executeCommonTool / create_todo", () => {
             { number: 10, title: "Phased todo", description: "Do the thing", phase: "backlog" },
             commonCtx(),
         );
-        const item = JSON.parse(result.text);
+        const item = JSON.parse(result.text).data;
         expect(item.phase).toBe("backlog");
     });
 
@@ -646,14 +646,14 @@ describe("executeCommonTool / edit_todo", () => {
             "create_todo",
             { number: 10, title: "My todo", description: "Do it" },
             commonCtx(),
-        )).text);
+        )).text).data;
 
         const result = await executeCommonTool(
             "edit_todo",
             { id: created.id, phase: "in-progress" },
             commonCtx(),
         );
-        const item = JSON.parse(result.text);
+        const item = JSON.parse(result.text).data;
         expect(item.phase).toBe("in-progress");
     });
 
@@ -662,14 +662,14 @@ describe("executeCommonTool / edit_todo", () => {
             "create_todo",
             { number: 10, title: "My todo", description: "Do it", phase: "backlog" },
             commonCtx(),
-        )).text);
+        )).text).data;
 
         const result = await executeCommonTool(
             "edit_todo",
             { id: created.id, phase: "null" },
             commonCtx(),
         );
-        const item = JSON.parse(result.text);
+        const item = JSON.parse(result.text).data;
         expect(item.phase).toBeNull();
     });
 
@@ -678,14 +678,14 @@ describe("executeCommonTool / edit_todo", () => {
             "create_todo",
             { number: 10, title: "My todo", description: "Do it", phase: "backlog" },
             commonCtx(),
-        )).text);
+        )).text).data;
 
         const result = await executeCommonTool(
             "edit_todo",
             { id: created.id, title: "Updated title" },
             commonCtx(),
         );
-        const item = JSON.parse(result.text);
+        const item = JSON.parse(result.text).data;
         expect(item.phase).toBe("backlog");
     });
 });
@@ -706,7 +706,7 @@ describe("executeCommonTool / list_todos", () => {
         );
 
         const result = await executeCommonTool("list_todos", {}, commonCtx());
-        const items = JSON.parse(result.text);
+        const items = JSON.parse(result.text).data;
         expect(items).toHaveLength(2);
         expect(items.find((t: { title: string }) => t.title === "No phase").phase).toBeNull();
         expect(items.find((t: { title: string }) => t.title === "Backlog only").phase).toBe("backlog");

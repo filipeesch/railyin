@@ -357,7 +357,7 @@ export const useConversationStore = defineStore("conversation", () => {
         content: event.content,
         metadata: event.metadata,
         parentBlockId: event.parentBlockId ?? null,
-        done: true,
+        done: event.type !== "tool_call",
         children: [],
       };
       state.blocks.set(blockId, newBlock);

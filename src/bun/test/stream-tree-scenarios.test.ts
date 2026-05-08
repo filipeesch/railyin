@@ -230,20 +230,20 @@ describe("S-17 [stream-tree]: cancel mid-text flushes assistant block into tree"
 // parentBlockId propagation (reasoningBlockId + callStack):
 //   reasoning "pre"     → parentBlockId=null  (callStack=[])
 //   --- tool_start flushes reasoning as "pre-r1" with deterministic blockId ---
-//   tool_call "c1"      → parentBlockId="pre-r1" (reasoningBlockId set)
+//   tool_call "c1"      → parentBlockId=null  (parentCallId is null, no longer inherits reasoningBlockId)
 //   reasoning "in-tool" → parentBlockId="c1"  (callStack=["c1"])
-//   tool_result "c1"    → parentBlockId="pre-r1" (reasoningBlockId still set)
+//   tool_result "c1"    → parentBlockId=null  (parentCallId is null, no longer inherits reasoningBlockId)
 //   assistant           → parentBlockId=null  (reasoningBlockId cleared by token)
 //
-// DB:   [reasoning pre-r1 pBid=null, tool_call c1 pBid=pre-r1,
-//        reasoning r2 pBid="c1", tool_result c1, assistant t1]
-// Tree: roots=[pre-r1, t1]
-//       pre-r1.children=["c1"]
+// DB:   [reasoning pre-r1 pBid=null, tool_call c1 pBid=null,
+//        reasoning r2 pBid="c1", tool_result c1 pBid=null, assistant t1]
+// Tree: roots=[pre-r1, c1, t1]
+//       pre-r1.children=[]
 //       c1.children=["r2"]
 // ---------------------------------------------------------------------------
 
-describe("S-18 [stream-tree]: reasoning inside tool call hangs off tool block as child", () => {
-    it("roots=[pre-r1, t1]; pre-r1.children=[c1]; c1.children=[r2]", async () => {
+describe("S-18 [stream-tree]: tool call appears as sibling of reasoning bubble, not nested inside it", () => {
+    it("roots=[pre-r1, c1, t1]; pre-r1.children=[]; c1.children=[r2]", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptReasoning("pre-tool thinking"),
@@ -266,20 +266,20 @@ describe("S-18 [stream-tree]: reasoning inside tool call hangs off tool block as
         const r2 = `${executionId}-r2`;
         const t1 = `${executionId}-t1`;
 
-        // Root order: pre-tool reasoning bubble (with tool nested inside) → post-tool assistant
-        expect(tree.roots).toEqual([preR1, t1]);
+        // Root order: pre-tool reasoning, tool call as sibling, post-tool assistant
+        expect(tree.roots).toEqual([preR1, "c1", t1]);
 
-        // Pre-tool reasoning: root-level, tool nested as child
+        // Pre-tool reasoning: root-level, NO children (tool is no longer nested)
         const preR1Block = tree.blocks.get(preR1);
         expect(preR1Block).toBeDefined();
         expect(preR1Block!.type).toBe("reasoning");
         expect(preR1Block!.parentBlockId).toBeNull();
-        expect(preR1Block!.children).toEqual(["c1"]);
+        expect(preR1Block!.children).toEqual([]);
 
-        // Tool call block: child of pre-tool reasoning, has in-tool reasoning as child
+        // Tool call block: root-level (NOT child of reasoning)
         const c1Block = tree.blocks.get("c1");
         expect(c1Block).toBeDefined();
-        expect(c1Block!.parentBlockId).toBe(preR1);
+        expect(c1Block!.parentBlockId).toBeNull();
         expect(c1Block!.children).toEqual([r2]);
 
         // In-tool reasoning: child of c1

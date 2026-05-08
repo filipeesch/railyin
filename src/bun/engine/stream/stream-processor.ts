@@ -262,7 +262,7 @@ export class StreamProcessor {
             };
             convBuffer.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: toolCallMsg, metadata: toolMeta, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
-            const toolParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
+            const toolParentBlockId = event.parentCallId ?? null;
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false, subagentId: null });
             callStack.push(callId);
             break;
@@ -297,7 +297,7 @@ export class StreamProcessor {
             const resultCallId = event.callId ?? (resultMsgRow?.id.toString() ?? "");
             const stackIdx = callStack.lastIndexOf(resultCallId);
             if (stackIdx !== -1) callStack.splice(stackIdx, 1);
-            const resultParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
+            const resultParentBlockId = event.parentCallId ?? null;
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: resultCallId, type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), parentBlockId: resultParentBlockId, done: false, subagentId: null });
 
             if (!event.isError && event.callId) {

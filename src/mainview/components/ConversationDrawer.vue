@@ -16,23 +16,26 @@
     :dismissable="false"
     :show-close-icon="false"
     @hide="onHide"
+    @after-show="onAfterShow"
   >
     <!-- Suppress PrimeVue's default header completely -->
     <template #header></template>
 
     <TaskChatView
       v-if="drawerStore.mode === 'task' && drawerStore.taskId != null"
+      ref="activeChatRef"
       :task-id="drawerStore.taskId"
     />
     <SessionChatView
       v-else-if="drawerStore.mode === 'session' && drawerStore.sessionId != null"
+      ref="activeChatRef"
       :session-id="drawerStore.sessionId"
     />
   </Drawer>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import Drawer from "primevue/drawer";
 import TaskChatView from "./TaskChatView.vue";
 import SessionChatView from "./SessionChatView.vue";
@@ -43,6 +46,9 @@ import { useChatStore } from "../stores/chat";
 const drawerStore = useDrawerStore();
 const taskStore = useTaskStore();
 const chatStore = useChatStore();
+
+type ChatViewInstance = { scrollToBottom: () => void; scheduleScrollToBottomIfAuto?: () => void };
+const activeChatRef = ref<ChatViewInstance | null>(null);
 
 const open = computed({
   get: () => drawerStore.mode !== null,
@@ -59,6 +65,10 @@ function onHide() {
   if (drawerStore.mode === "task") taskStore.closeTask();
   else if (drawerStore.mode === "session") chatStore.closeSession();
   drawerStore.close();
+}
+
+function onAfterShow() {
+  activeChatRef.value?.scheduleScrollToBottomIfAuto?.();
 }
 
 // ─── Resize logic ─────────────────────────────────────────────────────────────

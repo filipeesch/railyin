@@ -4,7 +4,7 @@
       <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right', 'rb__chevron']" />
       <i :class="['pi', 'pi-microchip-ai', 'rb__icon', streaming && 'rb__icon--pulse']" />
       <span class="rb__label">
-        <span v-if="streaming" class="rb__thinking">Thinking…</span>
+        <span v-if="streaming" class="rb__thinking">Reasoning…</span>
         <span v-else>Reasoned</span>
       </span>
     </button>
@@ -16,24 +16,65 @@
   </div>
 </template>
 
+<script lang="ts">
+// Module-level: shared across all ReasoningBubble instances in the app.
+// When a streaming bubble unmounts while open (store reload after done), the
+// next bubble mounted within a short window starts open instead of collapsed,
+// and its scroll position is restored to match the old bubble's position.
+let _recentFlag = false;
+let _recentScrollTop = 0;
+let _recentTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function markRecentOpen(scrollTop: number) {
+  if (_recentTimer) clearTimeout(_recentTimer);
+  _recentFlag = true;
+  _recentScrollTop = scrollTop;
+  _recentTimer = setTimeout(() => { _recentFlag = false; _recentTimer = null; }, 3000);
+}
+
+export function consumeRecentOpen(): number | false {
+  if (!_recentFlag) return false;
+  const top = _recentScrollTop;
+  _recentFlag = false;
+  _recentScrollTop = 0;
+  if (_recentTimer) { clearTimeout(_recentTimer); _recentTimer = null; }
+  return top;
+}
+</script>
+
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 
 const props = defineProps<{
   content: string;
   streaming: boolean;
 }>();
 
-// Auto-expand while streaming, auto-collapse when streaming ends
+// Start open if streaming now. The "stay open after done" path is handled
+// in onMounted below (must run after the old streaming component unmounts).
 const open = ref(props.streaming);
+// Track whether this instance was ever streaming so we can mark the flag on unmount.
+const wasStreaming = ref(props.streaming);
 
-watch(
-  () => props.streaming,
-  (active) => {
-    if (active) open.value = true;
-    else open.value = false;
-  },
-);
+watch(() => props.streaming, (v) => { if (v) wasStreaming.value = true; });
+
+onMounted(() => {
+  // Vue 3 mounts new nodes before unmounting old ones in the same patch cycle.
+  // onMounted runs in post-flush — after all onUnmounted hooks from the same
+  // update have fired. So we can safely consume the flag set by markRecentOpen().
+  const savedScrollTop = consumeRecentOpen();
+  if (!open.value && savedScrollTop !== false) {
+    open.value = true;
+    // Restore scroll position after the body renders (v-if needs one tick).
+    void nextTick(() => {
+      if (bodyEl.value && savedScrollTop > 0) bodyEl.value.scrollTop = savedScrollTop;
+    });
+  }
+});
+
+onUnmounted(() => {
+  if (wasStreaming.value && open.value) markRecentOpen(bodyEl.value?.scrollTop ?? 0);
+});
 
 function toggle() {
   open.value = !open.value;

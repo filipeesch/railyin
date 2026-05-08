@@ -219,7 +219,7 @@ test.describe("S — mixed scenario rendering", () => {
         ));
         ws.pushStreamEvent(mkEvent(task.id, S_EXEC, 2, "text_chunk", "final text", { blockId: `${S_EXEC}-t` }));
 
-        await expect(page.locator(".tcg")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".tc")).toBeVisible({ timeout: 3_000 });
         await expect(page.locator(".msg__bubble.streaming")).toBeVisible({ timeout: 3_000 });
     });
 
@@ -257,18 +257,19 @@ test.describe("N — streaming granularity and nesting", () => {
         await expect(page.locator(".rb__content")).toContainText("chunk1 chunk2");
     });
 
-    test("T-48: reasoning bubble auto-opens during streaming, auto-closes after done", async ({ page, ws, task }) => {
+    test("T-48: reasoning bubble starts open during streaming; stays open (no auto-collapse) after done", async ({ page, ws, task }) => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
         ws.pushStreamEvent(mkEvent(task.id, N_EXEC, 0, "reasoning_chunk", "thinking...", { blockId: `${N_EXEC}-r` }));
 
-        // Should be open (expanded) while pulsing
+        // Bubble is open by default while streaming — content visible without clicking
         await expect(page.locator(".rb__icon--pulse")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".rb__content")).toContainText("thinking...");
 
         ws.pushDone(task.id, N_EXEC, 99);
 
-        // After done, pulse stops (bubble may collapse)
+        // After done, pulse stops
         await expect(page.locator(".rb__icon--pulse")).not.toBeVisible({ timeout: 3_000 });
     });
 
@@ -290,11 +291,11 @@ test.describe("N — streaming granularity and nesting", () => {
             { blockId: childId, parentBlockId: parentId },
         ));
 
-        await expect(page.locator(".tcg")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".tc")).toBeVisible({ timeout: 3_000 });
         // Expand the parent
-        await page.locator(".tcg > .tcg__header").first().click();
+        await page.locator(".tc > .tc__header").first().click();
 
-        await expect(page.locator(".tcg .tcg__children > .tcg")).toBeVisible({ timeout: 2_000 });
+        await expect(page.locator(".tc .tcg__children > .tc")).toBeVisible({ timeout: 2_000 });
     });
 
     test("T-53: text_chunk streams word-by-word — DOM content grows after each inject", async ({ page, ws, task }) => {
@@ -333,9 +334,9 @@ test.describe("Q — sequential and interleaving order", () => {
             { blockId: `${Q_EXEC}-tc2` },
         ));
 
-        await expect(page.locator(".conversation-inner .tcg")).toHaveCount(2, { timeout: 3_000 });
+        await expect(page.locator(".conversation-inner .tc")).toHaveCount(2, { timeout: 3_000 });
 
-        const names = await page.locator(".conversation-inner .tcg .tcg__tool-name").allTextContents();
+        const names = await page.locator(".conversation-inner .tc .tc__tool-name").allTextContents();
         expect(names.map((n) => n.trim())).toEqual(["read_file", "read_file"]);
     });
 
@@ -351,7 +352,7 @@ test.describe("Q — sequential and interleaving order", () => {
         ));
         ws.pushStreamEvent(mkEvent(task.id, Q_EXEC, 2, "text_chunk", "text after tool", { blockId: `${Q_EXEC}-t1` }));
 
-        await expect(page.locator(".tcg")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".tc")).toBeVisible({ timeout: 3_000 });
         await expect(page.locator(".msg__bubble.streaming")).toBeVisible();
     });
 
@@ -367,7 +368,7 @@ test.describe("Q — sequential and interleaving order", () => {
                 { blockId: `${Q_EXEC}-tc${i}` },
             ));
             // Each tool should be visible before next arrives
-            await expect(page.locator(".conversation-inner .tcg")).toHaveCount(i + 1, { timeout: 2_000 });
+            await expect(page.locator(".conversation-inner .tc")).toHaveCount(i + 1, { timeout: 2_000 });
         }
     });
 });

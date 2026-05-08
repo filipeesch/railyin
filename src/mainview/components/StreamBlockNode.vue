@@ -33,31 +33,22 @@
     </div>
 
     <!-- Tool call (collapsible with children inside) -->
-    <div v-else-if="block.type === 'tool_call'" class="tcg">
-      <button class="tcg__header" @click="open = !open">
-        <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right', 'tcg__chevron']" />
-        <i :class="['pi', toolStatusIcon, 'tcg__tool-icon']" :style="toolStatusStyle" />
-        <code class="tcg__tool-name">{{ toolDisplay?.label }}</code>
-        <span v-if="toolPrimaryArg" class="tcg__primary-arg" :title="fullSubject">{{ toolPrimaryArg }}</span>
-        <span v-if="block.children.length > 0" class="tcg__badge">
-          <i class="pi pi-sitemap tcg__badge-icon" />
-          {{ block.children.length }}
-        </span>
-      </button>
-      <div v-if="open" :class="['tcg__body', (toolDisplay?.contentType === 'file' && !hasFileDiffChildren) ? 'tcg__body--flush' : '']">
-        <ReadView v-if="toolDisplay?.contentType === 'file' && !hasFileDiffChildren && toolResultContent" :content="toolResultContent" :startLine="toolDisplay?.startLine" />
-        <pre v-else-if="!hasFileDiffChildren && toolResultContent" class="tcg__output">{{ toolResultTruncated }}</pre>
-        <div v-if="block.children.length > 0" class="tcg__children">
+    <ToolCallBlock
+      v-else-if="block.type === 'tool_call'"
+      v-bind="streamToolCallProps"
+    >
+      <template v-if="nonDiffChildIds.length > 0" #children>
+        <div class="tcg__children">
           <StreamBlockNode
-            v-for="childId in block.children"
+            v-for="childId in nonDiffChildIds"
             :key="childId"
             :blockId="childId"
             :blocks="blocks"
             :renderMd="renderMd"
           />
         </div>
-      </div>
-    </div>
+      </template>
+    </ToolCallBlock>
 
     <!-- Tool result — skip rendering at root level; shown inside tool_call body -->
     <!-- If orphaned at root (no matching tool_call parent), render as collapsed output -->
@@ -87,7 +78,7 @@
 
     <!-- User message -->
     <div v-else-if="block.type === 'user'" class="msg msg--user">
-      <div class="msg__bubble prose" v-html="renderMd(block.content)" />
+      <div class="msg__bubble prose" v-html="renderUserMd(block.content)" />
     </div>
 
     <!-- Children for non-tool, non-reasoning blocks (those render children in their own body) -->
@@ -105,13 +96,14 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { FileDiffPayload, Hunk, ToolCallDisplay } from "@shared/rpc-types";
+import type { FileDiffPayload, Hunk } from "@shared/rpc-types";
 import type { StreamBlock } from "../stores/conversation";
-import { formatToolSubject, parseToolCallDisplay } from "../utils/toolCallDisplay";
+import { parseToolCallDisplay } from "../utils/toolCallDisplay";
 import { useTypewriter } from "../composables/useTypewriter";
+import { useMarkdown } from "../composables/useMarkdown";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import FileDiff from "./FileDiff.vue";
-import ReadView from "./ReadView.vue";
+import ToolCallBlock, { type ToolCallProps } from "./ToolCallBlock.vue";
 
 const props = defineProps<{
   blockId: string;
@@ -128,11 +120,11 @@ const block = computed(() => {
 
 // Typewriter animation for live streaming blocks only.
 // isLive is captured at component mount: blocks already done at mount (history) skip animation.
-const isLiveBlock = computed(() => block.value != null && !block.value.done);
 const blockContent = computed(() => block.value?.content ?? "");
 const blockDone = computed(() => block.value?.done ?? true);
 const isLiveAtMount = !!(props.blocks.get(props.blockId) && !props.blocks.get(props.blockId)!.done);
 const { displayed: displayedContent } = useTypewriter(blockContent, blockDone, isLiveAtMount);
+const { renderUserMd } = useMarkdown();
 
 const fileDiffPayload = computed<FileDiffPayload | null>(() => {
   const b = block.value;
@@ -148,81 +140,63 @@ const fileDiffPayload = computed<FileDiffPayload | null>(() => {
   }
 });
 
-// Tool call helpers
-const parsedToolCall = computed(() => {
-  const b = block.value;
-  if (!b || b.type !== "tool_call") {
-    return {
-      display: undefined as ToolCallDisplay | undefined,
-    };
-  }
-  return { display: parseToolCallDisplay(b.content) };
-});
-
-const toolDisplay = computed(() => parsedToolCall.value.display);
-
-const toolPrimaryArg = computed(() => {
-  const s = fullSubject.value;
-  return formatToolSubject(s, 80);
-});
-
-const fullSubject = computed(() => toolDisplay.value?.subject ?? "");
-
-// Find the matching tool_result (same blockId in the parent's children or roots)
-const toolResultBlock = computed(() => {
-  const b = block.value;
-  if (!b || b.type !== "tool_call") return null;
-  // tool_result with the same blockId would have been skipped by the store (duplicate blockId).
-  // Instead, search siblings for a tool_result block referencing this tool's callId.
-  // The tool_result blockId equals the callId in the orchestrator.
-  // Since both share the same blockId, the store skips the second one.
-  // Check the block's metadata for result info instead.
-  const meta = b.metadata ? tryParseJson(b.metadata) : null;
-  if (meta?.hasResult) return meta;
-  return null;
-});
-
-const toolResultContent = computed(() => {
-  const r = toolResultBlock.value;
-  // Store already extracts plain text from the JSON envelope
-  return r?.resultContent ?? "";
-});
-
-const toolResultTruncated = computed(() => truncate(toolResultContent.value));
-
-const toolHasResult = computed(() => {
-  const b = block.value;
-  if (!b) return false;
-  // tool_result overwrites the tool_call in the block map if same blockId,
-  // but our store skips duplicates. Check metadata or done flag.
-  return b.done;
-});
-
-// True when at least one child block is a file_diff — those already render
-// FileDiff directly, so the ReadView / pre fallback should be suppressed.
-const hasFileDiffChildren = computed(() => {
-  const b = block.value;
-  if (!b) return false;
-  return b.children.some((id) => props.blocks.get(id)?.type === "file_diff");
-});
-
-const toolStatusIcon = computed(() => {
-  if (!toolHasResult.value) return "pi-spin pi-spinner";
-  return "pi-check-circle";
-});
-
-const toolStatusStyle = computed(() => {
-  if (!toolHasResult.value) return undefined;
-  return { color: "#16a34a" };
-});
+function tryParseJson(s: string): Record<string, unknown> | null {
+  try { return JSON.parse(s); } catch { return null; }
+}
 
 function truncate(text: string, max = 800): string {
   return text.length > max ? text.slice(0, max) + "\n…[truncated]" : text;
 }
 
-function tryParseJson(s: string): Record<string, unknown> | null {
-  try { return JSON.parse(s); } catch { return null; }
-}
+// Build ToolCallProps for the shared ToolCallBlock component
+const streamToolCallProps = computed((): ToolCallProps => {
+  const b = block.value;
+  const display = b ? parseToolCallDisplay(b.content) : undefined;
+  const meta = b?.metadata ? tryParseJson(b.metadata) : null;
+  const resultContent: string = (meta?.resultContent as string) ?? "";
+  const hasResult = b?.done ?? false;
+
+  const fileDiffChildBlocks = b
+    ? b.children
+        .map((id) => props.blocks.get(id))
+        .filter((child): child is StreamBlock => child?.type === "file_diff")
+    : [];
+
+  const diffPayloads: FileDiffPayload[] | undefined =
+    fileDiffChildBlocks.length > 0
+      ? fileDiffChildBlocks.flatMap((child) => {
+          try {
+            const parsed = JSON.parse(child.content) as FileDiffPayload & { rawDiff?: string };
+            if (typeof parsed.rawDiff === "string") {
+              return [parseUnifiedDiff(parsed.rawDiff, parsed.path, parsed.operation)];
+            }
+            return [parsed as FileDiffPayload];
+          } catch {
+            return [];
+          }
+        })
+      : undefined;
+
+  const hasFileDiffChildren = fileDiffChildBlocks.length > 0;
+
+  return {
+    callId: b?.blockId ?? "",
+    label: display?.label ?? "tool",
+    subject: display?.subject,
+    contentType: hasFileDiffChildren ? undefined : display?.contentType,
+    startLine: display?.startLine,
+    status: hasResult ? "done" : "pending",
+    result: hasFileDiffChildren ? undefined : (resultContent || undefined),
+    diffPayloads,
+    children: [],
+  };
+});
+
+const nonDiffChildIds = computed(() => {
+  const b = block.value;
+  if (!b) return [];
+  return b.children.filter((id) => props.blocks.get(id)?.type !== "file_diff");
+});
 
 function parseUnifiedDiff(
   diffText: string,
