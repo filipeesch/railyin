@@ -78,16 +78,14 @@ test.describe("W — workspace settings", () => {
         expect(updateCalls[0]).toMatchObject({ name: "Renamed Workspace" });
     });
 
-    test("W-3: engine selector shows copilot and claude options", async ({ page, api }) => {
+    test("W-3: engine checkbox list shows copilot and claude", async ({ page, api }) => {
         api.returns("models.list", MODELS);
         await goToSetup(page, api);
         await page.getByRole("tab", { name: "Workspace" }).click();
 
-        const engineSelect = page.locator(".setup-section .p-select").first();
-        await engineSelect.click();
-        const options = page.locator(".p-select-overlay .p-select-option");
-        await expect(options.filter({ hasText: /copilot/i })).toBeVisible();
-        await expect(options.filter({ hasText: /claude/i })).toBeVisible();
+        const checkboxItems = page.locator(".engine-checkbox-item");
+        await expect(checkboxItems.filter({ hasText: /copilot/i })).toBeVisible();
+        await expect(checkboxItems.filter({ hasText: /claude/i })).toBeVisible();
     });
 
     test("W-4: model dropdown is populated from models.list", async ({ page, api }) => {
@@ -95,28 +93,29 @@ test.describe("W — workspace settings", () => {
         await goToSetup(page, api);
         await page.getByRole("tab", { name: "Workspace" }).click();
 
-        // Find the model select (second select in the section)
-        const modelSelect = page.locator(".setup-section .p-select").nth(1);
+        const modelSelect = page.locator(".setup-section .p-select").first();
         await modelSelect.click();
         const options = page.locator(".p-select-overlay .p-select-option");
         await expect(options.filter({ hasText: /gpt-4\.1/i })).toBeVisible();
         await expect(options.filter({ hasText: /gpt-4o/i })).toBeVisible();
     });
 
-    test("W-5: changing engine type clears model and re-fetches", async ({ page, api }) => {
+    test("W-5: unchecking an engine clears model and updates allowedEngines on save", async ({ page, api }) => {
         api.returns("models.list", MODELS);
         const updateCalls = api.capture("workspace.update", {});
         await goToSetup(page, api);
         await page.getByRole("tab", { name: "Workspace" }).click();
 
-        // Switch engine to claude
-        const engineSelect = page.locator(".setup-section .p-select").first();
-        await engineSelect.click();
-        await page.locator(".p-select-overlay .p-select-option").filter({ hasText: /claude/i }).click();
+        // Uncheck copilot to leave only claude allowed
+        const copilotCheckbox = page.locator(".engine-checkbox-item").filter({ hasText: /copilot/i }).locator(".p-checkbox-input");
+        await copilotCheckbox.click();
 
         await page.getByRole("button", { name: /save settings/i }).click();
         await expect(page.locator(".p-message-success")).toBeVisible({ timeout: 3_000 });
-        expect(updateCalls.some(c => (c as { engineType?: string }).engineType === "claude")).toBe(true);
+        expect(updateCalls.some(c => {
+            const call = c as { allowedEngines?: string[] };
+            return Array.isArray(call.allowedEngines) && !call.allowedEngines.includes("copilot");
+        })).toBe(true);
     });
 });
 

@@ -11,7 +11,7 @@ function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinat
 export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator | null) {
   return {
     // ─── models.list ─────────────────────────────────────────────────────────
-    "models.list": async (params: { workspaceKey?: string } = {}): Promise<ProviderModelList[]> => {
+    "models.list": async (params: { workspaceKey?: string; engineType?: string } = {}): Promise<ProviderModelList[]> => {
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const coord = requireOrchestrator(orchestrator);
 
@@ -25,7 +25,7 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
       );
 
       try {
-        const engineModels = await coord.listModels(workspaceKey);
+        const engineModels = await coord.listModels(workspaceKey, params.engineType);
         const byProvider = new Map<string, typeof engineModels>();
         for (const model of engineModels) {
           if (model.qualifiedId == null) continue;
