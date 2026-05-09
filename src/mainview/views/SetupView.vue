@@ -68,7 +68,7 @@
             <div class="field">
               <label>Default model <span class="field-hint">(optional)</span></label>
               <Select
-                v-model="wsForm.engineModel"
+                v-model="wsForm.defaultModel"
                 :options="groupedModels"
                 optionGroupLabel="label"
                 optionGroupChildren="items"
@@ -349,7 +349,7 @@ function onTabChange(event: { index: number }) {
 const wsForm = reactive({
   name: "",
   allowedEngines: [] as string[],
-  engineModel: null as string | null,
+  defaultModel: null as string | null,
   worktreeBasePath: "",
   workspacePath: "",
 });
@@ -392,7 +392,7 @@ const groupedModels = computed(() => {
 
 const selectedModelOption = computed(() => {
   for (const group of groupedModels.value) {
-    const found = group.items.find((item) => item.id === wsForm.engineModel);
+    const found = group.items.find((item) => item.id === wsForm.defaultModel);
     if (found) return found;
   }
   return null;
@@ -435,13 +435,13 @@ function syncWsForm() {
   if (!cfg) return;
   wsForm.name = cfg.name ?? "";
   wsForm.allowedEngines = cfg.allowedEngines ?? [];
-  wsForm.engineModel = cfg.engine?.model ?? null;
+  wsForm.defaultModel = cfg.defaultModel ?? null;
   wsForm.worktreeBasePath = cfg.worktreeBasePath ?? "";
   wsForm.workspacePath = cfg.workspacePath ?? "";
 }
 
 async function onAllowedEnginesChange() {
-  wsForm.engineModel = null;
+  wsForm.defaultModel = null;
   await loadModelsForEngines(wsForm.allowedEngines);
 }
 
@@ -473,7 +473,7 @@ async function saveWorkspaceSettings() {
     await workspaceStore.update({
       name: wsForm.name || undefined,
       allowedEngines: wsForm.allowedEngines,
-      engineModel: wsForm.engineModel ?? undefined,
+      defaultModel: wsForm.defaultModel ?? undefined,
       worktreeBasePath: wsForm.worktreeBasePath || undefined,
       workspacePath: wsForm.workspacePath || undefined,
     });

@@ -52,9 +52,7 @@ function writeTestConfig(runtimeDir: string) {
     writeFileSync(join(workspaceDir, "workspace.test.yaml"), `
 name: Test Workspace
 workspace_path: ${runtimeDir}
-engine:
-  type: copilot
-  model: copilot/mock-model
+default_model: copilot/mock-model
 projects:
   - key: test-ws
     name: Test Project
@@ -64,6 +62,8 @@ projects:
 worktree_base_path: ${join(workspaceDir, "worktrees")}
 enableThinking: false
 `);
+
+    writeFileSync(join(workspaceDir, "engines.yaml"), `engines:\n  - id: copilot\n    type: copilot\n`);
 
     writeFileSync(join(workspaceDir, "workflows", "default.yaml"), `
 id: default

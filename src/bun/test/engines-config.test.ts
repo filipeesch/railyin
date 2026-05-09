@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { setupTestConfig, initDb } from "./helpers.ts";
-import { resetConfig } from "../config/index.ts";
+import { loadConfig, resetConfig } from "../config/index.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 
 let cleanup: (() => void) | undefined;
@@ -14,6 +17,38 @@ afterEach(() => {
   cleanup = undefined;
   resetConfig();
 });
+
+// ─── Local helper for low-level error-path tests ──────────────────────────────
+
+function makeConfigDir(workspaceYaml: string, enginesYaml?: string): { configDir: string; cleanup: () => void } {
+  const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-ec-"));
+  const workspacePath = join(configDir, "workspace");
+  mkdirSync(join(workspacePath, "test-project"), { recursive: true });
+
+  writeFileSync(
+    join(configDir, "workspace.test.yaml"),
+    workspaceYaml.replace("{{workspacePath}}", workspacePath),
+  );
+  if (enginesYaml !== undefined) {
+    writeFileSync(join(configDir, "engines.yaml"), enginesYaml);
+  }
+
+  process.env.RAILYN_DB = ":memory:";
+  process.env.RAILYN_CONFIG_DIR = configDir;
+  resetConfig();
+
+  return {
+    configDir,
+    cleanup: () => {
+      rmSync(configDir, { recursive: true, force: true });
+      delete process.env.RAILYN_CONFIG_DIR;
+      delete process.env.RAILYN_DB;
+      resetConfig();
+    },
+  };
+}
+
+// ─── engines.yaml loading ─────────────────────────────────────────────────────
 
 describe("engines-config loading", () => {
   it("EC-1: 3 engines loaded from engines.yaml", () => {
@@ -57,33 +92,6 @@ engines:
     expect(config.engines[0].id).toBe("claude");
   });
 
-  it("EC-3: no engines.yaml → falls back to workspace.yaml engine block", () => {
-    const result = setupTestConfig();
-    cleanup = result.cleanup;
-
-    const config = getWorkspaceConfig(getDefaultWorkspaceKey());
-    expect(config.engines).toHaveLength(1);
-    expect(config.engines[0].id).toBe("copilot");
-  });
-
-  it("EC-4: both files → engines.yaml wins (engine in workspace.yaml is ignored)", () => {
-    const enginesYaml = `
-engines:
-  - id: claude
-    type: claude
-    model: claude/claude-sonnet-4-5
-`.trimStart();
-
-    // workspace.yaml will have engine: copilot (default from setupTestConfig)
-    const result = setupTestConfig("", undefined, [], "copilot/gpt-4.1", [], enginesYaml);
-    cleanup = result.cleanup;
-
-    const config = getWorkspaceConfig(getDefaultWorkspaceKey());
-    // engines.yaml takes precedence: only claude engine is present
-    expect(config.engines).toHaveLength(1);
-    expect(config.engines[0].id).toBe("claude");
-  });
-
   it("EC-5: allowed_engines filters available engines", () => {
     const enginesYaml = `
 engines:
@@ -118,31 +126,94 @@ engines:
     const config = getWorkspaceConfig(getDefaultWorkspaceKey());
     expect(config.allowedEngineIds).toBeNull();
   });
+});
 
-  it("EC-7: engines.yaml with only invalid entries (missing id/type) → falls back to workspace engine", () => {
-    const enginesYaml = `
-engines:
-  - model: copilot/gpt-4.1
-`.trimStart();
+// ─── error paths ─────────────────────────────────────────────────────────────
 
-    const result = setupTestConfig("", undefined, [], "copilot/gpt-4.1", [], enginesYaml);
-    cleanup = result.cleanup;
+describe("engines-config error paths", () => {
+  it("EC-ERR-1: workspace.yaml with engine: block → loadConfig returns non-null error with migration hint", () => {
+    cleanup = makeConfigDir(
+      [
+        "name: test",
+        "engine:",
+        "  type: copilot",
+        "  model: copilot/gpt-4.1",
+        "workspace_path: {{workspacePath}}",
+        "projects:",
+        "  - key: test-project",
+        "    name: Test Project",
+        "    project_path: test-project",
+        "    git_root_path: test-project",
+        "    default_branch: main",
+      ].join("\n"),
+      "engines:\n  - id: copilot\n    type: copilot\n",
+    ).cleanup;
 
-    const config = getWorkspaceConfig(getDefaultWorkspaceKey());
-    // Falls back to workspace.yaml engine block (copilot)
-    expect(config.engines).toHaveLength(1);
-    expect(config.engines[0].id).toBe("copilot");
+    const { config, error } = loadConfig();
+    expect(error).not.toBeNull();
+    expect(error).toContain("engine: block is no longer supported");
+    expect(config).toBeNull();
   });
 
-  it("EC-8: engines.yaml with empty engines list → falls back to workspace engine", () => {
-    const enginesYaml = `engines: []\n`;
+  it("EC-ERR-3: engines.yaml with zero valid entries → loadConfig returns non-null error", () => {
+    cleanup = makeConfigDir(
+      [
+        "name: test",
+        "workspace_path: {{workspacePath}}",
+        "projects:",
+        "  - key: test-project",
+        "    name: Test Project",
+        "    project_path: test-project",
+        "    git_root_path: test-project",
+        "    default_branch: main",
+      ].join("\n"),
+      "engines: []\n",
+    ).cleanup;
 
-    const result = setupTestConfig("", undefined, [], "copilot/gpt-4.1", [], enginesYaml);
+    const { config, error } = loadConfig();
+    expect(error).not.toBeNull();
+    expect(error).toContain("engines.yaml");
+    expect(config).toBeNull();
+  });
+
+  it("EC-ERR-3b: engines.yaml with only invalid entries (missing id/type) → loadConfig returns non-null error", () => {
+    cleanup = makeConfigDir(
+      [
+        "name: test",
+        "workspace_path: {{workspacePath}}",
+        "projects:",
+        "  - key: test-project",
+        "    name: Test Project",
+        "    project_path: test-project",
+        "    git_root_path: test-project",
+        "    default_branch: main",
+      ].join("\n"),
+      "engines:\n  - model: copilot/gpt-4.1\n",
+    ).cleanup;
+
+    const { config, error } = loadConfig();
+    expect(error).not.toBeNull();
+    expect(error).toContain("engines.yaml");
+    expect(config).toBeNull();
+  });
+});
+
+// ─── defaultModel resolution ──────────────────────────────────────────────────
+
+describe("defaultModel resolution", () => {
+  it("EC-DM-1: workspace.yaml with default_model → config.defaultModel is set", () => {
+    const result = setupTestConfig("", undefined, [], "copilot/gpt-4.1");
     cleanup = result.cleanup;
 
     const config = getWorkspaceConfig(getDefaultWorkspaceKey());
-    // Falls back to workspace.yaml engine block
-    expect(config.engines).toHaveLength(1);
-    expect(config.engines[0].id).toBe("copilot");
+    expect(config.defaultModel).toBe("copilot/gpt-4.1");
+  });
+
+  it("EC-DM-2: workspace.yaml without default_model → config.defaultModel is null", () => {
+    const result = setupTestConfig("", undefined, [], null);
+    cleanup = result.cleanup;
+
+    const config = getWorkspaceConfig(getDefaultWorkspaceKey());
+    expect(config.defaultModel).toBeNull();
   });
 });

@@ -44,7 +44,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return newWorkspace;
   }
 
-  async function update(params: { name?: string; allowedEngines?: string[]; engineModel?: string; worktreeBasePath?: string; workspacePath?: string }) {
+  async function update(params: { name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string }) {
     await api("workspace.update", {
       workspaceKey: activeWorkspaceKey.value ?? undefined,
       ...params,

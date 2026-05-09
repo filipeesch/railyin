@@ -35,9 +35,7 @@ describe("config path validation", () => {
     const { cleanup } = makeConfigDir(
       [
         "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
+        "default_model: copilot/mock-model",
         "projects:",
         "  - key: my-app",
         "    name: My App",
@@ -61,9 +59,7 @@ describe("config path validation", () => {
     const { cleanup } = makeConfigDir(
       [
         "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
+        "default_model: copilot/mock-model",
         `workspace_path: ${workspacePath}`,
         "projects:",
         "  - key: my-app",
@@ -90,9 +86,7 @@ describe("config path validation", () => {
     const { cleanup } = makeConfigDir(
       [
         "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
+        "default_model: copilot/mock-model",
         `workspace_path: ${workspacePath}`,
         "projects:",
         "  - key: app",
@@ -120,9 +114,7 @@ describe("config path validation", () => {
     const { cleanup } = makeConfigDir(
       [
         "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
+        "default_model: copilot/mock-model",
         `workspace_path: ${workspacePath}`,
         "projects:",
         "  - key: my-app",
@@ -151,9 +143,7 @@ describe("config path validation", () => {
     const { cleanup } = makeConfigDir(
       [
         "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
+        "default_model: copilot/mock-model",
         `workspace_path: ${workspacePath}`,
         "projects:",
         "  - key: standalone",
@@ -179,9 +169,7 @@ describe("config path validation", () => {
     const { cleanup } = makeConfigDir(
       [
         "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
+        "default_model: copilot/mock-model",
         `workspace_path: ${workspacePath}`,
         "projects:",
         "  - key: ui",
@@ -204,9 +192,7 @@ describe("config path validation", () => {
     const { cleanup } = makeConfigDir(
       [
         "name: no-projects",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
+        "default_model: copilot/mock-model",
       ].join("\n"),
     );
 

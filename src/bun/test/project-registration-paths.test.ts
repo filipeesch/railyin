@@ -104,8 +104,9 @@ describe("registerProject — path normalization", () => {
     const configDir = mkdtempSync(join(tmpdir(), "railyn-cfg-no-ws-"));
     writeFileSync(
       join(configDir, "workspace.test.yaml"),
-      ["name: test", "engine:", "  type: copilot", "  model: copilot/mock-model"].join("\n"),
+      ["name: test", "default_model: copilot/mock-model"].join("\n"),
     );
+    writeFileSync(join(configDir, "engines.yaml"), "engines:\n  - id: copilot\n    type: copilot\n");
     process.env.RAILYN_DB = ":memory:";
     process.env.RAILYN_CONFIG_DIR = configDir;
     resetConfig();

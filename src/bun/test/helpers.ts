@@ -293,8 +293,8 @@ export function setupTestConfig(
   gitRootPath?: string,
   /** Optional extra workflow template YAML strings (single-template format, NOT array). Each is written as its own file. */
   extraWorkflows: string[] = [],
-  /** Override the engine model. Pass null to omit the `model:` line entirely (simulates unconfigured engine model). Defaults to "copilot/mock-model". */
-  engineModel: string | null = "copilot/mock-model",
+  /** Override the default model. Pass null to omit the `default_model:` line entirely. Defaults to "copilot/mock-model". */
+  defaultModel: string | null = "copilot/mock-model",
   /** Optional extra workspace YAML files to write alongside workspace.yaml. Each entry is written as workspace.<key>.yaml. */
   extraWorkspaces: { key: string; yaml: string }[] = [],
   /** Optional raw YAML content to write as `engines.yaml` in the config dir. When provided, this file takes precedence over the workspace.yaml `engine:` block. */
@@ -317,9 +317,7 @@ export function setupTestConfig(
     join(configDir, "workspace.test.yaml"),
     [
       "name: test",
-      "engine:",
-      "  type: copilot",
-      ...(engineModel !== null ? [`  model: ${engineModel}`] : []),
+      ...(defaultModel !== null ? [`default_model: ${defaultModel}`] : []),
       `workspace_path: ${workspacePath}`,
       "projects:",
       "  - key: test-project",
@@ -344,9 +342,8 @@ export function setupTestConfig(
     writeFileSync(join(configDir, `workspace.${key}.yaml`), yaml);
   });
 
-  if (enginesYaml !== undefined) {
-    writeFileSync(join(configDir, "engines.yaml"), enginesYaml);
-  }
+  const DEFAULT_ENGINES_YAML = "engines:\n  - id: copilot\n    type: copilot\n";
+  writeFileSync(join(configDir, "engines.yaml"), enginesYaml ?? DEFAULT_ENGINES_YAML);
 
   process.env.RAILYN_DB = ":memory:";
   process.env.RAILYN_CONFIG_DIR = configDir;
