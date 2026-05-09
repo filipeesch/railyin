@@ -50,4 +50,18 @@ export interface SlashCommandDialect {
    * @param projectPath   Optional project root (higher priority than worktree).
    */
   resolvePrompt(value: string, worktreePath: string, projectPath?: string): Promise<ResolvedPrompt>;
+
+  /**
+   * Return the list of skill directory paths that should be registered with
+   * an engine's resource loader (e.g. Pi's `additionalSkillPaths`).
+   *
+   * Engines that support native skill loading (Pi) call this at session init
+   * to make the dialect's skills discoverable in the LLM system prompt.
+   *
+   * Returns an empty array for dialects that don't expose skill directories.
+   *
+   * @param worktreePath  Absolute path to the git worktree root.
+   * @param projectPath   Optional project root (higher priority than worktree).
+   */
+  getSkillPaths(worktreePath: string, projectPath?: string): string[];
 }

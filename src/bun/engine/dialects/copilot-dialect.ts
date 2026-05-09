@@ -131,4 +131,29 @@ export class CopilotDialect implements SlashCommandDialect {
       sourceArgs: input.trim(),
     };
   }
+
+  /**
+   * Return `.github/skills/` directories for Pi's `additionalSkillPaths`.
+   *
+   * Lookup order mirrors `listCommands`:
+   *   1. `<projectPath>/.github/skills/`
+   *   2. `<worktreePath>/.github/skills/` (if different from projectPath)
+   *   3. `~/.github/skills/`
+   *
+   * Only existing directories are included to avoid Pi emitting diagnostics for
+   * missing paths.
+   */
+  getSkillPaths(worktreePath: string, projectPath?: string): string[] {
+    const candidates: string[] = [];
+
+    if (projectPath) {
+      candidates.push(join(projectPath, ".github", "skills"));
+    }
+    if (!projectPath || projectPath !== worktreePath) {
+      candidates.push(join(worktreePath, ".github", "skills"));
+    }
+    candidates.push(join(homedir(), ".github", "skills"));
+
+    return candidates.filter((p) => existsSync(p));
+  }
 }

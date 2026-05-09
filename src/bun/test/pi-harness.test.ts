@@ -288,6 +288,10 @@ class SpyDialect implements SlashCommandDialect {
     this.listCommandsCalls.push({ worktreePath, projectPath });
     return [];
   }
+
+  getSkillPaths(_worktreePath: string, _projectPath?: string): string[] {
+    return [];
+  }
 }
 
 describe("PiEngine dialect injection", () => {

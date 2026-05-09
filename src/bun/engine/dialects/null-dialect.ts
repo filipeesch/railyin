@@ -16,4 +16,8 @@ export class NullDialect implements SlashCommandDialect {
   async resolvePrompt(value: string, _worktreePath: string, _projectPath?: string): Promise<ResolvedPrompt> {
     return { content: value, wasSlash: false };
   }
+
+  getSkillPaths(_worktreePath: string, _projectPath?: string): string[] {
+    return [];
+  }
 }

@@ -138,7 +138,14 @@ export class PiEngine implements ExecutionEngine {
 
     const tools = buildAllTools({ harnessCtx, commonCtx });
     const piModel = this.buildModel(modelOverride, contextWindowOverride);
-    const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd());
+
+    // Look up the project path before session creation so it can be used when
+    // wiring dialect skill paths into the Pi resource loader.
+    const projectPath = boardId != null && taskId != null
+      ? await this.lookupProjectPath(taskId, boardId, workingDirectory ?? process.cwd())
+      : undefined;
+
+    const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd(), projectPath);
 
     this.executionToConversation.set(executionId, conversationId);
 
@@ -175,9 +182,6 @@ export class PiEngine implements ExecutionEngine {
     // On success, close the queue to signal end-of-stream.
     let resolvedPrompt: string;
     try {
-      const projectPath = boardId != null && taskId != null
-        ? await this.lookupProjectPath(taskId, boardId, workingDirectory ?? process.cwd())
-        : undefined;
       const resolved = await this.dialect.resolvePrompt(
         prompt,
         workingDirectory ?? process.cwd(),
@@ -417,6 +421,7 @@ export class PiEngine implements ExecutionEngine {
     tools: ReturnType<typeof buildAllTools>,
     systemPrompt: string | undefined,
     cwd: string,
+    projectPath?: string,
   ): Promise<AgentSession> {
     const existing = this.sessions.get(conversationId);
     if (existing) {
@@ -434,10 +439,12 @@ export class PiEngine implements ExecutionEngine {
     const sessionManager = SessionManager.open(sessionPath);
 
     const agentDir = getAgentDir();
+    const skillPaths = this.dialect.getSkillPaths(cwd, projectPath);
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir,
       systemPromptOverride: () => systemPrompt,
+      ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
     });
     await resourceLoader.reload();
 

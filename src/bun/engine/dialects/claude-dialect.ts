@@ -141,4 +141,8 @@ export class ClaudeDialect implements SlashCommandDialect {
       sourceArgs: input.trim(),
     };
   }
+
+  getSkillPaths(_worktreePath: string, _projectPath?: string): string[] {
+    return [];
+  }
 }
