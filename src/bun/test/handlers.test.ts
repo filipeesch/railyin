@@ -610,9 +610,9 @@ describe("chat session parity handlers", () => {
       db,
       () => {},
       {
-        executeChatTurn: async (_sid, _cid, _userContent, _model, _mcpTools, _wsKey, _attachments, engineContent) => {
+        executeChatTurn: async (_sid: number, _cid: number, _userContent: string, _model: string | undefined, _mcpTools: string[] | null | undefined, _wsKey: string | undefined, _attachments: Attachment[] | undefined, engineContent: string | undefined) => {
           capturedContent.push(engineContent as string);
-          return { message: { id: 1, taskId: null, conversationId, type: "user", role: "user", content: "", metadata: null, createdAt: "" }, executionId: 1 };
+          return { message: { id: 1, taskId: null, conversationId, type: "user" as const, role: "user" as const, content: "", metadata: null, createdAt: "" }, executionId: 1 };
         },
         compactConversation: async () => {},
       } as unknown as ExecutionCoordinator,
@@ -645,9 +645,9 @@ describe("chat session parity handlers", () => {
       db,
       () => {},
       {
-        executeChatTurn: async (_sid, _cid, _userContent, _model, _mcpTools, _wsKey, _attachments, engineContent) => {
+        executeChatTurn: async (_sid: number, _cid: number, _userContent: string, _model: string | undefined, _mcpTools: string[] | null | undefined, _wsKey: string | undefined, _attachments: Attachment[] | undefined, engineContent: string | undefined) => {
           capturedContent.push(engineContent as string);
-          return { message: { id: 1, taskId: null, conversationId, type: "user", role: "user", content: "", metadata: null, createdAt: "" }, executionId: 1 };
+          return { message: { id: 1, taskId: null, conversationId, type: "user" as const, role: "user" as const, content: "", metadata: null, createdAt: "" }, executionId: 1 };
         },
         compactConversation: async () => {},
       } as unknown as ExecutionCoordinator,
@@ -655,7 +655,7 @@ describe("chat session parity handlers", () => {
 
     await handlers["chatSessions.submitDecisions"]({
       sessionId,
-      answers: [{ questionId: "q1", value: "yes" }],
+      answers: [{ question: "q1", answer: "yes" }],
     });
 
     // For submitDecisions, engine content is the formatted decision submission (no @file refs in this case).
