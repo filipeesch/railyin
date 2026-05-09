@@ -87,8 +87,6 @@ ALWAYS check the write result for op:XXXX before calling undo_write.`,
           mkdirSync(dirname(snapshot.path), { recursive: true });
           renameSync(toPath, snapshot.path);
         }
-        harnessCtx.hashCache.invalidate(snapshot.path);
-        harnessCtx.hashCache.invalidate(toPath);
       } else {
         // write_file, patch_file, delete_file
         if (snapshot.beforeContent === null) {
@@ -99,7 +97,6 @@ ALWAYS check the write result for op:XXXX before calling undo_write.`,
         } else {
           writeFileSync(snapshot.path, snapshot.beforeContent, "utf-8");
         }
-        harnessCtx.hashCache.invalidate(snapshot.path);
       }
 
       return {

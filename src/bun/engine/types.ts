@@ -34,7 +34,7 @@ export type EngineEvent = (
   | { type: "decision_request"; payload: string /* serialised DecisionRequestPayload JSON */ }
   | { type: "shell_approval"; command: string; executionId: number }
   | { type: "status"; message: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number }
+  | { type: "usage"; inputTokens: number; outputTokens: number; contextWindow?: number }
   | { type: "task_updated"; task: import("../../shared/rpc-types.ts").Task }
   | { type: "new_message"; message: import("../../shared/rpc-types.ts").ConversationMessage }
   | { type: "compaction_start" }

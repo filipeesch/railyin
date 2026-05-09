@@ -11,7 +11,7 @@ import { buildUndoTool } from "./undo.ts";
 import { buildSearchTools } from "./search.ts";
 import { buildShellTools } from "./shell.ts";
 import { buildWebTools } from "./web.ts";
-import { buildCommonTools } from "./common.ts";
+import { buildCommonTools, type SuspendRef } from "./common.ts";
 
 /**
  * Maps workflow column tool group names (from `tools:` in workflow YAML) to
@@ -36,7 +36,10 @@ export interface AllToolsOptions {
   commonCtx: CommonToolContext;
   /** Tool group names from the workflow column's `tools:` config. When omitted, uses DEFAULT_PI_TOOL_GROUPS. */
   columnGroups?: string[];
+  suspendRef?: SuspendRef;
 }
+
+export type { SuspendRef };
 
 /**
  * Build the tool set for a Pi agent session.
@@ -44,7 +47,7 @@ export interface AllToolsOptions {
  * Board and interaction tools (common-tools) are always included.
  */
 export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
-  const { harnessCtx, commonCtx, columnGroups } = opts;
+  const { harnessCtx, commonCtx, columnGroups, suspendRef } = opts;
 
   const activeGroups = (columnGroups ?? DEFAULT_PI_TOOL_GROUPS).filter(
     (g): g is PiToolGroupName => g in PI_TOOL_GROUPS,
@@ -52,5 +55,5 @@ export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
 
   const harnesTools = activeGroups.flatMap((group) => PI_TOOL_GROUPS[group](harnessCtx));
 
-  return [...harnesTools, ...buildCommonTools(commonCtx)];
+  return [...harnesTools, ...buildCommonTools(commonCtx, suspendRef)];
 }

@@ -321,6 +321,24 @@ export class StreamProcessor {
               "UPDATE executions SET input_tokens = ?, output_tokens = ? WHERE id = ?",
               [event.inputTokens ?? null, event.outputTokens ?? null, executionId],
             );
+            if (event.inputTokens != null) {
+              this.onStreamEvent?.({
+                taskId,
+                conversationId,
+                executionId,
+                seq: 0,
+                blockId: "",
+                type: "usage",
+                content: "",
+                metadata: JSON.stringify({
+                  usedTokens: event.inputTokens,
+                  maxTokens: event.contextWindow ?? null,
+                }),
+                parentBlockId: null,
+                done: false,
+                subagentId: null,
+              });
+            }
             break;
           }
 

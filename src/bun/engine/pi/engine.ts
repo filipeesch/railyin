@@ -25,7 +25,6 @@ import {
 import type { Model } from "@earendil-works/pi-ai";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
-import { ContentHashCache } from "./harness/hash-cache.ts";
 import { UndoStack } from "./harness/undo-stack.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
@@ -56,6 +55,8 @@ export class PiEngine implements ExecutionEngine {
   private readonly dialect: SlashCommandDialect;
   /** Map<conversationId, AgentSession> — one Pi session per conversation. */
   private readonly sessions = new Map<number, AgentSession>();
+  /** Map<conversationId, SuspendRef> — mutable ref updated at each execution start. */
+  private readonly suspendRefs = new Map<number, { onSuspend?: (event: EngineEvent) => void }>();
   /** Map<executionId, conversationId> — lets cancel() find the right session. */
   private readonly executionToConversation = new Map<number, number>();
   private readonly pendingResumes = new Map<
@@ -136,7 +137,7 @@ export class PiEngine implements ExecutionEngine {
       runtime: { worktreePath: workingDirectory },
     };
 
-    const tools = buildAllTools({ harnessCtx, commonCtx });
+    const tools = buildAllTools({ harnessCtx, commonCtx, suspendRef: this.getOrCreateSuspendRef(conversationId) });
     const piModel = this.buildModel(modelOverride, contextWindowOverride);
 
     // Look up the project path before session creation so it can be used when
@@ -155,6 +156,16 @@ export class PiEngine implements ExecutionEngine {
     // close() terminates the for-await instantly regardless of timing.
     const queue = new AsyncQueue<EngineEvent>();
     let agentError: Error | undefined;
+    let suspendedForDecision = false;
+
+    // Wire the suspend callback for this execution into the shared ref.
+    // The tool closures captured `suspendRef` by reference, so they always read the latest value.
+    const suspendRef = this.getOrCreateSuspendRef(conversationId);
+    suspendRef.onSuspend = (event: EngineEvent) => {
+      suspendedForDecision = true;
+      queue.push(event);
+      session.abort().catch(() => {});
+    };
 
     // Abort: tell Pi to stop AND close the queue so the for-await exits immediately.
     const onAbort = () => {
@@ -173,6 +184,15 @@ export class PiEngine implements ExecutionEngine {
           payload: event as unknown as Record<string, unknown>,
         });
       }
+
+      // Emit context usage after each turn so the gauge shows accurate values.
+      if (event.type === "turn_end") {
+        const usage = session.getContextUsage();
+        if (usage?.tokens != null) {
+          queue.push({ type: "usage", inputTokens: usage.tokens, outputTokens: 0, contextWindow: piModel.contextWindow });
+        }
+      }
+
       for (const engineEvent of translateEvent(event as any, workingDirectory)) {
         queue.push(engineEvent);
       }
@@ -215,7 +235,26 @@ export class PiEngine implements ExecutionEngine {
       this.executionToConversation.delete(executionId);
     }
 
-    if (agentError) {
+    if (suspendedForDecision) {
+      // Strip the trailing "aborted" assistant message Pi SDK adds after session.abort().
+      // Without this, the next turn would start with a stale empty assistant turn in context.
+      const agent = this.sessions.get(conversationId)?.agent;
+      if (agent) {
+        const msgs = agent.state.messages as any[];
+        let end = msgs.length;
+        while (end > 0) {
+          const last = msgs[end - 1];
+          if (last.role === "assistant" && last.stopReason === "aborted") {
+            end--;
+          } else {
+            break;
+          }
+        }
+        agent.state.messages = msgs.slice(0, end) as any;
+      }
+    }
+
+    if (agentError && !suspendedForDecision) {
       // Pi pushes a { stopReason: "error" } message into agent._state.messages on failure.
       // If we reuse this agent on the next turn, that poison message is included in the
       // context snapshot sent to the LLM — causing the same error to repeat forever.
@@ -293,6 +332,7 @@ export class PiEngine implements ExecutionEngine {
             displayName: m.id,
             contextWindow: m.context_length ?? undefined,
             contextWindowEditable: true,
+            supportsManualCompact: true,
           });
         }
       } catch (err) {
@@ -339,9 +379,6 @@ export class PiEngine implements ExecutionEngine {
   }
 
   async compact(_taskId: number | null, conversationId: number, _workingDirectory: string): Promise<void> {
-    const ctx = this.harnessContexts.get(conversationId);
-    if (ctx) ctx.hashCache.resetWindowFlags();
-
     const session = this.sessions.get(conversationId);
     if (!session) {
       console.warn(`[pi] compact(): no live session for conversation ${conversationId}, skipping`);
@@ -365,6 +402,7 @@ export class PiEngine implements ExecutionEngine {
     }
     this.sessions.clear();
     this.harnessContexts.clear();
+    this.suspendRefs.clear();
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
@@ -399,11 +437,19 @@ export class PiEngine implements ExecutionEngine {
   /** Map<conversationId, HarnessContext> */
   private readonly harnessContexts = new Map<number, HarnessContext>();
 
+  private getOrCreateSuspendRef(conversationId: number): { onSuspend?: (event: EngineEvent) => void } {
+    let ref = this.suspendRefs.get(conversationId);
+    if (!ref) {
+      ref = {};
+      this.suspendRefs.set(conversationId, ref);
+    }
+    return ref;
+  }
+
   private getOrCreateHarnessContext(conversationId: number, worktreePath: string): HarnessContext {
     let ctx = this.harnessContexts.get(conversationId);
     if (!ctx) {
       ctx = {
-        hashCache: new ContentHashCache(),
         undoStack: new UndoStack(this.config.harness?.undo_stack_size),
         worktreePath,
       };
@@ -427,7 +473,7 @@ export class PiEngine implements ExecutionEngine {
     if (existing) {
       existing.agent.state.model = model as any;
       existing.agent.state.tools = tools as any;
-      existing.agent.state.thinkingLevel = "low";
+      existing.agent.state.thinkingLevel = "off";
       if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
       return existing;
     }
@@ -478,7 +524,10 @@ export class PiEngine implements ExecutionEngine {
       authStorage,
     });
 
-    session.agent.state.thinkingLevel = "low";
+    // "off" prevents the SDK from sending reasoning_effort to local LLMs (LM Studio, Ollama),
+    // which return 400 for that field. reasoning: true on the model is still kept so the
+    // SDK can parse reasoning_content from models that return it in their response.
+    session.agent.state.thinkingLevel = "off";
 
     this.sessions.set(conversationId, session);
     return session;
@@ -509,6 +558,9 @@ export class PiEngine implements ExecutionEngine {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: contextWindowOverride ?? this.config.context_window ?? DEFAULT_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MAX_TOKENS,
+      // vLLM and other local providers don't support the OpenAI-only "developer" role.
+      // Disabling this keeps system messages as role:"system" which all providers accept.
+      compat: { supportsDeveloperRole: false },
     } as unknown as Model<"openai-completions">;
   }
 }

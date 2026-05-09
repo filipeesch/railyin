@@ -1,7 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
 import { Type } from "@earendil-works/pi-ai";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, relative, isAbsolute } from "node:path";
 
@@ -22,10 +21,6 @@ export function safePath(
     };
   }
   return { safe: true, abs: resolved, rel: relative(worktreePath, resolved) };
-}
-
-function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 // ---------------------------------------------------------------------------
@@ -93,22 +88,10 @@ NEVER read a file you just wrote — the write result already confirms success.`
       }
 
       const fullContent = readFileSync(absPath, "utf-8");
-      const hash = sha256(fullContent);
       const allLines = fullContent.split("\n");
       const totalLines = allLines.length;
 
       const hasRange = args.start_line != null || args.end_line != null;
-      const rangeKey = hasRange
-        ? `${args.start_line ?? 1}:${args.end_line ?? totalLines}`
-        : "0:0";
-
-      const cacheResult = harnessCtx.hashCache.checkFile(absPath, hash, rangeKey, 0);
-      if (cacheResult.hit && cacheResult.message) {
-        return {
-          content: [{ type: "text", text: cacheResult.message }],
-          details: { path: args.path },
-        };
-      }
 
       let content: string;
       let fromLine: number;
@@ -124,8 +107,6 @@ NEVER read a file you just wrote — the write result already confirms success.`
         toLine = totalLines;
         content = fullContent;
       }
-
-      harnessCtx.hashCache.updateFile(absPath, hash, rangeKey, 0);
 
       const header = hasRange
         ? `// path: ${relPath}\n// lines: ${fromLine}-${toLine} of ${totalLines}\n`
@@ -177,7 +158,6 @@ ALWAYS prefer glob over run_command for file discovery.`,
       const type = args.type ?? "file";
       const limit = args.limit ?? 100;
       const offset = args.offset ?? 0;
-      const cacheKey = `glob:${args.pattern}:${type}:${offset}`;
 
       const g = new Bun.Glob(args.pattern);
 
@@ -208,17 +188,6 @@ ALWAYS prefer glob over run_command for file discovery.`,
       const total = entries.length;
       const page = entries.slice(offset, offset + limit);
 
-      const resultHash = sha256(page.join("\n"));
-      const cacheResult = harnessCtx.hashCache.checkSearch(cacheKey);
-      if (cacheResult.hit && cacheResult.message) {
-        return {
-          content: [{ type: "text", text: cacheResult.message }],
-          details: { pattern: args.pattern, type, total, offset },
-        };
-      }
-
-      harnessCtx.hashCache.updateSearch(cacheKey, 0);
-
       const fromIdx = offset + 1;
       const toIdx = offset + page.length;
       let text = page.join("\n");
@@ -229,9 +198,6 @@ ALWAYS prefer glob over run_command for file discovery.`,
       } else if (total === 0) {
         text = `[No matches for pattern: ${args.pattern}]`;
       }
-
-      // Suppress unused-variable warning — hash is used only for cache key derivation above
-      void resultHash;
 
       return {
         content: [{ type: "text", text }],

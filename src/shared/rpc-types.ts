@@ -511,6 +511,7 @@ export type StreamEventType =
   | "tool_result"      // persisted: tool result
   | "file_diff"        // persisted: file diff
   | "system"           // persisted: system/error message
+  | "usage"            // ephemeral: context usage update — not persisted
   | "done";            // terminal event — closes all state for this execution
 
 export interface StreamEvent {

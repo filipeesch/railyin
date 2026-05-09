@@ -291,6 +291,21 @@ export const useConversationStore = defineStore("conversation", () => {
       return;
     }
 
+    if (event.type === "usage") {
+      if (event.metadata) {
+        try {
+          const { usedTokens, maxTokens } = JSON.parse(event.metadata) as { usedTokens?: number; maxTokens?: number | null };
+          if (usedTokens != null) {
+            const existing = contextUsageByConversation.value.get(event.conversationId);
+            const resolvedMax = maxTokens ?? existing?.maxTokens ?? 128_000;
+            const fraction = resolvedMax > 0 ? usedTokens / resolvedMax : 0;
+            contextUsageByConversation.value.set(event.conversationId, { usedTokens, maxTokens: resolvedMax, fraction });
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      return;
+    }
+
     if (event.type === "status_chunk") {
       state.statusMessage = event.content;
       return;
