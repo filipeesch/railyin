@@ -55,6 +55,8 @@ export class PiEngine implements ExecutionEngine {
   private readonly dialect: SlashCommandDialect;
   /** Map<conversationId, AgentSession> — one Pi session per conversation. */
   private readonly sessions = new Map<number, AgentSession>();
+  /** Map<conversationId, SuspendRef> — mutable ref updated at each execution start. */
+  private readonly suspendRefs = new Map<number, { onSuspend?: (event: EngineEvent) => void }>();
   /** Map<executionId, conversationId> — lets cancel() find the right session. */
   private readonly executionToConversation = new Map<number, number>();
   private readonly pendingResumes = new Map<
@@ -135,7 +137,7 @@ export class PiEngine implements ExecutionEngine {
       runtime: { worktreePath: workingDirectory },
     };
 
-    const tools = buildAllTools({ harnessCtx, commonCtx });
+    const tools = buildAllTools({ harnessCtx, commonCtx, suspendRef: this.getOrCreateSuspendRef(conversationId) });
     const piModel = this.buildModel(modelOverride, contextWindowOverride);
 
     // Look up the project path before session creation so it can be used when
@@ -154,6 +156,16 @@ export class PiEngine implements ExecutionEngine {
     // close() terminates the for-await instantly regardless of timing.
     const queue = new AsyncQueue<EngineEvent>();
     let agentError: Error | undefined;
+    let suspendedForDecision = false;
+
+    // Wire the suspend callback for this execution into the shared ref.
+    // The tool closures captured `suspendRef` by reference, so they always read the latest value.
+    const suspendRef = this.getOrCreateSuspendRef(conversationId);
+    suspendRef.onSuspend = (event: EngineEvent) => {
+      suspendedForDecision = true;
+      queue.push(event);
+      session.abort().catch(() => {});
+    };
 
     // Abort: tell Pi to stop AND close the queue so the for-await exits immediately.
     const onAbort = () => {
@@ -177,7 +189,7 @@ export class PiEngine implements ExecutionEngine {
       if (event.type === "turn_end") {
         const usage = session.getContextUsage();
         if (usage?.tokens != null) {
-          queue.push({ type: "usage", inputTokens: usage.tokens, outputTokens: 0 });
+          queue.push({ type: "usage", inputTokens: usage.tokens, outputTokens: 0, contextWindow: piModel.contextWindow });
         }
       }
 
@@ -223,7 +235,26 @@ export class PiEngine implements ExecutionEngine {
       this.executionToConversation.delete(executionId);
     }
 
-    if (agentError) {
+    if (suspendedForDecision) {
+      // Strip the trailing "aborted" assistant message Pi SDK adds after session.abort().
+      // Without this, the next turn would start with a stale empty assistant turn in context.
+      const agent = this.sessions.get(conversationId)?.agent;
+      if (agent) {
+        const msgs = agent.state.messages as any[];
+        let end = msgs.length;
+        while (end > 0) {
+          const last = msgs[end - 1];
+          if (last.role === "assistant" && last.stopReason === "aborted") {
+            end--;
+          } else {
+            break;
+          }
+        }
+        agent.state.messages = msgs.slice(0, end) as any;
+      }
+    }
+
+    if (agentError && !suspendedForDecision) {
       // Pi pushes a { stopReason: "error" } message into agent._state.messages on failure.
       // If we reuse this agent on the next turn, that poison message is included in the
       // context snapshot sent to the LLM — causing the same error to repeat forever.
@@ -371,6 +402,7 @@ export class PiEngine implements ExecutionEngine {
     }
     this.sessions.clear();
     this.harnessContexts.clear();
+    this.suspendRefs.clear();
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
@@ -404,6 +436,15 @@ export class PiEngine implements ExecutionEngine {
 
   /** Map<conversationId, HarnessContext> */
   private readonly harnessContexts = new Map<number, HarnessContext>();
+
+  private getOrCreateSuspendRef(conversationId: number): { onSuspend?: (event: EngineEvent) => void } {
+    let ref = this.suspendRefs.get(conversationId);
+    if (!ref) {
+      ref = {};
+      this.suspendRefs.set(conversationId, ref);
+    }
+    return ref;
+  }
 
   private getOrCreateHarnessContext(conversationId: number, worktreePath: string): HarnessContext {
     let ctx = this.harnessContexts.get(conversationId);
