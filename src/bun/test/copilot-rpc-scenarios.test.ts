@@ -234,7 +234,7 @@ describe("Copilot backend RPC scenarios", () => {
         });
         await runtime.recorder.waitForStreamDone(result.executionId);
 
-        expect(session.prompts).toEqual(["Resolved body: add-dark-mode"]);
+        expect(session.prompts).toEqual(['<command name="opsx-propose" args="add-dark-mode">\nResolved body: add-dark-mode\n</command>']);
         const persisted = runtime.db
             .query<{ content: string; role: string | null; metadata: string | null }, [number]>(
                 "SELECT content, role, metadata FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",

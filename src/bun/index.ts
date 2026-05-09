@@ -36,6 +36,7 @@ import { OpenCodeEngine } from "./engine/opencode/engine.ts";
 import { createDefaultOpenCodeSdkAdapter } from "./engine/opencode/adapter.ts";
 import { PiEngine } from "./engine/pi/engine.ts";
 import type { PiEngineConfig } from "./config/index.ts";
+import { createDefaultDialectRegistry } from "./engine/dialects/registry.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
 import { WorkspaceRepository } from "./db/workspace-repository.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
@@ -164,8 +165,11 @@ const engineFactories: Record<string, EngineFactory> = {
     new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
   opencode: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
     new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
-  pi: (engineId, cfg, onTaskUpdated, onNewMessage) =>
-    new PiEngine(engineId, cfg as PiEngineConfig, onTaskUpdated, onNewMessage),
+  pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
+    const piCfg = cfg as PiEngineConfig;
+    const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
+    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect);
+  },
   scripted: () => new MockExecutionEngine(),
 };
 

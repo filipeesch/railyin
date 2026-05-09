@@ -15,7 +15,7 @@ import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefault
 import { approveAll } from "@github/copilot-sdk";
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
-import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
+import { CopilotDialect } from "../dialects/copilot-dialect.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -66,6 +66,7 @@ const MEDIA_TYPE_EXT: Record<string, string> = {
 export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
+  private readonly dialect: CopilotDialect;
 
   /** Active sessions keyed by executionId. */
   private readonly sessions = new Map<number, CopilotSdkSession>();
@@ -79,11 +80,13 @@ export class CopilotEngine implements ExecutionEngine {
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: CopilotSdkAdapter = createDefaultCopilotSdkAdapter(),
+    dialect: CopilotDialect = new CopilotDialect(),
     // cliPath is only used when constructing the default adapter above;
     // when a custom sdkAdapter is injected (tests) this parameter is unused.
   ) {
     this._onTaskUpdated = onTaskUpdated;
     this.sdkAdapter = sdkAdapter;
+    this.dialect = dialect;
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -228,7 +231,8 @@ export class CopilotEngine implements ExecutionEngine {
 
       let resolvedInitialPrompt: string;
       try {
-        resolvedInitialPrompt = await resolvePrompt(prompt, workingDirectory ?? "");
+        const resolved = await this.dialect.resolvePrompt(prompt, workingDirectory ?? "");
+        resolvedInitialPrompt = resolved.content;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         yield { type: "error", message: msg, fatal: true };
@@ -482,7 +486,7 @@ export class CopilotEngine implements ExecutionEngine {
 
     const worktreePath = gitRow?.worktree_path ?? process.cwd();
 
-    let projectPath: string | null = null;
+    let projectPath: string | undefined;
     if (taskRow) {
       const wsKey =
         db.query<{ workspace_key: string }, [number]>(
@@ -494,20 +498,7 @@ export class CopilotEngine implements ExecutionEngine {
       }
     }
 
-    const userPath = join(homedir(), ".github", "prompts");
-
-    const seen = new Set<string>();
-    const commands: CommandInfo[] = [];
-
-    collectCopilotCommands(join(worktreePath, ".github", "prompts"), seen, commands);
-
-    if (projectPath && projectPath !== worktreePath) {
-      collectCopilotCommands(join(projectPath, ".github", "prompts"), seen, commands);
-    }
-
-    collectCopilotCommands(userPath, seen, commands);
-
-    return commands;
+    return this.dialect.listCommands(worktreePath, projectPath);
   }
 
   private waitForResume(executionId: number, signal?: AbortSignal): Promise<EngineResumeInput> {
@@ -552,40 +543,6 @@ export class CopilotEngine implements ExecutionEngine {
           : input.decision === "approve_all"
             ? "The requested shell command was approved for this and similar commands. Continue."
             : "The requested shell command was approved once. Continue.";
-    }
-  }
-}
-
-// ─── Copilot command discovery ────────────────────────────────────────────────
-
-/** Extract `description` value from YAML frontmatter (`---\ndescription: ...\n---`). */
-function parseFrontmatterDescription(filePath: string): string | undefined {
-  try {
-    const content = readFileSync(filePath, "utf8");
-    const match = content.match(/^---[\r\n]([\s\S]*?)[\r\n]---/);
-    if (!match) return undefined;
-    const descLine = match[1].match(/^description:\s*(.+)$/m);
-    return descLine ? descLine[1].trim() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function collectCopilotCommands(dir: string, seen: Set<string>, out: CommandInfo[]): void {
-  if (!existsSync(dir)) return;
-  let entries: import("fs").Dirent[];
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith(".prompt.md")) {
-      const commandName = basename(entry.name, ".prompt.md");
-      if (!seen.has(commandName)) {
-        seen.add(commandName);
-        out.push({ name: commandName, description: parseFrontmatterDescription(join(dir, entry.name)) });
-      }
     }
   }
 }

@@ -1,7 +1,4 @@
-## Purpose
-Provides `/`-triggered autocomplete in the chat editor for discovering and selecting slash commands, with engine-specific command discovery strategies.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Typing `/` in the chat editor triggers a slash command picker
 The system SHALL open an autocomplete dropdown when the user types `/` at any position in the chat editor. The dropdown SHALL list all slash commands discoverable from the active engine for the current task. The list SHALL update as the user continues typing (fuzzy/substring match on command name). Command data SHALL be served from the `useCommandsCache` composable, which returns cached data immediately and triggers a background refresh — the picker SHALL never block on a network call after the first open.
@@ -63,6 +60,8 @@ The system SHALL retrieve slash commands for Copilot engine tasks by calling `Co
 #### Scenario: Newly created command appears immediately
 - **WHEN** a new `.prompt.md` file is added to the worktree between two picker opens
 - **THEN** the new command appears the next time the user types `/` (no stale cache)
+
+## ADDED Requirements
 
 ### Requirement: Pi engine lists commands via its configured dialect
 The system SHALL retrieve slash commands for Pi engine tasks by calling `dialect.listCommands()` on the dialect injected at Pi engine construction time. When the Pi engine uses `CopilotDialect`, it SHALL glob `.github/prompts/` across worktree, project root, and personal scopes. When it uses `ClaudeDialect`, it SHALL glob `.claude/commands/` across the same three scopes. When it uses `NullDialect`, it SHALL return an empty list.

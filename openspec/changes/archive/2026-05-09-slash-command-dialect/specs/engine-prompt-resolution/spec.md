@@ -1,7 +1,4 @@
-## Purpose
-Defines how prompt resolution is delegated to engine implementations. Engines resolve prompts according to their own conventions before sending to their backend; the orchestrator passes raw user input without expansion.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Each engine resolves prompts according to its own convention
 The system SHALL delegate prompt resolution to the engine implementation via its injected `SlashCommandDialect`. The orchestrator SHALL pass `prompt` as raw user input in `ExecutionParams` without performing any slash-reference expansion. Each engine SHALL call `dialect.resolvePrompt()` before sending to its underlying backend and use the returned `ResolvedPrompt.content`.
@@ -40,3 +37,9 @@ The system SHALL not contain any string comparison of engine IDs (e.g. `engineId
 #### Scenario: TransitionExecutor uses resolved content for non-Copilot engines with a dialect
 - **WHEN** a Pi engine task transitions with `on_enter_prompt = "/my-cmd"` and the Pi engine has `dialect: copilot`
 - **THEN** `TransitionExecutor` resolves via the Pi engine's `CopilotDialect` and `wasSlash: true` drives display text correctly
+
+## REMOVED Requirements
+
+### Requirement: Copilot dialect resolver is a shared engine-layer library
+**Reason**: Superseded by `SlashCommandDialect` interface and `SlashCommandDialectRegistry`. The shared free-function pattern (`resolvePrompt()` from `copilot-prompt-resolver.ts`) is replaced by dialect instances obtained from the registry.
+**Migration**: All engine-layer resolution now goes through `dialect.resolvePrompt()`. `TransitionExecutor` uses `engineRegistry.getDialectForEngine(id)` to obtain the dialect; no imports from `copilot-prompt-resolver.ts` are needed.
