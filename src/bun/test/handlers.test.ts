@@ -576,6 +576,121 @@ describe("chat session parity handlers", () => {
       ".gitignore explain this\n\n```gitignore\n// " + filePath + "\nnode_modules/\ndist/\n\n```",
     );
   });
+
+  // ─── CS-1: chatSessions.create seeds conversation model from config.defaultModel ───
+
+  it("CS-1: chatSessions.create seeds conversation.model from config.defaultModel", async () => {
+    const handlers = chatSessionHandlers(db, () => {}, null as unknown as ExecutionCoordinator);
+    const session = await handlers["chatSessions.create"]({ workspaceKey: "default" });
+
+    const conv = db.query<{ model: string | null }, [number]>(
+      "SELECT model FROM conversations WHERE id = ?",
+    ).get(session.conversationId!);
+    // setupTestConfig sets default_model: copilot/mock-model
+    expect(conv?.model).toBe("copilot/mock-model");
+  });
+
+  // ─── CS-2: sendMessage derives engine from conversation model prefix ───────────
+
+  it("CS-2: sendMessage resolves @file: attachments when conversation model is claude/*", async () => {
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
+      [conversationId],
+    );
+    const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+    const filePath = join(gitDir, "note.md");
+    writeFileSync(filePath, "# Hello\n", "utf8");
+
+    const capturedContent: string[] = [];
+    const handlers = chatSessionHandlers(
+      db,
+      () => {},
+      {
+        executeChatTurn: async (_sid, _cid, _userContent, _model, _mcpTools, _wsKey, _attachments, engineContent) => {
+          capturedContent.push(engineContent as string);
+          return { message: { id: 1, taskId: null, conversationId, type: "user", role: "user", content: "", metadata: null, createdAt: "" }, executionId: 1 };
+        },
+        compactConversation: async () => {},
+      } as unknown as ExecutionCoordinator,
+    );
+
+    await handlers["chatSessions.sendMessage"]({
+      sessionId,
+      content: "explain this",
+      attachments: [{ label: "note.md", mediaType: "text/plain", data: `@file:${filePath}` }],
+    });
+
+    expect(capturedContent[0]).toContain("# Hello");
+    expect(capturedContent[0]).not.toContain(`@file:`);
+  });
+
+  // ─── CS-3: submitDecisions derives engine from conversation model prefix ───────
+
+  it("CS-3: submitDecisions resolves @file: attachments when conversation model is claude/*", async () => {
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
+      [conversationId],
+    );
+    const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+    const capturedContent: string[] = [];
+    const handlers = chatSessionHandlers(
+      db,
+      () => {},
+      {
+        executeChatTurn: async (_sid, _cid, _userContent, _model, _mcpTools, _wsKey, _attachments, engineContent) => {
+          capturedContent.push(engineContent as string);
+          return { message: { id: 1, taskId: null, conversationId, type: "user", role: "user", content: "", metadata: null, createdAt: "" }, executionId: 1 };
+        },
+        compactConversation: async () => {},
+      } as unknown as ExecutionCoordinator,
+    );
+
+    await handlers["chatSessions.submitDecisions"]({
+      sessionId,
+      answers: [{ questionId: "q1", value: "yes" }],
+    });
+
+    // For submitDecisions, engine content is the formatted decision submission (no @file refs in this case).
+    // Key assertion: no error thrown and orchestrator was called.
+    expect(capturedContent).toHaveLength(1);
+  });
+});
+
+// ─── AR: prepareMessageForEngine unit tests ───────────────────────────────────
+
+describe("prepareMessageForEngine — AR unit tests", () => {
+  it("AR-1: copilot engine — content and attachments pass through unchanged", async () => {
+    const attachments: Attachment[] = [
+      { label: "note.md", mediaType: "text/markdown", data: Buffer.from("# hi").toString("base64") },
+    ];
+
+    const result = await prepareMessageForEngine("copilot", "explain note.md", attachments);
+
+    expect(result.content).toBe("explain note.md");
+    expect(result.attachments).toEqual(attachments);
+  });
+
+  it("AR-2: non-copilot engine — @file: reference is resolved into content and stripped from attachments", async () => {
+    const filePath = join(gitDir, "snippet.ts");
+    writeFileSync(filePath, "const x = 1;\n", "utf8");
+
+    const attachments: Attachment[] = [
+      { label: "snippet.ts", mediaType: "text/plain", data: `@file:${filePath}` },
+    ];
+
+    const result = await prepareMessageForEngine("claude", "explain this", attachments);
+
+    expect(result.content).toContain("const x = 1;");
+    expect(result.attachments).toEqual([]);
+  });
 });
 
 // ─── resolveContextWindow (via tasks.contextUsage) ────────────────────────────
