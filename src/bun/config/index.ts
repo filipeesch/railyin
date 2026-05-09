@@ -89,6 +89,12 @@ export interface PiEngineConfig {
   /** Default model in "provider/model" format, e.g. "lmstudio/qwen3-8b". */
   model?: string;
   /**
+   * Context window size in tokens for the model. Used to calibrate the Pi SDK's
+   * auto-compaction threshold (fires at contextWindow - 16,384 tokens).
+   * Default: 128_000. Override for smaller models (e.g. 8192 for Mistral-7B).
+   */
+  context_window?: number;
+  /**
    * OpenAI-compatible provider endpoints keyed by provider name.
    * e.g. lmstudio: { base_url: "http://localhost:1234/v1" }
    */

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
+import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { getDefaultWorkspaceKey } from "../workspace-context.ts";
 
 function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinator {
@@ -8,7 +9,7 @@ function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinat
   return o;
 }
 
-export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator | null) {
+export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator | null, modelSettingsRepo?: ModelSettingsRepository) {
   return {
     // ─── models.list ─────────────────────────────────────────────────────────
     "models.list": async (params: { workspaceKey?: string; engineType?: string } = {}): Promise<ProviderModelList[]> => {
@@ -36,15 +37,23 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
 
         return Array.from(byProvider.entries()).map(([providerId, models]) => ({
           id: providerId,
-          models: models.map((m) => ({
-            id: m.qualifiedId!,
-            displayName: m.displayName,
-            description: m.description,
-            contextWindow: m.contextWindow ?? null,
-            enabled: enabledSet.has(m.qualifiedId!),
-            ...(m.supportsThinking ? { supportsAdaptiveThinking: true } : {}),
-            ...(m.supportsManualCompact ? { supportsManualCompact: true } : {}),
-          })),
+          models: models.map((m) => {
+            // Apply DB override precedence: DB override → server-reported → null
+            const dbOverride = modelSettingsRepo && m.qualifiedId
+              ? modelSettingsRepo.getContextWindow(workspaceKey, m.qualifiedId)
+              : null;
+            const contextWindow = dbOverride ?? m.contextWindow ?? null;
+            return {
+              id: m.qualifiedId!,
+              displayName: m.displayName,
+              description: m.description,
+              contextWindow,
+              enabled: enabledSet.has(m.qualifiedId!),
+              ...(m.supportsThinking ? { supportsAdaptiveThinking: true } : {}),
+              ...(m.supportsManualCompact ? { supportsManualCompact: true } : {}),
+              ...(m.contextWindowEditable ? { contextWindowEditable: true } : {}),
+            };
+          }),
         }));
       } catch (err) {
         return [
@@ -115,6 +124,14 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
         supportsManualCompact: m.supportsManualCompact,
         engineId: m.qualifiedId != null ? m.qualifiedId.split("/")[0] : "copilot",
       }));
+    },
+
+    // ─── models.setContextWindow ─────────────────────────────────────────────
+    "models.setContextWindow": async (params: { workspaceKey?: string; qualifiedModelId: string; contextWindow: number | null }): Promise<Record<string, never>> => {
+      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
+      if (!modelSettingsRepo) throw new Error("ModelSettingsRepository not available");
+      modelSettingsRepo.setContextWindow(workspaceKey, params.qualifiedModelId, params.contextWindow);
+      return {};
     },
   };
 }

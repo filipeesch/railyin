@@ -16,6 +16,7 @@ import type { IWorkspaceRepository } from "../../db/workspace-repository";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
+import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 
 
 export class TransitionExecutor {
@@ -31,6 +32,7 @@ export class TransitionExecutor {
     private readonly decisionInjector: DecisionContextInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
+    private readonly modelSettingsRepo?: ModelSettingsRepository,
   ) {}
 
   async execute(
@@ -146,6 +148,7 @@ export class TransitionExecutor {
       onSoftCancel: () => this.streamProcessor.abort(executionId),
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
+      ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
     };
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);

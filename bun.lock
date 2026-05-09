@@ -57,6 +57,7 @@
     },
   },
   "patchedDependencies": {
+    "@github/copilot-sdk@0.3.0": "patches/@github%2Fcopilot-sdk@0.3.0.patch",
     "@stryker-mutator/vitest-runner@9.6.1": "patches/@stryker-mutator%2Fvitest-runner@9.6.1.patch",
   },
   "packages": {

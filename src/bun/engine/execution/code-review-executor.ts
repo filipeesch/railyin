@@ -14,6 +14,7 @@ import type { OnTaskUpdated, OnNewMessage } from "../types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../../db/row-types.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
+import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 
 type DecisionRow = {
   hunk_hash: string;
@@ -48,6 +49,7 @@ export class CodeReviewExecutor {
     private readonly onNewMessage: OnNewMessage,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
+    private readonly modelSettingsRepo?: ModelSettingsRepository,
   ) {}
 
   async execute(
@@ -171,6 +173,7 @@ export class CodeReviewExecutor {
       ),
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),
+      ...(this.modelSettingsRepo && conversationModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, conversationModel) ?? undefined } : {}),
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 

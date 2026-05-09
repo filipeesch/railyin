@@ -88,7 +88,38 @@
               <span v-if="model.description" class="model-description">{{ model.description }}</span>
               <span class="model-raw-id">{{ model.id }}</span>
             </div>
-            <span v-if="model.contextWindow" class="model-ctx">
+            <template v-if="model.contextWindowEditable">
+              <span
+                v-if="editingCtxId === model.id"
+                class="model-ctx-edit"
+                @click.prevent.stop
+              >
+                <input
+                  type="number"
+                  class="model-ctx-input"
+                  v-model="editingCtxValue"
+                  placeholder="tokens"
+                  min="1"
+                  max="2000000"
+                  :ref="(el) => { if (el) (el as HTMLInputElement).focus(); }"
+                  @keydown.enter.prevent="saveCtxEdit(model.id)"
+                  @keydown.escape.prevent="cancelCtxEdit"
+                  @blur="saveCtxEdit(model.id)"
+                  @click.stop
+                />
+              </span>
+              <span
+                v-else
+                class="model-ctx model-ctx--editable"
+                :class="{ 'model-ctx--no-value': !model.contextWindow }"
+                :title="'Override context window' + (model.contextWindow ? ' (current: ' + formatCtx(model.contextWindow) + ')' : ' (using engine default)')"
+                @click.prevent.stop="startCtxEdit(model.id, model.contextWindow ?? null)"
+              >
+                <span v-if="model.contextWindow">{{ formatCtx(model.contextWindow) }}</span>
+                <i class="pi pi-pencil model-ctx__pencil" />
+              </span>
+            </template>
+            <span v-else-if="model.contextWindow" class="model-ctx">
               {{ formatCtx(model.contextWindow) }}
             </span>
           </label>
@@ -119,6 +150,8 @@ const loading = ref(false);
 const collapsed = ref(new Set<string>());
 const refreshing = ref(new Set<string>());
 const searchQuery = ref("");
+const editingCtxId = ref<string | null>(null);
+const editingCtxValue = ref<string>("");
 
 const providers = computed(() => workspaceStore.allProviderModels);
 
@@ -190,6 +223,26 @@ async function refresh(providerId: string) {
 
 async function onToggle(qualifiedModelId: string, enabled: boolean) {
   await workspaceStore.setModelEnabled(qualifiedModelId, enabled, effectiveWorkspaceKey.value);
+}
+
+function startCtxEdit(id: string, current: number | null) {
+  editingCtxId.value = id;
+  editingCtxValue.value = current != null ? String(current) : "";
+}
+
+function cancelCtxEdit() {
+  editingCtxId.value = null;
+  editingCtxValue.value = "";
+}
+
+async function saveCtxEdit(id: string) {
+  if (editingCtxId.value !== id) return;
+  const rawValue = editingCtxValue.value;
+  const parsed = rawValue ? parseInt(rawValue, 10) : NaN;
+  const value = !isNaN(parsed) && parsed > 0 ? parsed : null;
+  editingCtxId.value = null;
+  editingCtxValue.value = "";
+  await workspaceStore.setModelContextWindow(id, value, effectiveWorkspaceKey.value);
 }
 
 function modelLabel(model: { id: string; displayName?: string }): string {
@@ -354,6 +407,61 @@ function formatCtx(tokens: number): string {
 .model-ctx {
   color: var(--p-text-muted-color);
   font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.model-ctx--editable {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+
+.model-ctx--editable:hover {
+  background: var(--p-content-hover-background);
+}
+
+.model-ctx__pencil {
+  font-size: 0.65rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.model-ctx--no-value .model-ctx__pencil {
+  opacity: 0.35;
+}
+
+.model-ctx--editable:hover .model-ctx__pencil {
+  opacity: 1;
+}
+
+.model-ctx-edit {
+  display: flex;
+  align-items: center;
+}
+
+.model-ctx-input {
+  width: 80px;
+  font-size: 0.75rem;
+  padding: 1px 4px;
+  height: 22px;
+  border: 1px solid var(--p-primary-color);
+  border-radius: 3px;
+  background: var(--p-content-background);
+  color: var(--p-text-color);
+  outline: none;
+}
+
+.model-ctx-input::-webkit-outer-spin-button,
+.model-ctx-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.model-ctx-input[type=number] {
+  -moz-appearance: textfield;
 }
 </style>
 

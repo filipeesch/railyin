@@ -230,6 +230,12 @@ export function initDb(): Database {
       reason TEXT NOT NULL,
       revised_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS model_settings (
+      workspace_key       TEXT    NOT NULL,
+      qualified_model_id  TEXT    NOT NULL,
+      context_window      INTEGER,
+      PRIMARY KEY (workspace_key, qualified_model_id)
+    );
   `);
   return db;
 }

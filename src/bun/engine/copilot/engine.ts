@@ -12,6 +12,7 @@
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
 import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession } from "./session";
 import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
+import { approveAll } from "@github/copilot-sdk";
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
 import { resolvePrompt } from "../dialects/copilot-prompt-resolver.ts";
@@ -180,10 +181,7 @@ export class CopilotEngine implements ExecutionEngine {
       ...(resolvedModel ? { model: resolvedModel } : {}),
       tools,
       ...(systemMessage ? { systemMessage } : {}),
-      onPermissionRequest: (_req: unknown, _inv: unknown) => {
-        // Approve all — the Copilot agent operates inside our controlled environment
-        return { kind: "approved" as const };
-      },
+      onPermissionRequest: approveAll,
       workingDirectory,
       streaming: true,
     };
@@ -420,7 +418,7 @@ export class CopilotEngine implements ExecutionEngine {
     const sessionConfig = {
       workingDirectory,
       streaming: true,
-      onPermissionRequest: (_req: unknown, _inv: unknown) => ({ kind: "approved" as const }),
+      onPermissionRequest: approveAll,
     };
     const session = await this.sdkAdapter.resumeSession(sdkSessionId, sessionConfig);
     this.sdkAdapter.touchLease(sdkSessionId, "running");
