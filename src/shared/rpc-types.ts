@@ -107,6 +107,8 @@ export interface ProviderModelList {
     supportsAdaptiveThinking?: boolean;
     /** True when the engine supports manual context compaction for this model. */
     supportsManualCompact?: boolean;
+    /** True when the user can set a custom context window for this model (Pi/OpenCode engines). */
+    contextWindowEditable?: boolean;
   }>;
   error?: string;
 }
@@ -686,6 +688,10 @@ export type RailynAPI = {
   "models.listEnabled": {
     params: { workspaceKey?: string };
     response: ModelInfo[];
+  };
+  "models.setContextWindow": {
+    params: { workspaceKey?: string; qualifiedModelId: string; contextWindow: number | null };
+    response: Record<string, never>;
   };
 
   // Context usage

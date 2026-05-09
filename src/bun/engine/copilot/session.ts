@@ -1,3 +1,4 @@
+import type { PermissionHandler } from "@github/copilot-sdk";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
 
@@ -6,7 +7,7 @@ export interface CopilotSdkSessionConfig {
   model?: string;
   tools?: unknown[];
   systemMessage?: { mode: "append"; content: string };
-  onPermissionRequest?: (request: unknown, invocation: unknown) => unknown;
+  onPermissionRequest?: PermissionHandler;
   workingDirectory?: string;
   streaming?: boolean;
 }

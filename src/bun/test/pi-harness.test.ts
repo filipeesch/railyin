@@ -4,6 +4,9 @@ import { UndoStack } from "../engine/pi/harness/undo-stack.ts";
 import { AsyncQueue } from "../engine/pi/async-queue.ts";
 import { PiEngine } from "../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../config/index.ts";
+import type { SlashCommandDialect, ResolvedPrompt } from "../engine/dialects/slash-command-dialect.ts";
+import { NullDialect } from "../engine/dialects/null-dialect.ts";
+import type { CommandInfo } from "../engine/types.ts";
 
 // ─── ContentHashCache ─────────────────────────────────────────────────────────
 
@@ -266,6 +269,66 @@ describe("AsyncQueue", () => {
       collected.push(v);
     }
     expect(collected).toEqual([10, 20, 30]);
+  });
+});
+
+// ─── PiEngine dialect injection ───────────────────────────────────────────────
+
+/** Spy dialect that records all calls and passes through the prompt unchanged. */
+class SpyDialect implements SlashCommandDialect {
+  resolvePromptCalls: { value: string; worktreePath: string; projectPath?: string }[] = [];
+  listCommandsCalls: { worktreePath: string; projectPath?: string }[] = [];
+
+  async resolvePrompt(value: string, worktreePath: string, projectPath?: string): Promise<ResolvedPrompt> {
+    this.resolvePromptCalls.push({ value, worktreePath, projectPath });
+    return { content: value, wasSlash: false };
+  }
+
+  listCommands(worktreePath: string, projectPath?: string): CommandInfo[] {
+    this.listCommandsCalls.push({ worktreePath, projectPath });
+    return [];
+  }
+
+  getSkillPaths(_worktreePath: string, _projectPath?: string): string[] {
+    return [];
+  }
+}
+
+describe("PiEngine dialect injection", () => {
+  it("SPY-1: dialect passed to constructor is stored and accessible", () => {
+    const spy = new SpyDialect();
+    const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy);
+    expect((engine as any).dialect).toBe(spy);
+  });
+
+  it("SPY-2: default dialect is NullDialect when none is provided", () => {
+    const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
+    const engine = new PiEngine("test-pi", config, () => {}, () => {});
+    expect((engine as any).dialect).toBeInstanceOf(NullDialect);
+  });
+
+  it("SPY-3: pre-aborted execution does NOT call dialect.resolvePrompt", async () => {
+    const spy = new SpyDialect();
+    const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy);
+    const controller = new AbortController();
+    controller.abort();
+
+    const gen = engine.execute({
+      executionId: 1,
+      taskId: null,
+      boardId: undefined,
+      conversationId: 101,
+      model: "lmstudio/qwen3-8b",
+      workingDirectory: process.cwd(),
+      prompt: "/some-command",
+      signal: controller.signal,
+      boardTools: {} as any,
+    });
+    for await (const _ of gen) { /* drain */ }
+
+    expect(spy.resolvePromptCalls).toHaveLength(0);
   });
 });
 

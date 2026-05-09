@@ -9,13 +9,14 @@ import type { ExecutionParamsBuilder } from "./execution-params-builder";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
 import type { StreamProcessor } from "../stream/stream-processor";
 import type { TaskRow } from "../../db/row-types";
-import { resolvePrompt } from "../dialects/copilot-prompt-resolver";
+
 import { resolveModel } from "./model-resolver";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor";
 import type { IWorkspaceRepository } from "../../db/workspace-repository";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
+import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 
 
 export class TransitionExecutor {
@@ -31,6 +32,7 @@ export class TransitionExecutor {
     private readonly decisionInjector: DecisionContextInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
+    private readonly modelSettingsRepo?: ModelSettingsRepository,
   ) {}
 
   async execute(
@@ -92,7 +94,7 @@ export class TransitionExecutor {
     ).get(taskId)!;
     const workingDirectory = this.workdirResolver.resolve(updatedRow);
     const targetEngineId = QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
-    const transitionMetadata = await this.buildTransitionMetadata(
+    const transitionMetadata = this.buildTransitionMetadata(
       targetEngineId,
       fromState,
       toState,
@@ -146,6 +148,7 @@ export class TransitionExecutor {
       onSoftCancel: () => this.streamProcessor.abort(executionId),
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
+      ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
     };
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
@@ -154,23 +157,20 @@ export class TransitionExecutor {
     return { task: mapTask(runningRow), executionId };
   }
 
-  private async buildTransitionMetadata(
-    engineId: string,
+  private buildTransitionMetadata(
+    _engineId: string,
     fromState: string,
     toState: string,
     prompt: string,
-    workingDirectory: string,
-  ): Promise<TransitionEventMetadata> {
+    _workingDirectory: string,
+  ): TransitionEventMetadata {
     const sourceKind = prompt.trimStart().startsWith("/") ? "slash" : "inline";
-    const displayText = engineId === "copilot"
-      ? await resolvePrompt(prompt, workingDirectory)
-      : prompt;
 
     return {
       from: fromState,
       to: toState,
       instructionDetail: {
-        displayText,
+        displayText: prompt,
         sourceText: prompt,
         sourceKind,
         ...(sourceKind === "slash" ? { sourceRef: prompt.trim().split(/\s+/, 1)[0] } : {}),

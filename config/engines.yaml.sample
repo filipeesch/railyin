@@ -32,8 +32,16 @@ engines:
   # - id: pi-local
   #   type: pi
   #   model: lmstudio/qwen3-8b   # provider/model-id format
+  #   context_window: 128000     # optional; default 128000. Set to your model's
+  #                              # actual context window. Auto-compaction fires at
+  #                              # (context_window - 16384) tokens. Lower this for
+  #                              # small models (e.g. 8192 for Mistral-7B).
   #   providers:
   #     lmstudio:
   #       base_url: http://localhost:1234/v1
   #   harness:
   #     undo_stack_size: 50      # optional; default 50
+  #   # dialect: none            # Slash-command convention to use for this Pi engine.
+  #                              # copilot → .github/prompts/*.prompt.md
+  #                              # claude  → .claude/commands/**/*.md (colon-namespaced subdirs)
+  #                              # none    → no slash commands (default when omitted)

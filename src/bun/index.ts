@@ -16,6 +16,7 @@ import { taskGitHandlers } from "./handlers/task-git.ts";
 import { codeReviewHandlers } from "./handlers/code-review.ts";
 import { todoHandlers } from "./handlers/todos.ts";
 import { modelHandlers } from "./handlers/models.ts";
+import { SqliteModelSettingsRepository } from "./db/repositories/model-settings-repository.ts";
 import { engineHandlers } from "./handlers/engine.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
@@ -35,6 +36,7 @@ import { OpenCodeEngine } from "./engine/opencode/engine.ts";
 import { createDefaultOpenCodeSdkAdapter } from "./engine/opencode/adapter.ts";
 import { PiEngine } from "./engine/pi/engine.ts";
 import type { PiEngineConfig } from "./config/index.ts";
+import { createDefaultDialectRegistry } from "./engine/dialects/registry.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
 import { WorkspaceRepository } from "./db/workspace-repository.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
@@ -82,6 +84,7 @@ await runMigrations();
 seedDefaultWorkspace();
 
 const db = getDb();
+const modelSettingsRepo = new SqliteModelSettingsRepository(db);
 const wsRepo = new WorkspaceRepository(db);
 
 const projectResolver = new ProjectResolver();
@@ -162,8 +165,11 @@ const engineFactories: Record<string, EngineFactory> = {
     new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
   opencode: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
     new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
-  pi: (engineId, cfg, onTaskUpdated, onNewMessage) =>
-    new PiEngine(engineId, cfg as PiEngineConfig, onTaskUpdated, onNewMessage),
+  pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
+    const piCfg = cfg as PiEngineConfig;
+    const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
+    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect);
+  },
   scripted: () => new MockExecutionEngine(),
 };
 
@@ -231,7 +237,7 @@ if (injectedEngine) {
 }
 
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager)
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo)
   : null;
 
 if (orchestrator) {
@@ -258,11 +264,11 @@ const allHandlers = {
   ...workspaceHandlers(db),
   ...boardHandlers(db),
   ...projectHandlers(),
-  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier), worktreeManager),
+  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier), worktreeManager, modelSettingsRepo),
   ...taskGitHandlers(db, notifier.notifyTaskUpdated.bind(notifier), worktreeManager, gitRepo),
   ...codeReviewHandlers(db),
   ...todoHandlers(db),
-  ...modelHandlers(db, orchestrator),
+  ...modelHandlers(db, orchestrator, modelSettingsRepo),
   ...engineHandlers(orchestrator),
   ...conversationHandlers(db, orchestrator),
   ...workflowHandlers(notifier.notifyWorkflowReloaded.bind(notifier)),
