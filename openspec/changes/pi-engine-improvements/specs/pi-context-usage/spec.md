@@ -14,18 +14,19 @@ After each completed turn, `PiEngine` SHALL call `session.getContextUsage()` and
 - **WHEN** Pi SDK emits `turn_end` and `session.getContextUsage()` returns `null` or `{ tokens: null }` (e.g., immediately after compaction)
 - **THEN** no `usage` EngineEvent is emitted for that turn
 
-### Requirement: Context window size cached per model
-`PiEngine` SHALL maintain an in-memory `Map<qualifiedModelId, contextWindow>` updated on each `turn_end`. The cached value SHALL be surfaced in `listModels()` as `contextWindow` on the matching `EngineModelInfo`.
+### Requirement: Context window size surfaced from provider model list
+`PiEngine.listModels()` SHALL surface `contextWindow` from the OpenAI-compatible `/models` endpoint's `context_length` field for each model. This value is available immediately from `listModels()` without requiring a completed turn.
 
-#### Scenario: contextWindow populated after first turn
-- **WHEN** Pi SDK emits `turn_end` and `session.getContextUsage()` returns `{ contextWindow: W }`
-- **THEN** `PiEngine` stores `W` for the current `qualifiedModelId`
-- **AND** subsequent `listModels()` calls include `contextWindow: W` for that model entry
+#### Scenario: contextWindow available from model list
+- **WHEN** `engine.listModels()` is called
+- **AND** the provider's `/models` endpoint returns `{ id, context_length: W }` for a model
+- **THEN** the corresponding `EngineModelInfo` includes `contextWindow: W`
 
-#### Scenario: contextWindow absent before first turn
-- **WHEN** `engine.listModels()` is called before any turn has completed for a given model
-- **THEN** the `contextWindow` field is absent or `undefined` on the returned `EngineModelInfo`
+#### Scenario: contextWindow absent when provider does not report it
+- **WHEN** `engine.listModels()` is called
+- **AND** a model entry in the provider's `/models` response has no `context_length` field
+- **THEN** the `contextWindow` field is `undefined` on the returned `EngineModelInfo`
 
 #### Scenario: Different models have independent context windows
-- **WHEN** two different models (`modelA`, `modelB`) have both completed at least one turn
+- **WHEN** two different models (`modelA`, `modelB`) are returned by the provider
 - **THEN** `listModels()` returns independent `contextWindow` values for each model
