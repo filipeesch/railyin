@@ -28,6 +28,8 @@ import { UndoStack } from "./harness/undo-stack.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
 import { translateEvent } from "./event-translator.ts";
+import { getDb } from "../../db/index.ts";
+import { appendMessage } from "../../conversation/messages.ts";
 import { AsyncQueue } from "./async-queue.ts";
 import { createHash } from "crypto";
 import { mkdir } from "fs/promises";
@@ -42,7 +44,7 @@ function piSessionPathForConversation(conversationId: number): string {
 }
 
 /** Default context window used when the config doesn't specify one. */
-const DEFAULT_CONTEXT_WINDOW = 32_768;
+const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
 export class PiEngine implements ExecutionEngine {
@@ -91,6 +93,7 @@ export class PiEngine implements ExecutionEngine {
       onTransition,
       onHumanTurn,
       boardTools,
+      contextWindowOverride,
     } = params;
 
     // Bail immediately if already cancelled before we even start.
@@ -129,7 +132,7 @@ export class PiEngine implements ExecutionEngine {
     };
 
     const tools = buildAllTools({ harnessCtx, commonCtx });
-    const piModel = this.buildModel(modelOverride);
+    const piModel = this.buildModel(modelOverride, contextWindowOverride);
     const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd());
 
     this.executionToConversation.set(executionId, conversationId);
@@ -241,9 +244,7 @@ export class PiEngine implements ExecutionEngine {
   async listModels(): Promise<EngineModelInfo[]> {
     const providers = this.config.providers ?? {};
     if (Object.keys(providers).length === 0) {
-      // No providers configured — surface the static model from config (if any)
-      const model = this.config.model ?? "local/default";
-      return [{ qualifiedId: model, displayName: model }];
+      return [];
     }
 
     const results: EngineModelInfo[] = [];
@@ -255,22 +256,21 @@ export class PiEngine implements ExecutionEngine {
           signal: AbortSignal.timeout(5_000),
         });
         if (!res.ok) continue;
-        const json = (await res.json()) as { data?: { id: string }[] };
+        const json = (await res.json()) as { data?: { id: string; context_length?: number }[] };
         for (const m of json.data ?? []) {
           // Skip embedding models — they can't be used for text generation
           if (m.id.includes("embed")) continue;
           const qualifiedId = `${this.engineId}/${providerId}/${m.id}`;
-          results.push({ qualifiedId, displayName: m.id });
+          results.push({
+            qualifiedId,
+            displayName: m.id,
+            contextWindow: m.context_length ?? undefined,
+            contextWindowEditable: true,
+          });
         }
-      } catch {
-        // Provider unreachable — skip silently
+      } catch (err) {
+        console.warn(`[pi] listModels: provider "${providerId}" unreachable at ${baseUrl} —`, err instanceof Error ? err.message : err);
       }
-    }
-
-    // Fall back to static model if no provider returned anything
-    if (results.length === 0) {
-      const model = this.config.model ?? "local/default";
-      return [{ qualifiedId: model, displayName: model }];
     }
 
     return results;
@@ -281,10 +281,24 @@ export class PiEngine implements ExecutionEngine {
   }
 
   async compact(_taskId: number | null, conversationId: number, _workingDirectory: string): Promise<void> {
-    // Pi doesn't have an explicit compaction API. Resetting the window flags
-    // is the closest analog — it allows the cache to re-serve content on next read.
     const ctx = this.harnessContexts.get(conversationId);
     if (ctx) ctx.hashCache.resetWindowFlags();
+
+    const session = this.sessions.get(conversationId);
+    if (!session) {
+      console.warn(`[pi] compact(): no live session for conversation ${conversationId}, skipping`);
+      return;
+    }
+
+    try {
+      const result = await session.compact();
+      if (result?.summary) {
+        const db = getDb();
+        appendMessage(db, null, conversationId, "compaction_summary", null, result.summary);
+      }
+    } catch (err) {
+      console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);
+    }
   }
 
   async shutdown(): Promise<void> {
@@ -382,7 +396,7 @@ export class PiEngine implements ExecutionEngine {
     return session;
   }
 
-  private buildModel(modelOverride?: string): Model<"openai-completions"> {
+  private buildModel(modelOverride?: string, contextWindowOverride?: number): Model<"openai-completions"> {
     const modelStr = modelOverride ?? this.config.model ?? "default";
 
     // Expects 3-part format: engineId/providerName/modelId (as returned by listModels).
@@ -405,7 +419,7 @@ export class PiEngine implements ExecutionEngine {
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: DEFAULT_CONTEXT_WINDOW,
+      contextWindow: contextWindowOverride ?? this.config.context_window ?? DEFAULT_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MAX_TOKENS,
     } as unknown as Model<"openai-completions">;
   }

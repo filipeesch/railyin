@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
+import { SqliteModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { taskGitHandlers } from "../handlers/task-git.ts";
 import { WorktreeManager } from "../git/WorktreeManager.ts";
@@ -1055,6 +1056,25 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
 
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(128_000);
+  });
+
+  it("DB override from modelSettingsRepo wins over orchestrator-reported value", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'pi-local/lmstudio/qwen/qwen3-27b' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+
+    // Orchestrator reports 32_768 for this model
+    const orchestrator = makeMockOrchestrator([
+      { qualifiedId: "pi-local/lmstudio/qwen/qwen3-27b", contextWindow: 32_768 },
+    ]);
+
+    // User overrode it to 65_536 via the Models screen
+    const repo = new SqliteModelSettingsRepository(db);
+    repo.setContextWindow("default", "pi-local/lmstudio/qwen/qwen3-27b", 65_536);
+
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager, repo);
+
+    const result = await handlers["tasks.contextUsage"]({ taskId });
+    expect(result.maxTokens).toBe(65_536);
   });
 });
 

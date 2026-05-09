@@ -94,6 +94,9 @@ export interface ExecutionParams {
   onHumanTurn?: (taskId: number, message: string) => void;
   /** Board tool executor — injected by orchestrator, avoids getDb() inside engines. */
   boardTools?: IBoardToolExecutor;
+  /** Resolved context window override from model_settings DB. When present, engines
+   * MUST use this value instead of their built-in default. Injected by orchestrator. */
+  contextWindowOverride?: number;
   /**
    * Called by the engine to signal a soft cancellation (e.g. eviction).
    * The stream-processor uses this to abort its own AbortController so the
@@ -134,6 +137,8 @@ export interface EngineModelInfo {
   supportsThinking?: boolean;
   /** Whether this engine supports explicit manual compaction for this model. */
   supportsManualCompact?: boolean;
+  /** Whether the user can set a custom context window for this model (Pi/OpenCode engines). */
+  contextWindowEditable?: boolean;
   /** Whether this model is currently enabled for selection by the user. */
   enabled?: boolean;
 }
