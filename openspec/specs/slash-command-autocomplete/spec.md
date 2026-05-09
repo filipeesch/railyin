@@ -42,7 +42,7 @@ The system SHALL retrieve slash commands for Claude engine tasks by calling the 
 - **THEN** an empty list is returned and the picker shows the empty state
 
 ### Requirement: Copilot engine lists commands by globbing three path scopes
-The system SHALL retrieve slash commands for Copilot engine tasks by globbing `*.prompt.md` files across three ordered scopes: (1) worktreePath, (2) projectRootPath when it differs from worktreePath, (3) the user's personal `~/.github/prompts/` directory. Commands are deduplicated by name; earlier scopes take precedence. The glob is performed fresh on every picker open — no caching.
+The system SHALL retrieve slash commands for Copilot engine tasks by calling `CopilotDialect.listCommands()`, which globs `*.prompt.md` files across three ordered scopes: (1) worktreePath, (2) projectRootPath when it differs from worktreePath, (3) the user's personal `~/.github/prompts/` directory. Commands are deduplicated by name; earlier scopes take precedence. The glob is performed fresh on every picker open — no caching.
 
 #### Scenario: Commands from worktree scope
 - **WHEN** `<worktreePath>/.github/prompts/` contains `opsx-propose.prompt.md`
@@ -63,3 +63,18 @@ The system SHALL retrieve slash commands for Copilot engine tasks by globbing `*
 #### Scenario: Newly created command appears immediately
 - **WHEN** a new `.prompt.md` file is added to the worktree between two picker opens
 - **THEN** the new command appears the next time the user types `/` (no stale cache)
+
+### Requirement: Pi engine lists commands via its configured dialect
+The system SHALL retrieve slash commands for Pi engine tasks by calling `dialect.listCommands()` on the dialect injected at Pi engine construction time. When the Pi engine uses `CopilotDialect`, it SHALL glob `.github/prompts/` across worktree, project root, and personal scopes. When it uses `ClaudeDialect`, it SHALL glob `.claude/commands/` across the same three scopes. When it uses `NullDialect`, it SHALL return an empty list.
+
+#### Scenario: Pi engine with dialect copilot shows .github/prompts commands in picker
+- **WHEN** a Pi engine is configured with `dialect: copilot` and `.github/prompts/` contains commands
+- **THEN** those commands appear in the autocomplete picker for Pi engine tasks
+
+#### Scenario: Pi engine with dialect claude shows .claude/commands in picker
+- **WHEN** a Pi engine is configured with `dialect: claude` and `.claude/commands/` contains command files
+- **THEN** those commands appear in the autocomplete picker for Pi engine tasks
+
+#### Scenario: Pi engine with no dialect shows no commands
+- **WHEN** a Pi engine is configured with no `dialect` field (defaults to NullDialect)
+- **THEN** `listCommands()` returns an empty list and the picker shows the empty state
