@@ -95,7 +95,7 @@ Uses temp filesystem dirs. Migrates `collectClaudeCommands` cases from `list-com
 | CLD-RES-4 | `wasSlash: true`, content is XML-wrapped | same shape as CopilotDialect |
 | CLD-RES-5 | Colon preserved in XML `name` attribute | `name="opsx:apply"` |
 | CLD-RES-6 | `$input` substituted in body | `$input` → trailing args |
-| CLD-RES-7 | Worktree takes priority over projectRoot | worktree file returned |
+| CLD-RES-7 | projectRoot takes priority over worktree | projectRoot file returned |
 | CLD-RES-8 | `~/.claude/commands/` is last fallback | personal scope checked last |
 | CLD-RES-9 | Non-slash values pass through (`wasSlash: false`) | passthrough |
 | CLD-RES-10 | File not found throws with descriptive message | error contains command name |

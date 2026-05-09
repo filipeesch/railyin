@@ -4,21 +4,21 @@
 The system SHALL resolve a value matching the pattern `/stem` (and optional text argument) — when it appears at the very beginning of the engine-facing value — by reading the corresponding prompt file. The resolution SHALL be performed by the engine, not the orchestrator, using the engine's injected `SlashCommandDialect`. When a user message is stored with autocomplete chip markup, the system SHALL first derive plain/raw user text from that markup, preserving the leading `/` in slash-command labels before slash resolution is attempted. The system SHALL preserve the original slash invocation as the user-visible chat content and pass the resolved prompt body to the underlying LLM.
 
 For **CopilotDialect** (used by Copilot engine and optionally by Pi), the lookup order SHALL be:
-1. `<worktreePath>/.github/prompts/{stem}.prompt.md`
-2. `<projectRootPath>/.github/prompts/{stem}.prompt.md` (only when `projectRootPath` differs from `worktreePath`)
+1. `<projectRootPath>/.github/prompts/{stem}.prompt.md` (project root — always first)
+2. `<worktreePath>/.github/prompts/{stem}.prompt.md` (only when `worktreePath` differs from `projectRootPath`)
 3. `~/.github/prompts/{stem}.prompt.md` (personal/user scope)
 
 For **ClaudeDialect** (optionally used by Pi engine), the lookup order SHALL be:
-1. `<worktreePath>/.claude/commands/{stem}.md`
-2. `<projectRootPath>/.claude/commands/{stem}.md` (only when `projectRootPath` differs from `worktreePath`)
+1. `<projectRootPath>/.claude/commands/{stem}.md` (project root — always first)
+2. `<worktreePath>/.claude/commands/{stem}.md` (only when `worktreePath` differs from `projectRootPath`)
 3. `~/.claude/commands/{stem}.md` (personal/user scope)
 
 For **Claude engine**, slash recognition is delegated to the SDK after Railyin derives the plain/raw `/stem` text from stored chip markup; no filesystem lookup is performed by Railyin.
 
 For **Pi engine with NullDialect** (default), slash references are passed through unchanged to the underlying LLM.
 
-#### Scenario: Valid slash reference resolves to prompt body (CopilotDialect — worktree scope)
-- **WHEN** a value starts with `/opsx-propose` and `<worktreePath>/.github/prompts/opsx-propose.prompt.md` exists
+#### Scenario: Valid slash reference resolves to prompt body (CopilotDialect — project root scope)
+- **WHEN** a value starts with `/opsx-propose` and `<projectRootPath>/.github/prompts/opsx-propose.prompt.md` exists
 - **THEN** the file is read, YAML frontmatter is stripped, the body is XML-wrapped as `<command name="opsx-propose" args="">…</command>`, and returned as the resolved prompt
 
 #### Scenario: Pi engine with dialect copilot resolves from .github/prompts
@@ -37,9 +37,9 @@ For **Pi engine with NullDialect** (default), slash references are passed throug
 - **WHEN** the user selected a slash command from autocomplete and the stored message contains slash chip markup
 - **THEN** the derived engine-facing text begins with `/command` and remains eligible for slash resolution
 
-#### Scenario: Worktree lookup falls back to project root (CopilotDialect)
-- **WHEN** the worktree does not contain the prompt file but `<projectRootPath>/.github/prompts/{stem}.prompt.md` exists and projectRootPath differs from worktreePath
-- **THEN** the project root file is used and resolution succeeds
+#### Scenario: Project root lookup falls back to worktree (CopilotDialect)
+- **WHEN** the project root does not contain the prompt file but `<worktreePath>/.github/prompts/{stem}.prompt.md` exists and worktreePath differs from projectRootPath
+- **THEN** the worktree file is used and resolution succeeds
 
 #### Scenario: Personal scope used as final fallback (CopilotDialect)
 - **WHEN** neither worktree nor project root contain the prompt file but `~/.github/prompts/{stem}.prompt.md` exists

@@ -119,6 +119,13 @@ Lookup order mirrors `CopilotDialect` but for Claude's convention:
 2. `<projectPath>/.claude/commands/` (if differs)
 3. `~/.claude/commands/`
 
+**Lookup order (both dialects):**
+1. `<projectPath>/` — always first; matches `Orchestrator._resolveWorkingDirectory()` invariant
+2. `<worktreePath>/` — if differs from projectPath
+3. `~/.claude/commands/` (or `~/.github/prompts/` for Copilot)
+
+This also corrects a bug in the existing `copilot-prompt-resolver.ts` which had worktree before projectPath — `CopilotDialect` will fix this to match the established invariant.
+
 **Subdirectory colon-namespacing:** Claude commands may live in nested directories. The directory path is collapsed to a colon-separated name — `commands/opsx/apply.md` → `opsx:apply`. Resolution reverses this: `/opsx:apply` → `opsx/apply` → `<base>/opsx/apply.md`.
 
 **No frontmatter stripping:** `.claude/commands/` files use frontmatter for the `description:` field (read by `listCommands()` for autocomplete), but the full file body including the `---` block is sent to the LLM unchanged.
