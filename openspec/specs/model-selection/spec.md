@@ -47,7 +47,11 @@ The system SHALL allow each workflow column to declare an optional `model` field
 - **THEN** the conversation's `model` remains `"gpt-4.1"` and subsequent executions use that model
 
 ### Requirement: Available models are fetched dynamically from the provider
-The system SHALL expose a `models.list` RPC that delegates to the active engine's `listModels()` method. For the native engine, this calls `GET {base_url}/v1/models` on each configured provider. For the Copilot engine, this returns models available through the Copilot subscription. For the Claude engine, this returns models available through the Claude Agent SDK in the same provider-grouped shape used by the rest of the product, with a single Claude provider group.
+The system SHALL expose a `models.list` RPC that delegates to the active engine's `listModels()` method. For the Pi engine, this calls `GET {base_url}/v1/models` on each configured provider. For the Copilot engine, this returns models available through the Copilot subscription. For the Claude engine, this returns models available through the Claude Agent SDK in the same provider-grouped shape used by the rest of the product, with a single Claude provider group.
+
+Each model entry in `ProviderModelList.models` SHALL include a `contextWindowEditable?: boolean` field. This field SHALL be `true` only when the engine signals that context window is user-configurable for this model (Pi and OpenCode engines). Copilot and Claude model entries SHALL NOT include this field (or it SHALL be `false`/absent).
+
+The `contextWindow` value returned for each model SHALL reflect the following precedence: user override from `model_settings` DB → server-reported value from `/v1/models` → engine default (128,000 for Pi). The raw server-reported value is not exposed separately.
 
 #### Scenario: Models returned grouped by provider with enabled flags
 - **WHEN** all configured providers respond with valid model lists
@@ -60,6 +64,22 @@ The system SHALL expose a `models.list` RPC that delegates to the active engine'
 #### Scenario: Claude engine returns available models
 - **WHEN** the active engine is Claude and `models.list` is called
 - **THEN** the engine returns models available through the Claude SDK in the shared grouped model format with a single `claude` provider group
+
+#### Scenario: Pi model contextWindow reflects DB override
+- **WHEN** a user override exists in `model_settings` for a Pi model
+- **THEN** `models.list` returns `contextWindow` equal to the override value, not the server-reported value
+
+#### Scenario: Pi model contextWindow falls back to engine default when no override
+- **WHEN** no override exists and the server does not report a context length
+- **THEN** `models.list` returns `contextWindow: 128000` for that model
+
+#### Scenario: Pi model rows have contextWindowEditable true
+- **WHEN** `models.list` is called and Pi engine models are returned
+- **THEN** each Pi model entry has `contextWindowEditable: true`
+
+#### Scenario: Copilot model rows do not have contextWindowEditable
+- **WHEN** `models.list` is called and Copilot engine models are returned
+- **THEN** Copilot model entries have `contextWindowEditable` absent or `false`
 
 ### Requirement: Workspace AI model is optional in configuration
 The system SHALL NOT require a default model to be set in engine config. For the native engine, `default_model` under the `engine:` block is optional. For non-native engines such as Copilot and Claude, `engine.model` is optional. When absent, task execution SHALL use the model set on the task itself. If neither is set, the engine uses its own default behavior.

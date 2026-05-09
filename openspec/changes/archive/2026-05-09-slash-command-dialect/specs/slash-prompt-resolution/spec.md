@@ -1,7 +1,4 @@
-## Purpose
-Provides a reference syntax (`/stem`) that Railyin resolves at execution time by reading a prompt file from the project's worktree. Applies to workflow column fields (`on_enter_prompt`, `stage_instructions`) and task chat input.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Slash references resolve to prompt files from the project worktree
 The system SHALL resolve a value matching the pattern `/stem` (and optional text argument) — when it appears at the very beginning of the engine-facing value — by reading the corresponding prompt file. The resolution SHALL be performed by the engine, not the orchestrator, using the engine's injected `SlashCommandDialect`. When a user message is stored with autocomplete chip markup, the system SHALL first derive plain/raw user text from that markup, preserving the leading `/` in slash-command labels before slash resolution is attempted. The system SHALL preserve the original slash invocation as the user-visible chat content and pass the resolved prompt body to the underlying LLM.
@@ -78,3 +75,9 @@ For **Claude engine**, when a user message contains a slash chip using colon-sep
 #### Scenario: Colon-separated chip text is eligible for Claude SDK slash resolution
 - **WHEN** the stored message contains `[/opsx:propose|/opsx:propose]` chip markup
 - **THEN** the derived engine-facing text begins with `/opsx:propose` and retains the colon separator unchanged
+
+## REMOVED Requirements
+
+### Requirement: Copilot dialect resolver is a shared engine-layer library
+**Reason**: `copilot-prompt-resolver.ts` is superseded by the `SlashCommandDialect` abstraction. The `CopilotDialect` class at `src/bun/engine/dialects/copilot-dialect.ts` replaces it as the canonical implementation. Resolution is now dialect-driven via `SlashCommandDialectRegistry`; there is no longer a shared free function.
+**Migration**: Import from `src/bun/engine/dialects/copilot-dialect.ts` (class method) or obtain a dialect via `SlashCommandDialectRegistry.create("copilot")`. The `resolvePrompt()` free-function signature is removed; callers use `dialect.resolvePrompt()` instead.
