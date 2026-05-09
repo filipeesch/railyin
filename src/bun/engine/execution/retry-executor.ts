@@ -12,6 +12,7 @@ import type { TaskRow } from "../../db/row-types.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import { resolveModel } from "./model-resolver";
+import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 
 
 export class RetryExecutor {
@@ -23,6 +24,7 @@ export class RetryExecutor {
     private readonly streamProcessor: StreamProcessor,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
+    private readonly modelSettingsRepo?: ModelSettingsRepository,
   ) {}
 
   async execute(taskId: number): Promise<{ task: Task; executionId: number }> {
@@ -84,6 +86,7 @@ export class RetryExecutor {
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),
       model: resolveModel(updatedRow, null, false) ?? "", // Use centralized resolver
+      ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 

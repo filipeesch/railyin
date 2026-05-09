@@ -2,12 +2,20 @@ import type { Database } from "bun:sqlite";
 import { resolveModelContextWindow } from "./conversation/context.ts";
 import { ContextEstimator } from "./conversation/context-estimator.ts";
 import type { ExecutionCoordinator } from "./engine/coordinator.ts";
+import type { ModelSettingsRepository } from "./db/repositories/model-settings-repository.ts";
 
 export async function resolveContextWindow(
   model: string,
   workspaceKey: string,
   orchestrator: ExecutionCoordinator | null,
+  modelSettingsRepo?: ModelSettingsRepository,
 ): Promise<number> {
+  // DB override takes highest precedence
+  if (modelSettingsRepo) {
+    const dbOverride = modelSettingsRepo.getContextWindow(workspaceKey, model);
+    if (dbOverride != null) return dbOverride;
+  }
+
   if (orchestrator) {
     try {
       const models = await orchestrator.listModels(workspaceKey);

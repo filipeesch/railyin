@@ -94,6 +94,17 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     availableModels.value = await api("models.listEnabled", { workspaceKey });
   }
 
+  async function setModelContextWindow(qualifiedModelId: string, contextWindow: number | null, workspaceKey?: string) {
+    await api("models.setContextWindow", { workspaceKey, qualifiedModelId, contextWindow });
+    for (const provider of allProviderModels.value) {
+      const model = provider.models.find((entry) => entry.id === qualifiedModelId);
+      if (model) {
+        model.contextWindow = contextWindow;
+        break;
+      }
+    }
+  }
+
   /** Derived: first workflow template from the workspace config (from boards store) */
   const isConfigured = () => !!config.value;
   const activeWorkspace = computed(
@@ -126,6 +137,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     loadEnabledModels,
     loadAllModels,
     setModelEnabled,
+    setModelContextWindow,
     isConfigured,
     setThinking,
     selectWorkspace,

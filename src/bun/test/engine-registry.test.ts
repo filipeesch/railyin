@@ -208,7 +208,7 @@ describe("EngineRegistry — additional routing coverage", () => {
 
 describe("EngineRegistry — dialect injection (ER-DI)", () => {
   it("ER-DI-1: CopilotEngine default constructor uses CopilotDialect", () => {
-    const engine = new CopilotEngine(undefined, () => {}, () => {});
+    const engine = new CopilotEngine(() => {}, () => {});
     expect((engine as any).dialect).toBeInstanceOf(CopilotDialect);
   });
 
