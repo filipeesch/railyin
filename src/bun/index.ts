@@ -270,7 +270,7 @@ const allHandlers = {
   ...todoHandlers(db),
   ...modelHandlers(db, orchestrator, modelSettingsRepo),
   ...engineHandlers(orchestrator),
-  ...conversationHandlers(db, orchestrator),
+  ...conversationHandlers(db, orchestrator, modelSettingsRepo),
   ...workflowHandlers(notifier.notifyWorkflowReloaded.bind(notifier)),
   ...launchHandlers(db),
   ...lspHandlers(db, wsRepo, undefined, undefined, channel.broadcast.bind(channel)),

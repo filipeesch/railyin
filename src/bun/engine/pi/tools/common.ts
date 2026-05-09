@@ -9,6 +9,26 @@ import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from ".
 import { Type } from "@earendil-works/pi-ai";
 
 /**
+ * Normalize args from local LLMs that serialize array/object parameters as JSON strings.
+ * For example, `{ questions: "[{...}]" }` → `{ questions: [{...}] }`.
+ */
+function normalizeArgs(schema: { properties?: Record<string, { type?: string }> }, rawArgs: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...rawArgs };
+  for (const [key, prop] of Object.entries(schema.properties ?? {})) {
+    const val = result[key];
+    if (typeof val !== "string") continue;
+    if (prop.type === "array" || prop.type === "object") {
+      try {
+        result[key] = JSON.parse(val);
+      } catch {
+        // leave as-is
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Build Pi AgentTool wrappers for every common Railyin tool.
  * The tool metadata (name, description, parameters schema) comes from
  * COMMON_TOOL_DEFINITIONS — execution delegates to executeCommonTool.
@@ -23,7 +43,8 @@ export function buildCommonTools(ctx: CommonToolContext): AgentTool<any>[] {
       // compatible — cast as any since both represent JSON Schema objects.
       parameters: def.parameters as any,
       execute: async (_toolCallId, args, _signal) => {
-        const result = await executeCommonTool(def.name, args as Record<string, unknown>, ctx);
+        const normalizedArgs = normalizeArgs(def.parameters as { properties?: Record<string, { type?: string }> }, args as Record<string, unknown>);
+        const result = await executeCommonTool(def.name, normalizedArgs, ctx);
         const text = result.text ?? JSON.stringify(result);
         return {
           content: [{ type: "text", text }],
