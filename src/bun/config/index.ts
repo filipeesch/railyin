@@ -98,6 +98,13 @@ export interface PiEngineConfig {
     /** Maximum undo stack depth per conversation. Default: 50. */
     undo_stack_size?: number;
   };
+  /**
+   * Slash-command dialect to use for command discovery and resolution.
+   * - "copilot" — scans .github/prompts/*.prompt.md (GitHub Copilot convention)
+   * - "claude"  — scans .claude/commands/ recursively (Claude convention, colon-namespaced subdirs)
+   * - "none"    — no slash commands (default when omitted)
+   */
+  dialect?: "copilot" | "claude" | "none";
 }
 
 export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig | PiEngineConfig;

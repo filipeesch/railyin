@@ -37,3 +37,7 @@ engines:
   #       base_url: http://localhost:1234/v1
   #   harness:
   #     undo_stack_size: 50      # optional; default 50
+  #   # dialect: none            # Slash-command convention to use for this Pi engine.
+  #                              # copilot → .github/prompts/*.prompt.md
+  #                              # claude  → .claude/commands/**/*.md (colon-namespaced subdirs)
+  #                              # none    → no slash commands (default when omitted)
