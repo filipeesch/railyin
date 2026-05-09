@@ -558,6 +558,9 @@ export class PiEngine implements ExecutionEngine {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: contextWindowOverride ?? this.config.context_window ?? DEFAULT_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MAX_TOKENS,
+      // vLLM and other local providers don't support the OpenAI-only "developer" role.
+      // Disabling this keeps system messages as role:"system" which all providers accept.
+      compat: { supportsDeveloperRole: false },
     } as unknown as Model<"openai-completions">;
   }
 }
