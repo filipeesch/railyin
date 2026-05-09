@@ -432,7 +432,7 @@ export class PiEngine implements ExecutionEngine {
     if (existing) {
       existing.agent.state.model = model as any;
       existing.agent.state.tools = tools as any;
-      existing.agent.state.thinkingLevel = "low";
+      existing.agent.state.thinkingLevel = "off";
       if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
       return existing;
     }
@@ -483,7 +483,10 @@ export class PiEngine implements ExecutionEngine {
       authStorage,
     });
 
-    session.agent.state.thinkingLevel = "low";
+    // "off" prevents the SDK from sending reasoning_effort to local LLMs (LM Studio, Ollama),
+    // which return 400 for that field. reasoning: true on the model is still kept so the
+    // SDK can parse reasoning_content from models that return it in their response.
+    session.agent.state.thinkingLevel = "off";
 
     this.sessions.set(conversationId, session);
     return session;
