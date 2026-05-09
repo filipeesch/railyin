@@ -38,7 +38,7 @@ export type EngineEvent = (
   | { type: "task_updated"; task: import("../../shared/rpc-types.ts").Task }
   | { type: "new_message"; message: import("../../shared/rpc-types.ts").ConversationMessage }
   | { type: "compaction_start" }
-  | { type: "compaction_done" }
+  | { type: "compaction_done"; summary?: string }
   | { type: "done" }
   | { type: "error"; message: string; fatal?: boolean }
 ) & { isError?: boolean };
