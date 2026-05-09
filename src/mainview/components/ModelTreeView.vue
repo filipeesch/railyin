@@ -116,7 +116,6 @@
                 @click.prevent.stop="startCtxEdit(model.id, model.contextWindow ?? null)"
               >
                 <span v-if="model.contextWindow">{{ formatCtx(model.contextWindow) }}</span>
-                <span v-else class="model-ctx__placeholder">set ctx</span>
                 <i class="pi pi-pencil model-ctx__pencil" />
               </span>
             </template>
@@ -436,11 +435,6 @@ function formatCtx(tokens: number): string {
 
 .model-ctx--editable:hover .model-ctx__pencil {
   opacity: 1;
-}
-
-.model-ctx__placeholder {
-  opacity: 0.45;
-  font-style: italic;
 }
 
 .model-ctx-edit {
