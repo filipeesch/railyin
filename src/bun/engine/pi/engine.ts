@@ -517,8 +517,8 @@ export class PiEngine implements ExecutionEngine {
       agentDir,
       model: model as any,
       customTools: piTools,
-      // Disable Pi's built-in read/bash/edit/write — our harness tools replace them.
-      noTools: "builtin",
+      // Enable SDK built-in search tools (grep/find/ls) — auto-downloads ripgrep if needed.
+      tools: ["grep", "find", "ls"],
       sessionManager,
       resourceLoader,
       authStorage,
