@@ -197,7 +197,6 @@ Use patch_file for targeted edits to existing files; use write_file only when re
 
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, args.content, "utf-8");
-      harnessCtx.hashCache.invalidate(abs);
 
       const diff = buildDiff(rel, "write_file", existingContent ?? "", args.content, {
         isNew: existingContent === null,
@@ -303,7 +302,6 @@ ALWAYS save the op:XXXX to undo_write if needed.`,
       });
 
       writeFileSync(abs, after!, "utf-8");
-      harnessCtx.hashCache.invalidate(abs);
 
       const diff = buildDiff(rel, "patch_file", before, after!);
 
@@ -355,7 +353,6 @@ NEVER delete files outside the worktree.`,
       });
 
       unlinkSync(abs);
-      harnessCtx.hashCache.invalidate(abs);
 
       return {
         content: [{ type: "text", text: `OK: deleted ${rel} [${opId}]` }],
@@ -413,8 +410,6 @@ NEVER rename files to paths outside the worktree.`,
 
       mkdirSync(dirname(toAbs), { recursive: true });
       renameSync(fromAbs, toAbs);
-      harnessCtx.hashCache.invalidate(fromAbs);
-      harnessCtx.hashCache.invalidate(toAbs);
 
       const diff: FileDiffPayload = {
         operation: "rename_file",

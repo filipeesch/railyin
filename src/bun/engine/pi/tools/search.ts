@@ -1,33 +1,9 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
-import type { ContentHashCache } from "../harness/hash-cache.ts";
 import { Type } from "@earendil-works/pi-ai";
 import { spawnSync } from "node:child_process";
-import { relative } from "node:path";
-import picomatch from "picomatch";
 
 const OUTPUT_LIMIT = 20 * 1024;
-
-// ---------------------------------------------------------------------------
-// Cache invalidation helper (exported for use by write tools)
-// ---------------------------------------------------------------------------
-
-export function invalidateSearchByPath(
-  cache: ContentHashCache,
-  absPath: string,
-  worktreePath: string,
-): void {
-  const relPath = relative(worktreePath, absPath);
-  const keys = cache.getSearchKeys();
-  for (const key of keys) {
-    // Key format: "search:PATTERN:GLOB:ctx:mode:offset"
-    const parts = key.split(":");
-    const glob = parts[2]; // may be empty
-    if (!glob || picomatch(glob)(relPath)) {
-      cache.invalidateSearch(key);
-    }
-  }
-}
 
 // ---------------------------------------------------------------------------
 // search_text
@@ -81,15 +57,6 @@ If the result is "[search unchanged — same as turn N]", the results have NOT c
       const offset = args.offset ?? 0;
       const glob = args.glob ?? "";
 
-      const cacheKey = `search:${args.pattern}:${glob}:${contextLines}:${outputMode}:${offset}`;
-      const cacheResult = harnessCtx.hashCache.checkSearch(cacheKey);
-      if (cacheResult.hit && cacheResult.message) {
-        return {
-          content: [{ type: "text", text: cacheResult.message }],
-          details: { pattern: args.pattern, glob, outputMode },
-        };
-      }
-
       const rgArgs: string[] = ["--no-heading"];
 
       if (outputMode === "files_with_matches") {
@@ -132,7 +99,6 @@ If the result is "[search unchanged — same as turn N]", the results have NOT c
 
       if (!raw.trim()) {
         const noMatchText = `[No matches for pattern: ${args.pattern}${glob ? ` in ${glob}` : ""}]`;
-        harnessCtx.hashCache.updateSearch(cacheKey, 0);
         return {
           content: [{ type: "text", text: noMatchText }],
           details: { pattern: args.pattern, glob, outputMode, matchCount: 0 },
@@ -153,8 +119,6 @@ If the result is "[search unchanged — same as turn N]", the results have NOT c
         const nextOffset = offset + limit;
         text += `\n[Showing lines ${offset + 1}-${offset + pageLines.length} of ${totalLines}. Use offset=${nextOffset} for next page.]`;
       }
-
-      harnessCtx.hashCache.updateSearch(cacheKey, 0);
 
       return {
         content: [{ type: "text", text }],

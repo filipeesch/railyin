@@ -23,7 +23,6 @@ import {
 import type { Model } from "@earendil-works/pi-ai";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
-import { ContentHashCache } from "./harness/hash-cache.ts";
 import { UndoStack } from "./harness/undo-stack.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
@@ -161,6 +160,15 @@ export class PiEngine implements ExecutionEngine {
           payload: event as unknown as Record<string, unknown>,
         });
       }
+
+      // Emit context usage after each turn so the gauge shows accurate values.
+      if (event.type === "turn_end") {
+        const usage = session.getContextUsage();
+        if (usage?.tokens != null) {
+          queue.push({ type: "usage", inputTokens: usage.tokens, outputTokens: 0 });
+        }
+      }
+
       for (const engineEvent of translateEvent(event as any, workingDirectory)) {
         queue.push(engineEvent);
       }
@@ -266,6 +274,7 @@ export class PiEngine implements ExecutionEngine {
             displayName: m.id,
             contextWindow: m.context_length ?? undefined,
             contextWindowEditable: true,
+            supportsManualCompact: true,
           });
         }
       } catch (err) {
@@ -281,9 +290,6 @@ export class PiEngine implements ExecutionEngine {
   }
 
   async compact(_taskId: number | null, conversationId: number, _workingDirectory: string): Promise<void> {
-    const ctx = this.harnessContexts.get(conversationId);
-    if (ctx) ctx.hashCache.resetWindowFlags();
-
     const session = this.sessions.get(conversationId);
     if (!session) {
       console.warn(`[pi] compact(): no live session for conversation ${conversationId}, skipping`);
@@ -318,7 +324,6 @@ export class PiEngine implements ExecutionEngine {
     let ctx = this.harnessContexts.get(conversationId);
     if (!ctx) {
       ctx = {
-        hashCache: new ContentHashCache(),
         undoStack: new UndoStack(this.config.harness?.undo_stack_size),
         worktreePath,
       };
