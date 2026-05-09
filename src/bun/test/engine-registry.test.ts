@@ -3,6 +3,12 @@ import { EngineRegistry } from "../engine/engine-registry.ts";
 import { QualifiedModelId } from "../engine/qualified-model-id.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, EngineShutdownOptions } from "../engine/types.ts";
 import type { LoadedConfig } from "../config/index.ts";
+import { CopilotEngine } from "../engine/copilot/engine.ts";
+import { PiEngine } from "../engine/pi/engine.ts";
+import { CopilotDialect } from "../engine/dialects/copilot-dialect.ts";
+import { ClaudeDialect } from "../engine/dialects/claude-dialect.ts";
+import { NullDialect } from "../engine/dialects/null-dialect.ts";
+import { createDefaultDialectRegistry } from "../engine/dialects/registry.ts";
 
 function makeEngine(overrides: Partial<ExecutionEngine> = {}): ExecutionEngine & { cancelCalls: number[]; shutdownCalled: boolean } {
   const obj = {
@@ -195,5 +201,33 @@ describe("EngineRegistry — additional routing coverage", () => {
     const a = registry.resolveEngineForModel("workspace-a", "copilot/gpt-4.1");
     const b = registry.resolveEngineForModel("workspace-b", "copilot/gpt-4.1");
     expect(a).toBe(b);
+  });
+});
+
+// ─── Dialect injection verification ───────────────────────────────────────────
+
+describe("EngineRegistry — dialect injection (ER-DI)", () => {
+  it("ER-DI-1: CopilotEngine default constructor uses CopilotDialect", () => {
+    const engine = new CopilotEngine(undefined, () => {}, () => {});
+    expect((engine as any).dialect).toBeInstanceOf(CopilotDialect);
+  });
+
+  it("ER-DI-2: PiEngine with dialect:'copilot' config gets CopilotDialect via registry", () => {
+    const registry = createDefaultDialectRegistry();
+    const dialect = registry.create("copilot");
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, dialect);
+    expect((engine as any).dialect).toBeInstanceOf(CopilotDialect);
+  });
+
+  it("ER-DI-3: PiEngine with dialect:'claude' config gets ClaudeDialect via registry", () => {
+    const registry = createDefaultDialectRegistry();
+    const dialect = registry.create("claude");
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, dialect);
+    expect((engine as any).dialect).toBeInstanceOf(ClaudeDialect);
+  });
+
+  it("ER-DI-4: PiEngine with no dialect config gets NullDialect (default)", () => {
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {});
+    expect((engine as any).dialect).toBeInstanceOf(NullDialect);
   });
 });

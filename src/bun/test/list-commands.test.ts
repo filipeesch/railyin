@@ -2,9 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { collectClaudeCommands, ClaudeEngine } from "../engine/claude/engine.ts";
+import { ClaudeEngine } from "../engine/claude/engine.ts";
 import { CopilotDialect } from "../engine/dialects/copilot-dialect.ts";
-import type { CommandInfo } from "../engine/types.ts";
 import { MockClaudeSdkAdapter } from "./support/claude-sdk-mock.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import type { Database } from "bun:sqlite";
@@ -94,93 +93,6 @@ describe("CopilotDialect.listCommands", () => {
   it("handles unreadable directory gracefully", () => {
     const dialect = new CopilotDialect();
     expect(() => dialect.listCommands(join(tmpDir, "nonexistent-worktree"))).not.toThrow();
-  });
-});
-
-// ─── collectClaudeCommands ────────────────────────────────────────────────────
-
-describe("collectClaudeCommands", () => {
-  it("returns empty for non-existent directory", () => {
-    const seen = new Set<string>();
-    const out: CommandInfo[] = [];
-    collectClaudeCommands(join(tmpDir, ".claude", "commands"), "", seen, out);
-    expect(out).toEqual([]);
-  });
-
-  it("lists .md files as commands (stem is name)", () => {
-    const dir = join(tmpDir, ".claude", "commands");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "my-task.md"), "# My task");
-    writeFileSync(join(dir, "plan.md"), "# Plan");
-
-    const seen = new Set<string>();
-    const out: CommandInfo[] = [];
-    collectClaudeCommands(dir, "", seen, out);
-
-    const names = out.map((c) => c.name).sort();
-    expect(names).toEqual(["my-task", "plan"]);
-  });
-
-  it("ignores non-.md files", () => {
-    const dir = join(tmpDir, ".claude", "commands");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "cmd.md"), "# cmd");
-    writeFileSync(join(dir, "readme.txt"), "not a command");
-
-    const seen = new Set<string>();
-    const out: CommandInfo[] = [];
-    collectClaudeCommands(dir, "", seen, out);
-
-    expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("cmd");
-  });
-
-  it("recurses into subdirectories with colon separator", () => {
-    const dir = join(tmpDir, ".claude", "commands");
-    const subDir = join(dir, "opsx");
-    mkdirSync(subDir, { recursive: true });
-    writeFileSync(join(dir, "top-level.md"), "# top");
-    writeFileSync(join(subDir, "propose.md"), "# propose");
-    writeFileSync(join(subDir, "apply.md"), "# apply");
-
-    const seen = new Set<string>();
-    const out: CommandInfo[] = [];
-    collectClaudeCommands(dir, "", seen, out);
-
-    const names = out.map((c) => c.name).sort();
-    expect(names).toEqual(["opsx:apply", "opsx:propose", "top-level"]);
-  });
-
-  it("recursion uses prefix correctly for nested subdirs", () => {
-    const dir = join(tmpDir, ".claude", "commands");
-    const subDir = join(dir, "a", "b");
-    mkdirSync(subDir, { recursive: true });
-    writeFileSync(join(subDir, "cmd.md"), "# cmd");
-
-    const seen = new Set<string>();
-    const out: CommandInfo[] = [];
-    collectClaudeCommands(dir, "", seen, out);
-
-    expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("a:b:cmd");
-  });
-
-  it("deduplicates across multiple calls (first wins)", () => {
-    const dir1 = join(tmpDir, "worktree", ".claude", "commands");
-    const dir2 = join(tmpDir, "home", ".claude", "commands");
-    mkdirSync(dir1, { recursive: true });
-    mkdirSync(dir2, { recursive: true });
-    writeFileSync(join(dir1, "shared.md"), "From worktree");
-    writeFileSync(join(dir2, "shared.md"), "From home");
-    writeFileSync(join(dir2, "home-only.md"), "Home only");
-
-    const seen = new Set<string>();
-    const out: CommandInfo[] = [];
-    collectClaudeCommands(dir1, "", seen, out);
-    collectClaudeCommands(dir2, "", seen, out);
-
-    const names = out.map((c) => c.name).sort();
-    expect(names).toEqual(["home-only", "shared"]);
   });
 });
 
