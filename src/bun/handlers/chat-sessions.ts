@@ -5,6 +5,7 @@ import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
+import { QualifiedModelId } from "../engine/qualified-model-id.ts";
 
 function autoTitle(): string {
   const now = new Date();
@@ -45,10 +46,9 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         const convResult = db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
         const conversationId = convResult.lastInsertRowid as number;
 
-        // Seed the conversation model with the workspace default or engine model
+        // Seed the conversation model with the workspace default
         const workspaceConfig = getWorkspaceConfig(wsKey);
-        const engineModel = "model" in workspaceConfig.engine ? (workspaceConfig.engine.model || null) : null;
-        const modelToSet = workspaceConfig.workspace.default_model ?? engineModel ?? null;
+        const modelToSet = workspaceConfig.defaultModel ?? null;
         if (modelToSet) {
           db.run("UPDATE conversations SET model = ? WHERE id = ?", [modelToSet, conversationId]);
         }
@@ -113,8 +113,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       model?: string | null;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ messageId: number; executionId: number }> => {
-      const session = db.query<ChatSessionRow, [number]>(
-        "SELECT * FROM chat_sessions WHERE id = ?"
+      const session = db.query<ChatSessionRow & { conversation_model: string | null }, [number]>(
+        `SELECT cs.*, c.model AS conversation_model FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
       ).get(params.sessionId);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
@@ -127,8 +127,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
       // Trigger AI execution — orchestrator appends user message and returns executionId
       const { extractChips } = await import("../../mainview/utils/chat-chips.ts");
-      const workspaceConfig = getWorkspaceConfig(session.workspace_key);
-      const engine = workspaceConfig.engine.type;
+      const engine = QualifiedModelId.tryParse(session.conversation_model)?.engineId ?? "copilot";
       const promptContent = params.engineContent ?? extractChips(params.content).humanText;
       const prepared = await prepareMessageForEngine(engine, promptContent, params.attachments);
       const { message, executionId } = await orchestrator.executeChatTurn(
@@ -166,8 +165,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
       generalNotes?: string;
     }): Promise<{ messageId: number; executionId: number }> => {
-      const session = db.query<ChatSessionRow, [number]>(
-        "SELECT * FROM chat_sessions WHERE id = ?"
+      const session = db.query<ChatSessionRow & { conversation_model: string | null }, [number]>(
+        `SELECT cs.*, c.model AS conversation_model FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
       ).get(params.sessionId);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
@@ -180,8 +179,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
       const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
 
-      const workspaceConfig = getWorkspaceConfig(session.workspace_key);
-      const engine = workspaceConfig.engine.type;
+      const engine = QualifiedModelId.tryParse(session.conversation_model)?.engineId ?? "copilot";
       const prepared = await prepareMessageForEngine(engine, engineContent, undefined);
       const { message, executionId } = await orchestrator.executeChatTurn(
         params.sessionId,

@@ -54,7 +54,6 @@ function makeConfig(engineIds: string[], allowedEngineIds?: string[]): LoadedCon
   const base = getWorkspaceConfig("default");
   return {
     ...base,
-    engine: { type: engineIds[0] ?? "copilot" },
     engines: engineIds.map((id) => ({ id, config: { type: id } })),
     allowedEngineIds: allowedEngineIds ?? null,
   } as LoadedConfig;

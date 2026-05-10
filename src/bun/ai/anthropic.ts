@@ -384,7 +384,6 @@ export class AnthropicProvider implements AIProvider {
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly cacheTtl: "5m" | "1h" | undefined;
-  private readonly enableThinking: boolean;
   private readonly defaultEffort: "low" | "medium" | "high" | "max" | undefined;
   /** When true, include the context-editing-2025-10-01 beta header and
    *  `context_edit_strategy` body param on every request. */
@@ -400,7 +399,6 @@ export class AnthropicProvider implements AIProvider {
     model: string,
     baseUrl = ANTHROPIC_BASE_URL,
     cacheTtl?: "5m" | "1h",
-    enableThinking = false,
     defaultEffort?: "low" | "medium" | "high" | "max",
     contextEditEnabled = false,
     logger: Logger = realLogger,
@@ -409,7 +407,6 @@ export class AnthropicProvider implements AIProvider {
     this.model = model;
     this.baseUrl = baseUrl;
     this.cacheTtl = cacheTtl;
-    this.enableThinking = enableThinking;
     this.defaultEffort = defaultEffort;
     this.contextEditEnabled = contextEditEnabled;
     this.logger = logger;
@@ -492,7 +489,6 @@ export class AnthropicProvider implements AIProvider {
     };
     if (systemBlocks) body.system = systemBlocks;
     if (adaptedTools) body.tools = adaptedTools;
-    if (this.enableThinking) body.thinking = { type: "adaptive" };
     const turnEffort = options.effort ?? this.defaultEffort;
     await this.getCapabilities();
     if (turnEffort && this.supportsEffort) body.output_config = { effort: turnEffort };
@@ -600,7 +596,6 @@ export class AnthropicProvider implements AIProvider {
     };
     if (systemBlocks) body.system = systemBlocks;
     if (adaptedTools) body.tools = adaptedTools;
-    if (this.enableThinking) body.thinking = { type: "adaptive" };
     const streamEffort = options.effort ?? this.defaultEffort;
     await this.getCapabilities();
     if (streamEffort && this.supportsEffort) body.output_config = { effort: streamEffort };

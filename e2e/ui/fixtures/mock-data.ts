@@ -45,7 +45,7 @@ export function makeWorkspace(overrides?: Partial<WorkspaceConfig>): WorkspaceCo
         worktreeBasePath: "/tmp/railyn-test",
         workspacePath: "/home/user/projects",
         enableThinking: false,
-        engine: { model: "copilot/gpt-4.1" },
+        defaultModel: "copilot/gpt-4.1",
         availableEngines: [
             { id: "copilot", type: "copilot" },
             { id: "claude", type: "claude" },

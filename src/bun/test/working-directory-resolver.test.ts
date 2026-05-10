@@ -61,9 +61,7 @@ function setupMonorepoConfig(
     join(configDir, "workspace.test.yaml"),
     [
       "name: test",
-      "engine:",
-      "  type: copilot",
-      "  model: copilot/mock-model",
+      "default_model: copilot/mock-model",
       `workspace_path: ${workspacePath}`,
       "projects:",
       "  - key: test-project",

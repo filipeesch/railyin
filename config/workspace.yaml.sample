@@ -33,29 +33,12 @@ name: My Workspace
 #   - copilot
 #   - claude
 
-# ─── Single-engine fallback (backward compat) ─────────────────────────────────
-# When engines.yaml is absent, the engine: block below is used as a single-engine config.
-# Copilot engine: use your GitHub Copilot subscription.
-# Auth is handled automatically via env vars (COPILOT_GITHUB_TOKEN / GH_TOKEN)
-# or the `copilot` CLI login. No API key needed in this file.
-# engine:
-#   type: copilot
-#   model: gpt-4.1  # optional; defaults to Copilot's default model
+# ─── Default model ────────────────────────────────────────────────────────────
+# The workspace default model, in <engineId>/<modelId> format.
+# When a task or chat session has no model set, this value is used.
+# Engine instances are declared in config/engines.yaml (required).
 #
-# Claude engine:
-# engine:
-#   type: claude
-#   model: claude-sonnet-4-6  # optional
-#
-# OpenCode engine: use the OpenCode SDK with full provider flexibility.
-# engine:
-#   type: opencode
-#   model: anthropic/claude-sonnet-4-5  # optional default model (providerID/modelID)
-#   providers:
-#     anthropic:
-#       api_key: sk-ant-YOUR_KEY_HERE
-#     ollama:
-#       base_url: http://localhost:11434
+# default_model: copilot/gpt-4.1
 
 # Where to store Git worktrees. Defaults to ~/.railyn/worktrees
 # worktree_base_path: /path/to/worktrees
@@ -76,7 +59,5 @@ name: My Workspace
 # Anthropic-specific settings (only applied when using Anthropic provider)
 # anthropic:
 #   cache_ttl: "5m"  # "5m" (default, 1.25× write cost) or "1h" (2× write cost, survives long pauses)
-#   enable_thinking: false  # Set to true to enable adaptive thinking for supported models (Claude 3.7+, Claude 4+).
 #   effort: "medium"        # Thinking effort for the parent agent: "low" | "medium" | "high" | "max". Default is "high" (Sonnet 4.6). "medium" is a good balance for most tasks.
-#                           # Can also be toggled via Settings → Models in the UI.
 

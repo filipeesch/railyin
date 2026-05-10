@@ -1,7 +1,4 @@
-## Purpose
-Defines the `config/engines.yaml` file format for declaring all available engine instances globally.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: engines.yaml declares all engine instances globally
 The system SHALL require a `config/engines.yaml` file that declares all available engine instances. Each entry SHALL have: `id` (string — unique identifier, equals the engine type in v1), `type` (one of `copilot`, `claude`, `opencode`, `scripted`, `pi`), and optional engine-specific fields (`model`, `providers`). The first entry in the list SHALL be the default engine used when no model is set on a conversation. When `engines.yaml` is absent or contains zero valid engine entries, the system SHALL refuse to start with a clear configuration error.
@@ -26,17 +23,8 @@ The system SHALL require a `config/engines.yaml` file that declares all availabl
 - **WHEN** `config/engines.yaml` exists but its `engines:` list is empty or all entries lack `id`/`type`
 - **THEN** the loader returns a configuration error and no engines are constructed
 
-### Requirement: workspace.yaml supports optional allowed_engines filter
-Each workspace definition in `workspace.yaml` MAY include an `allowed_engines` list of engine IDs. When present, only the listed engines SHALL be available in that workspace. When absent, all engines from `engines.yaml` SHALL be available.
+## REMOVED Requirements
 
-#### Scenario: allowed_engines restricts visible engines
-- **WHEN** workspace A declares `allowed_engines: [copilot]` and engines.yaml has copilot and opencode
-- **THEN** `listModels()` for workspace A returns only copilot models
-
-#### Scenario: No allowed_engines means all engines available
-- **WHEN** workspace B declares no `allowed_engines`
-- **THEN** `listModels()` for workspace B returns models from all engines in engines.yaml
-
-#### Scenario: Invalid engine ID in allowed_engines is ignored with warning
-- **WHEN** `allowed_engines` references an engine ID not present in engines.yaml
-- **THEN** a startup warning is logged and the unknown ID is silently skipped
+### Requirement: Backward compatibility when engines.yaml is absent
+**Reason**: `engines.yaml` is now mandatory. The fallback to `workspace.yaml engine:` is being removed in favor of a single source of truth for engine instance declarations.
+**Migration**: Create `config/engines.yaml` with at least one engine entry (see `config/engines.yaml.sample`). Replace any `workspace.yaml engine:` block with a `default_model: <engineId>/<modelId>` field per the workspace spec migration.

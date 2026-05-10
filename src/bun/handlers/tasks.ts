@@ -23,6 +23,7 @@ import { validateTransition } from "../workflow/transition-validator.ts";
 import { getColumnConfig } from "../workflow/column-config.ts";
 import { PositionService } from "./position-service.ts";
 import { seedConversationModel } from "../engine/execution/model-resolver";
+import { QualifiedModelId } from "../engine/qualified-model-id.ts";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────
 
@@ -311,7 +312,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       }
       const { extractChips } = await import("../../mainview/utils/chat-chips.ts");
       const promptContent = params.engineContent ?? extractChips(params.content).humanText;
-      const engine = getWorkspaceConfig(taskWorkspaceKey).engine.type;
+      const engine = QualifiedModelId.tryParse(taskRow2?.conversation_model)?.engineId ?? "copilot";
       const prepared = await prepareMessageForEngine(engine, promptContent, params.attachments);
 
       return requireOrchestrator(orchestrator).executeHumanTurn(params.taskId, params.content, prepared.attachments, prepared.content);
@@ -326,7 +327,10 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
 
       const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
-      const engine = getWorkspaceConfig(taskWorkspaceKey).engine.type;
+      const submitConvRow = db.query<{ conversation_model: string | null }, [number]>(
+        "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?"
+      ).get(params.taskId);
+      const engine = QualifiedModelId.tryParse(submitConvRow?.conversation_model)?.engineId ?? "copilot";
       const prepared = await prepareMessageForEngine(engine, engineContent, undefined);
 
       return requireOrchestrator(orchestrator).executeHumanTurn(params.taskId, userContent, prepared.attachments, prepared.content);

@@ -117,6 +117,49 @@ test.describe("W — workspace settings", () => {
             return Array.isArray(call.allowedEngines) && !call.allowedEngines.includes("copilot");
         })).toBe(true);
     });
+
+    test("W-6: saving workspace settings calls workspace.update with defaultModel", async ({ page, api }) => {
+        api.returns("models.list", MODELS);
+        const updateCalls = api.capture("workspace.update", {});
+        await goToSetup(page, api);
+        await page.getByRole("tab", { name: "Workspace" }).click();
+
+        // Select a model in the dropdown
+        const modelSelect = page.locator(".setup-section .p-select").first();
+        await modelSelect.click();
+        const options = page.locator(".p-select-overlay .p-select-option");
+        await options.filter({ hasText: /gpt-4\.1/i }).first().click();
+
+        await page.getByRole("button", { name: /save settings/i }).click();
+        await expect(page.locator(".p-message-success")).toBeVisible({ timeout: 3_000 });
+        expect(updateCalls.some(c => {
+            const call = c as { defaultModel?: string };
+            return call.defaultModel === "copilot/gpt-4.1";
+        })).toBe(true);
+    });
+
+    test("W-7: model dropdown pre-selects value from defaultModel", async ({ page, api }) => {
+        api
+            .returns("models.list", MODELS)
+            .returns("workspace.getConfig", makeWorkspace({ defaultModel: "copilot/gpt-4.1" }));
+        await goToSetup(page, api);
+        await page.getByRole("tab", { name: "Workspace" }).click();
+
+        const modelSelect = page.locator(".setup-section .p-select").first();
+        await expect(modelSelect).toContainText(/gpt-4\.1/i);
+    });
+
+    test("W-8: model dropdown shows no selection when defaultModel is null", async ({ page, api }) => {
+        api
+            .returns("models.list", MODELS)
+            .returns("workspace.getConfig", makeWorkspace({ defaultModel: null }));
+        await goToSetup(page, api);
+        await page.getByRole("tab", { name: "Workspace" }).click();
+
+        const modelSelect = page.locator(".setup-section .p-select").first();
+        // No model selected — the dropdown should not show any model name
+        await expect(modelSelect).not.toContainText(/gpt-4/i);
+    });
 });
 
 // ─── Suite P — Project CRUD ────────────────────────────────────────────────

@@ -1,4 +1,3 @@
 name: Test Workspace
 
-engine:
-  type: scripted
+default_model: copilot/mock-model

@@ -433,12 +433,8 @@ export interface WorkspaceConfig {
     contextWindowTokens?: number;
   };
   worktreeBasePath: string;
-  /** Whether adaptive thinking is enabled for supported Anthropic models. */
-  enableThinking: boolean;
-  /** Resolved engine configuration for this workspace. */
-  engine: {
-    model?: string;
-  };
+  /** Default model for this workspace in `<engineId>/<modelId>` format. Null when unset. */
+  defaultModel: string | null;
   /** All engine instances available in this installation (from engines.yaml or fallback). */
   availableEngines: { id: string; type: string }[];
   /** Engine IDs allowed in this workspace. Empty means all available engines are allowed. */
@@ -555,7 +551,7 @@ export type RailynAPI = {
     response: WorkspaceSummary;
   };
   "workspace.update": {
-    params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; engineModel?: string; worktreeBasePath?: string; workspacePath?: string };
+    params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string };
     response: Record<string, never>;
   };
   "workspace.resolveGitRoot": {
@@ -565,10 +561,6 @@ export type RailynAPI = {
   "workspace.openFolderDialog": {
     params: { initialPath?: string };
     response: { path: string | null };
-  };
-  "workspace.setThinking": {
-    params: { workspaceKey?: string; enabled: boolean };
-    response: Record<string, never>;
   };
 
   // Boards

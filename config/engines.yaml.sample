@@ -1,10 +1,12 @@
-# engines.yaml — global engine configuration for Railyin
+# engines.yaml — global engine configuration for Railyin (REQUIRED)
 #
 # Declares all engine instances available across all workspaces.
 # Engines are constructed once at startup and shared.
 #
+# This file is required. If it is absent or contains no valid entries, Railyin
+# will refuse to start with a clear error message.
+#
 # To restrict which engines a workspace can use, add `allowed_engines:` to workspace.yaml.
-# When this file is absent, Railyin falls back to the `engine:` block in workspace.yaml.
 
 engines:
   # GitHub Copilot — uses the GitHub Copilot SDK (requires Copilot auth)
