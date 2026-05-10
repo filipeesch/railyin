@@ -24,6 +24,7 @@ export type WorkflowState = string; // matches column id from YAML
 
 export type ExecutionState =
   | "idle"
+  | "preparing"
   | "running"
   | "waiting_user"
   | "waiting_external"
