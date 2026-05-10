@@ -1,45 +1,17 @@
-# Spec Delta: search_text removal + SDK search tool replacement
+## Purpose
+This delta spec removes `search_text` from the Pi engine's custom harness. Search functionality for Pi engine is now provided by Pi SDK's built-in `grep` tool (with `find`/`ls`). The existing `search-tools` spec remains valid for other engines (Claude, Copilot) that still use the native `search_text` implementation.
 
-## MODIFIED Requirements
+## Changes
 
-### Requirement: Pi tool groups exclude search_text
-The Pi engine tool registry SHALL NOT include a `search_text` tool or `search` tool group. Search functionality is provided exclusively through Pi SDK's built-in `grep`, `find`, and `ls` tools.
+### REMOVED Requirement: search_text in Pi engine
+The `search_text` tool in the Pi engine custom harness SHALL be removed. Search for the Pi engine is provided by Pi SDK's built-in `grep` tool, which auto-downloads ripgrep when needed via `ensureTool("rg", true)`.
 
-#### Scenario: PI_TOOL_GROUPS has no search key
-- **WHEN** `PI_TOOL_GROUPS` is inspected
-- **THEN** it has exactly 4 keys: `read`, `write`, `shell`, `web`
-- **AND** it does NOT have a `search` key
+#### Scenario: search_text is not present in Pi tool registry
+- **WHEN** `buildAllTools()` is called for a Pi engine session
+- **THEN** no `search_text` tool is included in the returned tool array
 
-#### Scenario: DEFAULT_PI_TOOL_GROUPS has no search
-- **WHEN** `DEFAULT_PI_TOOL_GROUPS` is inspected
-- **THEN** it has exactly 3 entries: `read`, `write`, `shell`
-- **AND** it does NOT contain `search`
+### MODIFIED Requirement: search_internet handled separately
+The `search_internet` tool (in Pi SDK's `web` tool group) SHALL remain unchanged. It provides web search functionality and is independent of file search. The Pi SDK `grep` tool handles file content search.
 
-#### Scenario: buildAllTools() excludes search_text
-- **WHEN** `buildAllTools({ harnessCtx, commonCtx })` is called
-- **THEN** the returned tool array does NOT contain any tool named `search_text`
-
-#### Scenario: Column filtering respects columnGroups
-- **WHEN** `buildAllTools({ harnessCtx, commonCtx, columnGroups: ["read"] })` is called
-- **THEN** only tools from the `read` group are returned (plus common tools)
-- **AND** no `search` tools are present
-
-## ADDED Requirements
-
-### Requirement: SDK search tools enabled via createAgentSession
-Pi SDK's built-in `grep`, `find`, and `ls` tools SHALL be enabled via the `tools` parameter passed to `createAgentSession`.
-
-#### Scenario: SDK tools are enabled
-- **WHEN** `createAgentSession()` is called
-- **THEN** `tools: ["grep", "find", "ls"]` is included in the options
-
-### Requirement: Dependency cleanup
-After removing `search_text`, `picomatch` and `rimraf` SHALL no longer be imported anywhere in the codebase.
-
-#### Scenario: picomatch not imported
-- **WHEN** the codebase is searched for `picomatch` imports
-- **THEN** no matches are found
-
-#### Scenario: rimraf not imported
-- **WHEN** the codebase is searched for `rimraf` imports in TS files
-- **THEN** no matches are found
+### Note on search caching
+Pi SDK's `grep` has its own internal caching mechanism. Custom `ContentHashCache` `updateSearch`/`checkSearch` methods (used by the removed `search_text`) SHALL remain for compatibility with the `glob` tool in `read.ts` which uses them for file listing deduplication.
