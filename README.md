@@ -1,90 +1,52 @@
 # Railyin
 
-## Development
+## Quick start
 
 ```bash
 bun install
-bun run dev
+bun run build    # build frontend for `dist/` (prerequisite for UI tests)
+bun run dev      # dev server (in-memory DB by default)
+bun run prod     # prod server (persistent SQLite DB)
 ```
 
-> **Note:** `bun run dev` uses an **in-memory database** by default. Data is not persisted between runs. This prevents tests and development work from accidentally polluting your production data.
+Dev and prod accept `--port=3001` to run on a different port, and `--real-db` to persist data.
 
-To run with the real persistent database (e.g. to work on actual boards and tasks):
+`bun run prod` uses a persistent SQLite DB. For development with DB persistence, run `bun run dev -- --real-db`.
 
-```bash
-bun run prod
-# or during development with persistence:
-bun run dev -- --real-db
-```
+For production use, run `make run` (installs dependencies, builds the frontend, then starts the server).
 
 ## Testing
 
 ### Backend tests
 
-Runs unit and integration tests for the Bun backend (no app required):
-
 ```bash
-bun test
-# or
-bun run test
+bun test src/bun --timeout 20000
 ```
+
+### Weights and measures
+
+| Command | Description |
+|---|---|
+| `bun test src/bun --timeout 20000` | All Bun backend tests (vitest) |
+| `bun test src/bun/test/orchestrator.test.ts` | Single backend test file |
+| `bun test src/mainview/stores/conversation.test.ts` | Frontend unit test |
+| `bun test e2e/api --timeout 30000` | API smoke tests |
+| `bun run test:e2e` | Full Playwright suite (builds first) |
+| `bun run test:e2e:chat` | Single Playwright spec: chat |
+| `bun run test:mutation` | Stryker mutation tests |
 
 ### UI tests
 
-UI tests drive the live app through its debug bridge. The app must be running before you execute them.
+UI tests run against `dist/` served by `vite preview` — no Bun server involved. All `/api/*` endpoints are mocked via `page.route()` in `e2e/ui/fixtures/mock-api.ts`.
 
-The bridge port is OS-assigned at startup and written to `/tmp/railyn-debug.port`. `bridge.ts` reads that file automatically.
+| Command | Description |
+|---|---|
+| `bun run build` | Build frontend before running UI tests |
+| `bun run test:e2e` | Run all Playwright specs in `e2e/ui/` |
+| `bun run test:e2e:chat` | Single Playwright spec: chat |
+| `bun run test:e2e:board` | Single Playwright spec: board |
 
-**Option A — fully automated (recommended):**
-
-```bash
-bun run test:ui:run
-```
-
-This kills any existing app, starts it in test mode with the debug bridge enabled, runs the suite, then cleans up.
-
-**Option B — manual (two terminals):**
-
-**Terminal 1 — start the app in test mode:**
-```bash
-bun run dev:test
-# equivalent: vite build && electrobun dev --watch -- --debug=0 --memory-db
-```
-
-Wait ~25s for the app to start, then verify the bridge is up:
-```bash
-curl http://localhost:$(cat /tmp/railyn-debug.port)/
-```
-
-**Terminal 2 — run the UI tests:**
-```bash
-bun run test:ui
-# or for just the review overlay suite:
-bun run test:ui:review
-```
-
-> **Important:** Always use `bun run dev:test` (not `bun run dev`) when running UI tests. `--debug=0` is required to open the HTTP debug bridge on a random port — without it all UI tests fail immediately with `ConnectionRefused`. `--memory-db` uses an isolated in-memory database so tests never touch your real data. They reset their own DB state at the start of each suite — no manual cleanup needed.
-
-### Debug HTTP bridge
-
-The debug bridge is only started when the `--debug` flag is passed (never in a normal `bun run dev`). The actual port is written to `/tmp/railyn-debug.port` at startup.
-
-```bash
-# Start with debug bridge enabled (real DB, fixed port 9229):
-bun run dev:debug
-# equivalent: vite build && electrobun dev --watch -- --debug
-
-# Start with debug bridge + isolated in-memory DB (for tests, random port):
-bun run dev:test
-# equivalent: RAILYN_DEBUG=1 RAILYN_DB=:memory: vite build && electrobun dev --watch
-
-# Useful endpoints:
-# POST /inspect          — evaluate JS in the WebView and return the result
-# GET  /click?selector=  — dispatch click events on a CSS selector
-# GET  /screenshot       — take a screenshot
-# GET  /reset-decisions  — clear hunk decisions for a task (test helper)
-# GET  /setup-test-env   — create a self-contained test task + git worktree
-```
+Run `bun run build` first — Playwright config spares `dist/` via `vite preview` and handles the rest.
 
 ## Copilot Engine
 
