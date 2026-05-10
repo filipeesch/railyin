@@ -86,11 +86,19 @@ bun run dev:test
 # GET  /setup-test-env   — create a self-contained test task + git worktree
 ```
 
-## Copilot Engine
+## Copilot & Claude Engines
 
-To use the GitHub Copilot engine, set `engine.type: copilot` in your workspace config. On first use, Railyin automatically downloads the Copilot CLI binary (~130MB) and caches it at `~/.railyn/copilot-cli/`.
+To use either the GitHub Copilot or Claude Code engine, add it to `config/engines.yaml`:
 
-You must **authenticate** with GitHub Copilot before use (run `copilot auth` in a terminal with the CLI installed, or log in through VS Code's Copilot extension).
+```yaml
+engines:
+  - id: copilot
+    type: copilot
+  - id: claude
+    type: claude
+```
+
+You must be **authenticated** before use. Read [GitHub Copilot](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli#authenticate-with-login) or [Claude Code](https://code.claude.com/docs/en/authentication#log-in-to-claude-code) documentation for more information.
 
 ## Troubleshooting
 
