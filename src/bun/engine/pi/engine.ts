@@ -517,8 +517,22 @@ export class PiEngine implements ExecutionEngine {
       agentDir,
       model: model as any,
       customTools: piTools,
-      // Disable Pi's built-in read/bash/edit/write — our harness tools replace them.
-      noTools: "builtin",
+      // Enable SDK built-in search tools (grep/find/ls) — auto-downloads ripgrep if needed.
+      // NOTE: The SDK's `tools` parameter acts as a GLOBAL allowlist that filters
+      // both built-in and custom tools. We enable ALL active tools here.
+      tools: [
+        // SDK built-in search tools
+        "grep", "find", "ls",
+        // Their own custom tools (harness + common)
+        "read_file", "glob", "run_command", "undo_write",
+        "fetch_url", "search_internet",
+        "write_file", "patch_file", "delete_file", "rename_file",
+        // Common tools
+        "get_task", "get_board_summary", "list_tasks",
+        "create_task", "edit_task", "delete_task", "move_task", "message_task",
+        "list_decisions", "record_decision", "update_decision", "delete_decision",
+        "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status",
+      ],
       sessionManager,
       resourceLoader,
       authStorage,

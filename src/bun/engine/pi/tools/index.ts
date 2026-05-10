@@ -8,7 +8,6 @@ import type { CommonToolContext } from "../../types.ts";
 import { buildReadTools } from "./read.ts";
 import { buildWriteTools } from "./write.ts";
 import { buildUndoTool } from "./undo.ts";
-import { buildSearchTools } from "./search.ts";
 import { buildShellTools } from "./shell.ts";
 import { buildWebTools } from "./web.ts";
 import { buildCommonTools, type SuspendRef } from "./common.ts";
@@ -21,13 +20,12 @@ import { buildCommonTools, type SuspendRef } from "./common.ts";
 export const PI_TOOL_GROUPS = {
   read: (harnessCtx: HarnessContext) => buildReadTools(harnessCtx),
   write: (harnessCtx: HarnessContext) => [...buildWriteTools(harnessCtx), ...buildUndoTool(harnessCtx)],
-  search: (harnessCtx: HarnessContext) => buildSearchTools(harnessCtx),
   shell: (harnessCtx: HarnessContext) => buildShellTools(harnessCtx),
   web: (harnessCtx: HarnessContext) => buildWebTools(harnessCtx),
 } as const satisfies Record<string, (harnessCtx: HarnessContext) => AgentTool<any>[]>;
 
 /** Default tool groups when a column has no explicit `tools:` config. */
-export const DEFAULT_PI_TOOL_GROUPS: (keyof typeof PI_TOOL_GROUPS)[] = ["read", "write", "search", "shell"];
+export const DEFAULT_PI_TOOL_GROUPS: (keyof typeof PI_TOOL_GROUPS)[] = ["read", "write", "shell"];
 
 export type PiToolGroupName = keyof typeof PI_TOOL_GROUPS;
 
