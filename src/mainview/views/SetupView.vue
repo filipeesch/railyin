@@ -478,6 +478,10 @@ async function saveWorkspaceSettings() {
       workspacePath: wsForm.workspacePath || undefined,
     });
     await loadModelsForEngines();
+    await Promise.all([
+      workspaceStore.loadEnabledModels(),
+      workspaceStore.loadAllModels(),
+    ]);
     wsSaveSuccess.value = true;
     setTimeout(() => { wsSaveSuccess.value = false; }, 3000);
   } catch (e) {

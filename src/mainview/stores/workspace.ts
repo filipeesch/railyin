@@ -60,15 +60,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return result.gitRoot;
   }
 
-  async function setThinking(enabled: boolean) {
-    await api("workspace.setThinking", {
-      workspaceKey: activeWorkspaceKey.value ?? undefined,
-      enabled,
-    });
-    // Optimistically update local state so the toggle feels instant
-    if (config.value) config.value = { ...config.value, enableThinking: enabled };
-  }
-
   async function selectWorkspace(key: string) {
     activeWorkspaceKey.value = key;
     await load();
@@ -139,7 +130,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     setModelEnabled,
     setModelContextWindow,
     isConfigured,
-    setThinking,
     selectWorkspace,
     create,
     update,

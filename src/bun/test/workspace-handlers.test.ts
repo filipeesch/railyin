@@ -54,8 +54,6 @@ describe("workspaceHandlers", () => {
       [
         "name: test",
         "default_model: copilot/mock-model",
-        "anthropic:",
-        "  enable_thinking: true",
         "lsp:",
         "  servers:",
         "    - name: typescript-language-server",
@@ -70,7 +68,6 @@ describe("workspaceHandlers", () => {
     const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.getConfig"]({});
 
-    expect(result.enableThinking).toBe(true);
     expect(result.key).toBe("default");
   });
 

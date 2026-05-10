@@ -59,7 +59,5 @@ name: My Workspace
 # Anthropic-specific settings (only applied when using Anthropic provider)
 # anthropic:
 #   cache_ttl: "5m"  # "5m" (default, 1.25× write cost) or "1h" (2× write cost, survives long pauses)
-#   enable_thinking: false  # Set to true to enable adaptive thinking for supported models (Claude 3.7+, Claude 4+).
 #   effort: "medium"        # Thinking effort for the parent agent: "low" | "medium" | "high" | "max". Default is "high" (Sonnet 4.6). "medium" is a good balance for most tasks.
-#                           # Can also be toggled via Settings → Models in the UI.
 

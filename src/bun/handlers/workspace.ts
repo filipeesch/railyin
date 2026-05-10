@@ -44,7 +44,6 @@ export function workspaceHandlers(db: Database) {
           contextWindowTokens: legacyAi?.context_window_tokens ?? firstProvider?.context_window_tokens,
         },
         worktreeBasePath: config.workspace.worktree_base_path ?? "",
-        enableThinking: config.workspace.anthropic?.enable_thinking ?? false,
         defaultModel: config.defaultModel,
         availableEngines: config.engines.map((e) => ({ id: e.id, type: e.config.type })),
         allowedEngines: config.allowedEngineIds ?? allEngineIds,
@@ -58,15 +57,6 @@ export function workspaceHandlers(db: Database) {
         key: workspace.key,
         name: workspace.name,
       }));
-    },
-
-    "workspace.setThinking": async (params: { workspaceKey?: string; enabled: boolean }): Promise<Record<string, never>> => {
-      resetConfig();
-      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
-      patchWorkspaceYaml({ anthropic: { enable_thinking: params.enabled } }, workspaceKey);
-      // Clear provider cache so the next execution picks up the new setting
-      clearProviderCache();
-      return {};
     },
 
     "workspace.create": async (params: { name: string }): Promise<WorkspaceSummary> => {

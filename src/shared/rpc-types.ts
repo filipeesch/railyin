@@ -433,8 +433,6 @@ export interface WorkspaceConfig {
     contextWindowTokens?: number;
   };
   worktreeBasePath: string;
-  /** Whether adaptive thinking is enabled for supported Anthropic models. */
-  enableThinking: boolean;
   /** Default model for this workspace in `<engineId>/<modelId>` format. Null when unset. */
   defaultModel: string | null;
   /** All engine instances available in this installation (from engines.yaml or fallback). */
@@ -563,10 +561,6 @@ export type RailynAPI = {
   "workspace.openFolderDialog": {
     params: { initialPath?: string };
     response: { path: string | null };
-  };
-  "workspace.setThinking": {
-    params: { workspaceKey?: string; enabled: boolean };
-    response: Record<string, never>;
   };
 
   // Boards

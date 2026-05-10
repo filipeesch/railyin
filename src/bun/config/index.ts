@@ -25,7 +25,6 @@ export interface ProviderConfig {
 /** Config block for Anthropic-specific settings. */
 export interface AnthropicConfig {
   cache_ttl?: "5m" | "1h";
-  enable_thinking?: boolean;
   effort?: "low" | "medium" | "high" | "max";
   context_edit_strategy?: { enabled?: boolean };
 }
