@@ -7,8 +7,8 @@ describe("Test Plan: Validate search_text removal and SDK search tool replacemen
     expect(keys).toEqual(["read", "write", "shell", "web"]);
   });
 
-  it("DEFAULT_PI_TOOL_GROUPS has 3 entries: read, write, shell", () => {
-    expect(DEFAULT_PI_TOOL_GROUPS).toEqual(["read", "write", "shell"]);
+  it("DEFAULT_PI_TOOL_GROUPS is empty — only common tools are registered", () => {
+    expect(DEFAULT_PI_TOOL_GROUPS).toEqual([]);
   });
 
   it("buildAllTools() with columnGroup filtering works", () => {
