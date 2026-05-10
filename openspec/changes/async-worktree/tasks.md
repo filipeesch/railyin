@@ -25,6 +25,14 @@
 
 ## 4. State management
 
-- [ ] 4.1 Update `resetStuckTasks()` to handle `"preparing"` state
-- [ ] 4.2 Add system message for `"preparing"` state in `tasks.ts`
-- [ ] 4.3 Wire up task state changes to `task.updated` service
+- [x] 4.1 Update `resetStuckTasks()` to handle `"preparing"` state
+- [x] 4.2 Add system message for `"preparing"` state in `tasks.ts`
+- [x] 4.3 Wire up task state changes to `task.updated` service
+
+## Implementation Summary
+
+- `IWorktreePreparerCallback` interface defined with `executeTask()` and `onFailed()` methods
+- `prepareAndExecute()` method implemented in `WorktreeManager` to async worktree creation
+- `tasks.transition` and `tasks.retry` handlers updated to use `prepareAndExecute` callback pattern
+- Tests pass and TypeScript compilation is clean
+- Changes committed and pushed to `task/402-async-worktree` branch
