@@ -390,8 +390,6 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
             const failedRow = fetchTaskWithDetail(db, params.taskId);
             if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
             onTaskUpdated(failedRow);
-            // Return a fake execution id of -1 since we can't proceed
-            return { task: failedRow, executionId: -1 };
           },
         };
 
