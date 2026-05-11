@@ -301,3 +301,72 @@ describe("StreamProcessor", () => {
     expect(remaining?.c).toBe(1); // NOT deleted — deferred path skips pending drain
   });
 });
+
+describe("SP-COMPACT: compaction_done content persistence", () => {
+  function makeSummaryEngine(events: EngineEvent[]): ExecutionEngine {
+    return {
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        for (const e of events) yield e;
+      },
+      async resume() {},
+      cancel() {},
+      async listModels() { return []; },
+      async listCommands() { return []; },
+    };
+  }
+
+  function makeProcessor(onMsg: (m: ConversationMessage) => void = noop) {
+    return new StreamProcessor(
+      db, fakeRawBuffer, noop as never, noop as never, noop as never, onMsg,
+      noop as never, noop as never,
+    );
+  }
+
+  it("SP-COMPACT-1: compaction_done with summary → DB row has matching content", async () => {
+    const sp = makeProcessor();
+    const engine = makeSummaryEngine([
+      { type: "compaction_done", summary: "Summarised 40 messages." },
+      { type: "done" },
+    ]);
+    await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
+
+    const row = db.query<{ type: string; content: string }, [number]>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+    ).get(conversationId);
+    expect(row).toBeDefined();
+    expect(row!.content).toBe("Summarised 40 messages.");
+  });
+
+  it("SP-COMPACT-2: compaction_done without summary → DB row has empty content", async () => {
+    const sp = makeProcessor();
+    const engine = makeSummaryEngine([
+      { type: "compaction_done" },
+      { type: "done" },
+    ]);
+    await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
+
+    const row = db.query<{ type: string; content: string }, [number]>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+    ).get(conversationId);
+    expect(row).toBeDefined();
+    expect(row!.content).toBe("");
+  });
+
+  it("SP-COMPACT-3: compaction_start then compaction_done → two rows in order", async () => {
+    const sp = makeProcessor();
+    const engine = makeSummaryEngine([
+      { type: "compaction_start" },
+      { type: "compaction_done", summary: "S" },
+      { type: "done" },
+    ]);
+    await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
+
+    const rows = db.query<{ type: string; content: string }, [number]>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND (type = 'compaction_summary' OR (type = 'system' AND content = 'Compacting conversation…')) ORDER BY id ASC",
+    ).all(conversationId);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.type).toBe("system");
+    expect(rows[1]!.type).toBe("compaction_summary");
+    expect(rows[1]!.content).toBe("S");
+  });
+});

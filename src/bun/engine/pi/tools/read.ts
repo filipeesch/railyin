@@ -212,5 +212,6 @@ ALWAYS prefer glob over run_command for file discovery.`,
 // ---------------------------------------------------------------------------
 
 export function buildReadTools(harnessCtx: HarnessContext): AgentTool<any>[] {
-  return [readFileTool(harnessCtx), globTool(harnessCtx)];
+  // read_file is intentionally excluded — the Pi SDK's built-in "read" tool handles file reading.
+  return [globTool(harnessCtx)];
 }

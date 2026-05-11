@@ -21,6 +21,36 @@ function rel(p: string, worktreePath?: string): string {
 
 export function buildPiToolDisplay(name: string, args: Record<string, unknown>, worktreePath?: string): ToolCallDisplay {
   switch (name) {
+    // SDK built-in tools
+    case "read":
+      return {
+        label: "read",
+        subject: rel(str(args.file_path ?? args.path), worktreePath) || undefined,
+        contentType: "file",
+        startLine: typeof args.offset === "number" ? args.offset : undefined,
+      };
+
+    case "grep":
+      return {
+        label: "grep",
+        subject: str(args.pattern) || undefined,
+        contentType: "terminal",
+      };
+
+    case "find":
+      return {
+        label: "find",
+        subject: str(args.pattern) || undefined,
+        contentType: "terminal",
+      };
+
+    case "ls":
+      return {
+        label: "ls",
+        subject: rel(str(args.path), worktreePath) || undefined,
+        contentType: "terminal",
+      };
+
     case "read_file":
       return {
         label: "read file",

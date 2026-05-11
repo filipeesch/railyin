@@ -19,9 +19,9 @@ import type {
 } from "./types.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
-import { mapTask } from "../db/mappers.ts";
+import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import type { Database } from "bun:sqlite";
-import type { TaskRow } from "../db/row-types.ts";
+import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
@@ -286,7 +286,14 @@ export class Orchestrator implements ExecutionCoordinator {
       throw new Error(`Engine for task ${taskId} does not support manual compaction`);
     }
     const workingDirectory = this.workdirResolver.resolve(task);
-    await engine.compact(taskId, task.conversation_id ?? 0, workingDirectory);
+    const conversationId = task.conversation_id ?? 0;
+    await engine.compact(taskId, conversationId, workingDirectory);
+    const lastMsg = db.query<ConversationMessageRow, [number]>(
+      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+    ).get(conversationId);
+    if (lastMsg) {
+      this.onNewMessage(mapConversationMessage(lastMsg));
+    }
   }
 
   async compactConversation(conversationId: number, workspaceKey = getDefaultWorkspaceKey()): Promise<void> {
@@ -298,5 +305,11 @@ export class Orchestrator implements ExecutionCoordinator {
     }
     const workingDirectory = getEffectiveWorkspacePath(config);
     await engine.compact(null, conversationId, workingDirectory);
+    const lastMsg = this.db.query<ConversationMessageRow, [number]>(
+      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+    ).get(conversationId);
+    if (lastMsg) {
+      this.onNewMessage(mapConversationMessage(lastMsg));
+    }
   }
 }
