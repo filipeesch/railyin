@@ -521,10 +521,10 @@ export class PiEngine implements ExecutionEngine {
       // NOTE: The SDK's `tools` parameter acts as a GLOBAL allowlist that filters
       // both built-in and custom tools. We enable ALL active tools here.
       tools: [
-        // SDK built-in search tools
-        "grep", "find", "ls",
+        // SDK built-in tools — "read" is required for the SDK to inject skills into the system prompt
+        "read", "grep", "find", "ls",
         // Their own custom tools (harness + common)
-        "read_file", "glob", "run_command", "undo_write",
+        "glob", "run_command", "undo_write",
         "fetch_url", "search_internet",
         "write_file", "patch_file", "delete_file", "rename_file",
         // Common tools
