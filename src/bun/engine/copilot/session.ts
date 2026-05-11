@@ -1,3 +1,4 @@
+import type { PermissionHandler } from "@github/copilot-sdk";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
 
@@ -6,7 +7,7 @@ export interface CopilotSdkSessionConfig {
   model?: string;
   tools?: unknown[];
   systemMessage?: { mode: "append"; content: string };
-  onPermissionRequest?: (request: unknown, invocation: unknown) => unknown;
+  onPermissionRequest?: PermissionHandler;
   workingDirectory?: string;
   streaming?: boolean;
 }
@@ -125,7 +126,7 @@ type LoadedCopilotSession = {
   abort(): Promise<void>;
   disconnect(): Promise<void>;
   rpc: {
-    compaction: {
+    history: {
       compact(): Promise<unknown>;
     };
   };
@@ -240,7 +241,13 @@ function getSharedClient(): Promise<LoadedCopilotClient> {
       const client = new mod.CopilotClient({ cliUrl: `localhost:${port}` }) as LoadedCopilotClient;
       await client.start();
       return client;
-    })();
+    })().catch((err) => {
+      // Reset singleton so the next call retries from scratch instead of
+      // returning the same rejected promise forever.
+      _sharedClientPromise = undefined;
+      console.error("[copilot] Failed to start shared CLI client:", err instanceof Error ? err.stack ?? err.message : err);
+      throw err;
+    });
   }
   return _sharedClientPromise;
 }
@@ -283,7 +290,7 @@ class DefaultCopilotSdkSession implements CopilotSdkSession {
   }
 
   async compact(): Promise<void> {
-    await this.session.rpc.compaction.compact();
+    await this.session.rpc.history.compact();
   }
 
   disconnect(): Promise<void> {
@@ -461,7 +468,19 @@ export class DefaultCopilotSdkAdapter implements CopilotSdkAdapter {
   }
 
   async listModels(): Promise<CopilotSdkModelInfo[]> {
-    const client = await getSharedClient();
+    const LIST_MODELS_TIMEOUT_MS = 6_000;
+    let client: LoadedCopilotClient;
+    try {
+      client = await Promise.race([
+        getSharedClient(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Copilot CLI did not start within ${LIST_MODELS_TIMEOUT_MS / 1000}s — check that the CLI binary is installed and the port is reachable`)), LIST_MODELS_TIMEOUT_MS),
+        ),
+      ]);
+    } catch (err) {
+      console.error("[copilot] getSharedClient timed out or failed:", err instanceof Error ? err.message : err);
+      throw err;
+    }
     await client.start();
     return (await client.listModels()) as CopilotSdkModelInfo[];
   }

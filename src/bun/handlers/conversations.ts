@@ -8,8 +8,9 @@ import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context
 import { runWithConfig } from "../config/index.ts";
 import { resolveContextWindow } from "../context-usage.ts";
 import { ContextEstimator } from "../conversation/context-estimator.ts";
+import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 
-export function conversationHandlers(db: Database, orchestrator: ExecutionCoordinator | null) {
+export function conversationHandlers(db: Database, orchestrator: ExecutionCoordinator | null, modelSettingsRepo?: ModelSettingsRepository) {
   return {
     "conversations.getMessages": async (params: {
       conversationId?: number;
@@ -78,7 +79,7 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       // Model resolution: conversation.model (centralized storage for both tasks and chat sessions)
       const configuredModel = row?.conversation_model ?? workspaceConfig.workspace.default_model ?? null;
       const maxTokens = configuredModel 
-        ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator)) 
+        ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator, modelSettingsRepo)) 
         : 128_000;
       
       return new ContextEstimator(db).estimate(params.conversationId, maxTokens);

@@ -294,6 +294,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   private readonly activeQueries = new Map<number, ActiveClaudeQuery>();
   private readonly executionToSession = new Map<number, string>();
   private readonly leaseExecutions = new Map<string, Set<number>>();
+  private _modelsFetch: Promise<ClaudeSdkModelInfo[]> | null = null;
   private readonly leases = new LeaseRegistry(
     "claude",
     this.idleTimeoutMs,
@@ -513,7 +514,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           // A "failed" status means the MCP server process didn't start or the in-process
           // bridge failed — this is the definitive signal that railyin tools won't be available.
           // Ref: https://code.claude.com/docs/en/agent-sdk/mcp#error-handling
-          for (const event of translateClaudeMessage(message as { type: string }, config.toolMetaByCallId)) {
+          for (const event of translateClaudeMessage(message as { type: string }, { toolMetaByCallId: config.toolMetaByCallId, worktreePath: config.workingDirectory })) {
             emit(event);
           }
         }
@@ -576,6 +577,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         cwd: workingDirectory,
         permissionMode: "plan",
         tools: [],
+        persistSession: false,
         onElicitation: async () => ({ action: "decline" }),
       },
     });
@@ -593,6 +595,13 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   }
 
   async listModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]> {
+    if (!this._modelsFetch) {
+      this._modelsFetch = this._fetchModels(workingDirectory);
+    }
+    return this._modelsFetch;
+  }
+
+  private async _fetchModels(workingDirectory: string): Promise<ClaudeSdkModelInfo[]> {
     const sdk = await loadClaudeRuntime();
     // A no-op onElicitation forces the SDK into bidirectional mode
     // (hasBidirectionalNeeds=true → isSingleUserTurn=false). Without it the
@@ -605,12 +614,24 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         cwd: workingDirectory,
         permissionMode: "plan",
         tools: [],
+        persistSession: false,
         onElicitation: async () => ({ action: "decline" }),
       },
     });
 
+    const TIMEOUT_MS = 10_000;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
     try {
-      const models = await query.supportedModels?.() ?? [];
+      const models = await Promise.race([
+        query.supportedModels?.() ?? Promise.resolve([]),
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error(`ClaudeEngine.listModels timed out after ${TIMEOUT_MS / 1000}s`)),
+            TIMEOUT_MS,
+          );
+        }),
+      ]);
       return models.map((model) => ({
         value: String(model.value ?? model.id ?? ""),
         displayName: String(model.displayName ?? model.value ?? model.id ?? ""),
@@ -618,7 +639,12 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         supportsEffort: Boolean(model.supportsEffort),
         supportsAdaptiveThinking: Boolean(model.supportsAdaptiveThinking),
       }));
+    } catch (err) {
+      // Clear so the next call retries rather than reusing a rejected promise
+      this._modelsFetch = null;
+      throw err;
     } finally {
+      clearTimeout(timeoutHandle);
       await query.interrupt?.().catch(() => { });
       query.close?.();
     }

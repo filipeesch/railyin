@@ -262,7 +262,7 @@ export class StreamProcessor {
             };
             convBuffer.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: toolCallMsg, metadata: toolMeta, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
-            const toolParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
+            const toolParentBlockId = event.parentCallId ?? null;
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false, subagentId: null });
             callStack.push(callId);
             break;
@@ -297,7 +297,7 @@ export class StreamProcessor {
             const resultCallId = event.callId ?? (resultMsgRow?.id.toString() ?? "");
             const stackIdx = callStack.lastIndexOf(resultCallId);
             if (stackIdx !== -1) callStack.splice(stackIdx, 1);
-            const resultParentBlockId = event.parentCallId ?? reasoningBlockId ?? null;
+            const resultParentBlockId = event.parentCallId ?? null;
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: resultCallId, type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), parentBlockId: resultParentBlockId, done: false, subagentId: null });
 
             if (!event.isError && event.callId) {
@@ -321,6 +321,24 @@ export class StreamProcessor {
               "UPDATE executions SET input_tokens = ?, output_tokens = ? WHERE id = ?",
               [event.inputTokens ?? null, event.outputTokens ?? null, executionId],
             );
+            if (event.inputTokens != null) {
+              this.onStreamEvent?.({
+                taskId,
+                conversationId,
+                executionId,
+                seq: 0,
+                blockId: "",
+                type: "usage",
+                content: "",
+                metadata: JSON.stringify({
+                  usedTokens: event.inputTokens,
+                  maxTokens: event.contextWindow ?? null,
+                }),
+                parentBlockId: null,
+                done: false,
+                subagentId: null,
+              });
+            }
             break;
           }
 

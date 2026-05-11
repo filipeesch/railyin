@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildCommonTools } from "../engine/pi/tools/common.ts";
-import { ContentHashCache } from "../engine/pi/harness/hash-cache.ts";
 import { UndoStack } from "../engine/pi/harness/undo-stack.ts";
 import type { HarnessContext } from "../engine/pi/harness/context.ts";
 import type { CommonToolContext } from "../engine/types.ts";
@@ -29,7 +28,6 @@ const FAKE_TOOL_DEFS: AIToolDefinition[] = [
 
 function makeHarness(dir: string): HarnessContext {
   return {
-    hashCache: new ContentHashCache(),
     undoStack: new UndoStack(),
     worktreePath: dir,
   };
@@ -63,7 +61,7 @@ describe("Pi common-tools bridge (PCB)", () => {
     };
     mockExecutor.mockResolvedValueOnce(fakeResult);
 
-    const tools = buildCommonTools(makeCtx(), harness, FAKE_TOOL_DEFS, mockExecutor);
+    const tools = buildCommonTools(makeCtx(), harness, undefined, FAKE_TOOL_DEFS, mockExecutor);
     const lspRename = tools.find((t) => t.name === "lsp_rename")!;
     const result = await lspRename.execute("id", {});
 
@@ -81,7 +79,7 @@ describe("Pi common-tools bridge (PCB)", () => {
     };
     mockExecutor.mockResolvedValueOnce(fakeResult);
 
-    const tools = buildCommonTools(makeCtx(), harness, FAKE_TOOL_DEFS, mockExecutor);
+    const tools = buildCommonTools(makeCtx(), harness, undefined, FAKE_TOOL_DEFS, mockExecutor);
     const lspHover = tools.find((t) => t.name === "lsp_hover")!;
     const result = await lspHover.execute("id", {});
 
@@ -98,7 +96,7 @@ describe("Pi common-tools bridge (PCB)", () => {
     mockExecutor.mockResolvedValueOnce(fakeResult);
 
     // No harnessCtx passed
-    const tools = buildCommonTools(makeCtx(), undefined, FAKE_TOOL_DEFS, mockExecutor);
+    const tools = buildCommonTools(makeCtx(), undefined, undefined, FAKE_TOOL_DEFS, mockExecutor);
     const lspRename = tools.find((t) => t.name === "lsp_rename")!;
     const result = await lspRename.execute("id", {});
 
@@ -118,7 +116,7 @@ describe("Pi common-tools bridge (PCB)", () => {
     };
     mockExecutor.mockResolvedValueOnce(fakeResult);
 
-    const tools = buildCommonTools(makeCtx(), harness, FAKE_TOOL_DEFS, mockExecutor);
+    const tools = buildCommonTools(makeCtx(), harness, undefined, FAKE_TOOL_DEFS, mockExecutor);
     const lspRename = tools.find((t) => t.name === "lsp_rename")!;
     const result = await lspRename.execute("id", {});
 

@@ -1,6 +1,6 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "node:fs";
 import { join, resolve, relative, dirname, isAbsolute } from "node:path";
 import type { FileDiffPayload } from "../../../../shared/rpc-types.ts";
@@ -42,7 +42,6 @@ Use patch_file for targeted edits to existing files; use write_file only when re
 
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, args.content, "utf-8");
-      harnessCtx.hashCache.invalidate(abs);
 
       const diff = computeFileDiff(existingContent ?? "", args.content, rel, "write_file", {
         isNew: existingContent === null,
@@ -148,7 +147,6 @@ ALWAYS save the op:XXXX to undo_write if needed.`,
       });
 
       writeFileSync(abs, after!, "utf-8");
-      harnessCtx.hashCache.invalidate(abs);
 
       const diff = computeFileDiff(before, after!, rel, "patch_file");
 
@@ -200,7 +198,6 @@ NEVER delete files outside the worktree.`,
       });
 
       unlinkSync(abs);
-      harnessCtx.hashCache.invalidate(abs);
 
       return {
         content: [{ type: "text", text: `OK: deleted ${rel} [${opId}]` }],
@@ -258,8 +255,6 @@ NEVER rename files to paths outside the worktree.`,
 
       mkdirSync(dirname(toAbs), { recursive: true });
       renameSync(fromAbs, toAbs);
-      harnessCtx.hashCache.invalidate(fromAbs);
-      harnessCtx.hashCache.invalidate(toAbs);
 
       const diff: FileDiffPayload = {
         operation: "rename_file",

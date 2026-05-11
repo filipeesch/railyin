@@ -32,14 +32,27 @@ type ToolEventMeta = {
  */
 export async function* translateCopilotStream(
   session: CopilotSdkSession,
-  signal?: AbortSignal,
-  sendPromise?: Promise<unknown>,
-  onWatchdogFire?: () => Promise<boolean>,
-  onRawEvent?: (event: CopilotSdkEvent) => void,
-  onHeartbeat?: () => void,
-  idleTimeoutMs = 120_000,
-  maxSilenceCount = 3,
+  options?: {
+    signal?: AbortSignal;
+    sendPromise?: Promise<unknown>;
+    worktreePath?: string;
+    onWatchdogFire?: () => Promise<boolean>;
+    onRawEvent?: (event: CopilotSdkEvent) => void;
+    onHeartbeat?: () => void;
+    idleTimeoutMs?: number;
+    maxSilenceCount?: number;
+  },
 ): AsyncGenerator<EngineEvent> {
+  const {
+    signal,
+    sendPromise,
+    worktreePath,
+    onWatchdogFire,
+    onRawEvent,
+    onHeartbeat,
+    idleTimeoutMs = 120_000,
+    maxSilenceCount = 3,
+  } = options ?? {};
   // Use a queue + promise to bridge the callback-based session.on() API
   // into an async generator.
   const queue: EngineEvent[] = [];
@@ -109,7 +122,7 @@ export async function* translateCopilotStream(
       toolsInFlight = Math.max(0, toolsInFlight - 1);
     }
 
-    const engineEvent = translateEvent(event, receivedTokenDelta, receivedReasoningDelta, toolMetaByCallId);
+    const engineEvent = translateEvent(event, receivedTokenDelta, receivedReasoningDelta, toolMetaByCallId, worktreePath);
     if (engineEvent) {
       queue.push(engineEvent);
     }
@@ -194,6 +207,7 @@ function translateEvent(
   receivedTokenDelta: boolean,
   receivedReasoningDelta: boolean,
   toolMetaByCallId: Map<string, ToolEventMeta>,
+  worktreePath?: string,
 ): EngineEvent | null {
   switch (event.type) {
     // Streaming delta (incremental) — preferred when streaming is active
@@ -240,7 +254,7 @@ function translateEvent(
         isInternal: meta?.isInternal ?? false,
         display: COMMON_TOOL_NAMES.has(data.toolName)
           ? buildCommonToolDisplay(data.toolName, data.arguments ?? {})
-          : buildCopilotNativeDisplay(data.toolName, data.arguments ?? {}),
+          : buildCopilotNativeDisplay(data.toolName, data.arguments ?? {}, worktreePath),
       };
     }
 
@@ -257,17 +271,27 @@ function translateEvent(
       };
       const meta = toolMetaByCallId.get(data.toolCallId);
       toolMetaByCallId.delete(data.toolCallId);
+      const rawResultContent = data.result?.content ?? "";
+      let detailedResult: string | undefined = data.result?.detailedContent;
+      if (!detailedResult) {
+        try {
+          const parsed = JSON.parse(rawResultContent);
+          if (parsed && typeof parsed.detailedContent === "string" && parsed.detailedContent) {
+            detailedResult = parsed.detailedContent;
+          }
+        } catch { /* not JSON envelope */ }
+      }
       return {
         type: "tool_result",
         name: meta?.name ?? "unknown",
-        result: data.result?.content ?? "",
+        result: rawResultContent,
         callId: data.toolCallId,
         isError: !data.success,
         parentCallId: meta?.parentCallId,
         isInternal: meta?.isInternal ?? false,
-        detailedResult: data.result?.detailedContent,
+        detailedResult,
         contentBlocks: data.result?.contents,
-        writtenFiles: extractWrittenFilesFromCopilotTool(meta?.name, meta?.arguments, data.result?.detailedContent),
+        writtenFiles: extractWrittenFilesFromCopilotTool(meta?.name, meta?.arguments, detailedResult),
       };
     }
 
@@ -314,42 +338,68 @@ function translateEvent(
   }
 }
 
-function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>): ToolCallDisplay {
+function stripWorktreePath(subject: string | undefined, worktreePath?: string): string | undefined {
+  if (!subject || !worktreePath) return subject;
+  // Strip absolute worktree path from the start of the subject string
+  const prefix = worktreePath.endsWith("/") ? worktreePath : worktreePath + "/";
+  if (subject.startsWith(prefix)) return subject.slice(prefix.length);
+  if (subject.startsWith(worktreePath)) return subject.slice(worktreePath.length).replace(/^\//, "");
+  return subject;
+}
+
+function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>, worktreePath?: string): ToolCallDisplay {
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name) {
     case "read_file":
       return {
         label: canonicalToolDisplayLabel(name),
-        subject: str(args.path) || undefined,
+        subject: stripWorktreePath(str(args.path) || undefined, worktreePath),
         contentType: "file",
         startLine: typeof args.startLine === "number" && args.startLine > 0 ? args.startLine : undefined,
       };
     case "view":
       return {
         label: canonicalToolDisplayLabel(name),
-        subject: str(args.path) || undefined,
+        subject: stripWorktreePath(str(args.path) || undefined, worktreePath),
         contentType: "file",
       };
-    case "bash":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.command) || undefined, contentType: "terminal" };
+    case "bash": {
+      const cmd = str(args.command) || undefined;
+      return {
+        label: canonicalToolDisplayLabel(name),
+        subject: stripWorktreePath(cmd, worktreePath),
+        contentType: "terminal",
+      };
+    }
     case "create":
     case "write_file":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined, contentType: "file" };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(args.path) || undefined, worktreePath), contentType: "file" };
     case "edit":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined, contentType: "file" };
+      return {
+        label: canonicalToolDisplayLabel(name),
+        subject: stripWorktreePath(str(args.path) || undefined, worktreePath),
+        contentType: "file",
+        startLine: typeof args.startLine === "number" && args.startLine > 0 ? args.startLine : undefined,
+      };
     case "apply_patch":
       return { label: canonicalToolDisplayLabel(name) };
-    case "run_in_terminal":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.command) || undefined, contentType: "terminal" };
+    case "run_in_terminal": {
+      const cmd = str(args.command) || str(args.explanation) || undefined;
+      return {
+        label: canonicalToolDisplayLabel(name),
+        subject: stripWorktreePath(cmd, worktreePath),
+        contentType: "terminal",
+      };
+    }
     case "grep_search":
       return { label: canonicalToolDisplayLabel(name), subject: str(args.query || args.pattern) || undefined };
     case "find_files":
     case "find":
       return { label: canonicalToolDisplayLabel(name), subject: str(args.pattern || args.path as string) || undefined };
     case "delete_file":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(args.path) || undefined, worktreePath) };
     case "rename_file":
-      return { label: canonicalToolDisplayLabel(name), subject: str(args.path) || undefined };
+      return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(args.path) || undefined, worktreePath) };
     default:
       return { label: name };
   }
@@ -362,7 +412,6 @@ function isInternalCopilotEvent(
 ): boolean {
   const source = (event as { source?: string }).source;
   if (source?.startsWith("skill-")) return true;
-  if (parentToolCallId) return true;
   if (!toolName) return false;
   if (toolName === "report_intent") return true;
   return toolName.startsWith("internal_") || toolName.startsWith("copilot_");

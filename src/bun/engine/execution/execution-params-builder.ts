@@ -76,6 +76,7 @@ export class ExecutionParamsBuilder {
     onRawModelMessage: (raw: RawModelMessage) => void,
     enabledMcpTools: string[] | null,
     attachments?: Attachment[],
+    taskContext?: ExecutionParams["taskContext"],
   ): ExecutionParams {
     const base = this._buildBase(conversationId, executionId, prompt, undefined, workingDirectory, signal, onRawModelMessage, attachments);
 
@@ -84,6 +85,7 @@ export class ExecutionParamsBuilder {
       taskId: null,
       model,
       enabledMcpTools,
+      ...(taskContext ? { taskContext } : {}),
     };
   }
 }

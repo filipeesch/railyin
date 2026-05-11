@@ -15,6 +15,7 @@ import type {
   OnNewMessage,
   OnStreamEvent,
   EngineShutdownOptions,
+  EngineModelInfo,
 } from "./types.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
@@ -41,6 +42,7 @@ import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
 import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
+import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -71,6 +73,7 @@ export class Orchestrator implements ExecutionCoordinator {
     wsRepo: IWorkspaceRepository,
     onRawMessageEnqueued?: (item: RawMessageItem) => void,
     worktreeManager?: WorktreeManager,
+    modelSettingsRepo?: ModelSettingsRepository,
   ) {
     this.db = db;
     this.registry = registry;
@@ -97,6 +100,7 @@ export class Orchestrator implements ExecutionCoordinator {
       new DecisionContextInjector(db),
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
+      modelSettingsRepo,
     );
     this.humanTurnExecutor = new HumanTurnExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
@@ -104,10 +108,11 @@ export class Orchestrator implements ExecutionCoordinator {
       new DecisionContextInjector(db),
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
+      modelSettingsRepo,
     );
-    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools);
-    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools);
-    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor);
+    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, modelSettingsRepo);
+    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, modelSettingsRepo);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────
@@ -196,12 +201,28 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Model listing ─────────────────────────────────────────────────────────
 
-  async listModels(workspaceKey?: string) {
+  async listModels(workspaceKey?: string, engineType?: string): Promise<EngineModelInfo[]> {
     const key = workspaceKey ?? getDefaultWorkspaceKey();
     const config = getWorkspaceConfig(key);
+
+    if (engineType) {
+      const engine = this.registry.getEngineById(engineType);
+      if (!engine) throw new Error(`Engine '${engineType}' is not registered`);
+      return runWithConfig(config, () => engine.listModels());
+    }
+
     const engines = this.registry.listAllEngines(key);
     const results = await Promise.all(
-      engines.map((engine) => runWithConfig(config, () => engine.listModels())),
+      engines.map((engine) => {
+        const call = runWithConfig(config, () => engine.listModels());
+        const timeout = new Promise<EngineModelInfo[]>((_, reject) =>
+          setTimeout(() => reject(new Error("listModels timed out")), 8_000),
+        );
+        return Promise.race([call, timeout]).catch((err: unknown) => {
+          console.error("[orchestrator] listModels failed for engine:", err instanceof Error ? err.message : err);
+          return [] as EngineModelInfo[];
+        });
+      }),
     );
     return results.flat();
   }

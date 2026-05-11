@@ -107,6 +107,8 @@ export interface ProviderModelList {
     supportsAdaptiveThinking?: boolean;
     /** True when the engine supports manual context compaction for this model. */
     supportsManualCompact?: boolean;
+    /** True when the user can set a custom context window for this model (Pi/OpenCode engines). */
+    contextWindowEditable?: boolean;
   }>;
   error?: string;
 }
@@ -431,13 +433,12 @@ export interface WorkspaceConfig {
     contextWindowTokens?: number;
   };
   worktreeBasePath: string;
-  /** Whether adaptive thinking is enabled for supported Anthropic models. */
-  enableThinking: boolean;
-  /** Resolved engine configuration for this workspace. */
-  engine: {
-    type: "copilot" | "claude";
-    model?: string;
-  };
+  /** Default model for this workspace in `<engineId>/<modelId>` format. Null when unset. */
+  defaultModel: string | null;
+  /** All engine instances available in this installation (from engines.yaml or fallback). */
+  availableEngines: { id: string; type: string }[];
+  /** Engine IDs allowed in this workspace. Empty means all available engines are allowed. */
+  allowedEngines: string[];
   /** Configured LSP servers for this workspace. */
   lsp?: {
     servers?: Array<{ name: string; command: string; args: string[]; extensions: string[]; projects?: string[] }>;
@@ -506,6 +507,7 @@ export type StreamEventType =
   | "tool_result"      // persisted: tool result
   | "file_diff"        // persisted: file diff
   | "system"           // persisted: system/error message
+  | "usage"            // ephemeral: context usage update — not persisted
   | "done";            // terminal event — closes all state for this execution
 
 export interface StreamEvent {
@@ -549,7 +551,7 @@ export type RailynAPI = {
     response: WorkspaceSummary;
   };
   "workspace.update": {
-    params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string; workspacePath?: string };
+    params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string };
     response: Record<string, never>;
   };
   "workspace.resolveGitRoot": {
@@ -559,10 +561,6 @@ export type RailynAPI = {
   "workspace.openFolderDialog": {
     params: { initialPath?: string };
     response: { path: string | null };
-  };
-  "workspace.setThinking": {
-    params: { workspaceKey?: string; enabled: boolean };
-    response: Record<string, never>;
   };
 
   // Boards
@@ -673,7 +671,7 @@ export type RailynAPI = {
 
   // Models
   "models.list": {
-    params: { workspaceKey?: string };
+    params: { workspaceKey?: string; engineType?: string };
     response: ProviderModelList[];
   };
   "models.setEnabled": {
@@ -683,6 +681,10 @@ export type RailynAPI = {
   "models.listEnabled": {
     params: { workspaceKey?: string };
     response: ModelInfo[];
+  };
+  "models.setContextWindow": {
+    params: { workspaceKey?: string; qualifiedModelId: string; contextWindow: number | null };
+    response: Record<string, never>;
   };
 
   // Context usage

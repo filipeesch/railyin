@@ -34,11 +34,11 @@ export type EngineEvent = (
   | { type: "decision_request"; payload: string /* serialised DecisionRequestPayload JSON */ }
   | { type: "shell_approval"; command: string; executionId: number }
   | { type: "status"; message: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number }
+  | { type: "usage"; inputTokens: number; outputTokens: number; contextWindow?: number }
   | { type: "task_updated"; task: import("../../shared/rpc-types.ts").Task }
   | { type: "new_message"; message: import("../../shared/rpc-types.ts").ConversationMessage }
   | { type: "compaction_start" }
-  | { type: "compaction_done" }
+  | { type: "compaction_done"; summary?: string }
   | { type: "done" }
   | { type: "error"; message: string; fatal?: boolean }
 ) & { isError?: boolean };
@@ -94,6 +94,9 @@ export interface ExecutionParams {
   onHumanTurn?: (taskId: number, message: string) => void;
   /** Board tool executor — injected by orchestrator, avoids getDb() inside engines. */
   boardTools?: IBoardToolExecutor;
+  /** Resolved context window override from model_settings DB. When present, engines
+   * MUST use this value instead of their built-in default. Injected by orchestrator. */
+  contextWindowOverride?: number;
   /**
    * Called by the engine to signal a soft cancellation (e.g. eviction).
    * The stream-processor uses this to abort its own AbortController so the
@@ -134,6 +137,8 @@ export interface EngineModelInfo {
   supportsThinking?: boolean;
   /** Whether this engine supports explicit manual compaction for this model. */
   supportsManualCompact?: boolean;
+  /** Whether the user can set a custom context window for this model (Pi/OpenCode engines). */
+  contextWindowEditable?: boolean;
   /** Whether this model is currently enabled for selection by the user. */
   enabled?: boolean;
 }

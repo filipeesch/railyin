@@ -1,10 +1,10 @@
 ## Purpose
-Defines the `config/engines.yaml` file format for declaring all available engine instances globally, and how backward compatibility is maintained when the file is absent.
+Defines the `config/engines.yaml` file format for declaring all available engine instances globally.
 
 ## Requirements
 
 ### Requirement: engines.yaml declares all engine instances globally
-The system SHALL support a `config/engines.yaml` file that declares all available engine instances. Each entry SHALL have: `id` (string — unique identifier, equals the engine type in v1), `type` (one of `copilot`, `claude`, `opencode`, `scripted`), and optional engine-specific fields (`model`, `providers`). The first entry in the list SHALL be the default engine used when no model is set on a conversation.
+The system SHALL require a `config/engines.yaml` file that declares all available engine instances. Each entry SHALL have: `id` (string — unique identifier, equals the engine type in v1), `type` (one of `copilot`, `claude`, `opencode`, `scripted`, `pi`), and optional engine-specific fields (`model`, `providers`). The first entry in the list SHALL be the default engine used when no model is set on a conversation. When `engines.yaml` is absent or contains zero valid engine entries, the system SHALL refuse to start with a clear configuration error.
 
 #### Scenario: engines.yaml is parsed at startup
 - **WHEN** the application starts and `config/engines.yaml` exists
@@ -18,16 +18,13 @@ The system SHALL support a `config/engines.yaml` file that declares all availabl
 - **WHEN** `engines.yaml` has an opencode entry with a `providers` map
 - **THEN** the OpenCode server is started with those provider credentials
 
-### Requirement: Backward compatibility when engines.yaml is absent
-When `config/engines.yaml` does not exist, the system SHALL fall back to reading the `engine:` block from `workspace.yaml` and treating it as a single-entry engine list. All existing workspace configurations SHALL continue to work without modification.
+#### Scenario: Missing engines.yaml errors at startup
+- **WHEN** the application starts and `config/engines.yaml` does not exist
+- **THEN** the loader returns a configuration error directing the user to `config/engines.yaml.sample`, and no engines are constructed
 
-#### Scenario: No engines.yaml falls back to workspace.yaml engine block
-- **WHEN** `config/engines.yaml` does not exist AND `workspace.yaml` has `engine: { type: copilot }`
-- **THEN** a single CopilotEngine instance is created and used for all workspaces, identical to current behavior
-
-#### Scenario: Both files present — engines.yaml wins
-- **WHEN** both `config/engines.yaml` and `workspace.yaml engine:` block exist
-- **THEN** `engines.yaml` is used and the `engine:` block in `workspace.yaml` is ignored
+#### Scenario: engines.yaml with no valid entries errors at startup
+- **WHEN** `config/engines.yaml` exists but its `engines:` list is empty or all entries lack `id`/`type`
+- **THEN** the loader returns a configuration error and no engines are constructed
 
 ### Requirement: workspace.yaml supports optional allowed_engines filter
 Each workspace definition in `workspace.yaml` MAY include an `allowed_engines` list of engine IDs. When present, only the listed engines SHALL be available in that workspace. When absent, all engines from `engines.yaml` SHALL be available.

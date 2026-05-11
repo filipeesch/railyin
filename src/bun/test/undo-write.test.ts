@@ -2,14 +2,12 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ContentHashCache } from "../engine/pi/harness/hash-cache.ts";
 import { UndoStack } from "../engine/pi/harness/undo-stack.ts";
 import { buildUndoTool } from "../engine/pi/tools/undo.ts";
 import type { HarnessContext } from "../engine/pi/harness/context.ts";
 
 function makeHarness(dir: string): HarnessContext {
   return {
-    hashCache: new ContentHashCache(),
     undoStack: new UndoStack(),
     worktreePath: dir,
   };
@@ -79,20 +77,6 @@ describe("undo_write — lsp_rename support (UW)", () => {
     expect(result.isError).toBe(true);
   });
 
-  it("UW-6: invalidates hash cache entries for all restored files", async () => {
-    const file = join(dir, "cache.ts");
-    writeFileSync(file, "original");
-    ctx.hashCache.updateFile(file, "hash1", "0:0", 1);
-
-    const opId = ctx.undoStack.push({ type: "lsp_rename", beforeFiles: { [file]: "original" } });
-    const [tool] = buildUndoTool(ctx);
-
-    await tool.execute("id", { operationId: opId });
-
-    // After invalidate the cache should be a miss
-    const check = ctx.hashCache.checkFile(file, "hash1", "0:0", 2);
-    expect(check.hit).toBe(false);
-  });
 
   it("UW-7: snapshot is removed from stack after successful undo", async () => {
     const file = join(dir, "z.ts");

@@ -1,15 +1,10 @@
 name: My Workspace
 
-# ─── Workspace root path (REQUIRED when using projects) ───────────────────────
-# All project_path and git_root_path values are relative to this directory.
-# Migration: if you have absolute paths, set workspace_path to their common ancestor
-# and convert each project_path to a relative path from it.
-#
-# workspace_path: /home/user/projects
-
 # ─── Projects ─────────────────────────────────────────────────────────────────
 # workspace_path MUST be set for projects to work.
 # All paths are relative to workspace_path.
+#
+# workspace_path: /home/user/projects
 #
 # projects:
 #   # Standalone repo (project_path == git root):
@@ -24,59 +19,42 @@ name: My Workspace
 #     git_root_path: mono-repo             # git root is the repo root
 #     default_branch: main
 
-# ─── Multi-engine configuration (recommended) ─────────────────────────────────
-# Define available engines globally in config/engines.yaml (see engines.yaml.sample).
-# The `allowed_engines` field below restricts which engines this workspace can use.
-# When absent, all engines listed in engines.yaml are available.
+# ─── Engines ──────────────────────────────────────────────────────────────────
+# Engines are declared globally in config/engines.yaml (required).
+# To restrict which engines this workspace can use:
 #
 # allowed_engines:
 #   - copilot
 #   - claude
 
-# ─── Single-engine fallback (backward compat) ─────────────────────────────────
-# When engines.yaml is absent, the engine: block below is used as a single-engine config.
-# Copilot engine: use your GitHub Copilot subscription.
-# Auth is handled automatically via env vars (COPILOT_GITHUB_TOKEN / GH_TOKEN)
-# or the `copilot` CLI login. No API key needed in this file.
-# engine:
-#   type: copilot
-#   model: gpt-4.1  # optional; defaults to Copilot's default model
+# ─── Default model ────────────────────────────────────────────────────────────
+# The workspace default model in <engineId>/<modelId> format.
+# When a task or chat session has no model set, this value is used.
+# Engine IDs are defined in config/engines.yaml.
 #
-# Claude engine:
-# engine:
-#   type: claude
-#   model: claude-sonnet-4-6  # optional
-#
-# OpenCode engine: use the OpenCode SDK with full provider flexibility.
-# engine:
-#   type: opencode
-#   model: anthropic/claude-sonnet-4-5  # optional default model (providerID/modelID)
-#   providers:
-#     anthropic:
-#       api_key: sk-ant-YOUR_KEY_HERE
-#     ollama:
-#       base_url: http://localhost:11434
+# default_model: copilot/gpt-4.1
 
+# ─── Worktrees ────────────────────────────────────────────────────────────────
 # Where to store Git worktrees. Defaults to ~/.railyn/worktrees
 # worktree_base_path: /path/to/worktrees
 
-# Slash prompt references in workflow columns
-# on_enter_prompt and stage_instructions accept a /prompt-name reference as the ENTIRE value:
+# ─── Slash prompts ────────────────────────────────────────────────────────────
+# on_enter_prompt and stage_instructions in workflow columns accept a /prompt-name
+# reference as the entire value:
 #   on_enter_prompt: /opsx-propose
 # This resolves to .github/prompts/opsx-propose.prompt.md in the task's worktree.
 # Text after the reference is passed as $input substitution inside the prompt file.
-# The slash reference must be at the beginning — inline use (e.g., "see /opsx-propose") is not resolved.
-# You can also use slash commands in the task chat: start your message with /opsx-sync.
+# The slash reference must be at the beginning — inline use is not resolved.
+# You can also use slash commands in task chat: start your message with /opsx-sync.
 
-# Web search (used by the search_internet tool)
+# ─── Web search ───────────────────────────────────────────────────────────────
+# Used by the search_internet tool. Tavily is the only supported engine in v1.
 # search:
-#   engine: tavily   # "tavily" is the only supported engine in v1
-#   api_key: ""      # get a free key at https://tavily.com
+#   engine: tavily
+#   api_key: ""     # get a free key at https://tavily.com
 
-# Anthropic-specific settings (only applied when using Anthropic provider)
+# ─── Anthropic-specific settings ──────────────────────────────────────────────
+# Applied when using engines backed by the Anthropic provider.
 # anthropic:
-#   cache_ttl: "5m"  # "5m" (default, 1.25× write cost) or "1h" (2× write cost, survives long pauses)
-#   enable_thinking: false  # Set to true to enable adaptive thinking for supported models (Claude 3.7+, Claude 4+).
-#   effort: "medium"        # Thinking effort for the parent agent: "low" | "medium" | "high" | "max". Default is "high" (Sonnet 4.6). "medium" is a good balance for most tasks.
-#                           # Can also be toggled via Settings → Models in the UI.
-
+#   cache_ttl: "5m"   # "5m" (default, 1.25× write cost) or "1h" (2× write cost)
+#   effort: "medium"  # Thinking effort: "low" | "medium" | "high" | "max". Default: "high".

@@ -16,6 +16,7 @@ import { taskGitHandlers } from "./handlers/task-git.ts";
 import { codeReviewHandlers } from "./handlers/code-review.ts";
 import { todoHandlers } from "./handlers/todos.ts";
 import { modelHandlers } from "./handlers/models.ts";
+import { SqliteModelSettingsRepository } from "./db/repositories/model-settings-repository.ts";
 import { engineHandlers } from "./handlers/engine.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
@@ -35,6 +36,7 @@ import { OpenCodeEngine } from "./engine/opencode/engine.ts";
 import { createDefaultOpenCodeSdkAdapter } from "./engine/opencode/adapter.ts";
 import { PiEngine } from "./engine/pi/engine.ts";
 import type { PiEngineConfig } from "./config/index.ts";
+import { createDefaultDialectRegistry } from "./engine/dialects/registry.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
 import { WorkspaceRepository } from "./db/workspace-repository.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
@@ -82,6 +84,7 @@ await runMigrations();
 seedDefaultWorkspace();
 
 const db = getDb();
+const modelSettingsRepo = new SqliteModelSettingsRepository(db);
 const wsRepo = new WorkspaceRepository(db);
 
 const projectResolver = new ProjectResolver();
@@ -153,17 +156,20 @@ const streamProc = new StreamEventProcessor(channel, db);
 
 // ─── Engine factory map (composition root) ───────────────────────────────────
 
-type EngineFactory = (cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) => ExecutionEngine;
+type EngineFactory = (engineId: string, cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) => ExecutionEngine;
 
 const engineFactories: Record<string, EngineFactory> = {
-  copilot: (_cfg, onTaskUpdated, onNewMessage) =>
+  copilot: (_engineId, _cfg, onTaskUpdated, onNewMessage) =>
     new CopilotEngine(onTaskUpdated, onNewMessage, createDefaultCopilotSdkAdapter()),
-  claude: (cfg, onTaskUpdated, onNewMessage) =>
+  claude: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
     new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
-  opencode: (cfg, onTaskUpdated, onNewMessage) =>
+  opencode: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
     new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
-  pi: (cfg, onTaskUpdated, onNewMessage) =>
-    new PiEngine(cfg as PiEngineConfig, onTaskUpdated, onNewMessage),
+  pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
+    const piCfg = cfg as PiEngineConfig;
+    const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
+    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect);
+  },
   scripted: () => new MockExecutionEngine(),
 };
 
@@ -181,7 +187,7 @@ function buildEngineInstances(
       continue;
     }
     try {
-      map.set(entry.id, factory(entry.config, onTaskUpdated, onNewMessage));
+      map.set(entry.id, factory(entry.id, entry.config, onTaskUpdated, onNewMessage));
     } catch (err) {
       console.error(`[engine] Failed to construct engine '${entry.id}':`, err);
     }
@@ -202,8 +208,18 @@ if (injectedEngine) {
 } else {
   // Collect all unique engines across all workspaces, deduplicated by id.
   // In practice, engines.yaml is global so a single-pass over the default workspace is enough.
+  // copilot and claude are always included as core fallbacks even when absent from config.
   const { config: defaultConfig } = loadConfig();
-  const allEngines: EngineEntry[] = defaultConfig?.engines ?? [];
+  const configEngines: EngineEntry[] = defaultConfig?.engines ?? [];
+  const configIds = new Set(configEngines.map((e) => e.id));
+  const coreFallbacks: EngineEntry[] = [
+    { id: "copilot", config: { type: "copilot" } },
+    { id: "claude", config: { type: "claude" } },
+  ];
+  const allEngines: EngineEntry[] = [
+    ...configEngines,
+    ...coreFallbacks.filter((e) => !configIds.has(e.id)),
+  ];
   const seenIds = new Set<string>();
   const uniqueEngines = allEngines.filter((e) => {
     if (seenIds.has(e.id)) return false;
@@ -221,7 +237,7 @@ if (injectedEngine) {
 }
 
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager)
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo)
   : null;
 
 if (orchestrator) {
@@ -248,13 +264,13 @@ const allHandlers = {
   ...workspaceHandlers(db),
   ...boardHandlers(db),
   ...projectHandlers(),
-  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier), worktreeManager),
+  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier), worktreeManager, modelSettingsRepo),
   ...taskGitHandlers(db, notifier.notifyTaskUpdated.bind(notifier), worktreeManager, gitRepo),
   ...codeReviewHandlers(db),
   ...todoHandlers(db),
-  ...modelHandlers(db, orchestrator),
+  ...modelHandlers(db, orchestrator, modelSettingsRepo),
   ...engineHandlers(orchestrator),
-  ...conversationHandlers(db, orchestrator),
+  ...conversationHandlers(db, orchestrator, modelSettingsRepo),
   ...workflowHandlers(notifier.notifyWorkflowReloaded.bind(notifier)),
   ...launchHandlers(db),
   ...lspHandlers(db, wsRepo, undefined, undefined, channel.broadcast.bind(channel)),

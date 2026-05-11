@@ -7,8 +7,9 @@ import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../../workspace-cont
 import { getEffectiveWorkspacePath } from "../../config/path-utils";
 import type { EngineRegistry } from "../engine-registry";
 import type { ExecutionParamsBuilder } from "./execution-params-builder";
+import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
 import type { StreamProcessor } from "../stream/stream-processor";
-import type { ConversationMessageRow } from "../../db/row-types";
+import type { ConversationMessageRow, TaskRow } from "../../db/row-types";
 
 
 export class ChatExecutor {
@@ -17,6 +18,7 @@ export class ChatExecutor {
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly streamProcessor: StreamProcessor,
+    private readonly workdirResolver?: IWorkingDirectoryResolver,
   ) {}
 
   async execute(
@@ -34,10 +36,31 @@ export class ChatExecutor {
 
     const msgId = appendMessage(db, null, conversationId, "user", "user", content);
 
-    // Get the model from the conversation
-    const conversationModel = db
-      .prepare("SELECT model FROM conversations WHERE id = ?")
-      .get(conversationId) as { model: string | null } | undefined;
+    // Get the model, task context, and task row (if any) from the conversation
+    const conversationRow = db
+      .prepare(`
+        SELECT c.model, t.id as task_id, t.title, t.description,
+               t.project_key, t.board_id, t.conversation_id as task_conv_id,
+               t.execution_state, t.created_at
+        FROM conversations c
+        LEFT JOIN tasks t ON t.id = c.task_id
+        WHERE c.id = ?
+      `)
+      .get(conversationId) as {
+        model: string | null;
+        task_id: number | null;
+        title: string | null;
+        description: string | null;
+        project_key: string | null;
+      } & Partial<TaskRow> | undefined;
+
+    const conversationModel = conversationRow;
+    const taskContext = conversationRow?.title
+      ? {
+          title: conversationRow.title,
+          ...(conversationRow.description?.trim() ? { description: conversationRow.description.trim() } : {}),
+        }
+      : undefined;
     const modelValue = conversationModel?.model ?? null;
 
     // Use simplified model resolution for chat sessions
@@ -49,7 +72,17 @@ export class ChatExecutor {
     if (effectiveModel && !modelValue) {
       db.run("UPDATE conversations SET model = ? WHERE id = ?", [effectiveModel, conversationId]);
     }
-    const workingDirectory = getEffectiveWorkspacePath(config);
+
+    // For task-linked conversations, resolve the task's worktree path so write tools
+    // operate in the correct directory. Fall back to workspace root for pure chat sessions.
+    let workingDirectory = getEffectiveWorkspacePath(config);
+    if (conversationRow?.task_id && this.workdirResolver) {
+      try {
+        workingDirectory = this.workdirResolver.resolve(conversationRow as unknown as TaskRow);
+      } catch {
+        // worktree not ready yet — workspace root is acceptable fallback
+      }
+    }
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
     const execResult = db.run(
@@ -74,6 +107,7 @@ export class ChatExecutor {
         this.streamProcessor.makePersistCallback(null, conversationId, executionId),
         enabledMcpTools ?? null,
         attachments,
+        taskContext,
       ),
       onSoftCancel: () => this.streamProcessor.abort(executionId),
     };

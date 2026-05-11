@@ -396,6 +396,37 @@ describe("models", () => {
         const lists = await server.request("models.list", {});
         expect(Array.isArray(lists)).toBe(true);
     });
+
+    test("models.setContextWindow returns empty object", async () => {
+        const result = await server.request("models.setContextWindow", {
+            workspaceKey: "test-ws",
+            qualifiedModelId: "pi/some-model",
+            contextWindow: 65536,
+        });
+        expect(result).toEqual({});
+    });
+
+    test("models.setContextWindow with null clears override without error", async () => {
+        // First set a value, then clear it
+        await server.request("models.setContextWindow", {
+            workspaceKey: "test-ws",
+            qualifiedModelId: "pi/some-model",
+            contextWindow: 32768,
+        });
+        const result = await server.request("models.setContextWindow", {
+            workspaceKey: "test-ws",
+            qualifiedModelId: "pi/some-model",
+            contextWindow: null,
+        });
+        expect(result).toEqual({});
+    });
+
+    test("models.setContextWindow is idempotent — calling twice with same value succeeds", async () => {
+        const params = { workspaceKey: "test-ws", qualifiedModelId: "pi/repeat-model", contextWindow: 131072 };
+        await server.request("models.setContextWindow", params);
+        const result = await server.request("models.setContextWindow", params);
+        expect(result).toEqual({});
+    });
 });
 
 describe("worktree CWD isolation", () => {

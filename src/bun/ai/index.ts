@@ -31,17 +31,15 @@ function instantiateProvider(config: ProviderConfig, modelId: string): AIProvide
   if (config.type === "fake") return new FakeAIProvider();
   if (config.type === "anthropic") {
     let cacheTtl: "5m" | "1h" | undefined;
-    let enableThinking = false;
     let effort: "low" | "medium" | "high" | "max" | undefined;
     try {
       cacheTtl = getConfig().workspace.anthropic?.cache_ttl;
-      enableThinking = getConfig().workspace.anthropic?.enable_thinking ?? false;
       effort = getConfig().workspace.anthropic?.effort;
     } catch { /* config not loaded */ }
     const contextEditEnabled = (() => {
       try { return getConfig().workspace.anthropic?.context_edit_strategy?.enabled !== false; } catch { return true; }
     })();
-    return new AnthropicProvider(config.api_key ?? "", modelId, config.base_url, cacheTtl, enableThinking, effort, contextEditEnabled);
+    return new AnthropicProvider(config.api_key ?? "", modelId, config.base_url, cacheTtl, effort, contextEditEnabled);
   }
   // openai-compatible / openrouter / lmstudio / ollama all use OpenAICompatibleProvider
   return new OpenAICompatibleProvider(config.base_url ?? "", config.api_key ?? "", modelId, config.provider_args);

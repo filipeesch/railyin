@@ -21,6 +21,7 @@ export function workspaceHandlers(db: Database) {
       const legacyAi = config.workspace.ai;
       const firstProvider = config.providers[0];
 
+      const allEngineIds = config.engines.map((e) => e.id);
       return {
         id: 0,
         key: config.workspaceKey,
@@ -43,11 +44,9 @@ export function workspaceHandlers(db: Database) {
           contextWindowTokens: legacyAi?.context_window_tokens ?? firstProvider?.context_window_tokens,
         },
         worktreeBasePath: config.workspace.worktree_base_path ?? "",
-        enableThinking: config.workspace.anthropic?.enable_thinking ?? false,
-        engine: {
-          type: config.engine.type as "copilot" | "claude",
-          model: (config.engine as { model?: string }).model,
-        },
+        defaultModel: config.defaultModel,
+        availableEngines: config.engines.map((e) => ({ id: e.id, type: e.config.type })),
+        allowedEngines: config.allowedEngineIds ?? allEngineIds,
         lsp: config.workspace.lsp,
       };
     },
@@ -60,15 +59,6 @@ export function workspaceHandlers(db: Database) {
       }));
     },
 
-    "workspace.setThinking": async (params: { workspaceKey?: string; enabled: boolean }): Promise<Record<string, never>> => {
-      resetConfig();
-      const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
-      patchWorkspaceYaml({ anthropic: { enable_thinking: params.enabled } }, workspaceKey);
-      // Clear provider cache so the next execution picks up the new setting
-      clearProviderCache();
-      return {};
-    },
-
     "workspace.create": async (params: { name: string }): Promise<WorkspaceSummary> => {
       const workspacesRoot = process.env.RAILYN_WORKSPACES_DIR ?? join(getDataDir(), "workspaces");
       const key = sanitizeWorkspaceKey(params.name, "workspace");
@@ -79,19 +69,18 @@ export function workspaceHandlers(db: Database) {
       return { key, name: params.name.trim() };
     },
 
-    "workspace.update": async (params: { workspaceKey?: string; name?: string; engineType?: string; engineModel?: string; worktreeBasePath?: string; workspacePath?: string }): Promise<Record<string, never>> => {
+    "workspace.update": async (params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string }): Promise<Record<string, never>> => {
       resetConfig();
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const patch: Partial<WorkspaceYaml> = {};
       if (params.name !== undefined) patch.name = params.name;
       if (params.worktreeBasePath !== undefined) patch.worktree_base_path = params.worktreeBasePath;
       if (params.workspacePath !== undefined) patch.workspace_path = params.workspacePath;
-      if (params.engineType !== undefined || params.engineModel !== undefined) {
-        const existing = getConfig(workspaceKey).engine;
-        patch.engine = {
-          type: (params.engineType ?? existing.type) as "copilot" | "claude",
-          ...(params.engineModel ? { model: params.engineModel } : {}),
-        };
+      if (params.allowedEngines !== undefined) {
+        patch.allowed_engines = params.allowedEngines.length > 0 ? params.allowedEngines : undefined;
+      }
+      if (params.defaultModel !== undefined) {
+        patch.default_model = params.defaultModel || undefined;
       }
       patchWorkspaceYaml(patch, workspaceKey);
       clearProviderCache();

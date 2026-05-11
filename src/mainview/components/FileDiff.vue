@@ -147,7 +147,7 @@ function loadMoreDown() {
 
 .fdiff__body {
   max-height: 280px;
-  overflow-y: auto;
+  overflow: auto;
 }
 
 .fdiff__empty {
@@ -235,6 +235,8 @@ function loadMoreDown() {
   font-family: monospace;
   font-size: 0.75rem;
   line-height: 1.4;
+  min-width: max-content;
+  width: 100%;
 }
 
 .fdiff__line--added   { background: #e6ffed; }
@@ -242,12 +244,16 @@ function loadMoreDown() {
 .fdiff__line--context { background: transparent; }
 
 .fdiff__gutter {
-  width: 3ch;
+  min-width: 4ch;
   text-align: right;
-  padding: 0 4px;
+  padding: 0 6px;
   color: var(--p-text-muted-color, #888);
   user-select: none;
   flex-shrink: 0;
+}
+
+.fdiff__gutter--old {
+  border-right: 1px solid var(--p-surface-300, #cbd5e1);
 }
 
 .fdiff__sign {
@@ -264,7 +270,6 @@ function loadMoreDown() {
   flex: 1;
   padding: 0 4px;
   white-space: pre;
-  overflow-x: auto;
 }
 </style>
 

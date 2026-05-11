@@ -1,6 +1,6 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import { existsSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "node:fs";
 import { relative, dirname } from "node:path";
 import { safePath } from "./read.ts";
@@ -89,7 +89,6 @@ ALWAYS check the write result for op:XXXX before calling undo_write.`,
             mkdirSync(dirname(absPath), { recursive: true });
             writeFileSync(absPath, beforeContent, "utf-8");
           }
-          harnessCtx.hashCache.invalidate(absPath);
           restored++;
         }
         return {
@@ -106,8 +105,6 @@ ALWAYS check the write result for op:XXXX before calling undo_write.`,
           mkdirSync(dirname(snapshot.path), { recursive: true });
           renameSync(toPath, snapshot.path);
         }
-        harnessCtx.hashCache.invalidate(snapshot.path);
-        harnessCtx.hashCache.invalidate(toPath);
       } else {
         // write_file, patch_file, delete_file
         if (snapshot.beforeContent === null) {
@@ -118,7 +115,6 @@ ALWAYS check the write result for op:XXXX before calling undo_write.`,
         } else {
           writeFileSync(snapshot.path, snapshot.beforeContent, "utf-8");
         }
-        harnessCtx.hashCache.invalidate(snapshot.path);
       }
 
       return {

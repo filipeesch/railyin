@@ -111,7 +111,7 @@ jobs:
         run: bun run build
 
       - name: Run Playwright tests
-        run: npx playwright test e2e/ui
+        run: npx playwright test e2e/ui --workers=4
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4

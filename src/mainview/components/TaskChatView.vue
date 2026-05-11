@@ -112,6 +112,7 @@
     <template v-if="activeTab === 'chat' && task">
       <!-- Conversation body -->
       <ConversationBody
+        ref="conversationBodyRef"
         :messages="conversationStore.messages"
         :stream-state="conversationStore.activeStreamState"
         :execution-state="task.executionState"
@@ -508,6 +509,13 @@ watch(
     }
   },
 );
+
+const conversationBodyRef = ref<InstanceType<typeof ConversationBody> | null>(null);
+
+defineExpose({
+  scrollToBottom: () => conversationBodyRef.value?.scrollToBottom(),
+  scheduleScrollToBottomIfAuto: () => conversationBodyRef.value?.scheduleScrollToBottomIfAuto(),
+});
 </script>
 
 <style scoped>

@@ -13,6 +13,7 @@ import type { WorktreeManager } from "../git/WorktreeManager.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
+import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { IWorkspaceRepository } from "../db/workspace-repository.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
 import { getLoadedProjectByKey } from "../project-store.ts";
@@ -22,6 +23,7 @@ import { validateTransition } from "../workflow/transition-validator.ts";
 import { getColumnConfig } from "../workflow/column-config.ts";
 import { PositionService } from "./position-service.ts";
 import { seedConversationModel } from "../engine/execution/model-resolver";
+import { QualifiedModelId } from "../engine/qualified-model-id.ts";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────
 
@@ -48,7 +50,7 @@ function fetchTaskWithDetail(db: Database, taskId: number): Task | null {
   return row ? mapTask(row) : null;
 }
 
-export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager) {
+export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, modelSettingsRepo?: ModelSettingsRepository) {
   const positionService = new PositionService(db);
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
@@ -302,7 +304,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?"
       ).get(params.taskId);
       const resolvedCtxWindow = taskRow2?.conversation_model
-        ? await resolveContextWindow(taskRow2.conversation_model, taskWorkspaceKey, orchestrator)
+        ? await resolveContextWindow(taskRow2.conversation_model, taskWorkspaceKey, orchestrator, modelSettingsRepo)
         : 128_000;
       const warning = estimateContextWarning(db, params.taskId, resolvedCtxWindow);
       if (warning) {
@@ -310,7 +312,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       }
       const { extractChips } = await import("../../mainview/utils/chat-chips.ts");
       const promptContent = params.engineContent ?? extractChips(params.content).humanText;
-      const engine = getWorkspaceConfig(taskWorkspaceKey).engine.type;
+      const engine = QualifiedModelId.tryParse(taskRow2?.conversation_model)?.engineId ?? "copilot";
       const prepared = await prepareMessageForEngine(engine, promptContent, params.attachments);
 
       return requireOrchestrator(orchestrator).executeHumanTurn(params.taskId, params.content, prepared.attachments, prepared.content);
@@ -325,7 +327,10 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
 
       const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
-      const engine = getWorkspaceConfig(taskWorkspaceKey).engine.type;
+      const submitConvRow = db.query<{ conversation_model: string | null }, [number]>(
+        "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?"
+      ).get(params.taskId);
+      const engine = QualifiedModelId.tryParse(submitConvRow?.conversation_model)?.engineId ?? "copilot";
       const prepared = await prepareMessageForEngine(engine, engineContent, undefined);
 
       return requireOrchestrator(orchestrator).executeHumanTurn(params.taskId, userContent, prepared.attachments, prepared.content);
@@ -406,7 +411,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
       const maxTokens = await runWithConfig(workspaceConfig, async () => (
         taskModel
-          ? resolveContextWindow(taskModel, workspaceKey, orchestrator)
+          ? resolveContextWindow(taskModel, workspaceKey, orchestrator, modelSettingsRepo)
           : Promise.resolve(128_000)
       ));
       return estimateContextUsage(db, params.taskId, maxTokens);

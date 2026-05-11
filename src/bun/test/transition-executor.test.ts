@@ -220,7 +220,7 @@ columns:
       from: "backlog",
       to: "plan",
       instructionDetail: {
-        displayText: "Expanded instructions for transition card",
+        displayText: "/opsx-propose transition card",
         sourceText: "/opsx-propose transition card",
         sourceKind: "slash",
         sourceRef: "/opsx-propose",

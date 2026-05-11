@@ -438,7 +438,7 @@ describe("AnthropicProvider.stream() — text-only (5.3)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const events: Array<{ type: string; content?: string }> = [];
     for await (const event of provider.stream([{ role: "user", content: "Hi" }])) {
       events.push(event);
@@ -475,7 +475,7 @@ describe("AnthropicProvider.stream() — tool call (5.4)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const events: Array<{ type: string; calls?: Array<{ function: { name: string; arguments: string } }> }> = [];
     for await (const event of provider.stream([{ role: "user", content: "List files." }])) {
       events.push(event as typeof events[0]);
@@ -517,7 +517,7 @@ describe("AnthropicProvider.stream() — extended thinking (5.5)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const events: Array<{ type: string; content?: string }> = [];
     for await (const event of provider.stream([{ role: "user", content: "Think." }])) {
       events.push(event);
@@ -564,7 +564,7 @@ describe("AnthropicProvider.turn() — tool_use (5.6)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const result = await provider.turn([{ role: "user", content: "Write a file." }]);
 
     expect(result.type).toBe("tool_calls");
@@ -600,7 +600,7 @@ describe("AnthropicProvider — stop reason handling", () => {
       },
     });
 
-    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const events: Array<{ type: string; reason?: string }> = [];
     for await (const event of provider.stream([{ role: "user", content: "Hi" }])) {
       events.push(event as typeof events[0]);
@@ -627,7 +627,7 @@ describe("AnthropicProvider — stop reason handling", () => {
       },
     });
 
-    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const events: Array<{ type: string; reason?: string }> = [];
     for await (const event of provider.stream([{ role: "user", content: "Hi" }])) {
       events.push(event as typeof events[0]);
@@ -654,7 +654,7 @@ describe("AnthropicProvider — stop reason handling", () => {
       },
     });
 
-    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const events: Array<{ type: string }> = [];
     for await (const event of provider.stream([{ role: "user", content: "Hi" }])) {
       events.push(event);
@@ -677,7 +677,7 @@ describe("AnthropicProvider — stop reason handling", () => {
       },
     });
 
-    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("test-key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const result = await provider.turn([{ role: "user", content: "Do something harmful." }]);
 
     expect(result.type).toBe("text");
@@ -952,55 +952,6 @@ describe("adaptMessages — orphaned empty assistant filter", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AnthropicProvider: thinking body field
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("AnthropicProvider — thinking body field", () => {
-  let server: ReturnType<typeof Bun.serve>;
-  let capturedBody: Record<string, unknown> | null = null;
-
-  afterEach(() => { server?.stop(true); capturedBody = null; });
-
-  function simpleSse(): string {
-    return anthropicSse([
-      { type: "message_start", data: { message: { id: "m1", type: "message" } } },
-      { type: "content_block_start", data: { index: 0, content_block: { type: "text" } } },
-      { type: "content_block_delta", data: { index: 0, delta: { type: "text_delta", text: "hi" } } },
-      { type: "content_block_stop", data: { index: 0 } },
-      { type: "message_stop", data: {} },
-    ]);
-  }
-
-  it("does NOT include thinking in the body when enableThinking is false (default)", async () => {
-    server = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        if (req.method === "GET") return new Response(null, { status: 404 });
-        capturedBody = await req.json() as Record<string, unknown>;
-        return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
-      },
-    });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
-    for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
-    expect(capturedBody).not.toBeNull();
-    expect(capturedBody!.thinking).toBeUndefined();
-  });
-
-  it("includes thinking: { type: 'adaptive' } in the body when enableThinking is true", async () => {
-    server = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        if (req.method === "GET") return new Response(null, { status: 404 });
-        capturedBody = await req.json() as Record<string, unknown>;
-        return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
-      },
-    });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, true, undefined, undefined, noopLogger);
-    for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
-    expect(capturedBody).not.toBeNull();
-    expect(capturedBody!.thinking).toEqual({ type: "adaptive" });
-  });
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AnthropicProvider: effort config (3.1–3.3)
@@ -1033,8 +984,8 @@ describe("AnthropicProvider — effort config", () => {
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
     });
-    // Pass "medium" as defaultEffort (6th constructor arg)
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, false, "medium", undefined, noopLogger);
+    // Pass "medium" as defaultEffort (5th constructor arg)
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, "medium", undefined, noopLogger);
     for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
     expect(capturedBody).not.toBeNull();
     expect(capturedBody!.output_config).toEqual({ effort: "medium" });
@@ -1051,7 +1002,7 @@ describe("AnthropicProvider — effort config", () => {
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, false, "medium", undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, "medium", undefined, noopLogger);
     for await (const _e of provider.stream([{ role: "user", content: "hi" }], { effort: "low" })) { /* drain */ }
     expect(capturedBody).not.toBeNull();
     expect(capturedBody!.output_config).toEqual({ effort: "low" });
@@ -1066,7 +1017,7 @@ describe("AnthropicProvider — effort config", () => {
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
     expect(capturedBody).not.toBeNull();
     expect(capturedBody!.output_config).toBeUndefined();
@@ -1102,7 +1053,7 @@ describe("AnthropicProvider — automatic conversation caching", () => {
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
     expect(capturedBody).not.toBeNull();
     expect(capturedBody!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
@@ -1117,7 +1068,7 @@ describe("AnthropicProvider — automatic conversation caching", () => {
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, "1h", undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, "1h", undefined, undefined, noopLogger);
     for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
     expect(capturedBody).not.toBeNull();
     expect(capturedBody!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
@@ -1135,7 +1086,7 @@ describe("AnthropicProvider — automatic conversation caching", () => {
         });
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     await provider.turn([{ role: "user", content: "hi" }]);
     expect(capturedBody).not.toBeNull();
     expect(capturedBody!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
@@ -1153,7 +1104,7 @@ describe("AnthropicProvider — automatic conversation caching", () => {
         });
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, "1h", undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, "1h", undefined, undefined, noopLogger);
     await provider.turn([{ role: "user", content: "hi" }]);
     expect(capturedBody).not.toBeNull();
     expect(capturedBody!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
@@ -1200,7 +1151,7 @@ describe("AnthropicProvider — max-tokens escalation (4.5)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const result = await provider.turn([{ role: "user", content: "Write a detailed answer." }]);
 
     expect(callCount).toBe(2);
@@ -1228,7 +1179,7 @@ describe("AnthropicProvider — max-tokens escalation (4.5)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     // Explicitly request 64000 — no escalation should occur
     await provider.turn([{ role: "user", content: "hi" }], { maxTokens: 64000 });
     expect(callCount).toBe(1);
@@ -1251,7 +1202,7 @@ describe("AnthropicProvider — max-tokens escalation (4.5)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     await provider.turn([{ role: "user", content: "hi" }]);
     expect(callCount).toBe(1);
   });
@@ -1296,7 +1247,7 @@ describe("AnthropicProvider — context edit strategy (5.4)", () => {
         return simpleTurnResponse();
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     await provider.turn([{ role: "user", content: "hi" }]);
     expect(capturedHeaders!["anthropic-beta"]).toBeUndefined();
     expect(capturedBody!.context_edit_strategy).toBeUndefined();
@@ -1312,8 +1263,8 @@ describe("AnthropicProvider — context edit strategy (5.4)", () => {
         return simpleTurnResponse();
       },
     });
-    // 7th constructor param = contextEditEnabled = false
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, false, undefined, false, noopLogger);
+    // 6th constructor param = contextEditEnabled = false
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, false, noopLogger);
     await provider.turn([{ role: "user", content: "hi" }]);
     expect(capturedHeaders!["anthropic-beta"]).toBeUndefined();
     expect(capturedBody!.context_edit_strategy).toBeUndefined();
@@ -1329,7 +1280,7 @@ describe("AnthropicProvider — context edit strategy (5.4)", () => {
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
     expect(capturedHeaders!["anthropic-beta"]).toBeUndefined();
     expect(capturedBody!.context_edit_strategy).toBeUndefined();
@@ -1345,7 +1296,7 @@ describe("AnthropicProvider — context edit strategy (5.4)", () => {
         return new Response(simpleSse(), { headers: { "Content-Type": "text/event-stream" } });
       },
     });
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, false, undefined, false, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, false, noopLogger);
     for await (const _e of provider.stream([{ role: "user", content: "hi" }])) { /* drain */ }
     expect(capturedHeaders!["anthropic-beta"]).toBeUndefined();
     expect(capturedBody!.context_edit_strategy).toBeUndefined();
@@ -1549,7 +1500,7 @@ describe("AnthropicProvider.stream() — usage event parsing (6.1)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const usageEvents: Array<Record<string, unknown>> = [];
     for await (const event of provider.stream([{ role: "user", content: "Hi" }])) {
       if (event.type === "usage") usageEvents.push(event as unknown as Record<string, unknown>);
@@ -1579,7 +1530,7 @@ describe("AnthropicProvider.stream() — usage event parsing (6.1)", () => {
       },
     });
 
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, noopLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, noopLogger);
     const usageEvents: Array<Record<string, unknown>> = [];
     for await (const event of provider.stream([{ role: "user", content: "Hi" }])) {
       if (event.type === "usage") usageEvents.push(event as unknown as Record<string, unknown>);
@@ -1725,7 +1676,7 @@ describe("AnthropicProvider — logger injection", () => {
     });
 
     const spy = makeSpyLogger();
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, spy);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, spy);
     for await (const _ of provider.stream([{ role: "user", content: "Hi" }])) { /* drain */ }
 
     const debugCalls = spy.calls.filter((c) => c.level === "debug");
@@ -1751,7 +1702,7 @@ describe("AnthropicProvider — logger injection", () => {
 
     const spy = makeSpyLogger();
     // Use high maxTokens so it doesn't retry the turn() path
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, spy);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, spy);
     for await (const _ of provider.stream([{ role: "user", content: "Hi" }])) { /* drain */ }
 
     expect(spy.calls.some((c) => c.level === "warn")).toBe(true);
@@ -1775,7 +1726,7 @@ describe("AnthropicProvider — logger injection", () => {
     });
 
     // Construct without logger arg → defaults to realLogger
-    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, undefined, realLogger);
+    const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, realLogger);
     for await (const _ of provider.stream([{ role: "user", content: "Hi" }])) { /* drain */ }
 
     const row = db
