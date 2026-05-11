@@ -65,15 +65,32 @@ One `AgentSession` is created per `conversationId` and reused across executions 
 - **THEN** `session.dispose()` is called and the entry is removed from the session map
 
 ### Requirement: Tool injection
-All Pi built-in tools are disabled; only Railyin tools are exposed to the model.
+The Pi engine's `createAgentSession` call SHALL include a `tools` allowlist that enables the Pi SDK's built-in `"read"` tool alongside search tools (`"grep"`, `"find"`, `"ls"`) and all Railyin custom tools. The custom `"read_file"` tool SHALL NOT be included in the allowlist (its code is retained but not injected). Enabling `"read"` satisfies the Pi SDK's `selectedTools.includes("read")` guard, which gates skill injection into the system prompt.
 
-#### Scenario: No Pi built-in tools
-- **WHEN** `createAgentSession` is called
-- **THEN** `tools: []` is passed (disabling readTool, writeTool, editTool, bashTool, grepTool, findTool, lsTool)
-- **AND** `customTools: buildPiTools(ctx, harnessCtx)` provides all Railyin tools
+#### Scenario: read tool present in allowlist
+- **WHEN** `createAgentSession` is called for a new Pi session
+- **THEN** the `tools` array contains `"read"`
+- **AND** the `tools` array does NOT contain `"read_file"`
+
+#### Scenario: Skills injected into system prompt when dialect returns paths
+- **WHEN** the configured dialect returns one or more skill paths (e.g., `.github/skills/`)
+- **AND** skill files exist at those paths
+- **THEN** the skills are appended to the system prompt visible to the LLM at session creation
+
+#### Scenario: Skills NOT injected when no skill paths
+- **WHEN** the configured dialect returns an empty skill path list (e.g., `NullDialect`)
+- **THEN** no skills section appears in the system prompt
+
+### Requirement: Explicit skill invocation unaffected
+`additionalSkillPaths` SHALL remain set on `DefaultResourceLoader` so that `resourceLoader.getSkills()` returns the correct skills for explicit `/skill:name` invocations within the Pi session. This is independent of system prompt injection.
+
+#### Scenario: Explicit skill invocation resolves correctly
+- **WHEN** a user sends `/skill:openspec-propose` in a Pi session
+- **AND** the copilot dialect returned `.github/skills/` as a skill path
+- **THEN** the Pi SDK resolves the skill by name from the loaded skill list
 
 ### Requirement: Event translation
-Pi SDK events are translated to `EngineEvent` types compatible with Railyin's stream processor.
+Pi SDK `AgentSessionEvent` events (a superset of `AgentEvent`) are translated to `EngineEvent` types compatible with Railyin's stream processor. The translator imports from `AgentSessionEvent` (not `AgentEvent`) to handle session-specific events including compaction lifecycle events.
 
 #### Scenario: Streaming text
 - **WHEN** Pi emits `message_update` with `assistantMessageEvent.type === "text_delta"`
@@ -91,3 +108,35 @@ Pi SDK events are translated to `EngineEvent` types compatible with Railyin's st
 #### Scenario: Agent completion
 - **WHEN** Pi emits `agent_end`
 - **THEN** a `{ type: "done" }` EngineEvent is emitted and the stream closes
+
+#### Scenario: Compaction started
+- **WHEN** Pi SDK emits `compaction_start` (reason: threshold, overflow, or manual)
+- **THEN** a `{ type: "compaction_start" }` EngineEvent is emitted to Railyin's stream
+
+#### Scenario: Compaction completed
+- **WHEN** Pi SDK emits `compaction_end` with `aborted: false`
+- **THEN** a `{ type: "compaction_done" }` EngineEvent is emitted to Railyin's stream
+
+#### Scenario: Compaction aborted
+- **WHEN** Pi SDK emits `compaction_end` with `aborted: true`
+- **THEN** no EngineEvent is emitted (aborted compaction leaves session unchanged)
+
+### Requirement: Manual compaction delegates to Pi SDK
+`PiEngine.compact()` SHALL call `session.compact()` on the active Pi SDK session for the given `conversationId`. Pi SDK performs the compaction using the local LLM and manages the session JSONL file.
+
+#### Scenario: Manual compact triggers Pi SDK compaction
+- **WHEN** `engine.compact(taskId, conversationId, workingDirectory)` is called
+- **AND** a Pi session exists for `conversationId`
+- **THEN** `session.compact()` is awaited
+- **AND** Pi SDK emits `compaction_start` / `compaction_end` events which are forwarded to the stream
+
+#### Scenario: Manual compact no-ops when no session exists
+- **WHEN** `engine.compact()` is called for a `conversationId` with no active Pi session
+- **THEN** the call returns without error (no session to compact)
+
+### Requirement: listModels reports manual compaction support
+Pi models listed by `listModels()` SHALL include `supportsManualCompact: true` to indicate that manual compaction is available via the compact button in the UI.
+
+#### Scenario: supportsManualCompact flag in model list
+- **WHEN** `engine.listModels()` is called
+- **THEN** each returned `EngineModelInfo` includes `supportsManualCompact: true`

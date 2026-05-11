@@ -27,7 +27,6 @@ function makeEngine(overrides: Partial<ExecutionEngine> = {}): ExecutionEngine &
 
 function makeConfig(engineIds: string[], allowedEngineIds?: string[]): LoadedConfig {
   return {
-    engine: { type: engineIds[0] ?? "copilot" },
     engines: engineIds.map((id) => ({ id, config: { type: id } })),
     allowedEngineIds: allowedEngineIds ?? null,
     workspace: { name: "test", workspace_path: "/tmp", projects: [] },

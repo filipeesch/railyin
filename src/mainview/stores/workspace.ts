@@ -44,7 +44,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return newWorkspace;
   }
 
-  async function update(params: { name?: string; allowedEngines?: string[]; engineModel?: string; worktreeBasePath?: string; workspacePath?: string }) {
+  async function update(params: { name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string }) {
     await api("workspace.update", {
       workspaceKey: activeWorkspaceKey.value ?? undefined,
       ...params,
@@ -58,15 +58,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function resolveGitRoot(path: string): Promise<string | null> {
     const result = await api("workspace.resolveGitRoot", { path });
     return result.gitRoot;
-  }
-
-  async function setThinking(enabled: boolean) {
-    await api("workspace.setThinking", {
-      workspaceKey: activeWorkspaceKey.value ?? undefined,
-      enabled,
-    });
-    // Optimistically update local state so the toggle feels instant
-    if (config.value) config.value = { ...config.value, enableThinking: enabled };
   }
 
   async function selectWorkspace(key: string) {
@@ -139,7 +130,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     setModelEnabled,
     setModelContextWindow,
     isConfigured,
-    setThinking,
     selectWorkspace,
     create,
     update,

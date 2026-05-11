@@ -10,18 +10,6 @@
     </div>
 
     <div v-else>
-      <!-- Workspace-level thinking toggle -->
-      <div class="model-tree__thinking-toggle" v-if="hasAdaptiveThinkingModels">
-        <div class="model-tree__thinking-toggle-info">
-          <span class="model-tree__thinking-toggle-label">Enable thinking</span>
-          <span class="model-tree__thinking-toggle-desc">Send thinking requests for models that support adaptive reasoning (e.g. Claude 3.7+, Claude 4+ on Anthropic).</span>
-        </div>
-        <ToggleSwitch
-          :modelValue="enableThinking"
-          @update:modelValue="onToggleThinking"
-        />
-      </div>
-
       <div class="model-tree__search">
         <InputText
           v-model="searchQuery"
@@ -137,7 +125,6 @@ import Tag from "primevue/tag";
 import Checkbox from "primevue/checkbox";
 import ProgressSpinner from "primevue/progressspinner";
 import InputText from "primevue/inputtext";
-import ToggleSwitch from "primevue/toggleswitch";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const props = withDefaults(defineProps<{ workspaceKey?: string }>(), { workspaceKey: undefined });
@@ -154,17 +141,6 @@ const editingCtxId = ref<string | null>(null);
 const editingCtxValue = ref<string>("");
 
 const providers = computed(() => workspaceStore.allProviderModels);
-
-/** True when at least one loaded model supports adaptive thinking. */
-const hasAdaptiveThinkingModels = computed(() =>
-  providers.value.some((p) => p.models.some((m) => m.supportsAdaptiveThinking)),
-);
-
-const enableThinking = computed(() => workspaceStore.config?.enableThinking ?? false);
-
-async function onToggleThinking(value: boolean) {
-  await workspaceStore.setThinking(value);
-}
 
 const filteredProviders = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();

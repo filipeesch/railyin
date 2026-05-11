@@ -53,11 +53,7 @@ describe("workspaceHandlers", () => {
       join(configDir, workspaceFileName),
       [
         "name: test",
-        "engine:",
-        "  type: copilot",
-        "  model: copilot/mock-model",
-        "anthropic:",
-        "  enable_thinking: true",
+        "default_model: copilot/mock-model",
         "lsp:",
         "  servers:",
         "    - name: typescript-language-server",
@@ -72,7 +68,6 @@ describe("workspaceHandlers", () => {
     const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.getConfig"]({});
 
-    expect(result.enableThinking).toBe(true);
     expect(result.key).toBe("default");
   });
 
@@ -94,7 +89,6 @@ describe("workspaceHandlers", () => {
     expect(registry).toHaveLength(1);
     expect(registry[0]?.configDir).toBe(join(workspacesDir, "default"));
     expect(existsSync(workspaceFile)).toBe(true);
-    expect(readFileSync(workspaceFile, "utf-8")).toContain("type: copilot");
 
     rmSync(dataDir, { recursive: true, force: true });
     delete process.env.RAILYN_DATA_DIR;
@@ -103,41 +97,31 @@ describe("workspaceHandlers", () => {
     cleanupConfig = setupTestConfig().cleanup;
   });
 
-  it("workspace.getConfig returns engine model and available engines", async () => {
+  it("workspace.getConfig returns defaultModel and available engines", async () => {
     const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.getConfig"]({});
-    expect(result.engine).toBeDefined();
-    expect(result.engine.model).toBe("copilot/mock-model");
+    expect(result.defaultModel).toBe("copilot/mock-model");
+    expect((result as unknown as Record<string, unknown>).engine).toBeUndefined();
     expect(result.availableEngines).toBeDefined();
     expect(result.allowedEngines).toBeDefined();
   });
 
-  it("workspace.update patches name and derives engine type from model prefix", async () => {
+  it("workspace.update patches name and defaultModel", async () => {
     const configDir = process.env.RAILYN_CONFIG_DIR!;
     const handlers = workspaceHandlers(db);
-    await handlers["workspace.update"]({ name: "Updated Workspace", engineModel: "claude/claude-sonnet-4-6" });
+    await handlers["workspace.update"]({ name: "Updated Workspace", defaultModel: "claude/claude-sonnet-4-5" });
     const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
     const parsed = yaml.load(raw) as Record<string, unknown>;
     expect(parsed.name).toBe("Updated Workspace");
-    expect((parsed.engine as Record<string, unknown>).type).toBe("claude");
-    expect((parsed.engine as Record<string, unknown>).model).toBe("claude/claude-sonnet-4-6");
-  });
-
-  it("workspace.update deep-merges engine block (preserves type when only model is updated)", async () => {
-    const configDir = process.env.RAILYN_CONFIG_DIR!;
-    const handlers = workspaceHandlers(db);
-    await handlers["workspace.update"]({ engineModel: "copilot/gpt-4.1" });
-    const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
-    const parsed = yaml.load(raw) as Record<string, unknown>;
-    expect((parsed.engine as Record<string, unknown>).type).toBe("copilot");
-    expect((parsed.engine as Record<string, unknown>).model).toBe("copilot/gpt-4.1");
+    expect(parsed.default_model).toBe("claude/claude-sonnet-4-5");
+    expect(parsed.engine).toBeUndefined();
   });
 
   it("patchWorkspaceYaml strips git_path and shell_env_timeout_ms", () => {
     const configDir = process.env.RAILYN_CONFIG_DIR!;
     writeFileSync(
       join(configDir, "workspace.test.yaml"),
-      ["name: test", "git_path: /usr/bin/git", "shell_env_timeout_ms: 5000", "engine:", "  type: copilot"].join("\n"),
+      ["name: test", "git_path: /usr/bin/git", "shell_env_timeout_ms: 5000", "default_model: copilot/mock-model"].join("\n"),
       "utf-8",
     );
     resetConfig();

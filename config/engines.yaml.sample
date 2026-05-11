@@ -1,29 +1,48 @@
-# engines.yaml — global engine configuration for Railyin
+# engines.yaml — global engine configuration for Railyin (REQUIRED)
 #
 # Declares all engine instances available across all workspaces.
 # Engines are constructed once at startup and shared.
 #
+# This file is required. If it is absent or contains no valid entries, Railyin
+# will refuse to start with a clear error message.
+#
 # To restrict which engines a workspace can use, add `allowed_engines:` to workspace.yaml.
-# When this file is absent, Railyin falls back to the `engine:` block in workspace.yaml.
 
 engines:
   # GitHub Copilot — uses the GitHub Copilot SDK (requires Copilot auth)
   - id: copilot
     type: copilot
-    # model: gpt-4.1
 
   # Claude — uses the Claude Agent SDK / Claude Code environment (requires Claude Code auth)
   - id: claude
     type: claude
-    # model: claude-sonnet-4-6
 
-  # OpenCode — local/remote LLM router via the OpenCode AI SDK
+  # OpenCode — local/remote LLM router via the OpenCode AI SDK.
+  # Use this engine for Anthropic direct API, OpenRouter, Ollama, LM Studio,
+  # or any OpenAI-compatible endpoint.
+  #
+  # Anthropic direct API:
   # - id: opencode
   #   type: opencode
   #   model: anthropic/claude-sonnet-4-5
   #   providers:
   #     anthropic:
   #       api_key: ${ANTHROPIC_API_KEY}
+  #
+  # OpenRouter (access to hundreds of models via one API key):
+  # - id: openrouter
+  #   type: opencode
+  #   model: openrouter/meta-llama/llama-3.1-70b-instruct
+  #   providers:
+  #     openrouter:
+  #       base_url: https://openrouter.ai/api/v1
+  #       api_key: sk-or-YOUR_KEY_HERE
+  #
+  # Ollama (local models):
+  # - id: ollama
+  #   type: opencode
+  #   model: ollama/qwen2.5-coder:7b
+  #   providers:
   #     ollama:
   #       base_url: http://localhost:11434/v1
 

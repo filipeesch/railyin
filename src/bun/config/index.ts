@@ -25,7 +25,6 @@ export interface ProviderConfig {
 /** Config block for Anthropic-specific settings. */
 export interface AnthropicConfig {
   cache_ttl?: "5m" | "1h";
-  enable_thinking?: boolean;
   effort?: "low" | "medium" | "high" | "max";
   context_edit_strategy?: { enabled?: boolean };
 }
@@ -141,12 +140,6 @@ export interface AIProviderConfig {
 export interface WorkspaceYaml {
   name?: string;
   projects?: WorkspaceProjectYaml[];
-  /**
-   * New engine block. Discriminated by `type`:
-   *   - `copilot`: GitHub Copilot SDK
-   *   - `claude`: Claude Agent SDK / Claude Code
-   */
-  engine?: EngineConfig;
   /** Optional list of engine IDs (from engines.yaml) that are available in this workspace. When absent, all engines are available. */
   allowed_engines?: string[];
   /** @deprecated Legacy native-engine config. No longer supported. */
@@ -158,7 +151,7 @@ export interface WorkspaceYaml {
   workspace_path?: string;
   git_path?: string; // absolute path to git binary, e.g. /usr/bin/git
   shell_env_timeout_ms?: number; // timeout for shell environment resolution in milliseconds (default: 10000)
-  /** @deprecated Legacy native-engine config. No longer supported. */
+  /** Workspace default model in `<engineId>/<modelId>` format (e.g. `copilot/gpt-4.1`). Used to seed new conversation models. */
   default_model?: string;
   /** @deprecated Legacy native-engine config. No longer supported. */
   search?: SearchConfig;
@@ -166,6 +159,8 @@ export interface WorkspaceYaml {
   anthropic?: AnthropicConfig;
   /** LSP language server configuration for this workspace. */
   lsp?: LspConfig;
+  /** @deprecated Use engines.yaml instead. Kept for backward-compat detection only. */
+  engine?: EngineConfig;
 }
 
 export interface WorkspaceProjectYaml {
@@ -216,13 +211,13 @@ export interface LoadedConfig {
   /** Normalized, de-duplicated provider list for legacy helpers; supported engines do not rely on it. */
   providers: ProviderConfig[];
   workflows: WorkflowTemplateConfig[];
-  /** Resolved engine config — always present after load (the default engine for this workspace). */
-  engine: EngineConfig;
   /**
    * Ordered list of all engine instances available in this workspace.
-   * Populated from `engines.yaml`; falls back to a single-entry list derived from `engine` when absent.
+   * Populated from `engines.yaml`.
    */
   engines: EngineEntry[];
+  /** Default model for this workspace, from workspace.yaml default_model. Null when unset. */
+  defaultModel: string | null;
   /**
    * Subset of engine IDs permitted for this workspace (from `allowed_engines` in workspace.yaml).
    * `null` means no restriction — all engines from `engines.yaml` are available.
@@ -384,9 +379,6 @@ function mergeWorkspaceDefaults(
   if (defaults.lsp || workspace.lsp) {
     merged.lsp = { ...(defaults.lsp ?? {}), ...(workspace.lsp ?? {}) };
   }
-  if (defaults.engine || workspace.engine) {
-    merged.engine = { ...(defaults.engine ?? {} as EngineConfig), ...(workspace.engine ?? {} as EngineConfig) } as EngineConfig;
-  }
   return merged;
 }
 
@@ -453,15 +445,7 @@ name: My Workspace
 
 projects: []
 
-engine:
-  type: copilot
-  # model: gpt-4.1
-
-# Alternative engine example:
-# engine:
-#   type: claude
-#   model: claude-sonnet-4-6
-# Claude auth comes from your local Claude Code session; no API key is stored here.
+# default_model: copilot/gpt-4.1   # workspace default model (<engineId>/<modelId>)
 
 # Web search (used by the search_internet tool)
 # search:
@@ -530,19 +514,14 @@ interface EnginesYaml {
 }
 
 /**
- * Load the global `engines.yaml` from the config directory.
+ * Load `engines.yaml` from the config directory.
  *
  * - If `engines.yaml` is present: returns parsed `EngineEntry[]` (order preserved).
- * - If absent: returns `null` so the caller can fall back to `workspace.yaml engine:`.
- * - Logs a warning if both are present (engines.yaml wins).
+ * - If absent: returns `null`.
  */
-export function loadEnginesConfig(configDir: string, workspaceEngine?: EngineConfig): EngineEntry[] | null {
+export function loadEnginesConfig(configDir: string): EngineEntry[] | null {
   const enginesFile = join(configDir, "engines.yaml");
   if (!existsSync(enginesFile)) return null;
-
-  if (workspaceEngine) {
-    console.warn(`[config] Both engines.yaml and workspace.yaml engine: are present — engines.yaml takes precedence.`);
-  }
 
   let raw: EnginesYaml | null = null;
   try {
@@ -591,6 +570,11 @@ export function ensureConfigExists(configDir: string): void {
     writeFileSync(deliveryFile, DEFAULT_DELIVERY_YAML, "utf-8");
     console.log(`[config] Created default delivery.yaml at ${deliveryFile}`);
   }
+  const enginesFile = join(configDir, "engines.yaml");
+  if (!existsSync(enginesFile)) {
+    writeFileSync(enginesFile, "engines:\n  - id: copilot\n    type: copilot\n", "utf-8");
+    console.log(`[config] Created default engines.yaml at ${enginesFile}`);
+  }
 }
 
 export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null; error: string | null } {
@@ -629,29 +613,33 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
 
   // ── Resolve engine config ──────────────────────────────────────────────────
 
-  let engine: EngineConfig;
   const providers: ProviderConfig[] = [];
 
-  if ((workspace.engine?.type as string) === "native") {
-    _configError = `${workspaceFileName}: engine.type:native is no longer supported. Migrate this workspace to engine.type: copilot or engine.type: claude.`;
+  // Hard error if legacy engine: block is present
+  if (workspace.engine !== undefined) {
+    _configError = [
+      `${workspaceFileName}: engine: block is no longer supported.`,
+      `Replace it with:`,
+      `  default_model: <engineId>/<modelId>   # e.g. copilot/gpt-4.1`,
+      `and ensure engines.yaml declares the engines you want available.`,
+      `See config/engines.yaml.sample.`,
+    ].join("\n");
     return { config: null, error: _configError };
   }
 
-  if (workspace.providers?.length || workspace.ai || workspace.default_model || workspace.search) {
-    _configError = `${workspaceFileName}: legacy native-engine config was removed. Replace providers/ai/default_model/search with a supported engine block (engine.type: copilot or engine.type: claude).`;
+  if (workspace.providers?.length || workspace.ai || workspace.search) {
+    _configError = `${workspaceFileName}: legacy native-engine config was removed. Replace providers/ai/search with a supported engine in engines.yaml.`;
     return { config: null, error: _configError };
   }
 
   const globalConfigDir = getDefaultConfigDir();
-  const enginesYamlPresent = existsSync(join(configDir, "engines.yaml")) || existsSync(join(globalConfigDir, "engines.yaml"));
+  const engines = loadEnginesConfig(configDir) ?? loadEnginesConfig(globalConfigDir);
 
-  if (workspace.engine?.type === "copilot" || workspace.engine?.type === "claude" || workspace.engine?.type === "scripted" || workspace.engine?.type === "opencode") {
-    engine = workspace.engine;
-  } else if (enginesYamlPresent) {
-    // engines.yaml is the source of truth — workspace.yaml engine: is optional
-    engine = { type: "copilot" }; // placeholder; overridden by loadEnginesConfig below
-  } else {
-    _configError = `${workspaceFileName} is missing 'engine:'. Supported engines are 'copilot', 'claude', 'opencode', and 'scripted'.`;
+  if (!engines || engines.length === 0) {
+    _configError = [
+      `engines.yaml is required but was not found or contained no valid entries.`,
+      `See config/engines.yaml.sample for an example.`,
+    ].join("\n");
     return { config: null, error: _configError };
   }
 
@@ -770,8 +758,8 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     projects,
     providers: deduped,
     workflows,
-    engine,
-    engines: loadEnginesConfig(configDir, workspace.engine) ?? (workspace.engine == null ? loadEnginesConfig(globalConfigDir) : null) ?? [{ id: engine.type, config: engine }],
+    engines,
+    defaultModel: workspace.default_model ?? null,
     allowedEngineIds: workspace.allowed_engines?.length ? workspace.allowed_engines : null,
   };
   _configsByKey.set(cacheKey, _config);
@@ -828,12 +816,9 @@ export function patchWorkspaceYaml(patch: Partial<WorkspaceYaml>, workspaceKey?:
   } catch { /* file may not exist yet */ }
 
   const merged = { ...current, ...patch };
-  // Deep-merge nested objects (anthropic, engine)
+  // Deep-merge nested objects (anthropic)
   if (patch.anthropic && current.anthropic) {
     merged.anthropic = { ...current.anthropic, ...patch.anthropic };
-  }
-  if (patch.engine && current.engine) {
-    merged.engine = { ...current.engine, ...patch.engine } as EngineConfig;
   }
   // Strip deprecated fields that are no longer functional
   delete (merged as Record<string, unknown>).git_path;
