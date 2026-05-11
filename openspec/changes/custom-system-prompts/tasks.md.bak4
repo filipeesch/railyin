@@ -55,10 +55,10 @@
 
 ## 8. Testing
 
-- [x] 8.1 Write unit tests for `CustomPromptInjector` (global + project merge, model matching, engine/context/enabled filtering, priority ordering, error handling for bad YAML/patterns
-- [x] 8.2 Write unit tests for `SystemPromptAssembler` (fromConfig factory, assemble(), addCustomPrompts(), ordering logic, undefined when empty)
-- [x] 8.3 Write integration test: full execution flow with custom prompt injection in TransitionExecutor
-- [x] 8.4 Write integration test: full execution flow with custom prompt injection in ChatExecutor
+- [ ] 8.1 Write unit tests for `CustomPromptInjector` (global + project merge, model matching, engine/context/enabled filtering, priority ordering, error handling for bad YAML/patterns
+- [ ] 8.2 Write unit tests for `SystemPromptAssembler` (fromConfig factory, assemble(), addCustomPrompts(), ordering logic, undefined when empty)
+- [ ] 8.3 Write integration test: full execution flow with custom prompt injection in TransitionExecutor
+- [ ] 8.4 Write integration test: full execution flow with custom prompt injection in ChatExecutor
 - [ ] 8.5 Update existing `orchestrator.test.ts` to use `SystemPromptAssembler` instead of `buildSystemInstructions()` where tested
 - [ ] 8.6 Run `bun test src/bun/test --timeout 20000` and ensure all tests pass
 - [ ] 8.7 Test char limit exceeded (10240 chars) — truncation + warning
