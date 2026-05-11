@@ -9,7 +9,8 @@ import {
 import { appendMessage } from "../conversation/messages.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
-import type { WorktreeManager, IWorktreePreparerCallback } from "../git/WorktreeManager.ts";
+import type { WorktreeManager } from "../git/WorktreeManager.ts";
+import type { IWorktreePreparerCallback } from "../git/IWorktreePreparerCallback.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
@@ -23,7 +24,7 @@ import { validateTransition } from "../workflow/transition-validator.ts";
 import { getColumnConfig } from "../workflow/column-config.ts";
 import { PositionService } from "./position-service.ts";
 // Re-export for consumers of the handler module
-export { IWorktreePreparerCallback } from "../git/WorktreeManager.ts";
+export { IWorktreePreparerCallback } from "../git/IWorktreePreparerCallback.ts";
 import { seedConversationModel } from "../engine/execution/model-resolver";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────

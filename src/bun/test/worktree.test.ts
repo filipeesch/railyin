@@ -4,11 +4,8 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
-import {
-  WorktreeManager,
-  IWorktreePreparerCallback,
-  PreparedWorktreeResult,
-} from "../git/WorktreeManager.ts";
+import { WorktreeManager } from "../git/WorktreeManager.ts";
+import { IWorktreePreparerCallback, PreparedWorktreeResult } from "../git/IWorktreePreparerCallback.ts";
 import { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
 import { TaskGitContextRepository } from "../db/repositories/TaskGitContextRepository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";

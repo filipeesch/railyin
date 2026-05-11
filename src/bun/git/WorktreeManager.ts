@@ -8,6 +8,8 @@ import type { GitRepositoryManager } from "./GitRepositoryManager.ts";
 
 // ─── Branch naming ────────────────────────────────────────────────────────────
 
+import type { IWorktreePreparerCallback, PreparedWorktreeResult } from "./IWorktreePreparerCallback.ts";
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -20,27 +22,7 @@ function buildBranchName(taskId: number, title: string): string {
   return `task/${taskId}-${slugify(title)}`;
 }
 
-// ─── Callback interface ─────────────────────────────────────────────────
-
-/**
- * Callback invoked when worktree preparation completes (success or failure).
- * The handler passes this to prepareAndExecute() to receive notification
- * when the worktree is ready or when creation fails.
- */
-export interface IWorktreePreparerCallback {
-  /** Called when worktree is ready — triggers task execution */
-  executeTask(taskId: number, result: { path: string; branch: string }): Promise<void>;
-  /** Called when worktree creation fails — triggers failure state */
-  onFailed(taskId: number, error: Error): void;
-}
-
-/**
- * Result of successful worktree preparation.
- */
-export interface PreparedWorktreeResult {
-  path: string;
-  branch: string;
-}
+// ─── Options ──────────────────────────────────────────────────────────────────
 // ─── Options ──────────────────────────────────────────────────────────────────
 
 export interface CreateWorktreeOptions {
@@ -157,8 +139,6 @@ export class WorktreeManager {
     return {};
   }
 
-  // triggerWorktreeIfNeeded() has been replaced by prepareAndExecute()
-
   /**
    * Prepare worktree asynchronously. Returns immediately while worktree
    * creation happens in background. The caller provides callbacks for
@@ -210,24 +190,6 @@ export class WorktreeManager {
     // createWorktree() handles the "creating" case internally — it returns the
     // existing path without spawning a second git worktree add.
   }
-  async triggerWorktreeIfNeeded(
-    taskId: number,
-    onStatus?: (msg: string) => void,
-  ): Promise<void> {
-    const ctx = this.taskGitContextRepo.getContext(taskId);
-
-    if (
-      ctx?.gitRootPath &&
-      (ctx.worktreeStatus === "not_created" ||
-        ctx.worktreeStatus === "error" ||
-        ctx.worktreeStatus === "removed")
-    ) {
-      onStatus?.("Creating worktree for this task…");
-      const result = await this.createWorktree(taskId);
-      onStatus?.(`Worktree ready at \`${result.branch}\``);
-    }
-  }
-
   async listBranches(taskId: number): Promise<string[]> {
     const ctx = this.taskGitContextRepo.getContext(taskId);
     if (!ctx?.gitRootPath) return [];
