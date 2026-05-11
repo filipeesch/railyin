@@ -9,6 +9,7 @@ import { resetConfig } from "../config/index.ts";
 import { TransitionExecutor } from "../engine/execution/transition-executor.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
+import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
@@ -150,6 +151,7 @@ describe("TransitionExecutor", () => {
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      new CustomPromptInjector(),
     );
 
     const result = await executor.execute(taskId, "done");
@@ -207,6 +209,7 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      new CustomPromptInjector(),
     );
 
     const result = await executor.execute(taskId, "plan");
@@ -268,6 +271,7 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      new CustomPromptInjector(),
     );
 
     await executor.execute(taskId, "plan");
@@ -308,6 +312,7 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      new CustomPromptInjector(),
     );
 
     await executor.execute(taskId, "plan");
@@ -349,6 +354,7 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      new CustomPromptInjector(),
     );
 
     await executor.execute(taskId, "plan");
@@ -388,6 +394,7 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      new CustomPromptInjector(),
     );
 
     await executor.execute(taskId, "plan");
@@ -412,6 +419,7 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      new CustomPromptInjector(),
     );
 
     const result = await executor.execute(taskId, "plan");

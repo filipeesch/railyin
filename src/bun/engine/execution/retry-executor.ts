@@ -1,9 +1,10 @@
 import type { Task } from "../../../shared/rpc-types.ts";
+import { QualifiedModelId } from "../qualified-model-id";
 import type { Database } from "bun:sqlite";
 import { mapTask } from "../../db/mappers";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
-import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config";
+import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry.ts";
 import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver.ts";
@@ -13,6 +14,8 @@ import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import { resolveModel } from "./model-resolver";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
+import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
+import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
 
 
 export class RetryExecutor {
@@ -24,6 +27,7 @@ export class RetryExecutor {
     private readonly streamProcessor: StreamProcessor,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
+    private readonly customPromptInjector: CustomPromptInjector,
     private readonly modelSettingsRepo?: ModelSettingsRepository,
   ) {}
 
@@ -44,10 +48,8 @@ export class RetryExecutor {
     const attempt = (task.retry_count ?? 0) + 1;
 
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
-    // Use centralized model resolver with isColumnTransition=false (not a transition)
     const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
     const effectiveModel = resolveModel(taskWithModel, column?.model, false);
-    // Note: No model updates during retry - conversation model is authoritative
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
     const execResult = db.run(
@@ -71,21 +73,32 @@ export class RetryExecutor {
     const retryPrompt = column?.on_enter_prompt ?? "Please continue with the task.";
 
     const signal = this.streamProcessor.createSignal(executionId);
-    
+
+    // Build system instructions with custom prompt injection
+    const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
+    const promptFilter: PromptFilterContext = {
+      modelId: effectiveModel ?? "",
+      engineId: QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot",
+      executionType: "task",
+      projectPath: this.workdirResolver.resolve(updatedRow),
+    };
+    assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
+    const systemInstructions = assembler.assemble();
+
     const execParams = {
       ...this.paramsBuilder.build(
         updatedRow,
         conversationId,
         executionId,
         retryPrompt,
-        buildSystemInstructions(config, task.board_id, task.workflow_state),
+        systemInstructions,
         this.workdirResolver.resolve(updatedRow),
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
       ),
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),
-      model: resolveModel(updatedRow, null, false) ?? "", // Use centralized resolver
+      model: resolveModel(updatedRow, null, false) ?? "",
       ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);

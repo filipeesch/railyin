@@ -10,6 +10,8 @@ import type { ExecutionParamsBuilder } from "./execution-params-builder";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
 import type { StreamProcessor } from "../stream/stream-processor";
 import type { ConversationMessageRow, TaskRow } from "../../db/row-types";
+import { QualifiedModelId } from "../qualified-model-id";
+import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
 
 
 export class ChatExecutor {
@@ -18,7 +20,8 @@ export class ChatExecutor {
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly streamProcessor: StreamProcessor,
-    private readonly workdirResolver?: IWorkingDirectoryResolver,
+    private readonly workdirResolver: IWorkingDirectoryResolver,
+    private readonly customPromptInjector: CustomPromptInjector,
   ) {}
 
   async execute(
@@ -36,7 +39,6 @@ export class ChatExecutor {
 
     const msgId = appendMessage(db, null, conversationId, "user", "user", content);
 
-    // Get the model, task context, and task row (if any) from the conversation
     const conversationRow = db
       .prepare(`
         SELECT c.model, t.id as task_id, t.title, t.description,
@@ -63,12 +65,8 @@ export class ChatExecutor {
       : undefined;
     const modelValue = conversationModel?.model ?? null;
 
-    // Use simplified model resolution for chat sessions
-    // Priority: explicit model parameter → conversation model
-    // No fallback to workspace/engine defaults after creation
     const effectiveModel = model ?? modelValue ?? "";
-    
-    // Persist the model to the conversation if it's not already set
+
     if (effectiveModel && !modelValue) {
       db.run("UPDATE conversations SET model = ? WHERE id = ?", [effectiveModel, conversationId]);
     }
@@ -85,6 +83,16 @@ export class ChatExecutor {
     }
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
+    // Resolve custom prompts for chat execution
+    const engineId = QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
+    const promptFilter: PromptFilterContext = {
+      modelId: effectiveModel,
+      engineId,
+      executionType: "chat",
+      projectPath: workingDirectory,
+    };
+    const customSystemInstructions = this.customPromptInjector.resolve(promptFilter);
+
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
        VALUES (NULL, ?, 'chat', 'chat', 'chat-turn', 'running', 1)`,
@@ -95,7 +103,7 @@ export class ChatExecutor {
     db.run("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = ?", [conversationId]);
 
     const signal = this.streamProcessor.createSignal(executionId);
-    
+
     const execParams = {
       ...this.paramsBuilder.buildForChat(
         conversationId,
@@ -109,6 +117,7 @@ export class ChatExecutor {
         attachments,
         taskContext,
       ),
+      ...(customSystemInstructions ? { systemInstructions: customSystemInstructions } : {}),
       onSoftCancel: () => this.streamProcessor.abort(executionId),
     };
 
