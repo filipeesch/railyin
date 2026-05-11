@@ -38,16 +38,16 @@ export function myersDiff(before: string[], after: string[]): Hunk[] {
   let y = M;
 
   for (let d = trace.length - 1; d > 0; d--) {
-    const prev = trace[d - 1];
+    const prev = trace[d]; // trace[d] = v snapshot from start of level d = state after level d-1
     const k = x - y;
     const ki = k + MAX;
-    const prevK = (k === -(d - 1) || (k !== d - 1 && prev[ki - 1] < prev[ki + 1]))
+    const prevK = (k <= -(d - 1) || (k !== d - 1 && prev[ki - 1] < prev[ki + 1]))
       ? k + 1
       : k - 1;
     const prevX = prev[prevK + MAX];
     const prevY = prevX - prevK;
 
-    while (x > prevX + 1 && y > prevY + 1) {
+    while (x > prevX && y > prevY) {
       x--; y--;
       ops.unshift({ type: "=", x, y });
     }
@@ -94,7 +94,7 @@ export function myersDiff(before: string[], after: string[]): Hunk[] {
     } else {
       if (segment.length > 0) {
         pendingCtx.push(op);
-        if (pendingCtx.length === CONTEXT) {
+        if (pendingCtx.length >= CONTEXT) {
           const hasChangeAhead = ops.slice(i + 1, i + CONTEXT + 1).some((o) => o.type !== "=");
           if (!hasChangeAhead) {
             hunks.push(buildHunk(segment));

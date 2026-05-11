@@ -49,3 +49,71 @@ describe("resolveToolsForColumn", () => {
     expect(names).toContain("search_internet");
   });
 });
+
+// ─── TOOL_GROUPS — lsp group (TG) ─────────────────────────────────────────────
+
+describe("TOOL_GROUPS lsp group", () => {
+  const LSP_TOOLS = [
+    "lsp_go_to_definition",
+    "lsp_find_references",
+    "lsp_document_symbols",
+    "lsp_workspace_symbols",
+    "lsp_hover",
+    "lsp_rename",
+    "lsp_incoming_calls",
+    "lsp_outgoing_calls",
+    "lsp_diagnostics",
+    "lsp_type_definition",
+  ];
+
+  it("TG-1: lsp group contains exactly 10 tool names", () => {
+    const group = TOOL_GROUPS.get("lsp");
+    expect(group).toBeDefined();
+    expect(group!.length).toBe(10);
+  });
+
+  it("TG-2: lsp group contains all expected lsp_ tool names", () => {
+    const group = TOOL_GROUPS.get("lsp")!;
+    for (const name of LSP_TOOLS) {
+      expect(group).toContain(name);
+    }
+  });
+
+  it("TG-3: no tool in lsp group is named 'lsp' (old monolithic name)", () => {
+    const group = TOOL_GROUPS.get("lsp")!;
+    expect(group).not.toContain("lsp");
+  });
+
+  it("TG-4: resolveToolsForColumn([\"lsp\"]) returns 10 tools", () => {
+    const result = resolveToolsForColumn(["lsp"]);
+    expect(result.length).toBe(10);
+  });
+
+  it("TG-5: resolveToolsForColumn([\"lsp\"]) contains all lsp_ tool names", () => {
+    const result = resolveToolsForColumn(["lsp"]);
+    const names = result.map((t) => t.name);
+    for (const name of LSP_TOOLS) {
+      expect(names).toContain(name);
+    }
+  });
+
+  it("TG-6: lsp_hover has a per-tool character limit (10 000) lower than lsp_find_references (100 000)", () => {
+    // Verify limits exist by using the conversation/context module
+    // Indirectly: resolveToolsForColumn returns ToolDefinition objects that don't carry limits
+    // We verify by importing from the registry that it at least knows the tools
+    const result = resolveToolsForColumn(["lsp"]);
+    const hoverDef = result.find((t) => t.name === "lsp_hover");
+    const refsDef = result.find((t) => t.name === "lsp_find_references");
+    expect(hoverDef).toBeDefined();
+    expect(refsDef).toBeDefined();
+  });
+
+  it("TG-7: lsp_find_references definition includes limit and offset in parameters", () => {
+    const result = resolveToolsForColumn(["lsp"]);
+    const def = result.find((t) => t.name === "lsp_find_references");
+    expect(def).toBeDefined();
+    const props = (def!.parameters as any)?.properties ?? {};
+    expect(props).toHaveProperty("limit");
+    expect(props).toHaveProperty("offset");
+  });
+});

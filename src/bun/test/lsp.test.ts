@@ -475,6 +475,197 @@ describe("LSP split tools", () => {
 
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("ET-5: lsp_find_references applies default limit of 50", async () => {
+    const { executeLspFindReferences } = await import("../workflow/tools/lsp-tools.ts");
+    const dir = mkdtempSync(join(tmpdir(), "railyn-et5-"));
+    writeFileSync(join(dir, "foo.ts"), "const x = 1;\n");
+
+    const mockRefs = Array.from({ length: 60 }, (_, i) => ({
+      uri: `file://${join(dir, "foo.ts")}`,
+      range: { start: { line: i, character: 0 }, end: { line: i, character: 1 } },
+    }));
+    const mockManager = { request: vi.fn(async () => mockRefs), shutdown: () => {} };
+
+    const result = await executeLspFindReferences({ file_path: "foo.ts", line: 1, character: 1 }, mockManager as any, dir);
+
+    // Should show pagination hint since there are more than 50
+    expect(result).toContain("of 60");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ET-6: lsp_find_references respects limit+offset pagination", async () => {
+    const { executeLspFindReferences } = await import("../workflow/tools/lsp-tools.ts");
+    const dir = mkdtempSync(join(tmpdir(), "railyn-et6-"));
+    writeFileSync(join(dir, "foo.ts"), "const x = 1;\n");
+
+    const mockRefs = Array.from({ length: 10 }, (_, i) => ({
+      uri: `file://${join(dir, "foo.ts")}`,
+      range: { start: { line: i, character: 0 }, end: { line: i, character: 1 } },
+    }));
+    const mockManager = { request: vi.fn(async () => mockRefs), shutdown: () => {} };
+
+    // limit=3, offset=5 → should return refs 5,6,7 (3 items)
+    const result = await executeLspFindReferences({ file_path: "foo.ts", line: 1, character: 1, limit: 3, offset: 5 }, mockManager as any, dir);
+
+    // Page: refs 5,6,7 → "6–8 of 10" (1-based display)
+    expect(result).toContain("6–8 of 10");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ET-7: lsp_workspace_symbols applies default limit of 20", async () => {
+    const { executeLspWorkspaceSymbols } = await import("../workflow/tools/lsp-tools.ts");
+    const dir = mkdtempSync(join(tmpdir(), "railyn-et7-"));
+
+    const mockSymbols = Array.from({ length: 25 }, (_, i) => ({
+      name: `Symbol${i}`,
+      kind: 12,
+      location: {
+        uri: `file://${join(dir, "foo.ts")}`,
+        range: { start: { line: i, character: 0 }, end: { line: i, character: 5 } },
+      },
+    }));
+    const mockManager = {
+      request: vi.fn(async () => null),
+      requestWorkspaceSymbol: vi.fn(async () => mockSymbols),
+      shutdown: () => {},
+    };
+
+    const result = await executeLspWorkspaceSymbols({ query: "Symbol" }, mockManager as any, dir);
+
+    // Should show pagination hint since 25 > default 20
+    expect(result).toContain("of 25");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ET-8: lsp_rename returns result with writtenFiles and beforeFiles populated", async () => {
+    const { executeLspRename } = await import("../workflow/tools/lsp-tools.ts");
+    const dir = mkdtempSync(join(tmpdir(), "railyn-et8-"));
+    const file = join(dir, "rename.ts");
+    writeFileSync(file, "const oldName = 1;\n");
+    const uri = `file://${file}`;
+
+    const mockManager = {
+      request: vi.fn(async (absPath: string, method: string) => {
+        if (method === "textDocument/prepareRename") return { range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } } };
+        if (method === "textDocument/rename") {
+          return {
+            changes: {
+              [uri]: [{ range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } }, newText: "newName" }],
+            },
+          };
+        }
+        return null;
+      }),
+      markStale: vi.fn(),
+      shutdown: () => {},
+    };
+
+    const result = await executeLspRename({ file_path: "rename.ts", line: 1, character: 7, new_name: "newName" }, mockManager as any, dir);
+
+    expect(result.type).toBe("result");
+    expect(result.writtenFiles).toBeDefined();
+    expect(result.writtenFiles!.length).toBeGreaterThan(0);
+    expect(result.beforeFiles).toBeDefined();
+    expect(typeof result.beforeFiles![file]).toBe("string");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ET-9: lsp_rename returns error when prepareRename returns null", async () => {
+    const { executeLspRename } = await import("../workflow/tools/lsp-tools.ts");
+    const dir = mkdtempSync(join(tmpdir(), "railyn-et9-"));
+    writeFileSync(join(dir, "f.ts"), "const x = 1;\n");
+
+    const mockManager = {
+      request: vi.fn(async (_absPath: string, method: string) => {
+        if (method === "textDocument/prepareRename") return null;
+        return null;
+      }),
+      markStale: vi.fn(),
+      shutdown: () => {},
+    };
+
+    const result = await executeLspRename({ file_path: "f.ts", line: 1, character: 7, new_name: "y" }, mockManager as any, dir);
+
+    expect(result.type).toBe("result");
+    expect(result.text).toContain("Error");
+    expect(result.text).toContain("prepareRename");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ET-10: lsp_rename with empty WorkspaceEdit returns no-changes message", async () => {
+    const { executeLspRename } = await import("../workflow/tools/lsp-tools.ts");
+    const dir = mkdtempSync(join(tmpdir(), "railyn-et10-"));
+    writeFileSync(join(dir, "f.ts"), "const x = 1;\n");
+
+    const mockManager = {
+      request: vi.fn(async (_absPath: string, method: string) => {
+        if (method === "textDocument/prepareRename") return { range: {} };
+        if (method === "textDocument/rename") return {};
+        return null;
+      }),
+      markStale: vi.fn(),
+      shutdown: () => {},
+    };
+
+    const result = await executeLspRename({ file_path: "f.ts", line: 1, character: 7, new_name: "y" }, mockManager as any, dir);
+
+    expect(result.text).toContain("No changes needed");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ET-11: lsp_incoming_calls calls prepareCallHierarchy then callHierarchy/incomingCalls", async () => {
+    const { executeLspIncomingCalls } = await import("../workflow/tools/lsp-tools.ts");
+    const dir = mkdtempSync(join(tmpdir(), "railyn-et11-"));
+    writeFileSync(join(dir, "f.ts"), "function foo() {}\n");
+
+    const callOrder: string[] = [];
+    const mockItem = { name: "foo", kind: 12, uri: `file://${join(dir, "f.ts")}`, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } };
+    const mockManager = {
+      request: vi.fn(async (_absPath: string, method: string) => {
+        callOrder.push(method);
+        if (method === "textDocument/prepareCallHierarchy") return [mockItem];
+        if (method === "callHierarchy/incomingCalls") return [];
+        return null;
+      }),
+      shutdown: () => {},
+    };
+
+    await executeLspIncomingCalls({ file_path: "f.ts", line: 1, character: 1 }, mockManager as any, dir);
+
+    expect(callOrder[0]).toBe("textDocument/prepareCallHierarchy");
+    expect(callOrder[1]).toBe("callHierarchy/incomingCalls");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ET-12: lsp_type_definition calls textDocument/typeDefinition and formats result", async () => {
+    const { executeLspTypeDefinition } = await import("../workflow/tools/lsp-tools.ts");
+    const dir = mkdtempSync(join(tmpdir(), "railyn-et12-"));
+    writeFileSync(join(dir, "f.ts"), "const x: MyType = {};\n");
+
+    const mockManager = {
+      request: vi.fn(async () => null),
+      shutdown: () => {},
+    };
+
+    const result = await executeLspTypeDefinition({ file_path: "f.ts", line: 1, character: 1 }, mockManager as any, dir);
+
+    expect(mockManager.request).toHaveBeenCalledWith(
+      join(dir, "f.ts"),
+      "textDocument/typeDefinition",
+      expect.objectContaining({ position: { line: 0, character: 0 } }),
+    );
+    expect(result).toContain("no");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 // ─── applyWorkspaceEdit ───────────────────────────────────────────────────────
@@ -595,6 +786,80 @@ describe("applyWorkspaceEdit", () => {
     );
 
     expect("error" in result).toBe(true);
+  });
+
+  it("AE-1: result includes beforeContents with original file content before edit", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+    const file = join(dir, "ae1.ts");
+    const originalContent = "const original = true;\n";
+    writeFileSync(file, originalContent);
+    const uri = `file://${file}`;
+
+    const result = applyWorkspaceEdit(
+      { changes: { [uri]: [{ range: { start: { line: 0, character: 6 }, end: { line: 0, character: 14 } }, newText: "changed" }] } },
+      dir,
+    );
+
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(result.beforeContents[file]).toBe(originalContent);
+    }
+  });
+
+  it("AE-2: result includes diffs array with one FileDiffPayload per changed file", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+    const file1 = join(dir, "ae2a.ts");
+    const file2 = join(dir, "ae2b.ts");
+    writeFileSync(file1, "aaa\n");
+    writeFileSync(file2, "bbb\n");
+    const uri1 = `file://${file1}`;
+    const uri2 = `file://${file2}`;
+
+    const result = applyWorkspaceEdit(
+      {
+        changes: {
+          [uri1]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, newText: "AAA" }],
+          [uri2]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, newText: "BBB" }],
+        },
+      },
+      dir,
+    );
+
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(result.diffs).toHaveLength(2);
+      expect(result.diffs.every((d) => d.operation === "edit_file")).toBe(true);
+      expect(result.diffs.every((d) => d.hunks.length > 0)).toBe(true);
+    }
+  });
+
+  it("AE-3: beforeContents keys are absolute paths of changed files", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+    const file = join(dir, "ae3.ts");
+    writeFileSync(file, "hello\n");
+    const uri = `file://${file}`;
+
+    const result = applyWorkspaceEdit(
+      { changes: { [uri]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, newText: "world" }] } },
+      dir,
+    );
+
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(Object.keys(result.beforeContents)).toContain(file);
+    }
+  });
+
+  it("AE-4: empty workspace edit yields beforeContents {} and diffs []", async () => {
+    const { applyWorkspaceEdit } = await import("../lsp/apply-edits.ts");
+
+    const result = applyWorkspaceEdit({}, dir);
+
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(result.beforeContents).toEqual({});
+      expect(result.diffs).toEqual([]);
+    }
   });
 });
 

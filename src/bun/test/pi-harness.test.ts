@@ -194,4 +194,45 @@ describe("UndoStack", () => {
     const snap = stack.popByPath("/src/a.ts");
     expect(snap?.toPath).toBe("/src/b.ts");
   });
+
+  it("US-10: push with lsp_rename type is accepted and returns op:XXXX", () => {
+    const opId = stack.push({ type: "lsp_rename", beforeFiles: { "/a.ts": "old" } });
+    expect(opId).toMatch(/^op:[0-9a-f]{4}$/);
+    expect(stack.size).toBe(1);
+  });
+
+  it("US-11: undoById retrieves lsp_rename snapshot with correct beforeFiles", () => {
+    const beforeFiles = { "/a.ts": "original content", "/b.ts": null };
+    const opId = stack.push({ type: "lsp_rename", beforeFiles });
+    const id = opId.slice(3);
+    const snap = stack.undoById(id);
+    expect(snap).toBeDefined();
+    expect(snap!.type).toBe("lsp_rename");
+    if (snap!.type === "lsp_rename") {
+      expect(snap!.beforeFiles["/a.ts"]).toBe("original content");
+      expect(snap!.beforeFiles["/b.ts"]).toBeNull();
+    }
+  });
+
+  it("US-12: popByPath returns undefined for a path that only appears as a lsp_rename key", () => {
+    stack.push({ type: "lsp_rename", beforeFiles: { "/a.ts": "old" } });
+    const snap = stack.popByPath("/a.ts");
+    expect(snap).toBeUndefined();
+    // The lsp_rename snapshot is still on the stack (popByPath didn't touch it)
+    expect(stack.size).toBe(1);
+  });
+
+  it("US-13: lsp_rename snapshot coexists with write_file snapshots on the stack", () => {
+    const wfOpId = stack.push({ path: "/a.ts", type: "write_file", beforeContent: "v1" });
+    const lrOpId = stack.push({ type: "lsp_rename", beforeFiles: { "/b.ts": "b_old" } });
+    expect(stack.size).toBe(2);
+
+    // Can retrieve lsp_rename by id
+    const lrSnap = stack.undoById(lrOpId.slice(3));
+    expect(lrSnap?.type).toBe("lsp_rename");
+
+    // Can still retrieve write_file by id
+    const wfSnap = stack.undoById(wfOpId.slice(3));
+    expect(wfSnap?.type).toBe("write_file");
+  });
 });

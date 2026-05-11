@@ -6,6 +6,7 @@
  *   S-25: Copilot-style rawDiff payload renders as a parsed file diff
  *   S-26: subagent tool calls render nested under spawn_agent
  *   S-27: stale orphaned tool call shows unknown state instead of spinning
+ *   S-28: lsp_rename result renders diff card with added/removed stat badges
  *
  * Tool messages are pre-seeded via the conversations.getMessages mock
  * and conversations.getStreamEvents mock (persisted stream events).
@@ -231,4 +232,73 @@ test("S-27: stale orphaned tool call shows unknown state (not spinning)", async 
 
     expect(iconClasses).toContain("pi-question-circle");
     expect(iconClasses).not.toContain("pi-spin");
+});
+
+function lspRenameDiffMessages(taskId: number): ConversationMessage[] {
+    const call: ConversationMessage = {
+        id: 40,
+        taskId,
+        conversationId: taskId,
+        type: "tool_call",
+        role: "assistant",
+        content: JSON.stringify({
+            type: "function",
+            function: { name: "lsp_rename", arguments: '{"file_path":"src/foo.ts","line":3,"character":5,"new_name":"bar"}' },
+            id: "tc-lsp-rename",
+            display: { label: "lsp_rename", subject: "foo → bar" },
+        }),
+        metadata: null,
+        createdAt: new Date().toISOString(),
+    };
+    const result: ConversationMessage = {
+        id: 41,
+        taskId,
+        conversationId: taskId,
+        type: "tool_result",
+        role: "user",
+        content: JSON.stringify({
+            tool_use_id: "tc-lsp-rename",
+            content: "Renamed foo → bar in 1 file. [op:ab12]",
+            writtenFiles: [{
+                operation: "lsp_rename",
+                path: "src/foo.ts",
+                added: 1,
+                removed: 1,
+                hunks: [{
+                    old_start: 3, new_start: 3, lines: [
+                        { type: "removed", old_line: 3, content: "function foo() {}" },
+                        { type: "added", new_line: 3, content: "function bar() {}" },
+                    ],
+                }],
+            }],
+        }),
+        metadata: null,
+        createdAt: new Date().toISOString(),
+    };
+    return [call, result];
+}
+
+test("S-28: lsp_rename result renders diff card with added/removed stat badges", async ({ page, api, task }) => {
+    api.handle("conversations.getMessages", () => ({ messages: lspRenameDiffMessages(task.id), hasMore: false }));
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // The tool call card should be visible
+    const card = page.locator(".conversation-inner .tcg");
+    await expect(card).toBeVisible({ timeout: 3_000 });
+
+    // Tool name should be lsp_rename
+    await expect(card.locator(".tcg__tool-name")).toContainText("lsp_rename");
+
+    // Expand the diff
+    await card.locator(".tcg__header").click();
+
+    // Stat badges should show +1 / -1
+    await expect(page.locator(".tcg__stat--added")).toContainText("+1", { timeout: 3_000 });
+    await expect(page.locator(".tcg__stat--removed")).toContainText("-1");
+
+    // Diff lines should render the old/new symbol names
+    await expect(page.locator(".fdiff__line--added .fdiff__content")).toContainText("function bar()");
+    await expect(page.locator(".fdiff__line--removed .fdiff__content")).toContainText("function foo()");
 });

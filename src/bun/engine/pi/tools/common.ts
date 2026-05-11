@@ -4,9 +4,16 @@
  */
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AIToolDefinition } from "../../ai/types.ts";
 import type { CommonToolContext } from "../../types.ts";
 import type { HarnessContext } from "../harness/context.ts";
 import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from "../../common-tools.ts";
+
+export type CommonToolExecutor = (
+  name: string,
+  args: Record<string, unknown>,
+  ctx: CommonToolContext
+) => Promise<Awaited<ReturnType<typeof executeCommonTool>>>;
 
 /**
  * Build Pi AgentTool wrappers for every common Railyin tool.
@@ -15,9 +22,17 @@ import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from ".
  *
  * When harnessCtx is provided, write-producing tools (e.g. lsp_rename) that
  * return beforeFiles will push a snapshot to the UndoStack automatically.
+ *
+ * @param toolDefs - Tool definitions to wrap (defaults to COMMON_TOOL_DEFINITIONS)
+ * @param executor - Function to execute tools (defaults to executeCommonTool, injectable for tests)
  */
-export function buildCommonTools(ctx: CommonToolContext, harnessCtx?: HarnessContext): AgentTool<any>[] {
-  return COMMON_TOOL_DEFINITIONS.map((def) => {
+export function buildCommonTools(
+  ctx: CommonToolContext,
+  harnessCtx?: HarnessContext,
+  toolDefs: AIToolDefinition[] = COMMON_TOOL_DEFINITIONS,
+  executor: CommonToolExecutor = executeCommonTool
+): AgentTool<any>[] {
+  return toolDefs.map((def) => {
     const tool: AgentTool<any> = {
       name: def.name,
       label: def.name.replace(/_/g, " "),
@@ -26,7 +41,7 @@ export function buildCommonTools(ctx: CommonToolContext, harnessCtx?: HarnessCon
       // compatible — cast as any since both represent JSON Schema objects.
       parameters: def.parameters as any,
       execute: async (_toolCallId, args, _signal) => {
-        const result = await executeCommonTool(def.name, args as Record<string, unknown>, ctx);
+        const result = await executor(def.name, args as Record<string, unknown>, ctx);
         let text = result.text ?? JSON.stringify(result);
 
         if (result.type === "result" && result.beforeFiles && harnessCtx) {

@@ -134,3 +134,65 @@ describe("record_decision tool description enforcement", () => {
         expect(tool!.description).toContain("update_decision");
     });
 });
+
+// ─── LSP tool registration (CR) ───────────────────────────────────────────────
+
+const LSP_SPLIT_TOOLS = [
+  "lsp_go_to_definition",
+  "lsp_find_references",
+  "lsp_document_symbols",
+  "lsp_workspace_symbols",
+  "lsp_hover",
+  "lsp_rename",
+  "lsp_incoming_calls",
+  "lsp_outgoing_calls",
+  "lsp_diagnostics",
+  "lsp_type_definition",
+];
+
+describe("LSP tool registration in common tools", () => {
+  it("CR-1: COMMON_TOOL_DEFINITIONS does not contain a tool named 'lsp'", () => {
+    const names = COMMON_TOOL_DEFINITIONS.map((t) => t.name);
+    expect(names).not.toContain("lsp");
+  });
+
+  it("CR-2: COMMON_TOOL_DEFINITIONS contains exactly 10 lsp_ split tools", () => {
+    const names = COMMON_TOOL_DEFINITIONS.map((t) => t.name);
+    const lspTools = names.filter((n) => n.startsWith("lsp_"));
+    expect(lspTools.length).toBe(10);
+  });
+
+  it("CR-3: Copilot engine registers all 10 lsp_ tools", () => {
+    const tools = buildCopilotTools(baseContext);
+    const names = tools.map((t) => t.name);
+    for (const name of LSP_SPLIT_TOOLS) {
+      expect(names).toContain(name);
+    }
+  });
+
+  it("CR-4: Claude engine registers all 10 lsp_ tools", () => {
+    const registeredNames: string[] = [];
+    const sdk = {
+      tool: (name: string, _desc: string, _schema: unknown, _handler: unknown) => {
+        registeredNames.push(name);
+        return { name };
+      },
+      createSdkMcpServer: (options: unknown) => options,
+    };
+    const scalar = () => ({ optional: () => ({}) });
+    const z = {
+      string: scalar,
+      number: scalar,
+      boolean: scalar,
+      any: scalar,
+      array: (_item: unknown) => ({ optional: () => ({}) }),
+      object: (_shape: unknown) => ({ optional: () => ({}) }),
+      enum: (_values: [string, ...string[]]) => ({ optional: () => ({}) }),
+    };
+
+    buildClaudeToolServer(sdk as any, z as any, baseContext);
+    for (const name of LSP_SPLIT_TOOLS) {
+      expect(registeredNames).toContain(name);
+    }
+  });
+});
