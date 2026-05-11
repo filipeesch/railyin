@@ -83,10 +83,10 @@ describe("prepareAndExecute", () => {
     await manager.prepareAndExecute(
       taskId,
       {
-        executeTask: async (taskId, r: PreparedWorktreeResult) => {
+        executeTask: async (taskId: number, r: PreparedWorktreeResult) => {
           readyPaths.push(r.path);
         },
-        onFailed: () => {},
+        onFailed: (_taskId: number, _err: Error) => {},
       },
     );
     expect(readyPaths).toHaveLength(1);
@@ -132,8 +132,8 @@ describe("prepareAndExecute", () => {
     await manager.prepareAndExecute(
       taskId,
       {
-        executeTask: async () => {},
-        onFailed: () => {
+        executeTask: async (_taskId: number, _r: PreparedWorktreeResult) => {},
+        onFailed: (_taskId: number, _err: Error) => {
           errorGot = true;
         },
       },
