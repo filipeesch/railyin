@@ -452,5 +452,54 @@ describe("stream block state", () => {
     expect(stateA.roots).toHaveLength(1);
     expect(stateB.roots).toHaveLength(1);
   });
+
+  it("SB-NEW-1: onNewMessage with compaction_summary on active conversation → fetchContextUsage called", async () => {
+    const store = useConversationStore();
+    store.setActiveConversation(42);
+    apiMock.mockImplementation((async (method: string) => {
+      if (method === "conversations.contextUsage") return { usedTokens: 5, maxTokens: 100, fraction: 0.05 };
+      if (method === "conversations.getMessages") return { messages: [], hasMore: false };
+      return [];
+    }) as any);
+
+    store.onNewMessage({
+      id: 99,
+      taskId: null,
+      conversationId: 42,
+      type: "compaction_summary",
+      role: null,
+      content: "Compacted.",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(apiMock).toHaveBeenCalledWith("conversations.contextUsage", { conversationId: 42 });
+    expect(store.contextUsage).toEqual({ usedTokens: 5, maxTokens: 100, fraction: 0.05 });
+  });
+
+  it("SB-NEW-2: onNewMessage with compaction_summary on non-active conversation → fetchContextUsage NOT called", async () => {
+    const store = useConversationStore();
+    store.setActiveConversation(42);
+    apiMock.mockClear();
+
+    store.onNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 99,
+      type: "compaction_summary",
+      role: null,
+      content: "Other conv.",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    await Promise.resolve();
+
+    const contextUsageCalls = apiMock.mock.calls.filter(([method]) => method === "conversations.contextUsage");
+    expect(contextUsageCalls).toHaveLength(0);
+  });
 });
 

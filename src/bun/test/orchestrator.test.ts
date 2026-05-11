@@ -18,6 +18,8 @@ import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { Database } from "bun:sqlite";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
+import { getDb } from "../db/index.ts";
+import { appendMessage } from "../conversation/messages.ts";
 
 let db: Database;
 let gitDir: string;
@@ -669,6 +671,67 @@ columns:
 
     expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
     expect(capturedParams[1].systemInstructions).toBeUndefined();
+  });
+});
+
+describe("Orchestrator.compactTask", () => {
+  class CompactableEngine extends TestEngine {
+    compactResult: { summary: string } | null | undefined = { summary: "compacted" };
+    compactError: Error | null = null;
+
+    async compact(_taskId: number | null, conversationId: number, _workingDirectory: string): Promise<void> {
+      if (this.compactError) throw this.compactError;
+      if (this.compactResult?.summary) {
+        const db = getDb();
+        appendMessage(db, null, conversationId, "compaction_summary", null, this.compactResult.summary);
+      }
+    }
+  }
+
+  function makeCompactOrchestrator(engine: CompactableEngine): Orchestrator {
+    newMessages.length = 0;
+    return new Orchestrator(
+      db,
+      makeTestRegistry(engine),
+      noop,
+      (task) => taskUpdates.push(task),
+      (msg) => newMessages.push(msg),
+      new WorkspaceRepository(db),
+    );
+  }
+
+  it("ORCH-COMPACT-1: compact() resolves → onNewMessage called with compaction_summary", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+
+    const engine = new CompactableEngine();
+    const orc = makeCompactOrchestrator(engine);
+
+    await orc.compactTask(taskId);
+
+    expect(newMessages.length).toBeGreaterThan(0);
+    const msg = newMessages.find((m) => m.type === "compaction_summary");
+    expect(msg).toBeDefined();
+    expect(msg!.content).toBe("compacted");
+  });
+
+  it("ORCH-COMPACT-2: engine has no compact method → compactTask throws unsupported error", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+
+    // TestEngine has no compact method
+    await expect(orchestrator.compactTask(taskId)).rejects.toThrow(/does not support manual compaction/i);
+  });
+
+  it("ORCH-COMPACT-3: compact() throws → error propagates from compactTask", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+
+    const engine = new CompactableEngine();
+    engine.compactError = new Error("Compaction already in progress");
+    const orc = makeCompactOrchestrator(engine);
+
+    await expect(orc.compactTask(taskId)).rejects.toThrow("Compaction already in progress");
   });
 });
 

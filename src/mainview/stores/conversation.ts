@@ -422,6 +422,9 @@ export const useConversationStore = defineStore("conversation", () => {
     console.debug("[conversation] onNewMessage ACCEPTED", message.type, message.id);
     messages.value.push(message);
     sortMessagesInPlace();
+    if (message.type === "compaction_summary") {
+      fetchContextUsage({ conversationId: message.conversationId }).catch(console.error);
+    }
   }
 
   return {
