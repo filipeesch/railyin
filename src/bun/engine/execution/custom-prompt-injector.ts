@@ -1,6 +1,5 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import type { Minimatch } from "minimatch";
 import yaml from "js-yaml";
 import { getDataDir } from "../../utils/platform.ts";
 
