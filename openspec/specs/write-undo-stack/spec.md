@@ -1,7 +1,7 @@
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Write operations return an operationId for potential undo
-The system SHALL embed an `operationId` (format `op:XXXX` where XXXX is a 4-character lowercase hex string) in the success string returned to the model for every `write_file`, `patch_file`, `delete_file`, and `rename_file` call. The `UndoStack` SHALL store a snapshot before each operation. The model can pass the `operationId` to `undo_write` to restore the prior state.
+The system SHALL embed an `operationId` (format `op:XXXX` where XXXX is a 4-character lowercase hex string) in the success string returned to the model for every `write_file`, `patch_file`, `delete_file`, `rename_file`, and **`lsp_rename`** call. The `UndoStack` SHALL store a snapshot before each operation. The model can pass the `operationId` to `undo_write` to restore the prior state.
 
 #### Scenario: write_file result includes operationId
 - **WHEN** `write_file` succeeds
@@ -15,8 +15,15 @@ The system SHALL embed an `operationId` (format `op:XXXX` where XXXX is a 4-char
 - **WHEN** `rename_file` succeeds
 - **THEN** the result string is `"OK: renamed <from> → <to> [op:XXXX]"` and the snapshot stores `{ fromPath, toPath }` for reverse rename
 
+#### Scenario: lsp_rename result includes operationId in Pi engine
+- **WHEN** `lsp_rename` succeeds in a Pi engine session and modifies one or more files
+- **THEN** the result string ends with `[op:XXXX]`
+- **THEN** the undo stack contains a snapshot with `{ type: "lsp_rename", operationId: "XXXX", beforeFiles: { <absPath>: <beforeContent | null>, ... } }`
+
 ### Requirement: undo_write restores the pre-operation state by operationId or path, with chained undo support
 The system SHALL provide an `undo_write` tool that accepts `{ operationId: string }` or `{ path: string }`. When given an `operationId`, it SHALL find and apply the matching snapshot. When given a `path`, it SHALL undo the most recent write operation for that path and remove that entry from the stack — successive calls with the same path SHALL peel additional layers (chained undo). On success, the tool SHALL return a confirmation string. On failure (operationId not found, stack expired, no more entries for path), it SHALL return a descriptive error.
+
+For `lsp_rename` snapshots (type `"lsp_rename"`), undo by `operationId` SHALL restore all files stored in `beforeFiles`. Undo by `path` SHALL NOT match `lsp_rename` snapshots (since they are multi-file); the model must use `operationId` to undo an LSP rename.
 
 #### Scenario: undo by operationId restores prior file content
 - **WHEN** `undo_write({ operationId: "a3f9" })` is called and the operationId is in the stack
@@ -41,6 +48,16 @@ The system SHALL provide an `undo_write` tool that accepts `{ operationId: strin
 #### Scenario: expired operationId returns a clear error
 - **WHEN** `undo_write` is called with an operationId that has been rotated off the stack (stack exceeded 50 entries)
 - **THEN** the tool returns `"Error: op:XXXX is no longer in undo history (stack limit reached)"`
+
+#### Scenario: undo lsp_rename by operationId restores all changed files
+- **WHEN** `lsp_rename` changed 3 files and `undo_write({ operationId: "XXXX" })` is called
+- **THEN** all 3 files are restored to their pre-rename content
+- **THEN** the result is `"OK: reverted lsp_rename [op:XXXX] — restored 3 files"`
+
+#### Scenario: undo lsp_rename by path is not supported
+- **WHEN** `undo_write({ path: "src/auth.ts" })` is called after an lsp_rename that touched `src/auth.ts`
+- **THEN** the lsp_rename snapshot is NOT matched (it has no single `path` key)
+- **THEN** the result is `"Error: no more undo history for src/auth.ts"` (or the previous write entry if one exists)
 
 ### Requirement: UndoStack is capped at 50 entries with FIFO rotation
 The system SHALL cap the `UndoStack` at 50 entries. When a 51st entry is added, the oldest entry SHALL be silently discarded. The stack SHALL be scoped per `HarnessContext` (per Pi session / conversationId).
