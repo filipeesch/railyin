@@ -43,6 +43,7 @@ import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
+import { CustomPromptInjector } from "./execution/custom-prompt-injector.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -93,11 +94,13 @@ export class Orchestrator implements ExecutionCoordinator {
     );
     this.paramsBuilder = new ExecutionParamsBuilder();
     this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
+    const customPromptInjector = new CustomPromptInjector();
 
     this.transitionExecutor = new TransitionExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, boardTools, wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      customPromptInjector,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
       modelSettingsRepo,
@@ -106,13 +109,14 @@ export class Orchestrator implements ExecutionCoordinator {
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      customPromptInjector,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
       modelSettingsRepo,
     );
-    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, modelSettingsRepo);
-    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, modelSettingsRepo);
-    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver);
+    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, customPromptInjector, modelSettingsRepo);
+    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, customPromptInjector);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────

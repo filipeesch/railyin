@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
 import { getWorkspaceConfig } from "../../workspace-context.ts";
-import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config.ts";
+import { getColumnConfig } from "../../workflow/column-config.ts";
 import { formatReviewMessageForLLM } from "../../workflow/review.ts";
 import { buildDiffCache } from "../git/git-diff-parser.ts";
 import type { EngineRegistry } from "../engine-registry.ts";
@@ -15,6 +15,9 @@ import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../../d
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
+import { QualifiedModelId } from "../qualified-model-id";
+import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
+import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
 
 type DecisionRow = {
   hunk_hash: string;
@@ -49,6 +52,7 @@ export class CodeReviewExecutor {
     private readonly onNewMessage: OnNewMessage,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
+    private readonly customPromptInjector: CustomPromptInjector,
     private readonly modelSettingsRepo?: ModelSettingsRepository,
   ) {}
 
@@ -160,13 +164,25 @@ export class CodeReviewExecutor {
     this.onNewMessage(mapConversationMessage(reviewMsgRow));
 
     const signal = this.streamProcessor.createSignal(executionId);
+
+    // Build system instructions with custom prompt injection
+    const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
+    const promptFilter: PromptFilterContext = {
+      modelId: conversationModel ?? "",
+      engineId: QualifiedModelId.tryParse(conversationModel)?.engineId ?? config.engines[0]?.id ?? "copilot",
+      executionType: "task",
+      projectPath: this.workdirResolver.resolve(task),
+    };
+    assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
+    const systemInstructions = assembler.assemble();
+
     const execParams = {
       ...this.paramsBuilder.build(
         task,
         conversationId,
         executionId,
         reviewText,
-        buildSystemInstructions(config, task.board_id, task.workflow_state),
+        systemInstructions,
         this.workdirResolver.resolve(task),
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),

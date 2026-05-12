@@ -14,6 +14,7 @@ import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
+import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
 
 let db: Database;
 let gitDir: string;
@@ -100,6 +101,7 @@ function makeExecutor() {
     streamProcessor,
     wsRepo,
     boardTools,
+    new CustomPromptInjector(),
   );
   return { builder, streamProcessor, executor };
 }
