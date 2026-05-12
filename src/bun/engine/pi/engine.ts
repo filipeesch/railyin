@@ -47,6 +47,8 @@ function piSessionPathForConversation(conversationId: number): string {
 /** Default context window used when the config doesn't specify one. */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
+/** Tokens reserved for compaction overhead — matches Pi SDK default reserveTokens. */
+const DEFAULT_RESERVE_TOKENS = 16_384;
 
 export class PiEngine implements ExecutionEngine {
   private readonly engineId: string;
@@ -217,6 +219,17 @@ export class PiEngine implements ExecutionEngine {
 
     session
       .prompt(resolvedPrompt)
+      .then(async () => {
+        const usage = session.getContextUsage();
+        const threshold = piModel.contextWindow - DEFAULT_RESERVE_TOKENS;
+        if (usage?.tokens != null && usage.tokens > threshold && !session.isCompacting) {
+          try {
+            await session.compact();
+          } catch (err) {
+            console.error(`[pi] auto-compact failed for conversation ${conversationId}:`, err);
+          }
+        }
+      })
       .catch((err: unknown) => {
         agentError = err instanceof Error ? err : new Error(String(err));
       })
@@ -378,11 +391,14 @@ export class PiEngine implements ExecutionEngine {
     return this.dialect.listCommands(worktreePath, projectPath);
   }
 
-  async compact(_taskId: number | null, conversationId: number, _workingDirectory: string): Promise<void> {
-    const session = this.sessions.get(conversationId);
+  async compact(_taskId: number | null, conversationId: number, workingDirectory: string): Promise<void> {
+    let session = this.sessions.get(conversationId);
     if (!session) {
-      console.warn(`[pi] compact(): no live session for conversation ${conversationId}, skipping`);
-      return;
+      session = await this.getOrCreateSession(conversationId, this.buildModel(), [], undefined, workingDirectory);
+    }
+
+    if (session.isCompacting) {
+      throw new Error("Compaction already in progress");
     }
 
     try {
@@ -393,6 +409,7 @@ export class PiEngine implements ExecutionEngine {
       }
     } catch (err) {
       console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);
+      throw err;
     }
   }
 
@@ -461,7 +478,7 @@ export class PiEngine implements ExecutionEngine {
     return ctx;
   }
 
-  private async getOrCreateSession(
+  protected async getOrCreateSession(
     conversationId: number,
     model: Model<"openai-completions">,
     tools: ReturnType<typeof buildAllTools>,

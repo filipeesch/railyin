@@ -437,7 +437,7 @@ export class StreamProcessor {
               "SELECT type FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1"
             ).get(conversationId);
             if (lastMsg?.type === "compaction_summary") break;
-            convBuffer.enqueue({ taskId, conversationId, type: "compaction_summary", role: null, content: "", notify: true });
+            convBuffer.enqueue({ taskId, conversationId, type: "compaction_summary", role: null, content: event.summary ?? "", notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             break;
           }

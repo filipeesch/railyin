@@ -50,11 +50,11 @@ The Pi engine's `listModels()` SHALL query `GET {base_url}/v1/models` (not `/mod
 - **THEN** the returned `EngineModelInfo` has `contextWindow: null`
 
 ### Requirement: Session lifecycle
-One `AgentSession` is created per `conversationId` and reused across executions of the same conversation.
+One `AgentSession` is created per `conversationId` and reused across executions of the same conversation. When `compact()` is called and no live session exists for the conversation, the engine SHALL restore the session from the persisted `.jsonl` file at `~/.railyin/pi-sessions/<hash>.jsonl` via `getOrCreateSession()` rather than silently skipping. The restored session SHALL be stored in the session map so subsequent executions can reuse it. `compact()` SHALL check `session.isCompacting` before calling `session.compact()` and throw `"Compaction already in progress"` if true.
 
 #### Scenario: Session creation on first execute
 - **WHEN** `execute()` is called with a `conversationId` not yet in the session map
-- **THEN** a new `AgentSession` is created via `SessionManager.create(worktreePath)` and stored in `Map<conversationId, AgentSession>`
+- **THEN** a new `AgentSession` is created via `SessionManager.open(sessionPath)` and stored in `Map<conversationId, AgentSession>`
 
 #### Scenario: Session reuse on subsequent execute
 - **WHEN** `execute()` is called with the same `conversationId` again
@@ -63,6 +63,14 @@ One `AgentSession` is created per `conversationId` and reused across executions 
 #### Scenario: Session disposal on task archive
 - **WHEN** a task is archived or deleted
 - **THEN** `session.dispose()` is called and the entry is removed from the session map
+
+#### Scenario: compact() restores session from disk when not in memory
+- **WHEN** `compact()` is called for a conversationId not in the session map
+- **THEN** `getOrCreateSession()` is called to restore from `~/.railyin/pi-sessions/<hash>.jsonl`, the session is stored in the map, and compaction proceeds
+
+#### Scenario: compact() throws when already compacting
+- **WHEN** `compact()` is called and `session.isCompacting` returns true
+- **THEN** `"Compaction already in progress"` is thrown
 
 ### Requirement: Tool injection
 The Pi engine's `createAgentSession` call SHALL include a `tools` allowlist that enables the Pi SDK's built-in `"read"` tool alongside search tools (`"grep"`, `"find"`, `"ls"`) and all Railyin custom tools. The custom `"read_file"` tool SHALL NOT be included in the allowlist (its code is retained but not injected). Enabling `"read"` satisfies the Pi SDK's `selectedTools.includes("read")` guard, which gates skill injection into the system prompt.
@@ -130,9 +138,9 @@ Pi SDK `AgentSessionEvent` events (a superset of `AgentEvent`) are translated to
 - **THEN** `session.compact()` is awaited
 - **AND** Pi SDK emits `compaction_start` / `compaction_end` events which are forwarded to the stream
 
-#### Scenario: Manual compact no-ops when no session exists
-- **WHEN** `engine.compact()` is called for a `conversationId` with no active Pi session
-- **THEN** the call returns without error (no session to compact)
+#### Scenario: Manual compact restores session from disk when not in memory
+- **WHEN** `engine.compact()` is called for a `conversationId` with no active Pi session in memory
+- **THEN** `getOrCreateSession()` is called to restore from `~/.railyin/pi-sessions/<hash>.jsonl` and compaction proceeds normally
 
 ### Requirement: listModels reports manual compaction support
 Pi models listed by `listModels()` SHALL include `supportsManualCompact: true` to indicate that manual compaction is available via the compact button in the UI.
