@@ -32,8 +32,8 @@ describe("UndoStack", () => {
     const id = opId.slice(3); // strip "op:"
     const snap = stack.undoById(id);
     expect(snap).toBeDefined();
-    expect(snap!.path).toBe("/a.ts");
-    expect(snap!.beforeContent).toBe("v1");
+    expect((snap as { path: string; beforeContent: string }).path).toBe("/a.ts");
+    expect((snap as { path: string; beforeContent: string }).beforeContent).toBe("v1");
     expect(stack.size).toBe(0);
   });
 
@@ -47,7 +47,7 @@ describe("UndoStack", () => {
     stack.push({ path: "/a.ts", type: "patch_file", beforeContent: "v3" });
 
     const snap = stack.popByPath("/a.ts");
-    expect(snap?.beforeContent).toBe("v3"); // most recent last = v3
+    expect((snap as any)?.beforeContent).toBe("v3"); // most recent last = v3
     expect(stack.size).toBe(2);
   });
 
@@ -55,8 +55,8 @@ describe("UndoStack", () => {
     stack.push({ path: "/a.ts", type: "write_file", beforeContent: "v1" });
     stack.push({ path: "/a.ts", type: "patch_file", beforeContent: "v2" });
 
-    expect(stack.popByPath("/a.ts")?.beforeContent).toBe("v2");
-    expect(stack.popByPath("/a.ts")?.beforeContent).toBe("v1");
+    expect((stack.popByPath("/a.ts") as any)?.beforeContent).toBe("v2");
+    expect((stack.popByPath("/a.ts") as any)?.beforeContent).toBe("v1");
     expect(stack.popByPath("/a.ts")).toBeUndefined();
   });
 
@@ -67,7 +67,7 @@ describe("UndoStack", () => {
     stack.popByPath("/a.ts");
     expect(stack.size).toBe(1);
     const remaining = stack.popByPath("/b.ts");
-    expect(remaining?.path).toBe("/b.ts");
+    expect((remaining as any)?.path).toBe("/b.ts");
   });
 
   it("US-8: FIFO cap evicts oldest entry when maxSize is exceeded", () => {
@@ -88,7 +88,7 @@ describe("UndoStack", () => {
   it("US-9: rename_file snapshot stores toPath", () => {
     stack.push({ path: "/src/a.ts", type: "rename_file", beforeContent: null, toPath: "/src/b.ts" });
     const snap = stack.popByPath("/src/a.ts");
-    expect(snap?.toPath).toBe("/src/b.ts");
+    expect((snap as any)?.toPath).toBe("/src/b.ts");
   });
 
   it("US-10: push with lsp_rename type is accepted and returns op:XXXX", () => {

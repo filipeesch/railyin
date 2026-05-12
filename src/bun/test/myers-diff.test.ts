@@ -72,7 +72,7 @@ describe("computeFileDiff", () => {
     const diff = computeFileDiff("", after, "new.ts", "write_file");
     expect(diff.removed).toBe(0);
     expect(diff.added).toBeGreaterThan(0);
-    const allAdded = diff.hunks.flatMap((h) => h.lines).filter((l) => l.type === "added");
+    const allAdded = diff.hunks!.flatMap((h) => h.lines).filter((l) => l.type === "added");
     expect(allAdded.length).toBeGreaterThan(0);
   });
 });

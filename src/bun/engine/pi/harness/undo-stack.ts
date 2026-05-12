@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 
+type DistributiveOmit<T, K extends string> = T extends unknown ? Omit<T, K> : never;
+
 export type WriteSnapshot =
   | {
       operationId: string;
@@ -28,7 +30,7 @@ export class UndoStack {
     this.maxSize = maxSize;
   }
 
-  push(snapshot: Omit<WriteSnapshot, "operationId">): string {
+  push(snapshot: DistributiveOmit<WriteSnapshot, "operationId">): string {
     const operationId = randomBytes(2).toString("hex");
     this.stack.push({ ...snapshot, operationId } as WriteSnapshot);
     if (this.stack.length > this.maxSize) {

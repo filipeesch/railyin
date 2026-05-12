@@ -2,7 +2,7 @@ import { resolve, join, relative } from "path";
 import { pathToFileURL } from "url";
 import type { LSPServerManager } from "../../lsp/manager.ts";
 import type { CallHierarchyItem, Location, LocationLink, Hover, DocumentSymbol, SymbolInformation, CallHierarchyIncomingCall, CallHierarchyOutgoingCall } from "../../lsp/types.ts";
-import type { ToolExecutionResult } from "../common-tools.ts";
+import type { ToolExecutionResult } from "../../engine/common-tools.ts";
 import { applyWorkspaceEdit } from "../../lsp/apply-edits.ts";
 import {
   formatDefinition,
@@ -180,9 +180,10 @@ export async function executeLspDiagnostics(
   const r = requireFilePath(args, worktreePath);
   if ("error" in r) return r.error;
 
-  let diagnostics: Array<{ severity?: number; range?: { start: { line: number; character: number } }; source?: string; message: string }> | null = null;
+  type DiagItem = { severity?: number; range?: { start: { line: number; character: number } }; source?: string; message: string };
+  let diagnostics: DiagItem[] | null = null;
   try {
-    const result = await lspManager.request<{ items?: typeof diagnostics } | null>(r.abs, "textDocument/diagnostic", { textDocument: { uri: r.docUri } });
+    const result = await lspManager.request<{ items?: DiagItem[] | null } | null>(r.abs, "textDocument/diagnostic", { textDocument: { uri: r.docUri } });
     diagnostics = result?.items ?? null;
   } catch {
     return "Error: this language server does not support pull diagnostics (textDocument/diagnostic)";

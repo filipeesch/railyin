@@ -66,8 +66,8 @@ describe("Pi common-tools bridge (PCB)", () => {
     const result = await lspRename.execute("id", {});
 
     expect(harness.undoStack.size).toBe(1);
-    expect(result.content[0].text).toMatch(/\[op:[0-9a-f]{4}\]/);
-    expect(result.content[0].text).toContain("Renamed foo");
+    expect((result.content[0] as { text: string }).text).toMatch(/\[op:[0-9a-f]{4}\]/);
+    expect((result.content[0] as { text: string }).text).toContain("Renamed foo");
   });
 
   it("PCB-2: result without beforeFiles does not push to UndoStack", async () => {
@@ -84,7 +84,7 @@ describe("Pi common-tools bridge (PCB)", () => {
     const result = await lspHover.execute("id", {});
 
     expect(harness.undoStack.size).toBe(0);
-    expect(result.content[0].text).toBe("Hover info here");
+    expect((result.content[0] as { text: string }).text).toBe("Hover info here");
   });
 
   it("PCB-3: without harnessCtx, beforeFiles result does not push to UndoStack", async () => {
@@ -101,8 +101,8 @@ describe("Pi common-tools bridge (PCB)", () => {
     const result = await lspRename.execute("id", {});
 
     // Text should NOT have [op:XXXX] appended
-    expect(result.content[0].text).not.toMatch(/\[op:/);
-    expect(result.content[0].text).toBe("Renamed");
+    expect((result.content[0] as { text: string }).text).not.toMatch(/\[op:/);
+    expect((result.content[0] as { text: string }).text).toBe("Renamed");
   });
 
   it("PCB-4: writtenFiles are forwarded in tool details", async () => {
@@ -111,7 +111,7 @@ describe("Pi common-tools bridge (PCB)", () => {
     const fakeResult: ToolExecutionResult = {
       type: "result",
       text: "Done",
-      writtenFiles: [{ path: "a.ts", added: 1, removed: 0, chunks: [] }],
+      writtenFiles: [{ path: "a.ts", operation: "write_file" as const, added: 1, removed: 0, hunks: [] }],
       beforeFiles: { "/a.ts": "old" },
     };
     mockExecutor.mockResolvedValueOnce(fakeResult);

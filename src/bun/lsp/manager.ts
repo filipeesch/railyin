@@ -85,7 +85,7 @@ export class LSPServerManager {
     // Ensure file is open (handling stale content)
     await this.ensureFileOpen(instance, absFilePath);
 
-    return instance.client.sendRequest<T>(method, params);
+    return instance.client!.sendRequest<T>(method, params);
   }
 
   /**
@@ -154,7 +154,7 @@ export class LSPServerManager {
       await instance.startingPromise;
     }
 
-    if (instance.state !== "running" || !instance.client) {
+    if (!instance.client) {
       throw new Error(`LSP server "${instance.config.name}" failed to start.`);
     }
   }

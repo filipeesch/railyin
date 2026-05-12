@@ -61,20 +61,20 @@ describe("undo_write — lsp_rename support (UW)", () => {
     const [tool] = buildUndoTool(ctx);
 
     const result = await tool.execute("id", { operationId: opId });
-    expect(result.content[0].text).toContain("restored 2 files");
+    expect((result.content[0] as { text: string }).text).toContain("restored 2 files");
   });
 
   it("UW-4: returns error when operationId is unknown", async () => {
     const [tool] = buildUndoTool(ctx);
     const result = await tool.execute("id", { operationId: "op:dead" });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("no longer in undo history");
+    expect((result as any).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("no longer in undo history");
   });
 
   it("UW-5: returns error when neither operationId nor path provided", async () => {
     const [tool] = buildUndoTool(ctx);
     const result = await tool.execute("id", {});
-    expect(result.isError).toBe(true);
+    expect((result as any).isError).toBe(true);
   });
 
 

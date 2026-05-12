@@ -4,7 +4,7 @@
  */
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { AIToolDefinition } from "../../ai/types.ts";
+import type { AIToolDefinition } from "../../../ai/types.ts";
 import type { CommonToolContext, EngineEvent } from "../../types.ts";
 import type { HarnessContext } from "../harness/context.ts";
 import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from "../../common-tools.ts";

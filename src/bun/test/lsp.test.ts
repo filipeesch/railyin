@@ -579,6 +579,7 @@ describe("LSP split tools", () => {
     const result = await executeLspRename({ file_path: "rename.ts", line: 1, character: 7, new_name: "newName" }, mockManager as any, dir);
 
     expect(result.type).toBe("result");
+    if (result.type !== "result") return;
     expect(result.writtenFiles).toBeDefined();
     expect(result.writtenFiles!.length).toBeGreaterThan(0);
     expect(result.beforeFiles).toBeDefined();
@@ -841,7 +842,7 @@ describe("applyWorkspaceEdit", () => {
     if (!("error" in result)) {
       expect(result.diffs).toHaveLength(2);
       expect(result.diffs.every((d) => d.operation === "edit_file")).toBe(true);
-      expect(result.diffs.every((d) => d.hunks.length > 0)).toBe(true);
+      expect(result.diffs.every((d) => d.hunks!.length > 0)).toBe(true);
     }
   });
 
