@@ -323,6 +323,68 @@ test.describe("R — Context compaction", () => {
         await expect(page.locator(".msg--compaction__details")).not.toBeAttached();
     });
 
+    test("R-24: compact success → context gauge drops from 90% to 20%", async ({ page, api, ws, task }) => {
+        let contextUsageCallCount = 0;
+        const compactionMsg: ConversationMessage = {
+            id: 9010,
+            taskId: task.id,
+            conversationId: task.id,
+            type: "compaction_summary",
+            role: null,
+            content: "Compacted successfully.",
+            metadata: null,
+            createdAt: new Date().toISOString(),
+        };
+
+        api.handle("models.listEnabled", () => [
+            { id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true },
+        ]);
+        api.handle("conversations.contextUsage", () => {
+            contextUsageCallCount++;
+            // First call → 90%, subsequent calls (after compaction) → 20%
+            return contextUsageCallCount === 1
+                ? { usedTokens: 115_200, maxTokens: 128_000, fraction: 0.9 }
+                : { usedTokens: 25_600, maxTokens: 128_000, fraction: 0.2 };
+        });
+        api.handle("tasks.compact", async () => {
+            setTimeout(() => ws.push({ type: "message.new", payload: compactionMsg }), 50);
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Open popover and verify initial 90%
+        await page.locator("button.context-ring-btn").click();
+        await expect(page.locator(".ctx-popover__pct")).toContainText("90%", { timeout: 3_000 });
+
+        // Click compact
+        await page.locator(".ctx-popover button:has-text('Compact')").click();
+
+        // Gauge should update to 20% after compaction message triggers fetchContextUsage
+        await expect(page.locator("button.context-ring-btn")).toBeVisible({ timeout: 5_000 });
+        await page.locator("button.context-ring-btn").click();
+        await expect(page.locator(".ctx-popover__pct")).toContainText("20%", { timeout: 5_000 });
+    });
+
+    test("R-25: compact error → error notification visible", async ({ page, api, task }) => {
+        api.handle("models.listEnabled", () => [
+            { id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true },
+        ]);
+        api.handle("conversations.contextUsage", () => ({ usedTokens: 92_160, maxTokens: 128_000, fraction: 0.72 }));
+        api.handle("tasks.compact", async () => {
+            throw Object.assign(new Error("Compaction already in progress"), { status: 500 });
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator("button.context-ring-btn").click();
+        await page.locator(".ctx-popover button:has-text('Compact')").click();
+
+        // Error notification should appear
+        await expect(page.locator(".notification--error, [data-type='error'], .toast--error, [role='alert']")).toBeVisible({ timeout: 3_000 });
+    });
+
     test("R-23: context gauge appears after execution completes", async ({ page, api, ws, task }) => {
         const completedTask: Task = { ...task, executionState: "completed" };
 

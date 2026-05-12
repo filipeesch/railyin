@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { mapTask } from "../../db/mappers";
 import { appendMessage } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
-import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config";
+import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry";
 import type { ExecutionParamsBuilder } from "./execution-params-builder";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
@@ -17,6 +17,8 @@ import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
+import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
+import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
 
 
 export class TransitionExecutor {
@@ -30,6 +32,7 @@ export class TransitionExecutor {
     private readonly wsRepo: IWorkspaceRepository,
     private readonly crossEngineInjector: CrossEngineContextInjector,
     private readonly decisionInjector: DecisionContextInjector,
+    private readonly customPromptInjector: CustomPromptInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
     private readonly modelSettingsRepo?: ModelSettingsRepository,
@@ -66,12 +69,6 @@ export class TransitionExecutor {
     const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
     const effectiveModel = resolveModel(taskWithModel, column?.model, true);
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
-
-    // Persist column model during transition if (column?.model != null) {
-    //   db.run("UPDATE conversations SET model = ? WHERE id = ?", [column.model, conversationId]);
-    // }
-    // Note: No else-if for effectiveModel - we only update when column.model is defined
-    // This preserves user's conversation model when column has no model defined
 
     if (!column?.on_enter_prompt) {
       appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
@@ -128,7 +125,18 @@ export class TransitionExecutor {
       workingDirectory,
     );
     const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
-    const systemInstructions = buildSystemInstructions(config, task.board_id, toState);
+    
+    // Build system instructions with custom prompt injection
+    const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, toState);
+    const promptFilter: PromptFilterContext = {
+      modelId: effectiveModel ?? "",
+      engineId: targetEngineId,
+      executionType: "task",
+      projectPath: workingDirectory,
+    };
+    assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
+    const systemInstructions = assembler.assemble();
+    
     const userContent = [historyBlock, decisionsBlock, resolvedPrompt].filter(Boolean).join("\n\n");
 
     const execParams = {

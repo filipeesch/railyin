@@ -4,7 +4,7 @@ import type { Database } from "bun:sqlite";
 import { mapTask, mapConversationMessage } from "../../db/mappers";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
-import { buildSystemInstructions, getColumnConfig } from "../../workflow/column-config";
+import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry";
 import type { ExecutionParamsBuilder } from "./execution-params-builder";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
@@ -18,6 +18,8 @@ import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
+import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
+import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
 
 
 export class HumanTurnExecutor {
@@ -33,6 +35,7 @@ export class HumanTurnExecutor {
     private readonly boardTools: IBoardToolExecutor,
     private readonly crossEngineInjector: CrossEngineContextInjector,
     private readonly decisionInjector: DecisionContextInjector,
+    private readonly customPromptInjector: CustomPromptInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
     private readonly modelSettingsRepo?: ModelSettingsRepository,
@@ -78,8 +81,7 @@ export class HumanTurnExecutor {
           .get(msgId)!;
         return { message: mapConversationMessage(msgRow), executionId: task.current_execution_id };
       } catch {
-        // The engine has no live session for this execution (e.g. process was restarted).
-        // Roll back the optimistic state writes and fall through to start a fresh execution.
+        // Roll back optimistic state writes — engine session lost; restart as new execution
         db.run(
           "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = 'Engine session lost; restarted as new execution' WHERE id = ?",
           [task.current_execution_id],
@@ -89,17 +91,14 @@ export class HumanTurnExecutor {
           [taskId],
         );
 
-        // Get the model from the conversation
         const conversationModel = db
           .prepare("SELECT model FROM conversations WHERE id = ?")
           .get(task.conversation_id) as { model: string | null } | undefined;
         const modelValue = conversationModel?.model ?? null;
 
         const column = getColumnConfig(config, task.board_id, task.workflow_state);
-        // Use centralized model resolver with isColumnTransition=false
         const taskWithModelFallback = { ...task, conversation_model: modelValue };
         const effectiveModel = resolveModel(taskWithModelFallback, column?.model, false);
-        // Note: No model updates during fallback - conversation model is authoritative
         const taskForFallback: TaskRow = { ...task, conversation_model: modelValue };
         const execResult = db.run(
           `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -125,7 +124,7 @@ export class HumanTurnExecutor {
             conversationId,
             newExecutionId,
             engineContent ?? content,
-            buildSystemInstructions(config, task.board_id, task.workflow_state),
+            undefined,
             this.workdirResolver.resolve(taskForFallback),
             signal,
             this.streamProcessor.makePersistCallback(taskId, conversationId, newExecutionId),
@@ -147,10 +146,8 @@ export class HumanTurnExecutor {
     }
 
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
-    // Use centralized model resolver with isColumnTransition=false (not a transition)
     const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
     const resolvedModel = resolveModel(taskWithModel, column?.model, false);
-    // Persist column model if it resolved to one and conversation doesn't have it
     if (resolvedModel && !task.conversation_model) {
       db.run("UPDATE conversations SET model = ? WHERE id = ?", [resolvedModel, task.conversation_id]);
     }
@@ -190,7 +187,18 @@ export class HumanTurnExecutor {
       workingDirectory,
     );
     const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
-    const systemInstructions = buildSystemInstructions(config, task.board_id, task.workflow_state);
+    
+    // Build system instructions with custom prompt injection
+    const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
+    const promptFilter: PromptFilterContext = {
+      modelId: resolvedModel ?? "",
+      engineId: targetEngineId,
+      executionType: "task",
+      projectPath: workingDirectory,
+    };
+    assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
+    const systemInstructions = assembler.assemble();
+    
     const userContent = [historyBlock, decisionsBlock, resolvedPrompt].filter(Boolean).join("\n\n");
 
     const execParams = {

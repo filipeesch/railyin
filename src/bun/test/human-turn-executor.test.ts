@@ -16,6 +16,7 @@ import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
+import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
 
 let db: Database;
 let gitDir: string;
@@ -111,6 +112,7 @@ function makeExecutor(engine: TestEngine) {
     boardTools,
     new CrossEngineContextInjector(db),
     new DecisionContextInjector(db),
+      new CustomPromptInjector(),
   );
   return { builder, streamProcessor, executor };
 }

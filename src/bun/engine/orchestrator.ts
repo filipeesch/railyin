@@ -19,9 +19,9 @@ import type {
 } from "./types.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
-import { mapTask } from "../db/mappers.ts";
+import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import type { Database } from "bun:sqlite";
-import type { TaskRow } from "../db/row-types.ts";
+import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
@@ -43,6 +43,7 @@ import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
+import { CustomPromptInjector } from "./execution/custom-prompt-injector.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -93,11 +94,13 @@ export class Orchestrator implements ExecutionCoordinator {
     );
     this.paramsBuilder = new ExecutionParamsBuilder();
     this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
+    const customPromptInjector = new CustomPromptInjector();
 
     this.transitionExecutor = new TransitionExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, boardTools, wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      customPromptInjector,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
       modelSettingsRepo,
@@ -106,13 +109,14 @@ export class Orchestrator implements ExecutionCoordinator {
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
+      customPromptInjector,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
       modelSettingsRepo,
     );
-    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, modelSettingsRepo);
-    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, modelSettingsRepo);
-    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver);
+    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, customPromptInjector, modelSettingsRepo);
+    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, customPromptInjector);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────
@@ -286,7 +290,14 @@ export class Orchestrator implements ExecutionCoordinator {
       throw new Error(`Engine for task ${taskId} does not support manual compaction`);
     }
     const workingDirectory = this.workdirResolver.resolve(task);
-    await engine.compact(taskId, task.conversation_id ?? 0, workingDirectory);
+    const conversationId = task.conversation_id ?? 0;
+    await engine.compact(taskId, conversationId, workingDirectory);
+    const lastMsg = db.query<ConversationMessageRow, [number]>(
+      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+    ).get(conversationId);
+    if (lastMsg) {
+      this.onNewMessage(mapConversationMessage(lastMsg));
+    }
   }
 
   async compactConversation(conversationId: number, workspaceKey = getDefaultWorkspaceKey()): Promise<void> {
@@ -298,5 +309,11 @@ export class Orchestrator implements ExecutionCoordinator {
     }
     const workingDirectory = getEffectiveWorkspacePath(config);
     await engine.compact(null, conversationId, workingDirectory);
+    const lastMsg = this.db.query<ConversationMessageRow, [number]>(
+      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+    ).get(conversationId);
+    if (lastMsg) {
+      this.onNewMessage(mapConversationMessage(lastMsg));
+    }
   }
 }

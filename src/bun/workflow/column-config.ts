@@ -26,14 +26,3 @@ export function getWorkflowTemplate(
   const templateId = board?.workflow_template_id ?? "delivery";
   return config.workflows.find((w) => w.id === templateId) ?? null;
 }
-
-export function buildSystemInstructions(
-  config: LoadedConfig,
-  boardId: number,
-  columnId: string,
-): string | undefined {
-  const template = getWorkflowTemplate(config, boardId);
-  const column = template?.columns.find((c) => c.id === columnId);
-  const parts = [template?.workflow_instructions, column?.stage_instructions].filter(Boolean);
-  return parts.length > 0 ? parts.join("\n\n") : undefined;
-}
