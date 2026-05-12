@@ -31,7 +31,11 @@ Each common tool handler SHALL receive a `CommonToolContext` containing scoped s
 - **THEN** it passes a `CommonToolContext` with `repos.decisions` populated and the interview suspension callback at `runtime.interview`
 
 ### Requirement: executeCommonTool returns a typed result object
-The `executeCommonTool` function SHALL return `Promise<ToolExecutionResult>` where `ToolExecutionResult` is a discriminated union: `{ type: "result"; text: string }` for normal tool completions or `{ type: "suspend"; payload: string }` when the `decision_request` tool triggers execution suspension. Callers SHALL unwrap the `.text` field before treating the result as a plain string.
+The `executeCommonTool` function SHALL return `Promise<ToolExecutionResult>` where `ToolExecutionResult` is a discriminated union:
+- `{ type: "result"; text: string; writtenFiles?: FileDiffPayload[]; beforeFiles?: Record<string, string | null> }` for normal tool completions
+- `{ type: "suspend"; payload: string }` when the `decision_request` tool triggers execution suspension
+
+The `writtenFiles` field, when present, carries file diff payloads for UI visualization. The `beforeFiles` field, when present, carries the pre-mutation content of each changed file (keyed by absolute path; `null` means the file was newly created). Callers that only need text SHALL continue to use the `.text` field — the new fields are optional and backward-compatible.
 
 #### Scenario: Normal tool call returns result type
 - **WHEN** a common tool (e.g. `create_todo`, `list_decisions`) completes successfully
@@ -40,6 +44,10 @@ The `executeCommonTool` function SHALL return `Promise<ToolExecutionResult>` whe
 #### Scenario: decision_request triggers suspend type
 - **WHEN** `decision_request` is called with questions
 - **THEN** `executeCommonTool` resolves to `{ type: "suspend", payload: "<interview-payload>" }`
+
+#### Scenario: lsp_rename result carries writtenFiles and beforeFiles
+- **WHEN** `lsp_rename` succeeds and modifies N files
+- **THEN** `executeCommonTool` resolves to `{ type: "result", text: "...", writtenFiles: [N FileDiffPayload entries], beforeFiles: { <absPath>: <beforeContent>, ... } }`
 
 ### Requirement: Common tool handlers accept typed Record<string, unknown> args
 All common tool handlers — including those in `board-tools.ts`, `lsp-tools.ts`, and `common-tools.ts` — SHALL accept `args: Record<string, unknown>` instead of `Record<string, string>`. Handlers SHALL cast to the expected type after AJV validation has confirmed the value is safe (e.g. `args.task_id as number`). The `toToolArgs()` serialisation helper SHALL be removed from both `engine/claude/tools.ts` and `engine/copilot/tools.ts`.

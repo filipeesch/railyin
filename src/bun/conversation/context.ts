@@ -19,7 +19,16 @@ const TOOL_RESULT_LIMITS = new Map<string, number>([
   ["spawn_agent", 100_000],
   ["edit_file", 2_000],
   ["write_file", 2_000],
-  ["lsp", 100_000],
+  ["lsp_go_to_definition", 100_000],
+  ["lsp_find_references", 100_000],
+  ["lsp_document_symbols", 100_000],
+  ["lsp_workspace_symbols", 100_000],
+  ["lsp_hover", 10_000],
+  ["lsp_rename", 2_000],
+  ["lsp_incoming_calls", 100_000],
+  ["lsp_outgoing_calls", 100_000],
+  ["lsp_diagnostics", 100_000],
+  ["lsp_type_definition", 100_000],
 ]);
 const CONTEXT_WARN_FRACTION = 0.8;
 const SYSTEM_MESSAGE_OVERHEAD_TOKENS = 400;

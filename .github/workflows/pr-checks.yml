@@ -28,6 +28,37 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+  build:
+    name: Build Frontend
+    needs: type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
   backend-tests:
     name: Backend Tests
     needs: type-check
@@ -54,7 +85,7 @@ jobs:
 
   api-tests:
     name: API Tests
-    needs: backend-tests
+    needs: type-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,9 +108,13 @@ jobs:
         run: bun test e2e/api --timeout 30000
 
   e2e:
-    name: Playwright E2E
-    needs: api-tests
+    name: Playwright E2E (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    needs: [build, backend-tests, api-tests]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -97,6 +132,12 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -107,18 +148,31 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Build frontend
-        run: bun run build
-
-      - name: Run Playwright tests
-        run: npx playwright test e2e/ui --workers=4
+      - name: Run Playwright tests (shard ${{ matrix.shard }}/3)
+        run: npx playwright test e2e/ui --shard=${{ matrix.shard }}/3 --workers=2
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-report
+          name: playwright-report-shard-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/
           retention-days: 7
+
+  # Required status check — aggregates all shards into the single "Playwright E2E" name
+  # that branch protection expects.
+  e2e-complete:
+    name: Playwright E2E
+    needs: e2e
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check shard results
+        run: |
+          if [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "One or more E2E shards failed"
+            exit 1
+          fi
+          echo "All E2E shards passed"

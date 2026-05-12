@@ -1,4 +1,4 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Write operations return an operationId for potential undo
 The system SHALL embed an `operationId` (format `op:XXXX` where XXXX is a 4-character lowercase hex string) in the success string returned to the model for every `write_file`, `patch_file`, `delete_file`, `rename_file`, and **`lsp_rename`** call. The `UndoStack` SHALL store a snapshot before each operation. The model can pass the `operationId` to `undo_write` to restore the prior state.
@@ -58,10 +58,3 @@ For `lsp_rename` snapshots (type `"lsp_rename"`), undo by `operationId` SHALL re
 - **WHEN** `undo_write({ path: "src/auth.ts" })` is called after an lsp_rename that touched `src/auth.ts`
 - **THEN** the lsp_rename snapshot is NOT matched (it has no single `path` key)
 - **THEN** the result is `"Error: no more undo history for src/auth.ts"` (or the previous write entry if one exists)
-
-### Requirement: UndoStack is capped at 50 entries with FIFO rotation
-The system SHALL cap the `UndoStack` at 50 entries. When a 51st entry is added, the oldest entry SHALL be silently discarded. The stack SHALL be scoped per `HarnessContext` (per Pi session / conversationId).
-
-#### Scenario: Stack rotates at 50 entries
-- **WHEN** 51 write operations are performed in the same session
-- **THEN** the oldest entry is dropped and only the 50 most recent operations remain undoable

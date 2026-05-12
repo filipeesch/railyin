@@ -1,12 +1,26 @@
 import { randomBytes } from "node:crypto";
 
-export interface WriteSnapshot {
-  operationId: string;
-  path: string;
-  type: "write_file" | "patch_file" | "delete_file" | "rename_file";
-  beforeContent: string | null;
-  toPath?: string;
-}
+type DistributiveOmit<T, K extends string> = T extends unknown ? Omit<T, K> : never;
+
+export type WriteSnapshot =
+  | {
+      operationId: string;
+      type: "write_file" | "patch_file" | "delete_file";
+      path: string;
+      beforeContent: string | null;
+    }
+  | {
+      operationId: string;
+      type: "rename_file";
+      path: string;
+      beforeContent: null;
+      toPath: string;
+    }
+  | {
+      operationId: string;
+      type: "lsp_rename";
+      beforeFiles: Record<string, string | null>;
+    };
 
 export class UndoStack {
   private stack: WriteSnapshot[] = [];
@@ -16,9 +30,9 @@ export class UndoStack {
     this.maxSize = maxSize;
   }
 
-  push(snapshot: Omit<WriteSnapshot, "operationId">): string {
+  push(snapshot: DistributiveOmit<WriteSnapshot, "operationId">): string {
     const operationId = randomBytes(2).toString("hex");
-    this.stack.push({ ...snapshot, operationId });
+    this.stack.push({ ...snapshot, operationId } as WriteSnapshot);
     if (this.stack.length > this.maxSize) {
       this.stack.shift();
     }
@@ -33,7 +47,8 @@ export class UndoStack {
 
   popByPath(path: string): WriteSnapshot | undefined {
     for (let i = this.stack.length - 1; i >= 0; i--) {
-      if (this.stack[i].path === path) {
+      const snap = this.stack[i];
+      if ("path" in snap && snap.path === path) {
         return this.stack.splice(i, 1)[0];
       }
     }

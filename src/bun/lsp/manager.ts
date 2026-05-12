@@ -29,6 +29,8 @@ interface ServerInstance {
   openedMtimes: Map<string, number>;
   consecutiveFailures: number;
   capabilities?: InitializeResult["capabilities"];
+  /** In-flight start promise — concurrent callers await the same one */
+  startingPromise?: Promise<void>;
 }
 
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -78,25 +80,12 @@ export class LSPServerManager {
 
     const instance = this.servers.get(serverName)!;
 
-    if (instance.state === "disabled") {
-      throw new Error(
-        `LSP server "${serverName}" is disabled after ${MAX_CONSECUTIVE_FAILURES} consecutive failures.`,
-      );
-    }
-
-    // Lazy initialization
-    if (instance.state === "idle" || (instance.state === "error" && instance.consecutiveFailures < MAX_CONSECUTIVE_FAILURES)) {
-      await this.startServer(instance);
-    }
-
-    if (instance.state !== "running" || !instance.client) {
-      throw new Error(`LSP server "${serverName}" failed to start.`);
-    }
+    await this.ensureRunning(instance);
 
     // Ensure file is open (handling stale content)
     await this.ensureFileOpen(instance, absFilePath);
 
-    return instance.client.sendRequest<T>(method, params);
+    return instance.client!.sendRequest<T>(method, params);
   }
 
   /**
@@ -114,19 +103,9 @@ export class LSPServerManager {
 
     const instance = this.servers.get(serverName)!;
 
-    if (instance.state === "disabled") {
-      throw new Error(`LSP server "${serverName}" is disabled after ${MAX_CONSECUTIVE_FAILURES} consecutive failures.`);
-    }
+    await this.ensureRunning(instance);
 
-    if (instance.state === "idle" || (instance.state === "error" && instance.consecutiveFailures < MAX_CONSECUTIVE_FAILURES)) {
-      await this.startServer(instance);
-    }
-
-    if (instance.state !== "running" || !instance.client) {
-      throw new Error(`LSP server "${serverName}" failed to start.`);
-    }
-
-    return instance.client.sendRequest<T>("workspace/symbol", { query });
+    return instance.client!.sendRequest<T>("workspace/symbol", { query });
   }
 
   async shutdown(): Promise<void> {
@@ -150,7 +129,36 @@ export class LSPServerManager {
     }
   }
 
-  // ─── Server lifecycle ────────────────────────────────────────────────────────
+  // ─── Private helpers ────────────────────────────────────────────────────────
+
+  /** Ensures the server is running, deduplicating concurrent start attempts. */
+  private async ensureRunning(instance: ServerInstance): Promise<void> {
+    if (instance.state === "running") return;
+
+    if (instance.state === "disabled") {
+      throw new Error(
+        `LSP server "${instance.config.name}" is disabled after ${MAX_CONSECUTIVE_FAILURES} consecutive failures.`,
+      );
+    }
+
+    // If already starting, wait for the in-flight promise
+    if (instance.startingPromise) {
+      await instance.startingPromise;
+      return;
+    }
+
+    if (instance.state === "idle" || (instance.state === "error" && instance.consecutiveFailures < MAX_CONSECUTIVE_FAILURES)) {
+      instance.startingPromise = this.startServer(instance).finally(() => {
+        instance.startingPromise = undefined;
+      });
+      await instance.startingPromise;
+    }
+
+    if (!instance.client) {
+      throw new Error(`LSP server "${instance.config.name}" failed to start.`);
+    }
+  }
+
 
   private async startServer(instance: ServerInstance): Promise<void> {
     instance.state = "starting";

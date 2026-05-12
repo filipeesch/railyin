@@ -12,8 +12,19 @@ import type { AIToolDefinition } from "../ai/types.ts";
 import type { CommonToolContext } from "./types.ts";
 import type { BoardToolContext } from "../workflow/tools/types.ts";
 import { DECISION_REQUEST_TOOL_DEFINITION } from "./decision-request-tool-definition.ts";
-import { LSP_TOOL_DEFINITION } from "./lsp-tool-definition.ts";
-import { executeLspTool } from "../workflow/tools/lsp-tools.ts";
+import { LSP_TOOL_DEFINITIONS } from "./lsp-tool-definitions.ts";
+import {
+  executeLspGoToDefinition,
+  executeLspFindReferences,
+  executeLspDocumentSymbols,
+  executeLspWorkspaceSymbols,
+  executeLspHover,
+  executeLspRename,
+  executeLspIncomingCalls,
+  executeLspOutgoingCalls,
+  executeLspDiagnostics,
+  executeLspTypeDefinition,
+} from "../workflow/tools/lsp-tools.ts";
 import { validateToolArgs } from "./validate-tool-args.ts";
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
@@ -353,7 +364,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["id", "status"],
     },
   },
-  LSP_TOOL_DEFINITION,
+  ...LSP_TOOL_DEFINITIONS,
 ];
 
 export const COMMON_TOOL_NAMES = new Set(COMMON_TOOL_DEFINITIONS.map((t) => t.name));
@@ -410,6 +421,26 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
       return { label: "todo status", subject: args.id != null ? `#${args.id} → ${args.status ?? ""}` : undefined };
     case "get_todo":
       return { label: "get todo", subject: args.id != null ? `#${args.id}` : undefined };
+    case "lsp_go_to_definition":
+      return { label: "go to definition", subject: args.file_path != null ? String(args.file_path) : undefined };
+    case "lsp_find_references":
+      return { label: "find references", subject: args.file_path != null ? String(args.file_path) : undefined };
+    case "lsp_document_symbols":
+      return { label: "document symbols", subject: args.file_path != null ? String(args.file_path) : undefined };
+    case "lsp_workspace_symbols":
+      return { label: "workspace symbols", subject: args.query != null ? String(args.query) : undefined };
+    case "lsp_hover":
+      return { label: "hover", subject: args.file_path != null ? String(args.file_path) : undefined };
+    case "lsp_rename":
+      return { label: "rename symbol", subject: args.new_name != null ? String(args.new_name) : undefined };
+    case "lsp_incoming_calls":
+      return { label: "incoming calls", subject: args.file_path != null ? String(args.file_path) : undefined };
+    case "lsp_outgoing_calls":
+      return { label: "outgoing calls", subject: args.file_path != null ? String(args.file_path) : undefined };
+    case "lsp_diagnostics":
+      return { label: "diagnostics", subject: args.file_path != null ? String(args.file_path) : undefined };
+    case "lsp_type_definition":
+      return { label: "type definition", subject: args.file_path != null ? String(args.file_path) : undefined };
     default:
       return { label: name };
   }
@@ -422,7 +453,7 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
  * Returns a plain JSON/text string suitable for sending back to the LLM.
  */
 export type ToolExecutionResult =
-  | { type: "result"; text: string }
+  | { type: "result"; text: string; writtenFiles?: import("../../shared/rpc-types.ts").FileDiffPayload[]; beforeFiles?: Record<string, string | null> }
   | { type: "suspend"; text: string; payload: string };
 
 /**
@@ -445,6 +476,11 @@ export async function executeCommonTool(
     const payload: Record<string, unknown> = { questions: args.questions };
     if (context) payload.context = context;
     return { type: "suspend", text: "", payload: JSON.stringify(payload) };
+  }
+  if (name === "lsp_rename") {
+    if (!ctx.runtime.lspManager) return { type: "result", text: "Error: LSP is not configured. Add lsp.servers to workspace.yaml." };
+    if (!ctx.runtime.worktreePath) return { type: "result", text: "Error: worktreePath is not set in tool context" };
+    return executeLspRename(args, ctx.runtime.lspManager, ctx.runtime.worktreePath);
   }
   const text = await executeCommonToolText(name, args, ctx);
   return { type: "result", text };
@@ -596,14 +632,34 @@ async function executeCommonToolText(
       return JSON.stringify({ detailedContent: `Todo #${result.id} status updated to ${result.status}: "${result.title}"`, data: result });
     }
 
-    case "lsp": {
+    case "lsp_go_to_definition":
+    case "lsp_find_references":
+    case "lsp_document_symbols":
+    case "lsp_workspace_symbols":
+    case "lsp_hover":
+    case "lsp_incoming_calls":
+    case "lsp_outgoing_calls":
+    case "lsp_diagnostics":
+    case "lsp_type_definition": {
       if (!ctx.runtime.lspManager) {
         return "Error: LSP is not configured. Add lsp.servers to workspace.yaml.";
       }
       if (!ctx.runtime.worktreePath) {
         return "Error: worktreePath is not set in tool context";
       }
-      return executeLspTool(args, ctx.runtime.lspManager, ctx.runtime.worktreePath);
+      const lsp = ctx.runtime.lspManager;
+      const wtp = ctx.runtime.worktreePath;
+      switch (name) {
+        case "lsp_go_to_definition": return executeLspGoToDefinition(args, lsp, wtp);
+        case "lsp_find_references": return executeLspFindReferences(args, lsp, wtp);
+        case "lsp_document_symbols": return executeLspDocumentSymbols(args, lsp, wtp);
+        case "lsp_workspace_symbols": return executeLspWorkspaceSymbols(args, lsp, wtp);
+        case "lsp_hover": return executeLspHover(args, lsp, wtp);
+        case "lsp_incoming_calls": return executeLspIncomingCalls(args, lsp, wtp);
+        case "lsp_outgoing_calls": return executeLspOutgoingCalls(args, lsp, wtp);
+        case "lsp_diagnostics": return executeLspDiagnostics(args, lsp, wtp);
+        default: return executeLspTypeDefinition(args, lsp, wtp);
+      }
     }
 
     default:

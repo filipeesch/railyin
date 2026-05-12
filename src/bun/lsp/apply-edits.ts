@@ -2,10 +2,14 @@ import { readFileSync, writeFileSync } from "fs";
 import { relative } from "path";
 import { fileURLToPath } from "url";
 import type { WorkspaceEdit, TextEdit } from "./types.ts";
+import type { FileDiffPayload } from "../../shared/rpc-types.ts";
+import { computeFileDiff } from "../utils/diff.ts";
 
 export interface ApplyResult {
   filesChanged: string[];
   summary: string;
+  beforeContents: Record<string, string | null>;
+  diffs: FileDiffPayload[];
 }
 
 /**
@@ -31,11 +35,13 @@ export function applyWorkspaceEdit(
   }
 
   if (byUri.size === 0) {
-    return { filesChanged: [], summary: "No changes needed" };
+    return { filesChanged: [], summary: "No changes needed", beforeContents: {}, diffs: [] };
   }
 
   const filesChanged: string[] = [];
   const fileSummaries: string[] = [];
+  const beforeContents: Record<string, string | null> = {};
+  const diffs: FileDiffPayload[] = [];
 
   for (const [uri, edits] of byUri) {
     let absPath: string;
@@ -52,12 +58,15 @@ export function applyWorkspaceEdit(
       return { error: `Cannot read file ${absPath}: ${e instanceof Error ? e.message : String(e)}` };
     }
 
+    beforeContents[absPath] = content;
+
     // Sort descending by position so each splice doesn't invalidate later (earlier in file) offsets
     const sorted = [...edits].sort((a, b) => {
       if (b.range.start.line !== a.range.start.line) return b.range.start.line - a.range.start.line;
       return b.range.start.character - a.range.start.character;
     });
 
+    const beforeContent = content;
     for (const textEdit of sorted) {
       const startOffset = positionToOffset(content, textEdit.range.start.line, textEdit.range.start.character);
       const endOffset = positionToOffset(content, textEdit.range.end.line, textEdit.range.end.character);
@@ -73,13 +82,14 @@ export function applyWorkspaceEdit(
     const relPath = relative(worktreePath, absPath);
     filesChanged.push(relPath);
     fileSummaries.push(`${relPath}:${edits.length}`);
+    diffs.push(computeFileDiff(beforeContent, content, relPath, "edit_file"));
   }
 
   const summary = filesChanged.length === 1
     ? `1 file changed (${fileSummaries[0]})`
     : `${filesChanged.length} files changed (${fileSummaries.join(", ")})`;
 
-  return { filesChanged, summary };
+  return { filesChanged, summary, beforeContents, diffs };
 }
 
 /** Convert 0-based (line, character) to a byte offset in a UTF-8 string. */
