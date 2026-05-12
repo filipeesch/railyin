@@ -32,16 +32,20 @@ export function buildCopilotTools(
     parameters: def.parameters as Record<string, unknown>,
     skipPermission: true,
     handler: async (args: unknown) => {
-      const result = await executeCommonTool(
-        def.name,
-        ((args && typeof args === "object" ? args : {}) as Record<string, unknown>),
-        context,
-      );
-      if (result.type === "suspend") {
-        onSuspend?.(result.payload);
-        return "Interview suspended - awaiting user response.";
+      try {
+        const result = await executeCommonTool(
+          def.name,
+          ((args && typeof args === "object" ? args : {}) as Record<string, unknown>),
+          context,
+        );
+        if (result.type === "suspend") {
+          onSuspend?.(result.payload);
+          return "Interview suspended - awaiting user response.";
+        }
+        return result.text;
+      } catch (err) {
+        return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
-      return result.text;
     },
   }));
 
