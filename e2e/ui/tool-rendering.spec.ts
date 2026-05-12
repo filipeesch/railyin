@@ -368,18 +368,18 @@ test("S-30: lsp_rename result renders diff card with added/removed stat badges",
     await openTaskDrawer(page, task.id);
 
     // The tool call card should be visible
-    const card = page.locator(".conversation-inner .tcg");
+    const card = page.locator(".conversation-inner .tc");
     await expect(card).toBeVisible({ timeout: 3_000 });
 
     // Tool name should be lsp_rename
-    await expect(card.locator(".tcg__tool-name")).toContainText("lsp_rename");
+    await expect(card.locator(".tc__tool-name")).toContainText("lsp_rename");
 
     // Expand the diff
-    await card.locator(".tcg__header").click();
+    await card.locator(".tc__header").click();
 
     // Stat badges should show +1 / -1
-    await expect(page.locator(".tcg__stat--added")).toContainText("+1", { timeout: 3_000 });
-    await expect(page.locator(".tcg__stat--removed")).toContainText("-1");
+    await expect(page.locator(".tc__stat--added")).toContainText("+1", { timeout: 3_000 });
+    await expect(page.locator(".tc__stat--removed")).toContainText("-1");
 
     // Diff lines should render the old/new symbol names
     await expect(page.locator(".fdiff__line--added .fdiff__content")).toContainText("function bar()");
