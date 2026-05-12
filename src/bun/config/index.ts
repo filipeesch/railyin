@@ -112,7 +112,13 @@ export interface PiEngineConfig {
   dialect?: "copilot" | "claude" | "none";
 }
 
-export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig | PiEngineConfig;
+/** Cursor engine config — uses the Cursor Agent SDK. */
+export interface CursorEngineConfig {
+  type: "cursor";
+  /** Default model for the Cursor agent. If unset, Cursor uses its default model. */
+  model?: string;
+}
+export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig | PiEngineConfig | CursorEngineConfig;
 
 /**
  * A single engine entry from `engines.yaml`.

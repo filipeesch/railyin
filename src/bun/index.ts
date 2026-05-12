@@ -35,6 +35,7 @@ import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
 import { createDefaultOpenCodeSdkAdapter } from "./engine/opencode/adapter.ts";
 import { PiEngine } from "./engine/pi/engine.ts";
+import { CursorEngine, createDefaultCursorSdkAdapter } from "./engine/cursor/engine.ts";
 import type { PiEngineConfig } from "./config/index.ts";
 import { createDefaultDialectRegistry } from "./engine/dialects/registry.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
@@ -165,6 +166,8 @@ const engineFactories: Record<string, EngineFactory> = {
     new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
   opencode: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
     new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
+  cursor: (_engineId, _cfg, onTaskUpdated, onNewMessage) =>
+    new CursorEngine(onTaskUpdated, onNewMessage, createDefaultCursorSdkAdapter()),
   pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
     const piCfg = cfg as PiEngineConfig;
     const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
