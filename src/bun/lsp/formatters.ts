@@ -109,19 +109,39 @@ export function formatReferences(
 
 // ─── hover ───────────────────────────────────────────────────────────────────
 
+/** Extract plain text from a MarkedString — strips language/code-fence wrapper. */
+function markedStringText(c: string | { language: string; value: string } | { kind: string; value: string }): string {
+  if (typeof c === "string") return c;
+  return ("value" in c ? c.value : "") ?? "";
+}
+
 export function formatHover(result: Hover | null): string {
   if (!result) return "(no hover information)";
 
   const { contents } = result;
-  if (typeof contents === "string") return contents || "(no hover information)";
-  if ("kind" in contents) return contents.value || "(no hover information)";
-  if ("language" in contents) return "```" + contents.language + "\n" + contents.value + "\n```";
-  if (Array.isArray(contents)) {
-    return contents.map((c) =>
-      typeof c === "string" ? c : ("kind" in c ? c.value : "```" + c.language + "\n" + c.value + "\n```")
-    ).filter(Boolean).join("\n\n") || "(no hover information)";
+
+  // MarkupContent (new LSP format) — already structured markdown, pass through
+  if (contents && typeof contents === "object" && !Array.isArray(contents) && "kind" in contents) {
+    return contents.value || "(no hover information)";
   }
-  return "(no hover information)";
+
+  // Single MarkedString
+  if (!Array.isArray(contents)) {
+    const text = markedStringText(contents as string | { language: string; value: string }).trim();
+    if (!text) return "(no hover information)";
+    return `Type: ${text}`;
+  }
+
+  // Array of MarkedStrings — first entry is typically the type signature, rest is docs
+  const parts = (contents as Array<string | { language: string; value: string }>)
+    .map((c) => markedStringText(c).trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) return "(no hover information)";
+  if (parts.length === 1) return `Type: ${parts[0]}`;
+
+  const [typePart, ...docParts] = parts;
+  return `Type: ${typePart}\n\nDocs: ${docParts.join("\n\n")}`;
 }
 
 // ─── documentSymbol ───────────────────────────────────────────────────────────

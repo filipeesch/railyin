@@ -370,7 +370,19 @@ describe("formatHover", () => {
 
   it("formats a string contents hover", async () => {
     const { formatHover } = await import("../lsp/formatters.ts");
-    expect(formatHover({ contents: "string type" } as any)).toBe("string type");
+    expect(formatHover({ contents: "string type" } as any)).toBe("Type: string type");
+  });
+
+  it("formats a MarkedString (language+value) hover", async () => {
+    const { formatHover } = await import("../lsp/formatters.ts");
+    const result = formatHover({ contents: { language: "typescript", value: "const x: number" } } as any);
+    expect(result).toBe("Type: const x: number");
+  });
+
+  it("formats a MarkedString array with type and docs", async () => {
+    const { formatHover } = await import("../lsp/formatters.ts");
+    const result = formatHover({ contents: [{ language: "typescript", value: "const x: number" }, "The x value"] } as any);
+    expect(result).toBe("Type: const x: number\n\nDocs: The x value");
   });
 
   it("formats a MarkupContent hover", async () => {
@@ -453,7 +465,7 @@ describe("LSP split tools", () => {
       "textDocument/hover",
       expect.objectContaining({ position: { line: 0, character: 0 } }),
     );
-    expect(result).toBe("hover text");
+    expect(result).toBe("Type: hover text");
 
     rmSync(dir, { recursive: true, force: true });
   });
