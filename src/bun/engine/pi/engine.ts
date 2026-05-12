@@ -28,6 +28,7 @@ import { DecisionRepository } from "../../db/repositories/decision-repository.ts
 import { UndoStack } from "./harness/undo-stack.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
+import { FileSystemSkillResolver } from "./skill-resolver.ts";
 import { translateEvent } from "./event-translator.ts";
 import { getDb } from "../../db/index.ts";
 import { appendMessage } from "../../conversation/messages.ts";
@@ -139,16 +140,20 @@ export class PiEngine implements ExecutionEngine {
       runtime: { worktreePath: workingDirectory },
     };
 
-    const tools = buildAllTools({ harnessCtx, commonCtx, suspendRef: this.getOrCreateSuspendRef(conversationId) });
-    const piModel = this.buildModel(modelOverride, contextWindowOverride);
-
-    // Look up the project path before session creation so it can be used when
-    // wiring dialect skill paths into the Pi resource loader.
+    // Hoist project/skill path resolution so the skill resolver is ready before buildAllTools.
     const projectPath = boardId != null && taskId != null
       ? await this.lookupProjectPath(taskId, boardId, workingDirectory ?? process.cwd())
       : undefined;
 
-    const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd(), projectPath);
+    const skillPaths = this.dialect.getSkillPaths(workingDirectory ?? process.cwd(), projectPath);
+    const skillResolver = new FileSystemSkillResolver(skillPaths);
+
+    const tools = buildAllTools({ harnessCtx, commonCtx, skillResolver, suspendRef: this.getOrCreateSuspendRef(conversationId) });
+    const piModel = this.buildModel(modelOverride, contextWindowOverride);
+
+    // Look up the project path before session creation so it can be used when
+    // wiring dialect skill paths into the Pi resource loader.
+    const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd());
 
     this.executionToConversation.set(executionId, conversationId);
 
@@ -484,7 +489,6 @@ export class PiEngine implements ExecutionEngine {
     tools: ReturnType<typeof buildAllTools>,
     systemPrompt: string | undefined,
     cwd: string,
-    projectPath?: string,
   ): Promise<AgentSession> {
     const existing = this.sessions.get(conversationId);
     if (existing) {
@@ -502,12 +506,10 @@ export class PiEngine implements ExecutionEngine {
     const sessionManager = SessionManager.open(sessionPath);
 
     const agentDir = getAgentDir();
-    const skillPaths = this.dialect.getSkillPaths(cwd, projectPath);
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir,
       systemPromptOverride: () => systemPrompt,
-      ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
     });
     await resourceLoader.reload();
 
@@ -549,6 +551,8 @@ export class PiEngine implements ExecutionEngine {
         "create_task", "edit_task", "delete_task", "move_task", "message_task",
         "list_decisions", "record_decision", "update_decision", "delete_decision",
         "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status",
+        // Skill shim — resolves skill content by name from configured skill directories
+        "skill",
       ],
       sessionManager,
       resourceLoader,

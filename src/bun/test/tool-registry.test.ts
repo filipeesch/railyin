@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PI_TOOL_GROUPS, DEFAULT_PI_TOOL_GROUPS, buildAllTools, type PiToolGroupName } from "../engine/pi/tools/index.ts";
+import { InMemorySkillResolver } from "./pi/fixtures/InMemorySkillResolver.ts";
 
 describe("Test Plan: Validate search_text removal and SDK search tool replacement", () => {
   it("PI_TOOL_GROUPS has 4 groups: read, write, shell, web", () => {
@@ -26,6 +27,7 @@ describe("Test Plan: Validate search_text removal and SDK search tool replacemen
     const tools = buildAllTools({
       harnessCtx: mockHarnessCtx,
       commonCtx: mockCommonCtx,
+      skillResolver: new InMemorySkillResolver(),
       columnGroups: ["read"],
     });
     const names = tools.map((t) => t.name);

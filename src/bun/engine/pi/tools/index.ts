@@ -11,6 +11,8 @@ import { buildUndoTool } from "./undo.ts";
 import { buildShellTools } from "./shell.ts";
 import { buildWebTools } from "./web.ts";
 import { buildCommonTools, type SuspendRef } from "./common.ts";
+import { buildSkillTool } from "./skill.ts";
+import type { SkillResolver } from "../skill-resolver.ts";
 
 /**
  * Maps workflow column tool group names (from `tools:` in workflow YAML) to
@@ -32,6 +34,7 @@ export type PiToolGroupName = keyof typeof PI_TOOL_GROUPS;
 export interface AllToolsOptions {
   harnessCtx: HarnessContext;
   commonCtx: CommonToolContext;
+  skillResolver: SkillResolver;
   /** Tool group names from the workflow column's `tools:` config. When omitted, uses DEFAULT_PI_TOOL_GROUPS. */
   columnGroups?: string[];
   suspendRef?: SuspendRef;
@@ -45,7 +48,7 @@ export type { SuspendRef };
  * Board and interaction tools (common-tools) are always included.
  */
 export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
-  const { harnessCtx, commonCtx, columnGroups, suspendRef } = opts;
+  const { harnessCtx, commonCtx, skillResolver, columnGroups, suspendRef } = opts;
 
   const activeGroups = (columnGroups ?? DEFAULT_PI_TOOL_GROUPS).filter(
     (g): g is PiToolGroupName => g in PI_TOOL_GROUPS,
@@ -53,5 +56,5 @@ export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
 
   const harnesTools = activeGroups.flatMap((group) => PI_TOOL_GROUPS[group](harnessCtx));
 
-  return [...harnesTools, ...buildCommonTools(commonCtx, suspendRef)];
+  return [...harnesTools, ...buildCommonTools(commonCtx, suspendRef), buildSkillTool(skillResolver)];
 }
