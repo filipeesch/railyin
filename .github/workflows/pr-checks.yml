@@ -160,3 +160,19 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  # Required status check — aggregates all shards into the single "Playwright E2E" name
+  # that branch protection expects.
+  e2e-complete:
+    name: Playwright E2E
+    needs: e2e
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check shard results
+        run: |
+          if [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "One or more E2E shards failed"
+            exit 1
+          fi
+          echo "All E2E shards passed"
