@@ -25,6 +25,8 @@ import {
 import type { Model } from "@earendil-works/pi-ai";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
+import { taskLspRegistry } from "../../lsp/task-registry.ts";
+import { getConfig } from "../../config/index.ts";
 import { UndoStack } from "./harness/undo-stack.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
@@ -137,7 +139,14 @@ export class PiEngine implements ExecutionEngine {
         onCancel: (id) => this.cancel(id),
         onTaskUpdated: (task) => this._onTaskUpdated(task),
       },
-      runtime: { worktreePath: workingDirectory },
+      runtime: {
+        worktreePath: workingDirectory,
+        lspManager: taskLspRegistry.getManager(
+          taskId ?? 0,
+          getConfig().workspace.lsp?.servers ?? [],
+          workingDirectory,
+        ) ?? undefined,
+      },
     };
 
     // Hoist project/skill path resolution so the skill resolver is ready before buildAllTools.
@@ -551,6 +560,11 @@ export class PiEngine implements ExecutionEngine {
         "create_task", "edit_task", "delete_task", "move_task", "message_task",
         "list_decisions", "record_decision", "update_decision", "delete_decision",
         "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status",
+        // Interaction tools
+        "decision_request",
+        // LSP tools
+        "lsp_go_to_definition", "lsp_find_references", "lsp_document_symbols", "lsp_workspace_symbols",
+        "lsp_hover", "lsp_rename", "lsp_incoming_calls", "lsp_outgoing_calls", "lsp_diagnostics", "lsp_type_definition",
         // Skill shim — resolves skill content by name from configured skill directories
         "skill",
       ],
