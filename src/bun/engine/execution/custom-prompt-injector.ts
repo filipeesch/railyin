@@ -60,7 +60,7 @@ function extractMeta(fm: Record<string, unknown>, filePath: string): ParsedPromp
   }
 
   // Validate pattern: try matching something first (throws on bad syntax)
-  try { require("minimatch").minimatch("x", modelVal); } catch { console.warn(`[custom-prompts] Skipped ${filePath}: invalid pattern '${modelVal}'`); return null; }
+  try { require("minimatch").minimatch("x", modelVal, { matchBase: true }); } catch { console.warn(`[custom-prompts] Skipped ${filePath}: invalid pattern '${modelVal}'`); return null; }
 
   // Parse engine field
   const engineVal = fm.engine;
@@ -87,7 +87,7 @@ function matchesPrompt(meta: ParsedPromptMeta, filter: PromptFilterContext): boo
 
   let modelMatch = false;
   try {
-    modelMatch = require("minimatch").minimatch(filter.modelId, meta.model);
+    modelMatch = require("minimatch").minimatch(filter.modelId, meta.model, { matchBase: true });
   } catch {
     console.warn(`[custom-prompts] Skipped ${meta.sourceFile}: invalid model pattern '${meta.model}'`);
     return false;
