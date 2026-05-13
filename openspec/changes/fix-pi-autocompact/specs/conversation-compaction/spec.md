@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Compaction uses the task's own model
-The system SHALL ensure that when `compact()` is called on the Pi engine, the session is restored (or reused) with the model that was originally used for the conversation. The model SHALL be read from the `conversations.model` DB column. The context window for the compaction session SHALL be resolved from `ModelSettingsRepository` using the conversation's stored model and the engine's `workspaceKey`. If `conversations.model` is NULL (no model stored), the engine SHALL fall back to the engine's configured default model and resolve its context window from `ModelSettingsRepository`.
+The system SHALL ensure that when `compact()` is called on the Pi engine, the session is restored (or reused) with the model that was originally used for the conversation. The model SHALL be read from the `conversations.model` DB column. The context window for the compaction session SHALL be resolved from `ModelSettingsRepository` using the conversation's stored model and the engine's `workspaceKey`. If `conversations.model` is NULL (no model stored), the engine SHALL throw — the primary defense is the UI-side Compact button guard, which is disabled when the conversation has no stored model. `compact()` throwing in this case is a safety net only.
 
 #### Scenario: Compaction uses stored conversation model
 - **WHEN** `compact(taskId, conversationId, workingDirectory)` is called and `conversations.model` is `"pi-local/lmstudio/llama-3.2-3b"`
