@@ -21,7 +21,9 @@ import {
   DefaultResourceLoader,
   getAgentDir,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
@@ -47,17 +49,15 @@ function piSessionPathForConversation(conversationId: number): string {
   return join(PI_SESSIONS_DIR, `${hash}.jsonl`);
 }
 
-/** Default context window used when the config doesn't specify one. */
-const DEFAULT_CONTEXT_WINDOW = 128_000;
+/** Default max tokens per response. */
 const DEFAULT_MAX_TOKENS = 8_192;
-/** Tokens reserved for compaction overhead — matches Pi SDK default reserveTokens. */
-const DEFAULT_RESERVE_TOKENS = 16_384;
 
 export class PiEngine implements ExecutionEngine {
   private readonly engineId: string;
   private readonly config: PiEngineConfig;
   private readonly _onTaskUpdated: OnTaskUpdated;
   private readonly dialect: SlashCommandDialect;
+  private readonly modelSettingsRepo: ModelSettingsRepository;
   /** Map<conversationId, AgentSession> — one Pi session per conversation. */
   private readonly sessions = new Map<number, AgentSession>();
   /** Map<conversationId, SuspendRef> — mutable ref updated at each execution start. */
@@ -75,11 +75,13 @@ export class PiEngine implements ExecutionEngine {
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     dialect: SlashCommandDialect = new NullDialect(),
+    modelSettingsRepo: ModelSettingsRepository,
   ) {
     this.engineId = engineId;
     this.config = config;
     this._onTaskUpdated = onTaskUpdated;
     this.dialect = dialect;
+    this.modelSettingsRepo = modelSettingsRepo;
   }
 
   // ─── ExecutionEngine interface ──────────────────────────────────────────────
@@ -171,7 +173,7 @@ export class PiEngine implements ExecutionEngine {
     // items buffer when nobody is waiting and are delivered immediately when consumed.
     // close() terminates the for-await instantly regardless of timing.
     const queue = new AsyncQueue<EngineEvent>();
-    let agentError: Error | undefined;
+    const errorRef: { error?: Error } = {};
     let suspendedForDecision = false;
 
     // Wire the suspend callback for this execution into the shared ref.
@@ -231,25 +233,7 @@ export class PiEngine implements ExecutionEngine {
       return;
     }
 
-    session
-      .prompt(resolvedPrompt)
-      .then(async () => {
-        const usage = session.getContextUsage();
-        const threshold = piModel.contextWindow - DEFAULT_RESERVE_TOKENS;
-        if (usage?.tokens != null && usage.tokens > threshold && !session.isCompacting) {
-          try {
-            await session.compact();
-          } catch (err) {
-            console.error(`[pi] auto-compact failed for conversation ${conversationId}:`, err);
-          }
-        }
-      })
-      .catch((err: unknown) => {
-        agentError = err instanceof Error ? err : new Error(String(err));
-      })
-      .finally(() => {
-        queue.close();
-      });
+    this.runPromptWithCompaction(session, resolvedPrompt, conversationId, queue, errorRef);
 
     try {
       for await (const event of queue) {
@@ -281,7 +265,7 @@ export class PiEngine implements ExecutionEngine {
       }
     }
 
-    if (agentError && !suspendedForDecision) {
+    if (errorRef.error && !suspendedForDecision) {
       // Pi pushes a { stopReason: "error" } message into agent._state.messages on failure.
       // If we reuse this agent on the next turn, that poison message is included in the
       // context snapshot sent to the LLM — causing the same error to repeat forever.
@@ -299,12 +283,12 @@ export class PiEngine implements ExecutionEngine {
       }
 
       // Provide a clear hint for the known LM Studio MLX backend bug
-      const isTreeReduceBug = agentError.message.includes("tree_reduce");
+      const isTreeReduceBug = errorRef.error.message.includes("tree_reduce");
       const message = isTreeReduceBug
-        ? `LM Studio MLX backend error: '${agentError.message}'. ` +
+        ? `LM Studio MLX backend error: '${errorRef.error.message}'. ` +
           "This is a known bug in MLX models with conversation history. " +
           "Switch to a GGUF model (llama.cpp backend) in LM Studio to fix this."
-        : agentError.message;
+        : errorRef.error.message;
       yield { type: "error", message, fatal: false };
       return;
     }
@@ -405,10 +389,22 @@ export class PiEngine implements ExecutionEngine {
     return this.dialect.listCommands(worktreePath, projectPath);
   }
 
-  async compact(_taskId: number | null, conversationId: number, workingDirectory: string): Promise<void> {
+  async compact(_taskId: number | null, conversationId: number, workingDirectory: string, workspaceKey: string): Promise<void> {
     let session = this.sessions.get(conversationId);
     if (!session) {
-      session = await this.getOrCreateSession(conversationId, this.buildModel(), [], undefined, workingDirectory);
+      const db = getDb();
+      const row = db
+        .query<{ model: string | null }, [number]>("SELECT model FROM conversations WHERE id = ?")
+        .get(conversationId);
+      const conversationModel = row?.model ?? null;
+      if (!conversationModel) {
+        throw new Error(`Cannot compact conversation ${conversationId}: no model stored for conversation`);
+      }
+      const contextWindow = this.modelSettingsRepo.getContextWindow(workspaceKey, conversationModel);
+      if (contextWindow == null) {
+        throw new Error(`Cannot compact conversation ${conversationId}: no context window configured for model "${conversationModel}"`);
+      }
+      session = await this.getOrCreateSession(conversationId, this.buildModel(conversationModel, contextWindow), [], undefined, workingDirectory);
     }
 
     if (session.isCompacting) {
@@ -571,6 +567,7 @@ export class PiEngine implements ExecutionEngine {
       sessionManager,
       resourceLoader,
       authStorage,
+      settingsManager: this.buildCompactionSettings(),
     });
 
     // "off" prevents the SDK from sending reasoning_effort to local LLMs (LM Studio, Ollama),
@@ -596,6 +593,13 @@ export class PiEngine implements ExecutionEngine {
     const providerConfig = providerName ? this.config.providers?.[providerName] : undefined;
     const baseUrl = providerConfig?.base_url ?? "http://localhost:1234/v1";
 
+    if (contextWindowOverride == null) {
+      throw new Error(
+        `No context window configured for model "${modelStr}". ` +
+        "Set the context window in model settings before using this model.",
+      );
+    }
+
     return {
       id: modelId,
       name: nativeId,
@@ -605,11 +609,34 @@ export class PiEngine implements ExecutionEngine {
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: contextWindowOverride ?? this.config.context_window ?? DEFAULT_CONTEXT_WINDOW,
+      contextWindow: contextWindowOverride,
       maxTokens: DEFAULT_MAX_TOKENS,
       // vLLM and other local providers don't support the OpenAI-only "developer" role.
       // Disabling this keeps system messages as role:"system" which all providers accept.
       compat: { supportsDeveloperRole: false },
     } as unknown as Model<"openai-completions">;
+  }
+
+  private runPromptWithCompaction(
+    session: AgentSession,
+    resolvedPrompt: string,
+    conversationId: number,
+    queue: AsyncQueue<EngineEvent>,
+    errorRef: { error?: Error },
+  ): void {
+    session
+      .prompt(resolvedPrompt)
+      .catch((err: unknown) => {
+        errorRef.error = err instanceof Error ? err : new Error(String(err));
+      })
+      .finally(() => {
+        queue.close();
+      });
+  }
+
+  protected buildCompactionSettings(): SettingsManager {
+    return SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+    });
   }
 }

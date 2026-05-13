@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { PiEngine } from "../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../config/index.ts";
+import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { Database } from "bun:sqlite";
 
 // ─── MockAgentSession ─────────────────────────────────────────────────────────
@@ -27,6 +28,19 @@ class MockAgentSession {
   dispose() {}
 }
 
+// ─── TestModelSettingsRepository ─────────────────────────────────────────────
+
+class StubModelSettingsRepository extends NullModelSettingsRepository {
+  private readonly contextWindow: number;
+  constructor(contextWindow: number) {
+    super();
+    this.contextWindow = contextWindow;
+  }
+  override getContextWindow(_workspaceKey: string, _qualifiedModelId: string): number | null {
+    return this.contextWindow;
+  }
+}
+
 // ─── TestPiEngine ─────────────────────────────────────────────────────────────
 
 class TestPiEngine extends PiEngine {
@@ -35,7 +49,7 @@ class TestPiEngine extends PiEngine {
 
   constructor(session: MockAgentSession) {
     const config: PiEngineConfig = { type: "pi" };
-    super("test-pi", config, () => {}, () => {});
+    super("test-pi", config, () => {}, () => {}, undefined, new StubModelSettingsRepository(128_000));
     this.injectedSession = session;
   }
 
@@ -63,6 +77,8 @@ beforeEach(() => {
   db = initDb();
   const seed = seedProjectAndTask(db, "/test-git");
   conversationId = seed.conversationId;
+  // Seed the conversation's model so compact() can resolve it from DB
+  db.run("UPDATE conversations SET model = ? WHERE id = ?", ["test-pi/lmstudio/test-model", conversationId]);
 });
 
 afterEach(() => {
@@ -74,7 +90,7 @@ describe("PiEngine.compact()", () => {
     const session = new MockAgentSession();
     const engine = new TestPiEngine(session);
 
-    await engine.compact(null, conversationId, "/test-working-dir");
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
     expect(engine.getOrCreateSessionCallCount).toBe(1);
   });
@@ -84,7 +100,7 @@ describe("PiEngine.compact()", () => {
     session.isCompacting = true;
     const engine = new TestPiEngine(session);
 
-    await expect(engine.compact(null, conversationId, "/test-working-dir")).rejects.toThrow(
+    await expect(engine.compact(null, conversationId, "/test-working-dir", "test-workspace")).rejects.toThrow(
       "Compaction already in progress",
     );
   });
@@ -94,7 +110,7 @@ describe("PiEngine.compact()", () => {
     session.compactResult = { summary: "the summary" };
     const engine = new TestPiEngine(session);
 
-    await engine.compact(null, conversationId, "/test-working-dir");
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
@@ -108,7 +124,7 @@ describe("PiEngine.compact()", () => {
     session.compactResult = null;
     const engine = new TestPiEngine(session);
 
-    await engine.compact(null, conversationId, "/test-working-dir");
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
