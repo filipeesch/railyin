@@ -498,13 +498,13 @@ export class PiEngine implements ExecutionEngine {
     if (existing) {
       existing.runtime.worktreePath = workingDirectory;
       existing.runtime.lspManager =
-        taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory) ?? undefined;
+        taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory ?? "") ?? undefined;
       existing.workflow.onTransition = onTransition ?? (() => {});
       existing.workflow.onHumanTurn = onHumanTurn ?? (() => {});
       return existing;
     }
     const ctx: CommonToolContext = {
-      task: { id: taskId, boardId: boardId ?? null, conversationId },
+      task: { id: taskId ?? null, boardId: boardId ?? null, conversationId },
       repos: {
         todos: new TodoRepository(),
         decisions: new DecisionRepository(),
@@ -519,7 +519,7 @@ export class PiEngine implements ExecutionEngine {
       runtime: {
         worktreePath: workingDirectory,
         lspManager:
-          taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory) ?? undefined,
+          taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory ?? "") ?? undefined,
       },
     };
     this.commonCtxRefs.set(conversationId, ctx);
