@@ -26,6 +26,14 @@ The system SHALL support compacting a task's conversation history by sending acc
 - **WHEN** compaction runs
 - **THEN** the AI call for generating the summary uses the same model as the task (`task.model ?? workspace ai.model`)
 
+#### Scenario: Compaction uses stored conversation model
+- **WHEN** `compact(taskId, conversationId, workingDirectory)` is called and `conversations.model` is `"pi-local/lmstudio/llama-3.2-3b"`
+- **THEN** the Pi session for compaction is created or updated with model `"pi-local/lmstudio/llama-3.2-3b"` and the context window resolved from `model_settings` for that model
+
+#### Scenario: Compaction uses correct context window from model_settings
+- **WHEN** `compact()` resolves model `"pi-local/lmstudio/qwen3:8b"` and `model_settings` has `context_window = 32768` for that model
+- **THEN** the Pi session used for compaction has `model.contextWindow = 32768`
+
 #### Scenario: Compaction is visible in the conversation UI
 - **WHEN** a compaction_summary message exists in the conversation
 - **THEN** the UI renders it as a distinct visual divider labelled "— Conversation compacted —" with the summary accessible on expand

@@ -116,14 +116,23 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
         m.qualifiedId == null || activeIds.includes(m.qualifiedId)
       );
       
-      return filteredModels.map((m) => ({
-        id: m.qualifiedId,
-        displayName: m.displayName,
-        description: m.description,
-        contextWindow: m.contextWindow ?? null,
-        supportsManualCompact: m.supportsManualCompact,
-        engineId: m.qualifiedId != null ? m.qualifiedId.split("/")[0] : "copilot",
-      }));
+      return filteredModels
+        .map((m) => {
+          const dbOverride = modelSettingsRepo && m.qualifiedId
+            ? modelSettingsRepo.getContextWindow(workspaceKey, m.qualifiedId)
+            : null;
+          const contextWindow = dbOverride ?? m.contextWindow ?? null;
+          return {
+            id: m.qualifiedId,
+            displayName: m.displayName,
+            description: m.description,
+            contextWindow,
+            supportsManualCompact: m.supportsManualCompact,
+            ...(m.contextWindowEditable ? { contextWindowEditable: true } : {}),
+            engineId: m.qualifiedId != null ? m.qualifiedId.split("/")[0] : "copilot",
+          };
+        })
+        .filter((m) => !m.contextWindowEditable || m.contextWindow != null);
     },
 
     // ─── models.setContextWindow ─────────────────────────────────────────────

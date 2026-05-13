@@ -415,7 +415,7 @@ export class CopilotEngine implements ExecutionEngine {
     await this.sdkAdapter.shutdownAll(options).catch(() => { });
   }
 
-  async compact(taskId: number | null, conversationId: number, workingDirectory: string): Promise<void> {
+  async compact(taskId: number | null, conversationId: number, workingDirectory: string, _workspaceKey: string): Promise<void> {
     const sdkSessionId = copilotSessionIdForConversation(taskId, conversationId);
     // Wake the session — same pattern as execution, but we only need to trigger
     // compaction then let the lease manager put it back to sleep.

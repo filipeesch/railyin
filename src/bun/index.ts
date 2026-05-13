@@ -168,7 +168,7 @@ const engineFactories: Record<string, EngineFactory> = {
   pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
     const piCfg = cfg as PiEngineConfig;
     const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
-    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect);
+    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo);
   },
   scripted: () => new MockExecutionEngine(),
 };
