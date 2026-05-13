@@ -123,6 +123,7 @@ export class TransitionExecutor {
       sourceEngine,
       targetModelInfo,
       workingDirectory,
+      workspaceKey,
     );
     const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
     

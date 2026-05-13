@@ -37,3 +37,13 @@ export class SqliteModelSettingsRepository implements ModelSettingsRepository {
     }
   }
 }
+
+/** No-op implementation for use in tests where model settings are not relevant. */
+export class NullModelSettingsRepository implements ModelSettingsRepository {
+  getContextWindow(_workspaceKey: string, _qualifiedModelId: string): number | null {
+    return null;
+  }
+  setContextWindow(_workspaceKey: string, _qualifiedModelId: string, _value: number | null): void {
+    // no-op
+  }
+}

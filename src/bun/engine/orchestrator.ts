@@ -291,7 +291,7 @@ export class Orchestrator implements ExecutionCoordinator {
     }
     const workingDirectory = this.workdirResolver.resolve(task);
     const conversationId = task.conversation_id ?? 0;
-    await engine.compact(taskId, conversationId, workingDirectory);
+    await engine.compact(taskId, conversationId, workingDirectory, workspaceKey);
     const lastMsg = db.query<ConversationMessageRow, [number]>(
       "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);
@@ -308,7 +308,7 @@ export class Orchestrator implements ExecutionCoordinator {
       throw new Error(`Engine for conversation ${conversationId} does not support manual compaction`);
     }
     const workingDirectory = getEffectiveWorkspacePath(config);
-    await engine.compact(null, conversationId, workingDirectory);
+    await engine.compact(null, conversationId, workingDirectory, workspaceKey);
     const lastMsg = this.db.query<ConversationMessageRow, [number]>(
       "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);

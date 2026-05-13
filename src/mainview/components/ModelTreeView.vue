@@ -100,10 +100,13 @@
                 v-else
                 class="model-ctx model-ctx--editable"
                 :class="{ 'model-ctx--no-value': !model.contextWindow }"
-                :title="'Override context window' + (model.contextWindow ? ' (current: ' + formatCtx(model.contextWindow) + ')' : ' (using engine default)')"
+                :title="'Override context window' + (model.contextWindow ? ' (current: ' + formatCtx(model.contextWindow) + ')' : ' (required — model will not appear in chat)')"
                 @click.prevent.stop="startCtxEdit(model.id, model.contextWindow ?? null)"
               >
                 <span v-if="model.contextWindow">{{ formatCtx(model.contextWindow) }}</span>
+                <span v-else class="model-ctx--warning" title="Context window required — set it to use this model in chat">
+                  <i class="pi pi-exclamation-triangle" />
+                </span>
                 <i class="pi pi-pencil model-ctx__pencil" />
               </span>
             </template>
@@ -407,6 +410,12 @@ function formatCtx(tokens: number): string {
 
 .model-ctx--no-value .model-ctx__pencil {
   opacity: 0.35;
+}
+
+.model-ctx--warning {
+  color: var(--p-yellow-500, #f59e0b);
+  margin-right: 2px;
+  font-size: 0.7rem;
 }
 
 .model-ctx--editable:hover .model-ctx__pencil {
