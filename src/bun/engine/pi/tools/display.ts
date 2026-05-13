@@ -78,13 +78,6 @@ export function buildPiToolDisplay(name: string, args: Record<string, unknown>, 
     case "glob":
       return { label: "glob", subject: str(args.pattern) || undefined };
 
-    case "search_text":
-      return {
-        label: "search",
-        subject: str(args.pattern) || undefined,
-        contentType: "terminal",
-      };
-
     case "run_command":
       return {
         label: "run",
