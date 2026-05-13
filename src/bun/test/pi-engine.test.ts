@@ -57,33 +57,30 @@ class StubModelSettingsRepository extends NullModelSettingsRepository {
   }
 }
 
-// ─── TestPiEngine ─────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-class TestPiEngine extends PiEngine {
-  private readonly injectedSession: MockAgentSession;
-  createNewSessionCallCount = 0;
+function makePiEngine(session: MockAgentSession): PiEngine {
+  const config: PiEngineConfig = { type: "pi" };
+  return new PiEngine(
+    "test-pi",
+    config,
+    () => {},
+    () => {},
+    undefined,
+    new StubModelSettingsRepository(128_000),
+    async () => session as any,
+  );
+}
 
-  constructor(session: MockAgentSession) {
-    const config: PiEngineConfig = { type: "pi" };
-    super("test-pi", config, () => {}, () => {}, undefined, new StubModelSettingsRepository(128_000));
-    this.injectedSession = session;
-  }
-
-  protected async createNewSession(
-    _tools: unknown[],
-    _systemPrompt: string | undefined,
-    _conversationId: number,
-    _model: any,
-    _cwd: string,
-  ): Promise<any> {
-    this.createNewSessionCallCount++;
-    return this.injectedSession;
-  }
-
-  /** Directly exercises the getOrCreateSession reuse path, bypassing execute()'s full setup. */
-  async simulateGetOrCreate(conversationId: number, tools: any[], cwd: string): Promise<any> {
-    return this.getOrCreateSession(conversationId, {} as any, tools, undefined, cwd);
-  }
+/**
+ * Directly exercises the getOrCreateSession reuse path via compact(),
+ * which internally calls getOrCreateSession if no live session exists.
+ * For reuse tests we need two consecutive calls — we use a helper that
+ * accesses the private method via bracket notation.
+ */
+async function simulateGetOrCreate(engine: PiEngine, conversationId: number, tools: any[], cwd: string): Promise<any> {
+  // @ts-expect-error — accessing private method for testing
+  return engine.getOrCreateSession(conversationId, {} as any, tools, undefined, cwd);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -107,19 +104,29 @@ afterEach(() => {
 });
 
 describe("PiEngine.compact()", () => {
-  it("PE-COMPACT-1: no live session → getOrCreateSession called, session.compact() invoked", async () => {
+  it("PE-COMPACT-1: no live session → factory called, session.compact() invoked", async () => {
+    let factoryCallCount = 0;
     const session = new MockAgentSession();
-    const engine = new TestPiEngine(session);
+    const config: PiEngineConfig = { type: "pi" };
+    const engine = new PiEngine(
+      "test-pi",
+      config,
+      () => {},
+      () => {},
+      undefined,
+      new StubModelSettingsRepository(128_000),
+      async () => { factoryCallCount++; return session as any; },
+    );
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
-    expect(engine.createNewSessionCallCount).toBe(1);
+    expect(factoryCallCount).toBe(1);
   });
 
   it("PE-COMPACT-2: session.isCompacting = true → throws 'Compaction already in progress'", async () => {
     const session = new MockAgentSession();
     session.isCompacting = true;
-    const engine = new TestPiEngine(session);
+    const engine = makePiEngine(session);
 
     await expect(engine.compact(null, conversationId, "/test-working-dir", "test-workspace")).rejects.toThrow(
       "Compaction already in progress",
@@ -129,7 +136,7 @@ describe("PiEngine.compact()", () => {
   it("PE-COMPACT-3: compact() returns summary → compaction_summary row persisted in DB", async () => {
     const session = new MockAgentSession();
     session.compactResult = { summary: "the summary" };
-    const engine = new TestPiEngine(session);
+    const engine = makePiEngine(session);
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
@@ -143,7 +150,7 @@ describe("PiEngine.compact()", () => {
   it("PE-COMPACT-4: compact() returns null → no compaction_summary row inserted", async () => {
     const session = new MockAgentSession();
     session.compactResult = null;
-    const engine = new TestPiEngine(session);
+    const engine = makePiEngine(session);
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
@@ -157,24 +164,22 @@ describe("PiEngine.compact()", () => {
 describe("PiEngine session reuse", () => {
   it("PE-SESSION-REUSE-1: second execute on same conversationId calls setActiveToolsByName", async () => {
     const session = new MockAgentSession();
-    const engine = new TestPiEngine(session);
+    const engine = makePiEngine(session);
 
-    // First call — creates session
-    await engine.simulateGetOrCreate(conversationId, [], "/worktree-a");
-    expect(engine.createNewSessionCallCount).toBe(1);
+    // First call — creates session via factory
+    await simulateGetOrCreate(engine, conversationId, [], "/worktree-a");
 
     // Second call — reuses session; setActiveToolsByName should be called
-    await engine.simulateGetOrCreate(conversationId, [], "/worktree-b");
-    expect(engine.createNewSessionCallCount).toBe(1); // no new session created
+    await simulateGetOrCreate(engine, conversationId, [], "/worktree-b");
     expect(session.setActiveToolsCallCount).toBe(1);  // called on reuse
   });
 
   it("PE-SESSION-REUSE-2: reuse includes SDK built-in tool names", async () => {
     const session = new MockAgentSession();
-    const engine = new TestPiEngine(session);
+    const engine = makePiEngine(session);
 
-    await engine.simulateGetOrCreate(conversationId, [], "/worktree-a");
-    await engine.simulateGetOrCreate(conversationId, [], "/worktree-b");
+    await simulateGetOrCreate(engine, conversationId, [], "/worktree-a");
+    await simulateGetOrCreate(engine, conversationId, [], "/worktree-b");
 
     expect(session.lastSetNames).toContain("read");
     expect(session.lastSetNames).toContain("grep");

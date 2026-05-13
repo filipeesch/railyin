@@ -25,6 +25,23 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import type { Model } from "@earendil-works/pi-ai";
+
+/** Options passed to a SessionFactory when creating a new Pi agent session. */
+export interface SessionFactoryOptions {
+  tools: ReturnType<typeof buildAllTools>;
+  systemPrompt: string | undefined;
+  conversationId: number;
+  model: Model<"openai-completions">;
+  cwd: string;
+  config: PiEngineConfig;
+}
+
+/**
+ * Injectable factory for creating Pi agent sessions.
+ * The default implementation calls createAgentSession from the Pi SDK.
+ * Tests can inject a factory that uses a faux provider — no network, scripted responses.
+ */
+export type SessionFactory = (options: SessionFactoryOptions) => Promise<AgentSession>;
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
@@ -55,12 +72,85 @@ function piSessionPathForConversation(conversationId: number): string {
 /** Default max tokens per response. */
 const DEFAULT_MAX_TOKENS = 8_192;
 
+/**
+ * Production SessionFactory: creates a real Pi agent session using the SDK.
+ * Reads session history from disk and connects to the configured LLM provider.
+ */
+async function defaultSessionFactory(options: SessionFactoryOptions): Promise<AgentSession> {
+  const { tools, systemPrompt, conversationId, model, cwd, config } = options;
+
+  const sessionPath = piSessionPathForConversation(conversationId);
+  const sessionManager = SessionManager.open(sessionPath);
+
+  const agentDir = getAgentDir();
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    systemPromptOverride: () => systemPrompt,
+  });
+  await resourceLoader.reload();
+
+  const piTools = tools.map((t) =>
+    defineTool({
+      name: t.name,
+      label: t.label ?? t.name,
+      description: t.description,
+      parameters: t.parameters as any,
+      execute: t.execute as any,
+    }),
+  );
+
+  const authStorage = AuthStorage.inMemory();
+  // Pi always requires an API key value — local providers (LM Studio, Ollama) ignore it, so "no-key" is fine.
+  // Set for all configured providers AND ensure model.provider always has a key.
+  for (const [provider, cfg] of Object.entries(config.providers ?? {})) {
+    authStorage.setRuntimeApiKey(provider, cfg.api_key ?? "no-key");
+  }
+  authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
+
+  const { session } = await createAgentSession({
+    cwd,
+    agentDir,
+    model: model as any,
+    customTools: piTools,
+    // NOTE: The SDK's `tools` parameter acts as a GLOBAL allowlist that filters
+    // both built-in and custom tools. We enable ALL active tools here.
+    tools: [
+      ...SDK_BUILTIN_TOOL_NAMES,
+      "glob", "run_command", "undo_write",
+      "fetch_url", "search_internet",
+      "write_file", "patch_file", "delete_file", "rename_file",
+      "get_task", "get_board_summary", "list_tasks",
+      "create_task", "edit_task", "delete_task", "move_task", "message_task",
+      "list_decisions", "record_decision", "update_decision", "delete_decision",
+      "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status",
+      "decision_request",
+      "lsp_go_to_definition", "lsp_find_references", "lsp_document_symbols", "lsp_workspace_symbols",
+      "lsp_hover", "lsp_rename", "lsp_incoming_calls", "lsp_outgoing_calls", "lsp_diagnostics", "lsp_type_definition",
+      "skill",
+    ],
+    sessionManager,
+    resourceLoader,
+    authStorage,
+    settingsManager: SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+    }),
+  });
+
+  // "off" prevents the SDK from sending reasoning_effort to local LLMs (LM Studio, Ollama),
+  // which return 400 for that field.
+  session.agent.state.thinkingLevel = "off";
+
+  return session;
+}
+
 export class PiEngine implements ExecutionEngine {
   private readonly engineId: string;
   private readonly config: PiEngineConfig;
   private readonly _onTaskUpdated: OnTaskUpdated;
   private readonly dialect: SlashCommandDialect;
   private readonly modelSettingsRepo: ModelSettingsRepository;
+  private readonly sessionFactory: SessionFactory;
   /** Map<conversationId, AgentSession> — one Pi session per conversation. */
   private readonly sessions = new Map<number, AgentSession>();
   /** Map<conversationId, SuspendRef> — mutable ref updated at each execution start. */
@@ -79,12 +169,14 @@ export class PiEngine implements ExecutionEngine {
     _onNewMessage: OnNewMessage,
     dialect: SlashCommandDialect = new NullDialect(),
     modelSettingsRepo: ModelSettingsRepository,
+    sessionFactory: SessionFactory = defaultSessionFactory,
   ) {
     this.engineId = engineId;
     this.config = config;
     this._onTaskUpdated = onTaskUpdated;
     this.dialect = dialect;
     this.modelSettingsRepo = modelSettingsRepo;
+    this.sessionFactory = sessionFactory;
   }
 
   // ─── ExecutionEngine interface ──────────────────────────────────────────────
@@ -522,84 +614,17 @@ export class PiEngine implements ExecutionEngine {
     return ctx;
   }
 
-  protected async createNewSession(
+  private async createNewSession(
     tools: ReturnType<typeof buildAllTools>,
     systemPrompt: string | undefined,
     conversationId: number,
     model: Model<"openai-completions">,
     cwd: string,
   ): Promise<AgentSession> {
-    const sessionPath = piSessionPathForConversation(conversationId);
-    const sessionManager = SessionManager.open(sessionPath);
-
-    const agentDir = getAgentDir();
-    const resourceLoader = new DefaultResourceLoader({
-      cwd,
-      agentDir,
-      systemPromptOverride: () => systemPrompt,
-    });
-    await resourceLoader.reload();
-
-    const piTools = tools.map((t) =>
-      defineTool({
-        name: t.name,
-        label: t.label ?? t.name,
-        description: t.description,
-        parameters: t.parameters as any,
-        execute: t.execute as any,
-      }),
-    );
-
-    const authStorage = AuthStorage.inMemory();
-    // Pi always requires an API key value — local providers (LM Studio, Ollama) ignore it, so "no-key" is fine.
-    // Set for all configured providers AND ensure model.provider always has a key.
-    for (const [provider, cfg] of Object.entries(this.config.providers ?? {})) {
-      authStorage.setRuntimeApiKey(provider, cfg.api_key ?? "no-key");
-    }
-    authStorage.setRuntimeApiKey(model.provider, this.config.providers?.[model.provider]?.api_key ?? "no-key");
-
-    const { session } = await createAgentSession({
-      cwd,
-      agentDir,
-      model: model as any,
-      customTools: piTools,
-      // Enable SDK built-in search tools (grep/find/ls) — auto-downloads ripgrep if needed.
-      // NOTE: The SDK's `tools` parameter acts as a GLOBAL allowlist that filters
-      // both built-in and custom tools. We enable ALL active tools here.
-      tools: [
-        ...SDK_BUILTIN_TOOL_NAMES,
-        // Their own custom tools (harness + common)
-        "glob", "run_command", "undo_write",
-        "fetch_url", "search_internet",
-        "write_file", "patch_file", "delete_file", "rename_file",
-        // Common tools
-        "get_task", "get_board_summary", "list_tasks",
-        "create_task", "edit_task", "delete_task", "move_task", "message_task",
-        "list_decisions", "record_decision", "update_decision", "delete_decision",
-        "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status",
-        // Interaction tools
-        "decision_request",
-        // LSP tools
-        "lsp_go_to_definition", "lsp_find_references", "lsp_document_symbols", "lsp_workspace_symbols",
-        "lsp_hover", "lsp_rename", "lsp_incoming_calls", "lsp_outgoing_calls", "lsp_diagnostics", "lsp_type_definition",
-        // Skill shim — resolves skill content by name from configured skill directories
-        "skill",
-      ],
-      sessionManager,
-      resourceLoader,
-      authStorage,
-      settingsManager: this.buildCompactionSettings(),
-    });
-
-    // "off" prevents the SDK from sending reasoning_effort to local LLMs (LM Studio, Ollama),
-    // which return 400 for that field. reasoning: true on the model is still kept so the
-    // SDK can parse reasoning_content from models that return it in their response.
-    session.agent.state.thinkingLevel = "off";
-
-    return session;
+    return this.sessionFactory({ tools, systemPrompt, conversationId, model, cwd, config: this.config });
   }
 
-  protected async getOrCreateSession(
+  private async getOrCreateSession(
     conversationId: number,
     model: Model<"openai-completions">,
     tools: ReturnType<typeof buildAllTools>,
@@ -677,9 +702,4 @@ export class PiEngine implements ExecutionEngine {
       });
   }
 
-  protected buildCompactionSettings(): SettingsManager {
-    return SettingsManager.inMemory({
-      compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
-    });
-  }
 }
