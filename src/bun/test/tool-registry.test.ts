@@ -48,3 +48,51 @@ describe("Test Plan: Validate search_text removal and SDK search tool replacemen
     expect(true).toBe(true);
   });
 });
+
+describe("run_command tool description", () => {
+  it("run_command description does NOT contain 'search_text'", () => {
+    const mockHarnessCtx = {
+      hashCache: {} as any,
+      undoStack: {} as any,
+      worktreePath: "/tmp/test",
+    };
+    const mockCommonCtx = {
+      runtime: { worktreePath: "/tmp/test" },
+      task: {} as any,
+      repos: {} as any,
+      workflow: {} as any,
+    };
+    const tools = buildAllTools({
+      harnessCtx: mockHarnessCtx,
+      commonCtx: mockCommonCtx,
+      skillResolver: new InMemorySkillResolver(),
+      columnGroups: ["shell"],
+    });
+    const runCommand = tools.find((t) => t.name === "run_command");
+    expect(runCommand).toBeDefined();
+    expect(runCommand!.description).not.toContain("search_text");
+  });
+
+  it("run_command description references 'grep' and 'find'", () => {
+    const mockHarnessCtx = {
+      hashCache: {} as any,
+      undoStack: {} as any,
+      worktreePath: "/tmp/test",
+    };
+    const mockCommonCtx = {
+      runtime: { worktreePath: "/tmp/test" },
+      task: {} as any,
+      repos: {} as any,
+      workflow: {} as any,
+    };
+    const tools = buildAllTools({
+      harnessCtx: mockHarnessCtx,
+      commonCtx: mockCommonCtx,
+      skillResolver: new InMemorySkillResolver(),
+      columnGroups: ["shell"],
+    });
+    const runCommand = tools.find((t) => t.name === "run_command");
+    expect(runCommand!.description).toContain("grep");
+    expect(runCommand!.description).toContain("find");
+  });
+});

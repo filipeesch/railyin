@@ -10,7 +10,7 @@ import { appendMessage } from "./messages.ts";
 import { extractChips } from "../../mainview/utils/chat-chips.ts";
 
 const TOOL_RESULT_MAX_CHARS = 8_000;
-const TOOL_RESULT_LIMITS = new Map<string, number>([
+export const TOOL_RESULT_LIMITS = new Map<string, number>([
   ["read_file", 100_000],
   ["run_command", 30_000],
   ["fetch_url", 100_000],
