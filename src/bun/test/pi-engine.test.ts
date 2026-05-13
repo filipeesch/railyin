@@ -26,6 +26,22 @@ class MockAgentSession {
   }
 
   dispose() {}
+
+  setActiveToolsCallCount = 0;
+  lastSetNames: string[] = [];
+
+  async setActiveToolsByName(names: string[]): Promise<void> {
+    this.setActiveToolsCallCount++;
+    this.lastSetNames = [...names];
+  }
+
+  readonly agent = {
+    state: {
+      model: null as any,
+      thinkingLevel: "off" as string,
+      systemPrompt: undefined as string | undefined,
+    },
+  };
 }
 
 // ─── TestModelSettingsRepository ─────────────────────────────────────────────
@@ -45,7 +61,7 @@ class StubModelSettingsRepository extends NullModelSettingsRepository {
 
 class TestPiEngine extends PiEngine {
   private readonly injectedSession: MockAgentSession;
-  getOrCreateSessionCallCount = 0;
+  createNewSessionCallCount = 0;
 
   constructor(session: MockAgentSession) {
     const config: PiEngineConfig = { type: "pi" };
@@ -53,15 +69,20 @@ class TestPiEngine extends PiEngine {
     this.injectedSession = session;
   }
 
-  protected async getOrCreateSession(
-    _conversationId: number,
-    _model: any,
+  protected async createNewSession(
     _tools: unknown[],
     _systemPrompt: string | undefined,
-    _workingDirectory: string,
+    _conversationId: number,
+    _model: any,
+    _cwd: string,
   ): Promise<any> {
-    this.getOrCreateSessionCallCount++;
+    this.createNewSessionCallCount++;
     return this.injectedSession;
+  }
+
+  /** Directly exercises the getOrCreateSession reuse path, bypassing execute()'s full setup. */
+  async simulateGetOrCreate(conversationId: number, tools: any[], cwd: string): Promise<any> {
+    return this.getOrCreateSession(conversationId, {} as any, tools, undefined, cwd);
   }
 }
 
@@ -92,7 +113,7 @@ describe("PiEngine.compact()", () => {
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
-    expect(engine.getOrCreateSessionCallCount).toBe(1);
+    expect(engine.createNewSessionCallCount).toBe(1);
   });
 
   it("PE-COMPACT-2: session.isCompacting = true → throws 'Compaction already in progress'", async () => {
@@ -130,5 +151,34 @@ describe("PiEngine.compact()", () => {
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);
     expect(row).toBeNull();
+  });
+});
+
+describe("PiEngine session reuse", () => {
+  it("PE-SESSION-REUSE-1: second execute on same conversationId calls setActiveToolsByName", async () => {
+    const session = new MockAgentSession();
+    const engine = new TestPiEngine(session);
+
+    // First call — creates session
+    await engine.simulateGetOrCreate(conversationId, [], "/worktree-a");
+    expect(engine.createNewSessionCallCount).toBe(1);
+
+    // Second call — reuses session; setActiveToolsByName should be called
+    await engine.simulateGetOrCreate(conversationId, [], "/worktree-b");
+    expect(engine.createNewSessionCallCount).toBe(1); // no new session created
+    expect(session.setActiveToolsCallCount).toBe(1);  // called on reuse
+  });
+
+  it("PE-SESSION-REUSE-2: reuse includes SDK built-in tool names", async () => {
+    const session = new MockAgentSession();
+    const engine = new TestPiEngine(session);
+
+    await engine.simulateGetOrCreate(conversationId, [], "/worktree-a");
+    await engine.simulateGetOrCreate(conversationId, [], "/worktree-b");
+
+    expect(session.lastSetNames).toContain("read");
+    expect(session.lastSetNames).toContain("grep");
+    expect(session.lastSetNames).toContain("find");
+    expect(session.lastSetNames).toContain("ls");
   });
 });

@@ -44,6 +44,9 @@ import { join } from "path";
 
 const PI_SESSIONS_DIR = join(homedir(), ".railyin", "pi-sessions");
 
+/** SDK built-in tool names always included in the active tool set. */
+const SDK_BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
+
 function piSessionPathForConversation(conversationId: number): string {
   const hash = createHash("sha1").update(`railyin-pi-conversation-${conversationId}`).digest("hex");
   return join(PI_SESSIONS_DIR, `${hash}.jsonl`);
@@ -128,28 +131,15 @@ export class PiEngine implements ExecutionEngine {
     // Build harness context (per-conversation, lazily)
     const harnessCtx = this.getOrCreateHarnessContext(conversationId, workingDirectory ?? process.cwd());
 
-    const commonCtx: CommonToolContext = {
-      task: { id: taskId, boardId: boardId ?? null, conversationId },
-      repos: {
-        todos: new TodoRepository(),
-        decisions: new DecisionRepository(),
-        boardTools: boardTools!,
-      },
-      workflow: {
-        onTransition: onTransition ?? (() => {}),
-        onHumanTurn: onHumanTurn ?? (() => {}),
-        onCancel: (id) => this.cancel(id),
-        onTaskUpdated: (task) => this._onTaskUpdated(task),
-      },
-      runtime: {
-        worktreePath: workingDirectory,
-        lspManager: taskLspRegistry.getManager(
-          taskId ?? 0,
-          getConfig().workspace.lsp?.servers ?? [],
-          workingDirectory,
-        ) ?? undefined,
-      },
-    };
+    const commonCtx = this.getOrCreateCommonContext(
+      conversationId,
+      workingDirectory,
+      taskId,
+      boardId,
+      boardTools,
+      onTransition,
+      onHumanTurn,
+    );
 
     // Hoist project/skill path resolution so the skill resolver is ready before buildAllTools.
     const projectPath = boardId != null && taskId != null
@@ -429,6 +419,7 @@ export class PiEngine implements ExecutionEngine {
     }
     this.sessions.clear();
     this.harnessContexts.clear();
+    this.commonCtxRefs.clear();
     this.suspendRefs.clear();
   }
 
@@ -463,6 +454,8 @@ export class PiEngine implements ExecutionEngine {
 
   /** Map<conversationId, HarnessContext> */
   private readonly harnessContexts = new Map<number, HarnessContext>();
+  /** Map<conversationId, CommonToolContext> — mutable ref so tool closures stay current without rebuilding. */
+  private readonly commonCtxRefs = new Map<number, CommonToolContext>();
 
   private getOrCreateSuspendRef(conversationId: number): { onSuspend?: (event: EngineEvent) => void } {
     let ref = this.suspendRefs.get(conversationId);
@@ -488,25 +481,54 @@ export class PiEngine implements ExecutionEngine {
     return ctx;
   }
 
-  protected async getOrCreateSession(
+  private getOrCreateCommonContext(
     conversationId: number,
-    model: Model<"openai-completions">,
-    tools: ReturnType<typeof buildAllTools>,
-    systemPrompt: string | undefined,
-    cwd: string,
-  ): Promise<AgentSession> {
-    const existing = this.sessions.get(conversationId);
+    workingDirectory: string | undefined,
+    taskId: number | null | undefined,
+    boardId: number | null | undefined,
+    boardTools: ExecutionParams["boardTools"],
+    onTransition: ExecutionParams["onTransition"],
+    onHumanTurn: ExecutionParams["onHumanTurn"],
+  ): CommonToolContext {
+    const existing = this.commonCtxRefs.get(conversationId);
     if (existing) {
-      existing.agent.state.model = model as any;
-      existing.agent.state.tools = tools as any;
-      existing.agent.state.thinkingLevel = "off";
-      if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
+      existing.runtime.worktreePath = workingDirectory;
+      existing.runtime.lspManager =
+        taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory ?? "") ?? undefined;
+      existing.workflow.onTransition = onTransition ?? (() => {});
+      existing.workflow.onHumanTurn = onHumanTurn ?? (() => {});
       return existing;
     }
+    const ctx: CommonToolContext = {
+      task: { id: taskId ?? null, boardId: boardId ?? null, conversationId },
+      repos: {
+        todos: new TodoRepository(),
+        decisions: new DecisionRepository(),
+        boardTools: boardTools!,
+      },
+      workflow: {
+        onTransition: onTransition ?? (() => {}),
+        onHumanTurn: onHumanTurn ?? (() => {}),
+        onCancel: (id) => this.cancel(id),
+        onTaskUpdated: (task) => this._onTaskUpdated(task),
+      },
+      runtime: {
+        worktreePath: workingDirectory,
+        lspManager:
+          taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory ?? "") ?? undefined,
+      },
+    };
+    this.commonCtxRefs.set(conversationId, ctx);
+    return ctx;
+  }
 
-    // Ensure sessions dir exists
-    await mkdir(PI_SESSIONS_DIR, { recursive: true });
-
+  protected async createNewSession(
+    tools: ReturnType<typeof buildAllTools>,
+    systemPrompt: string | undefined,
+    conversationId: number,
+    model: Model<"openai-completions">,
+    cwd: string,
+  ): Promise<AgentSession> {
     const sessionPath = piSessionPathForConversation(conversationId);
     const sessionManager = SessionManager.open(sessionPath);
 
@@ -545,8 +567,7 @@ export class PiEngine implements ExecutionEngine {
       // NOTE: The SDK's `tools` parameter acts as a GLOBAL allowlist that filters
       // both built-in and custom tools. We enable ALL active tools here.
       tools: [
-        // SDK built-in tools — "read" is required for the SDK to inject skills into the system prompt
-        "read", "grep", "find", "ls",
+        ...SDK_BUILTIN_TOOL_NAMES,
         // Their own custom tools (harness + common)
         "glob", "run_command", "undo_write",
         "fetch_url", "search_internet",
@@ -575,6 +596,28 @@ export class PiEngine implements ExecutionEngine {
     // SDK can parse reasoning_content from models that return it in their response.
     session.agent.state.thinkingLevel = "off";
 
+    return session;
+  }
+
+  protected async getOrCreateSession(
+    conversationId: number,
+    model: Model<"openai-completions">,
+    tools: ReturnType<typeof buildAllTools>,
+    systemPrompt: string | undefined,
+    cwd: string,
+  ): Promise<AgentSession> {
+    const existing = this.sessions.get(conversationId);
+    if (existing) {
+      existing.agent.state.model = model as any;
+      existing.agent.state.thinkingLevel = "off";
+      if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
+      existing.setActiveToolsByName([...SDK_BUILTIN_TOOL_NAMES, ...tools.map((t) => t.name)]);
+      return existing;
+    }
+
+    // Ensure sessions dir exists
+    await mkdir(PI_SESSIONS_DIR, { recursive: true });
+    const session = await this.createNewSession(tools, systemPrompt, conversationId, model, cwd);
     this.sessions.set(conversationId, session);
     return session;
   }
