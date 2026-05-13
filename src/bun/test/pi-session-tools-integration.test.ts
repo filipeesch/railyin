@@ -22,11 +22,13 @@ import {
   AuthStorage,
   SessionManager,
   DefaultResourceLoader,
+  SettingsManager,
   getAgentDir,
   defineTool,
 } from "@earendil-works/pi-coding-agent";
-import { registerFauxProvider } from "@earendil-works/pi-ai";
+import { registerFauxProvider, fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -34,19 +36,45 @@ import { z } from "zod";
 const SDK_BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 
 /** Create a minimal real AgentSession using a faux provider. No HTTP calls. */
-async function createTestSession(faux: FauxProviderRegistration, cwd: string) {
+async function createTestSession(
+  faux: FauxProviderRegistration,
+  cwd: string,
+  systemPromptOverride?: string,
+  compactionOptions?: { contextWindow?: number; reserveTokens?: number },
+) {
   const sessionManager = SessionManager.open(join(cwd, "session.jsonl"));
   const agentDir = getAgentDir();
-  const resourceLoader = new DefaultResourceLoader({ cwd, agentDir });
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    ...(systemPromptOverride !== undefined && { systemPromptOverride: () => systemPromptOverride }),
+  });
   await resourceLoader.reload();
 
   const authStorage = AuthStorage.inMemory();
   authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
 
+  const settingsManager = compactionOptions
+    ? SettingsManager.inMemory({
+        compaction: {
+          enabled: true,
+          reserveTokens: compactionOptions.reserveTokens ?? 0,
+          keepRecentTokens: 1,
+        },
+      })
+    : undefined;
+
+  const model = {
+    ...faux.getModel(),
+    ...(compactionOptions?.contextWindow !== undefined && {
+      contextWindow: compactionOptions.contextWindow,
+    }),
+  };
+
   const { session } = await createAgentSession({
     cwd,
     agentDir,
-    model: faux.getModel() as any,
+    model: model as any,
     tools: [...SDK_BUILTIN_TOOL_NAMES, "noop"],
     customTools: [
       defineTool({
@@ -60,10 +88,30 @@ async function createTestSession(faux: FauxProviderRegistration, cwd: string) {
     sessionManager,
     resourceLoader,
     authStorage,
+    ...(settingsManager && { settingsManager }),
   });
 
   session.agent.state.thinkingLevel = "off";
   return session;
+}
+
+/**
+ * Run one faux turn and wait for the agent to finish.
+ * The faux provider must already have `setResponses` called before this.
+ */
+function runTurn(session: AgentSession, promptText: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "agent_end") {
+        unsubscribe();
+        resolve();
+      }
+    });
+    session.prompt(promptText).catch((err) => {
+      unsubscribe();
+      reject(err);
+    });
+  });
 }
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -158,5 +206,170 @@ describe("Pi engine session reuse — ghost tools regression", () => {
     const model = faux.getModel();
     expect(model).toBeDefined();
     expect(model.provider).toBeDefined();
+  });
+});
+
+// ─── System Prompt Injection Tests ────────────────────────────────────────────
+
+describe("Pi SDK session — system prompt injection", () => {
+  it("IT-SYSPROMPT-1: custom systemPromptOverride is reflected in session.systemPrompt", async () => {
+    const session = await createTestSession(faux, cwd, "MY_CUSTOM_PROMPT_MARKER");
+
+    expect(session.systemPrompt).toContain("MY_CUSTOM_PROMPT_MARKER");
+  });
+
+  it("IT-SYSPROMPT-2: session without override has a non-empty SDK default system prompt", async () => {
+    const session = await createTestSession(faux, cwd);
+
+    expect(typeof session.systemPrompt).toBe("string");
+    expect(session.systemPrompt.length).toBeGreaterThan(0);
+  });
+
+  it("IT-SYSPROMPT-3: reuse path — direct assignment updates session.systemPrompt (mirrors engine.ts line 638)", async () => {
+    const session = await createTestSession(faux, cwd);
+
+    // Mirrors what getOrCreateSession does when systemPrompt !== undefined
+    session.agent.state.systemPrompt = "REUSE_PROMPT_B";
+
+    expect(session.systemPrompt).toContain("REUSE_PROMPT_B");
+  });
+
+  it("IT-SYSPROMPT-4: reuse path — undefined systemPrompt leaves existing prompt unchanged", async () => {
+    const session = await createTestSession(faux, cwd);
+    session.agent.state.systemPrompt = "ORIGINAL_PROMPT";
+
+    // Mirrors the guard: if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
+    const systemPrompt: string | undefined = undefined;
+    if (systemPrompt !== undefined) session.agent.state.systemPrompt = systemPrompt;
+
+    expect(session.systemPrompt).toBe("ORIGINAL_PROMPT");
+  });
+
+  it("IT-SYSPROMPT-5: enrichedSystem construction — taskBlock + systemInstructions joined correctly", () => {
+    // Unit test for the inline string composition in createManagedExecution
+    const taskBlock = "## Task\n**Title:** My Task\n**Description:** A description";
+    const systemInstructions = "Do things carefully.";
+    const enrichedSystem = [taskBlock, systemInstructions].filter(Boolean).join("\n\n") || undefined;
+
+    expect(enrichedSystem).toContain("## Task");
+    expect(enrichedSystem).toContain("My Task");
+    expect(enrichedSystem).toContain("Do things carefully.");
+    expect(enrichedSystem).toContain("\n\n");
+  });
+
+  it("IT-SYSPROMPT-6: enrichedSystem is undefined when both taskBlock and systemInstructions are falsy", () => {
+    const taskBlock = undefined;
+    const systemInstructions = undefined;
+    const enrichedSystem = [taskBlock, systemInstructions].filter(Boolean).join("\n\n") || undefined;
+
+    expect(enrichedSystem).toBeUndefined();
+  });
+});
+
+// ─── Compaction SDK Tests ──────────────────────────────────────────────────────
+
+describe("Pi SDK session — manual compaction", () => {
+  it("IT-COMPACT-SDK-1: compact() returns a summary and tokensBefore after a turn", async () => {
+    const session = await createTestSession(faux, cwd);
+
+    // First response: user turn. Second response: compaction summarization LLM call.
+    faux.setResponses([
+      fauxAssistantMessage(fauxText("Hello, I am the assistant.")),
+      fauxAssistantMessage(fauxText("Summary of the conversation.")),
+    ]);
+    await runTurn(session, "Say hello.");
+
+    const result = await session.compact();
+
+    expect(result).not.toBeNull();
+    expect(typeof result!.summary).toBe("string");
+    expect(result!.summary.length).toBeGreaterThan(0);
+    expect(result!.tokensBefore).toBeGreaterThan(0);
+  });
+
+  it("IT-COMPACT-SDK-2: compact() emits compaction_start (reason=manual) then compaction_end", async () => {
+    const session = await createTestSession(faux, cwd);
+
+    faux.setResponses([
+      fauxAssistantMessage(fauxText("Hello.")),
+      fauxAssistantMessage(fauxText("Compact summary.")),
+    ]);
+    await runTurn(session, "Say hello.");
+
+    const events: string[] = [];
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "compaction_start" || event.type === "compaction_end") {
+        events.push(event.type);
+      }
+    });
+
+    await session.compact();
+    unsubscribe();
+
+    expect(events[0]).toBe("compaction_start");
+    expect(events[events.length - 1]).toBe("compaction_end");
+    expect(events.filter((e) => e === "compaction_start")).toHaveLength(1);
+    expect(events.filter((e) => e === "compaction_end")).toHaveLength(1);
+  });
+
+  it("IT-COMPACT-SDK-3: compaction_start carries reason=manual; compaction_end has result with summary", async () => {
+    const session = await createTestSession(faux, cwd);
+
+    faux.setResponses([
+      fauxAssistantMessage(fauxText("Hello.")),
+      fauxAssistantMessage(fauxText("Summary text.")),
+    ]);
+    await runTurn(session, "Say hello.");
+
+    let startReason: string | undefined;
+    let endResult: { summary: string } | undefined;
+    let wasCompactingDuringStart = false;
+
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "compaction_start") {
+        startReason = event.reason;
+        wasCompactingDuringStart = session.isCompacting;
+      }
+      if (event.type === "compaction_end" && event.result) {
+        endResult = event.result as { summary: string };
+      }
+    });
+
+    await session.compact();
+    unsubscribe();
+
+    expect(startReason).toBe("manual");
+    expect(wasCompactingDuringStart).toBe(true);
+    expect(session.isCompacting).toBe(false);
+    expect(endResult?.summary).toBeTruthy();
+  });
+});
+
+// ─── Compaction Auto-threshold Tests ──────────────────────────────────────────
+
+describe("Pi SDK session — auto-compaction threshold", () => {
+  it("IT-COMPACT-AUTO-1: threshold compaction fires when totalTokens > contextWindow - reserveTokens", async () => {
+    // contextWindow=200, reserveTokens=0 → threshold at 200.
+    // faux provider calculates totalTokens from text length (chars / 4) so any
+    // non-trivial prompt will produce >200 tokens once prompt + response > 800 chars.
+    // We use a longer prompt to guarantee the faux usage estimate exceeds 200.
+    const session = await createTestSession(faux, cwd, undefined, {
+      contextWindow: 200,
+      reserveTokens: 0,
+    });
+
+    const compactionEvents: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "compaction_start" || event.type === "compaction_end") {
+        compactionEvents.push(event.type);
+      }
+    });
+
+    // Repeat characters to ensure the faux provider's token estimate exceeds contextWindow
+    const longText = "x".repeat(820); // ~205 tokens (820 / 4 = 205)
+    faux.setResponses([fauxAssistantMessage(fauxText(longText))]);
+    await runTurn(session, longText);
+
+    expect(compactionEvents).toContain("compaction_start");
   });
 });
