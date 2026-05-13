@@ -8,7 +8,7 @@ PiEngine must be registered in the `engineFactories` map in `src/bun/index.ts` w
 - **THEN** a `PiEngine` instance is created and registered in the engine registry
 
 ### Requirement: ExecutionEngine contract
-PiEngine must fully implement the `ExecutionEngine` interface from `src/bun/engine/types.ts`. The resolved context window for compaction SHALL be read from `ExecutionParams.contextWindowOverride` when present, falling back to `this.config.context_window`, then to `DEFAULT_CONTEXT_WINDOW` (128,000). PiEngine SHALL NOT call `getDb()` to resolve the context window — this value is injected by the orchestrator via `ExecutionParams`.
+PiEngine must fully implement the `ExecutionEngine` interface from `src/bun/engine/types.ts`. The resolved context window for compaction SHALL be read from `ExecutionParams.contextWindowOverride` when provided to `execute()`. PiEngine SHALL NOT fall back to `config.context_window` or any hardcoded default — if `contextWindowOverride` is absent or null at the time `buildModel()` is called, the method SHALL throw. PiEngine SHALL accept `ModelSettingsRepository` and `workspaceKey` as constructor parameters injected at registration time.
 
 #### Scenario: execute() streams events
 - **WHEN** `engine.execute(params)` is called
@@ -20,15 +20,15 @@ PiEngine must fully implement the `ExecutionEngine` interface from `src/bun/engi
 
 #### Scenario: contextWindowOverride used for compaction threshold
 - **WHEN** `ExecutionParams.contextWindowOverride` is provided (e.g., 32768)
-- **THEN** the Pi engine's compaction threshold is `32768 - 16384 = 16384` tokens
+- **THEN** the Pi session's `model.contextWindow` is set to 32768, making the SDK threshold fire at `32768 - 16384 = 16384` tokens
 
-#### Scenario: Falls back to config context_window when no override
-- **WHEN** `ExecutionParams.contextWindowOverride` is absent and `PiEngineConfig.context_window` is 65536
-- **THEN** the compaction threshold is `65536 - 16384 = 49152` tokens
+#### Scenario: buildModel throws when contextWindow is null
+- **WHEN** `buildModel()` is called without a resolved `contextWindowOverride`
+- **THEN** an error is thrown and no session is created
 
-#### Scenario: Falls back to DEFAULT_CONTEXT_WINDOW when neither override nor config present
-- **WHEN** `ExecutionParams.contextWindowOverride` is absent and `PiEngineConfig.context_window` is undefined
-- **THEN** the compaction threshold is `128000 - 16384 = 111616` tokens
+#### Scenario: ModelSettingsRepository and workspaceKey injected at construction
+- **WHEN** the engine factory creates a `PiEngine` in `index.ts`
+- **THEN** the `ModelSettingsRepository` instance and current `workspaceKey` are passed as constructor arguments
 
 ### Requirement: listModels() from config
 The Pi engine's `listModels()` SHALL query `GET {base_url}/v1/models` (not `/models`) on each configured provider. Each returned `EngineModelInfo` SHALL include `contextWindowEditable: true`. The `contextWindow` value SHALL be: server-reported `context_length` from `/v1/models` response if present, otherwise `null` (the caller resolves the final effective value using `model_settings` overrides and the engine default).
