@@ -16,6 +16,7 @@ export class CrossEngineContextInjector {
     sourceEngine: ExecutionEngine | null,
     targetModelInfo: EngineModelInfo | undefined,
     workingDirectory: string,
+    workspaceKey: string,
   ): Promise<PrepareResult> {
     const conv = this.db
       .query<{ last_engine_type: string | null }, [number]>(
@@ -44,7 +45,7 @@ export class CrossEngineContextInjector {
         targetModelInfo.contextWindow,
       );
       if (est.fraction > 0.75) {
-        await sourceEngine.compact(null, conversationId, workingDirectory);
+        await sourceEngine.compact(null, conversationId, workingDirectory, workspaceKey);
         messages = this.fetchMessagesSinceAnchor(conversationId);
       }
     }

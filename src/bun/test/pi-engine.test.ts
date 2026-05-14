@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { PiEngine } from "../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../config/index.ts";
+import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { Database } from "bun:sqlite";
 
 // ─── MockAgentSession ─────────────────────────────────────────────────────────
@@ -25,30 +26,61 @@ class MockAgentSession {
   }
 
   dispose() {}
+
+  setActiveToolsCallCount = 0;
+  lastSetNames: string[] = [];
+
+  async setActiveToolsByName(names: string[]): Promise<void> {
+    this.setActiveToolsCallCount++;
+    this.lastSetNames = [...names];
+  }
+
+  readonly agent = {
+    state: {
+      model: null as any,
+      thinkingLevel: "off" as string,
+      systemPrompt: undefined as string | undefined,
+    },
+  };
 }
 
-// ─── TestPiEngine ─────────────────────────────────────────────────────────────
+// ─── TestModelSettingsRepository ─────────────────────────────────────────────
 
-class TestPiEngine extends PiEngine {
-  private readonly injectedSession: MockAgentSession;
-  getOrCreateSessionCallCount = 0;
-
-  constructor(session: MockAgentSession) {
-    const config: PiEngineConfig = { type: "pi" };
-    super("test-pi", config, () => {}, () => {});
-    this.injectedSession = session;
+class StubModelSettingsRepository extends NullModelSettingsRepository {
+  private readonly contextWindow: number;
+  constructor(contextWindow: number) {
+    super();
+    this.contextWindow = contextWindow;
   }
-
-  protected async getOrCreateSession(
-    _conversationId: number,
-    _model: any,
-    _tools: unknown[],
-    _systemPrompt: string | undefined,
-    _workingDirectory: string,
-  ): Promise<any> {
-    this.getOrCreateSessionCallCount++;
-    return this.injectedSession;
+  override getContextWindow(_workspaceKey: string, _qualifiedModelId: string): number | null {
+    return this.contextWindow;
   }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function makePiEngine(session: MockAgentSession): PiEngine {
+  const config: PiEngineConfig = { type: "pi" };
+  return new PiEngine(
+    "test-pi",
+    config,
+    () => {},
+    () => {},
+    undefined,
+    new StubModelSettingsRepository(128_000),
+    async () => session as any,
+  );
+}
+
+/**
+ * Directly exercises the getOrCreateSession reuse path via compact(),
+ * which internally calls getOrCreateSession if no live session exists.
+ * For reuse tests we need two consecutive calls — we use a helper that
+ * accesses the private method via bracket notation.
+ */
+async function simulateGetOrCreate(engine: PiEngine, conversationId: number, tools: any[], cwd: string): Promise<any> {
+  // @ts-expect-error — accessing private method for testing
+  return engine.getOrCreateSession(conversationId, {} as any, tools, undefined, cwd);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -63,6 +95,8 @@ beforeEach(() => {
   db = initDb();
   const seed = seedProjectAndTask(db, "/test-git");
   conversationId = seed.conversationId;
+  // Seed the conversation's model so compact() can resolve it from DB
+  db.run("UPDATE conversations SET model = ? WHERE id = ?", ["test-pi/lmstudio/test-model", conversationId]);
 });
 
 afterEach(() => {
@@ -70,21 +104,31 @@ afterEach(() => {
 });
 
 describe("PiEngine.compact()", () => {
-  it("PE-COMPACT-1: no live session → getOrCreateSession called, session.compact() invoked", async () => {
+  it("PE-COMPACT-1: no live session → factory called, session.compact() invoked", async () => {
+    let factoryCallCount = 0;
     const session = new MockAgentSession();
-    const engine = new TestPiEngine(session);
+    const config: PiEngineConfig = { type: "pi" };
+    const engine = new PiEngine(
+      "test-pi",
+      config,
+      () => {},
+      () => {},
+      undefined,
+      new StubModelSettingsRepository(128_000),
+      async () => { factoryCallCount++; return session as any; },
+    );
 
-    await engine.compact(null, conversationId, "/test-working-dir");
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
-    expect(engine.getOrCreateSessionCallCount).toBe(1);
+    expect(factoryCallCount).toBe(1);
   });
 
   it("PE-COMPACT-2: session.isCompacting = true → throws 'Compaction already in progress'", async () => {
     const session = new MockAgentSession();
     session.isCompacting = true;
-    const engine = new TestPiEngine(session);
+    const engine = makePiEngine(session);
 
-    await expect(engine.compact(null, conversationId, "/test-working-dir")).rejects.toThrow(
+    await expect(engine.compact(null, conversationId, "/test-working-dir", "test-workspace")).rejects.toThrow(
       "Compaction already in progress",
     );
   });
@@ -92,9 +136,9 @@ describe("PiEngine.compact()", () => {
   it("PE-COMPACT-3: compact() returns summary → compaction_summary row persisted in DB", async () => {
     const session = new MockAgentSession();
     session.compactResult = { summary: "the summary" };
-    const engine = new TestPiEngine(session);
+    const engine = makePiEngine(session);
 
-    await engine.compact(null, conversationId, "/test-working-dir");
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
@@ -106,13 +150,40 @@ describe("PiEngine.compact()", () => {
   it("PE-COMPACT-4: compact() returns null → no compaction_summary row inserted", async () => {
     const session = new MockAgentSession();
     session.compactResult = null;
-    const engine = new TestPiEngine(session);
+    const engine = makePiEngine(session);
 
-    await engine.compact(null, conversationId, "/test-working-dir");
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);
     expect(row).toBeNull();
+  });
+});
+
+describe("PiEngine session reuse", () => {
+  it("PE-SESSION-REUSE-1: second execute on same conversationId calls setActiveToolsByName", async () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngine(session);
+
+    // First call — creates session via factory
+    await simulateGetOrCreate(engine, conversationId, [], "/worktree-a");
+
+    // Second call — reuses session; setActiveToolsByName should be called
+    await simulateGetOrCreate(engine, conversationId, [], "/worktree-b");
+    expect(session.setActiveToolsCallCount).toBe(1);  // called on reuse
+  });
+
+  it("PE-SESSION-REUSE-2: reuse includes SDK built-in tool names", async () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngine(session);
+
+    await simulateGetOrCreate(engine, conversationId, [], "/worktree-a");
+    await simulateGetOrCreate(engine, conversationId, [], "/worktree-b");
+
+    expect(session.lastSetNames).toContain("read");
+    expect(session.lastSetNames).toContain("grep");
+    expect(session.lastSetNames).toContain("find");
+    expect(session.lastSetNames).toContain("ls");
   });
 });

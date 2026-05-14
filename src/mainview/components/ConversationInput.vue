@@ -436,11 +436,15 @@ const selectedModelOption = computed(() => {
   return null;
 });
 
-const supportsManualCompact = computed(() =>
-  workspaceStore.availableModels.find(
-    (model) => model.id === (props.modelId ?? workspaceStore.availableModels[0]?.id ?? null),
-  )?.supportsManualCompact === true
-);
+const supportsManualCompact = computed(() => {
+  // In task context (taskId is set), never fall back to the first available model —
+  // the conversation's model is explicit, and null means "no model selected yet".
+  const resolvedModelId = props.taskId != null
+    ? props.modelId ?? null
+    : (props.modelId ?? workspaceStore.availableModels[0]?.id ?? null);
+  if (resolvedModelId == null) return false;
+  return workspaceStore.availableModels.find((m) => m.id === resolvedModelId)?.supportsManualCompact === true;
+});
 
 // ─── Send logic ───────────────────────────────────────────────────────────────
 

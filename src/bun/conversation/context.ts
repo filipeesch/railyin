@@ -10,10 +10,8 @@ import { appendMessage } from "./messages.ts";
 import { extractChips } from "../../mainview/utils/chat-chips.ts";
 
 const TOOL_RESULT_MAX_CHARS = 8_000;
-const TOOL_RESULT_LIMITS = new Map<string, number>([
+export const TOOL_RESULT_LIMITS = new Map<string, number>([
   ["read_file", 100_000],
-  ["search_text", 20_000],
-  ["find_files", 10_000],
   ["run_command", 30_000],
   ["fetch_url", 100_000],
   ["spawn_agent", 100_000],
@@ -102,8 +100,6 @@ export const MICRO_COMPACT_SENTINEL = "[tool result cleared — content no longe
 export const MICRO_COMPACT_CLEARABLE_TOOLS = new Set([
   "read_file",
   "run_command",
-  "search_text",
-  "find_files",
   "fetch_url",
   "edit_file",
   "patch_file",

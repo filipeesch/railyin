@@ -6,6 +6,7 @@ import type { PiEngineConfig } from "../config/index.ts";
 import type { SlashCommandDialect, ResolvedPrompt } from "../engine/dialects/slash-command-dialect.ts";
 import { NullDialect } from "../engine/dialects/null-dialect.ts";
 import type { CommandInfo } from "../engine/types.ts";
+import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 
 // ─── UndoStack ────────────────────────────────────────────────────────────────
 
@@ -229,20 +230,20 @@ describe("PiEngine dialect injection", () => {
   it("SPY-1: dialect passed to constructor is stored and accessible", () => {
     const spy = new SpyDialect();
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy);
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy, new NullModelSettingsRepository());
     expect((engine as any).dialect).toBe(spy);
   });
 
   it("SPY-2: default dialect is NullDialect when none is provided", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {});
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
     expect((engine as any).dialect).toBeInstanceOf(NullDialect);
   });
 
   it("SPY-3: pre-aborted execution does NOT call dialect.resolvePrompt", async () => {
     const spy = new SpyDialect();
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy);
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy, new NullModelSettingsRepository());
     const controller = new AbortController();
     controller.abort();
 
@@ -267,7 +268,7 @@ describe("PiEngine dialect injection", () => {
 
 function makePiEngine(): PiEngine {
   const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-  return new PiEngine("test-pi", config, () => {}, () => {});
+  return new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
 }
 
 /** Minimal fake AgentSession — only needs abort() */
