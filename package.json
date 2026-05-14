@@ -5,6 +5,7 @@
   "description": "AI-assisted delivery orchestration for software teams",
   "scripts": {
     "postinstall": "bun scripts/postinstall.ts",
+    "typecheck": "tsc --noEmit",
     "dev": "bun scripts/dev.ts",
     "prod": "bun src/bun/index.ts",
     "dev:kill": "pkill -f 'src/bun/index.ts' || true",
@@ -18,9 +19,6 @@
     "test:e2e:timeline": "npx playwright test e2e/ui/timeline-pipeline.spec.ts",
     "test:e2e:review": "npx playwright test e2e/ui/review-overlay.spec.ts",
     "test:e2e:headed": "npx playwright test --headed",
-    "refine:mock": "bun refinement/runner.ts --mode mock",
-    "refine:local": "bun refinement/runner.ts --mode local",
-    "refine:live": "bun refinement/runner.ts --mode live",
     "build:ext": "cd extensions/railyin-ref && npm install && npm run compile && npm run package",
     "test:mutation:backend": "stryker run stryker.backend.json",
     "test:mutation:frontend": "stryker run stryker.frontend.json",
@@ -76,9 +74,5 @@
     "vitest": "^3.0.0",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0"
-  },
-  "patchedDependencies": {
-    "@stryker-mutator/vitest-runner@9.6.1": "patches/@stryker-mutator%2Fvitest-runner@9.6.1.patch",
-    "@github/copilot-sdk@0.3.0": "patches/@github%2Fcopilot-sdk@0.3.0.patch"
   }
 }
