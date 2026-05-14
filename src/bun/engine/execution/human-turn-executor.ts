@@ -185,9 +185,10 @@ export class HumanTurnExecutor {
       sourceEngine,
       targetModelInfo,
       workingDirectory,
+      workspaceKey,
     );
     const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
-    
+
     // Build system instructions with custom prompt injection
     const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
     const promptFilter: PromptFilterContext = {

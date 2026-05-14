@@ -21,7 +21,7 @@ function buildShellTool(harnessCtx: HarnessContext): AgentTool<typeof runCommand
 
 NEVER use run_command to write or edit files — ALWAYS use write_file or patch_file instead.
 NEVER use run_command to create files, append to files, or redirect output to files.
-ALWAYS prefer read_file, glob, and search_text over shell commands for file operations.
+ALWAYS prefer read_file, glob, grep, and find over shell commands for file operations.
 Use run_command for: git commands, running tests, checking tool versions, network inspection.`,
     parameters: runCommandParams,
     execute: async (_id, args) => {

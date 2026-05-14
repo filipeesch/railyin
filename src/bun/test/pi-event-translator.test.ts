@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { translateEvent } from "../engine/pi/event-translator.ts";
+import { buildPiToolDisplay } from "../engine/pi/tools/display.ts";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 // ─── Compaction event translation ────────────────────────────────────────────
@@ -90,5 +91,37 @@ describe("PiEngineConfig — context_window field", () => {
     };
 
     expect(config.context_window).toBeUndefined();
+  });
+});
+
+// ─── buildPiToolDisplay — SDK built-in tools ──────────────────────────────────
+
+describe("buildPiToolDisplay — SDK built-in tools", () => {
+  it("ET-DISPLAY-1: read tool renders file path relative to worktree", () => {
+    const result = buildPiToolDisplay("read", { file_path: "/repo/src/a.ts" }, "/repo");
+    expect(result).toMatchObject({ label: "read", subject: "src/a.ts", contentType: "file" });
+  });
+
+  it("ET-DISPLAY-2: grep tool renders pattern as subject", () => {
+    const result = buildPiToolDisplay("grep", { pattern: "myFunc" });
+    expect(result).toMatchObject({ label: "grep", contentType: "terminal" });
+    expect(result.subject).toBe("myFunc");
+  });
+
+  it("ET-DISPLAY-3: find tool renders pattern as subject", () => {
+    const result = buildPiToolDisplay("find", { pattern: "*.ts" });
+    expect(result).toMatchObject({ label: "find", contentType: "terminal" });
+    expect(result.subject).toBe("*.ts");
+  });
+
+  it("ET-DISPLAY-4: ls tool renders path relative to worktree", () => {
+    const result = buildPiToolDisplay("ls", { path: "/repo/src" }, "/repo");
+    expect(result).toMatchObject({ label: "ls", contentType: "terminal" });
+    expect(result.subject).toBe("src");
+  });
+
+  it("ET-DISPLAY-5: search_text falls through to common display (not hardcoded 'search' label)", () => {
+    const result = buildPiToolDisplay("search_text", { pattern: "x" });
+    expect(result.label).not.toBe("search");
   });
 });

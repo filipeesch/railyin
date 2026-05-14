@@ -8,7 +8,7 @@ PiEngine must be registered in the `engineFactories` map in `src/bun/index.ts` w
 - **THEN** a `PiEngine` instance is created and registered in the engine registry
 
 ### Requirement: ExecutionEngine contract
-PiEngine must fully implement the `ExecutionEngine` interface from `src/bun/engine/types.ts`. The resolved context window for compaction SHALL be read from `ExecutionParams.contextWindowOverride` when present, falling back to `this.config.context_window`, then to `DEFAULT_CONTEXT_WINDOW` (128,000). PiEngine SHALL NOT call `getDb()` to resolve the context window — this value is injected by the orchestrator via `ExecutionParams`.
+PiEngine must fully implement the `ExecutionEngine` interface from `src/bun/engine/types.ts`. The resolved context window for compaction SHALL be read from `ExecutionParams.contextWindowOverride` when provided to `execute()`. PiEngine SHALL NOT fall back to `config.context_window` or any hardcoded default — if `contextWindowOverride` is absent or null at the time `buildModel()` is called, the method SHALL throw. PiEngine SHALL accept `ModelSettingsRepository` and `workspaceKey` as constructor parameters injected at registration time.
 
 #### Scenario: execute() streams events
 - **WHEN** `engine.execute(params)` is called
@@ -20,15 +20,15 @@ PiEngine must fully implement the `ExecutionEngine` interface from `src/bun/engi
 
 #### Scenario: contextWindowOverride used for compaction threshold
 - **WHEN** `ExecutionParams.contextWindowOverride` is provided (e.g., 32768)
-- **THEN** the Pi engine's compaction threshold is `32768 - 16384 = 16384` tokens
+- **THEN** the Pi session's `model.contextWindow` is set to 32768, making the SDK threshold fire at `32768 - 16384 = 16384` tokens
 
-#### Scenario: Falls back to config context_window when no override
-- **WHEN** `ExecutionParams.contextWindowOverride` is absent and `PiEngineConfig.context_window` is 65536
-- **THEN** the compaction threshold is `65536 - 16384 = 49152` tokens
+#### Scenario: buildModel throws when contextWindow is null
+- **WHEN** `buildModel()` is called without a resolved `contextWindowOverride`
+- **THEN** an error is thrown and no session is created
 
-#### Scenario: Falls back to DEFAULT_CONTEXT_WINDOW when neither override nor config present
-- **WHEN** `ExecutionParams.contextWindowOverride` is absent and `PiEngineConfig.context_window` is undefined
-- **THEN** the compaction threshold is `128000 - 16384 = 111616` tokens
+#### Scenario: ModelSettingsRepository and workspaceKey injected at construction
+- **WHEN** the engine factory creates a `PiEngine` in `index.ts`
+- **THEN** the `ModelSettingsRepository` instance and current `workspaceKey` are passed as constructor arguments
 
 ### Requirement: listModels() from config
 The Pi engine's `listModels()` SHALL query `GET {base_url}/v1/models` (not `/models`) on each configured provider. Each returned `EngineModelInfo` SHALL include `contextWindowEditable: true`. The `contextWindow` value SHALL be: server-reported `context_length` from `/v1/models` response if present, otherwise `null` (the caller resolves the final effective value using `model_settings` overrides and the engine default).
@@ -50,19 +50,38 @@ The Pi engine's `listModels()` SHALL query `GET {base_url}/v1/models` (not `/mod
 - **THEN** the returned `EngineModelInfo` has `contextWindow: null`
 
 ### Requirement: Session lifecycle
-One `AgentSession` is created per `conversationId` and reused across executions of the same conversation. When `compact()` is called and no live session exists for the conversation, the engine SHALL restore the session from the persisted `.jsonl` file at `~/.railyin/pi-sessions/<hash>.jsonl` via `getOrCreateSession()` rather than silently skipping. The restored session SHALL be stored in the session map so subsequent executions can reuse it. `compact()` SHALL check `session.isCompacting` before calling `session.compact()` and throw `"Compaction already in progress"` if true.
+One `AgentSession` is created per `conversationId` and reused across executions of the same conversation. The engine SHALL maintain a mutable `CommonToolContext` ref per conversation (`commonCtxRefs: Map<conversationId, CommonToolContext>`), created on first execution and mutated in-place on reuse (mirroring the `harnessContexts` pattern). When `compact()` is called and no live session exists for the conversation, the engine SHALL restore the session from the persisted `.jsonl` file at `~/.railyin/pi-sessions/<hash>.jsonl` via `getOrCreateSession()` rather than silently skipping. The restored session SHALL be stored in the session map so subsequent executions can reuse it. `compact()` SHALL check `session.isCompacting` before calling `session.compact()` and throw `"Compaction already in progress"` if true.
+
+On session reuse, the engine SHALL call `session.setActiveToolsByName(names)` to update the active tool set instead of assigning directly to `agent.state.tools`. The engine SHALL NOT call `buildAllTools()` on session reuse — tool closures remain valid because they close over the mutable `CommonToolContext` ref. The `runtime.worktreePath`, `runtime.lspManager`, and all `workflow` callback fields SHALL be updated in-place on the stored `commonCtxRef` before each execution.
 
 #### Scenario: Session creation on first execute
 - **WHEN** `execute()` is called with a `conversationId` not yet in the session map
 - **THEN** a new `AgentSession` is created via `SessionManager.open(sessionPath)` and stored in `Map<conversationId, AgentSession>`
+- **AND** a `CommonToolContext` is created and stored in `commonCtxRefs` for that `conversationId`
 
 #### Scenario: Session reuse on subsequent execute
 - **WHEN** `execute()` is called with the same `conversationId` again
 - **THEN** the existing `AgentSession` is reused (Pi retains its internal context/compaction state)
+- **AND** `session.setActiveToolsByName()` is called to sync the active tool set from the SDK registry
+- **AND** `agent.state.tools` is NOT directly assigned
+- **AND** `buildAllTools()` is NOT called again
+
+#### Scenario: CommonToolContext mutable fields updated on reuse
+- **WHEN** `execute()` is called for a conversation that already has a `commonCtxRef`
+- **THEN** `commonCtxRef.runtime.worktreePath` is updated to the current working directory
+- **AND** `commonCtxRef.runtime.lspManager` is updated to the current LSP manager
+- **AND** `commonCtxRef.workflow` callbacks are updated to the current execution's callbacks
+- **AND** tool closures see these updated values without rebuilding
+
+#### Scenario: SDK built-in tools remain active on turn 2+
+- **WHEN** `execute()` is called for a second time on the same conversation
+- **THEN** the `read`, `grep`, `find`, and `ls` SDK built-in tools remain callable
+- **AND** no "tool not found" error is returned for these tools
 
 #### Scenario: Session disposal on task archive
 - **WHEN** a task is archived or deleted
 - **THEN** `session.dispose()` is called and the entry is removed from the session map
+- **AND** the corresponding `commonCtxRef` is removed from `commonCtxRefs`
 
 #### Scenario: compact() restores session from disk when not in memory
 - **WHEN** `compact()` is called for a conversationId not in the session map
