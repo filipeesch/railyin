@@ -8,6 +8,7 @@ import type { AIToolDefinition } from "../../../ai/types.ts";
 import type { CommonToolContext, EngineEvent } from "../../types.ts";
 import type { HarnessContext } from "../harness/context.ts";
 import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from "../../common-tools.ts";
+import { normalizeToolArguments } from "../../normalize-args.ts";
 
 export interface SuspendRef {
   onSuspend?: (event: EngineEvent) => void;
@@ -18,26 +19,6 @@ export type CommonToolExecutor = (
   args: Record<string, unknown>,
   ctx: CommonToolContext
 ) => Promise<Awaited<ReturnType<typeof executeCommonTool>>>;
-
-/**
- * Normalize args from local LLMs that serialize array/object parameters as JSON strings.
- * For example, `{ questions: "[{...}]" }` → `{ questions: [{...}] }`.
- */
-function normalizeArgs(schema: { properties?: Record<string, { type?: string }> }, rawArgs: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...rawArgs };
-  for (const [key, prop] of Object.entries(schema.properties ?? {})) {
-    const val = result[key];
-    if (typeof val !== "string") continue;
-    if (prop.type === "array" || prop.type === "object") {
-      try {
-        result[key] = JSON.parse(val);
-      } catch {
-        // leave as-is
-      }
-    }
-  }
-  return result;
-}
 
 /**
  * Build Pi AgentTool wrappers for every common Railyin tool.
@@ -65,9 +46,12 @@ export function buildCommonTools(
       // Pi uses TypeBox schemas; JSON Schema from COMMON_TOOL_DEFINITIONS is structurally
       // compatible — cast as any since both represent JSON Schema objects.
       parameters: def.parameters as any,
+      // Normalize string-encoded array/object parameters before SDK validation.
+      // This handles models (Qwen, GPT, etc.) that serialize complex params as JSON strings.
+      prepareArguments: (args) => normalizeToolArguments(def.parameters as any, args as Record<string, unknown>),
       execute: async (_toolCallId, args, _signal) => {
-        const normalizedArgs = normalizeArgs(def.parameters as { properties?: Record<string, { type?: string }> }, args as Record<string, unknown>);
-        const result = await executor(def.name, normalizedArgs, ctx);
+        // Arguments already normalized via prepareArguments above.
+        const result = await executor(def.name, args as Record<string, unknown>, ctx);
         if (result.type === "suspend" && suspendRef?.onSuspend) {
           suspendRef.onSuspend({ type: "decision_request", payload: result.payload });
           return {
@@ -84,7 +68,6 @@ export function buildCommonTools(
           });
           text = `${text} [${opId}]`;
         }
-
 
         return {
           content: [{ type: "text", text }],
