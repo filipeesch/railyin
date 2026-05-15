@@ -12,7 +12,7 @@
 - [x] 2.1 Update `src/bun/engine/pi/tools/common.ts` to import `normalizeToolArguments` from new module
 - [x] 2.2 Add `prepareArguments: (args) => normalizeToolArguments(def.parameters, args)` to each tool built in `buildCommonTools()`
 - [x] 2.3 Remove or comment-out the existing `normalizeArgs` call inside the tool's `execute` function (now redundant — pre-normalization happens via prepareArguments)
-- [ ] 2.4 Verify the tool flow: prepareArguments → SDK validation → execute receives normalized args
+- [x] 2.4 Verify the tool flow: prepareArguments → SDK validation → execute receives normalized args
 
 ## 3. Verify existing tools still work
 
