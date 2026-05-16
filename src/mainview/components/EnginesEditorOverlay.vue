@@ -1,45 +1,50 @@
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="file-editor-overlay" @keydown.esc="onCancel">
-      <!-- Header -->
-      <div class="file-editor-overlay__header">
-        <div class="file-editor-overlay__title">
-          <i class="pi pi-server" />
-          <span>Engines</span>
-        </div>
-        <Button icon="pi pi-times" severity="secondary" text rounded aria-label="Close" @click="onCancel" />
+  <Dialog
+    :visible="visible"
+    modal
+    header="Engines"
+    :style="{ width: '80vw', height: '80vh' }"
+    :content-style="{ flex: 1, display: 'flex', flexDirection: 'column', padding: 0, minHeight: 0 }"
+    :closable="true"
+    @update:visible="(v) => { if (!v) emit('close'); }"
+  >
+    <template #header>
+      <div class="engines-modal__header">
+        <i class="pi pi-server" />
+        <span>Engines</span>
       </div>
+    </template>
 
-      <!-- Note -->
-      <div class="file-editor-overlay__note">
-        <i class="pi pi-info-circle" />
-        Editing <code>engines.yaml</code> — changes take effect after restarting Railyin.
-      </div>
+    <!-- Note -->
+    <div class="engines-modal__note">
+      <i class="pi pi-info-circle" />
+      Editing <code>engines.yaml</code> — changes take effect after restarting Railyin.
+    </div>
 
-      <!-- Loading state -->
-      <div v-if="loading" class="engines-editor-overlay__loading">
-        <i class="pi pi-spin pi-spinner" /> Loading engines.yaml…
-      </div>
+    <!-- Loading -->
+    <div v-if="loading" class="engines-modal__loading">
+      <i class="pi pi-spin pi-spinner" /> Loading engines.yaml…
+    </div>
 
-      <!-- Load error -->
-      <div v-else-if="loadError" class="file-editor-overlay__save-error">
-        <i class="pi pi-exclamation-triangle" /> {{ loadError }}
-      </div>
+    <!-- Load error -->
+    <div v-else-if="loadError" class="engines-modal__error">
+      <i class="pi pi-exclamation-triangle" /> {{ loadError }}
+    </div>
 
-      <!-- Editor -->
-      <div v-else ref="editorContainerEl" class="file-editor-overlay__editor" />
+    <!-- Editor -->
+    <div v-else ref="editorContainerEl" class="engines-modal__editor" />
 
-      <!-- Footer -->
-      <div class="file-editor-overlay__footer">
-        <span v-if="validationError" class="file-editor-overlay__validation-error">
+    <template #footer>
+      <div class="engines-modal__footer">
+        <span v-if="validationError" class="engines-modal__validation-error">
           <i class="pi pi-times-circle" /> {{ validationError }}
         </span>
-        <span v-else-if="!loading && !loadError" class="file-editor-overlay__validation-valid">
+        <span v-else-if="!loading && !loadError" class="engines-modal__validation-valid">
           <i class="pi pi-check-circle" /> Valid YAML
         </span>
-        <span v-else class="file-editor-overlay__validation-placeholder" />
-        <div class="file-editor-overlay__actions">
-          <Button label="Cancel" severity="secondary" text @click="onCancel" :disabled="saving" />
+        <span v-else class="engines-modal__validation-placeholder" />
+        <div class="engines-modal__actions">
+          <Button label="Cancel" severity="secondary" text @click="emit('close')" :disabled="saving" />
           <Button
             label="Save"
             icon="pi pi-save"
@@ -49,13 +54,11 @@
           />
         </div>
       </div>
-
-      <!-- Save error -->
-      <div v-if="saveError" class="file-editor-overlay__save-error">
+      <div v-if="saveError" class="engines-modal__save-error">
         <i class="pi pi-exclamation-triangle" /> {{ saveError }}
       </div>
-    </div>
-  </Teleport>
+    </template>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -64,6 +67,7 @@ import loader from "@monaco-editor/loader";
 import * as monaco from "monaco-editor";
 loader.config({ monaco });
 import * as jsYaml from "js-yaml";
+import Dialog from "primevue/dialog";
 import Button from "primevue/button";
 import { useDarkMode } from "../composables/useDarkMode";
 import { api } from "../rpc";
@@ -135,11 +139,7 @@ function validate(content: string) {
   }
 }
 
-// ─── Actions ─────────────────────────────────────────────────────────────────
-
-function onCancel() {
-  emit("close");
-}
+// ─── Save ─────────────────────────────────────────────────────────────────────
 
 async function onSave() {
   if (validationError.value || saving.value) return;
@@ -198,7 +198,27 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.engines-editor-overlay__loading {
+.engines-modal__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.engines-modal__note {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 1rem;
+  font-size: 0.8rem;
+  color: var(--p-text-muted-color, #64748b);
+  background: var(--p-surface-50, #f8fafc);
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  flex-shrink: 0;
+}
+
+.engines-modal__loading,
+.engines-modal__error {
   flex: 1;
   display: flex;
   align-items: center;
@@ -206,5 +226,71 @@ onBeforeUnmount(() => {
   gap: 0.5rem;
   font-size: 0.9rem;
   color: var(--p-text-muted-color, #64748b);
+  padding: 2rem;
+}
+
+.engines-modal__error {
+  color: var(--p-red-500, #ef4444);
+}
+
+.engines-modal__editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.engines-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 1rem;
+}
+
+.engines-modal__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.engines-modal__validation-valid {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--p-green-600, #16a34a);
+}
+
+.engines-modal__validation-error {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--p-red-500, #ef4444);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engines-modal__validation-placeholder {
+  flex: 1;
+}
+
+.engines-modal__save-error {
+  padding: 0.4rem 0;
+  font-size: 0.8rem;
+  color: var(--p-red-600, #dc2626);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+</style>
+
+<style>
+html.dark-mode .engines-modal__note {
+  background: var(--p-surface-800, #1e293b);
+  border-bottom-color: var(--p-surface-700, #334155);
 }
 </style>
