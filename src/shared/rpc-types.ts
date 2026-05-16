@@ -967,6 +967,16 @@ export type RailynAPI = {
     response: ChatSession;
   };
 
+  // Global config
+  "config.getEnginesYaml": {
+    params: Record<string, never>;
+    response: { yaml: string };
+  };
+  "config.saveEnginesYaml": {
+    params: { yaml: string };
+    response: { ok: true };
+  };
+
   // Decisions
   "decisions.list": {
     params: { conversationId: number };

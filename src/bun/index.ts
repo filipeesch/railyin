@@ -26,6 +26,7 @@ import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mcpHandlers } from "./handlers/mcp.ts";
 import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
 import { decisionHandlers } from "./handlers/decisions.ts";
+import { configHandlers } from "./handlers/config.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import { EngineRegistry } from "./engine/engine-registry.ts";
 import { CopilotEngine } from "./engine/copilot/engine.ts";
@@ -278,6 +279,7 @@ const allHandlers = {
   ...mcpHandlers(db),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
   ...decisionHandlers(db),
+  ...configHandlers(),
 } as Record<string, (params: unknown) => unknown>;
 
 const wsHandler = new WebSocketHandler(channel, getPtySession);

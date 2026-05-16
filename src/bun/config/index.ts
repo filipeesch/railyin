@@ -300,6 +300,12 @@ export function readGlobalConfig(): GlobalConfig {
 let _config: LoadedConfig | null = null;
 const _configsByKey = new Map<string, LoadedConfig>();
 let _configError: string | null = null;
+
+export function invalidateConfigCache(): void {
+  _configsByKey.clear();
+  _config = null;
+  _configError = null;
+}
 let _workspaceRegistry: WorkspaceRegistryEntry[] | null = null;
 const configContext = new AsyncLocalStorage<LoadedConfig>();
 
@@ -307,7 +313,7 @@ const configContext = new AsyncLocalStorage<LoadedConfig>();
 // In production builds this is undefined and the fallback to ~/.railyn/config is used.
 declare const __RAILYN_DEV_CONFIG_DIR__: string | undefined;
 
-function getGlobalConfigDir(): string {
+export function getGlobalConfigDir(): string {
   // 1. Explicit env override (used by tests and CI)
   if (process.env.RAILYN_CONFIG_DIR) return process.env.RAILYN_CONFIG_DIR;
   // 2. Dev build: absolute path baked in at bundle time via --define

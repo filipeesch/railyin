@@ -26,3 +26,19 @@ The system SHALL require a `config/engines.yaml` file that declares all availabl
 #### Scenario: Workspace-dir engines.yaml is silently ignored
 - **WHEN** `~/.railyn/workspaces/default/engines.yaml` exists but `~/.railyn/config/engines.yaml` does not
 - **THEN** the loader returns a configuration error (missing global engines.yaml) — the workspace-dir file is not read
+
+---
+
+### Requirement: UI — Engines editor accessible from settings gear icon
+
+The settings gear icon in the board header SHALL present a popup menu with two items: **Setup** (navigates to `/setup`) and **Engines** (opens the engines YAML editor).
+
+The engines editor SHALL:
+- Open as a full-screen overlay pre-populated with the live contents of `~/.railyn/config/engines.yaml`
+- Provide real-time YAML validation and disable the Save button while the YAML is invalid
+- Display a note that changes take effect after restarting Railyin
+- Write back to `~/.railyn/config/engines.yaml` on save and invalidate the in-memory config cache
+
+RPCs required:
+- `config.getEnginesYaml` — reads engines.yaml from the global config dir
+- `config.saveEnginesYaml` — validates YAML, writes file, invalidates config cache
