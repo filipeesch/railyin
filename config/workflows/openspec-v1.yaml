@@ -1,5 +1,5 @@
-id: openspec
-name: openspec
+id: openspec-v1
+name: Openspec
 wotkflow_instructions: │
   NEVER take assumptions, if something is not clear use decison_request tool to clarify.
   NEVER manage todo items and tasks directly in the database, always use the provided tools for that.

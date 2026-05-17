@@ -9,6 +9,7 @@ import {
   seedWorkflows,
   resolveWorkflowFilePath,
   listWorkflowFiles,
+  listBundledWorkflowIds,
   createWorkflowFile,
   deleteWorkflowFile,
   evaluateDeletable,
@@ -263,24 +264,65 @@ describe("deleteWorkflowFile", () => {
 
 describe("evaluateDeletable", () => {
   it("reports a free workflow as deletable", () => {
-    expect(evaluateDeletable("a", { a: 0 }, 3)).toEqual({ deletable: true, undeletableReason: null });
+    expect(evaluateDeletable("a", { a: 0 }, 3, false)).toEqual({ deletable: true, undeletableReason: null });
   });
 
   it("reports a referenced workflow as not deletable", () => {
-    const result = evaluateDeletable("a", { a: 2 }, 3);
+    const result = evaluateDeletable("a", { a: 2 }, 3, false);
     expect(result.deletable).toBe(false);
     expect(result.undeletableReason).toMatch(/board/i);
   });
 
   it("reports the last remaining workflow as not deletable", () => {
-    const result = evaluateDeletable("a", { a: 0 }, 1);
+    const result = evaluateDeletable("a", { a: 0 }, 1, false);
     expect(result.deletable).toBe(false);
     expect(result.undeletableReason).toMatch(/last/i);
   });
 
+  it("reports a bundled workflow as not deletable", () => {
+    const result = evaluateDeletable("a", { a: 0 }, 3, true);
+    expect(result.deletable).toBe(false);
+    expect(result.undeletableReason).toMatch(/bundled/i);
+  });
+
   it("prefers the referenced reason when a workflow is both referenced and last", () => {
-    const result = evaluateDeletable("a", { a: 1 }, 1);
+    const result = evaluateDeletable("a", { a: 1 }, 1, false);
     expect(result.deletable).toBe(false);
     expect(result.undeletableReason).toMatch(/board/i);
+  });
+
+  it("prefers the bundled reason over the referenced and last reasons", () => {
+    const result = evaluateDeletable("a", { a: 5 }, 1, true);
+    expect(result.deletable).toBe(false);
+    expect(result.undeletableReason).toMatch(/bundled/i);
+  });
+});
+
+// ─── listBundledWorkflowIds ───────────────────────────────────────────────────
+
+describe("listBundledWorkflowIds", () => {
+  function withBundledDir<T>(dir: string, fn: () => T): T {
+    const prev = process.env.RAILYN_BUNDLED_WORKFLOWS_DIR;
+    process.env.RAILYN_BUNDLED_WORKFLOWS_DIR = dir;
+    try {
+      return fn();
+    } finally {
+      if (prev === undefined) delete process.env.RAILYN_BUNDLED_WORKFLOWS_DIR;
+      else process.env.RAILYN_BUNDLED_WORKFLOWS_DIR = prev;
+    }
+  }
+
+  it("returns the ids of every workflow in the bundled source directory", () => {
+    const source = join(tmp, "bundled");
+    writeWorkflow(source, "delivery.yaml", "delivery");
+    writeWorkflow(source, "open-spec.yaml", "openspec");
+
+    const ids = withBundledDir(source, () => listBundledWorkflowIds());
+    expect([...ids].sort()).toEqual(["delivery", "openspec"]);
+  });
+
+  it("returns an empty set when the bundled source directory is missing", () => {
+    const ids = withBundledDir(join(tmp, "does-not-exist"), () => listBundledWorkflowIds());
+    expect(ids.size).toBe(0);
   });
 });

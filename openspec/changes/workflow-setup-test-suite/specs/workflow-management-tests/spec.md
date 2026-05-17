@@ -15,9 +15,9 @@ The test suite SHALL cover the `workflow.list` handler with an in-memory databas
 - **WHEN** a workflow is referenced by at least one board
 - **THEN** its `workflow.list` entry has `deletable` false and a non-null `undeletableReason`
 
-#### Scenario: The sole workflow is reported not deletable
-- **WHEN** only one workflow exists in the workspace
-- **THEN** its `workflow.list` entry has `deletable` false and a non-null `undeletableReason`
+#### Scenario: A bundled workflow is reported not deletable
+- **WHEN** a workflow is provided by the bundled source
+- **THEN** its `workflow.list` entry has `deletable` false and a bundled `undeletableReason`
 
 #### Scenario: A free workflow is reported deletable
 - **WHEN** a workflow has no referencing boards and is not the only workflow
@@ -49,8 +49,8 @@ The test suite SHALL cover the `workflow.delete` handler, including guard enforc
 - **WHEN** `workflow.delete` targets a workflow referenced by at least one board
 - **THEN** the handler throws and the file is not removed
 
-#### Scenario: delete is rejected for the last workflow
-- **WHEN** `workflow.delete` targets the only remaining workflow
+#### Scenario: delete is rejected for a bundled workflow
+- **WHEN** `workflow.delete` targets a workflow provided by the bundled source
 - **THEN** the handler throws and the file is not removed
 
 ### Requirement: The ghost-workflow regression is handler-tested

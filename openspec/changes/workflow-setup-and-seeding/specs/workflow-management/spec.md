@@ -74,6 +74,21 @@ The system SHALL never allow the workspace to reach zero workflows. When only on
 - **WHEN** a `workflow.delete` request targets the only remaining workflow
 - **THEN** the backend rejects the request with an error and the file is not removed
 
+### Requirement: Bundled workflows cannot be deleted
+A workflow whose id is provided by the bundled workflows source SHALL NOT be deletable — seeding would recreate it on the next configuration load. Its trash button SHALL be visible but disabled, and the backend SHALL reject a delete request for it. Bundled workflows remain fully editable through the YAML editor. The bundled reason takes precedence over the referenced-by-board and last-workflow reasons.
+
+#### Scenario: Bundled workflow has a disabled delete button
+- **WHEN** a workflow's id matches a workflow in the bundled source
+- **THEN** its trash button is rendered visible but disabled
+
+#### Scenario: Backend rejects deleting a bundled workflow
+- **WHEN** a `workflow.delete` request targets a bundled workflow
+- **THEN** the backend rejects the request with an error and the file is not removed
+
+#### Scenario: Bundled reason takes precedence over the other guards
+- **WHEN** a bundled workflow is also referenced by a board or is the last remaining workflow
+- **THEN** the undeletable reason reports that it is a bundled workflow
+
 ### Requirement: Adding a workflow asks only for a name
 An "+ Add Workflow" button SHALL create a new workflow. The creation dialog SHALL ask only for a name. The system SHALL derive an id from the name, write a new YAML file containing a minimal valid set of columns to the workspace workflows directory, and add the workflow to the list.
 

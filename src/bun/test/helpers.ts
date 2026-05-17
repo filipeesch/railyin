@@ -338,6 +338,14 @@ export function setupTestConfig(
     writeFileSync(join(workflowsDir, `extra-${idx}.yaml`), yaml);
   });
 
+  // Dedicated bundled-source dir holding only the default `delivery` template.
+  // Seeding from it is a no-op (delivery already exists in the workspace), and
+  // it makes `delivery` the single bundled (non-deletable) workflow while any
+  // extra workflows are treated as user-created.
+  const bundledWorkflowsDir = join(configDir, "bundled-workflows");
+  mkdirSync(bundledWorkflowsDir, { recursive: true });
+  writeFileSync(join(bundledWorkflowsDir, "delivery.yaml"), DEFAULT_WORKFLOWS_YAML);
+
   extraWorkspaces.forEach(({ key, yaml }) => {
     writeFileSync(join(configDir, `workspace.${key}.yaml`), yaml);
   });
@@ -348,9 +356,9 @@ export function setupTestConfig(
   process.env.RAILYN_DB = ":memory:";
   process.env.RAILYN_CONFIG_DIR = configDir;
   process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");
-  // Point workflow seeding at this config's own workflows dir so loadConfig()
-  // seeding is a no-op — the workspace has exactly the templates written above.
-  process.env.RAILYN_BUNDLED_WORKFLOWS_DIR = workflowsDir;
+  // Point workflow seeding at the dedicated bundled-source dir (delivery only),
+  // so loadConfig() seeding is a no-op and `delivery` is the bundled workflow.
+  process.env.RAILYN_BUNDLED_WORKFLOWS_DIR = bundledWorkflowsDir;
   resetConfig();
   loadConfig();
 

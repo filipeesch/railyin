@@ -66,32 +66,31 @@ describe("workflow.list", () => {
     expect(list.map((w) => w.id).sort()).toEqual(["delivery", "review", "sprint"]);
   });
 
+  it("marks the bundled workflow as not deletable", async () => {
+    configure(["sprint"]);
+    const list = await workflowHandlers(db, notify)["workflow.list"]({ workspaceKey: WS });
+    const delivery = list.find((w) => w.id === "delivery")!;
+    expect(delivery.deletable).toBe(false);
+    expect(delivery.undeletableReason).toMatch(/bundled/i);
+    // A user-created workflow with no boards is deletable.
+    const sprint = list.find((w) => w.id === "sprint")!;
+    expect(sprint.deletable).toBe(true);
+  });
+
   it("reports boardCount and disables delete for a referenced workflow", async () => {
     configure(["sprint"]);
     await boardHandlers(db)["boards.create"]({
       workspaceKey: WS,
       name: "Board A",
       projectKeys: [],
-      workflowTemplateId: "delivery",
+      workflowTemplateId: "sprint",
     });
 
     const list = await workflowHandlers(db, notify)["workflow.list"]({ workspaceKey: WS });
-    const delivery = list.find((w) => w.id === "delivery")!;
-    expect(delivery.boardCount).toBe(1);
-    expect(delivery.deletable).toBe(false);
-    expect(delivery.undeletableReason).toMatch(/board/i);
-
     const sprint = list.find((w) => w.id === "sprint")!;
-    expect(sprint.boardCount).toBe(0);
-    expect(sprint.deletable).toBe(true);
-  });
-
-  it("disables delete for the last remaining workflow", async () => {
-    configure();
-    const list = await workflowHandlers(db, notify)["workflow.list"]({ workspaceKey: WS });
-    expect(list).toHaveLength(1);
-    expect(list[0]!.deletable).toBe(false);
-    expect(list[0]!.undeletableReason).toMatch(/last/i);
+    expect(sprint.boardCount).toBe(1);
+    expect(sprint.deletable).toBe(false);
+    expect(sprint.undeletableReason).toMatch(/board/i);
   });
 });
 
@@ -126,7 +125,7 @@ describe("workflow.create", () => {
 });
 
 describe("workflow.delete", () => {
-  it("deletes a free workflow file and notifies", async () => {
+  it("deletes a free user-created workflow file and notifies", async () => {
     configure(["sprint"]);
     const handlers = workflowHandlers(db, notify);
     await handlers["workflow.delete"]({ workspaceKey: WS, templateId: "sprint" });
@@ -137,24 +136,24 @@ describe("workflow.delete", () => {
     expect(list.map((w) => w.id)).not.toContain("sprint");
   });
 
+  it("rejects deleting a bundled workflow", async () => {
+    configure(["sprint"]);
+    const handlers = workflowHandlers(db, notify);
+    await expect(handlers["workflow.delete"]({ workspaceKey: WS, templateId: "delivery" })).rejects.toThrow();
+    expect(existsSync(join(process.env.RAILYN_CONFIG_DIR!, "workflows", "delivery.yaml"))).toBe(true);
+  });
+
   it("rejects deleting a workflow referenced by a board", async () => {
     configure(["sprint"]);
     await boardHandlers(db)["boards.create"]({
       workspaceKey: WS,
       name: "Board A",
       projectKeys: [],
-      workflowTemplateId: "delivery",
+      workflowTemplateId: "sprint",
     });
 
     const handlers = workflowHandlers(db, notify);
-    await expect(handlers["workflow.delete"]({ workspaceKey: WS, templateId: "delivery" })).rejects.toThrow();
-    expect(existsSync(join(process.env.RAILYN_CONFIG_DIR!, "workflows", "delivery.yaml"))).toBe(true);
-  });
-
-  it("rejects deleting the last remaining workflow", async () => {
-    configure();
-    const handlers = workflowHandlers(db, notify);
-    await expect(handlers["workflow.delete"]({ workspaceKey: WS, templateId: "delivery" })).rejects.toThrow();
-    expect(existsSync(join(process.env.RAILYN_CONFIG_DIR!, "workflows", "delivery.yaml"))).toBe(true);
+    await expect(handlers["workflow.delete"]({ workspaceKey: WS, templateId: "sprint" })).rejects.toThrow();
+    expect(existsSync(join(process.env.RAILYN_CONFIG_DIR!, "workflows", "extra-0.yaml"))).toBe(true);
   });
 });

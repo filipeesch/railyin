@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Bundled-source resolution and file discovery are unit-tested
-The test suite SHALL cover `getBundledWorkflowsDir`, `listWorkflowFiles`, and `resolveWorkflowFilePath` from the `src/bun/config/workflows.ts` module.
+The test suite SHALL cover `getBundledWorkflowsDir`, `listWorkflowFiles`, `listBundledWorkflowIds`, and `resolveWorkflowFilePath` from the `src/bun/config/workflows.ts` module.
 
 #### Scenario: getBundledWorkflowsDir resolves to an existing directory
 - **WHEN** `getBundledWorkflowsDir()` is called in the test environment
@@ -18,6 +18,10 @@ The test suite SHALL cover `getBundledWorkflowsDir`, `listWorkflowFiles`, and `r
 #### Scenario: resolveWorkflowFilePath matches by id when the filename differs
 - **WHEN** a workflow file's name does not match its `id` field
 - **THEN** `resolveWorkflowFilePath` still locates the file by scanning parsed `id` values, and returns `null` for an unknown id
+
+#### Scenario: listBundledWorkflowIds returns the ids of the bundled source
+- **WHEN** `listBundledWorkflowIds` runs against a configured bundled source directory
+- **THEN** it returns the set of workflow ids in that directory, and an empty set when the directory is missing
 
 ### Requirement: seedWorkflows copy-if-absent and fallback branches are unit-tested
 The test suite SHALL exercise `seedWorkflows(targetDir, sourceDir)` with an injected `sourceDir`, covering every copy and fallback branch.
@@ -83,6 +87,14 @@ The test suite SHALL cover the pure `evaluateDeletable` function for every guard
 #### Scenario: Referenced reason wins when both guards apply
 - **WHEN** a workflow is both referenced by a board and the only remaining workflow
 - **THEN** `evaluateDeletable` reports the referenced-by-boards reason
+
+#### Scenario: A bundled workflow is not deletable
+- **WHEN** `evaluateDeletable` is called with the bundled flag set
+- **THEN** it reports the workflow as not deletable with a bundled reason
+
+#### Scenario: The bundled reason wins over the referenced and last reasons
+- **WHEN** a workflow is bundled and also referenced by a board and the only one
+- **THEN** `evaluateDeletable` reports the bundled reason
 
 ### Requirement: The no-phantom-delivery invariant is integration-tested
 The test suite SHALL include a config-loader test proving the in-memory delivery fallback was removed.

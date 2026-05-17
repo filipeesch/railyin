@@ -5,6 +5,7 @@ import { getConfigDir, resetConfig, loadConfig } from "../config/index.ts";
 import {
   resolveWorkflowFilePath,
   listWorkflowFiles,
+  listBundledWorkflowIds,
   createWorkflowFile,
   deleteWorkflowFile,
   evaluateDeletable,
@@ -30,8 +31,9 @@ export function workflowHandlers(db: Database, notifyReloaded: () => void) {
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const files = listWorkflowFiles(getConfigDir(workspaceKey));
       const counts = boardCountsByWorkflow(db, workspaceKey);
+      const bundled = listBundledWorkflowIds();
       return files.map((wf) => {
-        const guard = evaluateDeletable(wf.id, counts, files.length);
+        const guard = evaluateDeletable(wf.id, counts, files.length, bundled.has(wf.id));
         return {
           id: wf.id,
           name: wf.name,
@@ -63,7 +65,12 @@ export function workflowHandlers(db: Database, notifyReloaded: () => void) {
       // Re-validate the delete guard server-side.
       const files = listWorkflowFiles(configDir);
       const counts = boardCountsByWorkflow(db, workspaceKey);
-      const guard = evaluateDeletable(params.templateId, counts, files.length);
+      const guard = evaluateDeletable(
+        params.templateId,
+        counts,
+        files.length,
+        listBundledWorkflowIds().has(params.templateId),
+      );
       if (!guard.deletable) {
         throw new Error(guard.undeletableReason ?? "This workflow cannot be deleted");
       }

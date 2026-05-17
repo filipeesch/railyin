@@ -103,6 +103,27 @@ export function resolveWorkflowFilePath(configDir: string, templateId: string): 
   return null;
 }
 
+/**
+ * Ids of the workflows provided by the bundled source directory. These are
+ * seeded into every workspace and are treated as non-deletable (they would be
+ * re-seeded on the next config load anyway).
+ */
+export function listBundledWorkflowIds(): Set<string> {
+  const dir = getBundledWorkflowsDir();
+  const ids = new Set<string>();
+  if (!existsSync(dir)) return ids;
+  for (const fileName of readdirSync(dir)) {
+    if (!isWorkflowFile(fileName)) continue;
+    try {
+      const parsed = yaml.load(readFileSync(join(dir, fileName), "utf-8")) as { id?: string } | null;
+      if (parsed?.id) ids.add(parsed.id);
+    } catch {
+      // Skip unparseable files.
+    }
+  }
+  return ids;
+}
+
 /** Discover all valid workflow templates in a config directory. */
 export function listWorkflowFiles(configDir: string): { id: string; name: string }[] {
   const workflowsDir = join(configDir, "workflows");
@@ -165,15 +186,19 @@ export function deleteWorkflowFile(configDir: string, templateId: string): void 
 }
 
 /**
- * Pure delete-guard evaluation. A workflow cannot be deleted while it is
- * referenced by a board, or while it is the only workflow left. The
- * referenced-by-board reason takes precedence when both apply.
+ * Pure delete-guard evaluation. A workflow cannot be deleted while it is a
+ * bundled workflow, while it is referenced by a board, or while it is the only
+ * workflow left. The bundled reason takes precedence, then referenced, then last.
  */
 export function evaluateDeletable(
   templateId: string,
   boardCountById: Record<string, number>,
   totalWorkflows: number,
+  isBundled: boolean,
 ): { deletable: boolean; undeletableReason: string | null } {
+  if (isBundled) {
+    return { deletable: false, undeletableReason: "Bundled workflow — cannot be deleted" };
+  }
   const count = boardCountById[templateId] ?? 0;
   if (count > 0) {
     return { deletable: false, undeletableReason: `In use by ${count} board${count === 1 ? "" : "s"}` };

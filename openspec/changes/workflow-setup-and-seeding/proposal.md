@@ -7,7 +7,7 @@ Workflow templates today can only be edited via a pencil button buried in the bo
 - Remove the workflow-edit pencil button from the board header.
 - Add a **Workflows** tab to the setup screen, positioned immediately before the **Boards** tab, that lists every workflow template for the current workspace (name + id) with per-row edit and delete actions and an "+ Add Workflow" button.
 - The pencil opens the existing YAML editor overlay; deletion requires a confirmation dialog.
-- Delete is blocked — button visible but disabled — when a workflow is referenced by at least one board in the workspace, or when it is the last remaining workflow. Guards are enforced server-side, not just in the UI.
+- Delete is blocked — button visible but disabled — when a workflow is a bundled workflow, is referenced by at least one board in the workspace, or is the last remaining workflow. Guards are enforced server-side, not just in the UI. Bundled workflows stay fully editable; only their deletion is disallowed (seeding would recreate the file otherwise).
 - "+ Add Workflow" asks only for a name, derives an id, and writes a new YAML file with a minimal valid 3-column set (Backlog → In Progress → Done) to the workspace workflows directory.
 - Add `workflow.list`, `workflow.create`, and `workflow.delete` RPC methods.
 - On fresh install, seed the workspace workflows directory from **every** YAML file in the bundled `config/workflows` source directory, copying each file only when its filename is not already present (user customizations are never overwritten). If the bundled source is missing or empty, fall back to writing a minimal delivery workflow.
