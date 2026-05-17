@@ -54,8 +54,9 @@
           text
           rounded
           aria-label="Settings"
-          @click="router.push('/setup')"
+          @click="(e) => settingsMenu.toggle(e)"
         />
+        <Menu ref="settingsMenu" :model="settingsMenuItems" popup />
         <Button
           icon="pi pi-comments"
           severity="secondary"
@@ -136,6 +137,13 @@
       @saved="onWorkflowSaved"
     />
 
+    <!-- Engines YAML editor -->
+    <EnginesEditorOverlay
+      :visible="enginesEditorVisible"
+      @close="enginesEditorVisible = false"
+      @saved="enginesEditorVisible = false"
+    />
+
     <!-- Task Detail Overlay (for both create and edit) -->
     <TaskDetailOverlay
       v-if="boardStore.activeBoardId"
@@ -186,6 +194,7 @@ import { useColumnTransitions } from "../composables/useColumnTransitions";
 import { api, onWorkflowReloaded } from "../rpc";
 import Select from "primevue/select";
 import Button from "primevue/button";
+import Menu from "primevue/menu";
 import Badge from "primevue/badge";
 import { useBoardStore } from "../stores/board";
 import { useTaskStore } from "../stores/task";
@@ -199,6 +208,7 @@ import ConversationDrawer from "../components/ConversationDrawer.vue";
 import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
+import EnginesEditorOverlay from "../components/EnginesEditorOverlay.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
 import CodeServerOverlay from "../components/CodeServerOverlay.vue";
 import ChatSidebar from "../components/ChatSidebar.vue";
@@ -224,6 +234,12 @@ const { isDark, toggle: toggleDark } = useDarkMode();
 
 const showCreateTask = ref(false);
 const activeTaskForOverlay = ref<number | null>(null);
+const enginesEditorVisible = ref(false);
+const settingsMenu = ref();
+const settingsMenuItems = [
+  { label: "Setup", icon: "pi pi-wrench", command: () => router.push("/setup") },
+  { label: "Engines", icon: "pi pi-server", command: () => { enginesEditorVisible.value = true; } },
+];
 const dragOverColumnId = ref<string | null>(null);
 const dropIndex = ref<number | null>(null);
 const dropIndicatorY = ref<number>(0);

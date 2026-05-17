@@ -102,11 +102,19 @@ The database schema SHALL store `workspace_key TEXT` (the file-derived string ke
 - **THEN** it reads `workspace_key` directly without reversing a numeric hash
 
 ### Requirement: Default config files are created on first launch
-The system SHALL auto-create `workspace.yaml` and the default workflow YAML when the config directory does not exist, so users can start without manual setup.
+The system SHALL auto-create workspace-scoped config files (`workspace.yaml`, `workflows/delivery.yaml`) in the workspace config directory when they are absent, so users can start without manual setup. Separately, the system SHALL auto-create `engines.yaml` in the **global config directory** (`~/.railyn/config/`) when it is absent. These two auto-creation concerns MUST be handled by separate functions: `ensureWorkspaceConfigExists(configDir)` for workspace files and `ensureGlobalConfigExists(globalConfigDir)` for the engines file. The `workspace.create` RPC handler SHALL call only `ensureWorkspaceConfigExists` — creating a new workspace MUST NOT write or modify the global engines file.
 
-#### Scenario: Config directory created automatically
-- **WHEN** the application starts and `~/.railyn/config/` does not exist
-- **THEN** the directory and default config files are created with safe defaults (`provider: fake`)
+#### Scenario: Workspace config files created automatically on first launch
+- **WHEN** the application starts and the workspace config directory does not contain `workspace.yaml`
+- **THEN** `workspace.yaml` and `workflows/delivery.yaml` are created in the workspace config directory with safe defaults
+
+#### Scenario: Global engines.yaml created automatically when absent
+- **WHEN** the application starts and `~/.railyn/config/engines.yaml` does not exist
+- **THEN** a default `engines.yaml` is created in the global config directory (`~/.railyn/config/`)
+
+#### Scenario: Creating a new workspace does not touch global engines.yaml
+- **WHEN** the user creates a new workspace via the `workspace.create` RPC
+- **THEN** only workspace-scoped files (`workspace.yaml`, `workflows/`) are created; `engines.yaml` in the global config dir is not modified
 
 ### Requirement: Workspace configuration supports optional allowed_engines filter
 The workspace YAML schema SHALL support an optional `allowed_engines` field containing a list of engine IDs. When present, only the listed engines (as declared in `engines.yaml`) SHALL be available for that workspace. When absent, all engines from `engines.yaml` are available.

@@ -300,6 +300,12 @@ export function readGlobalConfig(): GlobalConfig {
 let _config: LoadedConfig | null = null;
 const _configsByKey = new Map<string, LoadedConfig>();
 let _configError: string | null = null;
+
+export function invalidateConfigCache(): void {
+  _configsByKey.clear();
+  _config = null;
+  _configError = null;
+}
 let _workspaceRegistry: WorkspaceRegistryEntry[] | null = null;
 const configContext = new AsyncLocalStorage<LoadedConfig>();
 
@@ -307,7 +313,7 @@ const configContext = new AsyncLocalStorage<LoadedConfig>();
 // In production builds this is undefined and the fallback to ~/.railyn/config is used.
 declare const __RAILYN_DEV_CONFIG_DIR__: string | undefined;
 
-function getDefaultConfigDir(): string {
+export function getGlobalConfigDir(): string {
   // 1. Explicit env override (used by tests and CI)
   if (process.env.RAILYN_CONFIG_DIR) return process.env.RAILYN_CONFIG_DIR;
   // 2. Dev build: absolute path baked in at bundle time via --define
@@ -435,7 +441,7 @@ export function getWorkspaceRegistry(): WorkspaceRegistryEntry[] {
 
 export function getConfigDir(workspaceKey?: string): string {
   const entry = getWorkspaceRegistry().find((item) => item.key === (workspaceKey ?? getWorkspaceRegistry()[0]?.key));
-  return entry?.configDir ?? getDefaultConfigDir();
+  return entry?.configDir ?? getGlobalConfigDir();
 }
 
 // ─── Default file content ────────────────────────────────────────────────────
@@ -555,7 +561,16 @@ export function loadEnginesConfig(configDir: string): EngineEntry[] | null {
   return entries;
 }
 
-export function ensureConfigExists(configDir: string): void {
+export function ensureGlobalConfigExists(globalConfigDir: string): void {
+  mkdirSync(globalConfigDir, { recursive: true });
+  const enginesFile = join(globalConfigDir, "engines.yaml");
+  if (!existsSync(enginesFile)) {
+    writeFileSync(enginesFile, "engines:\n  - id: copilot\n    type: copilot\n", "utf-8");
+    console.log(`[config] Created default engines.yaml at ${enginesFile}`);
+  }
+}
+
+export function ensureWorkspaceConfigExists(configDir: string): void {
   const workspaceFile = join(configDir, getWorkspaceFileName());
   const workflowsDir = join(configDir, "workflows");
   const deliveryFile = join(workflowsDir, "delivery.yaml");
@@ -569,11 +584,6 @@ export function ensureConfigExists(configDir: string): void {
   if (!existsSync(deliveryFile)) {
     writeFileSync(deliveryFile, DEFAULT_DELIVERY_YAML, "utf-8");
     console.log(`[config] Created default delivery.yaml at ${deliveryFile}`);
-  }
-  const enginesFile = join(configDir, "engines.yaml");
-  if (!existsSync(enginesFile)) {
-    writeFileSync(enginesFile, "engines:\n  - id: copilot\n    type: copilot\n", "utf-8");
-    console.log(`[config] Created default engines.yaml at ${enginesFile}`);
   }
 }
 
@@ -593,9 +603,11 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     return { config: cached, error: null };
   }
   const globalConfig = readGlobalConfig();
+  const globalConfigDir = getGlobalConfigDir();
 
   // Auto-create default config files if they don't exist yet
-  ensureConfigExists(configDir);
+  ensureWorkspaceConfigExists(configDir);
+  ensureGlobalConfigExists(globalConfigDir);
 
   const workspaceFileName = getWorkspaceFileName();
   const workspaceFile = join(configDir, workspaceFileName);
@@ -632,8 +644,7 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     return { config: null, error: _configError };
   }
 
-  const globalConfigDir = getDefaultConfigDir();
-  const engines = loadEnginesConfig(configDir) ?? loadEnginesConfig(globalConfigDir);
+  const engines = loadEnginesConfig(globalConfigDir);
 
   if (!engines || engines.length === 0) {
     _configError = [

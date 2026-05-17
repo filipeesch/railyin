@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "fs";
 import { join } from "path";
-import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml, sanitizeWorkspaceKey, ensureConfigExists, type WorkspaceYaml } from "../config/index.ts";
+import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml, sanitizeWorkspaceKey, ensureWorkspaceConfigExists, type WorkspaceYaml } from "../config/index.ts";
 import { getHomeDir, getDataDir } from "../utils/platform.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { clearProviderCache } from "../ai/index.ts";
@@ -64,7 +64,7 @@ export function workspaceHandlers(db: Database) {
       const key = sanitizeWorkspaceKey(params.name, "workspace");
       const configDir = join(workspacesRoot, key);
       if (existsSync(configDir)) throw new Error(`Workspace already exists: ${key}`);
-      ensureConfigExists(configDir);
+      ensureWorkspaceConfigExists(configDir);
       resetConfig();
       return { key, name: params.name.trim() };
     },

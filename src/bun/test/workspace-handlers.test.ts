@@ -97,6 +97,46 @@ describe("workspaceHandlers", () => {
     cleanupConfig = setupTestConfig().cleanup;
   });
 
+  it("GEC-EXT-1: loadConfig with RAILYN_DATA_DIR places engines.yaml in global dir only", () => {
+    cleanupConfig();
+
+    const dataDir = mkdtempSync(join(tmpdir(), "railyn-data-"));
+    process.env.RAILYN_DATA_DIR = dataDir;
+    process.env.RAILYN_DB = ":memory:";
+    delete process.env.RAILYN_CONFIG_DIR;
+
+    resetConfig();
+    loadConfig();
+
+    const globalConfigDir = join(dataDir, "config");
+    const workspaceDir = join(dataDir, "workspaces", "default");
+    expect(existsSync(join(globalConfigDir, "engines.yaml"))).toBe(true);
+    expect(existsSync(join(workspaceDir, "engines.yaml"))).toBe(false);
+
+    rmSync(dataDir, { recursive: true, force: true });
+    delete process.env.RAILYN_DATA_DIR;
+    delete process.env.RAILYN_DB;
+    resetConfig();
+    cleanupConfig = setupTestConfig().cleanup;
+  });
+
+  it("GEC-7: workspace.create does not create engines.yaml in new workspace dir", async () => {
+    const workspacesDir = mkdtempSync(join(tmpdir(), "railyn-ws-"));
+    process.env.RAILYN_WORKSPACES_DIR = workspacesDir;
+
+    const handlers = workspaceHandlers(db);
+    await handlers["workspace.create"]({ name: "new-ws" });
+
+    const newWsDir = join(workspacesDir, "new-ws");
+    const wsFile = join(newWsDir, "workspace.test.yaml");
+    expect(existsSync(wsFile)).toBe(true);
+    expect(existsSync(join(newWsDir, "engines.yaml"))).toBe(false);
+
+    rmSync(workspacesDir, { recursive: true, force: true });
+    delete process.env.RAILYN_WORKSPACES_DIR;
+    resetConfig();
+  });
+
   it("workspace.getConfig returns defaultModel and available engines", async () => {
     const handlers = workspaceHandlers(db);
     const result = await handlers["workspace.getConfig"]({});

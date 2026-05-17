@@ -1,7 +1,4 @@
-## Purpose
-Defines the `engines.yaml` file format for declaring all available engine instances globally, and the UI for editing it.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: engines.yaml declares all engine instances globally
 The system SHALL require a `config/engines.yaml` file that declares all available engine instances. The file MUST be located in the global config directory (`~/.railyn/config/engines.yaml`). The system SHALL NOT read `engines.yaml` from any workspace-specific directory; workspace-dir copies are silently ignored. Each entry SHALL have: `id` (string — unique identifier, equals the engine type in v1), `type` (one of `copilot`, `claude`, `opencode`, `scripted`, `pi`), and optional engine-specific fields (`model`, `providers`). The first entry in the list SHALL be the default engine used when no model is set on a conversation. When `engines.yaml` is absent or contains zero valid engine entries, the system SHALL refuse to start with a clear configuration error.
@@ -29,6 +26,8 @@ The system SHALL require a `config/engines.yaml` file that declares all availabl
 #### Scenario: Workspace-dir engines.yaml is silently ignored
 - **WHEN** `~/.railyn/workspaces/default/engines.yaml` exists but `~/.railyn/config/engines.yaml` does not
 - **THEN** the loader returns a configuration error (missing global engines.yaml) — the workspace-dir file is not read
+
+---
 
 ### Requirement: UI — Engines editor accessible from settings gear icon
 
