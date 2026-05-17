@@ -1,29 +1,14 @@
 ## Purpose
-The workflow YAML editor allows users to edit workflow template configuration files directly from the board UI, without leaving the app or editing files manually on disk.
+The workflow YAML editor allows users to edit workflow template configuration files directly from the setup screen, without leaving the app or editing files manually on disk.
 
 ## Requirements
 
-### Requirement: Board header exposes a pencil button to edit the active workflow
-The system SHALL render a pencil (edit) icon button in the board header, immediately to the right of the board selector dropdown. The button SHALL be disabled when no board is active. Clicking it SHALL open the workflow YAML editor overlay for the active board's workflow template.
-
-#### Scenario: Pencil button is visible when a board is active
-- **WHEN** the user has an active board selected
-- **THEN** a pencil icon button appears to the right of the board selector in the board header
-
-#### Scenario: Pencil button is disabled with no active board
-- **WHEN** no board is selected
-- **THEN** the pencil button is rendered as disabled and non-interactive
-
-#### Scenario: Clicking the pencil button opens the editor overlay
-- **WHEN** the user clicks the pencil button
-- **THEN** the workflow YAML editor overlay opens, pre-loaded with the raw YAML of the active board's workflow template
-
 ### Requirement: Workflow YAML editor overlay displays and edits the template file
-The system SHALL provide a full-screen overlay containing a Monaco editor pre-loaded with the raw YAML content of the active board's workflow template. The overlay SHALL display the template name as its title, a close button, and Save / Cancel actions.
+The system SHALL provide a full-screen overlay containing a Monaco editor pre-loaded with the raw YAML content of the workflow template selected from the Workflows tab. The overlay SHALL display the template name as its title, a close button, and Save / Cancel actions.
 
 #### Scenario: Overlay loads the correct YAML
-- **WHEN** the workflow YAML editor overlay opens
-- **THEN** the Monaco editor is populated with the raw YAML of the active board's workflowTemplateId file
+- **WHEN** the workflow YAML editor overlay opens from a workflow row's pencil button
+- **THEN** the Monaco editor is populated with the raw YAML of that workflow's template file
 
 #### Scenario: Overlay can be dismissed without saving
 - **WHEN** the user clicks Cancel or presses Escape
