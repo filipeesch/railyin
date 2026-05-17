@@ -1,58 +1,37 @@
 id: delivery
 name: Delivery Flow
-# workflow_instructions: |
-#   You are an AI assistant helping deliver software tasks end-to-end.
-#   These instructions apply to every column in this workflow.
-# Group columns that share a horizontal board slot (visual-only — no engine effect).
-groups:
-  - label: Active
-    columns: [plan, in_progress]
 columns:
   - id: backlog
     label: Backlog
     description: Tasks waiting to be started
+    allowed_transitions:
+      - plan
 
   - id: plan
     label: Plan
     description: Define what needs to be done
-    # allowed_transitions restricts where tasks in this column can move.
-    # If omitted, all transitions are open (default, backward-compatible).
-    # Example: only allow moving to in_progress from plan.
-    # allowed_transitions: [in_progress]
     on_enter_prompt: |
       Create a clear, detailed implementation plan for this task.
       Break it down into concrete steps. Focus on WHAT needs to be
-      done and WHY, not implementation details. If you need
-      clarification from the user, use the ask_me tool.
+      done and WHY, not implementation details.
     stage_instructions: |
-      Lets keep the plan focused on WHAT and WHY. Avoid implementation details.
-    # Tools available to the model in this column (group names or individual tool names):
-    tools:
-      - read
-      - interactions
+      You are in the Planning phase. Do NOT write code or
+      implementation details. Focus only on understanding the
+      problem and defining what needs to be done.
+    allowed_transitions:
+      - in_progress
 
   - id: in_progress
     label: In Progress
     description: Active development
-    # WIP limit — block cards when 3 are already in this column.
-    limit: 3
     on_enter_prompt: |
-      Implement this task according to the plan.
-      In the end:
-        1 - build the app and execute tests
-        2 - Optmize the implementation
-        3 - Remove any dead code
-        4 - Execute the tests
-        5 - Go back to step 2 two times
-    stage_instructions:
-    # Tools available to the model in this column (group names or individual tool names):
-    tools:
-      - read
-      - write
-      - web
-      - shell
-      - interactions
-      - agents
+      Implement this task according to the plan. Work in the
+      provided Git worktree. Make focused, clean changes.
+    stage_instructions: |
+      You are in the Implementation phase. Work in the Git
+      worktree provided. Make minimal, focused changes.
+    allowed_transitions:
+      - in_review
 
   - id: in_review
     label: In Review
@@ -62,10 +41,9 @@ columns:
       reviewer attention, and flag any open questions or concerns.
     stage_instructions: |
       You are in the Review phase. Summarize changes clearly.
-      Do not make further code changes unless the reviewer
-      requests them.
+    allowed_transitions:
+      - done
 
   - id: done
     label: Done
     description: Task complete
-    on_enter_prompt: merge the current branch to main branch, solve possible conflicts. use ask_me tool if the conflicts resolution is not clear. remove the task worktree.
