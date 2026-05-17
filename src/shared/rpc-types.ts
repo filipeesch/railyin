@@ -471,6 +471,18 @@ export interface WorkflowTemplate {
   groups?: WorkflowColumnGroup[];
 }
 
+/** A workflow template summarized for the Workflows setup tab, with delete-guard metadata. */
+export interface WorkflowSummary {
+  id: string;
+  name: string;
+  /** Number of boards in the workspace referencing this workflow. */
+  boardCount: number;
+  /** False when the workflow is referenced by a board or is the last remaining workflow. */
+  deletable: boolean;
+  /** Human-readable reason why the workflow cannot be deleted, or null when it can. */
+  undeletableReason: string | null;
+}
+
 // ─── LSP setup types ─────────────────────────────────────────────────────────
 
 export interface LspInstallOption {
@@ -804,6 +816,18 @@ export type RailynAPI = {
   };
 
   // Workflow
+  "workflow.list": {
+    params: { workspaceKey?: string };
+    response: WorkflowSummary[];
+  };
+  "workflow.create": {
+    params: { workspaceKey?: string; name: string };
+    response: { id: string };
+  };
+  "workflow.delete": {
+    params: { workspaceKey?: string; templateId: string };
+    response: { ok: true };
+  };
   "workflow.getYaml": {
     params: { workspaceKey?: string; templateId: string };
     response: { yaml: string };

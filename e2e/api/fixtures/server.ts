@@ -120,6 +120,9 @@ export async function startServer(): Promise<TestServer> {
             RAILYN_DEBUG: "1",
             RAILYN_WORKSPACES_DIR: workspacesDir,
             RAILYN_TEST_EXECUTION_ENGINE: "mock",
+            // Point workflow seeding at the test workspace's own workflows dir so
+            // seeding is a no-op and the workspace has exactly the templates above.
+            RAILYN_BUNDLED_WORKFLOWS_DIR: join(workspacesDir, "test-ws", "workflows"),
         },
         stdout: "pipe",
         stderr: "pipe",

@@ -272,7 +272,7 @@ const allHandlers = {
   ...modelHandlers(db, orchestrator, modelSettingsRepo),
   ...engineHandlers(orchestrator),
   ...conversationHandlers(db, orchestrator, modelSettingsRepo),
-  ...workflowHandlers(notifier.notifyWorkflowReloaded.bind(notifier)),
+  ...workflowHandlers(db, notifier.notifyWorkflowReloaded.bind(notifier)),
   ...launchHandlers(db),
   ...lspHandlers(db, wsRepo, undefined, undefined, channel.broadcast.bind(channel)),
   ...codeServerHandlers(db, channel.broadcast.bind(channel), serverPort),

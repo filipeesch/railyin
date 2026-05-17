@@ -29,15 +29,6 @@
           class="board-selector"
           @change="onBoardChange"
         />
-        <Button
-          icon="pi pi-pencil"
-          severity="secondary"
-          text
-          rounded
-          aria-label="Edit workflow"
-          :disabled="!boardStore.activeBoard"
-          @click="onEditWorkflow"
-        />
       </div>
       <div class="board-header__right">
         <Button
@@ -125,17 +116,6 @@
     <!-- Code server overlay (z-index: 800, behind chat drawer) -->
     <CodeServerOverlay />
 
-    <!-- Workflow YAML editor overlay -->
-    <WorkflowEditorOverlay
-      v-if="workflowEditor.templateId"
-      :visible="workflowEditor.visible"
-      :workspace-key="workspaceStore.activeWorkspaceKey ?? undefined"
-      :template-id="workflowEditor.templateId"
-      :template-name="workflowEditor.templateName"
-      :initial-yaml="workflowEditor.yaml"
-      @close="workflowEditor.visible = false"
-      @saved="onWorkflowSaved"
-    />
 
     <!-- Engines YAML editor -->
     <EnginesEditorOverlay
@@ -207,7 +187,6 @@ import BoardColumn from "../components/BoardColumn.vue";
 import ConversationDrawer from "../components/ConversationDrawer.vue";
 import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
-import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 import EnginesEditorOverlay from "../components/EnginesEditorOverlay.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
 import CodeServerOverlay from "../components/CodeServerOverlay.vue";
@@ -255,43 +234,11 @@ async function onFooterClick() {
     terminalStore.togglePanel();
   }
 }
-// ─── Workflow editor state ────────────────────────────────────────────────────
-
-const workflowEditor = ref({
-  visible: false,
-  templateId: "",
-  templateName: "",
-  yaml: "",
-});
-
 const visibleBoards = computed(() => {
   const workspaceKey = workspaceStore.activeWorkspaceKey;
   if (workspaceKey == null) return boardStore.boards;
   return boardStore.boards.filter((board) => board.workspaceKey === workspaceKey);
 });
-
-async function onEditWorkflow() {
-  const board = boardStore.activeBoard;
-  if (!board) return;
-  try {
-    const { yaml } = await api("workflow.getYaml", {
-      workspaceKey: workspaceStore.activeWorkspaceKey ?? undefined,
-      templateId: board.workflowTemplateId,
-    });
-    workflowEditor.value = {
-      visible: true,
-      templateId: board.workflowTemplateId,
-      templateName: board.template.name,
-      yaml,
-    };
-  } catch (err) {
-    console.error("[workflow] Failed to load YAML:", err);
-  }
-}
-
-async function onWorkflowSaved() {
-  await boardStore.loadBoards();
-}
 
 // Reload board when backend notifies workflow was saved
 onWorkflowReloaded(async () => {

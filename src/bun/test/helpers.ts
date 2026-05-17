@@ -348,6 +348,9 @@ export function setupTestConfig(
   process.env.RAILYN_DB = ":memory:";
   process.env.RAILYN_CONFIG_DIR = configDir;
   process.env.RAILYN_SESSION_MEMORY_DIR = join(configDir, "tasks");
+  // Point workflow seeding at this config's own workflows dir so loadConfig()
+  // seeding is a no-op — the workspace has exactly the templates written above.
+  process.env.RAILYN_BUNDLED_WORKFLOWS_DIR = workflowsDir;
   resetConfig();
   loadConfig();
 
@@ -358,6 +361,7 @@ export function setupTestConfig(
       delete process.env.RAILYN_CONFIG_DIR;
       delete process.env.RAILYN_SESSION_MEMORY_DIR;
       delete process.env.RAILYN_DB;
+      delete process.env.RAILYN_BUNDLED_WORKFLOWS_DIR;
       resetConfig();
     },
   };
