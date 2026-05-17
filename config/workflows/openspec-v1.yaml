@@ -1,6 +1,6 @@
 id: openspec-v1
 name: Open Spec
-wotkflow_instructions: │
+workflow_instructions: |
   NEVER take assumptions, if something is not clear use decison_request tool to clarify.
   NEVER manage todo items and tasks directly in the database, always use the provided tools for that.
   ALWAYS use @get_todo and read the content before taking a todo item to work.
