@@ -126,13 +126,25 @@ export function workspaceHandlers(db: Database) {
           // -STA is required: WinForms dialogs must run on a Single-Threaded Apartment.
           // A topmost owner Form ensures the dialog surfaces in front of the browser window.
           // initialPath is passed via env var to avoid path injection (e.g. paths with quotes).
+          // The owner Form must be Show()n to get a real Win32 HWND; without it
+          // ShowDialog() blocks indefinitely with no visible dialog.
+          // Positioned off-screen (-32000,-32000) so it never appears to the user.
           const ps = [
             "Add-Type -AssemblyName System.Windows.Forms;",
+            "Add-Type -AssemblyName System.Drawing;",
             "$owner = New-Object System.Windows.Forms.Form;",
             "$owner.TopMost = $true;",
+            "$owner.ShowInTaskbar = $false;",
+            "$owner.FormBorderStyle = 'None';",
+            "$owner.Size = New-Object System.Drawing.Size(1,1);",
+            "$owner.StartPosition = 'Manual';",
+            "$owner.Location = New-Object System.Drawing.Point(-32000,-32000);",
+            "$owner.Show();",
             "$d = New-Object System.Windows.Forms.FolderBrowserDialog;",
             "$d.SelectedPath = $env:RAILYN_INITIAL_PATH;",
-            "if ($d.ShowDialog($owner) -eq 'OK') { $d.SelectedPath }",
+            "$result = $d.ShowDialog($owner);",
+            "$owner.Dispose();",
+            "if ($result -eq 'OK') { $d.SelectedPath }",
           ].join(" ");
           const proc = Bun.spawn(["powershell", "-NoProfile", "-STA", "-Command", ps], {
             stdout: "pipe",
