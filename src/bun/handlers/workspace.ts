@@ -122,7 +122,7 @@ export function workspaceHandlers(db: Database) {
           const code = await proc.exited;
           return { path: code === 0 && text ? text.replace(/\/$/, "") : null };
         } else if (platform === "win32") {
-          const ps = `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }`;
+          const ps = `Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.Form; $owner.TopMost = $true; $owner.WindowState = 'Minimized'; $owner.ShowInTaskbar = $false; $owner.Show(); $owner.Hide(); $d = New-Object System.Windows.Forms.FolderBrowserDialog; if ($d.ShowDialog($owner) -eq 'OK') { $d.SelectedPath }; $owner.Dispose()`;
           const proc = Bun.spawn(["powershell", "-NoProfile", "-Command", ps], { stdout: "pipe", stderr: "ignore" });
           const text = (await new Response(proc.stdout).text()).trim();
           const code = await proc.exited;
