@@ -122,8 +122,23 @@ export function workspaceHandlers(db: Database) {
           const code = await proc.exited;
           return { path: code === 0 && text ? text.replace(/\/$/, "") : null };
         } else if (platform === "win32") {
-          const ps = `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }`;
-          const proc = Bun.spawn(["powershell", "-NoProfile", "-Command", ps], { stdout: "pipe", stderr: "ignore" });
+          const initial = expandHome(params.initialPath?.trim() || getHomeDir());
+          // -STA is required: WinForms dialogs must run on a Single-Threaded Apartment.
+          // A topmost owner Form ensures the dialog surfaces in front of the browser window.
+          // initialPath is passed via env var to avoid path injection (e.g. paths with quotes).
+          const ps = [
+            "Add-Type -AssemblyName System.Windows.Forms;",
+            "$owner = New-Object System.Windows.Forms.Form;",
+            "$owner.TopMost = $true;",
+            "$d = New-Object System.Windows.Forms.FolderBrowserDialog;",
+            "$d.SelectedPath = $env:RAILYN_INITIAL_PATH;",
+            "if ($d.ShowDialog($owner) -eq 'OK') { $d.SelectedPath }",
+          ].join(" ");
+          const proc = Bun.spawn(["powershell", "-NoProfile", "-STA", "-Command", ps], {
+            stdout: "pipe",
+            stderr: "ignore",
+            env: { ...process.env, RAILYN_INITIAL_PATH: initial },
+          });
           const text = (await new Response(proc.stdout).text()).trim();
           const code = await proc.exited;
           return { path: code === 0 && text ? text : null };
