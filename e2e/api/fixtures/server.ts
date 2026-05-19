@@ -65,7 +65,7 @@ enableThinking: false
 
     writeFileSync(join(workspaceDir, "engines.yaml"), `engines:\n  - id: copilot\n    type: copilot\n`);
 
-    writeFileSync(join(workspaceDir, "workflows", "default.yaml"), `
+    const defaultWorkflowYaml = `
 id: default
 name: Default
 columns:
@@ -79,9 +79,17 @@ columns:
     label: In Review
   - id: done
     label: Done
-`);
+`;
+    writeFileSync(join(workspaceDir, "workflows", "default.yaml"), defaultWorkflowYaml);
 
-    return { workspacesDir, projectDir };
+    // Dedicated bundled-source dir holding only the `default` template. Seeding
+    // from it is a no-op (default already exists in the workspace), and it makes
+    // `default` the single bundled (non-deletable) workflow.
+    const bundledWorkflowsDir = join(runtimeDir, "bundled-workflows");
+    mkdirSync(bundledWorkflowsDir, { recursive: true });
+    writeFileSync(join(bundledWorkflowsDir, "default.yaml"), defaultWorkflowYaml);
+
+    return { workspacesDir, projectDir, bundledWorkflowsDir };
 }
 
 export interface TestServer {
@@ -99,7 +107,7 @@ export interface TestServer {
 
 export async function startServer(): Promise<TestServer> {
     const runtimeDir = runtimePath("api-");
-    const { workspacesDir, projectDir } = writeTestConfig(runtimeDir);
+    const { workspacesDir, projectDir, bundledWorkflowsDir } = writeTestConfig(runtimeDir);
 
     const proc = spawn({
         cmd: [
@@ -120,6 +128,9 @@ export async function startServer(): Promise<TestServer> {
             RAILYN_DEBUG: "1",
             RAILYN_WORKSPACES_DIR: workspacesDir,
             RAILYN_TEST_EXECUTION_ENGINE: "mock",
+            // Point workflow seeding at the dedicated bundled-source dir (default
+            // only) so seeding is a no-op and `default` is the bundled workflow.
+            RAILYN_BUNDLED_WORKFLOWS_DIR: bundledWorkflowsDir,
         },
         stdout: "pipe",
         stderr: "pipe",

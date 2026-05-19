@@ -229,6 +229,10 @@
           </div>
         </TabPanel>
 
+        <TabPanel header="Workflows">
+          <WorkflowSetupTab />
+        </TabPanel>
+
         <TabPanel header="Boards">
           <BoardSetupTab />
         </TabPanel>
@@ -315,6 +319,7 @@ import Tag from "primevue/tag";
 import { api } from "../rpc";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useBoardStore } from "../stores/board";
+import { useWorkflowStore } from "../stores/workflow";
 import { useProjectStore } from "../stores/project";
 import { useTaskStore } from "../stores/task";
 import ModelTreeView from "../components/ModelTreeView.vue";
@@ -322,23 +327,29 @@ import LspSetupPrompt from "../components/LspSetupPrompt.vue";
 import LspInstallModal from "../components/LspInstallModal.vue";
 import ProjectDetailDialog from "../components/ProjectDetailDialog.vue";
 import BoardSetupTab from "../components/BoardSetupTab.vue";
+import WorkflowSetupTab from "../components/WorkflowSetupTab.vue";
 import type { LspDetectedLanguage, ModelInfo, Project } from "../../shared/rpc-types";
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
 const boardStore = useBoardStore();
+const workflowStore = useWorkflowStore();
 const projectStore = useProjectStore();
 const taskStore = useTaskStore();
 
 const activeTab = ref(0);
 
-// Tab indices: 0=Workspace, 1=Projects, 2=Language Servers, 3=Boards, 4=Models
+// Tab indices: 0=Workspace, 1=Projects, 2=Language Servers, 3=Workflows, 4=Boards, 5=Models
 const LS_TAB_INDEX = 2;
 const PROJECTS_TAB_INDEX = 1;
-const BOARDS_TAB_INDEX = 3;
+const WORKFLOWS_TAB_INDEX = 3;
+const BOARDS_TAB_INDEX = 4;
 function onTabChange(event: { index: number }) {
   if (event.index === BOARDS_TAB_INDEX) {
     boardStore.loadBoards();
+  }
+  if (event.index === WORKFLOWS_TAB_INDEX) {
+    workflowStore.loadWorkflows(workspaceStore.activeWorkspaceKey ?? undefined);
   }
   if (event.index === PROJECTS_TAB_INDEX) {
     scanProjectLanguages();
@@ -759,6 +770,10 @@ watch(
     // Re-scan immediately if the Projects tab is already open
     if (activeTab.value === PROJECTS_TAB_INDEX) {
       await scanProjectLanguages();
+    }
+    // Refresh workflow list if the Workflows tab is already open
+    if (activeTab.value === WORKFLOWS_TAB_INDEX) {
+      workflowStore.loadWorkflows(workspaceStore.activeWorkspaceKey ?? undefined);
     }
   },
   { immediate: true },

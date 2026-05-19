@@ -100,7 +100,9 @@ export const test = base.extend<Fixtures>({
             .returns("projects.delete", undefined)
             // Decision records — tests override as needed
             .returns("decisions.list", [])
-            .returns("decisions.getRevisions", []);
+            .returns("decisions.getRevisions", [])
+            // Workflow setup — tests override as needed
+            .returns("workflow.list", []);
 
         await api.install();
         await use(api);

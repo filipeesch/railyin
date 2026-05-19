@@ -5,6 +5,7 @@ import { createHash } from "crypto";
 import yaml from "js-yaml";
 import { resolveConfigPath } from "./path-utils.ts";
 import { getDataDir as platformGetDataDir, getHomeDir } from "../utils/platform.ts";
+import { seedWorkflows } from "./workflows.ts";
 
 // ─── Config types ─────────────────────────────────────────────────────────────
 
@@ -301,6 +302,12 @@ let _config: LoadedConfig | null = null;
 const _configsByKey = new Map<string, LoadedConfig>();
 let _configError: string | null = null;
 
+// Track which workflow directories have already been seeded in this process.
+// Intentionally NOT cleared by resetConfig() so that config resets triggered
+// by workflow.create / delete / saveYaml do not cause unnecessary repeated
+// filesystem scans of the bundled source directory.
+const _seededWorkflowDirs = new Set<string>();
+
 export function invalidateConfigCache(): void {
   _configsByKey.clear();
   _config = null;
@@ -459,50 +466,6 @@ projects: []
 #   api_key: ""      # get a free key at https://tavily.com
 `.trimStart();
 
-const DEFAULT_DELIVERY_YAML = `
-id: delivery
-name: Delivery Flow
-columns:
-  - id: backlog
-    label: Backlog
-    description: Tasks waiting to be started
-
-  - id: plan
-    label: Plan
-    description: Define what needs to be done
-    on_enter_prompt: |
-      Create a clear, detailed implementation plan for this task.
-      Break it down into concrete steps. Focus on WHAT needs to be
-      done and WHY, not implementation details.
-    stage_instructions: |
-      You are in the Planning phase. Do NOT write code or
-      implementation details. Focus only on understanding the
-      problem and defining what needs to be done.
-
-  - id: in_progress
-    label: In Progress
-    description: Active development
-    on_enter_prompt: |
-      Implement this task according to the plan. Work in the
-      provided Git worktree. Make focused, clean changes.
-    stage_instructions: |
-      You are in the Implementation phase. Work in the Git
-      worktree provided. Make minimal, focused changes.
-
-  - id: in_review
-    label: In Review
-    description: Awaiting human review
-    on_enter_prompt: |
-      Summarize the changes made, highlight anything that needs
-      reviewer attention, and flag any open questions or concerns.
-    stage_instructions: |
-      You are in the Review phase. Summarize changes clearly.
-
-  - id: done
-    label: Done
-    description: Task complete
-`.trimStart();
-
 /**
  * Parsed shape of a single entry in `engines.yaml`.
  * The raw YAML has `id` plus all engine config fields at the top level.
@@ -573,7 +536,6 @@ export function ensureGlobalConfigExists(globalConfigDir: string): void {
 export function ensureWorkspaceConfigExists(configDir: string): void {
   const workspaceFile = join(configDir, getWorkspaceFileName());
   const workflowsDir = join(configDir, "workflows");
-  const deliveryFile = join(workflowsDir, "delivery.yaml");
 
   mkdirSync(workflowsDir, { recursive: true });
 
@@ -581,10 +543,22 @@ export function ensureWorkspaceConfigExists(configDir: string): void {
     writeFileSync(workspaceFile, DEFAULT_WORKSPACE_YAML, "utf-8");
     console.log(`[config] Created default workspace.yaml at ${workspaceFile}`);
   }
-  if (!existsSync(deliveryFile)) {
-    writeFileSync(deliveryFile, DEFAULT_DELIVERY_YAML, "utf-8");
-    console.log(`[config] Created default delivery.yaml at ${deliveryFile}`);
+
+  // Seed workflows only once per unique workflows directory per process.
+  // Using a module-level set means config resets triggered by workflow
+  // create/delete/saveYaml will not cause repeated bundled-source scans.
+  // Tests use unique temp dirs so each test's dir is always unseeded.
+  if (!_seededWorkflowDirs.has(workflowsDir)) {
+    _seededWorkflowDirs.add(workflowsDir);
+    seedWorkflows(workflowsDir);
   }
+}
+
+/** Mark a workflows directory as already seeded. Used by the startup seed loop
+ *  in index.ts so that subsequent loadConfig calls for those workspaces do not
+ *  re-run seedWorkflows unnecessarily. */
+export function markWorkflowDirSeeded(workflowsDir: string): void {
+  _seededWorkflowDirs.add(workflowsDir);
 }
 
 export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null; error: string | null } {
@@ -671,9 +645,10 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     deduped.push(p);
   }
 
-  // Load workflow templates from config/workflows/ (and legacy workflows.yaml)
+  // Load workflow templates from config/workflows/. The directory is seeded
+  // from the bundled source by ensureWorkspaceConfigExists(), so it always
+  // contains at least one workflow file.
   const workflowsDir = join(configDir, "workflows");
-  const legacyWorkflowsFile = join(configDir, "workflows.yaml");
   const workflows: WorkflowTemplateConfig[] = [];
 
   if (existsSync(workflowsDir)) {
@@ -689,25 +664,6 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
         console.warn(`[config] Could not parse workflow ${file}: ${err}`);
       }
     }
-  }
-  if (workflows.length === 0 && existsSync(legacyWorkflowsFile)) {
-    try {
-      const raw = readFileSync(legacyWorkflowsFile, "utf-8");
-      const parsed = yaml.load(raw);
-      const templates = Array.isArray(parsed) ? parsed : [parsed];
-      for (const item of templates) {
-        const tmpl = item as WorkflowTemplateConfig;
-        if (tmpl?.id && tmpl?.columns) workflows.push(tmpl);
-      }
-    } catch (err) {
-      console.warn(`[config] Could not parse legacy workflows.yaml: ${err}`);
-    }
-  }
-
-  // Always include the bundled default template
-  const defaultTemplate = getDefaultTemplate();
-  if (!workflows.find((w) => w.id === defaultTemplate.id)) {
-    workflows.push(defaultTemplate);
   }
 
   const rawProjects = workspace.projects ?? [];
@@ -838,53 +794,4 @@ export function patchWorkspaceYaml(patch: Partial<WorkspaceYaml>, workspaceKey?:
   writeFileSync(workspaceFile, yaml.dump(merged), "utf-8");
   // Invalidate the in-memory config so the next getConfig() call re-reads it
   resetConfig();
-}
-
-// ─── Bundled default workflow template ───────────────────────────────────────
-
-export function getDefaultTemplate(): WorkflowTemplateConfig {
-  return {
-    id: "delivery",
-    name: "Delivery Flow",
-    columns: [
-      {
-        id: "backlog",
-        label: "Backlog",
-        description: "Tasks waiting to be started",
-        is_backlog: true,
-      },
-      {
-        id: "plan",
-        label: "Plan",
-        description: "Define what needs to be done",
-        on_enter_prompt:
-          "Create a clear, detailed implementation plan for this task. Break it down into concrete steps. Focus on WHAT needs to be done and WHY, not the implementation details.",
-        stage_instructions:
-          "You are in the Planning phase. Do NOT write code or implementation details. Focus only on understanding the problem and defining what needs to be done.",
-      },
-      {
-        id: "in_progress",
-        label: "In Progress",
-        description: "Active development",
-        on_enter_prompt:
-          "Implement this task according to the plan. Work in the provided Git worktree. Make focused, clean changes.",
-        stage_instructions:
-          "You are in the Implementation phase. Work in the Git worktree provided. Make minimal, focused changes. Follow the plan established in the planning phase.",
-      },
-      {
-        id: "in_review",
-        label: "In Review",
-        description: "Awaiting human review",
-        on_enter_prompt:
-          "Summarize the changes made, highlight anything that needs reviewer attention, and flag any open questions or concerns.",
-        stage_instructions:
-          "You are in the Review phase. Summarize changes clearly. Do not make further code changes unless the reviewer requests them.",
-      },
-      {
-        id: "done",
-        label: "Done",
-        description: "Task complete",
-      },
-    ],
-  };
 }
