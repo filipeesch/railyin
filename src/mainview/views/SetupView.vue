@@ -771,6 +771,10 @@ watch(
     if (activeTab.value === PROJECTS_TAB_INDEX) {
       await scanProjectLanguages();
     }
+    // Refresh workflow list if the Workflows tab is already open
+    if (activeTab.value === WORKFLOWS_TAB_INDEX) {
+      workflowStore.loadWorkflows(workspaceStore.activeWorkspaceKey ?? undefined);
+    }
   },
   { immediate: true },
 );

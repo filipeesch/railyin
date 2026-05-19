@@ -302,6 +302,12 @@ let _config: LoadedConfig | null = null;
 const _configsByKey = new Map<string, LoadedConfig>();
 let _configError: string | null = null;
 
+// Track which workflow directories have already been seeded in this process.
+// Intentionally NOT cleared by resetConfig() so that config resets triggered
+// by workflow.create / delete / saveYaml do not cause unnecessary repeated
+// filesystem scans of the bundled source directory.
+const _seededWorkflowDirs = new Set<string>();
+
 export function invalidateConfigCache(): void {
   _configsByKey.clear();
   _config = null;
@@ -538,9 +544,21 @@ export function ensureWorkspaceConfigExists(configDir: string): void {
     console.log(`[config] Created default workspace.yaml at ${workspaceFile}`);
   }
 
-  // Seed the workspace workflows directory from the bundled source, copying
-  // each bundled file only when it is not already present.
-  seedWorkflows(workflowsDir);
+  // Seed workflows only once per unique workflows directory per process.
+  // Using a module-level set means config resets triggered by workflow
+  // create/delete/saveYaml will not cause repeated bundled-source scans.
+  // Tests use unique temp dirs so each test's dir is always unseeded.
+  if (!_seededWorkflowDirs.has(workflowsDir)) {
+    _seededWorkflowDirs.add(workflowsDir);
+    seedWorkflows(workflowsDir);
+  }
+}
+
+/** Mark a workflows directory as already seeded. Used by the startup seed loop
+ *  in index.ts so that subsequent loadConfig calls for those workspaces do not
+ *  re-run seedWorkflows unnecessarily. */
+export function markWorkflowDirSeeded(workflowsDir: string): void {
+  _seededWorkflowDirs.add(workflowsDir);
 }
 
 export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null; error: string | null } {
