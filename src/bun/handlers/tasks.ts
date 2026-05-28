@@ -10,6 +10,7 @@ import { appendMessage } from "../conversation/messages.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
 import type { WorktreeManager } from "../git/WorktreeManager.ts";
+import type { IWorktreePreparerCallback } from "../git/IWorktreePreparerCallback.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
@@ -22,6 +23,8 @@ import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { validateTransition } from "../workflow/transition-validator.ts";
 import { getColumnConfig } from "../workflow/column-config.ts";
 import { PositionService } from "./position-service.ts";
+// Re-export for consumers of the handler module
+export { IWorktreePreparerCallback } from "../git/IWorktreePreparerCallback.ts";
 import { seedConversationModel } from "../engine/execution/model-resolver";
 import { QualifiedModelId } from "../engine/qualified-model-id.ts";
 
@@ -249,20 +252,36 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
-        const postStatus = (msg: string) => {
-          // Do NOT call onTaskUpdated here: the DB row still carries the old
-          // workflow_state while the worktree is being created (executeTransition
-          // hasn't run yet). Broadcasting the stale row causes the UI card to
-          // bounce back to the source column and then re-animate to the target.
-          // The authoritative state update is pushed at the end of the RPC via
-          // orchestrator.executeTransition → onTaskUpdated.
-          appendMessage(db, params.taskId, convId!, "system", null, msg);
+        // Configure callback for prepareAndExecute
+        const callback: IWorktreePreparerCallback = {
+          executeTask: async (taskId: number) => {
+            await requireOrchestrator(orchestrator).executeTransition(
+              taskId,
+              params.toState,
+            );
+          },
+          onFailed: (taskId: number, error: Error) => {
+            // Worktree is required — fail the task so the user sees the error in the UI
+            const errMsg = error.message;
+            db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
+            appendMessage(db, 
+              params.taskId,
+              convId!,
+              "system",
+              null,
+              `Worktree setup failed: ${errMsg}`,
+            );
+            const failedRow = fetchTaskWithDetail(db, params.taskId);
+            if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
+            onTaskUpdated(failedRow);
+          },
         };
 
         try {
-          await worktreeManager.triggerWorktreeIfNeeded(params.taskId, postStatus);
+          await worktreeManager.prepareAndExecute(params.taskId, callback);
         } catch (err) {
-          // Worktree is required — fail the task so the user sees the error in the UI
+          // prepareAndExecute sets the task to "preparing" and handles the async
+          // worktree creation. If it throws unexpectedly, report the failure.
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
           appendMessage(db, 
@@ -363,15 +382,26 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
-        const postStatus = (msg: string) => {
-          appendMessage(db, params.taskId, retryConvId!, "system", null, msg);
-          const updated = fetchTaskWithDetail(db, params.taskId);
-          if (updated) onTaskUpdated(updated);
+        // Configure callback for prepareAndExecute
+        const callback: IWorktreePreparerCallback = {
+          executeTask: async (taskId: number) => {
+            await requireOrchestrator(orchestrator).executeRetry(taskId);
+          },
+          onFailed: (taskId: number, error: Error) => {
+            const errMsg = error.message;
+            db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
+            appendMessage(db, params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
+            const failedRow = fetchTaskWithDetail(db, params.taskId);
+            if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
+            onTaskUpdated(failedRow);
+          },
         };
 
         try {
-          await worktreeManager.triggerWorktreeIfNeeded(params.taskId, postStatus);
+          await worktreeManager.prepareAndExecute(params.taskId, callback);
         } catch (err) {
+          // prepareAndExecute sets the task to "preparing" and handles the async
+          // worktree creation. If it throws unexpectedly, report the failure.
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
           appendMessage(db, params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);

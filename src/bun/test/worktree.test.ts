@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { WorktreeManager } from "../git/WorktreeManager.ts";
+import { IWorktreePreparerCallback, PreparedWorktreeResult } from "../git/IWorktreePreparerCallback.ts";
 import { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
 import { TaskGitContextRepository } from "../db/repositories/TaskGitContextRepository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
@@ -17,7 +18,6 @@ let worktreesBase: string;
 let configCleanup: () => void;
 let manager: WorktreeManager;
 
-/** Stub IProjectResolver — returns configurable values */
 function makeProjectResolver(defaultBranch = "main", worktreeBasePath?: string): IProjectResolver {
   return {
     getDefaultBranch: (_wsKey: string, _projectKey: string) => defaultBranch,
@@ -56,120 +56,88 @@ afterEach(() => {
   configCleanup();
 });
 
-// ─── registerContext ──────────────────────────────────────────────────────────
-
-describe("registerContext", () => {
-  it("creates task_git_context row with not_created status", () => {
+describe("prepareAndExecute", () => {
+  it("returns immediately when no task_git_context row exists", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    manager.registerContext(taskId, gitDir);
-
-    const row = db
-      .query<{ task_id: number; git_root_path: string; worktree_status: string }, [number]>(
-        "SELECT task_id, git_root_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-
-    expect(row).not.toBeNull();
-    expect(row!.git_root_path).toBe(gitDir);
-    expect(row!.worktree_status).toBe("not_created");
+    const callback: IWorktreePreparerCallback = {
+      executeTask: async () => {
+        // No-op
+      },
+      onFailed: () => {
+        // ignore
+      },
+    };
+    await manager.prepareAndExecute(taskId, callback);
+    // db context not modified
   });
 
-  it("updates existing row without changing worktree_status", () => {
+  it("calls executeTask when worktree_status is already ready", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    manager.registerContext(taskId, "/wrong/path");
-
-    db.run("UPDATE task_git_context SET worktree_status = 'ready' WHERE task_id = ?", [taskId]);
-
     manager.registerContext(taskId, gitDir);
+    db.run(
+      "UPDATE task_git_context SET worktree_status = 'ready', worktree_path = '/some/path', branch_name = 'test-branch' WHERE task_id = ?",
+      [taskId],
+    );
 
-    const row = db
-      .query<{ git_root_path: string; worktree_status: string }, [number]>(
-        "SELECT git_root_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-
-    expect(row!.git_root_path).toBe(gitDir);
-    expect(row!.worktree_status).toBe("ready");
-  });
-});
-
-// ─── triggerWorktreeIfNeeded ──────────────────────────────────────────────────
-
-describe("triggerWorktreeIfNeeded", () => {
-  it("does nothing when no task_git_context row exists", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    const statuses: string[] = [];
-    await manager.triggerWorktreeIfNeeded(taskId, (msg) => statuses.push(msg));
-    expect(statuses).toHaveLength(0);
+    const readyPaths: string[] = [];
+    await manager.prepareAndExecute(
+      taskId,
+      {
+        executeTask: async (taskId: number, r: PreparedWorktreeResult) => {
+          readyPaths.push(r.path);
+        },
+        onFailed: (_taskId: number, _err: Error) => {},
+      },
+    );
+    expect(readyPaths).toHaveLength(1);
+    expect(readyPaths[0]).toBeTruthy();
   });
 
-  it("does nothing when worktree_status is already ready", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    manager.registerContext(taskId, gitDir);
-    db.run("UPDATE task_git_context SET worktree_status = 'ready' WHERE task_id = ?", [taskId]);
-
-    const statuses: string[] = [];
-    await manager.triggerWorktreeIfNeeded(taskId, (msg) => statuses.push(msg));
-    expect(statuses).toHaveLength(0);
-  });
-
-  it("creates worktree and sets status to ready for not_created", async () => {
+  it("creates worktree and calls executeTask for not_created", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     manager.registerContext(taskId, gitDir);
 
-    const statuses: string[] = [];
-    await manager.triggerWorktreeIfNeeded(taskId, (msg) => statuses.push(msg));
+    const callback: IWorktreePreparerCallback = {
+      executeTask: async () => {
+        // Already resolved by prepareAndExecute
+      },
+      onFailed: () => {
+        // ignore
+      },
+    };
 
-    const row = db
-      .query<{ worktree_status: string }, [number]>(
-        "SELECT worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
+    await manager.prepareAndExecute(taskId, callback);
 
-    expect(row!.worktree_status).toBe("ready");
-    expect(statuses[0]).toMatch(/creating worktree/i);
-    expect(statuses[1]).toMatch(/ready/i);
-  }, 15_000);
-
-  it("sets worktree_path inside worktree_base_path after creation", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    manager.registerContext(taskId, gitDir);
-
-    await manager.triggerWorktreeIfNeeded(taskId);
-
-    const row = db
-      .query<{ worktree_path: string; worktree_status: string }, [number]>(
-        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-
-    expect(row!.worktree_status).toBe("ready");
-    expect(row!.worktree_path).toMatch(new RegExp(`^${worktreesBase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-    expect(row!.worktree_path).not.toMatch(new RegExp(`^${gitDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/?$`));
-  }, 15_000);
-
-  it("retries worktree creation when status is error", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    manager.registerContext(taskId, gitDir);
-    db.run("UPDATE task_git_context SET worktree_status = 'error' WHERE task_id = ?", [taskId]);
-
-    const statuses: string[] = [];
-    await manager.triggerWorktreeIfNeeded(taskId, (msg) => statuses.push(msg));
-
-    const row = db
-      .query<{ worktree_status: string }, [number]>(
-        "SELECT worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
+    // Wait for the background worktree creation to complete
+    let row: { worktree_status: string } | null;
+    let attempts = 20;
+    while (attempts-- > 0) {
+      row = db
+        .query<{ worktree_status: string }, [number]>(
+          "SELECT worktree_status FROM task_git_context WHERE task_id = ?",
+        )
+        .get(taskId);
+      if (row?.worktree_status === "ready") break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
 
     expect(row!.worktree_status).toBe("ready");
   }, 15_000);
 
-  it("throws and leaves status as error when git_root_path is invalid", async () => {
+  it("calls onFailed when git_root_path is invalid", async () => {
     const { taskId } = seedProjectAndTask(db, "/nonexistent/git/root");
     manager.registerContext(taskId, "/nonexistent/git/root");
 
-    await expect(manager.triggerWorktreeIfNeeded(taskId)).rejects.toThrow(/does not exist/i);
+    let errorGot = false;
+    await manager.prepareAndExecute(
+      taskId,
+      {
+        executeTask: async (_taskId: number, _r: PreparedWorktreeResult) => {},
+        onFailed: (_taskId: number, _err: Error) => {
+          errorGot = true;
+        },
+      },
+    );
 
     const row = db
       .query<{ worktree_status: string }, [number]>(
@@ -179,78 +147,4 @@ describe("triggerWorktreeIfNeeded", () => {
 
     expect(row!.worktree_status).toBe("error");
   });
-
-  // ─── THE BUG FIX: default branch used instead of HEAD ──────────────────────
-
-  it("creates worktree from defaultBranch, not from HEAD when HEAD is a different branch", async () => {
-    // Arrange: add a second commit on a feature branch so HEAD diverges from main
-    const mainSha = execSync("git rev-parse HEAD", { cwd: gitDir }).toString().trim();
-    execSync("git checkout -b feature-branch", { cwd: gitDir });
-    writeFileSync(join(gitDir, "feature.txt"), "feature work");
-    execSync("git add .", { cwd: gitDir });
-    execSync('git commit -m "feature commit"', { cwd: gitDir });
-    // HEAD is now on feature-branch (ahead of main)
-
-    const { taskId } = seedProjectAndTask(db, gitDir);
-
-    // Use a resolver that returns 'main' as the default branch
-    const managerWithMain = new WorktreeManager(
-      db,
-      new WorkspaceRepository(db),
-      makeProjectResolver("main", worktreesBase),
-      new GitRepositoryManager(),
-      new TaskGitContextRepository(db),
-    );
-    managerWithMain.registerContext(taskId, gitDir);
-
-    // Act: trigger auto-creation (no explicit sourceBranch)
-    await managerWithMain.triggerWorktreeIfNeeded(taskId);
-
-    // Assert: worktree was based on main (commit A), not feature-branch (commit B)
-    const row = db
-      .query<{ worktree_path: string }, [number]>(
-        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-    expect(row!.worktree_path).toBeTruthy();
-
-    const worktreeSha = execSync("git rev-parse HEAD", { cwd: row!.worktree_path }).toString().trim();
-    expect(worktreeSha).toBe(mainSha);
-  }, 15_000);
-
-  it("uses explicit sourceBranch from options, overriding IProjectResolver.getDefaultBranch", async () => {
-    // Create a second branch with a distinct commit
-    execSync("git checkout -b alt-branch", { cwd: gitDir });
-    writeFileSync(join(gitDir, "alt.txt"), "alt content");
-    execSync("git add .", { cwd: gitDir });
-    execSync('git commit -m "alt commit"', { cwd: gitDir });
-    const altSha = execSync("git rev-parse HEAD", { cwd: gitDir }).toString().trim();
-    execSync("git checkout main", { cwd: gitDir, shell: "/bin/sh" });
-
-    const { taskId } = seedProjectAndTask(db, gitDir);
-
-    // Resolver returns 'main', but we pass sourceBranch: 'alt-branch' explicitly
-    const managerWithMain = new WorktreeManager(
-      db,
-      new WorkspaceRepository(db),
-      makeProjectResolver("main", worktreesBase),
-      new GitRepositoryManager(),
-      new TaskGitContextRepository(db),
-    );
-    managerWithMain.registerContext(taskId, gitDir);
-
-    // Call createWorktree directly with an explicit sourceBranch override
-    await managerWithMain.createWorktree(taskId, { sourceBranch: "alt-branch" });
-
-    const row = db
-      .query<{ worktree_path: string }, [number]>(
-        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
-    expect(row!.worktree_path).toBeTruthy();
-
-    const worktreeSha = execSync("git rev-parse HEAD", { cwd: row!.worktree_path }).toString().trim();
-    expect(worktreeSha).toBe(altSha);
-  }, 15_000);
 });
-

@@ -8,6 +8,8 @@ import type { GitRepositoryManager } from "./GitRepositoryManager.ts";
 
 // ─── Branch naming ────────────────────────────────────────────────────────────
 
+import type { IWorktreePreparerCallback, PreparedWorktreeResult } from "./IWorktreePreparerCallback.ts";
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -20,6 +22,7 @@ function buildBranchName(taskId: number, title: string): string {
   return `task/${taskId}-${slugify(title)}`;
 }
 
+// ─── Options ──────────────────────────────────────────────────────────────────
 // ─── Options ──────────────────────────────────────────────────────────────────
 
 export interface CreateWorktreeOptions {
@@ -136,24 +139,57 @@ export class WorktreeManager {
     return {};
   }
 
-  async triggerWorktreeIfNeeded(
+  /**
+   * Prepare worktree asynchronously. Returns immediately while worktree
+   * creation happens in background. The caller provides callbacks for
+   * completion and failure scenarios.
+   *
+   * - If worktree is already ready -> executeTask fires immediately
+   * - If worktree needs creation -> created in background, then executeTask fires
+   * - If creation fails -> onFailed fires with the error
+   * - Task state is always set to "preparing" at entry
+   */
+  async prepareAndExecute(
     taskId: number,
-    onStatus?: (msg: string) => void,
+    callback: IWorktreePreparerCallback,
   ): Promise<void> {
+    // Update task to "preparing" state
+    this.db.run(
+      "UPDATE tasks SET execution_state = 'preparing' WHERE id = ?",
+      [taskId],
+    );
+
     const ctx = this.taskGitContextRepo.getContext(taskId);
 
+    // Worktree already ready — execute immediately without creation
+    if (ctx?.worktreeStatus === "ready" && ctx.worktreePath) {
+      await callback.executeTask(taskId, {
+        path: ctx.worktreePath,
+        branch: ctx.branchName ?? branchFromPath(ctx.worktreePath),
+      });
+      return;
+    }
+
+    // Worktree needs creation — handle different states
     if (
       ctx?.gitRootPath &&
       (ctx.worktreeStatus === "not_created" ||
         ctx.worktreeStatus === "error" ||
         ctx.worktreeStatus === "removed")
     ) {
-      onStatus?.("Creating worktree for this task…");
-      const result = await this.createWorktree(taskId);
-      onStatus?.(`Worktree ready at \`${result.branch}\``);
+      // Create worktree in background, callback when ready or failed
+      this.createWorktree(taskId)
+        .then((result) => callback.executeTask(taskId, result))
+        .catch((err) => callback.onFailed(taskId, err));
+      return;
     }
-  }
 
+    // worktreeStatus === "creating" — worktree is being created elsewhere
+    // (e.g. server restart). We just mark task as "preparing" and the existing
+    // createWorktree() call will call executeTask when it completes.
+    // createWorktree() handles the "creating" case internally — it returns the
+    // existing path without spawning a second git worktree add.
+  }
   async listBranches(taskId: number): Promise<string[]> {
     const ctx = this.taskGitContextRepo.getContext(taskId);
     if (!ctx?.gitRootPath) return [];
