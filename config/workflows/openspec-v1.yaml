@@ -1,0 +1,130 @@
+id: openspec-v1
+name: Open Spec v1
+workflow_instructions: |
+  NEVER take assumptions, if something is not clear use decison_request tool to clarify.
+  NEVER manage todo items and tasks directly in the database, always use the provided tools for that.
+  ALWAYS use @get_todo and read the content before taking a todo item to work.
+  ALWAYS search on official documentation in internet if you are stucked.
+columns:
+  - id: backlog
+    label: Backlog
+    description: Ideas and requests waiting to be explored
+    allowed_transitions:
+      - explore
+
+  - id: explore
+    label: Explore
+    description: Think through the problem, investigate options, clarify requirements
+    allowed_transitions:
+      - propose
+    on_enter_prompt: |
+      /opsx-explore 
+      merge from main and investigate if need to rethink our path.
+      Explore how to implement this feature using projects patterns, don't focus in testing, this will tacled later.
+      ALWAYS use decison_request tool when asking for decisions, use it until everything is clear. 
+      Follow SOLID and Clean Code principles when desining a solution, avoid god classes.
+      Prefer dependency injection and loose cupling desining solutions.
+      Identify cleanup possibilities, refactorings, simplificatons in the code with this new development.
+      Do not propose without my call.
+    stage_instructions: exploration mode. Don't change any file!
+
+  - id: propose
+    label: Propose
+    description: Create a change proposal with design, specs, and tasks
+    allowed_transitions:
+      - apply
+      - explore_tests
+    on_enter_prompt: |
+      /opsx-propose 
+    stage_instructions: proposal mode. Don't implement anything!
+
+  - id: explore_tests
+    label: Explore Tests
+    allowed_transitions:
+      - propose_tests
+    on_enter_prompt: |
+      /opsx-explore 
+      merge from main and investigate if need to rethink our path.
+      Explore the unit tests, integration tests (with in-memory DB) and Playwright tests that need to be developed to cover this feature.
+      NEVER suggest code changes just for testing scenario, otherwise find refactoring possibilites that allow testng.
+      Always prefer dependency injection for mocks instead altertnative paths, if you have doubts use decison_request tool.
+      Use the specs created as a basis and extrapolate it in more scenarios.
+      Don't propose with without my call.
+    stage_instructions: exploration mode. Don't change any file!
+
+  - id: propose_tests
+    label: Propose Tests
+    allowed_transitions:
+      - proposal_review
+    on_enter_prompt: |
+      /opsx-propose 
+      Create a separate proposal with the test suite.
+      Only update the original proposal with what could be changed in the featured development after our discussion, keep the test suite in the new proposal.
+    stage_instructions: proposal mode. Don't implement anything!
+
+  - id: proposal_review
+    label: Proposal Review
+    allowed_transitions:
+      - apply
+    on_enter_prompt: |
+      Commit the proposal files using a concise conventional commit message (max 8 words).
+      Open a draft pull request using gh cli tool. Use the openspec proposal.md files to generate the description.
+    stage_instructions: Proposal validation gate. Do not implement anything!
+
+  - id: apply
+    label: Apply
+    description: Implement the tasks from the change proposal
+    allowed_transitions:
+      - review
+    on_enter_prompt: |
+      /opsx-apply 
+      merge from main and investigate if need to rethink our path.
+      Implement feature and test changes. 
+      AWLAYS use #get_todo tool to retrive each subtask before executing it and keep its status updated, use subagents to implement more than one task at the same time when applicable.
+      Don't take assumptions! You if have quenstions use #decison_request .
+      In the end:
+        - Remove any dead code
+        - Run "npx tsc --noEmit"
+        - Execute the whole test suite (unit, integration and playwright)
+        - Commit and push the changes
+
+  - id: review
+    label: Review
+    allowed_transitions:
+      - archive
+      - queued
+    on_enter_prompt: |
+      Check if all tasks are completed.
+      Read all openspec artifacts and review if the implementation aligns with what was written in the specs.
+      Check if no todo ( @list_todos ) item or mocked implementations were left behind.
+      Commit and push the changes.
+      Change the Pull Request from draft to review.
+
+  - id: queued
+    label: Queued
+    allowed_transitions:
+      - archive
+
+  - id: archive
+    label: Archive
+    description: Archive and merge the changes to main branch
+    allowed_transitions:
+      - done
+    on_enter_prompt: |
+      /opsx-archive 
+      archive all implemented changes with sync.
+      commit our changes and push.
+      Solve possible PR conflicts, use folder openspec/changes/archive to have more context.
+
+  - id: done
+    label: Done
+
+groups:
+  - label: Planing
+    columns: [explore, propose, explore_tests, propose_tests]
+  - label: Validation
+    columns: [proposal_review]
+  - label: Development
+    columns: [apply, review, queued]
+  - label: Deploy
+    columns: [archive, done]

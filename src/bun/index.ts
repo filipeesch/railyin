@@ -1,7 +1,8 @@
 import { runMigrations } from "./db/migrations/runner.ts";
 import { seedDefaultWorkspace } from "./db/seed.ts";
 import { getDb } from "./db/index.ts";
-import { loadConfig, getDataDir, type EngineConfig, type EngineEntry } from "./config/index.ts";
+import { loadConfig, getDataDir, getWorkspaceRegistry, markWorkflowDirSeeded, type EngineConfig, type EngineEntry } from "./config/index.ts";
+import { seedWorkflows } from "./config/workflows.ts";
 import { getTmpDir } from "./utils/platform.ts";
 import * as path from "path";
 import { getPtySession } from "./launch/pty.ts";
@@ -26,6 +27,7 @@ import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mcpHandlers } from "./handlers/mcp.ts";
 import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
 import { decisionHandlers } from "./handlers/decisions.ts";
+import { configHandlers } from "./handlers/config.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import { EngineRegistry } from "./engine/engine-registry.ts";
 import { CopilotEngine } from "./engine/copilot/engine.ts";
@@ -94,6 +96,16 @@ const worktreeManager = new WorktreeManager(db, wsRepo, projectResolver, gitRepo
 
 // 2. Load default workspace config (YAML files)
 const { error: configError } = loadConfig();
+
+// 2a. Seed workflows for every known workspace so all workspaces receive
+// bundled templates on first run, not just the default workspace.
+// ensureWorkspaceConfigExists only seeds brand-new workspaces; this loop
+// covers pre-existing workspaces that were created before seeding was introduced.
+for (const entry of getWorkspaceRegistry()) {
+  const workflowsDir = path.join(entry.configDir, "workflows");
+  seedWorkflows(workflowsDir);
+  markWorkflowDirSeeded(workflowsDir);
+}
 
 // 2b. Load MCP config from ~/.railyn/mcp.json and start registry (non-blocking)
 async function loadMcpConfig(): Promise<void> {
@@ -271,13 +283,14 @@ const allHandlers = {
   ...modelHandlers(db, orchestrator, modelSettingsRepo),
   ...engineHandlers(orchestrator),
   ...conversationHandlers(db, orchestrator, modelSettingsRepo),
-  ...workflowHandlers(notifier.notifyWorkflowReloaded.bind(notifier)),
+  ...workflowHandlers(db, notifier.notifyWorkflowReloaded.bind(notifier)),
   ...launchHandlers(db),
   ...lspHandlers(db, wsRepo, undefined, undefined, channel.broadcast.bind(channel)),
   ...codeServerHandlers(db, channel.broadcast.bind(channel), serverPort),
   ...mcpHandlers(db),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
   ...decisionHandlers(db),
+  ...configHandlers(),
 } as Record<string, (params: unknown) => unknown>;
 
 const wsHandler = new WebSocketHandler(channel, getPtySession);

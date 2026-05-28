@@ -48,7 +48,8 @@ export function boardHandlers(db: Database) {
 
       // Validate that the workflow template exists; fall back to first available
       const template = config.workflows.find((w) => w.id === params.workflowTemplateId);
-      const templateId = template?.id ?? config.workflows[0]?.id ?? "delivery";
+      const templateId = template?.id ?? config.workflows[0]?.id;
+      if (!templateId) throw new Error("No workflow templates available in this workspace");
 
       const result = db.run(
         "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES (?, ?, ?, ?)",
