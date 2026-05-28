@@ -96,6 +96,7 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
       label: t.label ?? t.name,
       description: t.description,
       parameters: t.parameters as any,
+      prepareArguments: t.prepareArguments,
       execute: t.execute as any,
     }),
   );
