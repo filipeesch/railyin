@@ -1,0 +1,3 @@
+- Create normalize-args module under src/bun/engine/
+- Add prepareArguments to all Pi engine tool wrappers
+- No behavior change for native JSON inputs
