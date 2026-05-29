@@ -46,6 +46,7 @@ export function initDb(): Database {
       approved_commands         TEXT    NOT NULL DEFAULT '[]',
       position                  REAL NOT NULL DEFAULT 0,
       needs_column_prompt       INTEGER NOT NULL DEFAULT 0,
+      enabled_mcp_tools         TEXT    NULL,
       created_at                TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS task_git_context (

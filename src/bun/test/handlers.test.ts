@@ -479,7 +479,7 @@ describe("conversations handlers", () => {
 
 describe("chat session parity handlers", () => {
   it("persists session MCP tool selections", async () => {
-    const handlers = mcpHandlers(db);
+    const handlers = mcpHandlers(db, { registryPool: null as any, resolveProject: () => null });
     db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
     const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run(
