@@ -128,6 +128,10 @@
                 />
               </div>
             </div>
+            <div class="field">
+              <label>Auto-approve shell commands <span class="field-hint">(new tasks start with auto-approve enabled)</span></label>
+              <ToggleSwitch v-model="wsForm.shellAutoApprove" />
+            </div>
             <Message v-if="wsSaveError" severity="error" :closable="false" class="mb-2">{{ wsSaveError }}</Message>
             <Message v-if="wsSaveSuccess" severity="success" :closable="false" class="mb-2">Settings saved</Message>
             <Button label="Save settings" icon="pi pi-save" :loading="wsSaving" @click="saveWorkspaceSettings" />
@@ -316,6 +320,7 @@ import Button from "primevue/button";
 import Message from "primevue/message";
 import Dialog from "primevue/dialog";
 import Tag from "primevue/tag";
+import ToggleSwitch from "primevue/toggleswitch";
 import { api } from "../rpc";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useBoardStore } from "../stores/board";
@@ -363,6 +368,7 @@ const wsForm = reactive({
   defaultModel: null as string | null,
   worktreeBasePath: "",
   workspacePath: "",
+  shellAutoApprove: false,
 });
 const wsSaving = ref(false);
 const wsSaveError = ref<string | null>(null);
@@ -449,6 +455,7 @@ function syncWsForm() {
   wsForm.defaultModel = cfg.defaultModel ?? null;
   wsForm.worktreeBasePath = cfg.worktreeBasePath ?? "";
   wsForm.workspacePath = cfg.workspacePath ?? "";
+  wsForm.shellAutoApprove = cfg.shellAutoApprove ?? false;
 }
 
 async function onAllowedEnginesChange() {
@@ -487,6 +494,7 @@ async function saveWorkspaceSettings() {
       defaultModel: wsForm.defaultModel ?? undefined,
       worktreeBasePath: wsForm.worktreeBasePath || undefined,
       workspacePath: wsForm.workspacePath || undefined,
+      shellAutoApprove: wsForm.shellAutoApprove,
     });
     await loadModelsForEngines();
     await Promise.all([

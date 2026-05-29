@@ -83,6 +83,8 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         throw new Error(`Project ${params.projectKey} not found in workspace ${workspaceKey}`);
       }
 
+      const wsShellAutoApprove = getWorkspaceConfig(workspaceKey).workspace.shell_auto_approve ?? false;
+
       // Create conversation first with placeholder task_id=0
       const convResult = db.run("INSERT INTO conversations (task_id) VALUES (0)");
       const conversationId = convResult.lastInsertRowid as number;
@@ -95,8 +97,8 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
 
       const taskResult = db.run(
         `INSERT INTO tasks
-           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position)
-         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
+           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, shell_auto_approve, position)
+         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?, ?,
            COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000)`,
         [
           params.boardId,
@@ -104,6 +106,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           params.title.trim(),
           params.description.trim(),
           conversationId,
+          wsShellAutoApprove ? 1 : 0,
           params.boardId,
         ],
       );

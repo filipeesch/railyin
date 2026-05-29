@@ -51,6 +51,7 @@ export function makeWorkspace(overrides?: Partial<WorkspaceConfig>): WorkspaceCo
             { id: "claude", type: "claude" },
         ],
         allowedEngines: ["copilot", "claude"],
+        shellAutoApprove: false,
         ...overrides,
     };
 }
