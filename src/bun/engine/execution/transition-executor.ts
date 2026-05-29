@@ -1,6 +1,7 @@
 import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
 import { mapTask } from "../../db/mappers";
+import { fetchTaskWithModel } from "../../db/task-queries.ts";
 import { appendMessage } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
@@ -111,8 +112,7 @@ export class TransitionExecutor {
       [executionId, taskId],
     );
 
-    const freshTaskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-    const freshTask = mapTask(freshTaskRow);
+    const freshTask = fetchTaskWithModel(db, taskId)!;
     const signal = this.streamProcessor.createSignal(executionId);
 
     const sourceEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
@@ -163,8 +163,7 @@ export class TransitionExecutor {
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
-    const runningRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
-    return { task: mapTask(runningRow), executionId };
+    return { task: fetchTaskWithModel(db, taskId)!, executionId };
   }
 
   private buildTransitionMetadata(

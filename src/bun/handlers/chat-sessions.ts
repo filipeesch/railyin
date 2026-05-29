@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { ChatSession, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ChatSessionRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
+import { fetchChatSessionWithModel } from "../db/task-queries.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
@@ -59,11 +60,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         );
         const sessionId = sessionResult.lastInsertRowid as number;
 
-        const row = db.query<ChatSessionRow, [number]>(
-          "SELECT * FROM chat_sessions WHERE id = ?"
-        ).get(sessionId);
-
-        return mapChatSession(row!);
+        return fetchChatSessionWithModel(db, sessionId)!;
       })();
 
       onSessionUpdated(session);
@@ -73,8 +70,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
     "chatSessions.rename": async (params: { sessionId: number; title: string }): Promise<void> => {
 
       db.run("UPDATE chat_sessions SET title = ? WHERE id = ?", [params.title, params.sessionId]);
-      const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
-      if (row) onSessionUpdated(mapChatSession(row));
+      const updated = fetchChatSessionWithModel(db, params.sessionId);
+      if (updated) onSessionUpdated(updated);
     },
 
     "chatSessions.archive": async (params: { sessionId: number }): Promise<void> => {
@@ -83,8 +80,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now') WHERE id = ?",
         [params.sessionId]
       );
-      const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
-      if (row) onSessionUpdated(mapChatSession(row));
+      const updated = fetchChatSessionWithModel(db, params.sessionId);
+      if (updated) onSessionUpdated(updated);
     },
 
     "chatSessions.markRead": async (params: { sessionId: number }): Promise<void> => {
@@ -148,14 +145,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       );
 
       // Fetch updated session with model from conversation
-      const updatedSession = db.query<ChatSessionRow, [number]>(
-        `SELECT cs.*, c.model AS conversation_model 
-         FROM chat_sessions cs 
-         LEFT JOIN conversations c ON c.id = cs.conversation_id 
-         WHERE cs.id = ?`
-      ).get(params.sessionId);
-
-      if (updatedSession) onSessionUpdated(mapChatSession(updatedSession));
+      const updatedSession = fetchChatSessionWithModel(db, params.sessionId);
+      if (updatedSession) onSessionUpdated(updatedSession);
 
       return { messageId: message.id, executionId };
     },
@@ -198,14 +189,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         prepared.content,
       );
 
-      const updatedSession = db.query<ChatSessionRow, [number]>(
-        `SELECT cs.*, c.model AS conversation_model 
-         FROM chat_sessions cs 
-         LEFT JOIN conversations c ON c.id = cs.conversation_id 
-         WHERE cs.id = ?`
-      ).get(params.sessionId);
-
-      if (updatedSession) onSessionUpdated(mapChatSession(updatedSession));
+      const updatedSession = fetchChatSessionWithModel(db, params.sessionId);
+      if (updatedSession) onSessionUpdated(updatedSession);
 
       return { messageId: message.id, executionId };
     },
@@ -251,8 +236,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       } else {
         // No running execution found — just update DB status directly.
         db.run("UPDATE chat_sessions SET status = 'idle' WHERE id = ? AND status = 'running'", [params.sessionId]);
-        const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
-        if (row) onSessionUpdated(mapChatSession(row));
+        const updated = fetchChatSessionWithModel(db, params.sessionId);
+        if (updated) onSessionUpdated(updated);
       }
     },
 
@@ -271,10 +256,10 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         throw new Error(`Chat session ${params.sessionId} has no conversation`);
       }
       db.run("UPDATE conversations SET model = ? WHERE id = ?", [params.model, session.conversation_id]);
-      const updated = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      const updated = fetchChatSessionWithModel(db, params.sessionId);
       if (!updated) throw new Error(`Chat session ${params.sessionId} not found after update`);
-      onSessionUpdated(mapChatSession(updated));
-      return mapChatSession(updated);
+      onSessionUpdated(updated);
+      return updated;
     },
   };
 }
@@ -294,8 +279,8 @@ export function startChatSessionAutoArchiveJob(db: Database, onSessionUpdated: O
           "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now') WHERE id = ?",
           [row.id]
         );
-        const updated = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(row.id);
-        if (updated) onSessionUpdated(mapChatSession(updated));
+        const updated = fetchChatSessionWithModel(db, row.id);
+        if (updated) onSessionUpdated(updated);
       }
     } catch (err) {
       console.error('[chat-sessions] auto-archive job error:', err);

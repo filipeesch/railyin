@@ -185,6 +185,81 @@ describe("workspaceHandlers", () => {
     const result = await handlers["workspace.resolveGitRoot"]({ path: tmpdir() });
     expect(result.gitRoot).toBeNull();
   });
+
+  // WH-1: shellAutoApprove defaults to false when field is absent
+  it("WH-1: workspace.getConfig returns shellAutoApprove false when field absent", async () => {
+    const handlers = workspaceHandlers(db);
+    const result = await handlers["workspace.getConfig"]({});
+    expect(result.shellAutoApprove).toBe(false);
+  });
+
+  // WH-2: shellAutoApprove true when yaml has shell_auto_approve: true
+  it("WH-2: workspace.getConfig returns shellAutoApprove true when yaml has shell_auto_approve: true", async () => {
+    const configDir = process.env.RAILYN_CONFIG_DIR!;
+    writeFileSync(
+      join(configDir, "workspace.test.yaml"),
+      ["name: test", "default_model: copilot/mock-model", "shell_auto_approve: true"].join("\n"),
+      "utf-8",
+    );
+    resetConfig();
+
+    const handlers = workspaceHandlers(db);
+    const result = await handlers["workspace.getConfig"]({});
+    expect(result.shellAutoApprove).toBe(true);
+  });
+
+  // WH-3: shellAutoApprove false when yaml has shell_auto_approve: false
+  it("WH-3: workspace.getConfig returns shellAutoApprove false when yaml has shell_auto_approve: false", async () => {
+    const configDir = process.env.RAILYN_CONFIG_DIR!;
+    writeFileSync(
+      join(configDir, "workspace.test.yaml"),
+      ["name: test", "default_model: copilot/mock-model", "shell_auto_approve: false"].join("\n"),
+      "utf-8",
+    );
+    resetConfig();
+
+    const handlers = workspaceHandlers(db);
+    const result = await handlers["workspace.getConfig"]({});
+    expect(result.shellAutoApprove).toBe(false);
+  });
+
+  // WH-4: workspace.update with shellAutoApprove: true writes shell_auto_approve: true
+  it("WH-4: workspace.update with shellAutoApprove: true writes shell_auto_approve: true to yaml", async () => {
+    const configDir = process.env.RAILYN_CONFIG_DIR!;
+    const handlers = workspaceHandlers(db);
+    await handlers["workspace.update"]({ shellAutoApprove: true });
+    const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
+    const parsed = yaml.load(raw) as Record<string, unknown>;
+    expect(parsed.shell_auto_approve).toBe(true);
+  });
+
+  // WH-5: workspace.update with shellAutoApprove: false removes shell_auto_approve from yaml
+  it("WH-5: workspace.update with shellAutoApprove: false removes shell_auto_approve from yaml", async () => {
+    const configDir = process.env.RAILYN_CONFIG_DIR!;
+    writeFileSync(
+      join(configDir, "workspace.test.yaml"),
+      ["name: test", "default_model: copilot/mock-model", "shell_auto_approve: true"].join("\n"),
+      "utf-8",
+    );
+    resetConfig();
+
+    const handlers = workspaceHandlers(db);
+    await handlers["workspace.update"]({ shellAutoApprove: false });
+    const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
+    const parsed = yaml.load(raw) as Record<string, unknown>;
+    expect(parsed.shell_auto_approve).toBeFalsy();
+  });
+
+  // WH-6: workspace.update preserves other yaml fields when updating shellAutoApprove
+  it("WH-6: workspace.update preserves other yaml fields when updating shellAutoApprove", async () => {
+    const configDir = process.env.RAILYN_CONFIG_DIR!;
+    const handlers = workspaceHandlers(db);
+    await handlers["workspace.update"]({ shellAutoApprove: true });
+    const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
+    const parsed = yaml.load(raw) as Record<string, unknown>;
+    expect(parsed.name).toBeDefined();
+    expect(parsed.default_model).toBeDefined();
+  });
 });
 
 describe("projectHandlers", () => {

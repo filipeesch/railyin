@@ -198,6 +198,83 @@ it("automatically seeds conversation.model from config.defaultModel", async () =
 
     expect(row!.model).toBeNull();
   });
+
+  // TC-SA-1: no workspace shell_auto_approve → task.shellAutoApprove = false
+  it("TC-SA-1: task created with no workspace shell_auto_approve gets shellAutoApprove: false", async () => {
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectKey,
+      title: "SA task",
+      description: "default auto-approve",
+    });
+
+    expect(task.shellAutoApprove).toBe(false);
+  });
+
+  // TC-SA-2: workspace has shell_auto_approve: true → task.shellAutoApprove = true
+  it("TC-SA-2: task created with workspace shell_auto_approve: true gets shellAutoApprove: true", async () => {
+    configCleanup();
+    const cfg = setupTestConfig("shell_auto_approve: true", gitDir);
+    configCleanup = cfg.cleanup;
+
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectKey,
+      title: "SA task true",
+      description: "workspace auto-approve on",
+    });
+
+    expect(task.shellAutoApprove).toBe(true);
+  });
+
+  // TC-SA-3: workspace has shell_auto_approve: false explicitly → task.shellAutoApprove = false
+  it("TC-SA-3: task created with workspace shell_auto_approve: false gets shellAutoApprove: false", async () => {
+    configCleanup();
+    const cfg = setupTestConfig("shell_auto_approve: false", gitDir);
+    configCleanup = cfg.cleanup;
+
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectKey,
+      title: "SA task false",
+      description: "workspace auto-approve explicitly off",
+    });
+
+    expect(task.shellAutoApprove).toBe(false);
+  });
+
+  // TC-SA-4: per-task setShellAutoApprove overrides seeded value
+  it("TC-SA-4: tasks.setShellAutoApprove overrides the workspace-seeded value", async () => {
+    configCleanup();
+    const cfg = setupTestConfig("shell_auto_approve: true", gitDir);
+    configCleanup = cfg.cleanup;
+
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectKey,
+      title: "SA override task",
+      description: "will be toggled off",
+    });
+    expect(task.shellAutoApprove).toBe(true);
+
+    await handlers["tasks.setShellAutoApprove"]({ taskId: task.id, enabled: false });
+    const row = db
+      .query<{ shell_auto_approve: number }, [number]>("SELECT shell_auto_approve FROM tasks WHERE id = ?")
+      .get(task.id);
+    expect(row!.shell_auto_approve).toBe(0);
+  });
 });
 
 // ─── tasks.transition (worktree failure) ─────────────────────────────────────
