@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
+import { fetchTaskWithModel } from "../db/task-queries.ts";
 import {
   estimateContextWarning,
   estimateContextUsage,
@@ -35,19 +36,7 @@ function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinat
 // ─── Helper: fetch a single task with git context + execution count ───────────
 
 function fetchTaskWithDetail(db: Database, taskId: number): Task | null {
-  const row = db
-    .query<TaskRow, [number]>(
-      `SELECT t.*,
-              gc.worktree_status, gc.branch_name, gc.worktree_path, 
-              (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count,
-              c.model AS conversation_model
-       FROM tasks t 
-       LEFT JOIN task_git_context gc ON gc.task_id = t.id
-       LEFT JOIN conversations c ON c.id = t.conversation_id
-       WHERE t.id = ?`,
-    )
-    .get(taskId);
-  return row ? mapTask(row) : null;
+  return fetchTaskWithModel(db, taskId);
 }
 
 export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, modelSettingsRepo?: ModelSettingsRepository) {

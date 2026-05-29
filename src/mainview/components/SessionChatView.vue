@@ -152,44 +152,28 @@ const session = computed(() => chatStore.activeSession);
 
 // Local model selection that syncs with session.model
 const selectedModelId = ref<string | null>(null);
-const isUserChangingModel = ref(false);
 
-// Sync selectedModelId when session changes (but not during user-initiated changes)
+// Sync selectedModelId when session changes
 watch(
   () => session.value?.model,
   (newModel) => {
-    console.log('[SessionChatView] session.model changed:', newModel, 'isUserChangingModel:', isUserChangingModel.value);
-    // Only sync if we're not in the middle of a user-initiated change
-    if (!isUserChangingModel.value) {
-      selectedModelId.value = newModel ?? workspaceStore.availableModels[0]?.id ?? null;
-    }
+    selectedModelId.value = newModel ?? workspaceStore.availableModels[0]?.id ?? null;
   },
   { immediate: true }
 );
 
 // Persist model changes to backend
-const previousModelId = ref<string | null>(null);
 watch(
   () => selectedModelId.value,
   async (newModel, oldModel) => {
-    console.log('[SessionChatView] selectedModelId changed:', oldModel, '->', newModel);
-    if (newModel !== oldModel && session.value && newModel !== previousModelId.value) {
+    if (newModel !== oldModel && session.value) {
       try {
-        console.log('[SessionChatView] Calling chatSessions.setModel for session', session.value.id);
-        isUserChangingModel.value = true;
         await api("chatSessions.setModel", {
           sessionId: session.value.id,
           model: newModel,
         });
-        previousModelId.value = newModel;
-        console.log('[SessionChatView] Model persisted successfully');
-        // Reset the flag after a short delay to allow the session update to propagate
-        setTimeout(() => {
-          isUserChangingModel.value = false;
-        }, 100);
       } catch (err) {
         console.error('[SessionChatView] Failed to set model:', err);
-        isUserChangingModel.value = false;
       }
     }
   }
