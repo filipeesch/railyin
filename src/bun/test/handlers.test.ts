@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
@@ -556,7 +556,7 @@ describe("conversations handlers", () => {
 
 describe("chat session parity handlers", () => {
   it("persists session MCP tool selections", async () => {
-    const handlers = mcpHandlers(db);
+    const handlers = mcpHandlers(db, { registryPool: null as any, resolveProject: () => null });
     db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
     const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
     db.run(
@@ -971,5 +971,98 @@ describe("tasks.delete — ESP-2: cascade atomicity", () => {
     expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM conversation_messages WHERE task_id = ?").get(taskId)!.n).toBe(0);
     expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM task_git_context WHERE task_id = ?").get(taskId)!.n).toBe(0);
     expect(db.query<{ n: number }, [number]>("SELECT COUNT(*) as n FROM conversations WHERE id = ?").get(conversationId)!.n).toBe(0);
+  });
+});
+
+describe("mcp.getProjectConfig / mcp.saveProjectConfig", () => {
+  let projectDir: string;
+
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), "railyn-project-config-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  function makeHandlers(resolveResult: { projectPath: string } | null) {
+    return mcpHandlers(db, {
+      registryPool: { invalidate: () => {} } as any,
+      resolveProject: () => resolveResult,
+    });
+  }
+
+  it("getProjectConfig returns path and content when file exists", async () => {
+    const railynDir = join(projectDir, ".railyn");
+    mkdirSync(railynDir, { recursive: true });
+    const configContent = JSON.stringify({ servers: [] }, null, 2);
+    writeFileSync(join(railynDir, "mcp.json"), configContent, "utf-8");
+
+    const handlers = makeHandlers({ projectPath: projectDir });
+    const result = await handlers["mcp.getProjectConfig"]({ workspaceKey: "default", projectKey: "my-project" });
+
+    expect(result.path).toBe(join(projectDir, ".railyn", "mcp.json"));
+    expect(result.content).toBe(configContent);
+  });
+
+  it("getProjectConfig returns empty template when file does not exist", async () => {
+    const handlers = makeHandlers({ projectPath: projectDir });
+    const result = await handlers["mcp.getProjectConfig"]({ workspaceKey: "default", projectKey: "my-project" });
+
+    expect(result.path).toBe(join(projectDir, ".railyn", "mcp.json"));
+    expect(JSON.parse(result.content)).toEqual({ servers: [] });
+  });
+
+  it("getProjectConfig throws when project is not found", async () => {
+    const handlers = makeHandlers(null);
+    await expect(
+      handlers["mcp.getProjectConfig"]({ workspaceKey: "default", projectKey: "unknown" }),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it("saveProjectConfig writes file to <projectPath>/.railyn/mcp.json", async () => {
+    const handlers = makeHandlers({ projectPath: projectDir });
+    const content = JSON.stringify({ servers: [] }, null, 2);
+    await handlers["mcp.saveProjectConfig"]({ workspaceKey: "default", projectKey: "my-project", content });
+
+    const writtenPath = join(projectDir, ".railyn", "mcp.json");
+    expect(existsSync(writtenPath)).toBe(true);
+    expect(readFileSync(writtenPath, "utf-8")).toBe(content);
+  });
+
+  it("saveProjectConfig creates .railyn directory when it does not exist", async () => {
+    const handlers = makeHandlers({ projectPath: projectDir });
+    await handlers["mcp.saveProjectConfig"]({
+      workspaceKey: "default",
+      projectKey: "my-project",
+      content: JSON.stringify({ servers: [] }),
+    });
+
+    expect(existsSync(join(projectDir, ".railyn"))).toBe(true);
+  });
+
+  it("saveProjectConfig throws for invalid JSON without writing", async () => {
+    const handlers = makeHandlers({ projectPath: projectDir });
+    await expect(
+      handlers["mcp.saveProjectConfig"]({ workspaceKey: "default", projectKey: "p", content: "not valid json {" }),
+    ).rejects.toThrow(SyntaxError);
+
+    expect(existsSync(join(projectDir, ".railyn", "mcp.json"))).toBe(false);
+  });
+
+  it("saveProjectConfig calls pool.invalidate for the project path", async () => {
+    let invalidatedPath: string | undefined;
+    const handlers = mcpHandlers(db, {
+      registryPool: { invalidate: (p: string) => { invalidatedPath = p; } } as any,
+      resolveProject: () => ({ projectPath: projectDir }),
+    });
+
+    await handlers["mcp.saveProjectConfig"]({
+      workspaceKey: "default",
+      projectKey: "my-project",
+      content: JSON.stringify({ servers: [] }),
+    });
+
+    expect(invalidatedPath).toBe(projectDir);
   });
 });

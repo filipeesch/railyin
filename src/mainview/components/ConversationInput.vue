@@ -276,7 +276,10 @@
           :task-id="props.taskId"
           :session-id="props.sessionId"
           :enabled-mcp-tools="props.enabledMcpTools ?? null"
-          @edit-config="onMcpEditConfig"
+          :project-key="props.projectKey"
+          :workspace-key="props.workspaceKey"
+          @edit-global-config="onMcpEditConfig"
+          @edit-project-config="onMcpEditProjectConfig"
           @tools-changed="(t) => emit('toolsChanged', t)"
         />
         <FileEditorOverlay
@@ -287,6 +290,15 @@
           note="Editing global MCP server configuration (~/.railyn/mcp.json). Save to reload servers."
           @close="mcpEditorVisible = false"
           @save="onMcpConfigSave"
+        />
+        <FileEditorOverlay
+          :visible="mcpProjectEditorVisible"
+          title="Edit project mcp.json"
+          :content="mcpProjectConfigContent"
+          language="json"
+          note="Editing project-level MCP server configuration (.railyn/mcp.json). Save to reload servers."
+          @close="mcpProjectEditorVisible = false"
+          @save="onMcpProjectConfigSave"
         />
       </template>
 
@@ -329,6 +341,7 @@ const props = defineProps<{
   taskId?: number | null;
   sessionId?: number | null;
   workspaceKey?: string | null;
+  projectKey?: string | null;
   modelId?: string | null;
   contextUsage?: { usedTokens: number; maxTokens: number; fraction: number } | null;
   compacting?: boolean;
@@ -366,6 +379,8 @@ const mcpPopoverRef = ref<InstanceType<typeof McpToolsPopover> | null>(null);
 const contextPopoverRef = ref<InstanceType<typeof ContextPopover> | null>(null);
 const mcpEditorVisible = ref(false);
 const mcpConfigContent = ref("{}");
+const mcpProjectEditorVisible = ref(false);
+const mcpProjectConfigContent = ref("{}");
 const mcpStatuses = ref<McpServerStatus[]>([]);
 
 // ─── Computed ─────────────────────────────────────────────────────────────────
@@ -571,6 +586,23 @@ async function onMcpEditConfig() {
 async function onMcpConfigSave(content: string) {
   await api("mcp.saveConfig", { content });
   mcpEditorVisible.value = false;
+}
+
+async function onMcpEditProjectConfig() {
+  if (!props.workspaceKey || !props.projectKey) return;
+  try {
+    const result = await api("mcp.getProjectConfig", { workspaceKey: props.workspaceKey, projectKey: props.projectKey });
+    mcpProjectConfigContent.value = result.content;
+    mcpProjectEditorVisible.value = true;
+  } catch (err) {
+    console.error("Failed to load project mcp config", err);
+  }
+}
+
+async function onMcpProjectConfigSave(content: string) {
+  if (!props.workspaceKey || !props.projectKey) return;
+  await api("mcp.saveProjectConfig", { workspaceKey: props.workspaceKey, projectKey: props.projectKey, content });
+  mcpProjectEditorVisible.value = false;
 }
 
 async function loadMcpStatus() {

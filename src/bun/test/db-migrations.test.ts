@@ -310,4 +310,64 @@ describe("runMigrations", () => {
     ).get("037_remove_model_from_tasks");
     expect(row?.checksum).not.toBe(oldChecksum);
   });
+
+  it("migration 044: converts NULL enabled_mcp_tools to '[]' in tasks and chat_sessions", async () => {
+    const rawDb = new Database(dbPath, { create: true });
+    // Mark all prior migrations as already applied so the runner only runs 044.
+    // We provide minimal table schemas that satisfy any migrations the runner might
+    // still attempt to apply (none — all are pre-marked as applied).
+    rawDb.exec(`
+      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')), checksum TEXT);
+      INSERT INTO schema_migrations (id) VALUES
+        ('001_initial'),('002_task_ux_improvements'),('003_logs'),('004_hunk_decisions'),
+        ('005_enabled_models'),('006_pending_messages'),('007_shell_command_approval'),
+        ('007_line_comments'),('008_hunk_decisions_sent'),('008_task_todos'),
+        ('009_execution_cost'),('010_drop_todo_context'),('011_execution_input_tokens'),
+        ('012_execution_output_tokens'),('013_execution_cache_creation_tokens'),
+        ('014_execution_cache_read_tokens'),('015_workspace_config_key'),
+        ('016_execution_checkpoints'),('016_task_position'),('017_task_position_backfill'),
+        ('018_git_base_sha'),('018_stream_events'),('019_add_parent_block_id'),
+        ('020_line_comment_columns'),('021_model_raw_messages'),
+        ('022_drop_workspace_project_fks'),('023_text_keys'),('024_todo_v2'),
+        ('025_todo_phase'),('026_chat_sessions'),('027_nullable_executions'),
+        ('028_chat_session_mcp_tools'),('029_conversation_stream_cleanup'),
+        ('030_stream_events_cleanup'),('031_conversation_pagination_index'),
+        ('032_perf_indices'),('033_stream_events_exec_index'),
+        ('034_needs_column_prompt'),('035_add_model_to_conversations'),
+        ('036_migrate_model_to_conversations'),('037_remove_model_from_tasks'),
+        ('038_seed_copilot_auto_model'),('039_restore_tasks_created_at_default'),
+        ('040_decision_records'),('041_last_engine_type'),
+        ('042_decisions_injection_tracking'),('043_model_settings');
+
+      CREATE TABLE tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enabled_mcp_tools TEXT
+      );
+      CREATE TABLE chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enabled_mcp_tools TEXT
+      );
+    `);
+
+    rawDb.run("INSERT INTO tasks (enabled_mcp_tools) VALUES (NULL)");
+    rawDb.run("INSERT INTO tasks (enabled_mcp_tools) VALUES (?)", ['["server:tool"]']);
+    rawDb.run("INSERT INTO chat_sessions (enabled_mcp_tools) VALUES (NULL)");
+    rawDb.run("INSERT INTO chat_sessions (enabled_mcp_tools) VALUES (?)", ['[]']);
+    rawDb.close();
+
+    await runMigrations();
+
+    const db = getDb();
+    const taskRows = db.query<{ enabled_mcp_tools: string | null }, []>(
+      "SELECT enabled_mcp_tools FROM tasks ORDER BY id",
+    ).all();
+    expect(taskRows[0].enabled_mcp_tools).toBe("[]");
+    expect(taskRows[1].enabled_mcp_tools).toBe('["server:tool"]');
+
+    const sessionRows = db.query<{ enabled_mcp_tools: string | null }, []>(
+      "SELECT enabled_mcp_tools FROM chat_sessions ORDER BY id",
+    ).all();
+    expect(sessionRows[0].enabled_mcp_tools).toBe("[]");
+    expect(sessionRows[1].enabled_mcp_tools).toBe("[]");
+  });
 });

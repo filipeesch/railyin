@@ -2,6 +2,7 @@ import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
 import type { IBoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
+import type { McpClientRegistry } from "../mcp/registry.ts";
 
 
 // ─── AskUser option ───────────────────────────────────────────────────────────
@@ -84,8 +85,10 @@ export interface ExecutionParams {
    */
   onRawModelMessage?: (message: RawModelMessage) => void;
 
-  /** MCP tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
+  /** MCP tool filter: [] = all disabled, string[] = "server:tool" pairs enabled. */
   enabledMcpTools?: string[] | null;
+  /** MCP client registry for this execution. null when no registry available. */
+  mcpRegistry?: McpClientRegistry | null;
   /** Optional user-provided attachments for the first turn of an execution. */
   attachments?: Attachment[];
   /** Called when the engine tool triggers a task workflow-state transition. */

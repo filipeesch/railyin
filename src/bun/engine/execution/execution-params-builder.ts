@@ -1,14 +1,19 @@
 import type { ExecutionParams, RawModelMessage } from "../types.ts";
 import type { TaskRow } from "../../db/row-types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
+import type { McpRegistryPool } from "../../mcp/registry-pool.ts";
+import type { McpClientRegistry } from "../../mcp/registry.ts";
 
 /**
  * Assembles ExecutionParams from a task row + pre-created signal.
  * Pure: no side effects — AbortController registration is done by StreamProcessor.createSignal().
  */
 export class ExecutionParamsBuilder {
+  private readonly pool: McpRegistryPool | null;
 
-  constructor() {}
+  constructor(pool: McpRegistryPool | null = null) {
+    this.pool = pool;
+  }
 
   private _buildBase(
     conversationId: number,
@@ -43,6 +48,7 @@ export class ExecutionParamsBuilder {
     onRawModelMessage: (raw: RawModelMessage) => void,
     attachments?: Attachment[],
     model?: string,
+    projectPath?: string,
   ): ExecutionParams {
     const taskContext: ExecutionParams["taskContext"] = {
       title: task.title,
@@ -50,6 +56,15 @@ export class ExecutionParamsBuilder {
     };
 
     const base = this._buildBase(conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments);
+
+    const enabledMcpTools: string[] = (() => {
+      if (!task.enabled_mcp_tools) return [];
+      try { return JSON.parse(task.enabled_mcp_tools); } catch { return []; }
+    })();
+
+    const mcpRegistry: McpClientRegistry | null = this.pool
+      ? (projectPath ? this.pool.getForProject(projectPath) : this.pool.getGlobalRegistry())
+      : null;
 
     return {
       ...base,
@@ -60,9 +75,8 @@ export class ExecutionParamsBuilder {
       model: model ?? task.conversation_model ?? "",
       signal,
       onRawModelMessage,
-      enabledMcpTools: task.enabled_mcp_tools
-        ? (() => { try { return JSON.parse(task.enabled_mcp_tools!); } catch { return null; } })()
-        : null,
+      enabledMcpTools,
+      mcpRegistry,
     };
   }
 
@@ -80,12 +94,16 @@ export class ExecutionParamsBuilder {
   ): ExecutionParams {
     const base = this._buildBase(conversationId, executionId, prompt, undefined, workingDirectory, signal, onRawModelMessage, attachments);
 
+    const mcpRegistry: McpClientRegistry | null = this.pool ? this.pool.getGlobalRegistry() : null;
+
     return {
       ...base,
       taskId: null,
       model,
-      enabledMcpTools,
+      enabledMcpTools: enabledMcpTools ?? [],
+      mcpRegistry,
       ...(taskContext ? { taskContext } : {}),
     };
   }
 }
+

@@ -6,7 +6,6 @@ import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { readdirSync, existsSync, readFileSync } from "fs";
 import { join, relative, extname, basename } from "path";
-import { getMcpRegistry } from "../../mcp/registry.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 
@@ -44,7 +43,7 @@ export class ClaudeEngine implements ExecutionEngine {
     );
 
     // Collect external MCP server configs from the registry for native Claude pass-through.
-    const mcpRegistry = getMcpRegistry();
+    const mcpRegistry = params.mcpRegistry ?? null;
     const externalMcpServers = mcpRegistry
       ? mcpRegistry.getStatus()
           .filter((s) => s.state === "running")

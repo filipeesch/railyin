@@ -152,6 +152,7 @@ export class TransitionExecutor {
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
         effectiveModel ?? undefined,
+        config.projects.find((p) => p.key === task.project_key)?.projectPath,
       ),
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),

@@ -21,7 +21,6 @@ import { getConfig } from "../../config/index.ts";
 import { readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, extname, basename, isAbsolute } from "path";
 import { homedir, tmpdir } from "os";
-import { getMcpRegistry } from "../../mcp/registry.ts";
 import { parseFileRef } from "../../utils/resolve-file-attachments.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
@@ -169,7 +168,7 @@ export class CopilotEngine implements ExecutionEngine {
       },
     };
 
-    const tools = buildCopilotTools(toolContext, getMcpRegistry(), params.enabledMcpTools, onSuspend);
+    const tools = buildCopilotTools(toolContext, params.mcpRegistry ?? null, params.enabledMcpTools ?? [], onSuspend);
 
     // Build system message — prepend task identity then append stage_instructions
     const taskBlock = taskContext
