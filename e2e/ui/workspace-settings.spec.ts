@@ -160,6 +160,74 @@ test.describe("W — workspace settings", () => {
         // No model selected — the dropdown should not show any model name
         await expect(modelSelect).not.toContainText(/gpt-4/i);
     });
+
+    test("W-9: Auto-approve toggle is visible in Workspace tab", async ({ page, api }) => {
+        api.returns("models.list", MODELS);
+        await goToSetup(page, api);
+        await page.getByRole("tab", { name: "Workspace" }).click();
+
+        await expect(page.locator(".field").filter({ hasText: /auto-approve shell commands/i })).toBeVisible();
+    });
+
+    test("W-10: toggle reflects false when config has shellAutoApprove: false", async ({ page, api }) => {
+        api
+            .returns("models.list", MODELS)
+            .returns("workspace.getConfig", makeWorkspace({ shellAutoApprove: false }));
+        await goToSetup(page, api);
+        await page.getByRole("tab", { name: "Workspace" }).click();
+
+        const toggle = page.locator(".field").filter({ hasText: /auto-approve shell commands/i }).locator(".p-toggleswitch-input");
+        await expect(toggle).not.toBeChecked();
+    });
+
+    test("W-11: toggle reflects true when config has shellAutoApprove: true", async ({ page, api }) => {
+        api
+            .returns("models.list", MODELS)
+            .returns("workspace.getConfig", makeWorkspace({ shellAutoApprove: true }));
+        await goToSetup(page, api);
+        await page.getByRole("tab", { name: "Workspace" }).click();
+
+        const toggle = page.locator(".field").filter({ hasText: /auto-approve shell commands/i }).locator(".p-toggleswitch-input");
+        await expect(toggle).toBeChecked();
+    });
+
+    test("W-12: enabling toggle and saving sends shellAutoApprove: true", async ({ page, api }) => {
+        api
+            .returns("models.list", MODELS)
+            .returns("workspace.getConfig", makeWorkspace({ shellAutoApprove: false }));
+        const updateCalls = api.capture("workspace.update", {});
+        await goToSetup(page, api);
+        await page.getByRole("tab", { name: "Workspace" }).click();
+
+        const toggleField = page.locator(".field").filter({ hasText: /auto-approve shell commands/i });
+        await toggleField.locator(".p-toggleswitch").click();
+        await page.getByRole("button", { name: /save settings/i }).click();
+
+        await expect(page.locator(".p-message-success")).toBeVisible({ timeout: 3_000 });
+        expect(updateCalls.some(c => {
+            const call = c as { shellAutoApprove?: boolean };
+            return call.shellAutoApprove === true;
+        })).toBe(true);
+    });
+
+    test("W-13: disabling toggle and saving sends shellAutoApprove: false", async ({ page, api }) => {
+        api
+            .returns("models.list", MODELS)
+            .returns("workspace.getConfig", makeWorkspace({ shellAutoApprove: true }));
+        const updateCalls = api.capture("workspace.update", {});
+        await goToSetup(page, api);
+        await page.getByRole("tab", { name: "Workspace" }).click();
+
+        const toggleField = page.locator(".field").filter({ hasText: /auto-approve shell commands/i });
+        await toggleField.locator(".p-toggleswitch").click();
+        await page.getByRole("button", { name: /save settings/i }).click();
+
+        await expect(page.locator(".p-message-success")).toBeVisible({ timeout: 3_000 });
+        expect(updateCalls.some(c => {
+            const call = c as { shellAutoApprove?: boolean };
+            return call.shellAutoApprove === false;
+        })).toBe(true);
+    });
 });
 
 // ─── Suite P — Project CRUD ────────────────────────────────────────────────

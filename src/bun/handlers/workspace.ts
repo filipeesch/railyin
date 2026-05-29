@@ -48,6 +48,7 @@ export function workspaceHandlers(db: Database) {
         availableEngines: config.engines.map((e) => ({ id: e.id, type: e.config.type })),
         allowedEngines: config.allowedEngineIds ?? allEngineIds,
         lsp: config.workspace.lsp,
+        shellAutoApprove: config.workspace.shell_auto_approve ?? false,
       };
     },
 
@@ -69,7 +70,7 @@ export function workspaceHandlers(db: Database) {
       return { key, name: params.name.trim() };
     },
 
-    "workspace.update": async (params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string }): Promise<Record<string, never>> => {
+    "workspace.update": async (params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string; shellAutoApprove?: boolean }): Promise<Record<string, never>> => {
       resetConfig();
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const patch: Partial<WorkspaceYaml> = {};
@@ -81,6 +82,9 @@ export function workspaceHandlers(db: Database) {
       }
       if (params.defaultModel !== undefined) {
         patch.default_model = params.defaultModel || undefined;
+      }
+      if (params.shellAutoApprove !== undefined) {
+        patch.shell_auto_approve = params.shellAutoApprove || undefined;
       }
       patchWorkspaceYaml(patch, workspaceKey);
       clearProviderCache();

@@ -443,6 +443,8 @@ export interface WorkspaceConfig {
   lsp?: {
     servers?: Array<{ name: string; command: string; args: string[]; extensions: string[]; projects?: string[] }>;
   };
+  /** When true, new tasks are created with shell auto-approve enabled by default. */
+  shellAutoApprove: boolean;
 }
 
 export interface WorkspaceSummary {
@@ -563,7 +565,7 @@ export type RailynAPI = {
     response: WorkspaceSummary;
   };
   "workspace.update": {
-    params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string };
+    params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string; shellAutoApprove?: boolean };
     response: Record<string, never>;
   };
   "workspace.resolveGitRoot": {

@@ -162,6 +162,8 @@ export interface WorkspaceYaml {
   lsp?: LspConfig;
   /** @deprecated Use engines.yaml instead. Kept for backward-compat detection only. */
   engine?: EngineConfig;
+  /** When true, new tasks are created with shell_auto_approve enabled by default. */
+  shell_auto_approve?: boolean;
 }
 
 export interface WorkspaceProjectYaml {
