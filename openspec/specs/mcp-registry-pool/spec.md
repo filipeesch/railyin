@@ -1,5 +1,8 @@
-## ADDED Requirements
+# mcp-registry-pool Specification
 
+## Purpose
+TBD - created by archiving change mcp-disabled-by-default. Update Purpose after archive.
+## Requirements
 ### Requirement: McpRegistryPool manages multiple registry instances
 A `McpRegistryPool` class SHALL manage one `McpClientRegistry` per project path plus one global registry. It SHALL expose a `getRegistry(projectPath?: string)` method that returns the appropriate registry instance and lazily initializes it if needed. The pool SHALL be the single injectable entry point for registry access at the app layer.
 
@@ -22,3 +25,4 @@ A `McpRegistryPool` class SHALL manage one `McpClientRegistry` per project path 
 #### Scenario: Pool shutdown
 - **WHEN** `pool.shutdown()` is called
 - **THEN** all managed registry instances call their own `shutdown()` methods to terminate server processes
+

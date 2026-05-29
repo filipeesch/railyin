@@ -1,5 +1,8 @@
-## ADDED Requirements
+# mcp-project-config-rpc Specification
 
+## Purpose
+TBD - created by archiving change mcp-disabled-by-default. Update Purpose after archive.
+## Requirements
 ### Requirement: Get project MCP config via RPC
 The system SHALL expose a `mcp.getProjectConfig` RPC method that reads `<projectPath>/.railyn/mcp.json` for a given workspace and project key, returning the file path and raw content string.
 
@@ -25,3 +28,4 @@ The system SHALL expose a `mcp.saveProjectConfig` RPC method that writes the pro
 #### Scenario: Save invalid JSON rejected
 - **WHEN** `mcp.saveProjectConfig` is called with content that is not valid JSON
 - **THEN** the server returns an error and the file is not written
+

@@ -19,6 +19,8 @@ A `McpRegistryPool` service SHALL manage per-project and global `McpClientRegist
 - **WHEN** a standalone chat session execution starts (no project_key)
 - **THEN** the global registry is used
 
+## MODIFIED Requirements
+
 ### Requirement: Server lifecycle state machine
 The registry SHALL maintain a state for each configured server: `idle`, `starting`, `running`, or `error`. On registry init, all servers start in `idle`. Connecting transitions through `starting` to `running` or `error`.
 

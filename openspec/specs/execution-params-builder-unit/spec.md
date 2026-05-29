@@ -1,5 +1,8 @@
-## MODIFIED Requirements
+# execution-params-builder-unit Specification
 
+## Purpose
+TBD - created by archiving change mcp-disabled-by-default-tests. Update Purpose after archive.
+## Requirements
 ### Requirement: enabled_mcp_tools null maps to empty array
 `ExecutionParamsBuilder.build()` and `buildForChat()` SHALL treat `null` and missing `enabled_mcp_tools` as `[]` (no tools enabled), not as a sentinel for "all tools".
 
@@ -26,3 +29,4 @@
 #### Scenario: pool DI — global registry used for chat builds
 - **WHEN** `buildForChat()` is called (session context, no project path)
 - **THEN** `params.mcpRegistry` SHALL be the registry returned by `pool.getGlobalRegistry()`
+

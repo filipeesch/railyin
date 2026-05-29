@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: MCP config file location and override
+### Requirement: MCP config file location and merge
 The system SHALL load MCP server configuration from two locations: `~/.railyn/mcp.json` (global) and `<project.path>/.railyn/mcp.json` (project-level). When a project-level config exists, it SHALL completely replace the global config for that project's tasks. No merging occurs — the project config is the sole source of servers for that scope.
 
 #### Scenario: Project config only
@@ -19,7 +19,7 @@ The system SHALL load MCP server configuration from two locations: `~/.railyn/mc
 - **WHEN** neither global nor project config file exists
 - **THEN** no MCP servers are loaded and the registry remains empty with no error
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Shared config normalization via config-loader
 A dedicated `src/bun/mcp/config-loader.ts` module SHALL provide `normalizeToMcpConfig(raw)` and `loadMcpConfigFile(path)` functions. All config loading — at boot and in RPC handlers — SHALL use this shared module.
