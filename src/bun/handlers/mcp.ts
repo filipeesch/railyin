@@ -5,13 +5,12 @@ import { mapChatSession, mapTask } from "../db/mappers.ts";
 import type { ChatSessionRow, TaskRow } from "../db/row-types.ts";
 import { getDataDir } from "../config/index.ts";
 import type { McpServerStatus } from "../mcp/types.ts";
-import { normalizeToMcpConfig } from "../mcp/config-loader.ts";
 import type { McpRegistryPool } from "../mcp/registry-pool.ts";
 import type { ChatSession, Task } from "../../shared/rpc-types.ts";
 
 export function mcpHandlers(db: Database, { registryPool, resolveProject }: {
   registryPool: McpRegistryPool;
-  resolveProject: (workspaceKey: string, projectKey: string) => { projectPath: string };
+  resolveProject: (workspaceKey: string, projectKey: string) => { projectPath: string } | null;
 }) {
   return {
     "mcp.getStatus": async (_params: Record<string, never>): Promise<McpServerStatus[]> => {
@@ -45,7 +44,9 @@ export function mcpHandlers(db: Database, { registryPool, resolveProject }: {
     },
 
     "mcp.getProjectConfig": async (params: { workspaceKey: string; projectKey: string }): Promise<{ path: string; content: string }> => {
-      const { projectPath } = resolveProject(params.workspaceKey, params.projectKey);
+      const project = resolveProject(params.workspaceKey, params.projectKey);
+      if (!project) throw new Error(`Project '${params.projectKey}' not found in workspace '${params.workspaceKey}'`);
+      const { projectPath } = project;
       const configPath = join(projectPath, ".railyn", "mcp.json");
       if (existsSync(configPath)) {
         return { path: configPath, content: readFileSync(configPath, "utf-8") };
@@ -54,7 +55,9 @@ export function mcpHandlers(db: Database, { registryPool, resolveProject }: {
     },
 
     "mcp.saveProjectConfig": async (params: { workspaceKey: string; projectKey: string; content: string }): Promise<{ ok: true }> => {
-      const { projectPath } = resolveProject(params.workspaceKey, params.projectKey);
+      const project = resolveProject(params.workspaceKey, params.projectKey);
+      if (!project) throw new Error(`Project '${params.projectKey}' not found in workspace '${params.workspaceKey}'`);
+      const { projectPath } = project;
       const configPath = join(projectPath, ".railyn", "mcp.json");
       const dir = dirname(configPath);
       JSON.parse(params.content); // validate JSON — throws if invalid
