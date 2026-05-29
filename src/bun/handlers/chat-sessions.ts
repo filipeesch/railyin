@@ -54,7 +54,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         }
 
         const sessionResult = db.run(
-          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES (?, ?, 'idle', ?)`,
+          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools) VALUES (?, ?, 'idle', ?, '[]')`,
           [wsKey, title, conversationId]
         );
         const sessionId = sessionResult.lastInsertRowid as number;

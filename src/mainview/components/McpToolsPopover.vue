@@ -72,12 +72,21 @@
 
       <div class="mcp-tools-popover__footer">
         <Button
-          label="Edit mcp.json"
+          label="Edit global mcp.json"
           icon="pi pi-pencil"
           size="small"
           severity="secondary"
           text
-          @click="onEditConfig"
+          @click="onEditGlobalConfig"
+        />
+        <Button
+          v-if="props.projectKey"
+          label="Edit project mcp.json"
+          icon="pi pi-pencil"
+          size="small"
+          severity="secondary"
+          text
+          @click="onEditProjectConfig"
         />
       </div>
     </div>
@@ -96,10 +105,13 @@ const props = defineProps<{
   taskId?: number | null;
   sessionId?: number | null;
   enabledMcpTools: string[] | null;
+  projectKey?: string | null;
+  workspaceKey?: string | null;
 }>();
 
 const emit = defineEmits<{
-  "edit-config": [];
+  "edit-global-config": [];
+  "edit-project-config": [];
   "tools-changed": [target: Task | ChatSession];
 }>();
 
@@ -162,19 +174,14 @@ function serverCheckState(server: McpServerStatus): "all" | "some" | "none" {
 }
 
 async function toggleServer(server: McpServerStatus, checked: boolean) {
-  let current = localEnabled.value;
-  if (current === null) {
-    current = servers.value.flatMap(s => s.tools.map(t => `${s.name}:${t.name}`));
-  }
+  const current = localEnabled.value ?? [];
   const serverKeys = server.tools.map(t => `${server.name}:${t.name}`);
-  let next: string[] | null;
+  let next: string[];
   if (checked) {
     next = [...new Set([...current, ...serverKeys])];
   } else {
     next = current.filter(k => !serverKeys.includes(k));
   }
-  const allKeys = servers.value.flatMap(s => s.tools.map(t => `${s.name}:${t.name}`));
-  if (next.length === allKeys.length) next = null;
   // Update local state immediately for instant visual feedback
   localEnabled.value = next;
   try {
@@ -189,28 +196,19 @@ async function toggleServer(server: McpServerStatus, checked: boolean) {
 // ─── Tool enable/disable ──────────────────────────────────────────────────────
 
 function isToolEnabled(serverName: string, toolName: string): boolean {
-  if (localEnabled.value === null) return true;
+  if (localEnabled.value === null) return false;
   return localEnabled.value.includes(`${serverName}:${toolName}`);
 }
 
 async function toggleTool(serverName: string, toolName: string, enabled: boolean) {
   const key = `${serverName}:${toolName}`;
-  let current = localEnabled.value;
+  const current = localEnabled.value ?? [];
 
-  if (current === null) {
-    current = servers.value.flatMap(s => s.tools.map(t => `${s.name}:${t.name}`));
-  }
-
-  let next: string[] | null;
+  let next: string[];
   if (enabled) {
     next = [...new Set([...current, key])];
   } else {
     next = current.filter(k => k !== key);
-  }
-
-  const allKeys = servers.value.flatMap(s => s.tools.map(t => `${s.name}:${t.name}`));
-  if (next.length === allKeys.length && allKeys.every(k => next!.includes(k))) {
-    next = null;
   }
 
   // Update local state immediately for instant visual feedback
@@ -245,11 +243,15 @@ async function reloadServer(name: string) {
 
 // ─── Edit config ──────────────────────────────────────────────────────────────
 
-function onEditConfig() {
-  emit("edit-config");
+function onEditGlobalConfig() {
+  emit("edit-global-config");
 }
 
-function saveTools(enabledTools: string[] | null): Promise<Task | ChatSession> {
+function onEditProjectConfig() {
+  emit("edit-project-config");
+}
+
+function saveTools(enabledTools: string[]): Promise<Task | ChatSession> {
   if (props.taskId != null) {
     return api("mcp.setTaskTools", { taskId: props.taskId, enabledTools });
   }

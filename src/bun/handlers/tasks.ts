@@ -112,9 +112,9 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
 
       const taskResult = db.run(
         `INSERT INTO tasks
-           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position)
+           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position, enabled_mcp_tools)
          VALUES (?, ?, ?, ?, 'backlog', 'idle', ?,
-           COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000)`,
+           COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000, '[]')`,
         [
           params.boardId,
           params.projectKey,

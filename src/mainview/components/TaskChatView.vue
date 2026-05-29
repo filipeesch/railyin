@@ -144,6 +144,8 @@
         :execution-state="task.executionState"
         :task-id="task.id"
         :model-id="task.model"
+        :workspace-key="taskWorkspaceKey"
+        :project-key="task.projectKey"
         :context-usage="conversationStore.contextUsage"
         :compacting="compacting"
         :enabled-mcp-tools="task.enabledMcpTools ?? null"

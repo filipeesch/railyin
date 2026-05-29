@@ -44,6 +44,7 @@ import { CrossEngineContextInjector } from "../conversation/cross-engine-context
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { CustomPromptInjector } from "./execution/custom-prompt-injector.ts";
+import type { McpRegistryPool } from "../mcp/registry-pool.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -75,6 +76,7 @@ export class Orchestrator implements ExecutionCoordinator {
     onRawMessageEnqueued?: (item: RawMessageItem) => void,
     worktreeManager?: WorktreeManager,
     modelSettingsRepo?: ModelSettingsRepository,
+    registryPool?: McpRegistryPool,
   ) {
     this.db = db;
     this.registry = registry;
@@ -92,7 +94,7 @@ export class Orchestrator implements ExecutionCoordinator {
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
-    this.paramsBuilder = new ExecutionParamsBuilder();
+    this.paramsBuilder = new ExecutionParamsBuilder(registryPool ?? null);
     this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
     const customPromptInjector = new CustomPromptInjector();
 
