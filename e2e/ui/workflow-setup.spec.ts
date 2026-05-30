@@ -262,14 +262,14 @@ test.describe("WE — workflow editor overlay", () => {
   });
 });
 
-// ─── Suite WB — Board header has no workflow-edit pencil ─────────────────────
+// ─── Suite WB — Board header workflow-edit pencil ────────────────────────────
 
 test.describe("WB — board header", () => {
-  test("WB-1: the board header has no workflow-edit pencil button", async ({ page, api }) => {
+  test("WB-1: the board header shows a workflow-edit pencil button when a board is active", async ({ page, api }) => {
     api.returns("boards.list", [makeBoard()]);
     await page.goto("/");
     await expect(page.locator(".board-header")).toBeVisible({ timeout: 5_000 });
-    await expect(page.locator(".board-header").getByRole("button", { name: /edit workflow/i })).toHaveCount(0);
+    await expect(page.locator(".board-header").getByRole("button", { name: /edit workflow/i })).toHaveCount(1);
   });
 });
 
