@@ -1,5 +1,5 @@
 /**
- * worktree-management.spec.ts — UI tests for the worktree management feature in the Info tab.
+ * worktree-management.spec.ts — UI tests for the worktree management feature in the Git tab.
  *
  * Suites:
  *   W-A — Display states (7 tests)
@@ -8,6 +8,8 @@
  *   W-D — Create worktree: existing branch mode (4 tests)
  *   W-E — Error state & retry (4 tests)
  *   W-F — Guard rails: block during running execution (3 tests)
+ *   W-G — Task overlay save behavior (3 tests)
+ *   W-H — Navigation and regression guards (6 tests)
  */
 
 import { test, expect } from "./fixtures";
@@ -23,6 +25,13 @@ async function openInfoTab(page: import("@playwright/test").Page, taskId: number
   await expect(page.locator(".task-detail")).toBeVisible();
   await page.locator(".tab-btn", { hasText: "Info" }).click();
   await expect(page.locator(".task-tab-info")).toBeVisible();
+}
+
+async function openGitTab(page: import("@playwright/test").Page, taskId: number) {
+  await page.locator(`[data-task-id="${taskId}"]`).click();
+  await expect(page.locator(".task-detail")).toBeVisible();
+  await page.locator(".tab-btn", { hasText: "Git" }).click();
+  await expect(page.locator(".task-tab-git")).toBeVisible();
 }
 
 function makeReadyTask(overrides: Partial<Task> = {}): Task {
@@ -42,9 +51,9 @@ test.describe("W-A — display states", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info .info-section", { hasText: "Worktree" })).not.toBeVisible();
+    await expect(page.locator(".task-tab-git .info-section", { hasText: "Worktree" })).not.toBeVisible();
   });
 
   test("W-A-2: worktreeStatus ready → branch and path rows visible", async ({ page, api }) => {
@@ -52,10 +61,10 @@ test.describe("W-A — display states", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info .info-value--mono", { hasText: "task/1-my-task" })).toBeVisible();
-    await expect(page.locator(".task-tab-info .info-value--mono", { hasText: "/tmp/railyn-test/task-1-my-task" })).toBeVisible();
+    await expect(page.locator(".task-tab-git .info-value--mono", { hasText: "task/1-my-task" })).toBeVisible();
+    await expect(page.locator(".task-tab-git .info-value--mono", { hasText: "/tmp/railyn-test/task-1-my-task" })).toBeVisible();
   });
 
   test("W-A-3: worktreeStatus ready → delete button visible next to path", async ({ page, api }) => {
@@ -63,9 +72,9 @@ test.describe("W-A — display states", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info button:has(.pi-trash)")).toBeVisible();
+    await expect(page.locator(".task-tab-git button:has(.pi-trash)")).toBeVisible();
   });
 
   test("W-A-4: worktreeStatus creating → spinner visible, no delete/create controls", async ({ page, api }) => {
@@ -73,11 +82,11 @@ test.describe("W-A — display states", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info .pi-spin")).toBeVisible();
-    await expect(page.locator(".task-tab-info button:has(.pi-trash)")).not.toBeVisible();
-    await expect(page.locator(".task-tab-info .wt-create-form")).not.toBeVisible();
+    await expect(page.locator(".task-tab-git .pi-spin")).toBeVisible();
+    await expect(page.locator(".task-tab-git button:has(.pi-trash)")).not.toBeVisible();
+    await expect(page.locator(".task-tab-git .wt-create-form")).not.toBeVisible();
   });
 
   test("W-A-5: worktreeStatus not_created → create form visible", async ({ page, api }) => {
@@ -86,9 +95,9 @@ test.describe("W-A — display states", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info .wt-create-form")).toBeVisible();
+    await expect(page.locator(".task-tab-git .wt-create-form")).toBeVisible();
   });
 
   test("W-A-6: worktreeStatus removed → create form visible", async ({ page, api }) => {
@@ -97,9 +106,9 @@ test.describe("W-A — display states", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info .wt-create-form")).toBeVisible();
+    await expect(page.locator(".task-tab-git .wt-create-form")).toBeVisible();
   });
 
   test("W-A-7: worktreeStatus error → error indicator + Retry button", async ({ page, api }) => {
@@ -108,10 +117,10 @@ test.describe("W-A — display states", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info .info-value--danger", { hasText: "error" })).toBeVisible();
-    await expect(page.locator(".task-tab-info button", { hasText: "Retry" })).toBeVisible();
+    await expect(page.locator(".task-tab-git .info-value--danger", { hasText: "error" })).toBeVisible();
+    await expect(page.locator(".task-tab-git button", { hasText: "Retry" })).toBeVisible();
   });
 });
 
@@ -123,12 +132,12 @@ test.describe("W-B — delete worktree", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await page.locator(".task-tab-info button:has(.pi-trash)").click();
+    await page.locator(".task-tab-git button:has(.pi-trash)").click();
 
-    await expect(page.locator(".task-tab-info .delete-confirm")).toBeVisible();
-    await expect(page.locator(".task-tab-info .delete-confirm__text")).toContainText("/tmp/railyn-test/task-1-my-task");
+    await expect(page.locator(".task-tab-git .delete-confirm")).toBeVisible();
+    await expect(page.locator(".task-tab-git .delete-confirm__text")).toContainText("/tmp/railyn-test/task-1-my-task");
   });
 
   test("W-B-2: confirm Cancel → dialog dismissed, removeWorktree NOT called", async ({ page, api }) => {
@@ -137,14 +146,14 @@ test.describe("W-B — delete worktree", () => {
     const removeCalls = api.capture("tasks.removeWorktree", undefined);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await page.locator(".task-tab-info button:has(.pi-trash)").click();
-    await expect(page.locator(".task-tab-info .delete-confirm")).toBeVisible();
+    await page.locator(".task-tab-git button:has(.pi-trash)").click();
+    await expect(page.locator(".task-tab-git .delete-confirm")).toBeVisible();
 
-    await page.locator(".task-tab-info .delete-confirm__actions button", { hasText: "Cancel" }).click();
+    await page.locator(".task-tab-git .delete-confirm__actions button", { hasText: "Cancel" }).click();
 
-    await expect(page.locator(".task-tab-info .delete-confirm")).not.toBeVisible();
+    await expect(page.locator(".task-tab-git .delete-confirm")).not.toBeVisible();
     expect(removeCalls).toHaveLength(0);
   });
 
@@ -154,10 +163,10 @@ test.describe("W-B — delete worktree", () => {
     const removeCalls = api.capture("tasks.removeWorktree", undefined);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await page.locator(".task-tab-info button:has(.pi-trash)").click();
-    await page.locator(".task-tab-info .delete-confirm__actions button", { hasText: "Delete" }).click();
+    await page.locator(".task-tab-git button:has(.pi-trash)").click();
+    await page.locator(".task-tab-git .delete-confirm__actions button", { hasText: "Delete" }).click();
 
     await expect.poll(() => removeCalls.length).toBe(1);
     expect((removeCalls[0] as { taskId: number }).taskId).toBe(42);
@@ -171,14 +180,14 @@ test.describe("W-B — delete worktree", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await page.locator(".task-tab-info button:has(.pi-trash)").click();
-    await page.locator(".task-tab-info .delete-confirm__actions button", { hasText: "Delete" }).click();
+    await page.locator(".task-tab-git button:has(.pi-trash)").click();
+    await page.locator(".task-tab-git .delete-confirm__actions button", { hasText: "Delete" }).click();
 
     ws.push({ type: "task.updated", payload: removedTask });
 
-    await expect(page.locator(".task-tab-info .wt-create-form")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".task-tab-git .wt-create-form")).toBeVisible({ timeout: 5_000 });
   });
 
   test("W-B-5: removeWorktree returns warning → warning text shown", async ({ page, api }) => {
@@ -187,14 +196,14 @@ test.describe("W-B — delete worktree", () => {
     api.returns("tasks.removeWorktree", { warning: "Some uncommitted changes remain" } as unknown as undefined);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await page.locator(".task-tab-info button:has(.pi-trash)").click();
-    await page.locator(".task-tab-info .delete-confirm__actions button", { hasText: "Delete" }).click();
+    await page.locator(".task-tab-git button:has(.pi-trash)").click();
+    await page.locator(".task-tab-git .delete-confirm__actions button", { hasText: "Delete" }).click();
 
     // warning may be shown via toast or inline — check for the warning text
-    await expect(page.locator(".task-tab-info .delete-confirm__warning")).toBeVisible({ timeout: 5_000 });
-    await expect(page.locator(".task-tab-info .delete-confirm__warning")).toContainText("uncommitted");
+    await expect(page.locator(".task-tab-git .delete-confirm__warning")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".task-tab-git .delete-confirm__warning")).toContainText("uncommitted");
   });
 });
 
@@ -207,7 +216,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     await expect(page.locator(".wt-mode-btn--active", { hasText: "New branch" })).toBeVisible();
   });
@@ -218,7 +227,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     const branchInput = page.locator(".wt-create-form input[placeholder*='task']").first();
     await expect(branchInput).toHaveValue(/task\/21-/);
@@ -230,7 +239,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     const pathInput = page.locator(".wt-create-form input[placeholder*='path']").first();
     // Must be full path: <worktreeBasePath>/<branch-slug>
@@ -245,7 +254,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.delayed("workspace.getConfig", makeWorkspace({ worktreeBasePath: "/tmp/async-base" }), 300);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     const pathInput = page.locator(".wt-create-form input[placeholder*='path']").first();
     // Initially empty (no base path yet), then populated once config arrives
@@ -259,7 +268,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.returns("workspace.getConfig", makeWorkspace({ worktreeBasePath: "" }));
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     const pathInput = page.locator(".wt-create-form input[placeholder*='path']").first();
     // Empty — user must fill manually
@@ -277,7 +286,7 @@ test.describe("W-C — create: new branch mode", () => {
     const branchCalls = api.capture("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     await expect.poll(() => branchCalls.length, { timeout: 5_000 }).toBeGreaterThan(0);
     expect((branchCalls[0] as { taskId: number }).taskId).toBe(23);
@@ -289,7 +298,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     const branchInput = page.locator(".wt-create-form input[placeholder*='task']").first();
     await branchInput.clear();
@@ -303,7 +312,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     // The PrimeVue Select shows options in an overlay on click
     const fromSelect = page.locator(".wt-create-form .wt-field", { hasText: "From" }).locator(".p-select");
@@ -323,7 +332,7 @@ test.describe("W-C — create: new branch mode", () => {
     const createCalls = api.capture("tasks.createWorktree", undefined);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     // Select source branch
     const fromSelect = page.locator(".wt-create-form .wt-field", { hasText: "From" }).locator(".p-select");
@@ -349,13 +358,13 @@ test.describe("W-C — create: new branch mode", () => {
     api.returns("tasks.createWorktree", undefined);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     await page.locator(".wt-create-form button", { hasText: "Create Worktree" }).click();
     ws.push({ type: "task.updated", payload: readyTask });
 
-    await expect(page.locator(".task-tab-info .wt-create-form")).not.toBeVisible({ timeout: 5_000 });
-    await expect(page.locator(".task-tab-info .info-value--mono", { hasText: "task/1-my-task" })).toBeVisible();
+    await expect(page.locator(".task-tab-git .wt-create-form")).not.toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".task-tab-git .info-value--mono", { hasText: "task/1-my-task" })).toBeVisible();
   });
 
   test("W-C-9: while create is in-flight → Create button shows loading state", async ({ page, api }) => {
@@ -366,7 +375,7 @@ test.describe("W-C — create: new branch mode", () => {
     api.handle("tasks.createWorktree", () => new Promise(() => { }));
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     await page.locator(".wt-create-form button", { hasText: "Create Worktree" }).click();
 
@@ -383,7 +392,7 @@ test.describe("W-D — create: existing branch mode", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     await page.locator(".wt-mode-btn", { hasText: "Existing branch" }).click();
 
@@ -399,7 +408,7 @@ test.describe("W-D — create: existing branch mode", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     await page.locator(".wt-mode-btn", { hasText: "Existing branch" }).click();
 
@@ -416,7 +425,7 @@ test.describe("W-D — create: existing branch mode", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     await page.locator(".wt-mode-btn", { hasText: "Existing branch" }).click();
 
@@ -430,7 +439,7 @@ test.describe("W-D — create: existing branch mode", () => {
     const createCalls = api.capture("tasks.createWorktree", undefined);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
     await page.locator(".wt-mode-btn", { hasText: "Existing branch" }).click();
 
@@ -457,9 +466,9 @@ test.describe("W-E — error state and retry", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info button", { hasText: "Retry" })).toBeVisible();
+    await expect(page.locator(".task-tab-git button", { hasText: "Retry" })).toBeVisible();
   });
 
   test("W-E-2: click Retry → create form expands", async ({ page, api }) => {
@@ -468,11 +477,11 @@ test.describe("W-E — error state and retry", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await page.locator(".task-tab-info button", { hasText: "Retry" }).click();
+    await page.locator(".task-tab-git button", { hasText: "Retry" }).click();
 
-    await expect(page.locator(".task-tab-info .wt-create-form")).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator(".task-tab-git .wt-create-form")).toBeVisible({ timeout: 3_000 });
   });
 
   test("W-E-3: tasks.createWorktree rejects → error message shown in form", async ({ page, api }) => {
@@ -482,9 +491,9 @@ test.describe("W-E — error state and retry", () => {
     api.handle("tasks.createWorktree", () => { throw new Error("git error: branch already exists"); });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await page.locator(".task-tab-info button", { hasText: "Retry" }).click();
+    await page.locator(".task-tab-git button", { hasText: "Retry" }).click();
     await page.locator(".wt-create-form button", { hasText: "Create Worktree" }).click();
 
     await expect(page.locator(".wt-create-form .wt-error")).toBeVisible({ timeout: 5_000 });
@@ -498,9 +507,9 @@ test.describe("W-E — error state and retry", () => {
     api.handle("tasks.createWorktree", () => { throw new Error("failed"); });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await page.locator(".task-tab-info button", { hasText: "Retry" }).click();
+    await page.locator(".task-tab-git button", { hasText: "Retry" }).click();
     const createBtn = page.locator(".wt-create-form button", { hasText: "Create Worktree" });
     await createBtn.click();
 
@@ -517,9 +526,9 @@ test.describe("W-F — guard rails during running execution", () => {
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info button:has(.pi-trash)")).toBeDisabled();
+    await expect(page.locator(".task-tab-git button:has(.pi-trash)")).toBeDisabled();
   });
 
   test("W-F-2: executionState running + worktreeStatus not_created → create form hidden", async ({ page, api }) => {
@@ -528,9 +537,9 @@ test.describe("W-F — guard rails during running execution", () => {
     api.returns("tasks.listBranches", { branches: BRANCHES });
 
     await page.goto("/");
-    await openInfoTab(page, task.id);
+    await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-info .wt-create-form")).not.toBeVisible();
+    await expect(page.locator(".task-tab-git .wt-create-form")).not.toBeVisible();
   });
 
   test("W-F-3: WS update sets executionState idle → delete button becomes enabled", async ({ page, api, ws }) => {
@@ -539,13 +548,13 @@ test.describe("W-F — guard rails during running execution", () => {
     api.handle("tasks.list", () => [runningTask]);
 
     await page.goto("/");
-    await openInfoTab(page, runningTask.id);
+    await openGitTab(page, runningTask.id);
 
-    await expect(page.locator(".task-tab-info button:has(.pi-trash)")).toBeDisabled();
+    await expect(page.locator(".task-tab-git button:has(.pi-trash)")).toBeDisabled();
 
     ws.push({ type: "task.updated", payload: idleTask });
 
-    await expect(page.locator(".task-tab-info button:has(.pi-trash)")).toBeEnabled({ timeout: 5_000 });
+    await expect(page.locator(".task-tab-git button:has(.pi-trash)")).toBeEnabled({ timeout: 5_000 });
   });
 });
 
@@ -602,5 +611,92 @@ test.describe("W-G — task overlay save behavior", () => {
     const saveBtn = page.locator(".task-overlay__footer button:has-text('Save')");
     await expect(saveBtn).toBeVisible();
     await expect(saveBtn).toBeDisabled();
+  });
+});
+
+// ─── Suite W-H — Navigation and regression guards ────────────────────────────
+
+test.describe("W-H — navigation and regression guards", () => {
+  test("W-H-1: Git tab button is visible in the drawer toolbar", async ({ page, api }) => {
+    const task = makeReadyTask();
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+    await page.locator(`[data-task-id="${task.id}"]`).click();
+    await expect(page.locator(".task-detail")).toBeVisible();
+
+    await expect(page.locator(".tab-btn", { hasText: "Git" })).toBeVisible();
+  });
+
+  test("W-H-2: Clicking Git tab shows worktree content (.task-tab-git visible)", async ({ page, api }) => {
+    const task = makeReadyTask();
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+    await page.locator(`[data-task-id="${task.id}"]`).click();
+    await expect(page.locator(".task-detail")).toBeVisible();
+
+    await page.locator(".tab-btn", { hasText: "Git" }).click();
+    await expect(page.locator(".task-tab-git")).toBeVisible();
+  });
+
+  test("W-H-3: Tab order is Chat, Info, Git, Decisions", async ({ page, api }) => {
+    const task = makeReadyTask();
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+    await page.locator(`[data-task-id="${task.id}"]`).click();
+    await expect(page.locator(".task-detail")).toBeVisible();
+
+    const tabs = page.locator(".tab-btn");
+    await expect(tabs).toHaveCount(4);
+    await expect(tabs.nth(0)).toContainText("Chat");
+    await expect(tabs.nth(1)).toContainText("Info");
+    await expect(tabs.nth(2)).toContainText("Git");
+    await expect(tabs.nth(3)).toContainText("Decisions");
+  });
+
+  test("W-H-4: Info tab does NOT show a Worktree section for a ready task (regression guard)", async ({ page, api }) => {
+    const task = makeReadyTask();
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+    await openInfoTab(page, task.id);
+
+    await expect(page.locator(".task-tab-info .info-section", { hasText: "Worktree" })).not.toBeVisible();
+  });
+
+  test("W-H-5: Info tab does NOT show .wt-create-form for a not_created task (regression guard)", async ({ page, api }) => {
+    const task = makeTask({ worktreeStatus: "not_created" });
+    api.returns("tasks.listBranches", { branches: BRANCHES });
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+    await openInfoTab(page, task.id);
+
+    await expect(page.locator(".task-tab-info .wt-create-form")).not.toBeVisible();
+  });
+
+  test("W-H-6: Delete confirmation is dismissed after switching away from Git tab and returning", async ({ page, api }) => {
+    const task = makeReadyTask({ id: 60 });
+    api.handle("tasks.list", () => [task]);
+
+    await page.goto("/");
+    await openGitTab(page, task.id);
+
+    // Trigger delete confirmation
+    await page.locator(".task-tab-git button:has(.pi-trash)").click();
+    await expect(page.locator(".task-tab-git .delete-confirm")).toBeVisible();
+
+    // Switch away to Chat tab
+    await page.locator(".tab-btn", { hasText: "Chat" }).click();
+    await expect(page.locator(".task-tab-git")).not.toBeVisible();
+
+    // Switch back to Git tab
+    await page.locator(".tab-btn", { hasText: "Git" }).click();
+    await expect(page.locator(".task-tab-git")).toBeVisible();
+
+    // Delete confirmation should be gone (TaskGitPanel remounted, confirmingDelete reset)
+    await expect(page.locator(".task-tab-git .delete-confirm")).not.toBeVisible();
   });
 });

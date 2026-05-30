@@ -158,6 +158,16 @@ test.describe("TD — task drawer coverage", () => {
         await expect(card.locator(".transition-card__details-body")).not.toContainText("Expanded instructions for transition card");
         await expect(card).not.toContainText("Source");
     });
+
+    test("TD-8: drawer shows Git tab button and switching to it renders .task-tab-git", async ({ page, task }) => {
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".task-chat-view .tab-btn:has-text('Git')")).toBeVisible();
+        await page.locator(".task-chat-view .tab-btn:has-text('Git')").click();
+        await expect(page.locator(".task-chat-view .tab-btn--active")).toContainText("Git");
+        await expect(page.locator(".task-chat-view .task-tab-git")).toBeVisible();
+    });
 });
 
 // ─── Suite TD-B — Launch buttons ─────────────────────────────────────────────

@@ -83,9 +83,9 @@ test.describe("CS-A — toolbar button: visibility based on worktreePath", () =>
     await expect(page.locator(".task-detail button:has(.pi-code)")).not.toBeVisible();
     await expect(page.locator(".task-detail button:has(.pi-desktop)")).not.toBeVisible();
 
-    // Switch to Info tab and create worktree
-    await page.locator(".tab-btn", { hasText: "Info" }).click();
-    await expect(page.locator(".task-tab-info")).toBeVisible();
+    // Switch to Git tab and create worktree
+    await page.locator(".tab-btn", { hasText: "Git" }).click();
+    await expect(page.locator(".task-tab-git")).toBeVisible();
     await page.locator(".wt-create-form button", { hasText: "Create Worktree" }).click();
 
     // Wait for worktree creation to complete by pushing a task update via WS
