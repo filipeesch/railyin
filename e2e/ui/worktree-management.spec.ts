@@ -640,7 +640,7 @@ test.describe("W-H — navigation and regression guards", () => {
     await expect(page.locator(".task-tab-git")).toBeVisible();
   });
 
-  test("W-H-3: Tab order is Chat, Info, Git, Decisions", async ({ page, api }) => {
+  test("W-H-3: Tab order is Chat, Info, Git, Decisions, Notes", async ({ page, api }) => {
     const task = makeReadyTask();
     api.handle("tasks.list", () => [task]);
 
@@ -649,11 +649,12 @@ test.describe("W-H — navigation and regression guards", () => {
     await expect(page.locator(".task-detail")).toBeVisible();
 
     const tabs = page.locator(".tab-btn");
-    await expect(tabs).toHaveCount(4);
+    await expect(tabs).toHaveCount(5);
     await expect(tabs.nth(0)).toContainText("Chat");
     await expect(tabs.nth(1)).toContainText("Info");
     await expect(tabs.nth(2)).toContainText("Git");
     await expect(tabs.nth(3)).toContainText("Decisions");
+    await expect(tabs.nth(4)).toContainText("Notes");
   });
 
   test("W-H-4: Info tab does NOT show a Worktree section for a ready task (regression guard)", async ({ page, api }) => {
