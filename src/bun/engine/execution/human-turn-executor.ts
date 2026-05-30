@@ -1,8 +1,9 @@
 import type { ConversationMessage } from "../../../shared/rpc-types";
 import type { Attachment } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
-import { mapTask, mapConversationMessage } from "../../db/mappers";
+import { mapConversationMessage } from "../../db/mappers";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
+import { fetchTaskWithModel } from "../../db/task-queries";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry";
@@ -67,12 +68,7 @@ export class HumanTurnExecutor {
         "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
         [task.current_execution_id],
       );
-      this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>(
-        `SELECT t.*, c.model AS conversation_model 
-         FROM tasks t 
-         LEFT JOIN conversations c ON c.id = t.conversation_id 
-         WHERE t.id = ?`
-      ).get(taskId)!));
+      this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
       const resumeEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
       try {
         await resumeEngine.resume(task.current_execution_id, { type: "ask_user", content: engineContent ?? content });
@@ -110,12 +106,7 @@ export class HumanTurnExecutor {
           "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
           [newExecutionId, taskId],
         );
-        this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>(
-          `SELECT t.*, c.model AS conversation_model 
-           FROM tasks t 
-           LEFT JOIN conversations c ON c.id = t.conversation_id 
-           WHERE t.id = ?`
-        ).get(taskId)!));
+        this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
 
         const signal = this.streamProcessor.createSignal(newExecutionId);
         const execParams = {
@@ -165,12 +156,7 @@ export class HumanTurnExecutor {
       "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
       [executionId, taskId],
     );
-    this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>(
-      `SELECT t.*, c.model AS conversation_model 
-       FROM tasks t 
-       LEFT JOIN conversations c ON c.id = t.conversation_id 
-       WHERE t.id = ?`
-    ).get(taskId)!));
+    this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
 
     const resolvedPrompt = engineContent ?? content;
     const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);

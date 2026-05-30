@@ -14,8 +14,7 @@ import type { Database } from "bun:sqlite";
 import { ConvMessageBuffer } from "../../conversation/conv-message-buffer.ts";
 import type { WriteBuffer } from "../../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "./raw-message-buffer.ts";
-import { mapTask } from "../../db/mappers.ts";
-import type { TaskRow } from "../../db/row-types.ts";
+import { fetchTaskWithModel } from "../../db/task-queries.ts";
 
 /**
  * Per-token delta event types that are broadcast immediately but not persisted to
@@ -495,16 +494,14 @@ export class StreamProcessor {
       this.clearClaudeExecution(executionId);
 
       if (taskId != null) {
-        const finalRow = db.query<TaskRow, [number]>(
-          `SELECT t.*, c.model AS conversation_model
-           FROM tasks t
-           LEFT JOIN conversations c ON c.id = t.conversation_id
-           WHERE t.id = ?`,
-        ).get(taskId);
-        if (finalRow) {
-          this.onTaskUpdated(mapTask(finalRow));
+        const finalTask = fetchTaskWithModel(db, taskId);
+        if (finalTask) {
+          this.onTaskUpdated(finalTask);
 
-          if (finalRow.needs_column_prompt === 1) {
+          const finalRow = db.query<{ needs_column_prompt: number; workflow_state: string }, [number]>(
+            "SELECT needs_column_prompt, workflow_state FROM tasks WHERE id = ?",
+          ).get(taskId);
+          if (finalRow?.needs_column_prompt === 1) {
             db.run("UPDATE tasks SET needs_column_prompt = 0 WHERE id = ?", [taskId]);
             void this.onDeferredTransition(taskId, finalRow.workflow_state);
           } else {

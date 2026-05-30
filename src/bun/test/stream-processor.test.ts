@@ -300,6 +300,43 @@ describe("StreamProcessor", () => {
     const remaining = db.query<{ c: number }, [number]>("SELECT COUNT(*) as c FROM pending_messages WHERE task_id = ?").get(taskId);
     expect(remaining?.c).toBe(1); // NOT deleted — deferred path skips pending drain
   });
+
+  it("SP-GC-1: onTaskUpdated receives Task with worktreePath when task_git_context row exists", async () => {
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, ?, ?)",
+      [taskId, "/tmp/git-root", "/wt/1", "ready", "feature/test"],
+    );
+
+    let capturedTask: import("../../shared/rpc-types.ts").Task | null = null;
+    const sp = new StreamProcessor(
+      db, fakeRawBuffer, noop as never, noop as never,
+      (task) => { capturedTask = task; },
+      noop as never,
+      () => {},
+    );
+
+    await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
+
+    expect(capturedTask).not.toBeNull();
+    expect(capturedTask!.worktreePath).toBe("/wt/1");
+    expect(capturedTask!.worktreeStatus).toBe("ready");
+    expect(capturedTask!.branchName).toBe("feature/test");
+  });
+
+  it("SP-GC-2: onTaskUpdated receives Task with null worktreePath when no task_git_context row exists", async () => {
+    let capturedTask: import("../../shared/rpc-types.ts").Task | null = null;
+    const sp = new StreamProcessor(
+      db, fakeRawBuffer, noop as never, noop as never,
+      (task) => { capturedTask = task; },
+      noop as never,
+      () => {},
+    );
+
+    await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
+
+    expect(capturedTask).not.toBeNull();
+    expect(capturedTask!.worktreePath).toBeNull();
+  });
 });
 
 describe("SP-COMPACT: compaction_done content persistence", () => {
