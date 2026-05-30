@@ -64,3 +64,21 @@ engines:
   #                              # copilot → .github/prompts/*.prompt.md
   #                              # claude  → .claude/commands/**/*.md (colon-namespaced subdirs)
   #                              # none    → no slash commands (default when omitted)
+  #
+  #   # ── Sampling parameter presets ────────────────────────────────────────────
+  #   # Named presets of LLM sampling parameters. Columns can reference a preset
+  #   # by name via `sampling_preset: <name>` in the workflow YAML.
+  #   # Fallback chain: column.sampling_preset → default_sampling_preset → none
+  #   #
+  #   # default_sampling_preset: balanced   # used when a column has no sampling_preset
+  #   # sampling_presets:
+  #   #   balanced:                         # good all-round default
+  #   #     temperature: 0.8
+  #   #     top_p: 0.95
+  #   #   precise:                          # low-variance for code writing / bug fixing
+  #   #     temperature: 0.2
+  #   #     top_p: 0.85
+  #   #   creative:                         # high-variance for brainstorming / exploration
+  #   #     temperature: 1.2
+  #   #     top_p: 0.98
+  #   #     presence_penalty: 0.3
