@@ -57,6 +57,8 @@ import { getDb } from "../../db/index.ts";
 import { appendMessage } from "../../conversation/messages.ts";
 import { AsyncQueue } from "./async-queue.ts";
 import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
+import { runWithLimiter } from "./provider-transport.ts";
+import { formatPiError } from "./pi-error.ts";
 import { validatePiEngineConfig } from "./pi-config-validation.ts";
 import { createHash } from "crypto";
 import { mkdir } from "fs/promises";
@@ -149,6 +151,16 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
   return session;
 }
 
+function isLmStudioUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  try {
+    const { hostname, port } = new URL(baseUrl);
+    return (hostname === "localhost" || hostname === "127.0.0.1") && port === "1234";
+  } catch {
+    return false;
+  }
+}
+
 export class PiEngine implements ExecutionEngine {
   private readonly engineId: string;
   private readonly config: PiEngineConfig;
@@ -160,6 +172,8 @@ export class PiEngine implements ExecutionEngine {
   private readonly sessions = new Map<number, AgentSession>();
   /** Map<conversationId, SuspendRef> — mutable ref updated at each execution start. */
   private readonly suspendRefs = new Map<number, { onSuspend?: (event: EngineEvent) => void }>();
+  /** Map<conversationId, DelegateEmitRef> — emit target for child session events, wired per execution. */
+  private readonly delegateEmitRefs = new Map<number, { emit?: (event: EngineEvent) => void }>();
   /** Map<executionId, conversationId> — lets cancel() find the right session. */
   private readonly executionToConversation = new Map<number, number>();
   private readonly pendingResumes = new Map<
@@ -196,6 +210,12 @@ export class PiEngine implements ExecutionEngine {
         providerCfg.max_inflight ?? PROVIDER_LIMITER_DEFAULTS.max_inflight,
         providerCfg.queue_timeout_ms ?? PROVIDER_LIMITER_DEFAULTS.queue_timeout_ms,
       );
+      if ((providerCfg.max_inflight ?? PROVIDER_LIMITER_DEFAULTS.max_inflight) > 2 && isLmStudioUrl(providerCfg.base_url)) {
+        console.warn(
+          `[pi] Provider "${name}" has max_inflight=${providerCfg.max_inflight ?? PROVIDER_LIMITER_DEFAULTS.max_inflight} but base_url looks like LM Studio (:1234). ` +
+          "LM Studio handles 1-2 concurrent requests; reduce max_inflight to 1 or 2.",
+        );
+      }
     }
   }
 
@@ -262,9 +282,22 @@ export class PiEngine implements ExecutionEngine {
     const skillPaths = this.dialect.getSkillPaths(workingDirectory ?? process.cwd(), projectPath);
     const skillResolver = new FileSystemSkillResolver(skillPaths);
 
-    const tools = buildAllTools({ harnessCtx, commonCtx, skillResolver, suspendRef: this.getOrCreateSuspendRef(conversationId) });
     const piModel = this.buildModel(modelOverride, contextWindowOverride);
     const providerName = piModel.provider;
+
+    const tools = buildAllTools({
+      harnessCtx,
+      commonCtx,
+      skillResolver,
+      suspendRef: this.getOrCreateSuspendRef(conversationId),
+      delegateEmitRef: this.getOrCreateDelegateEmitRef(conversationId),
+      limiterRegistry: this.registry,
+      parentModel: piModel,
+      parentSystemPrompt: enrichedSystem,
+      parentConversationId: conversationId,
+      parentCwd: workingDirectory ?? process.cwd(),
+      engineConfig: this.config,
+    });
 
     // Look up the project path before session creation so it can be used when
     // wiring dialect skill paths into the Pi resource loader.
@@ -290,6 +323,10 @@ export class PiEngine implements ExecutionEngine {
       queue.push(event);
       session.abort().catch(() => {});
     };
+
+    // Wire the delegate emit ref for this execution so child session events flow into the queue.
+    const delegateEmitRef = this.getOrCreateDelegateEmitRef(conversationId);
+    delegateEmitRef.emit = (event: EngineEvent) => queue.push(event);
 
     // Abort: tell Pi to stop AND close the queue so the for-await exits immediately.
     const onAbort = () => {
@@ -364,7 +401,7 @@ export class PiEngine implements ExecutionEngine {
       return;
     }
 
-    this.runPromptWithCompaction(session, resolvedPrompt, conversationId, queue, errorRef);
+    this.runPromptWithCompaction(session, resolvedPrompt, conversationId, queue, errorRef, providerName, signal);
 
     try {
       for await (const event of queue) {
@@ -414,13 +451,7 @@ export class PiEngine implements ExecutionEngine {
       }
 
       // Provide a clear hint for the known LM Studio MLX backend bug
-      const isTreeReduceBug = errorRef.error.message.includes("tree_reduce");
-      const message = isTreeReduceBug
-        ? `LM Studio MLX backend error: '${errorRef.error.message}'. ` +
-          "This is a known bug in MLX models with conversation history. " +
-          "Switch to a GGUF model (llama.cpp backend) in LM Studio to fix this."
-        : errorRef.error.message;
-      yield { type: "error", message, fatal: false };
+      yield { type: "error", message: formatPiError(errorRef.error), fatal: false };
       return;
     }
 
@@ -567,6 +598,7 @@ export class PiEngine implements ExecutionEngine {
     this.harnessContexts.clear();
     this.commonCtxRefs.clear();
     this.suspendRefs.clear();
+    this.delegateEmitRefs.clear();
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
@@ -610,6 +642,19 @@ export class PiEngine implements ExecutionEngine {
       this.suspendRefs.set(conversationId, ref);
     }
     return ref;
+  }
+
+  private getOrCreateDelegateEmitRef(conversationId: number): { emit?: (event: EngineEvent) => void } {
+    let ref = this.delegateEmitRefs.get(conversationId);
+    if (!ref) {
+      ref = {};
+      this.delegateEmitRefs.set(conversationId, ref);
+    }
+    return ref;
+  }
+
+  getPiProviderStatus(): import("./provider-limiter.ts").ProviderLimiterSnapshot[] {
+    return this.registry.snapshots();
   }
 
   private getOrCreateHarnessContext(conversationId: number, worktreePath: string): HarnessContext {
@@ -763,9 +808,10 @@ export class PiEngine implements ExecutionEngine {
     conversationId: number,
     queue: AsyncQueue<EngineEvent>,
     errorRef: { error?: Error },
+    providerName: string,
+    signal?: AbortSignal,
   ): void {
-    session
-      .prompt(resolvedPrompt)
+    runWithLimiter(this.registry, providerName, signal, () => session.prompt(resolvedPrompt))
       .catch((err: unknown) => {
         errorRef.error = err instanceof Error ? err : new Error(String(err));
       })
