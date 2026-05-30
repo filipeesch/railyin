@@ -11,12 +11,10 @@ export function noteHandlers(db: Database) {
 
     "notes.create": (params: {
       conversationId: number;
-      title?: string | null;
       content: string;
     }): TaskNote => {
       const repo = new NoteRepository(db);
       return repo.createNote(params.conversationId, {
-        title: params.title,
         content: params.content,
         isSourceAi: false,
       }) as TaskNote;
@@ -24,14 +22,10 @@ export function noteHandlers(db: Database) {
 
     "notes.update": (params: {
       id: number;
-      title?: string | null;
       content?: string;
     }): TaskNote => {
       const repo = new NoteRepository(db);
-      const note = repo.updateNote(params.id, {
-        title: params.title,
-        content: params.content,
-      });
+      const note = repo.updateNote(params.id, { content: params.content });
       if (!note) throw new Error(`Note #${params.id} not found`);
       return note as TaskNote;
     },

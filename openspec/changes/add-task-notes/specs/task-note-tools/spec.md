@@ -5,22 +5,18 @@ Defines the LLM tool surface for note management: `create_note`, `list_notes`, a
 ## Requirements
 
 ### Requirement: LLM can create notes via create_note tool
-The system SHALL expose a `create_note` tool in `COMMON_TOOL_DEFINITIONS`. It SHALL accept `content` (string, required — markdown body) and `title` (string, optional — short label for the note). On success it SHALL create a note row with `is_source_ai = 1` and return a confirmation string containing the new note's `id` and title.
+The system SHALL expose a `create_note` tool in `COMMON_TOOL_DEFINITIONS`. It SHALL accept `content` (string, required — markdown body). On success it SHALL create a note row with `is_source_ai = 1` and return a confirmation string containing the new note's `id`.
 
-#### Scenario: LLM creates a note with title and content
-- **WHEN** the LLM calls `create_note` with `title: "Architecture"` and `content: "## Decision\n..."`
+#### Scenario: LLM creates a note
+- **WHEN** the LLM calls `create_note` with `content: "## Decision\n..."`
 - **THEN** a note is persisted with `is_source_ai = 1` and the tool returns a confirmation with the note id
-
-#### Scenario: LLM creates a note with content only
-- **WHEN** the LLM calls `create_note` with `content` only (no title)
-- **THEN** the note is persisted with `title = NULL` and the tool returns confirmation
 
 #### Scenario: create_note without content is rejected
 - **WHEN** the LLM calls `create_note` without a `content` field
 - **THEN** `executeCommonTool` returns a validation error and no note is created
 
 ### Requirement: LLM can list notes via list_notes tool
-The system SHALL expose a `list_notes` tool that returns all notes for the current `conversationId`. Each note SHALL include `id`, `title`, `content`, `isSourceAi`, `createdAt`, and `updatedAt`. Notes SHALL be ordered by `created_at ASC`. When no notes exist the tool SHALL return a descriptive empty message.
+The system SHALL expose a `list_notes` tool that returns all notes for the current `conversationId`. Each note SHALL include `id`, `content`, `isSourceAi`, `createdAt`, and `updatedAt`. Notes SHALL be ordered by `created_at ASC`. When no notes exist the tool SHALL return a descriptive empty message.
 
 #### Scenario: LLM lists all notes for the conversation
 - **WHEN** the LLM calls `list_notes` and two notes exist
@@ -31,22 +27,18 @@ The system SHALL expose a `list_notes` tool that returns all notes for the curre
 - **THEN** the tool returns "No notes found for this conversation."
 
 ### Requirement: LLM can update notes via update_note tool
-The system SHALL expose an `update_note` tool that accepts `note_id` (number, required), and at least one of `content` (string) or `title` (string or null). On success it SHALL call `NoteRepository.updateNote` and return a confirmation string. Calling `update_note` without providing `note_id` SHALL return a validation error.
+The system SHALL expose an `update_note` tool that accepts `id` (number, required) and `content` (string, required). On success it SHALL call `NoteRepository.updateNote` and return a confirmation string. Calling `update_note` without providing `id` SHALL return a validation error.
 
 #### Scenario: LLM updates note content
-- **WHEN** the LLM calls `update_note` with a valid `note_id` and new `content`
+- **WHEN** the LLM calls `update_note` with a valid `id` and new `content`
 - **THEN** the note's content is updated and the tool returns a confirmation
 
-#### Scenario: LLM clears note title by passing null
-- **WHEN** the LLM calls `update_note` with `title: null`
-- **THEN** the note's title is set to NULL in the database
-
-#### Scenario: update_note without note_id is rejected
-- **WHEN** the LLM calls `update_note` without `note_id`
+#### Scenario: update_note without id is rejected
+- **WHEN** the LLM calls `update_note` without `id`
 - **THEN** `executeCommonTool` returns a validation error and no update occurs
 
 #### Scenario: update_note with unknown id returns error
-- **WHEN** the LLM calls `update_note` with a `note_id` that does not exist
+- **WHEN** the LLM calls `update_note` with an `id` that does not exist
 - **THEN** the tool returns an error message indicating the note was not found
 
 ### Requirement: Note tools are available in all four engines

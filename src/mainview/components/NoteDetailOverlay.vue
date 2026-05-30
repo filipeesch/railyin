@@ -45,11 +45,6 @@
         </div>
 
         <div v-if="!previewMode" class="note-overlay__edit">
-          <input
-            v-model="form.title"
-            class="note-overlay__title-input"
-            placeholder="Title (optional)"
-          />
           <textarea
             v-model="form.content"
             class="note-overlay__textarea"
@@ -85,7 +80,6 @@ const props = defineProps<{
   visible: boolean;
   conversationId: number;
   noteId: number | null;
-  initialTitle?: string | null;
   initialContent?: string;
 }>();
 
@@ -99,7 +93,7 @@ const previewMode = ref(false);
 const saving = ref(false);
 const error = ref<string | null>(null);
 
-const form = reactive({ title: "", content: "" });
+const form = reactive({ content: "" });
 
 const { renderMd } = useMarkdown();
 
@@ -111,7 +105,6 @@ const renderedContent = computed(() => {
 function resetForm() {
   previewMode.value = false;
   error.value = null;
-  form.title = props.initialTitle ?? "";
   form.content = props.initialContent ?? "";
 }
 
@@ -126,13 +119,11 @@ async function onSave() {
     if (props.noteId == null) {
       await createNote({
         conversationId: props.conversationId,
-        title: form.title.trim() || null,
         content: form.content.trim(),
       });
     } else {
       await updateNote({
         id: props.noteId,
-        title: form.title.trim() || null,
         content: form.content.trim(),
       });
     }
@@ -242,21 +233,6 @@ watch(
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.note-overlay__title-input {
-  border: none;
-  border-bottom: 1px solid var(--p-content-border-color);
-  padding: 8px 16px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  background: var(--p-content-background);
-  color: var(--p-text-color);
-  flex-shrink: 0;
-}
-
-.note-overlay__title-input:focus {
-  outline: none;
 }
 
 .note-overlay__textarea {

@@ -6,7 +6,6 @@ import { getDb } from "../index.ts";
 export interface TaskNote {
   id: number;
   conversationId: number;
-  title: string | null;
   content: string;
   isSourceAi: boolean;
   createdAt: string;
@@ -18,7 +17,6 @@ export interface TaskNote {
 interface TaskNoteRow {
   id: number;
   conversation_id: number;
-  title: string | null;
   content: string;
   is_source_ai: number;
   created_at: string;
@@ -31,7 +29,6 @@ function mapRow(row: TaskNoteRow): TaskNote {
   return {
     id: row.id,
     conversationId: row.conversation_id,
-    title: row.title,
     content: row.content,
     isSourceAi: row.is_source_ai === 1,
     createdAt: row.created_at,
@@ -50,17 +47,12 @@ export class NoteRepository {
 
   createNote(
     conversationId: number,
-    input: { title?: string | null; content: string; isSourceAi?: boolean },
+    input: { content: string; isSourceAi?: boolean },
   ): TaskNote {
     const res = this.db.run(
-      `INSERT INTO task_notes (conversation_id, title, content, is_source_ai)
-       VALUES (?, ?, ?, ?)`,
-      [
-        conversationId,
-        input.title ?? null,
-        input.content,
-        input.isSourceAi ? 1 : 0,
-      ],
+      `INSERT INTO task_notes (conversation_id, content, is_source_ai)
+       VALUES (?, ?, ?)`,
+      [conversationId, input.content, input.isSourceAi ? 1 : 0],
     );
     const row = this.db
       .query<TaskNoteRow, [number]>("SELECT * FROM task_notes WHERE id = ?")
@@ -68,20 +60,17 @@ export class NoteRepository {
     return mapRow(row!);
   }
 
-  updateNote(id: number, input: { title?: string | null; content?: string }): TaskNote | null {
+  updateNote(id: number, input: { content?: string }): TaskNote | null {
     const existing = this.db
       .query<TaskNoteRow, [number]>("SELECT * FROM task_notes WHERE id = ?")
       .get(id);
     if (!existing) return null;
 
-    const title = "title" in input ? input.title : existing.title;
     const content = input.content !== undefined ? input.content : existing.content;
 
     this.db.run(
-      `UPDATE task_notes
-       SET title = ?, content = ?, updated_at = datetime('now')
-       WHERE id = ?`,
-      [title ?? null, content, id],
+      `UPDATE task_notes SET content = ?, updated_at = datetime('now') WHERE id = ?`,
+      [content, id],
     );
 
     const updated = this.db

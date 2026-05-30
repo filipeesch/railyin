@@ -19,12 +19,8 @@
         class="note-item"
         @click="openEdit(note)"
       >
-        <div class="note-item__header">
-          <span v-if="note.title" class="note-item__title">{{ note.title }}</span>
-          <span v-if="note.isSourceAi" class="note-item__ai-badge">AI</span>
-          <span class="note-item__date">{{ formatDate(note.updatedAt) }}</span>
-        </div>
-        <div class="note-item__preview">{{ previewText(note.content) }}</div>
+        <span v-if="note.isSourceAi" class="note-item__ai-badge">AI</span>
+        <div class="note-item__content markdown-content" v-html="renderMd(note.content)" />
       </div>
     </div>
 
@@ -32,7 +28,6 @@
       :visible="overlayVisible"
       :conversation-id="conversationId"
       :note-id="editingNoteId"
-      :initial-title="editingNote?.title ?? null"
       :initial-content="editingNote?.content ?? ''"
       @close="overlayVisible = false"
       @saved="onSaved"
@@ -45,6 +40,7 @@
 import { ref, onMounted, watch } from "vue";
 import type { TaskNote } from "@shared/rpc-types";
 import { listNotes } from "@/rpc";
+import { useMarkdown } from "@/composables/useMarkdown";
 import Button from "primevue/button";
 import NoteDetailOverlay from "./NoteDetailOverlay.vue";
 
@@ -58,6 +54,8 @@ const loading = ref(false);
 const overlayVisible = ref(false);
 const editingNoteId = ref<number | null>(null);
 const editingNote = ref<TaskNote | null>(null);
+
+const { renderMd } = useMarkdown();
 
 async function fetchNotes() {
   loading.value = true;
@@ -83,15 +81,6 @@ function openEdit(note: TaskNote) {
 async function onSaved() {
   overlayVisible.value = false;
   await fetchNotes();
-}
-
-function previewText(content: string): string {
-  const firstLine = content.replace(/#+\s*/g, "").split("\n").find((l) => l.trim());
-  return firstLine ? (firstLine.length > 120 ? firstLine.slice(0, 120) + "…" : firstLine) : "";
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 onMounted(fetchNotes);
@@ -127,6 +116,7 @@ watch(() => props.refreshTrigger, fetchNotes);
 }
 
 .note-item {
+  position: relative;
   padding: 10px 12px;
   border-radius: 6px;
   border: 1px solid var(--p-content-border-color);
@@ -139,45 +129,32 @@ watch(() => props.refreshTrigger, fetchNotes);
   background: var(--p-content-hover-background);
 }
 
-.note-item__header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-  flex-wrap: wrap;
-}
-
-.note-item__title {
-  font-size: 13px;
-  font-weight: 600;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .note-item__ai-badge {
+  position: absolute;
+  top: 6px;
+  right: 8px;
   font-size: 10px;
   background: var(--accent-color, #3b82f6);
   color: white;
   padding: 1px 5px;
   border-radius: 3px;
   font-weight: 600;
-  flex-shrink: 0;
 }
 
-.note-item__date {
-  font-size: 11px;
-  color: var(--text-secondary, #64748b);
-  flex-shrink: 0;
-}
-
-.note-item__preview {
-  font-size: 12px;
-  color: var(--text-secondary, #64748b);
+.note-item__content {
+  font-size: 13px;
+  line-height: 1.5;
+  max-height: 120px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
 }
+</style>
+
+<style>
+.note-item__content.markdown-content p { margin: 0.2em 0; }
+.note-item__content.markdown-content h1,
+.note-item__content.markdown-content h2,
+.note-item__content.markdown-content h3 { margin: 0.2em 0; font-size: 0.95em; }
+.note-item__content.markdown-content ul,
+.note-item__content.markdown-content ol { margin: 0.2em 0; padding-left: 1.2em; }
 </style>

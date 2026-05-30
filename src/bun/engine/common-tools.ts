@@ -235,7 +235,6 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
     parameters: {
       type: "object",
       properties: {
-        title: { type: "string", description: "Optional short label for the note" },
         content: { type: "string", description: "Markdown body of the note (required)" },
       },
       required: ["content"],
@@ -252,15 +251,14 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: "update_note",
-    description: "Update an existing note's title or content. Call list_notes first to get the note ID.",
+    description: "Update an existing note's content. Call list_notes first to get the note ID.",
     parameters: {
       type: "object",
       properties: {
         id: { type: "number", description: "Note ID (get from list_notes)" },
-        title: { type: "string", description: "New title (optional)" },
-        content: { type: "string", description: "New markdown content (optional)" },
+        content: { type: "string", description: "New markdown content" },
       },
-      required: ["id"],
+      required: ["id", "content"],
     },
   },
   // ── todo tools ───────────────────────────────────────────────────────────────
@@ -448,8 +446,7 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
     case "list_notes":
       return { label: "list notes" };
     case "update_note":
-      return { label: "update note", subject: args.id != null ? `#${args.id}` : undefined };
-    case "create_todo":
+      return { label: "update note", subject: args.id != null ? `#${args.id}` : undefined };    case "create_todo":
     case "edit_todo": {
       const num = args.number != null ? String(args.number) : null;
       const title = args.title != null ? String(args.title) : null;
@@ -617,28 +614,25 @@ async function executeCommonToolText(
     case "create_note": {
       const content = args.content != null ? (args.content as string).trim() : "";
       if (!content) return "Error: content is required";
-      const title = args.title != null ? (args.title as string).trim() : undefined;
       const note = ctx.repos.notes.createNote(ctx.task.conversationId, {
-        title: title ?? null,
         content,
         isSourceAi: true,
       });
-      return `Note #${note.id} created.${note.title ? ` Title: ${note.title}` : ""}`;
+      return `Note #${note.id} created.`;
     }
 
     case "list_notes": {
       const notes = ctx.repos.notes.listByConversation(ctx.task.conversationId);
       if (notes.length === 0) return "No notes found for this conversation.";
-      const lines = notes.map((n) => `#${n.id}${n.title ? ` [${n.title}]` : ""}: ${n.content.slice(0, 120)}${n.content.length > 120 ? "…" : ""}`);
+      const lines = notes.map((n) => `#${n.id}: ${n.content.slice(0, 120)}${n.content.length > 120 ? "…" : ""}`);
       return JSON.stringify({ detailedContent: `${notes.length} note${notes.length !== 1 ? "s" : ""}:\n${lines.join("\n")}`, data: notes });
     }
 
     case "update_note": {
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const title = args.title !== undefined ? (args.title as string | null) : undefined;
       const content = args.content != null ? (args.content as string) : undefined;
-      const note = ctx.repos.notes.updateNote(id, { title, content });
+      const note = ctx.repos.notes.updateNote(id, { content });
       if (!note) return `Error: Note #${id} not found.`;
       return `Note #${id} updated.`;
     }

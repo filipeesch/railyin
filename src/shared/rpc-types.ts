@@ -235,7 +235,6 @@ export type DecisionWeight = "critical" | "medium" | "easy";
 export interface TaskNote {
   id: number;
   conversationId: number;
-  title: string | null;
   content: string;
   isSourceAi: boolean;
   createdAt: string;
@@ -1072,11 +1071,11 @@ export type RailynAPI = {
     response: TaskNote[];
   };
   "notes.create": {
-    params: { conversationId: number; title?: string | null; content: string };
+    params: { conversationId: number; content: string };
     response: TaskNote;
   };
   "notes.update": {
-    params: { id: number; title?: string | null; content?: string };
+    params: { id: number; content?: string };
     response: TaskNote;
   };
   "notes.delete": {

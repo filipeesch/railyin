@@ -234,7 +234,6 @@ export function initDb(): Database {
     CREATE TABLE IF NOT EXISTS task_notes (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-      title           TEXT,
       content         TEXT    NOT NULL,
       is_source_ai    INTEGER NOT NULL DEFAULT 0,
       created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
