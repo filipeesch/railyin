@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
+import { readStorage, writeStorage } from "../utils/storage";
 
 const DRAWER_WIDTH_KEY = "railyn.drawerWidth";
 const DEFAULT_WIDTH = 480;
@@ -12,9 +13,9 @@ export const useDrawerStore = defineStore("drawer", () => {
   const sessionId = ref<number | null>(null);
   const conversationId = ref<number | null>(null);
 
-  const storedWidth = parseInt(localStorage.getItem(DRAWER_WIDTH_KEY) ?? "", 10);
+  const storedWidth = readStorage<number | null>(DRAWER_WIDTH_KEY, null);
   const width = ref(
-    isNaN(storedWidth) ? DEFAULT_WIDTH : Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, storedWidth)),
+    storedWidth === null ? DEFAULT_WIDTH : Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, storedWidth)),
   );
 
   function openForTask(tId: number, convId: number) {
@@ -40,7 +41,7 @@ export const useDrawerStore = defineStore("drawer", () => {
 
   function setWidth(w: number) {
     width.value = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w));
-    localStorage.setItem(DRAWER_WIDTH_KEY, String(width.value));
+    writeStorage(DRAWER_WIDTH_KEY, width.value);
   }
 
   return { mode, taskId, sessionId, conversationId, width, openForTask, openForSession, close, setWidth };

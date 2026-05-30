@@ -69,4 +69,30 @@ test.describe("Board workspace navigation", () => {
         await expect.poll(() => configCalls.length).toBeGreaterThanOrEqual(1);
         expect(configCalls.some((p) => p.workspaceKey === "ws-2")).toBe(true);
     });
+
+    test("WS-NAV-3: clicking a workspace tab persists activeWorkspaceKey to localStorage", async ({
+        page,
+        api,
+    }) => {
+        api.returns("workspace.list", [
+            { key: "test-workspace", name: "Test Workspace" },
+            { key: "ws-2", name: "Workspace 2" },
+        ]);
+
+        api.handle("workspace.getConfig", ({ workspaceKey }) =>
+            makeWorkspace({ key: workspaceKey ?? "test-workspace" }),
+        );
+
+        await navigateToBoard(page);
+
+        await page.locator(".workspace-tab", { hasText: "Workspace 2" }).click();
+
+        // Wait for reactive watch to flush
+        await page.waitForTimeout(200);
+
+        const persisted = await page.evaluate(() =>
+            localStorage.getItem("railyn.activeWorkspaceKey"),
+        );
+        expect(persisted).toBe(JSON.stringify("ws-2"));
+    });
 });

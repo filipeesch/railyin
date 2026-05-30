@@ -29,6 +29,15 @@
           class="board-selector"
           @change="onBoardChange"
         />
+        <Button
+          v-if="boardStore.activeBoard"
+          icon="pi pi-pencil"
+          severity="secondary"
+          text
+          rounded
+          aria-label="Edit workflow"
+          @click="openWorkflowEditor"
+        />
       </div>
       <div class="board-header__right">
         <Button
@@ -124,6 +133,18 @@
       @saved="enginesEditorVisible = false"
     />
 
+    <!-- Workflow YAML editor -->
+    <WorkflowEditorOverlay
+      v-if="boardStore.activeBoard"
+      :visible="workflowEditorVisible"
+      :workspace-key="workspaceStore.activeWorkspaceKey ?? undefined"
+      :template-id="boardStore.activeBoard.template.id"
+      :template-name="boardStore.activeBoard.template.name"
+      :initial-yaml="workflowEditorYaml"
+      @close="workflowEditorVisible = false"
+      @saved="workflowEditorVisible = false"
+    />
+
     <!-- Task Detail Overlay (for both create and edit) -->
     <TaskDetailOverlay
       v-if="boardStore.activeBoardId"
@@ -188,17 +209,15 @@ import ConversationDrawer from "../components/ConversationDrawer.vue";
 import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
 import EnginesEditorOverlay from "../components/EnginesEditorOverlay.vue";
+import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
 import CodeServerOverlay from "../components/CodeServerOverlay.vue";
 import ChatSidebar from "../components/ChatSidebar.vue";
 import { useDrawerStore } from "../stores/drawer";
+import { readStorage, writeStorage } from "../utils/storage";
 import type { Task } from "../../shared/rpc-types";
 
 const CHAT_SIDEBAR_OPEN_KEY = "railyn.chatSidebarOpen";
-
-function loadChatSidebarOpen(): boolean {
-  return localStorage.getItem(CHAT_SIDEBAR_OPEN_KEY) === "true";
-}
 
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
@@ -208,12 +227,14 @@ const projectStore = useProjectStore();
 const terminalStore = useTerminalStore();
 const chatStore = useChatStore();
 const drawerStore = useDrawerStore();
-const chatSidebarOpen = ref(loadChatSidebarOpen());
+const chatSidebarOpen = ref(readStorage<boolean>(CHAT_SIDEBAR_OPEN_KEY, false));
 const { isDark, toggle: toggleDark } = useDarkMode();
 
 const showCreateTask = ref(false);
 const activeTaskForOverlay = ref<number | null>(null);
 const enginesEditorVisible = ref(false);
+const workflowEditorVisible = ref(false);
+const workflowEditorYaml = ref("");
 const settingsMenu = ref();
 const settingsMenuItems = [
   { label: "Setup", icon: "pi pi-wrench", command: () => router.push("/setup") },
@@ -234,6 +255,17 @@ async function onFooterClick() {
     terminalStore.togglePanel();
   }
 }
+async function openWorkflowEditor() {
+  const board = boardStore.activeBoard;
+  if (!board) return;
+  const { yaml } = await api("workflow.getYaml", {
+    workspaceKey: workspaceStore.activeWorkspaceKey ?? undefined,
+    templateId: board.template.id,
+  });
+  workflowEditorYaml.value = yaml;
+  workflowEditorVisible.value = true;
+}
+
 const visibleBoards = computed(() => {
   const workspaceKey = workspaceStore.activeWorkspaceKey;
   if (workspaceKey == null) return boardStore.boards;
@@ -604,7 +636,7 @@ watch(
 );
 
 watch(chatSidebarOpen, (isOpen) => {
-  localStorage.setItem(CHAT_SIDEBAR_OPEN_KEY, String(isOpen));
+  writeStorage(CHAT_SIDEBAR_OPEN_KEY, isOpen);
 });
 </script>
 

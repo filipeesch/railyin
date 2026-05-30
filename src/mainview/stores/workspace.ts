@@ -1,20 +1,29 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { api } from "../rpc";
 import type { ModelInfo, ProviderModelList, WorkspaceConfig, WorkspaceSummary } from "@shared/rpc-types";
+import { readStorage, writeStorage } from "../utils/storage";
+
+const STORAGE_KEY_WORKSPACE = "railyn.activeWorkspaceKey";
 
 export const useWorkspaceStore = defineStore("workspace", () => {
   const workspaces = ref<WorkspaceSummary[]>([]);
-  const activeWorkspaceKey = ref<string | null>(null);
+  const activeWorkspaceKey = ref<string | null>(readStorage<string | null>(STORAGE_KEY_WORKSPACE, null));
   const config = ref<WorkspaceConfig | null>(null);
   const loading = ref(false);
   const error = ref<string | null>(null);
   const availableModels = ref<ModelInfo[]>([]);
   const allProviderModels = ref<ProviderModelList[]>([]);
 
+  watch(activeWorkspaceKey, (key) => {
+    writeStorage(STORAGE_KEY_WORKSPACE, key);
+  });
+
   async function loadWorkspaces() {
     workspaces.value = await api("workspace.list", {});
-    if (!activeWorkspaceKey.value && workspaces.value.length > 0) {
+    const persistedKey = activeWorkspaceKey.value;
+    const keyIsValid = persistedKey != null && workspaces.value.some((w) => w.key === persistedKey);
+    if (!keyIsValid && workspaces.value.length > 0) {
       activeWorkspaceKey.value = workspaces.value[0].key;
     }
   }
