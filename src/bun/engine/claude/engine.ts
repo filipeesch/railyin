@@ -8,6 +8,7 @@ import { readdirSync, existsSync, readFileSync } from "fs";
 import { join, relative, extname, basename } from "path";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
+import { NoteRepository } from "../../db/repositories/note-repository.ts";
 
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -70,6 +71,7 @@ export class ClaudeEngine implements ExecutionEngine {
         repos: {
           todos: new TodoRepository(),
           decisions: new DecisionRepository(),
+          notes: new NoteRepository(),
           boardTools: boardTools!,
         },
         workflow: {

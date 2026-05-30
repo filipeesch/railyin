@@ -232,6 +232,16 @@ export interface DecisionRequestPayload {
 
 export type DecisionWeight = "critical" | "medium" | "easy";
 
+export interface TaskNote {
+  id: number;
+  conversationId: number;
+  title: string | null;
+  content: string;
+  isSourceAi: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DecisionRecord {
   id: number;
   conversationId: number;
@@ -1056,6 +1066,22 @@ export type RailynAPI = {
   "decisions.getRevisions": {
     params: { decisionId: number };
     response: DecisionRevision[];
+  };
+  "notes.list": {
+    params: { conversationId: number };
+    response: TaskNote[];
+  };
+  "notes.create": {
+    params: { conversationId: number; title?: string | null; content: string };
+    response: TaskNote;
+  };
+  "notes.update": {
+    params: { id: number; title?: string | null; content?: string };
+    response: TaskNote | null;
+  };
+  "notes.delete": {
+    params: { id: number };
+    response: void;
   };
 };
 

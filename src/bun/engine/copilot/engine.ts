@@ -24,6 +24,7 @@ import { homedir, tmpdir } from "os";
 import { parseFileRef } from "../../utils/resolve-file-attachments.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
+import { NoteRepository } from "../../db/repositories/note-repository.ts";
 
 function utf16LineOffsets(text: string): number[] {
   const offsets = [0];
@@ -150,6 +151,7 @@ export class CopilotEngine implements ExecutionEngine {
       repos: {
         todos: new TodoRepository(),
         decisions: new DecisionRepository(),
+        notes: new NoteRepository(),
         boardTools: boardTools!,
       },
       workflow: {

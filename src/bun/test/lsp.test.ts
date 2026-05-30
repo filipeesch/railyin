@@ -436,7 +436,7 @@ describe("LSP split tools", () => {
     const { executeCommonTool } = await import("../engine/common-tools.ts");
     const ctx = {
       task: { id: 0, boardId: 0, conversationId: 0 },
-      repos: { todos: null as any, decisions: null as any },
+      repos: { todos: null as any, decisions: null as any, notes: null as any },
       workflow: { onTransition: () => {}, onHumanTurn: () => {}, onCancel: () => {}, onTaskUpdated: () => {} },
       runtime: { worktreePath: "/tmp" },
     };
