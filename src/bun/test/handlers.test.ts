@@ -279,6 +279,68 @@ it("automatically seeds conversation.model from config.defaultModel", async () =
 
 // ─── tasks.transition (worktree failure) ─────────────────────────────────────
 
+// ─── TC-POS: tasks.create position placement ─────────────────────────────────
+
+describe("tasks.create — TC-POS: top-of-column position", () => {
+  it("TC-POS-1: first task in empty backlog has position 500", async () => {
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+
+    // Remove the seed task so backlog is empty
+    db.run("DELETE FROM tasks WHERE board_id = ?", [boardId]);
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectKey,
+      title: "First task",
+      description: "",
+    });
+
+    expect(task.position).toBe(500);
+    const row = db.query<{ position: number }, [number]>("SELECT position FROM tasks WHERE id = ?").get(task.id);
+    expect(row!.position).toBe(500);
+  });
+
+  it("TC-POS-2: second task lands above first (position < 500)", async () => {
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+    db.run("DELETE FROM tasks WHERE board_id = ?", [boardId]);
+
+    // Seed a task at position 500
+    const first = await handlers["tasks.create"]({ boardId, projectKey, title: "First", description: "" });
+    expect(first.position).toBe(500);
+
+    const second = await handlers["tasks.create"]({ boardId, projectKey, title: "Second", description: "" });
+    expect(second.position).toBe(250);
+    expect(second.position).toBeLessThan(first.position);
+  });
+
+  it("TC-POS-3: third task lands above second (position < 250)", async () => {
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+    db.run("DELETE FROM tasks WHERE board_id = ?", [boardId]);
+
+    await handlers["tasks.create"]({ boardId, projectKey, title: "First", description: "" });
+    const second = await handlers["tasks.create"]({ boardId, projectKey, title: "Second", description: "" });
+    const third = await handlers["tasks.create"]({ boardId, projectKey, title: "Third", description: "" });
+
+    expect(third.position).toBe(125);
+    expect(third.position).toBeLessThan(second.position);
+  });
+
+  it("TC-POS-4: returned task.position matches the persisted DB value", async () => {
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+    const { handlers } = makeHandlers();
+    db.run("DELETE FROM tasks WHERE board_id = ?", [boardId]);
+
+    const task = await handlers["tasks.create"]({ boardId, projectKey, title: "Pos check", description: "" });
+    const row = db.query<{ position: number }, [number]>("SELECT position FROM tasks WHERE id = ?").get(task.id);
+
+    expect(row!.position).toBe(task.position);
+  });
+});
+
+
 describe("tasks.transition / worktree failure", () => {
   it("fails task and appends error message when git_root_path is invalid", async () => {
     // Create board and task with a project that has a bad git root path.
