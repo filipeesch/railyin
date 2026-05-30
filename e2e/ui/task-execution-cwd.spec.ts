@@ -1,7 +1,7 @@
 /**
  * task-execution-cwd.spec.ts — UI tests for worktree CWD isolation.
  *
- * Verifies that the Info tab surfaces the worktree path as the agent's
+ * Verifies that the Git tab surfaces the worktree path as the agent's
  * working directory, NOT the project path, when a worktree is ready.
  *
  * Suites:
@@ -19,11 +19,11 @@ const PROJECT_PATH = "/home/user/myrepo";
 const WORKTREE_PATH = "/tmp/railyn-worktrees/task-1-fix-bug";
 const MONOREPO_WORKTREE_PATH = "/tmp/railyn-worktrees/task-2-api/packages/api";
 
-async function openInfoTab(page: import("@playwright/test").Page, taskId: number) {
+async function openGitTab(page: import("@playwright/test").Page, taskId: number) {
     await page.locator(`[data-task-id="${taskId}"]`).click();
     await expect(page.locator(".task-detail")).toBeVisible();
-    await page.locator(".tab-btn", { hasText: "Info" }).click();
-    await expect(page.locator(".task-tab-info")).toBeVisible();
+    await page.locator(".tab-btn", { hasText: "Git" }).click();
+    await expect(page.locator(".task-tab-git")).toBeVisible();
 }
 
 function makeReadyTask(overrides: Partial<Task> = {}): Task {
@@ -44,16 +44,16 @@ test.describe("CWD-A — static working directory display", () => {
         api.handle("workspace.get", () => makeWorkspace());
 
         await page.goto("/");
-        await openInfoTab(page, task.id);
+        await openGitTab(page, task.id);
 
         // The Info tab must show the worktree path
         await expect(
-            page.locator(".task-tab-info .info-value--mono", { hasText: WORKTREE_PATH }),
+            page.locator(".task-tab-git .info-value--mono", { hasText: WORKTREE_PATH }),
         ).toBeVisible();
 
         // Project path must not appear as a separate value (worktree replaced it)
         await expect(
-            page.locator(".task-tab-info .info-value--mono", { hasText: PROJECT_PATH }),
+            page.locator(".task-tab-git .info-value--mono", { hasText: PROJECT_PATH }),
         ).not.toBeVisible();
     });
 
@@ -63,11 +63,11 @@ test.describe("CWD-A — static working directory display", () => {
         api.handle("workspace.get", () => makeWorkspace());
 
         await page.goto("/");
-        await openInfoTab(page, task.id);
+        await openGitTab(page, task.id);
 
         // No worktree section at all
         await expect(
-            page.locator(".task-tab-info .info-section", { hasText: "Worktree" }),
+            page.locator(".task-tab-git .info-section", { hasText: "Worktree" }),
         ).not.toBeVisible();
     });
 
@@ -83,10 +83,10 @@ test.describe("CWD-A — static working directory display", () => {
         api.handle("workspace.get", () => makeWorkspace());
 
         await page.goto("/");
-        await openInfoTab(page, task.id);
+        await openGitTab(page, task.id);
 
         await expect(
-            page.locator(".task-tab-info .info-value--mono", { hasText: MONOREPO_WORKTREE_PATH }),
+            page.locator(".task-tab-git .info-value--mono", { hasText: MONOREPO_WORKTREE_PATH }),
         ).toBeVisible();
     });
 });
@@ -105,11 +105,11 @@ test.describe("CWD-B — live path update via WebSocket", () => {
         api.handle("workspace.get", () => makeWorkspace());
 
         await page.goto("/");
-        await openInfoTab(page, pendingTask.id);
+        await openGitTab(page, pendingTask.id);
 
         // No worktree section yet
         await expect(
-            page.locator(".task-tab-info .info-section", { hasText: "Worktree" }),
+            page.locator(".task-tab-git .info-section", { hasText: "Worktree" }),
         ).not.toBeVisible();
 
         // Backend signals worktree is ready
@@ -123,7 +123,7 @@ test.describe("CWD-B — live path update via WebSocket", () => {
 
         // Worktree path should now appear
         await expect(
-            page.locator(".task-tab-info .info-value--mono", { hasText: WORKTREE_PATH }),
+            page.locator(".task-tab-git .info-value--mono", { hasText: WORKTREE_PATH }),
         ).toBeVisible({ timeout: 5_000 });
     });
 
@@ -137,11 +137,11 @@ test.describe("CWD-B — live path update via WebSocket", () => {
         api.handle("workspace.get", () => makeWorkspace());
 
         await page.goto("/");
-        await openInfoTab(page, readyTask.id);
+        await openGitTab(page, readyTask.id);
 
         // Path is visible initially
         await expect(
-            page.locator(".task-tab-info .info-value--mono", { hasText: WORKTREE_PATH }),
+            page.locator(".task-tab-git .info-value--mono", { hasText: WORKTREE_PATH }),
         ).toBeVisible();
 
         // Worktree removed
@@ -154,7 +154,7 @@ test.describe("CWD-B — live path update via WebSocket", () => {
 
         // Path row should disappear
         await expect(
-            page.locator(".task-tab-info .info-value--mono", { hasText: WORKTREE_PATH }),
+            page.locator(".task-tab-git .info-value--mono", { hasText: WORKTREE_PATH }),
         ).not.toBeVisible({ timeout: 5_000 });
     });
 });
