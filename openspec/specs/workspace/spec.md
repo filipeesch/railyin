@@ -160,6 +160,14 @@ The `workspace.update` RPC method SHALL accept an optional `shellAutoApprove` bo
 - **WHEN** `workspace.update` is called with `{ shellAutoApprove: false }`
 - **THEN** the workspace's `workspace.yaml` is updated with `shell_auto_approve: false` (or the field is removed)
 
+### Requirement: Active workspace selection is persisted to localStorage
+See `board-selection-persistence` capability spec for full requirements.
+This is captured here as a delta to the `workspace` capability to record that the workspace store now owns localStorage persistence of `activeWorkspaceKey`.
+
+#### Scenario: Workspace store writes activeWorkspaceKey to localStorage on change
+- **WHEN** the active workspace key changes in the workspace store
+- **THEN** the new value is written to `localStorage` under key `railyn.activeWorkspaceKey`
+
 ### Requirement: Workspace settings UI exposes shell auto-approve toggle
 The Workspace settings tab in the setup UI SHALL display a toggle labeled "Auto-approve shell commands" after the worktree base path field. The toggle SHALL reflect the current workspace `shellAutoApprove` value and SHALL be persisted when the user clicks "Save settings".
 

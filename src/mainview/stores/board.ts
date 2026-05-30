@@ -27,9 +27,7 @@ export const useBoardStore = defineStore("board", () => {
     loading.value = true;
     error.value = null;
     try {
-      const fetched = await api("boards.list", {});
-      console.log("[boardStore.loadBoards] fetched boards:", fetched.map((b) => ({ id: b.id, templateId: b.workflowTemplateId ?? "?", cols: b.template.columns.map((c) => c.id) })));
-      boards.value = fetched;
+      boards.value = await api("boards.list", {});
       const persisted = activeBoardId.value;
       const persistedBoard = persisted != null ? boards.value.find((b) => b.id === persisted) : null;
       const belongsToWorkspace = persistedBoard != null
