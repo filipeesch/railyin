@@ -46,7 +46,12 @@ test.describe("Board unread indicators", () => {
             { key: "test-workspace", name: "Test Workspace" },
             { key: "ws-2", name: "Workspace 2" },
         ]);
-        api.returns("boards.list", [makeBoard({ workspaceKey: "ws-2" })]);
+        // Board 1 (BOARD_ID) belongs to ws-2 — that's where the task lives for unread tracking.
+        // Board 2 belongs to test-workspace (the active workspace) so navigateToBoard can select it.
+        api.returns("boards.list", [
+            makeBoard({ id: 2, workspaceKey: "test-workspace" }),
+            makeBoard({ workspaceKey: "ws-2" }),
+        ]);
 
         await navigateToBoard(page);
 

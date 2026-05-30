@@ -1,14 +1,17 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { api } from "../rpc";
 import type { Board, WorkflowTemplate } from "@shared/rpc-types";
 import { findFirstBoardInWorkspace } from "../workspace-helpers";
+import { readStorage, writeStorage } from "../utils/storage";
 
 type BoardWithTemplate = Board & { template: WorkflowTemplate };
 
+const STORAGE_KEY_BOARD = "railyn.activeBoardId";
+
 export const useBoardStore = defineStore("board", () => {
   const boards = ref<BoardWithTemplate[]>([]);
-  const activeBoardId = ref<number | null>(null);
+  const activeBoardId = ref<number | null>(readStorage<number | null>(STORAGE_KEY_BOARD, null));
   const loading = ref(false);
   const error = ref<string | null>(null);
 
@@ -16,13 +19,23 @@ export const useBoardStore = defineStore("board", () => {
     boards.value.find((b) => b.id === activeBoardId.value) ?? null,
   );
 
-  async function loadBoards() {
+  watch(activeBoardId, (id) => {
+    writeStorage(STORAGE_KEY_BOARD, id);
+  });
+
+  async function loadBoards(workspaceKey?: string) {
     loading.value = true;
     error.value = null;
     try {
       boards.value = await api("boards.list", {});
-      if (!activeBoardId.value && boards.value.length > 0) {
-        activeBoardId.value = boards.value[0].id;
+      const persisted = activeBoardId.value;
+      const persistedBoard = persisted != null ? boards.value.find((b) => b.id === persisted) : null;
+      const belongsToWorkspace = persistedBoard != null
+        && (workspaceKey == null || persistedBoard.workspaceKey === workspaceKey);
+      if (!belongsToWorkspace) {
+        activeBoardId.value = workspaceKey != null
+          ? findFirstBoardInWorkspace(boards.value, workspaceKey)
+          : (boards.value[0]?.id ?? null);
       }
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e);

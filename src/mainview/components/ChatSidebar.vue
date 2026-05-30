@@ -92,6 +92,7 @@ import InputText from "primevue/inputtext";
 import { useChatStore } from "../stores/chat";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { ChatSession } from "@shared/rpc-types";
+import { readStorage, writeStorage } from "../utils/storage";
 
 const chatStore = useChatStore();
 const workspaceStore = useWorkspaceStore();
@@ -103,9 +104,8 @@ const SIDEBAR_MAX = 400;
 const STORAGE_KEY = "chat-sidebar-width";
 
 function loadWidth(): number {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  const n = stored ? parseInt(stored, 10) : NaN;
-  return isNaN(n) ? 220 : Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, n));
+  const stored = readStorage<number | null>(STORAGE_KEY, null);
+  return stored === null ? 220 : Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, stored));
 }
 
 const sidebarWidth = ref(loadWidth());
@@ -119,7 +119,7 @@ function startResize(e: MouseEvent) {
     sidebarWidth.value = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + delta));
   }
   function onUp() {
-    localStorage.setItem(STORAGE_KEY, String(sidebarWidth.value));
+    writeStorage(STORAGE_KEY, sidebarWidth.value);
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("mouseup", onUp);
   }

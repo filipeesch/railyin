@@ -4,8 +4,9 @@
  * Suites:
  *   SU — updateBoard
  *   SD — deleteBoard
+ *   BP — board persistence (localStorage)
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import type { Board, WorkflowTemplate } from "@shared/rpc-types";
 
@@ -13,6 +14,30 @@ const apiMock = vi.fn(async (..._args: unknown[]): Promise<unknown> => []);
 vi.mock("../rpc", () => ({
   api: (...args: Parameters<typeof apiMock>) => apiMock(...args),
 }));
+
+// ─── localStorage mock ────────────────────────────────────────────────────────
+
+let fakeStorage: Record<string, string> = {};
+const localStorageMock = {
+    getItem: (key: string) => fakeStorage[key] ?? null,
+    setItem: (key: string, value: string) => {
+        fakeStorage[key] = value;
+    },
+    removeItem: (key: string) => {
+        delete fakeStorage[key];
+    },
+    clear: () => {
+        fakeStorage = {};
+    },
+    get length() {
+        return Object.keys(fakeStorage).length;
+    },
+    key: (n: number) => Object.keys(fakeStorage)[n] ?? null,
+} satisfies Storage;
+
+beforeAll(() => {
+    (globalThis as Record<string, unknown>).localStorage = localStorageMock;
+});
 
 const { useBoardStore } = await import("./board");
 
@@ -35,6 +60,7 @@ function makeBoard(overrides?: Partial<Board & { template: WorkflowTemplate }>):
 }
 
 beforeEach(() => {
+  fakeStorage = {};
   setActivePinia(createPinia());
   apiMock.mockReset();
 });
@@ -156,5 +182,76 @@ describe("SD — deleteBoard", () => {
     await pending;
 
     expect(store.boards).toHaveLength(0);
+  });
+});
+
+// ─── BP — board persistence ───────────────────────────────────────────────────
+
+describe("BP — board persistence", () => {
+  it("BP-1: activeBoardId starts null when nothing is stored", () => {
+    const store = useBoardStore();
+    expect(store.activeBoardId).toBeNull();
+  });
+
+  it("BP-2: activeBoardId is restored from localStorage on store init", () => {
+    fakeStorage["railyn.activeBoardId"] = JSON.stringify(42);
+    const store = useBoardStore();
+    expect(store.activeBoardId).toBe(42);
+  });
+
+  it("BP-3: persisted board belonging to workspace is preserved after loadBoards(workspaceKey)", async () => {
+    fakeStorage["railyn.activeBoardId"] = JSON.stringify(1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    apiMock.mockImplementation((async (method: string) => {
+      if (method === "boards.list") return [makeBoard({ id: 1, workspaceKey: "ws-a" })];
+      return [];
+    }) as any);
+
+    const store = useBoardStore();
+    await store.loadBoards("ws-a");
+
+    expect(store.activeBoardId).toBe(1);
+  });
+
+  it("BP-4: persisted board from different workspace is replaced with first board of target workspace", async () => {
+    fakeStorage["railyn.activeBoardId"] = JSON.stringify(99);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    apiMock.mockImplementation((async (method: string) => {
+      if (method === "boards.list") {
+        return [
+          makeBoard({ id: 5, workspaceKey: "ws-target" }),
+          makeBoard({ id: 99, workspaceKey: "ws-other" }),
+        ];
+      }
+      return [];
+    }) as any);
+
+    const store = useBoardStore();
+    await store.loadBoards("ws-target");
+
+    expect(store.activeBoardId).toBe(5);
+  });
+
+  it("BP-5: persisted board id not in any board list falls back to first board", async () => {
+    fakeStorage["railyn.activeBoardId"] = JSON.stringify(999);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    apiMock.mockImplementation((async (method: string) => {
+      if (method === "boards.list") return [makeBoard({ id: 7, workspaceKey: "ws-a" })];
+      return [];
+    }) as any);
+
+    const store = useBoardStore();
+    await store.loadBoards("ws-a");
+
+    expect(store.activeBoardId).toBe(7);
+  });
+
+  it("BP-6: selectBoard() persists id to localStorage", async () => {
+    const { nextTick } = await import("vue");
+    const store = useBoardStore();
+    store.selectBoard(77);
+    await nextTick();
+
+    expect(fakeStorage["railyn.activeBoardId"]).toBe(JSON.stringify(77));
   });
 });

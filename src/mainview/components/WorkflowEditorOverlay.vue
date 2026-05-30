@@ -147,6 +147,7 @@ async function onSave() {
 
   try {
     const content = editor?.getValue() ?? props.initialYaml;
+    console.log(`[WorkflowEditorOverlay] saving templateId=${props.templateId} workspaceKey=${props.workspaceKey}`);
     await api("workflow.saveYaml", {
       workspaceKey: props.workspaceKey,
       templateId: props.templateId,

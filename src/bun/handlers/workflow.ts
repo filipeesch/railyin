@@ -109,10 +109,13 @@ export function workflowHandlers(db: Database, notifyReloaded: () => void) {
       }
 
       writeFileSync(filePath, params.yaml, "utf-8");
+      console.log(`[workflow.saveYaml] wrote ${filePath} for template=${params.templateId} workspace=${workspaceKey}`);
 
       // Reload in-memory config and notify the frontend.
       resetConfig();
-      loadConfig(workspaceKey);
+      const reloaded = loadConfig(workspaceKey);
+      const reloadedWorkflows = reloaded.config?.workflows.map((w) => ({ id: w.id, cols: w.columns.map((c) => c.id) }));
+      console.log(`[workflow.saveYaml] reloaded config workflows:`, JSON.stringify(reloadedWorkflows));
       notifyReloaded();
 
       return { ok: true };

@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
+import { readStorage } from "../utils/storage";
 
 export interface TerminalSession {
   sessionId: string;
@@ -17,17 +18,6 @@ const MIN_HEIGHT = 120;
 const DEFAULT_SESSION_PANE_WIDTH = 200;
 const MIN_SESSION_PANE_WIDTH = 160;
 const MAX_SESSION_PANE_WIDTH = 400;
-
-function readStorage<T>(key: string, fallback: T): T {
-  if (typeof localStorage === "undefined") return fallback;
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw === null) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
 
 export const useTerminalStore = defineStore("terminal", () => {
   const sessions = ref<TerminalSession[]>(readStorage<TerminalSession[]>(STORAGE_KEY_SESSIONS, []));

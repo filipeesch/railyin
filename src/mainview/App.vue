@@ -88,7 +88,7 @@ onMounted(async () => {
   }
 
   // Load boards; redirect to setup if none exist yet
-  await boardStore.loadBoards();
+  await boardStore.loadBoards(workspaceStore.activeWorkspaceKey ?? undefined);
   if (boardStore.boards.length === 0) {
     router.push("/setup");
   } else {

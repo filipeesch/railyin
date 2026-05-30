@@ -124,6 +124,46 @@ describe("workflow.create", () => {
   });
 });
 
+describe("workflow.saveYaml → boards.list round-trip", () => {
+  it("boards.list returns updated template columns after saveYaml", async () => {
+    configure();
+    const wHandlers = workflowHandlers(db, notify);
+    const bHandlers = boardHandlers(db);
+
+    // Create a board referencing the delivery workflow
+    const board = await bHandlers["boards.create"]({
+      workspaceKey: WS,
+      name: "Test Board",
+      projectKeys: [],
+      workflowTemplateId: "delivery",
+    });
+
+    // Verify initial state: delivery has backlog + done columns
+    const before = await bHandlers["boards.list"]();
+    const boardBefore = before.find((b) => b.id === board.id)!;
+    expect(boardBefore.template.columns.map((c) => c.id)).not.toContain("review");
+
+    // Edit the delivery workflow YAML to add a 'review' column
+    const originalYaml = (await wHandlers["workflow.getYaml"]({ workspaceKey: WS, templateId: "delivery" })).yaml;
+    const updatedYaml = originalYaml + "\n  - id: review\n    label: Review\n";
+
+    await wHandlers["workflow.saveYaml"]({ workspaceKey: WS, templateId: "delivery", yaml: updatedYaml });
+
+    // boards.list should now return the template with the new 'review' column
+    const after = await bHandlers["boards.list"]();
+    const boardAfter = after.find((b) => b.id === board.id)!;
+    expect(boardAfter.template.columns.map((c) => c.id)).toContain("review");
+  });
+
+  it("saveYaml calls notifyReloaded after writing the file", async () => {
+    configure();
+    const wHandlers = workflowHandlers(db, notify);
+    const originalYaml = (await wHandlers["workflow.getYaml"]({ workspaceKey: WS, templateId: "delivery" })).yaml;
+    await wHandlers["workflow.saveYaml"]({ workspaceKey: WS, templateId: "delivery", yaml: originalYaml });
+    expect(notifyCount).toBe(1);
+  });
+});
+
 describe("workflow.delete", () => {
   it("deletes a free user-created workflow file and notifies", async () => {
     configure(["sprint"]);

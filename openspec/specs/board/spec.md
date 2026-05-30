@@ -118,6 +118,14 @@ The system SHALL implement task card dragging using pointer events (not HTML5 Dr
 - **WHEN** the user drags and releases a task card
 - **THEN** the task detail drawer does NOT open (click is suppressed within 200ms of drag end)
 
+### Requirement: Active board selection is persisted to localStorage
+See `board-selection-persistence` capability spec for full requirements.
+This is captured here as a delta to the `board` capability to record that the board store now owns localStorage persistence of `activeBoardId`.
+
+#### Scenario: Board store writes activeBoardId to localStorage on change
+- **WHEN** the active board id changes in the board store
+- **THEN** the new value is written to `localStorage` under key `railyn.activeBoardId`
+
 ### Requirement: Board column header includes contextual task creation button
 The system SHALL display a task creation button below the backlog column title for contextual task creation.
 
