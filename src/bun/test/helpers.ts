@@ -391,6 +391,35 @@ import type { ExecutionEngine } from "../engine/types.ts";
 import { getWorkspaceConfig, getDefaultWorkspaceKey } from "../workspace-context.ts";
 
 /**
+ * Seed a standalone chat session with its own conversation.
+ * Returns the session id and conversation id for use in executor tests.
+ */
+export function seedChatSession(
+  db: Database,
+  overrides: { workspaceKey?: string; title?: string; model?: string } = {},
+): { sessionId: number; conversationId: number } {
+  const workspaceKey = overrides.workspaceKey ?? "default";
+  const title = overrides.title ?? "Test Session";
+
+  db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+  const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+  if (overrides.model) {
+    db.run("UPDATE conversations SET model = ? WHERE id = ?", [overrides.model, conversationId]);
+  }
+
+  db.run(
+    "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES (?, ?, 'idle', ?)",
+    [workspaceKey, title, conversationId],
+  );
+  const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+  return { sessionId, conversationId };
+}
+
+
+
+/**
  * Build an `EngineRegistry` containing a single engine for unit tests.
  * Must be called AFTER `setupTestConfig()` so the workspace config is loaded.
  * The engine is registered under the first engine ID declared in the loaded config
