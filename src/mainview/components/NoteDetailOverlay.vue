@@ -146,6 +146,7 @@ async function onSave() {
 
 async function onDelete() {
   if (props.noteId == null) return;
+  if (!confirm("Delete this note? This cannot be undone.")) return;
   saving.value = true;
   error.value = null;
   try {

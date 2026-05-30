@@ -1077,7 +1077,7 @@ export type RailynAPI = {
   };
   "notes.update": {
     params: { id: number; title?: string | null; content?: string };
-    response: TaskNote | null;
+    response: TaskNote;
   };
   "notes.delete": {
     params: { id: number };

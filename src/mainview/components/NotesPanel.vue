@@ -22,7 +22,7 @@
         <div class="note-item__header">
           <span v-if="note.title" class="note-item__title">{{ note.title }}</span>
           <span v-if="note.isSourceAi" class="note-item__ai-badge">AI</span>
-          <span class="note-item__date">{{ formatDate(note.createdAt) }}</span>
+          <span class="note-item__date">{{ formatDate(note.updatedAt) }}</span>
         </div>
         <div class="note-item__preview">{{ previewText(note.content) }}</div>
       </div>

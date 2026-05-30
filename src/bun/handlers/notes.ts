@@ -26,12 +26,14 @@ export function noteHandlers(db: Database) {
       id: number;
       title?: string | null;
       content?: string;
-    }): TaskNote | null => {
+    }): TaskNote => {
       const repo = new NoteRepository(db);
-      return repo.updateNote(params.id, {
+      const note = repo.updateNote(params.id, {
         title: params.title,
         content: params.content,
-      }) as TaskNote | null;
+      });
+      if (!note) throw new Error(`Note #${params.id} not found`);
+      return note as TaskNote;
     },
 
     "notes.delete": (params: { id: number }): void => {
