@@ -152,3 +152,20 @@ describe("RetryExecutor — model resolution", () => {
     expect(row.model).toBeNull();
   });
 });
+
+describe("RetryExecutor — git context propagation", () => {
+  it("RE-GC-1: retry returns task with worktreePath when task_git_context row exists", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, ?, ?)",
+      [taskId, "/tmp/git-root", "/wt/1", "ready", "feature/test"],
+    );
+
+    const { executor } = makeExecutor();
+    const result = await executor.execute(taskId);
+
+    expect(result.task.worktreePath).toBe("/wt/1");
+  });
+});

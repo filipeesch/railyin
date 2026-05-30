@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { openTaskDrawer } from "./fixtures";
 import { navigateToBoard } from "./fixtures/board-helpers";
 import { makeTask } from "./fixtures/mock-data";
 
@@ -65,5 +66,49 @@ test.describe("Board WebSocket updates", () => {
         // Board should still render correctly and the default task card should be visible
         const card = page.locator(`[data-task-id="${task.id}"]`);
         await expect(card).toBeVisible();
+    });
+});
+
+test.describe("Board WebSocket updates — worktree buttons", () => {
+    test("WS-WT-1: task.updated with null worktreePath hides Terminal button in open drawer", async ({
+        page,
+        api,
+        ws,
+    }) => {
+        const taskWithWorktree = makeTask({ id: 50, worktreePath: "/wt/1", worktreeStatus: "ready" });
+        api.handle("tasks.list", () => [taskWithWorktree]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, taskWithWorktree.id);
+
+        // Verify terminal button is initially visible
+        await expect(page.locator(".tcv-toolbar button:has(.pi-desktop)")).toBeVisible({ timeout: 3_000 });
+
+        // Push task.updated with null worktreePath (simulates pre-fix bug when backend omitted git context join)
+        ws.push({ type: "task.updated", payload: { ...taskWithWorktree, worktreePath: null, worktreeStatus: null } });
+
+        // Terminal button should now be hidden
+        await expect(page.locator(".tcv-toolbar button:has(.pi-desktop)")).not.toBeAttached();
+    });
+
+    test("WS-WT-2: task.updated preserving worktreePath keeps Terminal button visible in open drawer", async ({
+        page,
+        api,
+        ws,
+    }) => {
+        const taskWithWorktree = makeTask({ id: 51, worktreePath: "/wt/1", worktreeStatus: "ready" });
+        api.handle("tasks.list", () => [taskWithWorktree]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, taskWithWorktree.id);
+
+        // Verify terminal button is initially visible
+        await expect(page.locator(".tcv-toolbar button:has(.pi-desktop)")).toBeVisible({ timeout: 3_000 });
+
+        // Push task.updated with worktreePath preserved (correct post-fix behavior)
+        ws.push({ type: "task.updated", payload: { ...taskWithWorktree, executionState: "running" } });
+
+        // Terminal button should remain visible
+        await expect(page.locator(".tcv-toolbar button:has(.pi-desktop)")).toBeVisible();
     });
 });

@@ -1,7 +1,7 @@
 import type { Task } from "../../../shared/rpc-types.ts";
 import { QualifiedModelId } from "../qualified-model-id";
 import type { Database } from "bun:sqlite";
-import { mapTask } from "../../db/mappers";
+import { fetchTaskWithModel } from "../../db/task-queries.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
@@ -106,6 +106,6 @@ export class RetryExecutor {
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 
-    return { task: mapTask(updatedRow), executionId };
+    return { task: fetchTaskWithModel(db, taskId)!, executionId };
   }
 }

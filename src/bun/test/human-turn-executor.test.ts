@@ -11,7 +11,8 @@ import { IWorkingDirectoryResolver } from "../engine/execution/working-directory
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage, OnTaskUpdated } from "../engine/types.ts";
+import type { Task } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
@@ -98,7 +99,7 @@ afterEach(() => {
   resetConfig();
 });
 
-function makeExecutor(engine: TestEngine) {
+function makeExecutor(engine: TestEngine, onTaskUpdated?: OnTaskUpdated) {
   const builder = new CapturingParamsBuilder();
   const streamProcessor = new StubStreamProcessor();
   const executor = new HumanTurnExecutor(
@@ -107,7 +108,7 @@ function makeExecutor(engine: TestEngine) {
     builder,
     new StubWorkdirResolver(gitDir),
     streamProcessor,
-    () => {},
+    onTaskUpdated ?? (() => {}),
     wsRepo,
     boardTools,
     new CrossEngineContextInjector(db),
@@ -244,5 +245,76 @@ describe("HumanTurnExecutor — decision context injection", () => {
 
     await executor.execute(taskId, "second message");
     expect(builder.lastBuilt?.prompt).not.toContain("## Decision Records");
+  });
+});
+
+describe("HumanTurnExecutor — git context propagation via onTaskUpdated", () => {
+  function seedGitContext(taskId: number) {
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, ?, ?)",
+      [taskId, gitDir, "/wt/1", "ready", "feature/test"],
+    );
+  }
+
+  function seedWaitingUserState(taskId: number, conversationId: number) {
+    db.run(
+      "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'running', 1)",
+      [taskId, conversationId],
+    );
+    const execId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?",
+      [execId, taskId],
+    );
+  }
+
+  it("HT-GC-1: waiting_user resume broadcasts task with worktreePath via onTaskUpdated", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    seedGitContext(taskId);
+    seedWaitingUserState(taskId, conversationId);
+
+    let capturedTask: Task | null = null;
+    const { executor } = makeExecutor(new TestEngine(), (t) => { capturedTask = t; });
+
+    await executor.execute(taskId, "hello");
+
+    expect(capturedTask).not.toBeNull();
+    expect(capturedTask!.worktreePath).toBe("/wt/1");
+    expect(capturedTask!.worktreeStatus).toBe("ready");
+  });
+
+  it("HT-GC-2: session-lost fallback broadcasts task with worktreePath via onTaskUpdated", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    seedGitContext(taskId);
+    seedWaitingUserState(taskId, conversationId);
+
+    const capturedTasks: Task[] = [];
+    const { executor } = makeExecutor(new TestEngine(true), (t) => { capturedTasks.push(t); });
+
+    await executor.execute(taskId, "hello");
+
+    const broadcastForTask = capturedTasks.find(t => t.id === taskId);
+    expect(broadcastForTask).toBeDefined();
+    expect(broadcastForTask!.worktreePath).toBe("/wt/1");
+  });
+
+  it("HT-GC-3: new execution start broadcasts task with worktreePath via onTaskUpdated", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    seedGitContext(taskId);
+
+    let capturedTask: Task | null = null;
+    const { executor } = makeExecutor(new TestEngine(), (t) => { capturedTask = t; });
+
+    await executor.execute(taskId, "hello");
+
+    expect(capturedTask).not.toBeNull();
+    expect(capturedTask!.worktreePath).toBe("/wt/1");
+    expect(capturedTask!.worktreeStatus).toBe("ready");
   });
 });
