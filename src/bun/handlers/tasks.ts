@@ -95,11 +95,11 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       // Note: No automatic model seeding in new architecture
       // Model must be explicitly set via tasks.setModel after creation
 
+      const topPosition = positionService.getTopPosition(params.boardId, "backlog");
       const taskResult = db.run(
         `INSERT INTO tasks
            (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, shell_auto_approve, position, enabled_mcp_tools)
-         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?, ?,
-           COALESCE((SELECT MAX(position) FROM tasks WHERE board_id = ? AND workflow_state = 'backlog'), 0) + 1000, '[]')`,
+         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?, ?, ?, '[]')`,
         [
           params.boardId,
           params.projectKey,
@@ -107,7 +107,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           params.description.trim(),
           conversationId,
           wsShellAutoApprove ? 1 : 0,
-          params.boardId,
+          topPosition,
         ],
       );
       const taskId = taskResult.lastInsertRowid as number;
@@ -158,12 +158,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       if (params.targetPosition != null) {
         db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.targetPosition, params.taskId]);
       } else {
-        const minRow = db
-          .query<{ min_pos: number | null }, [number, string]>(
-            "SELECT MIN(position) as min_pos FROM tasks WHERE board_id = (SELECT board_id FROM tasks WHERE id = ?) AND workflow_state = ?",
-          )
-          .get(params.taskId, params.toState);
-        const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
+        const topPos = positionService.getTopPosition(validation.boardId, params.toState);
         db.run("UPDATE tasks SET position = ? WHERE id = ?", [topPos, params.taskId]);
       }
       if (validation.ok) {
