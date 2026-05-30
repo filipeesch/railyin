@@ -52,6 +52,9 @@
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'info' }]" @click="activeTab = 'info'">
           <i class="pi pi-info-circle" /> Info
         </button>
+        <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'git' }]" @click="activeTab = 'git'">
+          <i class="pi pi-code-branch" /> Git
+        </button>
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'decisions' }]" @click="activeTab = 'decisions'">
           <i class="pi pi-list-check" /> Decisions
         </button>
@@ -169,6 +172,9 @@
     <!-- Info tab -->
     <TaskInfoPanel v-else-if="activeTab === 'info' && task" :task-id="task.id" />
 
+    <!-- Git tab -->
+    <TaskGitPanel v-else-if="activeTab === 'git' && task" :task-id="task.id" />
+
     <!-- Decisions tab -->
     <DecisionsPanel v-else-if="activeTab === 'decisions' && task" :conversation-id="task.conversationId" />
 
@@ -212,6 +218,7 @@ import Dialog from "primevue/dialog";
 import ConversationBody from "./ConversationBody.vue";
 import ConversationInput from "./ConversationInput.vue";
 import TaskInfoPanel from "./TaskInfoPanel.vue";
+import TaskGitPanel from "./TaskGitPanel.vue";
 import ChangedFilesPanel from "./ChangedFilesPanel.vue";
 import TodoPanel from "./TodoPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
@@ -275,7 +282,7 @@ const execSeverity = computed((): "secondary" | "info" | "warn" | "danger" | "su
 
 // ─── UI state ─────────────────────────────────────────────────────────────────
 
-const activeTab = ref<"chat" | "info" | "decisions">("chat");
+const activeTab = ref<"chat" | "info" | "git" | "decisions">("chat");
 const compacting = ref(false);
 const manageModelsOpen = ref(false);
 const retrying = ref(false);
