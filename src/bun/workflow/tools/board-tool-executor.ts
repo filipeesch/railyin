@@ -5,6 +5,7 @@ import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
 import type { WorktreeManager } from "../../git/WorktreeManager.ts";
 import { getProjectByKey, getLoadedProjectByKey } from "../../project-store.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
+import { PositionService } from "../../handlers/position-service.ts";
 import type { BoardToolContext } from "./types.ts";
 import { validateTransition } from "../transition-validator.ts";
 import { getWorkspaceConfig } from "../../workspace-context.ts";
@@ -32,11 +33,15 @@ const TASK_WITH_GIT = `
   WHERE t.id = ?`;
 
 export class BoardToolExecutor implements IBoardToolExecutor {
+  private readonly positionService: PositionService;
+
   constructor(
     private readonly db: Database,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly worktreeManager?: WorktreeManager,
-  ) {}
+  ) {
+    this.positionService = new PositionService(db);
+  }
 
   async execGetTask(args: Record<string, unknown>, _ctx: BoardToolContext): Promise<string> {
     const taskId = Number(args.task_id);
@@ -131,10 +136,11 @@ export class BoardToolExecutor implements IBoardToolExecutor {
     if (explicitModel) {
       this.db.run("UPDATE conversations SET model = ? WHERE id = ?", [explicitModel, convId]);
     }
+    const topPosition = this.positionService.getTopPosition(boardId, "backlog");
     const taskRes = this.db.run(
-      `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id)
-       VALUES (?, ?, ?, ?, 'backlog', 'idle', ?)`,
-      [boardId, projectKey, title, description, convId],
+      `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position)
+       VALUES (?, ?, ?, ?, 'backlog', 'idle', ?, ?)`,
+      [boardId, projectKey, title, description, convId, topPosition],
     );
     const newTaskId = taskRes.lastInsertRowid as number;
     this.db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [newTaskId, convId]);
@@ -210,12 +216,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
     if (!validation.ok) {
       return `Error: ${validation.reason}`;
     }
-    const minRow = this.db
-      .query<{ min_pos: number | null }, [number, string]>(
-        "SELECT MIN(position) as min_pos FROM tasks WHERE board_id = ? AND workflow_state = ?",
-      )
-      .get(validation.boardId, targetState);
-    const topPos = minRow?.min_pos != null ? minRow.min_pos / 2 : 500;
+    const topPos = this.positionService.getTopPosition(validation.boardId, targetState);
 
     const movedTask = this.db
       .query<{ execution_state: string }, [number]>(

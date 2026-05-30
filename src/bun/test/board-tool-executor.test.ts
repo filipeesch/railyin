@@ -81,6 +81,42 @@ describe("BE-4: execCreateTask inserts into injected in-memory DB", () => {
     const after = db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM tasks").get()!.count;
     expect(after).toBe(before + 1);
   });
+
+  it("BE-4.2: places new task above existing tasks when backlog is non-empty", async () => {
+    // move seed task into backlog at an explicit position
+    db.run("UPDATE tasks SET workflow_state = 'backlog', position = 500 WHERE id = ?", [taskId]);
+
+    await executor.execCreateTask(
+      { title: "On Top", project_key: "test-project", board_id: boardId },
+      makeCtx(),
+    );
+
+    const positions = db
+      .query<{ position: number }, [number]>(
+        "SELECT position FROM tasks WHERE board_id = ? AND workflow_state = 'backlog' ORDER BY position ASC",
+      )
+      .all(boardId)
+      .map((r) => r.position);
+
+    expect(positions[0]).toBeLessThan(500);
+  });
+
+  it("BE-4.3: assigns position 500 when backlog is empty", async () => {
+    db.run("DELETE FROM tasks WHERE board_id = ?", [boardId]);
+
+    await executor.execCreateTask(
+      { title: "Empty board task", project_key: "test-project", board_id: boardId },
+      makeCtx(),
+    );
+
+    const row = db
+      .query<{ position: number }, [number]>(
+        "SELECT position FROM tasks WHERE board_id = ? ORDER BY id DESC LIMIT 1",
+      )
+      .get(boardId);
+
+    expect(row!.position).toBe(500);
+  });
 });
 
 describe("BE-5: execMoveTask updates workflow_state in injected DB", () => {
