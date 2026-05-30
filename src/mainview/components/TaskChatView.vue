@@ -53,7 +53,7 @@
           <i class="pi pi-info-circle" /> Info
         </button>
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'git' }]" @click="activeTab = 'git'">
-          <i class="pi pi-code-branch" /> Git
+          <i class="pi pi-share-alt" /> Git
         </button>
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'decisions' }]" @click="activeTab = 'decisions'">
           <i class="pi pi-list-check" /> Decisions
