@@ -9,6 +9,7 @@ import type {
   OnNewMessage,
   CommonToolContext,
 } from "../types.ts";
+import { resolveSamplingPreset } from "./sampling-params.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
@@ -204,6 +205,7 @@ export class PiEngine implements ExecutionEngine {
       onHumanTurn,
       boardTools,
       contextWindowOverride,
+      samplingPresetName,
     } = params;
 
     // Bail immediately if already cancelled before we even start.
@@ -249,6 +251,8 @@ export class PiEngine implements ExecutionEngine {
     // Look up the project path before session creation so it can be used when
     // wiring dialect skill paths into the Pi resource loader.
     const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd());
+
+    this._applyPresetToSession(session, samplingPresetName);
 
     this.executionToConversation.set(executionId, conversationId);
 
@@ -648,6 +652,23 @@ export class PiEngine implements ExecutionEngine {
     const session = await this.createNewSession(tools, systemPrompt, conversationId, model, cwd);
     this.sessions.set(conversationId, session);
     return session;
+  }
+
+  /**
+   * Sets or clears `session.agent.onPayload` for the current execution.
+   *
+   * MUST be called on every `createManagedExecution()` invocation — sessions are
+   * reused across executions and `onPayload` is a mutable property on the Agent.
+   * When no preset resolves, it is explicitly reset to `undefined` to prevent a
+   * prior execution's sampling values from leaking into this one.
+   */
+  _applyPresetToSession(session: AgentSession, presetName: string | undefined): void {
+    const resolved = resolveSamplingPreset(presetName, this.config);
+    if (resolved !== undefined) {
+      session.agent.onPayload = (payload: unknown) => ({ ...(payload as Record<string, unknown>), ...resolved });
+    } else {
+      session.agent.onPayload = undefined;
+    }
   }
 
   private buildModel(modelOverride?: string, contextWindowOverride?: number): Model<"openai-completions"> {

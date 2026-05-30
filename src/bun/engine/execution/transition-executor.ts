@@ -152,6 +152,7 @@ export class TransitionExecutor {
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
       ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
+      ...(column.sampling_preset !== undefined ? { samplingPresetName: column.sampling_preset } : {}),
     };
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
