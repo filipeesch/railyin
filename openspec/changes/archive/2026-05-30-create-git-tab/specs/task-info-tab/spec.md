@@ -1,6 +1,5 @@
-## Purpose
-The task Info tab surfaces project context, worktree metadata, and the task description in a read-friendly format with an inline edit action.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Info tab displays project information
 The system SHALL display the task's project name and project key in the Info tab.
 
@@ -23,3 +22,24 @@ The system SHALL display the task's description as rendered markdown in the Info
 - **WHEN** the Info tab is active and the task description is empty
 - **THEN** the description section is still rendered with the edit button available
 
+## REMOVED Requirements
+
+### Requirement: Info tab displays worktree and branch metadata
+**Reason**: Worktree management is a git-specific concern and has been moved to the dedicated Git tab.
+**Migration**: Users should use the Git tab to view and manage worktree branch, path, and status.
+
+### Requirement: User can delete a worktree from the Info tab
+**Reason**: Moved to the Git tab.
+**Migration**: Use the Git tab to delete a worktree.
+
+### Requirement: User can create a worktree from the Info tab
+**Reason**: Moved to the Git tab.
+**Migration**: Use the Git tab to create a worktree.
+
+### Requirement: Worktree error state shows retry option
+**Reason**: Moved to the Git tab.
+**Migration**: Use the Git tab to retry worktree creation.
+
+### Requirement: Worktree creating state shows a spinner
+**Reason**: Moved to the Git tab.
+**Migration**: Worktree creation progress is now shown in the Git tab.

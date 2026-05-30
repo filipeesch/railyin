@@ -52,6 +52,9 @@
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'info' }]" @click="activeTab = 'info'">
           <i class="pi pi-info-circle" /> Info
         </button>
+        <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'git' }]" @click="activeTab = 'git'">
+          <Icon icon="mdi:source-branch" width="14" height="14" /> Git
+        </button>
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'decisions' }]" @click="activeTab = 'decisions'">
           <i class="pi pi-list-check" /> Decisions
         </button>
@@ -172,6 +175,9 @@
     <!-- Info tab -->
     <TaskInfoPanel v-else-if="activeTab === 'info' && task" :task-id="task.id" />
 
+    <!-- Git tab -->
+    <TaskGitPanel v-else-if="activeTab === 'git' && task" :task-id="task.id" />
+
     <!-- Decisions tab -->
     <DecisionsPanel v-else-if="activeTab === 'decisions' && task" :conversation-id="task.conversationId" />
 
@@ -215,6 +221,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
 import { useColumnTransitions } from "../composables/useColumnTransitions";
+import { Icon } from "@iconify/vue";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Select from "primevue/select";
@@ -222,6 +229,7 @@ import Dialog from "primevue/dialog";
 import ConversationBody from "./ConversationBody.vue";
 import ConversationInput from "./ConversationInput.vue";
 import TaskInfoPanel from "./TaskInfoPanel.vue";
+import TaskGitPanel from "./TaskGitPanel.vue";
 import ChangedFilesPanel from "./ChangedFilesPanel.vue";
 import TodoPanel from "./TodoPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
@@ -286,7 +294,7 @@ const execSeverity = computed((): "secondary" | "info" | "warn" | "danger" | "su
 
 // ─── UI state ─────────────────────────────────────────────────────────────────
 
-const activeTab = ref<"chat" | "info" | "decisions" | "notes">("chat");
+const activeTab = ref<"chat" | "info" | "git" | "decisions" | "notes">("chat");
 const compacting = ref(false);
 const manageModelsOpen = ref(false);
 const retrying = ref(false);
