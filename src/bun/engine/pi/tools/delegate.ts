@@ -66,35 +66,60 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
     name: "delegate",
     label: "Delegate tasks",
     description:
-      "Fan out independent sub-tasks to parallel child agents. " +
-      "Each child receives its own prompt and a restricted tool set. " +
-      "Results are returned as a markdown digest.",
+      "Fan out 2+ independent sub-tasks to parallel child agents and receive a markdown digest of all results.\n\n" +
+      "WHEN TO USE\n" +
+      "- You can split the work into tasks with no shared files and no sequential dependency between them.\n" +
+      "- Each task can be fully described without referencing another task's output.\n" +
+      "- You have at least 2 tasks (for a single task, just do it yourself).\n\n" +
+      "DO NOT DELEGATE IF\n" +
+      "- Two tasks touch the same file (last-write-wins, no merge).\n" +
+      "- Task B needs Task A's output as input.\n" +
+      "- Tasks share mutable state (lock files, package.json, git index).\n" +
+      "- Tasks need shell commands — shell state is global, not safe to parallelise.",
     parameters: {
       type: "object",
       properties: {
+        description: {
+          type: "string",
+          description:
+            "Required. One sentence: what each task covers and why they are independent. " +
+            'Example: "job-a writes src/auth/token.ts, job-b writes src/user/service.ts — no shared files." ' +
+            "Keep it short — this appears as the bubble header in the UI.",
+        },
         tasks: {
           type: "array",
           description: "Sub-tasks to run in parallel. Each becomes an independent child agent call.",
           items: {
             type: "object",
             properties: {
-              id: { type: "string", description: "Unique identifier for this sub-task (used in the result digest)." },
-              prompt: { type: "string", description: "Instruction for the child agent." },
+              id: {
+                type: "string",
+                description:
+                  "Short slug naming the scope. Use the file stem when possible, " +
+                  'e.g. "auth-token" or "user-service-tests". If you cannot name it in 3–5 words the task is too broad.',
+              },
+              prompt: {
+                type: "string",
+                description:
+                  "Self-contained instruction for a fresh agent with no prior context. " +
+                  "Include: file path(s), expected interface/contract, relevant constraints. " +
+                  "The child has no conversation history — everything it needs must be here. " +
+                  'Bad: "Implement the auth module." ' +
+                  'Good: "Create src/auth/token.ts exporting signToken(payload, secret) and verifyToken(token, secret) using the jose library already in package.json."',
+              },
               tools: {
                 type: "array",
                 items: { type: "string", enum: ["read", "web"] },
-                description: 'Tool groups available to this child. Defaults to config.allow_tools ?? ["read"].',
+                description:
+                  'Tool groups available to this child. Defaults to config.allow_tools ?? ["read"]. ' +
+                  "Do not include shell — shell state is shared and not safe to parallelise.",
               },
             },
             required: ["id", "prompt"],
           },
         },
-        description: {
-          type: "string",
-          description: "Human-readable summary of the fan-out purpose.",
-        },
       },
-      required: ["tasks"],
+      required: ["description", "tasks"],
     },
     execute: async (
       toolCallId: string,
