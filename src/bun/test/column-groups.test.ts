@@ -15,6 +15,7 @@ import { executeCommonTool } from "../engine/common-tools.ts";
 import type { CommonToolContext } from "../engine/types.ts";
 import { TodoRepository } from "../db/todos.ts";
 import { DecisionRepository } from "../db/repositories/decision-repository.ts";
+import { NoteRepository } from "../db/repositories/note-repository.ts";
 import type { Database } from "bun:sqlite";
 
 let db: Database;
@@ -260,6 +261,7 @@ const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
   repos: {
     todos: new TodoRepository(db),
     decisions: new DecisionRepository(db),
+    notes: new NoteRepository(db),
     boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
   },
   workflow: {

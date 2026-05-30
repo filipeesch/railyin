@@ -129,3 +129,15 @@ export const listDecisions = (params: { conversationId: number }) =>
 
 export const getDecisionRevisions = (params: { decisionId: number }) =>
   api("decisions.getRevisions", params);
+
+export const listNotes = (params: { conversationId: number }) =>
+  api("notes.list", params);
+
+export const createNote = (params: { conversationId: number; content: string }) =>
+  api("notes.create", params);
+
+export const updateNote = (params: { id: number; content?: string }) =>
+  api("notes.update", params);
+
+export const deleteNote = (params: { id: number }) =>
+  api("notes.delete", params);

@@ -11,6 +11,7 @@ import type {
 import type { OpenCodeSdkAdapter } from "./types.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
+import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import type { CommonToolContext } from "../types.ts";
 
 export class OpenCodeEngine implements ExecutionEngine {
@@ -69,6 +70,7 @@ export class OpenCodeEngine implements ExecutionEngine {
       repos: {
         todos: new TodoRepository(),
         decisions: new DecisionRepository(),
+        notes: new NoteRepository(),
         boardTools: boardTools!,
       },
       workflow: {

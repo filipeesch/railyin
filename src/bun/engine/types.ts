@@ -221,6 +221,7 @@ export interface CommonToolContext {
   repos: {
     todos: import("../db/todos.ts").TodoRepository;
     decisions: import("../db/repositories/decision-repository.ts").DecisionRepository;
+    notes: import("../db/repositories/note-repository.ts").NoteRepository;
     boardTools: IBoardToolExecutor;
   };
   workflow: {

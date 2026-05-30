@@ -26,6 +26,7 @@ import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mcpHandlers } from "./handlers/mcp.ts";
 import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
 import { decisionHandlers } from "./handlers/decisions.ts";
+import { noteHandlers } from "./handlers/notes.ts";
 import { configHandlers } from "./handlers/config.ts";
 import { Orchestrator } from "./engine/orchestrator.ts";
 import { EngineRegistry } from "./engine/engine-registry.ts";
@@ -264,6 +265,7 @@ const allHandlers = {
   }),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
   ...decisionHandlers(db),
+  ...noteHandlers(db),
   ...configHandlers(),
 } as Record<string, (params: unknown) => unknown>;
 

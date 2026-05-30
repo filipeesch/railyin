@@ -6,6 +6,7 @@ import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import type { CommonToolContext } from "../engine/types.ts";
 import { TodoRepository } from "../db/todos.ts";
 import { DecisionRepository } from "../db/repositories/decision-repository.ts";
+import { NoteRepository } from "../db/repositories/note-repository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 
@@ -39,6 +40,7 @@ const commonCtx = (overrides?: {
     repos: {
       todos: new TodoRepository(db),
       decisions: new DecisionRepository(db),
+      notes: new NoteRepository(db),
       boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
     },
     workflow: {

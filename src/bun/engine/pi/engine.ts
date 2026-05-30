@@ -44,6 +44,7 @@ export interface SessionFactoryOptions {
 export type SessionFactory = (options: SessionFactoryOptions) => Promise<AgentSession>;
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
+import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { UndoStack } from "./harness/undo-stack.ts";
@@ -597,6 +598,7 @@ export class PiEngine implements ExecutionEngine {
       repos: {
         todos: new TodoRepository(),
         decisions: new DecisionRepository(),
+        notes: new NoteRepository(),
         boardTools: boardTools!,
       },
       workflow: {

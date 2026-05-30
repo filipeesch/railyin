@@ -58,6 +58,9 @@
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'decisions' }]" @click="activeTab = 'decisions'">
           <i class="pi pi-list-check" /> Decisions
         </button>
+        <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'notes' }]" @click="activeTab = 'notes'">
+          <i class="pi pi-file-edit" /> Notes
+        </button>
       </div>
       <div class="toolbar-actions" v-if="task">
         <Select
@@ -178,6 +181,13 @@
     <!-- Decisions tab -->
     <DecisionsPanel v-else-if="activeTab === 'decisions' && task" :conversation-id="task.conversationId" />
 
+    <!-- Notes tab -->
+    <NotesPanel
+      v-else-if="activeTab === 'notes' && task"
+      :conversation-id="task.conversationId"
+      :refresh-trigger="notesRefreshTrigger"
+    />
+
     <!-- Manage Models modal -->
     <ManageModelsModal
       v-model="manageModelsOpen"
@@ -225,6 +235,7 @@ import TodoPanel from "./TodoPanel.vue";
 import LaunchButtons from "./LaunchButtons.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
 import DecisionsPanel from "./DecisionsPanel.vue";
+import NotesPanel from "./NotesPanel.vue";
 import { useTaskStore } from "../stores/task";
 import { useConversationStore } from "../stores/conversation";
 import { useBoardStore } from "../stores/board";
@@ -283,7 +294,7 @@ const execSeverity = computed((): "secondary" | "info" | "warn" | "danger" | "su
 
 // ─── UI state ─────────────────────────────────────────────────────────────────
 
-const activeTab = ref<"chat" | "info" | "git" | "decisions">("chat");
+const activeTab = ref<"chat" | "info" | "git" | "decisions" | "notes">("chat");
 const compacting = ref(false);
 const manageModelsOpen = ref(false);
 const retrying = ref(false);
@@ -294,6 +305,7 @@ const deleteLoading = ref(false);
 const deleteError = ref<string | null>(null);
 const deleteWarning = ref<string | null>(null);
 const todoRefreshTrigger = ref(0);
+const notesRefreshTrigger = ref(0);
 const numstat = ref<GitNumstat | null>(null);
 const pendingByFile = ref<{ filePath: string; pendingCount: number }[]>([]);
 const launchConfig = ref<LaunchConfig | null>(null);
@@ -325,6 +337,7 @@ async function refreshTaskData() {
 async function refreshTaskDataOnExecutionEnd() {
   if (!task.value) return;
   todoRefreshTrigger.value++;
+  notesRefreshTrigger.value++;
   numstat.value = await taskStore.getGitStat(task.value.id);
   try {
     pendingByFile.value = await api("tasks.getPendingHunkSummary", { taskId: task.value.id });

@@ -20,15 +20,15 @@ The system SHALL extract shared tool handlers into a common module at `src/bun/e
 - **THEN** shared execution invokes a common interview callback contract and produces equivalent waiting-user behavior across engines
 
 ### Requirement: Common tool handlers receive a context object
-Each common tool handler SHALL receive a `CommonToolContext` containing scoped sub-objects: `task` (containing `taskId`, `boardId`, `taskContext`), `repos` (containing `todos: TodoRepository`, `decisions: DecisionRepository`), `workflow` (containing `transition`, `humanTurn` callbacks), and `runtime` (containing `interview` suspension callback, `cancellation` signal). The context SHALL be constructed via constructor injection of the repository instances. No handler SHALL access global state.
+Each common tool handler SHALL receive a `CommonToolContext` containing scoped sub-objects: `task` (containing `taskId`, `boardId`, `taskContext`), `repos` (containing `todos: TodoRepository`, `decisions: DecisionRepository`, `notes: NoteRepository`), `workflow` (containing `transition`, `humanTurn` callbacks), and `runtime` (containing `interview` suspension callback, `cancellation` signal). The context SHALL be constructed via constructor injection of the repository instances. No handler SHALL access global state.
 
 #### Scenario: Context populated by Copilot engine
 - **WHEN** the Copilot engine executes a common tool call
-- **THEN** it passes a `CommonToolContext` with `repos.decisions` populated and the interview suspension callback at `runtime.interview`
+- **THEN** it passes a `CommonToolContext` with `repos.decisions` populated, `repos.notes` populated, and the interview suspension callback at `runtime.interview`
 
 #### Scenario: Context populated by Claude engine
 - **WHEN** the Claude engine executes a common tool call
-- **THEN** it passes a `CommonToolContext` with `repos.decisions` populated and the interview suspension callback at `runtime.interview`
+- **THEN** it passes a `CommonToolContext` with `repos.decisions` populated, `repos.notes` populated, and the interview suspension callback at `runtime.interview`
 
 ### Requirement: executeCommonTool returns a typed result object
 The `executeCommonTool` function SHALL return `Promise<ToolExecutionResult>` where `ToolExecutionResult` is a discriminated union:
@@ -245,3 +245,10 @@ The system SHALL expose a `delete_decision` tool that accepts `id` (number) and 
 - **WHEN** the AI calls `delete_decision` with a valid id
 - **THEN** subsequent `list_decisions` calls do not include the deleted record
 - **AND** the record remains in the database with `is_deleted = 1`
+
+### Requirement: Common tools include note management tools
+The `COMMON_TOOL_DEFINITIONS` array SHALL include `create_note`, `list_notes`, and `update_note` alongside the existing task, todo, decision, and interaction tools. The `executeCommonToolText` switch SHALL handle all three note tool names by dispatching to `ctx.repos.notes`.
+
+#### Scenario: Note tools registered alongside decision tools
+- **WHEN** an engine registers common tool definitions
+- **THEN** `create_note`, `list_notes`, and `update_note` appear in the tool list
