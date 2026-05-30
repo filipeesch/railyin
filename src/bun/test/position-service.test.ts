@@ -93,6 +93,47 @@ describe("PositionService — PS-2: reorderColumn", () => {
   });
 });
 
+// ─── PS-4: getTopPosition ─────────────────────────────────────────────────────
+
+describe("PositionService — PS-4: getTopPosition", () => {
+  it("PS-4.1: returns MIN(position)/2 for a non-empty column", () => {
+    insertTask(db, boardId, "backlog", 500);
+    insertTask(db, boardId, "backlog", 1000);
+    insertTask(db, boardId, "backlog", 2000);
+
+    const svc = new PositionService(db);
+    expect(svc.getTopPosition(boardId, "backlog")).toBe(250);
+  });
+
+  it("PS-4.2: returns 500 for an empty column", () => {
+    const svc = new PositionService(db);
+    expect(svc.getTopPosition(boardId, "backlog")).toBe(500);
+  });
+
+  it("PS-4.3: returns position/2 when column has a single task", () => {
+    insertTask(db, boardId, "backlog", 300);
+
+    const svc = new PositionService(db);
+    expect(svc.getTopPosition(boardId, "backlog")).toBe(150);
+  });
+
+  it("PS-4.4: is isolated per board — ignores tasks on other boards", () => {
+    // Board A: task at 100
+    insertTask(db, boardId, "backlog", 100);
+
+    // Board B: create a separate board and task at 1000
+    const boardBSeed = seedProjectAndTask(db, `/test-board-b-${Math.random()}`);
+    const boardBId = db
+      .query<{ board_id: number }, [number]>("SELECT board_id FROM tasks WHERE id = ?")
+      .get(boardBSeed.taskId)!.board_id;
+    db.run("UPDATE tasks SET position = 1000 WHERE id = ?", [boardBSeed.taskId]);
+
+    const svc = new PositionService(db);
+    // Board B's top position should use its own min (1000), not board A's (100)
+    expect(svc.getTopPosition(boardBId, "backlog")).toBe(500);
+  });
+});
+
 // ─── PS-3: transaction atomicity ─────────────────────────────────────────────
 
 describe("PositionService — PS-3: reorderColumn atomicity", () => {
