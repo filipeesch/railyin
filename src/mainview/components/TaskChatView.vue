@@ -53,7 +53,7 @@
           <i class="pi pi-info-circle" /> Info
         </button>
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'git' }]" @click="activeTab = 'git'">
-          <i class="pi pi-share-alt" /> Git
+          <Icon icon="mdi:source-branch" width="14" height="14" /> Git
         </button>
         <button :class="['tab-btn', { 'tab-btn--active': activeTab === 'decisions' }]" @click="activeTab = 'decisions'">
           <i class="pi pi-list-check" /> Decisions
@@ -211,6 +211,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
 import { useColumnTransitions } from "../composables/useColumnTransitions";
+import { Icon } from "@iconify/vue";
 import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Select from "primevue/select";
