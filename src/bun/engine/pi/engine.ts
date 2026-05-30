@@ -56,6 +56,8 @@ import { translateEvent } from "./event-translator.ts";
 import { getDb } from "../../db/index.ts";
 import { appendMessage } from "../../conversation/messages.ts";
 import { AsyncQueue } from "./async-queue.ts";
+import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
+import { validatePiEngineConfig } from "./pi-config-validation.ts";
 import { createHash } from "crypto";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
@@ -164,6 +166,10 @@ export class PiEngine implements ExecutionEngine {
     number,
     { resolve: (input: EngineResumeInput) => void; reject: (error: Error) => void }
   >();
+  /** Shared per-provider concurrency limiter for all sessions and background compaction. */
+  private readonly registry: ProviderLimiterRegistry;
+  /** Map<conversationId, Promise<void>> — tracks in-flight background compactions. */
+  private readonly bgCompactions = new Map<number, Promise<void>>();
 
   constructor(
     engineId: string,
@@ -176,10 +182,21 @@ export class PiEngine implements ExecutionEngine {
   ) {
     this.engineId = engineId;
     this.config = config;
+    validatePiEngineConfig(config);
     this._onTaskUpdated = onTaskUpdated;
     this.dialect = dialect;
     this.modelSettingsRepo = modelSettingsRepo;
     this.sessionFactory = sessionFactory;
+
+    // Build the provider limiter registry from configured providers.
+    this.registry = new ProviderLimiterRegistry();
+    for (const [name, providerCfg] of Object.entries(config.providers ?? {})) {
+      this.registry.register(
+        name,
+        providerCfg.max_inflight ?? PROVIDER_LIMITER_DEFAULTS.max_inflight,
+        providerCfg.queue_timeout_ms ?? PROVIDER_LIMITER_DEFAULTS.queue_timeout_ms,
+      );
+    }
   }
 
   // ─── ExecutionEngine interface ──────────────────────────────────────────────
@@ -247,6 +264,7 @@ export class PiEngine implements ExecutionEngine {
 
     const tools = buildAllTools({ harnessCtx, commonCtx, skillResolver, suspendRef: this.getOrCreateSuspendRef(conversationId) });
     const piModel = this.buildModel(modelOverride, contextWindowOverride);
+    const providerName = piModel.provider;
 
     // Look up the project path before session creation so it can be used when
     // wiring dialect skill paths into the Pi resource loader.
@@ -296,6 +314,31 @@ export class PiEngine implements ExecutionEngine {
         const usage = session.getContextUsage();
         if (usage?.tokens != null) {
           queue.push({ type: "usage", inputTokens: usage.tokens, outputTokens: 0, contextWindow: piModel.contextWindow });
+        }
+
+        // Opportunistic background compaction: fire before the SDK's hard threshold.
+        if (this.config.harness?.background_compaction?.enabled !== false && usage?.tokens != null) {
+          const earlyMargin = this.config.harness?.background_compaction?.early_margin_tokens ?? 8192;
+          const softThreshold = piModel.contextWindow - (16384 + earlyMargin);
+          if (usage.tokens > softThreshold && !this.bgCompactions.has(conversationId)) {
+            const release = this.registry.tryAcquire(providerName);
+            if (release !== null) {
+              const p = (async () => {
+                try {
+                  const result = await session.compact();
+                  if (result?.summary) {
+                    appendMessage(getDb(), null, conversationId, "compaction_summary", null, result.summary);
+                  }
+                } catch (err) {
+                  console.error("[pi] background compaction failed:", err);
+                } finally {
+                  release();
+                  this.bgCompactions.delete(conversationId);
+                }
+              })();
+              this.bgCompactions.set(conversationId, p);
+            }
+          }
         }
       }
 
@@ -516,6 +559,11 @@ export class PiEngine implements ExecutionEngine {
       try { session.dispose(); } catch { /* ignore */ }
     }
     this.sessions.clear();
+    // Wait for any in-flight background compactions to settle before tearing down.
+    for (const [, p] of this.bgCompactions) {
+      await p.catch(() => {});
+    }
+    this.bgCompactions.clear();
     this.harnessContexts.clear();
     this.commonCtxRefs.clear();
     this.suspendRefs.clear();
