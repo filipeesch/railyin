@@ -417,8 +417,6 @@ export function seedChatSession(
   return { sessionId, conversationId };
 }
 
-
-
 /**
  * Build an `EngineRegistry` containing a single engine for unit tests.
  * Must be called AFTER `setupTestConfig()` so the workspace config is loaded.

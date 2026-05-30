@@ -9,7 +9,7 @@ import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, RawModelMessage } from "../engine/types.ts";
 import type { ConversationMessage } from "../../shared/rpc-types.ts";
 import { initDb, setupTestConfig, makeTestRegistry, seedChatSession } from "./helpers.ts";
 import { resetConfig } from "../config/index.ts";
@@ -70,7 +70,6 @@ function makeExecutor(opts: {
   onNewMessage?: (msg: ConversationMessage) => void;
   streamProcessor?: StubStreamProcessor;
 }): { executor: ChatExecutor; streamProcessor: StubStreamProcessor } {
-  const wsRepo = new WorkspaceRepository(db);
   const streamProcessor = opts.streamProcessor ?? new StubStreamProcessor();
   const executor = new ChatExecutor(
     db,
