@@ -437,4 +437,85 @@ columns:
     // Same as pre-feature behavior when no custom prompts match
     expect(true).toBe(true);
   });
+
+  // TE-PRESET-1: column with sampling_preset → samplingPresetName flows through
+  it("TE-PRESET-1: column with sampling_preset populates samplingPresetName in ExecutionParams", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: preset-workflow
+name: PresetWorkflow
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+    sampling_preset: balanced
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'preset-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(streamProcessor.lastRun?.params.samplingPresetName).toBe("balanced");
+  });
+
+  // TE-PRESET-2: column without sampling_preset → samplingPresetName is undefined
+  it("TE-PRESET-2: column without sampling_preset leaves samplingPresetName undefined", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: no-preset-workflow
+name: NoPresetWorkflow
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'no-preset-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(streamProcessor.lastRun?.params.samplingPresetName).toBeUndefined();
+  });
 });

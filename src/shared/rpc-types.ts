@@ -490,6 +490,7 @@ export interface WorkflowColumn {
   model?: string;
   limit?: number;
   allowedTransitions?: string[];
+  samplingPreset?: string;
 }
 
 export interface WorkflowTemplate {
