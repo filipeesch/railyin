@@ -90,6 +90,21 @@ describe("ExecutionParamsBuilder.build", () => {
 
     expect(params.enabledMcpTools).toEqual([]);
   });
+
+  // EPB-PRESET-2: build() does not set samplingPresetName (it is injected externally by TransitionExecutor)
+  it("EPB-PRESET-2: samplingPresetName is undefined in base build() result", () => {
+    const params = builder.build(makeTask(), 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+
+    expect(params.samplingPresetName).toBeUndefined();
+  });
+
+  // EPB-PRESET-1: samplingPresetName passes through when spread onto build() result (mirrors TransitionExecutor pattern)
+  it("EPB-PRESET-1: samplingPresetName is preserved when spread onto build() result", () => {
+    const base = builder.build(makeTask(), 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const params = { ...base, samplingPresetName: "balanced" };
+
+    expect(params.samplingPresetName).toBe("balanced");
+  });
 });
 
 describe("ExecutionParamsBuilder.buildForChat", () => {

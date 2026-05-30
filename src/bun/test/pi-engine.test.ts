@@ -41,6 +41,7 @@ class MockAgentSession {
       thinkingLevel: "off" as string,
       systemPrompt: undefined as string | undefined,
     },
+    onPayload: undefined as ((payload: unknown, model: unknown) => unknown) | undefined,
   };
 }
 
@@ -185,5 +186,87 @@ describe("PiEngine session reuse", () => {
     expect(session.lastSetNames).toContain("grep");
     expect(session.lastSetNames).toContain("find");
     expect(session.lastSetNames).toContain("ls");
+  });
+});
+
+// ─── _applyPresetToSession ────────────────────────────────────────────────────
+
+function makePiEngineWithPresets(session: MockAgentSession): PiEngine {
+  const config: PiEngineConfig = {
+    type: "pi",
+    default_sampling_preset: "balanced",
+    sampling_presets: {
+      balanced: { temperature: 0.8, top_p: 0.95 },
+      creative: { temperature: 1.2, top_p: 0.98 },
+      precise: { temperature: 0.2, top_p: 0.85 },
+    },
+  };
+  return new PiEngine(
+    "test-pi",
+    config,
+    () => {},
+    () => {},
+    undefined,
+    new StubModelSettingsRepository(128_000),
+    async () => session as any,
+  );
+}
+
+describe("_applyPresetToSession", () => {
+  it("PE-PRESET-1: named preset → session.agent.onPayload is a function", () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngineWithPresets(session);
+    (engine as any)._applyPresetToSession(session, "creative");
+    expect(typeof session.agent.onPayload).toBe("function");
+  });
+
+  it("PE-PRESET-2: creative preset → onPayload merges temperature and top_p, excludes unknown keys", () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngineWithPresets(session);
+    (engine as any)._applyPresetToSession(session, "creative");
+    const result = session.agent.onPayload!({ model: "x" }, null) as Record<string, unknown>;
+    expect(result.temperature).toBe(1.2);
+    expect(result.top_p).toBe(0.98);
+    expect(result.model).toBe("x");
+    expect("top_k" in result).toBe(false);
+    expect("presence_penalty" in result).toBe(false);
+  });
+
+  it("PE-PRESET-3: undefined preset on engine with no default → onPayload is undefined", () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngine(session);
+    (engine as any)._applyPresetToSession(session, undefined);
+    expect(session.agent.onPayload).toBeUndefined();
+  });
+
+  it("PE-PRESET-4: second call overwrites first preset", () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngineWithPresets(session);
+    (engine as any)._applyPresetToSession(session, "creative");
+    (engine as any)._applyPresetToSession(session, "precise");
+    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+    expect(result.temperature).toBe(0.2);
+  });
+
+  it("PE-PRESET-5: session reuse leakage — applying undefined clears previously set onPayload", () => {
+    const session = new MockAgentSession();
+    const config: PiEngineConfig = {
+      type: "pi",
+      sampling_presets: {
+        balanced: { temperature: 0.8, top_p: 0.95 },
+      },
+    };
+    const engine = new PiEngine(
+      "test-pi",
+      config,
+      () => {},
+      () => {},
+      undefined,
+      new StubModelSettingsRepository(128_000),
+      async () => session as any,
+    );
+    (engine as any)._applyPresetToSession(session, "balanced");
+    (engine as any)._applyPresetToSession(session, undefined);
+    expect(session.agent.onPayload).toBeUndefined();
   });
 });

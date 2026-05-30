@@ -83,6 +83,14 @@ export interface OpenCodeProviderConfig {
   models?: Record<string, { name?: string }>;
 }
 
+/** A named set of LLM sampling parameters for the Pi engine. All fields are optional. */
+export interface SamplingPreset {
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  presence_penalty?: number;
+}
+
 /** Pi engine config — uses the Pi agent SDK for local LLMs (LM Studio, Ollama, OpenAI-compatible). */
 export interface PiEngineConfig {
   type: "pi";
@@ -111,6 +119,10 @@ export interface PiEngineConfig {
    * - "none"    — no slash commands (default when omitted)
    */
   dialect?: "copilot" | "claude" | "none";
+  /** Named sampling parameter presets for this Pi engine instance. */
+  sampling_presets?: Record<string, SamplingPreset>;
+  /** Name of the preset to use when a column does not specify one. */
+  default_sampling_preset?: string;
 }
 
 export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig | PiEngineConfig;
@@ -187,6 +199,8 @@ export interface WorkflowColumnConfig {
   tools?: string[];
   model?: string;
   limit?: number;
+  /** Name of a sampling preset defined in the active Pi engine's config. */
+  sampling_preset?: string;
 }
 
 export interface WorkflowColumnGroup {
