@@ -3,6 +3,7 @@ import { resolveSamplingPreset } from "@bun/engine/pi/sampling-params.ts";
 import type { PiEngineConfig } from "@bun/config/index.ts";
 
 const baseConfig: PiEngineConfig = {
+  type: "pi",
   sampling_presets: {
     precise: { temperature: 0.2, top_p: 0.85 },
     balanced: { temperature: 0.7, top_p: 0.9, top_k: 40, presence_penalty: 0.1 },
@@ -20,6 +21,7 @@ describe("resolveSamplingPreset", () => {
   // PS-2: Partial preset has no extra keys
   it("PS-2: partial preset only has defined keys", () => {
     const config: PiEngineConfig = {
+      type: "pi",
       sampling_presets: { minimal: { temperature: 0.8 } },
     };
     const result = resolveSamplingPreset("minimal", config);
@@ -90,7 +92,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-9: sampling_presets undefined → returns undefined without throwing
   it("PS-9: missing sampling_presets returns undefined without throwing", () => {
-    const config: PiEngineConfig = {};
+    const config: PiEngineConfig = { type: "pi" };
     expect(() => resolveSamplingPreset("any", config)).not.toThrow();
     expect(resolveSamplingPreset("any", config)).toBeUndefined();
   });
@@ -98,6 +100,7 @@ describe("resolveSamplingPreset", () => {
   // PS-10: temperature: 0 is not filtered as falsy
   it("PS-10: temperature: 0 is preserved in returned preset", () => {
     const config: PiEngineConfig = {
+      type: "pi",
       sampling_presets: { zero: { temperature: 0 } },
     };
     const result = resolveSamplingPreset("zero", config);
