@@ -1,10 +1,8 @@
 ## Purpose
 The chat drawer toolbar provides persistent navigation and action controls for the task detail drawer, replacing the side panel with a tab-based layout.
-
 ## Requirements
-
 ### Requirement: Drawer toolbar contains a tab switcher on the left and an action cluster on the right
-The system SHALL render a persistent toolbar row below the drawer header containing a tab switcher (Chat, Info) anchored to the left and an action cluster (workflow select, terminal button, run button, tools button) anchored to the right.
+The system SHALL render a persistent toolbar row below the drawer header containing a tab switcher (Chat, Info, Git, Decisions) anchored to the left and an action cluster (workflow select, terminal button, code editor button, retry button, launch buttons) anchored to the right.
 
 #### Scenario: Toolbar is always visible
 - **WHEN** the task detail drawer is open
@@ -16,11 +14,23 @@ The system SHALL render a persistent toolbar row below the drawer header contain
 
 #### Scenario: Switching to Info tab shows Info content
 - **WHEN** the user clicks the Info tab
-- **THEN** the Info tab becomes active and the drawer body shows the Info tab content
+- **THEN** the Info tab becomes active and the drawer body shows project metadata and description
+
+#### Scenario: Switching to Git tab shows Git content
+- **WHEN** the user clicks the Git tab
+- **THEN** the Git tab becomes active and the drawer body shows the worktree management panel
+
+#### Scenario: Switching to Decisions tab shows Decisions content
+- **WHEN** the user clicks the Decisions tab
+- **THEN** the Decisions tab becomes active
 
 #### Scenario: Switching to Chat tab shows Chat content
 - **WHEN** the user clicks the Chat tab
 - **THEN** the Chat tab becomes active and the drawer body shows the conversation timeline, changed files panel, todo panel, and chat input
+
+#### Scenario: Tab order is Chat, Info, Git, Decisions
+- **WHEN** the toolbar is rendered
+- **THEN** the tabs appear in the order: Chat, Info, Git, Decisions
 
 ### Requirement: Workflow state select in toolbar shows current column and allows transition
 The system SHALL render a Select dropdown in the toolbar showing the task's current workflow column as the selected value, and SHALL trigger a workflow transition when the user selects a different column.
@@ -101,3 +111,4 @@ The system SHALL have Playwright test coverage verifying that the toolbar's cond
 #### Scenario: Retry button visible for failed tasks
 - **WHEN** the task has `executionState: "failed"`
 - **THEN** the retry button is visible in the toolbar
+
