@@ -6,8 +6,7 @@ import { seedWorkflows } from "./config/workflows.ts";
 import { getTmpDir } from "./utils/platform.ts";
 import * as path from "path";
 import { getPtySession } from "./launch/pty.ts";
-import { initMcpRegistry } from "./mcp/registry.ts";
-import type { McpConfig, McpServerConfig } from "./mcp/types.ts";
+import { McpRegistryPool } from "./mcp/registry-pool.ts";
 import { MockExecutionEngine } from "./testing/mock-engine.ts";
 import { workspaceHandlers } from "./handlers/workspace.ts";
 import { boardHandlers } from "./handlers/boards.ts";
@@ -107,42 +106,11 @@ for (const entry of getWorkspaceRegistry()) {
   markWorkflowDirSeeded(workflowsDir);
 }
 
-// 2b. Load MCP config from ~/.railyn/mcp.json and start registry (non-blocking)
-async function loadMcpConfig(): Promise<void> {
-  const { existsSync, readFileSync } = await import("fs");
-  const { join } = await import("path");
-  const mcpConfigPath = join(getDataDir(), "mcp.json");
-  if (!existsSync(mcpConfigPath)) return;
-  try {
-    const raw = readFileSync(mcpConfigPath, "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    let mcpConfig: McpConfig;
-    if (!parsed.servers) {
-      mcpConfig = { servers: [] };
-    } else if (Array.isArray(parsed.servers)) {
-      mcpConfig = { servers: parsed.servers as McpServerConfig[] };
-    } else {
-      const servers: McpServerConfig[] = Object.entries(parsed.servers as Record<string, unknown>).map(
-        ([name, entry]) => {
-          const e = entry as Record<string, unknown>;
-          const transport = e.url
-            ? { type: "http" as const, url: e.url as string, headers: e.headers as Record<string, string> | undefined }
-            : { type: "stdio" as const, command: e.command as string, args: e.args as string[] | undefined, env: e.env as Record<string, string> | undefined };
-          return { name, transport };
-        }
-      );
-      mcpConfig = { servers };
-    }
-    const registry = initMcpRegistry(mcpConfig);
-    registry.startAll().catch((err: unknown) => {
-      console.error("[mcp] Failed to start MCP servers at startup:", err);
-    });
-    console.log(`[mcp] Loaded ${mcpConfig.servers.length} MCP server(s) from ${mcpConfigPath}`);
-  } catch (err) {
-    console.error("[mcp] Failed to load mcp.json at startup:", err);
-  }
-}
-await loadMcpConfig();
+// 2b. Start global MCP registry (non-blocking)
+const registryPool = new McpRegistryPool();
+registryPool.getGlobalRegistry().startAll().catch((err: unknown) => {
+  console.error("[mcp] Failed to start MCP servers at startup:", err);
+});
 
 // 3. Reset any tasks/executions stuck in 'running'/'waiting_user' from last session
 function resetStuckTasks(): void {
@@ -249,7 +217,7 @@ if (injectedEngine) {
 }
 
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo)
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo, registryPool)
   : null;
 
 if (orchestrator) {
@@ -287,7 +255,13 @@ const allHandlers = {
   ...launchHandlers(db),
   ...lspHandlers(db, wsRepo, undefined, undefined, channel.broadcast.bind(channel)),
   ...codeServerHandlers(db, channel.broadcast.bind(channel), serverPort),
-  ...mcpHandlers(db),
+  ...mcpHandlers(db, {
+    registryPool,
+    resolveProject: (workspaceKey: string, projectKey: string) => {
+      const cfg = getWorkspaceConfig(workspaceKey);
+      return cfg?.projects?.find((p) => p.key === projectKey) ?? null;
+    },
+  }),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
   ...decisionHandlers(db),
   ...configHandlers(),

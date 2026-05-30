@@ -77,18 +77,18 @@ describe("ExecutionParamsBuilder.build", () => {
     expect(params.enabledMcpTools).toEqual(["tool-a", "tool-b"]);
   });
 
-  it("sets enabledMcpTools to null when enabled_mcp_tools is null", () => {
+  it("sets enabledMcpTools to [] when enabled_mcp_tools is null", () => {
     const task = makeTask({ enabled_mcp_tools: null });
     const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
 
-    expect(params.enabledMcpTools).toBeNull();
+    expect(params.enabledMcpTools).toEqual([]);
   });
 
-  it("sets enabledMcpTools to null when enabled_mcp_tools is invalid JSON", () => {
+  it("sets enabledMcpTools to [] when enabled_mcp_tools is invalid JSON", () => {
     const task = makeTask({ enabled_mcp_tools: "not-json" });
     const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
 
-    expect(params.enabledMcpTools).toBeNull();
+    expect(params.enabledMcpTools).toEqual([]);
   });
 });
 

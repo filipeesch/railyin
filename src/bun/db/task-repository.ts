@@ -11,9 +11,11 @@ export class TaskRepository {
       .query<TaskRow, [number]>(
         `SELECT t.*,
                 gc.worktree_status, gc.branch_name, gc.worktree_path,
-                (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count
+                (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count,
+                c.model AS conversation_model
          FROM tasks t
          LEFT JOIN task_git_context gc ON gc.task_id = t.id
+         LEFT JOIN conversations c ON c.id = t.conversation_id
          WHERE t.id = ?`,
       )
       .get(id);

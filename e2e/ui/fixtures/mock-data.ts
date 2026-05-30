@@ -51,6 +51,7 @@ export function makeWorkspace(overrides?: Partial<WorkspaceConfig>): WorkspaceCo
             { id: "claude", type: "claude" },
         ],
         allowedEngines: ["copilot", "claude"],
+        shellAutoApprove: false,
         ...overrides,
     };
 }
@@ -130,7 +131,7 @@ export function makeTask(overrides?: Partial<Task>): Task {
         createdFromTaskId: null,
         createdFromExecutionId: null,
         model: "fake/test",
-        enabledMcpTools: null,
+        enabledMcpTools: [],
         shellAutoApprove: false,
         approvedCommands: [],
         worktreeStatus: null,
@@ -226,7 +227,7 @@ export function makeChatSession(overrides?: Partial<ChatSession>): ChatSession {
         title: `Chat ${id}`,
         status: "idle",
         conversationId,
-        enabledMcpTools: null,
+        enabledMcpTools: [],
         lastActivityAt: now,
         lastReadAt: now,
         archivedAt: null,

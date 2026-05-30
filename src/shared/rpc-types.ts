@@ -69,6 +69,23 @@ export interface ChatSession {
   createdAt: string;
 }
 
+// ─── MCP types (shared frontend/backend) ─────────────────────────────────────
+
+export interface McpToolDef {
+  name: string;
+  serverName: string;
+  qualifiedName: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+export interface McpServerStatus {
+  name: string;
+  state: "running" | "error" | "starting" | "idle" | "disabled";
+  tools: McpToolDef[];
+  error?: string;
+}
+
 export type MessageType =
   | "user"
   | "assistant"
@@ -443,6 +460,8 @@ export interface WorkspaceConfig {
   lsp?: {
     servers?: Array<{ name: string; command: string; args: string[]; extensions: string[]; projects?: string[] }>;
   };
+  /** When true, new tasks are created with shell auto-approve enabled by default. */
+  shellAutoApprove: boolean;
 }
 
 export interface WorkspaceSummary {
@@ -563,7 +582,7 @@ export type RailynAPI = {
     response: WorkspaceSummary;
   };
   "workspace.update": {
-    params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string };
+    params: { workspaceKey?: string; name?: string; allowedEngines?: string[]; defaultModel?: string; worktreeBasePath?: string; workspacePath?: string; shellAutoApprove?: boolean };
     response: Record<string, never>;
   };
   "workspace.resolveGitRoot": {
@@ -986,9 +1005,37 @@ export type RailynAPI = {
     params: { sessionId: number };
     response: void;
   };
+  "mcp.getStatus": {
+    params: Record<string, never>;
+    response: McpServerStatus[];
+  };
+  "mcp.reload": {
+    params: { serverName?: string };
+    response: McpServerStatus[];
+  };
+  "mcp.getConfig": {
+    params: Record<string, never>;
+    response: { path: string; content: string };
+  };
+  "mcp.saveConfig": {
+    params: { content: string };
+    response: { ok: true };
+  };
+  "mcp.setTaskTools": {
+    params: { taskId: number; enabledTools: string[] | null };
+    response: Task;
+  };
   "mcp.setSessionTools": {
     params: { sessionId: number; enabledTools: string[] | null };
     response: ChatSession;
+  };
+  "mcp.getProjectConfig": {
+    params: { workspaceKey: string; projectKey: string };
+    response: { path: string; content: string };
+  };
+  "mcp.saveProjectConfig": {
+    params: { workspaceKey: string; projectKey: string; content: string };
+    response: { ok: true };
   };
 
   // Global config

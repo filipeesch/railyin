@@ -147,19 +147,3 @@ export class McpClientRegistry {
     throw new Error(`Unsupported MCP transport type: ${(transport as { type: string }).type}`);
   }
 }
-
-// ─── Singleton accessor ───────────────────────────────────────────────────────
-
-let _registry: McpClientRegistry | null = null;
-
-export function getMcpRegistry(): McpClientRegistry | null {
-  return _registry;
-}
-
-export function initMcpRegistry(config: McpConfig): McpClientRegistry {
-  if (_registry) {
-    void _registry.shutdown().catch(() => {});
-  }
-  _registry = new McpClientRegistry(config);
-  return _registry;
-}

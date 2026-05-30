@@ -1,5 +1,6 @@
+## Purpose
+The `McpClientRegistry` manages lifecycle, tool listing, and invocation for MCP servers (stdio and HTTP). The `McpRegistryPool` manages per-project and global registry instances, providing dependency-injected access to registries throughout the application.
 ## Requirements
-
 ### Requirement: Server lifecycle state machine
 The registry SHALL maintain a state for each configured server: `idle`, `starting`, `running`, or `error`. On registry init, all servers start in `idle`. Connecting transitions through `starting` to `running` or `error`.
 
@@ -50,3 +51,23 @@ The registry SHALL terminate all stdio server processes and close all HTTP conne
 #### Scenario: Shutdown all servers
 - **WHEN** `shutdown()` is called
 - **THEN** all running stdio server processes are terminated and the registry transitions all servers to `idle`
+
+### Requirement: Registry lifetime and lookup
+A `McpRegistryPool` service SHALL manage per-project and global `McpClientRegistry` instances. The pool SHALL be constructed once at application boot, injected into the app context, and consumed by execution builders — replacing the module-level `getMcpRegistry()` singleton pattern.
+
+#### Scenario: Global registry initialized at boot
+- **WHEN** the application starts
+- **THEN** `McpRegistryPool` initializes a global registry from `~/.railyn/mcp.json` (if present)
+
+#### Scenario: Project registry lazily initialized
+- **WHEN** an execution starts for a project whose registry has not yet been loaded
+- **THEN** `McpRegistryPool.getRegistry(projectPath)` initializes and caches a new `McpClientRegistry` for that project
+
+#### Scenario: Registry reused for subsequent executions
+- **WHEN** a second execution starts for the same project path
+- **THEN** the cached registry is returned without re-initialization
+
+#### Scenario: Session execution uses global registry
+- **WHEN** a standalone chat session execution starts (no project_key)
+- **THEN** the global registry is used
+

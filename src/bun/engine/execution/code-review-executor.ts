@@ -1,6 +1,7 @@
 import type { ConversationMessage, ManualEdit, CodeReviewPayload, CodeReviewHunk, LineComment, HunkDecision } from "../../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
+import { fetchTaskWithModel } from "../../db/task-queries.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
 import { getWorkspaceConfig } from "../../workspace-context.ts";
 import { getColumnConfig } from "../../workflow/column-config.ts";
@@ -156,7 +157,7 @@ export class CodeReviewExecutor {
       "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
       [executionId, taskId],
     );
-    this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
+    this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
 
     const reviewMsgRow = db
       .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
@@ -186,6 +187,9 @@ export class CodeReviewExecutor {
         this.workdirResolver.resolve(task),
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
+        undefined,
+        undefined,
+        config.projects.find((p) => p.key === task.project_key)?.projectPath,
       ),
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),

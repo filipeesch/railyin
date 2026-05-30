@@ -20,6 +20,7 @@ import type {
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
+import { fetchTaskWithModel } from "../db/task-queries.ts";
 import type { Database } from "bun:sqlite";
 import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
@@ -44,6 +45,7 @@ import { CrossEngineContextInjector } from "../conversation/cross-engine-context
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { CustomPromptInjector } from "./execution/custom-prompt-injector.ts";
+import type { McpRegistryPool } from "../mcp/registry-pool.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -75,6 +77,7 @@ export class Orchestrator implements ExecutionCoordinator {
     onRawMessageEnqueued?: (item: RawMessageItem) => void,
     worktreeManager?: WorktreeManager,
     modelSettingsRepo?: ModelSettingsRepository,
+    registryPool?: McpRegistryPool,
   ) {
     this.db = db;
     this.registry = registry;
@@ -92,7 +95,7 @@ export class Orchestrator implements ExecutionCoordinator {
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );
-    this.paramsBuilder = new ExecutionParamsBuilder();
+    this.paramsBuilder = new ExecutionParamsBuilder(registryPool ?? null);
     this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
     const customPromptInjector = new CustomPromptInjector();
 
@@ -188,9 +191,9 @@ export class Orchestrator implements ExecutionCoordinator {
       if (execRow.status === "running" && execRow.finished_at == null) {
         db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
         db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
-        const taskRow = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+        const taskRow = fetchTaskWithModel(db, taskId);
         if (taskRow) {
-          this.onTaskUpdated(mapTask(taskRow));
+          this.onTaskUpdated(taskRow);
         }
         this.streamProcessor.emitDone(taskId, conversationId, executionId);
       }
@@ -275,7 +278,7 @@ export class Orchestrator implements ExecutionCoordinator {
       "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
       [task.current_execution_id],
     );
-    this.onTaskUpdated(mapTask(db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!));
+    this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
   }
 
   async compactTask(taskId: number): Promise<void> {

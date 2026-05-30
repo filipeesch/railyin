@@ -109,8 +109,8 @@ test.describe("V — MCP popover open and drawer regression", () => {
         await openTaskDrawer(page, task.id);
         await openMcpPopover(page);
 
-        // Click the "Edit mcp.json" button inside the teleported popover
-        await page.locator(".mcp-tools-popover__footer button").click();
+        // Click the "Edit global mcp.json" button — use first() since two buttons exist when task has projectKey
+        await page.locator(".mcp-tools-popover__footer button").first().click();
 
         // Drawer must still be visible — this was the regression
         await expect(page.locator(".task-detail")).toBeVisible();
@@ -139,7 +139,7 @@ test.describe("V — MCP popover content", () => {
         await openTaskDrawer(page, task.id);
         await openMcpPopover(page);
 
-        await expect(page.locator(".mcp-tools-popover__footer button:has-text('Edit mcp.json')")).toBeVisible();
+        await expect(page.locator(".mcp-tools-popover__footer button:has-text('Edit global mcp.json')")).toBeVisible();
     });
 
     test("V-8: Running server renders name, tool count, and green dot", async ({ page, api, task }) => {
@@ -203,7 +203,7 @@ test.describe("V — MCP popover content", () => {
 // ─── Suite V-12 to V-14 — Tool checkbox state and toggling ───────────────────
 
 test.describe("V — MCP tool checkboxes", () => {
-    test("V-12: enabledMcpTools=null means all tools are checked", async ({ page, api, task }) => {
+    test("V-12: enabledMcpTools=null means all tools are UNchecked", async ({ page, api, task }) => {
         const t = makeTask({ id: 1, enabledMcpTools: null });
         api.returns("mcp.getStatus", [makeMcpStatus()]);
         api.handle("tasks.list", () => [t]);
@@ -215,8 +215,8 @@ test.describe("V — MCP tool checkboxes", () => {
 
         const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
         await expect(checkboxes).toHaveCount(2);
-        await expect(checkboxes.nth(0)).toHaveClass(/p-checkbox-checked/);
-        await expect(checkboxes.nth(1)).toHaveClass(/p-checkbox-checked/);
+        await expect(checkboxes.nth(0)).not.toHaveClass(/p-checkbox-checked/);
+        await expect(checkboxes.nth(1)).not.toHaveClass(/p-checkbox-checked/);
     });
 
     test("V-13: enabledMcpTools=[toolA] means only toolA is checked", async ({ page, api, task }) => {
@@ -236,8 +236,8 @@ test.describe("V — MCP tool checkboxes", () => {
     });
 
     test("V-14: Toggling a checkbox calls mcp.setTaskTools with updated list", async ({ page, api, task }) => {
-        const t = makeTask({ id: 1, enabledMcpTools: null });
-        const updatedTask = makeTask({ id: 1, enabledMcpTools: ["test-server:toolB"] });
+        const t = makeTask({ id: 1, enabledMcpTools: [] });
+        const updatedTask = makeTask({ id: 1, enabledMcpTools: ["test-server:toolA"] });
 
         api.returns("mcp.getStatus", [makeMcpStatus()]);
         api.handle("tasks.list", () => [t]);
@@ -248,13 +248,13 @@ test.describe("V — MCP tool checkboxes", () => {
         await openMcpPopover(page);
         await expandServer(page);
 
-        // Uncheck toolA (first checkbox) — click the PrimeVue wrapper, not the hidden input
+        // Check toolA (first checkbox) — starts unchecked with [] semantics
         const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
         await expect(checkboxes).toHaveCount(2);
         await checkboxes.nth(0).click();
 
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: ["test-server:toolB"] });
+        expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: ["test-server:toolA"] });
     });
 });
 
@@ -308,7 +308,7 @@ test.describe("V — MCP file editor overlay", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
         await openMcpPopover(page);
-        await page.locator(".mcp-tools-popover__footer button:has-text('Edit mcp.json')").click();
+        await page.locator(".mcp-tools-popover__footer button:has-text('Edit global mcp.json')").click();
         await expect(page.locator(".file-editor-overlay")).toBeVisible();
     }
 
@@ -408,7 +408,7 @@ test.describe("V — MCP file editor overlay", () => {
 test.describe("V — MCP tree behavior", () => {
     test("V-24: Server checkbox checks all children", async ({ page, api, task }) => {
         const t = makeTask({ id: 1, enabledMcpTools: [] });
-        const allChecked = makeTask({ id: 1, enabledMcpTools: null });
+        const allChecked = makeTask({ id: 1, enabledMcpTools: ["test-server:toolA", "test-server:toolB"] });
         api.returns("mcp.getStatus", [makeMcpStatus({ name: "test-server" })]);
         api.handle("tasks.list", () => [t]);
         const calls = api.capture("mcp.setTaskTools", allChecked);
@@ -417,15 +417,15 @@ test.describe("V — MCP tree behavior", () => {
         await openTaskDrawer(page, t.id);
         await openMcpPopover(page);
 
-        // Check server-level checkbox → should enable all tools
+        // Check server-level checkbox → should enable all tools explicitly
         await page.locator(".mcp-tools-popover__server-row .p-checkbox").first().click();
 
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: null });
+        expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: ["test-server:toolA", "test-server:toolB"] });
     });
 
     test("V-25: Server checkbox unchecks all children", async ({ page, api, task }) => {
-        const t = makeTask({ id: 1, enabledMcpTools: null });
+        const t = makeTask({ id: 1, enabledMcpTools: ["test-server:toolA", "test-server:toolB"] });
         const noneChecked = makeTask({ id: 1, enabledMcpTools: [] });
         api.returns("mcp.getStatus", [makeMcpStatus({ name: "test-server" })]);
         api.handle("tasks.list", () => [t]);
