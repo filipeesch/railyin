@@ -34,6 +34,7 @@ export function boardHandlers(db: Database) {
         const workspaceConfig = getWorkspaceConfig(row.workspace_key);
         const rawTemplate = workspaceConfig.workflows.find((w) => w.id === row.workflow_template_id)
           ?? workspaceConfig.workflows[0]!;
+        console.log(`[boards.list] board=${board.id} templateId=${row.workflow_template_id} resolved=${rawTemplate.id} cols=${rawTemplate.columns.map((c) => c.id).join(",")}`);
         return { ...board, template: templateToWorkflowTemplate(rawTemplate) };
       });
     },

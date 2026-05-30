@@ -274,7 +274,9 @@ const visibleBoards = computed(() => {
 
 // Reload board when backend notifies workflow was saved
 onWorkflowReloaded(async () => {
+  console.log("[BoardView] onWorkflowReloaded fired — reloading boards");
   await boardStore.loadBoards();
+  console.log("[BoardView] loadBoards complete, activeBoard template cols:", boardStore.activeBoard?.template.columns.map((c) => c.id));
 });
 
 type DragState = {
