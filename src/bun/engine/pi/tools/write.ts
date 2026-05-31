@@ -7,11 +7,16 @@ import type { FileDiffPayload } from "../../../../shared/rpc-types.ts";
 import { computeFileDiff } from "../../../utils/diff.ts";
 import { safePath } from "./read.ts";
 
+const CONTENT_ERRORS: Record<string, string> = {
+  write_file: 'write_file: "content" is required — provide the full file text as a string',
+  patch_file: 'patch_file: "content" is required — provide the text to insert or replace as a string',
+};
+
 function requireContent(toolName: string, rawArgs: unknown): void {
   const args = rawArgs as Record<string, unknown> | null | undefined;
   if (!args || typeof args.content !== "string") {
     throw new Error(
-      `${toolName}: "content" is required — provide the text as a string`,
+      CONTENT_ERRORS[toolName] ?? `${toolName}: "content" is required — provide the text as a string`,
     );
   }
 }
@@ -22,7 +27,9 @@ function requireContent(toolName: string, rawArgs: unknown): void {
 
 const writeFileParams = Type.Object({
   path: Type.String(),
-  content: Type.String(),
+  content: Type.String({
+    description: "REQUIRED. The full file text to write. Must always be provided.",
+  }),
 });
 
 function writeFileTool(harnessCtx: HarnessContext): AgentTool<typeof writeFileParams> {
