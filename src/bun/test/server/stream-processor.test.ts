@@ -112,6 +112,10 @@ describe("StreamEventProcessor", () => {
 
   beforeEach(() => {
     db = initDb();
+    // Seed conversations so stream_events FK (conversation_id → conversations.id) is satisfied.
+    // makeStreamEvent uses conversationId: 1 by default; SP-4 also uses conversationId: 2.
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)"); // id = 1
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)"); // id = 2
     const ch = makeChannel();
     channel = ch.channel;
     calls = ch.calls;

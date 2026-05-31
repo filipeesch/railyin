@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
-import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import { initDb, seedProjectAndTask, seedChatSession, setupTestConfig } from "./helpers.ts";
 import { RetentionJob } from "../jobs/retention-job.ts";
 import { createMockWait } from "./support/mock-wait.ts";
 
@@ -127,13 +127,14 @@ describe("RetentionJob — RJ-3: start/tick cycle", () => {
 
     const job = new RetentionJob(db, waitFn);
     job.start();
-    // runNow() called immediately on start — 2 DELETEs (raw + stream_events)
-    expect(deleteCount).toBe(2);
+    // runNow() called immediately on start — 3 DELETEs (raw + stream_events + chat_sessions)
+    // Conversations DELETE is conditional (only runs when stale sessions exist)
+    expect(deleteCount).toBe(3);
 
     tick();
     await new Promise((r) => setTimeout(r, 0));
     // Another runNow() after tick
-    expect(deleteCount).toBe(4);
+    expect(deleteCount).toBe(6);
 
     job.stop();
     db.run = originalRun;
@@ -155,15 +156,102 @@ describe("RetentionJob — RJ-4: stop halts loop", () => {
     };
 
     const job = new RetentionJob(db, waitFn);
-    job.start(); // 2 DELETEs from immediate runNow
+    job.start(); // 3 DELETEs from immediate runNow (conditional conversations DELETE not triggered)
     job.stop();
 
     tick();
     await new Promise((r) => setTimeout(r, 0));
 
     // No extra DELETEs because loop was stopped
-    expect(deleteCount).toBe(2);
+    expect(deleteCount).toBe(3);
 
     db.run = originalRun;
+  });
+});
+
+// ─── RJ-5: archived chat session hard-delete + cascade ───────────────────────
+
+function countChatSessions(db: Database): number {
+  return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM chat_sessions").get()!.n;
+}
+
+function countConversationMessages(db: Database): number {
+  return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM conversation_messages").get()!.n;
+}
+
+describe("RetentionJob — RJ-5: archived chat session hard-delete", () => {
+  it("RJ-5a: hard-deletes archived session with archived_at > 7 days ago", () => {
+    const { sessionId } = seedChatSession(db);
+    db.run(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+      [sessionId],
+    );
+    expect(countChatSessions(db)).toBe(1);
+
+    const job = new RetentionJob(db);
+    job.runNow();
+
+    expect(countChatSessions(db)).toBe(0);
+  });
+
+  it("RJ-5b: preserves archived session archived only 3 days ago", () => {
+    const { sessionId } = seedChatSession(db);
+    db.run(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-3 days') WHERE id = ?",
+      [sessionId],
+    );
+
+    const job = new RetentionJob(db);
+    job.runNow();
+
+    expect(countChatSessions(db)).toBe(1);
+  });
+
+  it("RJ-5c: never deletes an idle (non-archived) session", () => {
+    seedChatSession(db);
+    // status defaults to 'idle'
+
+    const job = new RetentionJob(db);
+    job.runNow();
+
+    expect(countChatSessions(db)).toBe(1);
+  });
+
+  it("RJ-5d: cascade-deletes conversation_messages when session is hard-deleted", () => {
+    const { sessionId, conversationId } = seedChatSession(db);
+    db.run(
+      "INSERT INTO conversation_messages (conversation_id, type, content) VALUES (?, 'user', 'hello')",
+      [conversationId],
+    );
+    db.run(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+      [sessionId],
+    );
+    expect(countConversationMessages(db)).toBe(1);
+
+    const job = new RetentionJob(db);
+    job.runNow();
+
+    expect(countChatSessions(db)).toBe(0);
+    expect(countConversationMessages(db)).toBe(0);
+  });
+
+  it("RJ-5e: cascade-deletes stream_events when session is hard-deleted", () => {
+    const { sessionId, conversationId } = seedChatSession(db);
+    db.run(
+      `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content)
+       VALUES (?, 0, 1, 'blk', 'text_chunk', 'data')`,
+      [conversationId],
+    );
+    db.run(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+      [sessionId],
+    );
+
+    const job = new RetentionJob(db);
+    job.runNow();
+
+    expect(countChatSessions(db)).toBe(0);
+    expect(countStreamEvents(db)).toBe(0);
   });
 });

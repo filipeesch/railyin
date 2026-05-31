@@ -127,14 +127,12 @@ test.describe("CS-A — Sidebar rendering", () => {
 // ─── Suite CS-B — Session creation and naming ─────────────────────────────────
 
 test.describe("CS-B — Session creation and naming", () => {
-    test("CS-B-1: New Chat button calls chatSessions.create and adds session to list", async ({ page, api, ws }) => {
+    test("CS-B-1: New Chat button calls chatSessions.create and adds session to list", async ({ page, api }) => {
         const newSession = makeChatSession({ id: 300, title: "New Chat" });
         api.returns("chatSessions.list", []);
         let createCalled = false;
         api.handle("chatSessions.create", () => {
             createCalled = true;
-            // Push WS event so chatStore adds it to list
-            setTimeout(() => ws.pushChatSessionCreated(newSession), 50);
             return newSession;
         });
         api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
@@ -148,11 +146,10 @@ test.describe("CS-B — Session creation and naming", () => {
         expect(createCalled).toBe(true);
     });
 
-    test("CS-B-2: clicking New Chat opens the ConversationDrawer in session mode", async ({ page, api, ws }) => {
+    test("CS-B-2: clicking New Chat opens the ConversationDrawer in session mode", async ({ page, api }) => {
         const newSession = makeChatSession({ id: 301, title: "New Chat" });
         api.returns("chatSessions.list", []);
         api.handle("chatSessions.create", () => {
-            setTimeout(() => ws.pushChatSessionCreated(newSession), 50);
             return newSession;
         });
         api.returns("chatSessions.get", newSession);
@@ -333,20 +330,6 @@ test.describe("CS-D — Live WebSocket status updates", () => {
         ws.pushChatSessionUpdated({ ...session, lastReadAt: null });
 
         await expect(page.locator(".session-item__unread-dot")).toBeVisible({ timeout: 2_000 });
-    });
-
-    test("CS-D-3: chatSession.created WS event adds new session to list", async ({ page, api, ws }) => {
-        api.returns("chatSessions.list", []);
-
-        await page.goto("/");
-        await openSidebar(page);
-        await expect(page.locator(".session-item")).toHaveCount(0);
-
-        const newSession = makeChatSession({ id: 322, title: "Pushed Session" });
-        ws.pushChatSessionCreated(newSession);
-
-        await expect(page.locator(".session-item")).toHaveCount(1, { timeout: 2_000 });
-        await expect(page.locator(".session-item__title").first()).toContainText("Pushed Session");
     });
 
     test("CS-D-4: session title updates in sidebar after rename WS event", async ({ page, api, ws }) => {
@@ -574,5 +557,89 @@ test.describe("CS-G — Sidebar drag-resize", () => {
 
         stored = Number(await page.evaluate(() => localStorage.getItem("chat-sidebar-width")));
         expect(stored).toBeGreaterThanOrEqual(160);
+    });
+});
+
+// ─── Suite CS-H — Workspace filter on WS push ─────────────────────────────────
+
+test.describe("CS-H — Workspace filter on WS push", () => {
+    test("CS-H-1: chatSession.updated with wrong workspaceKey is ignored", async ({ page, api, ws }) => {
+        api.returns("chatSessions.list", []);
+
+        await page.goto("/");
+        await openSidebar(page);
+        await expect(page.locator(".session-item")).toHaveCount(0);
+
+        const wrongWorkspace = makeChatSession({ id: 500, title: "Wrong WS", workspaceKey: "other-ws" });
+        ws.pushChatSessionUpdated(wrongWorkspace);
+
+        // Should NOT appear
+        await page.waitForTimeout(300);
+        await expect(page.locator(".session-item")).toHaveCount(0);
+    });
+
+    test("CS-H-2: chatSession.updated with correct workspaceKey appears in sidebar", async ({ page, api, ws }) => {
+        api.returns("chatSessions.list", []);
+
+        await page.goto("/");
+        await openSidebar(page);
+        await expect(page.locator(".session-item")).toHaveCount(0);
+
+        const rightSession = makeChatSession({ id: 501, title: "Correct WS", workspaceKey: WORKSPACE_KEY });
+        ws.pushChatSessionUpdated(rightSession);
+
+        await expect(page.locator(".session-item")).toHaveCount(1, { timeout: 2_000 });
+        await expect(page.locator(".session-item__title").first()).toContainText("Correct WS");
+    });
+});
+
+// ─── Suite CS-I — Toolbar count badge ─────────────────────────────────────────
+
+test.describe("CS-I — Toolbar count badge", () => {
+    test("CS-I-1: badge shows non-archived session count", async ({ page, api }) => {
+        const s1 = makeChatSession({ id: 600, title: "Session 1", status: "idle" });
+        const s2 = makeChatSession({ id: 601, title: "Session 2", status: "idle" });
+        api.returns("chatSessions.list", [s1, s2]);
+
+        await page.goto("/");
+
+        const badge = page.locator(".p-overlay-badge .p-badge, .chat-session-badge");
+        await expect(badge).toBeVisible({ timeout: 3_000 });
+        await expect(badge).toHaveText("2");
+    });
+
+    test("CS-I-2: badge not visible when no sessions", async ({ page, api }) => {
+        api.returns("chatSessions.list", []);
+
+        await page.goto("/");
+
+        const badge = page.locator(".p-overlay-badge .p-badge, .chat-session-badge");
+        await expect(badge).not.toBeVisible({ timeout: 3_000 });
+    });
+
+    test("CS-I-3: badge increments when new session pushed via WS", async ({ page, api, ws }) => {
+        const s1 = makeChatSession({ id: 602, title: "Session 1", status: "idle" });
+        api.returns("chatSessions.list", [s1]);
+
+        await page.goto("/");
+
+        const badge = page.locator(".p-overlay-badge .p-badge, .chat-session-badge");
+        await expect(badge).toHaveText("1", { timeout: 3_000 });
+
+        const s2 = makeChatSession({ id: 603, title: "Session 2", status: "idle", workspaceKey: WORKSPACE_KEY });
+        ws.pushChatSessionUpdated(s2);
+
+        await expect(badge).toHaveText("2", { timeout: 2_000 });
+    });
+
+    test("CS-I-4: archived sessions excluded from badge count", async ({ page, api }) => {
+        const active = makeChatSession({ id: 604, title: "Active", status: "idle" });
+        const archived = makeChatSession({ id: 605, title: "Archived", status: "archived" });
+        api.returns("chatSessions.list", [active, archived]);
+
+        await page.goto("/");
+
+        const badge = page.locator(".p-overlay-badge .p-badge, .chat-session-badge");
+        await expect(badge).toHaveText("1", { timeout: 3_000 });
     });
 });

@@ -99,11 +99,6 @@ export class WsMock {
         this.push({ type: "chatSession.updated", payload: session });
     }
 
-    /** Convenience: push a chatSession.created event. */
-    pushChatSessionCreated(session: ChatSession): void {
-        this.push({ type: "chatSession.created", payload: session });
-    }
-
     /** Convenience: push a `message.new` push event (simulates server broadcasting a new message). */
     pushNewMessage(message: import("@shared/rpc-types").ConversationMessage): void {
         this.push({ type: "message.new", payload: message });

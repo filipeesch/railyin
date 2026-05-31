@@ -18,6 +18,25 @@ export class RetentionJob {
   runNow(): void {
     this.db.run("DELETE FROM model_raw_messages WHERE created_at < datetime('now', '-1 day')");
     this.db.run("DELETE FROM stream_events WHERE created_at < datetime('now', '-4 hours')");
+    // Collect conversation IDs owned by expired archived chat sessions, then delete
+    // the chat sessions first (to free the FK reference), then delete the conversations
+    // so that ON DELETE CASCADE propagates to conversation_messages and stream_events.
+    const staleConversationIds = this.db
+      .query<{ conversation_id: number }, []>(
+        `SELECT conversation_id FROM chat_sessions
+         WHERE status = 'archived' AND archived_at < datetime('now', '-7 days')`,
+      )
+      .all()
+      .map((r) => r.conversation_id);
+
+    this.db.run(
+      "DELETE FROM chat_sessions WHERE status = 'archived' AND archived_at < datetime('now', '-7 days')"
+    );
+
+    if (staleConversationIds.length > 0) {
+      const placeholders = staleConversationIds.map(() => "?").join(", ");
+      this.db.run(`DELETE FROM conversations WHERE id IN (${placeholders})`, staleConversationIds);
+    }
   }
 
   start(): void {
