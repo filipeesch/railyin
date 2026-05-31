@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 import { navigateToBoard } from "./fixtures/board-helpers";
-import { makeChatSession, makeWorkspace } from "./fixtures/mock-data";
+import { makeChatSession, makeWorkspace, makeBoard } from "./fixtures/mock-data";
 
 test.describe("Board workspace navigation", () => {
     test("WS-NAV-1: clicking a workspace tab sets it as active (is-active class)", async ({
@@ -227,11 +227,32 @@ test.describe("Board workspace navigation", () => {
         await expect(page.locator(".session-item", { hasText: "Session B" })).not.toBeVisible();
     });
 
-    // WS-NAV-8 skipped: workspace creation flow requires clearing localStorage
-    // to avoid conflict with baseline fixture's "test-workspace". The core
-    // behavior (selectWorkspace triggers reloads) is covered by WS-NAV-6/7.
-    test.skip("WS-NAV-8: workspace creation flow — create new WS, select it, verify stores refreshed", async ({ page, api }) => {
-        // TODO: Implement with localStorage.clear() before navigateToBoard
-        expect(true).toBe(true);
+    test("WS-NAV-8: workspace creation flow — create new WS, select it, verify stores refreshed", async ({ page, api }) => {
+        // Two workspaces so clicking the second triggers a real workspace switch
+        api.returns("workspace.list", [
+            { key: "test-workspace", name: "Test Workspace" },
+            { key: "ws-new", name: "New Workspace" },
+        ]);
+        api.handle("workspace.getConfig", ({ workspaceKey }) =>
+            makeWorkspace({ key: workspaceKey ?? "test-workspace" }),
+        );
+
+        const board = makeBoard();
+        const sessionCalls = api.capture("chatSessions.list", []);
+        // capture replaces the handler — pass the real board so the initial load succeeds
+        const boardCalls = api.capture("boards.list", [board]);
+
+        await navigateToBoard(page);
+
+        // Clear initial mount calls
+        sessionCalls.length = 0;
+        boardCalls.length = 0;
+
+        // Click the second workspace tab — triggers selectWorkspace → composables watch fires → reloads
+        await page.locator(".workspace-tab", { hasText: "New Workspace" }).click();
+
+        // Both sessions and boards should have been reloaded for the new workspace
+        await expect.poll(() => sessionCalls.length).toBeGreaterThanOrEqual(1);
+        await expect.poll(() => boardCalls.length).toBeGreaterThanOrEqual(1);
     });
 });
