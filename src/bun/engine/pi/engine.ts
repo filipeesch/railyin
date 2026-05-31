@@ -10,6 +10,7 @@ import type {
   CommonToolContext,
 } from "../types.ts";
 import { resolveSamplingPreset } from "./sampling-params.ts";
+import { SDK_BUILTIN_TOOL_NAMES } from "./constants.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
@@ -68,7 +69,6 @@ import { join } from "path";
 const PI_SESSIONS_DIR = join(homedir(), ".railyin", "pi-sessions");
 
 /** SDK built-in tool names always included in the active tool set. */
-const SDK_BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 
 function piSessionPathForConversation(conversationId: number): string {
   const hash = createHash("sha1").update(`railyin-pi-conversation-${conversationId}`).digest("hex");

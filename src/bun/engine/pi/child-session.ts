@@ -19,6 +19,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { PiEngineConfig } from "../../config/index.ts";
+import { SDK_BUILTIN_TOOL_NAMES } from "./constants.ts";
 
 /**
  * Short instruction appended to the parent system prompt for child sessions.
@@ -106,7 +107,10 @@ export const defaultChildSessionFactory: ChildSessionFactory = async (opts) => {
     agentDir,
     model: model as any,
     customTools: piTools,
-    tools: tools.map((t) => t.name),
+    // Include SDK built-in tools in the allowlist so the child model can call
+    // read/grep/find/ls. Without these names, the SDK silently drops built-in
+    // tool calls and the model loops or stalls trying to read files.
+    tools: [...SDK_BUILTIN_TOOL_NAMES, ...tools.map((t) => t.name)],
     sessionManager,
     resourceLoader,
     authStorage,

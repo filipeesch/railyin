@@ -30,10 +30,12 @@ import { registerFauxProvider, fauxAssistantMessage, fauxText } from "@earendil-
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
+import { defaultChildSessionFactory } from "../engine/pi/child-session.ts";
+import { SDK_BUILTIN_TOOL_NAMES } from "../engine/pi/constants.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const SDK_BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
+// SDK_BUILTIN_TOOL_NAMES imported from constants — see import at top of file.
 
 /** Create a minimal real AgentSession using a faux provider. No HTTP calls. */
 async function createTestSession(
@@ -371,5 +373,95 @@ describe("Pi SDK session — auto-compaction threshold", () => {
     await runTurn(session, longText);
 
     expect(compactionEvents).toContain("compaction_start");
+  });
+});
+
+// ─── Child Session (delegate) SDK built-in tool allowlist ────────────────────
+
+describe("Pi delegate — child session SDK built-in tool allowlist", () => {
+  it("IT-CHILD-1: defaultChildSessionFactory includes SDK built-ins (read, grep, find, ls) in active tools", async () => {
+    const handle = await defaultChildSessionFactory({
+      jobId: "test-child",
+      tools: [],
+      model: faux.getModel() as any,
+      config: { type: "pi" },
+      parentSystemPrompt: undefined,
+      cwd,
+    });
+
+    try {
+      const activeTools = handle.session.getActiveToolNames();
+      for (const name of SDK_BUILTIN_TOOL_NAMES) {
+        expect(activeTools, `Expected SDK built-in '${name}' in child session active tools`).toContain(name);
+      }
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("IT-CHILD-2: child session SDK built-ins are present even when custom tools array is empty", async () => {
+    const handle = await defaultChildSessionFactory({
+      jobId: "test-child-no-customs",
+      tools: [],
+      model: faux.getModel() as any,
+      config: { type: "pi" },
+      parentSystemPrompt: undefined,
+      cwd,
+    });
+
+    try {
+      const activeTools = handle.session.getActiveToolNames();
+      expect(activeTools).toContain("read");
+      expect(activeTools).toContain("grep");
+      expect(activeTools).toContain("find");
+      expect(activeTools).toContain("ls");
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("IT-CHILD-3: child session includes custom tool names alongside SDK built-ins", async () => {
+    const customTool: any = {
+      name: "glob",
+      label: "Glob",
+      description: "Glob files",
+      parameters: {},
+      execute: async () => ({ content: [{ type: "text", text: "[]" }], details: undefined }),
+    };
+
+    const handle = await defaultChildSessionFactory({
+      jobId: "test-child-with-custom",
+      tools: [customTool],
+      model: faux.getModel() as any,
+      config: { type: "pi" },
+      parentSystemPrompt: undefined,
+      cwd,
+    });
+
+    try {
+      const activeTools = handle.session.getActiveToolNames();
+      expect(activeTools).toContain("read");
+      expect(activeTools).toContain("glob");
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("IT-CHILD-4: child session does NOT have 'delegate' tool (no recursive delegation)", async () => {
+    const handle = await defaultChildSessionFactory({
+      jobId: "test-child-no-delegate",
+      tools: [],
+      model: faux.getModel() as any,
+      config: { type: "pi" },
+      parentSystemPrompt: undefined,
+      cwd,
+    });
+
+    try {
+      const activeTools = handle.session.getActiveToolNames();
+      expect(activeTools).not.toContain("delegate");
+    } finally {
+      handle.dispose();
+    }
   });
 });
