@@ -211,8 +211,12 @@ function subagentEntryProps(entry: ToolEntry) {
   let resultContent: string | undefined;
   if (entry.result) {
     try {
-      const r = JSON.parse(entry.result.content) as { content?: Array<{ text?: string }> };
-      resultContent = r.content?.map((c) => c.text ?? "").join("") || undefined;
+      const r = JSON.parse(entry.result.content) as { content?: unknown };
+      if (typeof r.content === "string") {
+        resultContent = r.content || undefined;
+      } else if (Array.isArray(r.content)) {
+        resultContent = (r.content as Array<{ text?: string }>).map((c) => c.text ?? "").join("") || undefined;
+      }
     } catch {
       resultContent = entry.result.content;
     }
