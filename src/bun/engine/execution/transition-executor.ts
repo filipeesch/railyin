@@ -1,6 +1,5 @@
 import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
-import { mapTask } from "../../db/mappers";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
 import { appendMessage } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
@@ -74,13 +73,7 @@ export class TransitionExecutor {
     if (!column?.on_enter_prompt) {
       appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
       db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
-      const freshIdleRow = db.query<TaskRow, [number]>(
-        `SELECT t.*, c.model AS conversation_model 
-         FROM tasks t 
-         LEFT JOIN conversations c ON c.id = t.conversation_id 
-         WHERE t.id = ?`
-      ).get(taskId)!;
-      return { task: mapTask(freshIdleRow), executionId: null };
+      return { task: fetchTaskWithModel(db, taskId)!, executionId: null };
     }
 
     const resolvedPrompt = column.on_enter_prompt;
@@ -159,6 +152,7 @@ export class TransitionExecutor {
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
       ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
+      ...(column.sampling_preset !== undefined ? { samplingPresetName: column.sampling_preset } : {}),
     };
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);

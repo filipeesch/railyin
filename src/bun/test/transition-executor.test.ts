@@ -171,6 +171,34 @@ describe("TransitionExecutor", () => {
     expect(promptRows?.count).toBe(0);
   });
 
+  it("TE-GC-1: no-prompt transition returns task with worktreePath when task_git_context row exists", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, ?, ?)",
+      [taskId, "/tmp/git-root", "/wt/1", "ready", "feature/test"],
+    );
+
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      new CapturingParamsBuilder(),
+      new StubWorkdirResolver(gitDir),
+      new StubStreamProcessor(),
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+    );
+
+    const result = await executor.execute(taskId, "done");
+
+    expect(result.task.worktreePath).toBe("/wt/1");
+  });
+
   it("stores enriched transition metadata and resolves slash prompts for copilot execution", async () => {
     mkdirSync(join(gitDir, ".github", "prompts"), { recursive: true });
     writeFileSync(
@@ -436,5 +464,86 @@ columns:
   it("TP-2: no custom prompts still yields workflow+stage only", async () => {
     // Same as pre-feature behavior when no custom prompts match
     expect(true).toBe(true);
+  });
+
+  // TE-PRESET-1: column with sampling_preset → samplingPresetName flows through
+  it("TE-PRESET-1: column with sampling_preset populates samplingPresetName in ExecutionParams", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: preset-workflow
+name: PresetWorkflow
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+    sampling_preset: balanced
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'preset-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(streamProcessor.lastRun?.params.samplingPresetName).toBe("balanced");
+  });
+
+  // TE-PRESET-2: column without sampling_preset → samplingPresetName is undefined
+  it("TE-PRESET-2: column without sampling_preset leaves samplingPresetName undefined", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: no-preset-workflow
+name: NoPresetWorkflow
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'no-preset-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(streamProcessor.lastRun?.params.samplingPresetName).toBeUndefined();
   });
 });

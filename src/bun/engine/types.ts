@@ -101,6 +101,12 @@ export interface ExecutionParams {
    * MUST use this value instead of their built-in default. Injected by orchestrator. */
   contextWindowOverride?: number;
   /**
+   * Name of the sampling preset to apply for this execution.
+   * Resolved from the column's `sampling_preset` field. Pi engine resolves this
+   * against its own config; other engines ignore it.
+   */
+  samplingPresetName?: string;
+  /**
    * Called by the engine to signal a soft cancellation (e.g. eviction).
    * The stream-processor uses this to abort its own AbortController so the
    * execution is marked as `cancelled` instead of being left in `running`.

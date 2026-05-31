@@ -333,8 +333,7 @@ describe("taskStore", () => {
     expect(store.unreadTaskIds.has(14)).toBe(false);
   });
 
-  it("T15: onTaskStreamEvent does NOT mark unread on 'done' stream event", async () => {
-    const store = useTaskStore();
+  it("T15: onTaskStreamEvent does NOT mark unread on 'done' stream event", async () => {    const store = useTaskStore();
     const running = makeTask({ id: 15, boardId: 1, executionState: "running" });
     apiMock.mockResolvedValueOnce([running]);
     await store.loadTasks(1);
@@ -353,5 +352,17 @@ describe("taskStore", () => {
     store.onTaskNewMessage({ taskId: 16, type: "assistant", content: "thinking..." } as Parameters<typeof store.onTaskNewMessage>[0]);
 
     expect(store.unreadTaskIds.has(16)).toBe(false);
+  });
+
+  it("T-WT-1: onTaskUpdated preserves worktreePath in taskIndex", async () => {
+    const store = useTaskStore();
+    const task = makeTask({ id: 20, boardId: 1, worktreePath: null });
+    apiMock.mockResolvedValueOnce([task]);
+    await store.loadTasks(1);
+
+    store.onTaskUpdated({ ...task, worktreePath: "/wt/1", worktreeStatus: "ready", executionState: "completed" });
+
+    expect(store.taskIndex[20].worktreePath).toBe("/wt/1");
+    expect(store.taskIndex[20].worktreeStatus).toBe("ready");
   });
 });

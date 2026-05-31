@@ -125,3 +125,107 @@ columns:
   });
 });
 
+describe("sampling_preset in column config", () => {
+  // CC-PRESET-1: column with sampling_preset field is read correctly
+  it("CC-PRESET-1: column with sampling_preset returns the preset name", () => {
+    const wfYaml = `id: wf-preset
+name: WithPreset
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+    sampling_preset: balanced
+`;
+    const { cleanup } = setupTestConfig("", "/tmp/test-git", [wfYaml]);
+    configCleanup = cleanup;
+
+    db.run(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'wf-preset')",
+    );
+    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    const config = getConfig();
+
+    const col = getColumnConfig(config, boardId, "plan");
+
+    expect(col).not.toBeNull();
+    expect(col!.sampling_preset).toBe("balanced");
+  });
+
+  // CC-PRESET-2: column without sampling_preset has undefined
+  it("CC-PRESET-2: column without sampling_preset has undefined sampling_preset", () => {
+    const wfYaml = `id: wf-no-preset
+name: NoPreset
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+`;
+    const { cleanup } = setupTestConfig("", "/tmp/test-git", [wfYaml]);
+    configCleanup = cleanup;
+
+    db.run(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'wf-no-preset')",
+    );
+    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    const config = getConfig();
+
+    const col = getColumnConfig(config, boardId, "plan");
+
+    expect(col).not.toBeNull();
+    expect(col!.sampling_preset).toBeUndefined();
+  });
+
+  // CC-PRESET-3: PiEngineConfig reads sampling_presets from engines.yaml
+  it("CC-PRESET-3: PiEngineConfig.sampling_presets is loaded from engines.yaml", () => {
+    const enginesYaml = `engines:
+  - id: pi
+    type: pi
+    model: anthropic/claude-sonnet-4-5
+    sampling_presets:
+      balanced:
+        temperature: 0.7
+        top_p: 0.9
+      creative:
+        temperature: 1.2
+        top_p: 0.95
+        top_k: 40
+    default_sampling_preset: balanced
+`;
+    const { cleanup } = setupTestConfig("", "/tmp/test-git", [], undefined, undefined, enginesYaml);
+    configCleanup = cleanup;
+
+    const config = getConfig();
+    const piEntry = config.engines.find(e => e.id === "pi");
+    const piConfig = piEntry!.config as import("../config/index.ts").PiEngineConfig;
+
+    expect(piConfig.sampling_presets).toBeDefined();
+    expect(piConfig.sampling_presets!["balanced"].temperature).toBe(0.7);
+    expect(piConfig.sampling_presets!["creative"].top_k).toBe(40);
+    expect(piConfig.default_sampling_preset).toBe("balanced");
+  });
+
+  // CC-PRESET-4: PiEngineConfig without presets has undefined fields
+  it("CC-PRESET-4: PiEngineConfig without sampling_presets has undefined fields", () => {
+    const enginesYaml = `engines:
+  - id: pi
+    type: pi
+    model: anthropic/claude-sonnet-4-5
+`;
+    const { cleanup } = setupTestConfig("", "/tmp/test-git", [], undefined, undefined, enginesYaml);
+    configCleanup = cleanup;
+
+    const config = getConfig();
+    const piEntry = config.engines.find(e => e.id === "pi");
+    const piConfig = piEntry!.config as import("../config/index.ts").PiEngineConfig;
+
+    expect(piConfig.sampling_presets).toBeUndefined();
+    expect(piConfig.default_sampling_preset).toBeUndefined();
+  });
+});
+

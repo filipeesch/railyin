@@ -25,6 +25,15 @@ export class PositionService {
     })();
   }
 
+  getTopPosition(boardId: number, columnId: string): number {
+    const row = this.db
+      .query<{ min_pos: number | null }, [number, string]>(
+        "SELECT MIN(position) as min_pos FROM tasks WHERE board_id = ? AND workflow_state = ?",
+      )
+      .get(boardId, columnId);
+    return row?.min_pos != null ? row.min_pos / 2 : 500;
+  }
+
   reorderColumn(boardId: number, taskIds: number[]): void {
     this.db.transaction(() => {
       for (let i = 0; i < taskIds.length; i++) {
