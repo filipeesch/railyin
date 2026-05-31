@@ -45,7 +45,7 @@ Identical to `TransitionExecutor` and `HumanTurnExecutor`. The execution is comm
 
 ### Decision: `ChatExecutor` receives `CrossEngineContextInjector` via constructor injection
 
-Consistent with DI pattern used across all executors. The injector is constructed once in `Orchestrator` and shared — same instance already passed to `TransitionExecutor` and `HumanTurnExecutor`.
+Consistent with DI pattern used across all executors. Each executor receives its own `CrossEngineContextInjector(db)` instance constructed in `Orchestrator` — the class is stateless so separate instances are functionally equivalent. This mirrors the existing pattern for `TransitionExecutor` and `HumanTurnExecutor`.
 
 ## Risks / Trade-offs
 
