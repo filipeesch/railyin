@@ -53,7 +53,34 @@ describe("translatePart — ToolPart", () => {
       name: "bash",
       arguments: JSON.stringify({ cmd: "ls" }),
       callId: "call-abc",
+      display: { label: "bash" },
     });
+  });
+
+  it("maps running state for move_task (common tool) to tool_start with display", () => {
+    const events = translatePart(part({
+      type: "tool",
+      tool: "move_task",
+      callID: "call-mv",
+      state: { status: "running", input: { task_id: 5, workflow_state: "done" }, time: { start: 0 } },
+    }));
+    expect(events).toHaveLength(1);
+    const toolStart = events[0] as Extract<(typeof events)[0], { type: "tool_start" }>;
+    expect(toolStart.type).toBe("tool_start");
+    expect(toolStart.display).toBeDefined();
+  });
+
+  it("maps running state for unknown tool to tool_start with humanized label", () => {
+    const events = translatePart(part({
+      type: "tool",
+      tool: "my_custom_tool",
+      callID: "call-custom",
+      state: { status: "running", input: {}, time: { start: 0 } },
+    }));
+    expect(events).toHaveLength(1);
+    const toolStart = events[0] as Extract<(typeof events)[0], { type: "tool_start" }>;
+    expect(toolStart.type).toBe("tool_start");
+    expect(toolStart.display?.label).toBe("my custom tool");
   });
 
   it("maps completed state to tool_result event", () => {

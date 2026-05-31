@@ -408,6 +408,7 @@ export const COMMON_TOOL_NAMES = new Set(COMMON_TOOL_DEFINITIONS.map((t) => t.na
 // ─── Display builder ──────────────────────────────────────────────────────────
 
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
+import { humanizeToolName } from "./tool-display.ts";
 
 export function buildCommonToolDisplay(name: string, args: Record<string, unknown>): ToolCallDisplay {
   const str = (v: unknown): string => (v != null ? String(v) : "");
@@ -483,7 +484,7 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
     case "lsp_type_definition":
       return { label: "type definition", subject: args.file_path != null ? String(args.file_path) : undefined };
     default:
-      return { label: name };
+      return { label: humanizeToolName(name) };
   }
 }
 

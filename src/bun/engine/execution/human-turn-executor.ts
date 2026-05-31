@@ -18,9 +18,9 @@ import { resolveModel } from "./model-resolver";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
-import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
 import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
+import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 
 
 export class HumanTurnExecutor {
@@ -39,7 +39,7 @@ export class HumanTurnExecutor {
     private readonly customPromptInjector: CustomPromptInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
-    private readonly modelSettingsRepo?: ModelSettingsRepository,
+    private readonly paramsEnricher?: ExecutionParamsEnricher,
   ) {}
 
   async execute(
@@ -109,7 +109,7 @@ export class HumanTurnExecutor {
         this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
 
         const signal = this.streamProcessor.createSignal(newExecutionId);
-        const execParams = {
+        const fallbackBase = {
           ...this.paramsBuilder.build(
             taskForFallback,
             conversationId,
@@ -127,8 +127,15 @@ export class HumanTurnExecutor {
           onSoftCancel: () => this.streamProcessor.abort(newExecutionId),
           ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
           ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
-          ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
         };
+        const execParams = this.paramsEnricher
+          ? this.paramsEnricher.enrich(fallbackBase, {
+              workspaceKey,
+              conversationId,
+              columnPreset: column?.sampling_preset,
+              model: effectiveModel ?? "",
+            })
+          : fallbackBase;
         this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel), execParams);
 
         const msgRow = db
@@ -190,7 +197,7 @@ export class HumanTurnExecutor {
     
     const userContent = [historyBlock, decisionsBlock, resolvedPrompt].filter(Boolean).join("\n\n");
 
-    const execParams = {
+    const baseParams = {
       ...this.paramsBuilder.build(
         taskForExecution,
         conversationId,
@@ -208,8 +215,16 @@ export class HumanTurnExecutor {
       onSoftCancel: () => this.streamProcessor.abort(executionId),
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
-      ...(this.modelSettingsRepo && resolvedModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, resolvedModel) ?? undefined } : {}),
     };
+
+    const execParams = this.paramsEnricher
+      ? this.paramsEnricher.enrich(baseParams, {
+          workspaceKey,
+          conversationId,
+          columnPreset: column?.sampling_preset,
+          model: resolvedModel ?? "",
+        })
+      : baseParams;
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
 

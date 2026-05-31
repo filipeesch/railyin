@@ -268,6 +268,16 @@ export const useTaskStore = defineStore("task", () => {
     return task;
   }
 
+  async function setSamplingPreset(taskId: number, presetName: string | null) {
+    const task = taskIndex.value[taskId];
+    if (!task) return;
+    await api("conversations.setSamplingPreset", {
+      conversationId: task.conversationId,
+      presetName,
+    });
+    _replaceTask({ ...task, samplingPresetOverride: presetName });
+  }
+
   // ─── Cancel running execution ─────────────────────────────────────────────
 
   async function cancelTask(taskId: number) {
@@ -443,6 +453,7 @@ export const useTaskStore = defineStore("task", () => {
     fetchContextUsage,
     compactTask,
     setModel,
+    setSamplingPreset,
     cancelTask,
     updateTask,
     deleteTask,

@@ -4,7 +4,7 @@ Defines the contract for `ExecutionParamsBuilder` — how task and chat executio
 ## Requirements
 
 ### Requirement: ExecutionParamsBuilder.build() is a pure function
-`ExecutionParamsBuilder` SHALL NOT accept or use a `DecisionRepository` parameter. `build()` and `buildForChat()` SHALL NOT call any decision repository method and SHALL NOT append any decision block to `systemInstructions`. All other behavior (AbortSignal, prompt resolution, attachments) remains unchanged.
+`ExecutionParamsBuilder` SHALL NOT accept or use a `DecisionRepository` parameter. `build()` and `buildForChat()` SHALL NOT call any decision repository method and SHALL NOT append any decision block to `systemInstructions`. `ExecutionParamsBuilder` SHALL NOT apply `contextWindowOverride` or `samplingPresetName` — these are applied by `ExecutionParamsEnricher` after the builder returns. All other behavior (AbortSignal, prompt resolution, attachments) remains unchanged.
 
 #### Scenario: build() does not append decision block
 - **WHEN** `build(task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, attachments?)` is called
@@ -21,6 +21,14 @@ Defines the contract for `ExecutionParamsBuilder` — how task and chat executio
 #### Scenario: buildForChat() — no decisions in systemInstructions
 - **WHEN** `ExecutionParamsBuilder.buildForChat()` is called with a conversation that has decision records
 - **THEN** the returned params have no decision content in `systemInstructions`
+
+#### Scenario: build() returns params without contextWindowOverride
+- **WHEN** `ExecutionParamsBuilder.build()` is called
+- **THEN** the returned `ExecutionParams.contextWindowOverride` is `undefined` (to be set by enricher)
+
+#### Scenario: build() returns params without samplingPresetName
+- **WHEN** `ExecutionParamsBuilder.build()` is called
+- **THEN** the returned `ExecutionParams.samplingPresetName` is `undefined` (to be set by enricher)
 
 ### Requirement: WorkingDirectoryResolver resolves the agent CWD
 `WorkingDirectoryResolver.resolve(task: TaskRow): string` SHALL implement the priority order: worktree_path + relative(gitRootPath, projectPath) → projectPath → throw.

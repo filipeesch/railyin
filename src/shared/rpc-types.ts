@@ -53,6 +53,7 @@ export interface Task {
   executionCount: number;
   position: number;
   enabledMcpTools: string[] | null;
+  samplingPresetOverride: string | null;
 }
 
 export interface ChatSession {
@@ -63,6 +64,7 @@ export interface ChatSession {
   conversationId: number;
   model: string | null;
   enabledMcpTools: string[] | null;
+  samplingPresetOverride: string | null;
   lastActivityAt: string;
   lastReadAt: string | null;
   archivedAt: string | null;
@@ -110,6 +112,20 @@ export interface ModelInfo {
   supportsManualCompact?: boolean;
   /** Engine that provides this model, parsed from qualifiedId prefix (e.g. "copilot", "claude", "opencode"). */
   engineId?: string;
+  /** Available sampling presets for Pi-engine models. Undefined for non-Pi engines. */
+  availablePresets?: Array<{ name: string; params: SamplingPreset }>;
+}
+
+/** Sampling parameters for a named preset (Pi engine). */
+export interface SamplingPreset {
+  /** Optional human-readable display name shown in the preset selector. Falls back to the preset key. */
+  label?: string;
+  /** Optional description shown as subtitle in the preset selector dropdown option. */
+  description?: string;
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  presence_penalty?: number;
 }
 
 export interface ProviderModelList {
@@ -708,6 +724,10 @@ export type RailynAPI = {
   "conversations.contextUsage": {
     params: { conversationId: number };
     response: { usedTokens: number; maxTokens: number; fraction: number };
+  };
+  "conversations.setSamplingPreset": {
+    params: { conversationId: number; presetName: string | null };
+    response: Record<string, never>;
   };
 
   // Models

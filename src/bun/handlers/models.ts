@@ -2,7 +2,8 @@ import type { Database } from "bun:sqlite";
 import type { ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
-import { getDefaultWorkspaceKey } from "../workspace-context.ts";
+import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
+import type { PiEngineConfig, SamplingPreset as ConfigSamplingPreset } from "../config/index.ts";
 
 function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinator {
   if (!o) throw new Error("Engine not initialized — check workspace config");
@@ -115,13 +116,31 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
       const filteredModels = engineModels.filter((m) => 
         m.qualifiedId == null || activeIds.includes(m.qualifiedId)
       );
-      
+
+      const workspaceConfig = getWorkspaceConfig(workspaceKey);
+
+      // Build a map of engineId → presets for all pi-type engines (id may differ from "pi")
+      const piPresetsByEngineId = new Map<string, Array<{ name: string; params: ConfigSamplingPreset }>>();
+      for (const entry of workspaceConfig.engines) {
+        if (entry.config.type === "pi") {
+          const piConfig = entry.config as PiEngineConfig;
+          if (piConfig.sampling_presets) {
+            piPresetsByEngineId.set(
+              entry.id,
+              Object.entries(piConfig.sampling_presets).map(([name, params]) => ({ name, params })),
+            );
+          }
+        }
+      }
+
       return filteredModels
         .map((m) => {
           const dbOverride = modelSettingsRepo && m.qualifiedId
             ? modelSettingsRepo.getContextWindow(workspaceKey, m.qualifiedId)
             : null;
           const contextWindow = dbOverride ?? m.contextWindow ?? null;
+          const engineId = m.qualifiedId != null ? m.qualifiedId.split("/")[0] : "copilot";
+          const availablePresets = piPresetsByEngineId.get(engineId);
           return {
             id: m.qualifiedId,
             displayName: m.displayName,
@@ -129,7 +148,8 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
             contextWindow,
             supportsManualCompact: m.supportsManualCompact,
             ...(m.contextWindowEditable ? { contextWindowEditable: true } : {}),
-            engineId: m.qualifiedId != null ? m.qualifiedId.split("/")[0] : "copilot",
+            engineId,
+            ...(availablePresets ? { availablePresets } : {}),
           };
         })
         .filter((m) => !m.contextWindowEditable || m.contextWindow != null);

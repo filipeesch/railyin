@@ -4,7 +4,7 @@ Defines the sampling parameter preset system for the Pi engine — how presets a
 ## Requirements
 
 ### Requirement: Sampling preset definition in engines.yaml
-The Pi engine config in `engines.yaml` SHALL support an optional `sampling_presets` map where keys are preset names and values are objects containing any combination of `temperature` (number), `top_p` (number), `top_k` (number), and `presence_penalty` (number). The Pi engine config SHALL also support an optional `default_sampling_preset` string that names which preset to apply when a column specifies none. All preset fields are optional — omitted fields are not sent to the LLM API.
+The Pi engine config in `engines.yaml` SHALL support an optional `sampling_presets` map where keys are preset names (stable identifiers used in column config and the DB) and values are objects containing any combination of `label` (string), `description` (string), `temperature` (number), `top_p` (number), `top_k` (number), and `presence_penalty` (number). `label` is the human-readable display name shown in the UI selector; if omitted, the YAML key is used as the label. `description` is optional explanatory text shown as a subtitle in the selector dropdown. Numeric sampling fields are optional — omitted fields are not sent to the LLM API. The Pi engine config SHALL also support an optional `default_sampling_preset` string that names which preset to apply when a column specifies none. All preset fields are optional — omitted fields are not sent to the LLM API.
 
 #### Scenario: Pi engine config with sampling_presets is parsed
 - **WHEN** `engines.yaml` contains a Pi engine entry with `sampling_presets` and `default_sampling_preset`
@@ -13,6 +13,14 @@ The Pi engine config in `engines.yaml` SHALL support an optional `sampling_prese
 #### Scenario: Pi engine config without sampling_presets is valid
 - **WHEN** `engines.yaml` contains a Pi engine entry with no `sampling_presets` field
 - **THEN** the engine loads successfully with `sampling_presets` defaulting to an empty map and `default_sampling_preset` defaulting to `undefined`
+
+#### Scenario: Pi engine preset with label and description
+- **WHEN** a preset entry contains `label: "Creative / Design"` and `description: "High temp for brainstorming"`
+- **THEN** `SamplingPreset.label` is `"Creative / Design"` and `SamplingPreset.description` is `"High temp for brainstorming"`
+
+#### Scenario: Pi engine preset without label falls back to key
+- **WHEN** a preset entry has no `label` field
+- **THEN** `SamplingPreset.label` is `undefined` and the UI falls back to displaying the YAML key as the name
 
 ### Requirement: Workflow column references a sampling preset by name
 A workflow column config SHALL support an optional `sampling_preset` string field that references a preset name defined in the Pi engine's `sampling_presets` map.
@@ -26,23 +34,31 @@ A workflow column config SHALL support an optional `sampling_preset` string fiel
 - **THEN** `WorkflowColumnConfig.sampling_preset` is `undefined`
 
 ### Requirement: Preset resolution fallback chain
-The system SHALL resolve the effective sampling preset for an execution using the following fallback chain: (1) the preset named by the column's `sampling_preset` field; (2) the preset named by the engine's `default_sampling_preset` field; (3) no sampling override. If a preset name is specified but not found in `sampling_presets`, the system SHALL log a warning and fall through to the next fallback level.
+The system SHALL resolve the effective sampling preset for an execution using the following fallback chain: (1) the preset name stored in `conversations.sampling_preset_override` for the current conversation; (2) the preset named by the column's `sampling_preset` field; (3) the preset named by the engine's `default_sampling_preset` field; (4) no sampling override. If a preset name is specified at any level but not found in `sampling_presets`, the system SHALL log a warning and fall through to the next fallback level.
 
-#### Scenario: Column preset takes priority
-- **WHEN** a column has `sampling_preset: creative` and the engine has `default_sampling_preset: balanced`
+#### Scenario: Conversation override takes priority over column preset
+- **WHEN** `conversations.sampling_preset_override` is `"fast"` and the column has `sampling_preset: creative`
+- **THEN** the `fast` preset values are applied to the execution
+
+#### Scenario: Conversation override takes priority over engine default
+- **WHEN** `conversations.sampling_preset_override` is `"fast"` and the engine has `default_sampling_preset: balanced`
+- **THEN** the `fast` preset values are applied to the execution
+
+#### Scenario: Column preset used when conversation override is null
+- **WHEN** `conversations.sampling_preset_override` is NULL and the column has `sampling_preset: creative` and the engine has `default_sampling_preset: balanced`
 - **THEN** the `creative` preset values are applied to the execution
 
-#### Scenario: Engine default used when column has no preset
-- **WHEN** a column has no `sampling_preset` and the engine has `default_sampling_preset: balanced`
+#### Scenario: Engine default used when column has no preset and no conversation override
+- **WHEN** `conversations.sampling_preset_override` is NULL, the column has no `sampling_preset`, and the engine has `default_sampling_preset: balanced`
 - **THEN** the `balanced` preset values are applied to the execution
 
-#### Scenario: No override when neither column nor engine specifies a preset
-- **WHEN** a column has no `sampling_preset` and the engine has no `default_sampling_preset`
+#### Scenario: No override when no level specifies a preset
+- **WHEN** `conversations.sampling_preset_override` is NULL, the column has no `sampling_preset`, and the engine has no `default_sampling_preset`
 - **THEN** no sampling parameters are injected and the LLM API uses provider defaults
 
-#### Scenario: Unknown preset name falls back gracefully
-- **WHEN** a column references `sampling_preset: nonexistent` and the engine has `default_sampling_preset: balanced`
-- **THEN** a warning is logged and the `balanced` preset is applied instead
+#### Scenario: Unknown conversation preset falls back gracefully
+- **WHEN** `conversations.sampling_preset_override` is `"nonexistent"` and the engine has `default_sampling_preset: balanced`
+- **THEN** a warning is logged, the conversation override level is skipped, and the `balanced` preset is applied
 
 ### Requirement: resolveSamplingPreset pure function
 The system SHALL provide a pure function `resolveSamplingPreset(presetName, config)` in `src/bun/engine/pi/sampling-params.ts` that accepts an optional preset name string and a `PiEngineConfig`, and returns the resolved `SamplingPreset` object or `undefined`. Only defined (non-`undefined`) fields of the resolved preset SHALL be included in the returned object.

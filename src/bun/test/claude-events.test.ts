@@ -435,3 +435,90 @@ describe("Claude message translator - assistant dedup (text/thinking suppression
     expect(events[0].type).toBe("tool_start");
   });
 });
+
+describe("Claude message translator - MCP-prefixed tool name handling", () => {
+  test("strips mcp__railyin__ prefix and routes to common display for known tools", () => {
+    const message = {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "call_mcp1",
+            name: "mcp__railyin__decision_request",
+            input: { questions: [] },
+          },
+        ],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, { toolMetaByCallId: new Map() });
+    const toolStart = events.find((e) => e.type === "tool_start");
+
+    expect(toolStart?.name).toBe("decision_request");
+    expect(toolStart?.display?.label).toBe("decision request");
+  });
+
+  test("strips mcp__railyin__ prefix before isInternal check — report_intent is filtered", () => {
+    const message = {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "call_intent",
+            name: "mcp__railyin__report_intent",
+            input: { intent: "Exploring codebase" },
+          },
+        ],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, { toolMetaByCallId: new Map() });
+    const toolStart = events.find((e) => e.type === "tool_start");
+
+    expect(toolStart?.isInternal).toBe(true);
+  });
+
+  test("external MCP tool name is humanized via humanizeToolName fallback", () => {
+    const message = {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "call_ext",
+            name: "mcp__other-server__do_thing",
+            input: {},
+          },
+        ],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, { toolMetaByCallId: new Map() });
+    const toolStart = events.find((e) => e.type === "tool_start");
+
+    expect(toolStart?.display?.label).toBe("other-server do thing");
+  });
+
+  test("plain unknown tool name is humanized with underscores replaced by spaces", () => {
+    const message = {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "call_custom",
+            name: "my_custom_tool",
+            input: {},
+          },
+        ],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, { toolMetaByCallId: new Map() });
+    const toolStart = events.find((e) => e.type === "tool_start");
+
+    expect(toolStart?.display?.label).toBe("my custom tool");
+  });
+});

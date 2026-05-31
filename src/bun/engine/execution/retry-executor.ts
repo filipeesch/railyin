@@ -13,9 +13,9 @@ import type { TaskRow } from "../../db/row-types.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import { resolveModel } from "./model-resolver";
-import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
 import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
+import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 
 
 export class RetryExecutor {
@@ -28,7 +28,7 @@ export class RetryExecutor {
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
     private readonly customPromptInjector: CustomPromptInjector,
-    private readonly modelSettingsRepo?: ModelSettingsRepository,
+    private readonly paramsEnricher?: ExecutionParamsEnricher,
   ) {}
 
   async execute(taskId: number): Promise<{ task: Task; executionId: number }> {
@@ -85,7 +85,7 @@ export class RetryExecutor {
     assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
     const systemInstructions = assembler.assemble();
 
-    const execParams = {
+    const retryBase = {
       ...this.paramsBuilder.build(
         updatedRow,
         conversationId,
@@ -102,8 +102,16 @@ export class RetryExecutor {
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),
       model: resolveModel(updatedRow, null, false) ?? "",
-      ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
     };
+
+    const execParams = this.paramsEnricher
+      ? this.paramsEnricher.enrich(retryBase, {
+          workspaceKey,
+          conversationId,
+          columnPreset: column?.sampling_preset,
+          model: effectiveModel ?? "",
+        })
+      : retryBase;
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 
     return { task: fetchTaskWithModel(db, taskId)!, executionId };

@@ -42,6 +42,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           `SELECT t.*,
                   gc.worktree_status, gc.branch_name, gc.worktree_path,
                   c.model AS conversation_model,
+                  c.sampling_preset_override AS conversation_sampling_preset_override,
                   (SELECT COUNT(*) FROM executions WHERE task_id = t.id) AS execution_count
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id

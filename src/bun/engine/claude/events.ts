@@ -1,7 +1,7 @@
 import type { EngineEvent } from "../types.ts";
 import type { ToolCallDisplay } from "../../../shared/rpc-types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
-import { canonicalToolDisplayLabel } from "../tool-display.ts";
+import { canonicalToolDisplayLabel, stripRailyinMcpPrefix, humanizeToolName, stripWorktreePath } from "../tool-display.ts";
 
 interface ClaudeContentBlock {
   type: string;
@@ -71,10 +71,11 @@ export function translateClaudeMessage(
         // (SDK emits BOTH stream_event deltas AND a final assembled assistant message when
         //  includePartialMessages: true is set — so we suppress them here to avoid double-emit)
         if (block.type === "tool_use" && block.id && block.name) {
+          const resolvedName = stripRailyinMcpPrefix(block.name);
           // Store tool metadata for later pairing with tool_result
           if (toolMetaByCallId) {
             toolMetaByCallId.set(block.id, {
-              name: block.name,
+              name: resolvedName,
               arguments: block.input,
             });
           }
@@ -82,12 +83,12 @@ export function translateClaudeMessage(
           events.push({
             type: "tool_start",
             callId: block.id,
-            name: block.name,
+            name: resolvedName,
             arguments: JSON.stringify(block.input ?? {}),
-            isInternal: isInternalClaudeToolName(block.name),
-            display: COMMON_TOOL_NAMES.has(block.name)
-              ? buildCommonToolDisplay(block.name, block.input ?? {})
-              : buildClaudeBuiltinDisplay(block.name, block.input ?? {}, worktreePath),
+            isInternal: isInternalClaudeToolName(resolvedName),
+            display: COMMON_TOOL_NAMES.has(resolvedName)
+              ? buildCommonToolDisplay(resolvedName, block.input ?? {})
+              : buildClaudeBuiltinDisplay(resolvedName, block.input ?? {}, worktreePath),
           });
         }
       }
@@ -233,14 +234,6 @@ function extractWrittenFilesFromClaudeToolArgs(
   return undefined;
 }
 
-function stripWorktreePath(subject: string | undefined, worktreePath?: string): string | undefined {
-  if (!subject || !worktreePath) return subject;
-  const prefix = worktreePath.endsWith("/") ? worktreePath : worktreePath + "/";
-  if (subject.startsWith(prefix)) return subject.slice(prefix.length);
-  if (subject.startsWith(worktreePath)) return subject.slice(worktreePath.length).replace(/^\//, "");
-  return subject;
-}
-
 function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>, worktreePath?: string): ToolCallDisplay {
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name.toLowerCase()) {
@@ -287,7 +280,7 @@ function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>,
     case "store_memory":
       return { label: canonicalToolDisplayLabel(name) };
     default:
-      return { label: name };
+      return { label: humanizeToolName(name) };
   }
 }
 
