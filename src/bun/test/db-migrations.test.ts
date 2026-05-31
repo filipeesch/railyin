@@ -347,6 +347,11 @@ describe("runMigrations", () => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         enabled_mcp_tools TEXT
       );
+      CREATE TABLE conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        model TEXT
+      );
     `);
 
     rawDb.run("INSERT INTO tasks (enabled_mcp_tools) VALUES (NULL)");

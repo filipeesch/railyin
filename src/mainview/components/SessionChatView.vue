@@ -94,6 +94,7 @@
       :session-id="session.id"
       :workspace-key="session.workspaceKey"
       :model-id="selectedModelId"
+      :sampling-preset-override="selectedPresetOverride"
       :context-usage="conversationStore.contextUsage"
       :compacting="compacting"
       :enabled-mcp-tools="session.enabledMcpTools ?? null"
@@ -106,6 +107,7 @@
       @cancel-edit="() => session && chatStore.cancelEdit(session.id)"
       @cancel="onCancel"
       @update:model-id="selectedModelId = $event"
+      @update:sampling-preset-override="onSamplingPresetChange"
       @compact="compactConversation"
       @manage-models="manageModelsOpen = true"
       @tools-changed="chatStore.onChatSessionUpdated"
@@ -153,11 +155,23 @@ const session = computed(() => chatStore.activeSession);
 // Local model selection that syncs with session.model
 const selectedModelId = ref<string | null>(null);
 
+// Local sampling preset override that syncs with session.samplingPresetOverride
+const selectedPresetOverride = ref<string | null>(null);
+
 // Sync selectedModelId when session changes
 watch(
   () => session.value?.model,
   (newModel) => {
     selectedModelId.value = newModel ?? workspaceStore.availableModels[0]?.id ?? null;
+  },
+  { immediate: true }
+);
+
+// Sync selectedPresetOverride when session changes
+watch(
+  () => session.value?.samplingPresetOverride,
+  (preset) => {
+    selectedPresetOverride.value = preset ?? null;
   },
   { immediate: true }
 );
@@ -178,6 +192,19 @@ watch(
     }
   }
 );
+
+async function onSamplingPresetChange(presetName: string | null) {
+  if (!session.value) return;
+  selectedPresetOverride.value = presetName;
+  try {
+    await api("conversations.setSamplingPreset", {
+      conversationId: session.value.conversationId,
+      presetName,
+    });
+  } catch (err) {
+    console.error('[SessionChatView] Failed to set sampling preset:', err);
+  }
+}
 
 const manageModelsOpen = ref(false);
 const compacting = ref(false);

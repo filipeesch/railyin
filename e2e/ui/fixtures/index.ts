@@ -70,7 +70,7 @@ export const test = base.extend<Fixtures>({
             .returns("lsp.detectLanguages", [])
             // Chat sessions — tests override as needed
             .returns("chatSessions.list", [])
-            .returns("chatSessions.create", { id: 900, workspaceKey: "test-workspace", title: "New Chat", status: "idle", conversationId: 900, enabledMcpTools: null, lastActivityAt: new Date().toISOString(), lastReadAt: null, archivedAt: null, createdAt: new Date().toISOString() })
+            .returns("chatSessions.create", { id: 900, workspaceKey: "test-workspace", title: "New Chat", status: "idle", conversationId: 900, model: null, enabledMcpTools: null, samplingPresetOverride: null, lastActivityAt: new Date().toISOString(), lastReadAt: null, archivedAt: null, createdAt: new Date().toISOString() })
             .handle("chatSessions.get", ({ sessionId }) => ({
                 id: sessionId,
                 conversationId: sessionId,
@@ -83,6 +83,7 @@ export const test = base.extend<Fixtures>({
                 archivedAt: null,
                 createdAt: new Date().toISOString(),
                 model: null,
+                samplingPresetOverride: null,
             }))
             .returns("chatSessions.getMessages", { messages: [], hasMore: false })
             .returns("chatSessions.rename", undefined)

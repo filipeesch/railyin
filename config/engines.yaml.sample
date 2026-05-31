@@ -70,15 +70,24 @@ engines:
   #   # by name via `sampling_preset: <name>` in the workflow YAML.
   #   # Fallback chain: column.sampling_preset → default_sampling_preset → none
   #   #
+  #   # `label` and `description` are optional — used in the UI preset selector.
+  #   # The YAML key is used as the stable identifier in column config and the DB.
+  #   #
   #   # default_sampling_preset: balanced   # used when a column has no sampling_preset
   #   # sampling_presets:
   #   #   balanced:                         # good all-round default
+  #   #     label: "Balanced"
+  #   #     description: "Good all-round default for most tasks"
   #   #     temperature: 0.8
   #   #     top_p: 0.95
   #   #   precise:                          # low-variance for code writing / bug fixing
+  #   #     label: "Precise / Code"
+  #   #     description: "Low variance for deterministic code and bug fixing"
   #   #     temperature: 0.2
   #   #     top_p: 0.85
   #   #   creative:                         # high-variance for brainstorming / exploration
+  #   #     label: "Creative / Design"
+  #   #     description: "High variance for brainstorming and open-ended exploration"
   #   #     temperature: 1.2
   #   #     top_p: 0.98
   #   #     presence_penalty: 0.3

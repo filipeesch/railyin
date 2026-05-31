@@ -26,7 +26,8 @@ export function initDb(): Database {
        task_id INTEGER,
        model   TEXT,
        last_engine_type TEXT NULL,
-       decisions_injected_after_compaction_id INTEGER NULL
+       decisions_injected_after_compaction_id INTEGER NULL,
+       sampling_preset_override TEXT NULL
      );
     CREATE TABLE IF NOT EXISTS tasks (
       id                        INTEGER PRIMARY KEY AUTOINCREMENT,

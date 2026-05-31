@@ -131,6 +131,7 @@ export function makeTask(overrides?: Partial<Task>): Task {
         createdFromTaskId: null,
         createdFromExecutionId: null,
         model: "fake/test",
+        samplingPresetOverride: null,
         enabledMcpTools: [],
         shellAutoApprove: false,
         approvedCommands: [],
