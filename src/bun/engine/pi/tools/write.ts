@@ -2,10 +2,19 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
 import { Type } from "@earendil-works/pi-ai";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "node:fs";
-import { join, resolve, relative, dirname, isAbsolute } from "node:path";
+import { dirname } from "node:path";
 import type { FileDiffPayload } from "../../../../shared/rpc-types.ts";
 import { computeFileDiff } from "../../../utils/diff.ts";
 import { safePath } from "./read.ts";
+
+function requireContent(toolName: string, rawArgs: unknown): void {
+  const args = rawArgs as Record<string, unknown> | null | undefined;
+  if (!args || typeof args.content !== "string") {
+    throw new Error(
+      `${toolName}: "content" is required — provide the text as a string`,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // write_file
@@ -22,10 +31,19 @@ function writeFileTool(harnessCtx: HarnessContext): AgentTool<typeof writeFilePa
     label: "Write File",
     description: `Create or fully overwrite a file in the worktree.
 
+Required params: path (string), content (string — REQUIRED, the full file text to write)
+
+Example:
+{"path": "src/utils.ts", "content": "export function add(a: number, b: number) { return a + b; }\\n"}
+
 ALWAYS save the op:XXXX from the result — pass it to undo_write if you need to revert.
 NEVER use run_command to write files — ALWAYS use write_file or patch_file.
 Use patch_file for targeted edits to existing files; use write_file only when rewriting the entire file.`,
     parameters: writeFileParams,
+    prepareArguments: (args) => {
+      requireContent("write_file", args);
+      return args as { path: string; content: string };
+    },
     execute: async (_toolCallId, args) => {
       const checked = safePath(harnessCtx.worktreePath, args.path);
       if (!checked.safe) {
@@ -61,7 +79,13 @@ Use patch_file for targeted edits to existing files; use write_file only when re
 
 const patchFileParams = Type.Object({
   path: Type.String(),
-  anchor: Type.String({ description: "Exact unique string to locate the insertion point" }),
+  content: Type.String({
+    description: "REQUIRED. The exact text to insert or replace. Must always be provided.",
+  }),
+  anchor: Type.String({
+    description:
+      "Exact unique string to locate the insertion point. Ignored when position is start or end.",
+  }),
   position: Type.Union([
     Type.Literal("before"),
     Type.Literal("after"),
@@ -69,7 +93,6 @@ const patchFileParams = Type.Object({
     Type.Literal("start"),
     Type.Literal("end"),
   ]),
-  content: Type.String({ description: "Text to insert or use as replacement" }),
 });
 
 function patchFileTool(harnessCtx: HarnessContext): AgentTool<typeof patchFileParams> {
@@ -78,11 +101,20 @@ function patchFileTool(harnessCtx: HarnessContext): AgentTool<typeof patchFilePa
     label: "Patch File",
     description: `Make a targeted anchor-based edit to an existing file.
 
+Required params: path (string), content (string — REQUIRED, text to insert or replace), anchor (string), position ("before"|"after"|"replace"|"start"|"end")
+
+Example:
+{"path": "src/app.ts", "content": "  const x = 1;\\n", "anchor": "function setup() {", "position": "after"}
+
 ALWAYS use an anchor string that appears EXACTLY ONCE in the file.
 Use position "replace" to substitute the anchor text, "after" to insert after it, "before" to insert before it.
 Use "start" or "end" (anchor ignored) to prepend or append to the whole file.
 ALWAYS save the op:XXXX to undo_write if needed.`,
     parameters: patchFileParams,
+    prepareArguments: (args) => {
+      requireContent("patch_file", args);
+      return args as { path: string; content: string; anchor: string; position: "before" | "after" | "replace" | "start" | "end" };
+    },
     execute: async (_toolCallId, args) => {
       const checked = safePath(harnessCtx.worktreePath, args.path);
       if (!checked.safe) {
