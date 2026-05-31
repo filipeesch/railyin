@@ -353,4 +353,51 @@ describe("buildDelegateTool", () => {
     expect(text).toContain("shell");
     expect(spawnCount).toBe(0);
   });
+
+  test("DL-12: absolute workingDirectory — returns error without spawning child", async () => {
+    let spawnCount = 0;
+    const factory: ChildSessionFactory = async () => { spawnCount++; throw new Error("should not be called"); };
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory }));
+    const result = await tool.execute("call-12", {
+      tasks: [{ id: "t1", prompt: "p1", workingDirectory: "/etc/passwd" }],
+    }, undefined);
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/invalid workingDirectory/i);
+    expect(text).toMatch(/absolute/i);
+    expect(spawnCount).toBe(0);
+  });
+
+  test("DL-13: path-traversal workingDirectory — returns error without spawning child", async () => {
+    let spawnCount = 0;
+    const factory: ChildSessionFactory = async () => { spawnCount++; throw new Error("should not be called"); };
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory }));
+    const result = await tool.execute("call-13", {
+      tasks: [{ id: "t1", prompt: "p1", workingDirectory: "../../../etc" }],
+    }, undefined);
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/invalid workingDirectory/i);
+    expect(text).toMatch(/escapes/i);
+    expect(spawnCount).toBe(0);
+  });
+
+  test("DL-14: valid relative workingDirectory — child session receives scoped cwd", async () => {
+    const receivedCwds: string[] = [];
+    const factory: ChildSessionFactory = async (opts) => {
+      receivedCwds.push(opts.cwd);
+      const session = new MockChildSession(opts.jobId, "ok");
+      return { session: session as any, dispose: () => {} };
+    };
+    // Use real repo dirs so statSync passes
+    const parentCwd = process.cwd();
+    const opts = makeOpts({ childSessionFactory: factory, parentCwd });
+    const [tool] = buildDelegateTool(fakeHarnessCtx, opts);
+    await tool.execute("call-14", {
+      tasks: [{ id: "t1", prompt: "p1", workingDirectory: "src" }],
+    }, undefined);
+
+    expect(receivedCwds).toHaveLength(1);
+    expect(receivedCwds[0]).toBe(`${parentCwd}/src`);
+  });
 });

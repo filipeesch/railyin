@@ -7,6 +7,8 @@
  * them as nested collapsible cards (S-26 pattern).
  */
 
+import { join, isAbsolute, resolve } from "node:path";
+import { statSync } from "node:fs";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { HarnessContext } from "../harness/context.ts";
@@ -32,7 +34,7 @@ export interface DelegateToolOptions {
   buildChildTools?: (groups: string[]) => AgentTool<any>[];
 }
 
-type DelegateTask = { id: string; intent?: string; prompt: string; tools?: string[] };
+type DelegateTask = { id: string; intent?: string; prompt: string; tools?: string[]; workingDirectory?: string };
 
 export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToolOptions): AgentTool<any>[] {
   const {
@@ -119,6 +121,15 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
                   'Tool groups available to this child. Defaults to config.allow_tools ?? ["read"]. ' +
                   "Do not include shell — shell state is shared and not safe to parallelise.",
               },
+              workingDirectory: {
+                type: "string",
+                description:
+                  "Optional subdirectory (relative path) to scope this child agent's working directory. " +
+                  "All file tools (read, glob, grep) will resolve paths relative to this directory, " +
+                  "bounding the agent to that subtree — it cannot read files outside it. " +
+                  "Must be a relative path inside the project root (no leading slash, no '..' escapes). " +
+                  'Example: "src/auth" scopes the child to the auth module only.',
+              },
             },
             required: ["id", "prompt"],
           },
@@ -179,6 +190,18 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
         }
       }
 
+      // Validate per-task workingDirectory paths before launching any child.
+      for (const task of args.tasks) {
+        if (!task.workingDirectory) continue;
+        const error = validateChildWorkingDirectory(cwd, task.workingDirectory);
+        if (error) {
+          return {
+            content: [{ type: "text", text: `Error: task "${task.id}" has invalid workingDirectory — ${error}` }],
+            details: undefined,
+          };
+        }
+      }
+
       const providerName = model.provider;
       const providerSnapshot = registry.snapshot(providerName);
       const effectiveConcurrency =
@@ -194,6 +217,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
           return;
         }
 
+        const childCwd = task.workingDirectory ? join(cwd, task.workingDirectory) : cwd;
         const childBlockId = `child-${task.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const childGroups = (task.tools ?? delegateConfig?.allow_tools ?? ["read"]).filter((g) => g !== "delegate");
         const childTools = buildChildTools(childGroups);
@@ -216,7 +240,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
             model,
             config,
             parentSystemPrompt: opts.parentSystemPrompt,
-            cwd,
+            cwd: childCwd,
           });
 
           // Subscribe BEFORE prompting to capture all child events.
@@ -308,4 +332,32 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
   };
 
   return [tool];
+}
+
+/**
+ * Validates a per-task workingDirectory value against the parent cwd.
+ * Returns an error message string if invalid, or null if valid.
+ *
+ * Rules:
+ *  1. Must be a relative path (no leading slash).
+ *  2. Resolved path must remain inside parentCwd (no ".." escapes).
+ *  3. The resolved directory must exist.
+ */
+function validateChildWorkingDirectory(parentCwd: string, childRelPath: string): string | null {
+  if (isAbsolute(childRelPath)) {
+    return `path must be relative, not absolute ("${childRelPath}")`;
+  }
+  const resolved = resolve(join(parentCwd, childRelPath));
+  if (!resolved.startsWith(parentCwd + "/") && resolved !== parentCwd) {
+    return `path escapes the project root ("${childRelPath}")`;
+  }
+  try {
+    const stat = statSync(resolved);
+    if (!stat.isDirectory()) {
+      return `path is not a directory ("${childRelPath}")`;
+    }
+  } catch {
+    return `directory does not exist ("${childRelPath}")`;
+  }
+  return null;
 }
