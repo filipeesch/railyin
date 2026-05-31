@@ -135,6 +135,7 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
       "lsp_go_to_definition", "lsp_find_references", "lsp_document_symbols", "lsp_workspace_symbols",
       "lsp_hover", "lsp_rename", "lsp_incoming_calls", "lsp_outgoing_calls", "lsp_diagnostics", "lsp_type_definition",
       "skill",
+      "delegate",
     ],
     sessionManager,
     resourceLoader,
