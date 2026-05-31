@@ -1,3 +1,21 @@
+export function stripRailyinMcpPrefix(name: string): string {
+    const PREFIX = "mcp__railyin__";
+    return name.startsWith(PREFIX) ? name.slice(PREFIX.length) : name;
+}
+
+export function humanizeToolName(name: string): string {
+    const withoutMcp = name.startsWith("mcp__") ? name.slice("mcp__".length) : name;
+    return withoutMcp.replace(/__/g, " ").replace(/_/g, " ");
+}
+
+export function stripWorktreePath(subject: string | undefined, worktreePath?: string): string | undefined {
+    if (!subject || !worktreePath) return subject;
+    const prefix = worktreePath.endsWith("/") ? worktreePath : worktreePath + "/";
+    if (subject.startsWith(prefix)) return subject.slice(prefix.length);
+    if (subject.startsWith(worktreePath)) return subject.slice(worktreePath.length).replace(/^\//, "");
+    return subject;
+}
+
 export function canonicalToolDisplayLabel(name: string): string {
     switch (name.toLowerCase()) {
         case "read":

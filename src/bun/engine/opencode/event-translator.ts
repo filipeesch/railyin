@@ -1,4 +1,6 @@
 import type { EngineEvent } from "../types.ts";
+import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
+import { humanizeToolName } from "../tool-display.ts";
 import type {
   Part,
   StepFinishPart,
@@ -43,11 +45,15 @@ function translateToolPart(part: ToolPart): EngineEvent[] {
   const state = part.state;
 
   if (state.status === "running") {
+    const display = COMMON_TOOL_NAMES.has(part.tool)
+      ? buildCommonToolDisplay(part.tool, state.input as Record<string, unknown>)
+      : { label: humanizeToolName(part.tool) };
     return [{
       type: "tool_start",
       name: part.tool,
       arguments: JSON.stringify(state.input),
       callId: part.callID,
+      display,
     }];
   }
 

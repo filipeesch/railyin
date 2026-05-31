@@ -14,7 +14,7 @@ import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
 import type { EngineEvent } from "../types.ts";
 import type { FileDiffPayload, Hunk, ToolCallDisplay } from "../../../shared/rpc-types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
-import { canonicalToolDisplayLabel } from "../tool-display.ts";
+import { canonicalToolDisplayLabel, humanizeToolName, stripWorktreePath } from "../tool-display.ts";
 
 type ToolEventMeta = {
   name: string;
@@ -338,15 +338,6 @@ function translateEvent(
   }
 }
 
-function stripWorktreePath(subject: string | undefined, worktreePath?: string): string | undefined {
-  if (!subject || !worktreePath) return subject;
-  // Strip absolute worktree path from the start of the subject string
-  const prefix = worktreePath.endsWith("/") ? worktreePath : worktreePath + "/";
-  if (subject.startsWith(prefix)) return subject.slice(prefix.length);
-  if (subject.startsWith(worktreePath)) return subject.slice(worktreePath.length).replace(/^\//, "");
-  return subject;
-}
-
 function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>, worktreePath?: string): ToolCallDisplay {
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name) {
@@ -401,7 +392,7 @@ function buildCopilotNativeDisplay(name: string, args: Record<string, unknown>, 
     case "rename_file":
       return { label: canonicalToolDisplayLabel(name), subject: stripWorktreePath(str(args.path) || undefined, worktreePath) };
     default:
-      return { label: name };
+      return { label: humanizeToolName(name) };
   }
 }
 
