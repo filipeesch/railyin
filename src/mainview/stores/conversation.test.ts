@@ -453,6 +453,67 @@ describe("stream block state", () => {
     expect(stateB.roots).toHaveLength(1);
   });
 
+  it("SB-11: two subagent bubbles each nest their own child even when raw child callIds collide", () => {
+    // REGRESSION: parallel delegate children (local models reuse ids like "call_0")
+    // emit colliding child tool callIds. The backend namespaces the live blockId by the
+    // parent bubble (`<bubble>::<callId>`); the store keys blocks by that namespaced id,
+    // so both siblings must nest instead of one being silently dropped.
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // Two subagent bubbles (root-level tool_call containers).
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", { blockId: "bubble-a", content: "subagent", subagentId: "bubble-a" }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", { blockId: "bubble-b", content: "subagent", subagentId: "bubble-b" }));
+
+    // Each child's tool_call uses the SAME raw callId ("call_0") but a parent-namespaced blockId.
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", { blockId: "bubble-a::call_0", parentBlockId: "bubble-a", content: "read_file" }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", { blockId: "bubble-b::call_0", parentBlockId: "bubble-b", content: "read_file" }));
+
+    const state = store.streamStates.get(1)!;
+    const bubbleA = state.blocks.get("bubble-a")!;
+    const bubbleB = state.blocks.get("bubble-b")!;
+
+    expect(bubbleA.children).toEqual(["bubble-a::call_0"]);
+    expect(bubbleB.children).toEqual(["bubble-b::call_0"]);
+
+    // Each child's tool_result (mirrored namespacing) marks the right child done.
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", { blockId: "bubble-a::call_0", parentBlockId: "bubble-a", content: "a" }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", { blockId: "bubble-b::call_0", parentBlockId: "bubble-b", content: "b" }));
+
+    expect(state.blocks.get("bubble-a::call_0")!.done).toBe(true);
+    expect(state.blocks.get("bubble-b::call_0")!.done).toBe(true);
+  });
+
+  it("SB-12: single subagent bubble nests BOTH sequential child calls when raw callId is reused", () => {
+    // REGRESSION (single task): a single delegate child (local models like Qwen) emits the
+    // SAME raw callId ("call_0") for two SEQUENTIAL tool calls. The backend gives each
+    // occurrence a distinct live blockId (`<bubble>::<callId>::<seq>`); the store keys blocks
+    // by that id, so BOTH calls must nest under the bubble instead of the second being dropped.
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // One subagent bubble.
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", { blockId: "bubble", content: "subagent", subagentId: "bubble" }));
+
+    // First child tool call: occurrence 1.
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", { blockId: "bubble::call_0::1", parentBlockId: "bubble", content: "read_file" }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", { blockId: "bubble::call_0::1", parentBlockId: "bubble", content: "first" }));
+
+    // Second child tool call REUSES the raw callId but is a distinct occurrence.
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", { blockId: "bubble::call_0::2", parentBlockId: "bubble", content: "read_file" }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", { blockId: "bubble::call_0::2", parentBlockId: "bubble", content: "second" }));
+
+    const state = store.streamStates.get(1)!;
+    const bubble = state.blocks.get("bubble")!;
+
+    // Both occurrences nested under the bubble — the second is NOT silently dropped.
+    expect(bubble.children).toEqual(["bubble::call_0::1", "bubble::call_0::2"]);
+
+    // Each result resolved its own occurrence.
+    expect(state.blocks.get("bubble::call_0::1")!.done).toBe(true);
+    expect(state.blocks.get("bubble::call_0::2")!.done).toBe(true);
+  });
+
   it("SB-NEW-1: onNewMessage with compaction_summary on active conversation → fetchContextUsage called", async () => {
     const store = useConversationStore();
     store.setActiveConversation(42);

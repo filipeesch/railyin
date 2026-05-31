@@ -146,9 +146,9 @@ The `delegate` tool SHALL be covered in `src/bun/test/pi-delegate.test.ts` using
 - **WHEN** a task specifies `tools: ["shell"]` and `harness.delegate.allow_tools = ["read"]`
 - **THEN** the tool returns an error naming the rejected group and no children are spawned
 
-#### Scenario: Child tool set is read-only by default
+#### Scenario: Child tool set is writable by default
 - **WHEN** a child session is created without specifying `tools`
-- **THEN** the tool names passed to the child factory include SDK builtins and `read` group tools but NOT `write`, `shell`, `patch_file`, `run_command`, `create_task`, `move_task`, `record_decision`, `update_todo_status`, `decision_request`, or `delegate`
+- **THEN** the tool names passed to the child factory include SDK builtins, the `read`, `write`, and `shell` group tools (`write_file`, `patch_file`, `delete_file`, `run_command`), and the TODO tools, but NOT `delegate`, `create_task`, `edit_task`, `delete_task`, `move_task`, `message_task`, `record_decision`, `decision_request`, or note tools
 
 #### Scenario: delegate not available in child tool set (recursive guard)
 - **WHEN** a child session is created
@@ -173,3 +173,23 @@ The `delegate` tool SHALL be covered in `src/bun/test/pi-delegate.test.ts` using
 #### Scenario: S-D4 — collapsed children are hidden before expand
 - **WHEN** the delegate card is rendered but not yet expanded
 - **THEN** `tc__children > .tc` count is `0`
+
+### Requirement: Live child stream nesting tests
+
+The unique-live-`blockId` guarantee for subagent child tool events SHALL be covered both at the backend stream-pipeline level (`src/bun/test/stream-pipeline-scenarios.test.ts`) and at the frontend store level (`src/mainview/stores/conversation.test.ts`). These tests assert that colliding or reused child `callId`s never cause a live tool block to be dropped from its bubble.
+
+#### Scenario: S-13 — parallel children with colliding callIds get distinct live blockIds
+- **WHEN** two subagent bubbles each emit a child tool_call/tool_result with the same raw `callId` (`call_0`)
+- **THEN** the broadcast `tool_call` events have distinct `blockId`s and each `tool_result` reuses its own child's `blockId`
+
+#### Scenario: S-14 — single child reusing a callId sequentially gets distinct live blockIds
+- **WHEN** one subagent bubble's child emits two sequential tool calls that reuse the raw `callId` `call_0`
+- **THEN** both `tool_call` events are broadcast with distinct `blockId`s and each `tool_result` reuses the `blockId` of its own occurrence
+
+#### Scenario: SB-11 — store nests parallel siblings under their own bubble
+- **WHEN** the store receives two bubbles each with a namespaced child tool block (`<bubble>::call_0`)
+- **THEN** each bubble's `children` contains only its own child and each child is marked `done` by its mirrored `tool_result`
+
+#### Scenario: SB-12 — store nests both sequential reuses under one bubble
+- **WHEN** the store receives one bubble with two namespaced occurrences (`<bubble>::call_0::1`, `<bubble>::call_0::2`)
+- **THEN** the bubble's `children` contains both occurrences in order and each is marked `done`

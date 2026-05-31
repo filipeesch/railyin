@@ -127,10 +127,12 @@ export interface PiDelegateConfig {
    */
   max_concurrency?: number;
   /**
-   * Tool groups children are allowed to use. Allowed values: "read", "web".
-   * Default: ["read"]. Children never receive write, shell, or delegate.
+   * Tool groups children are allowed to use. Allowed values: "read", "write", "shell", "web".
+   * Default: ["read", "write", "shell"]. Children operate on the shared parent worktree and
+   * may edit files and run shell commands, but NEVER receive the `delegate` tool (no recursive
+   * fan-out) or board-mutating common tools.
    */
-  allow_tools?: ("read" | "web")[];
+  allow_tools?: ("read" | "write" | "shell" | "web")[];
 }
 
 /** Harness-level config for opportunistic background compaction. */

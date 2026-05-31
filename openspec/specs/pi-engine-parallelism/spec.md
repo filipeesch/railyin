@@ -52,10 +52,10 @@ The Pi engine SHALL maintain one shared `undici.Agent` (or equivalent HTTP keep-
 
 ### Requirement: `delegate` tool for parallel sub-conversations
 
-The Pi engine SHALL expose a tool named `delegate` whose parameters are `{ tasks: Array<{ id: string; prompt: string; tools?: ("read"|"web")[] }>, max_concurrency?: number }`. When the parent agent invokes `delegate`, the engine SHALL:
+The Pi engine SHALL expose a tool named `delegate` whose parameters are `{ tasks: Array<{ id: string; prompt: string; tools?: ("read"|"write"|"shell"|"web")[] }>, max_concurrency?: number }`. When the parent agent invokes `delegate`, the engine SHALL:
 
-1. Validate that `tasks.length` is between 1 and `harness.delegate.max_per_call` (default 5), all `id` values are non-empty and unique within the call, and every `tools` entry is contained in `harness.delegate.allow_tools` (default `["read"]`).
-2. Spawn one fresh in-memory `AgentSession` per task with a tool set restricted to `read` plus any explicitly-allowed groups; the child tool set SHALL NOT contain `write`, `shell`, `delegate`, `decision_request`, or any board-mutating common tool.
+1. Validate that `tasks.length` is between 1 and `harness.delegate.max_per_call` (default 5), all `id` values are non-empty and unique within the call, and every `tools` entry is contained in `harness.delegate.allow_tools` (default `["read","write","shell"]`).
+2. Spawn one fresh in-memory `AgentSession` per task operating on the shared parent worktree, with a tool set covering the requested groups (default `read`, `write`, `shell`); the child tool set SHALL NOT contain `delegate` (no recursive fan-out) or any board-mutating common tool (`create_task`, `edit_task`, `delete_task`, `move_task`, `message_task`), decision tool, or note tool. Children DO receive the TODO tools to track their own work.
 3. Run children concurrently with internal concurrency `min(max_concurrency, harness.delegate.max_per_call, tasks.length, providerLimiter.max_inflight)`.
 4. Use `Promise.allSettled` so per-child errors do not abort the batch.
 5. Return a single markdown digest as the tool result with one `### {id}` section per task (final assistant text or formatted error), plus `details: { jobs: Array<{ id: string; status: "ok"|"error"; durationMs: number; tokens?: number }> }`.
@@ -69,9 +69,9 @@ The Pi engine SHALL expose a tool named `delegate` whose parameters are `{ tasks
 - **WHEN** one of three child tasks throws and the other two succeed
 - **THEN** the tool result includes the two successes and a structured error section for the failing task, and the parent receives one tool result (no error event)
 
-#### Scenario: Child tool set is read-only by default
+#### Scenario: Child tool set is writable by default
 - **WHEN** a task is dispatched without specifying `tools`
-- **THEN** the child session's active tool set contains the SDK built-ins, the `read` group tools, and the read-only common board tools, but NOT `write`, `shell`, `delete_file`, `patch_file`, `run_command`, `create_task`, `move_task`, `record_decision`, `update_todo_status`, `decision_request`, or `delegate`
+- **THEN** the child session's active tool set contains the SDK built-ins, the `read`, `write`, and `shell` group tools (`write_file`, `patch_file`, `delete_file`, `run_command`), and the TODO common tools, but NOT `delegate`, `create_task`, `edit_task`, `delete_task`, `move_task`, `message_task`, `record_decision`, `decision_request`, or note tools
 
 #### Scenario: Recursive delegation rejected
 - **WHEN** a child task is dispatched and the child agent attempts to call `delegate`
@@ -103,9 +103,19 @@ While children are running, each child's `tool_start` and `tool_result` events S
 
 The UI renders them as collapsible nested cards under the `delegate` tool call using the existing `parentCallId` rendering (S-26 pattern). No new `EngineEvent` types or UI components are required.
 
+Because child tool `callId`s are only unique within a child session, they can collide with a parent `callId`, collide with a parallel sibling child, or be reused across sequential tool calls within one child (local models such as vLLM/Qwen emit ids like `call_0` repeatedly). The frontend stream store keys live blocks by `blockId`, so the engine SHALL assign each child tool-call occurrence a globally-unique LIVE `blockId` (namespaced by the parent bubble plus a monotonic per-execution counter). The matching `tool_result` and any child `file_diff` SHALL reuse that exact live `blockId`. Persisted `conversation_messages` SHALL keep the raw `callId` (history nests via `parent_tool_call_id`), so reload behaviour is unchanged.
+
 #### Scenario: Child tool events nested under delegate card
 - **WHEN** a child invokes a tool (e.g. `read_file`)
 - **THEN** a `tool_start` event with `parentCallId = delegate_tool_call_id` and `isInternal: true` is emitted on the parent stream, and the UI renders it as a child card under the `delegate` tool call
+
+#### Scenario: Parallel children with colliding callIds stay distinct
+- **WHEN** two parallel children each emit a tool call with the same raw `callId` (e.g. `call_0`)
+- **THEN** each child's `tool_call` and `tool_result` receive distinct live `blockId`s namespaced by their own bubble, and the UI nests each under its own bubble
+
+#### Scenario: Single child reusing a callId sequentially stays distinct
+- **WHEN** one child emits two sequential tool calls that reuse the same raw `callId` (e.g. `call_0` twice)
+- **THEN** each occurrence receives a distinct live `blockId`, both nest under the bubble, and each `tool_result` resolves to its own occurrence
 
 #### Scenario: Parent agent does not see child updates
 - **WHEN** the parent's next assistant turn begins after `delegate` completes
@@ -186,7 +196,7 @@ harness: {
     enabled?: boolean;         // default true
     max_per_call?: number;     // default 5, must be 1..10
     max_concurrency?: number;  // optional; default derived as min(max_per_call, provider.max_inflight)
-    allow_tools?: ("read"|"web")[]; // default ["read"]
+    allow_tools?: ("read"|"write"|"shell"|"web")[]; // default ["read","write","shell"]
   };
   background_compaction?: {
     enabled?: boolean;            // default true

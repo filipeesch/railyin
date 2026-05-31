@@ -155,6 +155,16 @@ export class StreamProcessor {
     const callStack: string[] = [];
     let reasoningBlockId: string | null = null;
     let reasoningFlushCount = 0;
+    // Subagent child tool callIds are only unique within a child session and can repeat
+    // (local models reuse ids like "call_0" across sequential calls) or collide with parent
+    // callIds. The frontend store keys live blocks by blockId, so any repeat would be silently
+    // dropped. We assign each child tool-call occurrence a globally-unique LIVE blockId and
+    // remember it so the matching tool_result (and any file_diff) reuse the same id. The
+    // persisted message keeps the raw callId (DB reload nests via parent_tool_call_id), so
+    // history is unaffected.
+    let childToolSeq = 0;
+    const childLiveBlockIdByCall = new Map<string, string>();
+    const childCallKey = (parentCallId: string, callId: string) => `${parentCallId}\u0000${callId}`;
 
     try {
       const abortController = this.abortControllers.get(executionId) ?? (() => {
@@ -283,7 +293,23 @@ export class StreamProcessor {
             convBuffer.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: toolCallMsg, metadata: toolMeta, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             const toolParentBlockId = event.parentCallId ?? null;
-            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false, subagentId: null });
+            // Subagent child tool callIds are only unique WITHIN a child session. They can
+            // collide with parent callIds, with PARALLEL siblings (different bubbles), or be
+            // REUSED sequentially within one child (local models emit "call_0" repeatedly).
+            // The frontend store keys live blocks by blockId, so any repeat is silently
+            // dropped. Give every child tool-call occurrence a globally-unique LIVE blockId
+            // (namespaced by parent bubble + a monotonic counter) and remember it so the
+            // matching tool_result and any file_diff reuse the exact same id. The persisted
+            // message keeps the raw callId (nested on reload via parent_tool_call_id), so
+            // history is unaffected.
+            let liveToolBlockId: string;
+            if (event.isInternal && event.parentCallId) {
+              liveToolBlockId = `${event.parentCallId}::${callId}::${++childToolSeq}`;
+              childLiveBlockIdByCall.set(childCallKey(event.parentCallId, callId), liveToolBlockId);
+            } else {
+              liveToolBlockId = callId;
+            }
+            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: liveToolBlockId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false, subagentId: null });
             if (!event.isInternal) callStack.push(callId);
             break;
           }
@@ -322,7 +348,16 @@ export class StreamProcessor {
               if (stackIdx !== -1) callStack.splice(stackIdx, 1);
             }
             const resultParentBlockId = event.parentCallId ?? null;
-            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: resultCallId, type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), parentBlockId: resultParentBlockId, done: false, subagentId: null });
+            // Reuse the exact LIVE blockId assigned to the matching child tool_call so the
+            // result resolves the correct (namespaced, possibly-repeated) live block. Consume
+            // the mapping so the next reuse of this callId starts a fresh occurrence.
+            let liveResultBlockId = resultCallId;
+            if (event.isInternal && event.parentCallId) {
+              const key = childCallKey(event.parentCallId, resultCallId);
+              liveResultBlockId = childLiveBlockIdByCall.get(key) ?? `${event.parentCallId}::${resultCallId}::${++childToolSeq}`;
+              childLiveBlockIdByCall.delete(key);
+            }
+            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: liveResultBlockId, type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), parentBlockId: resultParentBlockId, done: false, subagentId: null });
 
             if (!event.isError && event.callId) {
               const writtenFiles = event.writtenFiles ?? [];
@@ -334,6 +369,9 @@ export class StreamProcessor {
                   executionId,
                   event.callId,
                   writtenFiles,
+                  // Child file diffs must nest under the namespaced live tool block, not the
+                  // raw callId (which may collide). Persisted metadata keeps the raw callId.
+                  (event.isInternal && event.parentCallId) ? liveResultBlockId : undefined,
                 );
               }
             }
@@ -600,6 +638,7 @@ export class StreamProcessor {
     executionId: number,
     callId: string,
     writtenFiles: Array<import("../../../shared/rpc-types.ts").FileDiffPayload>,
+    liveParentBlockIdOverride?: string,
   ): Promise<void> {
     const db = this.db;
 
@@ -636,6 +675,9 @@ export class StreamProcessor {
       const diffMeta = { tool_call_id: callId };
       const diffContent = JSON.stringify(payload);
       convBuffer.enqueue({ taskId, conversationId, type: "file_diff", role: null, content: diffContent, metadata: diffMeta, notify: true });
+      // Persisted row keeps the raw callId (reload nests via tool_call_id). The LIVE block must
+      // nest under the namespaced child tool block when one was assigned, else the raw callId.
+      const liveParentBlockId = liveParentBlockIdOverride ?? callId;
       convBuffer.flush().forEach((msg) => {
         this.onNewMessage(msg);
         this.onStreamEvent?.({
@@ -643,11 +685,11 @@ export class StreamProcessor {
           conversationId,
           executionId,
           seq: 0,
-          blockId: `${callId}-diff-${file.path}`,
+          blockId: `${liveParentBlockId}-diff-${file.path}`,
           type: "file_diff",
           content: diffContent,
           metadata: JSON.stringify(diffMeta),
-          parentBlockId: callId,
+          parentBlockId: liveParentBlockId,
           done: false,
           subagentId: null,
         });
