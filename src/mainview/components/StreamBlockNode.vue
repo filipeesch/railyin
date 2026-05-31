@@ -47,7 +47,9 @@
 
     <!-- Delegate call divider (the parent agent's tool_call for delegate itself) -->
     <div v-else-if="block.type === 'tool_call' && isDelegateCall" class="delegate-divider">
-      <span class="delegate-divider__label">Spawning agents…</span>
+      <span class="delegate-divider__label">
+        Spawning {{ delegateAgentCount > 0 ? delegateAgentCount : '' }} agent{{ delegateAgentCount !== 1 ? 's' : '' }}…
+      </span>
     </div>
 
     <!-- Tool call (collapsible with children inside) -->
@@ -251,6 +253,14 @@ const isDelegateCall = computed(() => {
   const b = block.value;
   if (!b || b.type !== "tool_call") return false;
   return parseToolCallFunctionName(b.content) === "delegate";
+});
+
+const delegateAgentCount = computed((): number => {
+  const b = block.value;
+  if (!b) return 0;
+  const args = parseToolCallArguments(b.content);
+  const tasks = args?.tasks;
+  return Array.isArray(tasks) ? tasks.length : 0;
 });
 
 function parseUnifiedDiff(

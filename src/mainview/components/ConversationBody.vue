@@ -38,7 +38,9 @@
             v-else-if="displayItems[vitem.index].kind === 'tool_entry' && isDelegateEntry(asToolEntry(vitem.index).entry)"
             class="delegate-divider"
           >
-            <span class="delegate-divider__label">Spawning agents…</span>
+            <span class="delegate-divider__label">
+              Spawning {{ delegateAgentCount(asToolEntry(vitem.index).entry) > 0 ? delegateAgentCount(asToolEntry(vitem.index).entry) : '' }} agent{{ delegateAgentCount(asToolEntry(vitem.index).entry) !== 1 ? 's' : '' }}…
+            </span>
           </div>
           <ToolCallGroup
             v-else-if="displayItems[vitem.index].kind === 'tool_entry'"
@@ -196,6 +198,11 @@ function isSubagentEntry(entry: ToolEntry): boolean {
 
 function isDelegateEntry(entry: ToolEntry): boolean {
   return parseEntryFunctionName(entry) === "delegate";
+}
+
+function delegateAgentCount(entry: ToolEntry): number {
+  const args = parseEntryArguments(entry);
+  return Array.isArray(args?.tasks) ? (args.tasks as unknown[]).length : 0;
 }
 
 function subagentEntryProps(entry: ToolEntry) {

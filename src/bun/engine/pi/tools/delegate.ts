@@ -94,9 +94,11 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
               intent: {
                 type: "string",
                 description:
-                  "Max 8 words describing what this specific agent will do. " +
-                  'Examples: "analyze auth module structure", "list exported functions in utils". ' +
-                  "Shown as the bubble header in the UI.",
+                  "Verb phrase (≤8 words) shown as the bubble header in the UI. " +
+                  "Must start with an action verb describing what this agent does. " +
+                  'Examples: "Analyze authentication module structure", "Map exported functions in utilities", ' +
+                  '"Find database schema and migrations". ' +
+                  "Do NOT use service names or file paths as the intent.",
               },
               prompt: {
                 type: "string",
