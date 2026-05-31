@@ -14,6 +14,7 @@ import { QualifiedModelId } from "../qualified-model-id";
 import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
+import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 
 
 export class ChatExecutor {
@@ -24,6 +25,7 @@ export class ChatExecutor {
     private readonly streamProcessor: StreamProcessor,
     private readonly workdirResolver: IWorkingDirectoryResolver,
     private readonly customPromptInjector: CustomPromptInjector,
+    private readonly crossEngineInjector: CrossEngineContextInjector,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
     private readonly boardTools?: IBoardToolExecutor,
     private readonly onNewMessage?: (msg: ConversationMessage) => void,
@@ -46,7 +48,7 @@ export class ChatExecutor {
 
     const conversationRow = db
       .prepare(`
-        SELECT c.model, t.id as task_id, t.title, t.description,
+        SELECT c.model, c.last_engine_type, t.id as task_id, t.title, t.description,
                t.project_key, t.board_id, t.conversation_id as task_conv_id,
                t.execution_state, t.created_at
         FROM conversations c
@@ -55,6 +57,7 @@ export class ChatExecutor {
       `)
       .get(conversationId) as {
         model: string | null;
+        last_engine_type: string | null;
         task_id: number | null;
         title: string | null;
         description: string | null;
@@ -72,7 +75,7 @@ export class ChatExecutor {
 
     const effectiveModel = model ?? modelValue ?? "";
 
-    if (effectiveModel && !modelValue) {
+    if (effectiveModel && effectiveModel !== modelValue) {
       db.run("UPDATE conversations SET model = ? WHERE id = ?", [effectiveModel, conversationId]);
     }
 
@@ -110,6 +113,20 @@ export class ChatExecutor {
       return { message: mapConversationMessage(userMsgRow), executionId: -1 };
     }
 
+    const lastEngineType = conversationRow?.last_engine_type ?? null;
+    const sourceEngine = lastEngineType ? (this.engineRegistry.getEngineById(lastEngineType) ?? null) : null;
+    const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === effectiveModel);
+    const { historyBlock } = await this.crossEngineInjector.prepareSwitch(
+      conversationId,
+      engineId,
+      sourceEngine,
+      targetModelInfo,
+      workingDirectory,
+      workspaceKey,
+    );
+
+    const enginePrompt = [historyBlock, engineContent ?? content].filter(Boolean).join("\n\n");
+
     const promptFilter: PromptFilterContext = {
       modelId: effectiveModel,
       engineId,
@@ -133,7 +150,7 @@ export class ChatExecutor {
       ...this.paramsBuilder.buildForChat(
         conversationId,
         executionId,
-        engineContent ?? content,
+        enginePrompt,
         workingDirectory,
         effectiveModel,
         signal,
@@ -156,6 +173,7 @@ export class ChatExecutor {
       : chatBase;
 
     this.streamProcessor.runNonNative(null, conversationId, executionId, engine, execParams);
+    db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [engineId, conversationId]);
 
     const msgRow = db
       .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
