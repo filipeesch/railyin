@@ -10,7 +10,7 @@ import type {
   CommonToolContext,
 } from "../types.ts";
 import { resolveSamplingPreset } from "./sampling-params.ts";
-import { SDK_BUILTIN_TOOL_NAMES } from "./constants.ts";
+import { buildToolAllowlist } from "./constants.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
@@ -120,23 +120,10 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
     agentDir,
     model: model as any,
     customTools: piTools,
-    // NOTE: The SDK's `tools` parameter acts as a GLOBAL allowlist that filters
-    // both built-in and custom tools. We enable ALL active tools here.
-    tools: [
-      ...SDK_BUILTIN_TOOL_NAMES,
-      "run_command", "undo_write",
-      "fetch_url", "search_internet",
-      "write_file", "patch_file", "delete_file", "rename_file",
-      "get_task", "get_board_summary", "list_tasks",
-      "create_task", "edit_task", "delete_task", "move_task", "message_task",
-      "list_decisions", "record_decision", "update_decision", "delete_decision",
-      "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status",
-      "decision_request",
-      "lsp_go_to_definition", "lsp_find_references", "lsp_document_symbols", "lsp_workspace_symbols",
-      "lsp_hover", "lsp_rename", "lsp_incoming_calls", "lsp_outgoing_calls", "lsp_diagnostics", "lsp_type_definition",
-      "skill",
-      "delegate",
-    ],
+    // Include SDK built-in tools and every registered custom tool in the
+    // allowlist so the model can call them. buildToolAllowlist() is the
+    // single source of truth — updating the tool list here is sufficient.
+    tools: buildToolAllowlist(piTools),
     sessionManager,
     resourceLoader,
     authStorage,
@@ -738,7 +725,7 @@ export class PiEngine implements ExecutionEngine {
       existing.agent.state.model = model as any;
       existing.agent.state.thinkingLevel = "off";
       if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
-      existing.setActiveToolsByName([...SDK_BUILTIN_TOOL_NAMES, ...tools.map((t) => t.name)]);
+      existing.setActiveToolsByName(buildToolAllowlist(tools));
       return existing;
     }
 
