@@ -302,7 +302,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
 
           results[idx] = { status: "fulfilled", value: { id: task.id, text } };
           const usage = handle.session.getContextUsage?.();
-          jobSummaries[idx] = { id: task.id, status: "ok", durationMs: Date.now() - startMs, tokens: usage?.tokens };
+          jobSummaries[idx] = { id: task.id, status: "ok", durationMs: Date.now() - startMs, tokens: usage?.tokens ?? undefined };
 
           // Close the subagent bubble as succeeded (no parentCallId → root level).
           delegateEmitRef?.emit?.({
