@@ -34,6 +34,14 @@
             v-bind="subagentEntryProps(asToolEntry(vitem.index).entry)"
             :renderMd="renderMd"
           />
+          <div
+            v-else-if="displayItems[vitem.index].kind === 'tool_entry' && isDelegateEntry(asToolEntry(vitem.index).entry)"
+            class="delegate-divider"
+          >
+            <span class="delegate-divider__label">
+              Spawning {{ delegateAgentCount(asToolEntry(vitem.index).entry) > 0 ? delegateAgentCount(asToolEntry(vitem.index).entry) : '' }} agent{{ delegateAgentCount(asToolEntry(vitem.index).entry) !== 1 ? 's' : '' }}…
+            </span>
+          </div>
           <ToolCallGroup
             v-else-if="displayItems[vitem.index].kind === 'tool_entry'"
             :entry="asToolEntry(vitem.index).entry"
@@ -188,6 +196,15 @@ function isSubagentEntry(entry: ToolEntry): boolean {
   return parseEntryFunctionName(entry) === "subagent";
 }
 
+
+function isDelegateEntry(entry: ToolEntry): boolean {
+  return parseEntryFunctionName(entry) === "delegate";
+}
+
+function delegateAgentCount(entry: ToolEntry): number {
+  const args = parseEntryArguments(entry);
+  return Array.isArray(args?.tasks) ? (args.tasks as unknown[]).length : 0;
+}
 
 function subagentEntryProps(entry: ToolEntry) {
   const args = parseEntryArguments(entry);
@@ -540,6 +557,27 @@ defineExpose({ scrollToBottom, scheduleScrollToBottomIfAuto });
 </script>
 
 <style scoped>
+
+.delegate-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--p-text-muted-color, #94a3b8);
+  font-size: 0.72rem;
+}
+
+.delegate-divider::before,
+.delegate-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--p-surface-200, #e2e8f0);
+}
+
+.delegate-divider__label {
+  white-space: nowrap;
+}
 
 .conv-body {
   flex: 1;

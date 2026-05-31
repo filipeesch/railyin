@@ -116,33 +116,27 @@ function makeDelegateMessages(taskId: number): ConversationMessage[] {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-test("S-D1: delegate badge shows child count", async ({ page, api, task }) => {
+test("S-D1: delegate renders a divider showing the agent count", async ({ page, api, task }) => {
     api.handle("conversations.getMessages", () => ({ messages: makeDelegateMessages(task.id), hasMore: false }));
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);
 
-    const topLevel = page.locator(".conversation-inner .tc");
-    await expect(topLevel).toHaveCount(1, { timeout: 3_000 });
-
-    const badge = topLevel.locator(".tc__badge").first();
-    await expect(badge).toContainText("2");
+    const divider = page.locator(".conversation-inner .delegate-divider");
+    await expect(divider).toBeVisible({ timeout: 3_000 });
+    await expect(divider).toContainText("2");
+    await expect(divider).toContainText("agent");
 });
 
-test("S-D2: expand → two nested child tool call cards with correct tool names", async ({ page, api, task }) => {
+test("S-D2: delegate divider shows correct plural label for multiple agents", async ({ page, api, task }) => {
     api.handle("conversations.getMessages", () => ({ messages: makeDelegateMessages(task.id), hasMore: false }));
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);
 
-    const topLevel = page.locator(".conversation-inner .tc");
-    await expect(topLevel).toHaveCount(1, { timeout: 3_000 });
-
-    await topLevel.locator(".tc__header").click();
-    await expect(topLevel.locator(".tc__children > .tc")).toHaveCount(2, { timeout: 2_000 });
-
-    const childNames = await topLevel.locator(".tc__children > .tc .tc__tool-name").allTextContents();
-    expect(childNames.map((t) => t.trim())).toEqual(["read_file", "list_dir"]);
+    const label = page.locator(".conversation-inner .delegate-divider__label");
+    await expect(label).toBeVisible({ timeout: 3_000 });
+    await expect(label).toContainText("agents");
 });
 
 test("S-D3: digest assistant message renders job heading", async ({ page, api, task }) => {
@@ -156,15 +150,13 @@ test("S-D3: digest assistant message renders job heading", async ({ page, api, t
     await expect(assistantBlock).toContainText("Job: auth");
 });
 
-test("S-D4: delegate children are hidden before expand", async ({ page, api, task }) => {
+test("S-D4: delegate divider does not render any nested tool call cards", async ({ page, api, task }) => {
     api.handle("conversations.getMessages", () => ({ messages: makeDelegateMessages(task.id), hasMore: false }));
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);
 
-    const topLevel = page.locator(".conversation-inner .tc");
-    await expect(topLevel).toHaveCount(1, { timeout: 3_000 });
-
-    // Children are not visible before expand
-    await expect(topLevel.locator(".tc__children > .tc")).toHaveCount(0);
+    await expect(page.locator(".conversation-inner .delegate-divider")).toBeVisible({ timeout: 3_000 });
+    // Child tool calls are not rendered as top-level .tc cards
+    await expect(page.locator(".conversation-inner > * > .tc")).toHaveCount(0);
 });
