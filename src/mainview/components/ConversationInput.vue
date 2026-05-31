@@ -226,15 +226,16 @@
       <template v-if="isPiEngine && availablePresets.length > 0">
         <Select
           :model-value="props.samplingPresetOverride ?? null"
-          :options="[{ name: null, label: 'Auto', description: '(column default)' }, ...availablePresets.map((p) => ({ name: p.name, label: p.params.label ?? p.name, description: p.params.description, params: p.params }))]"
+          :options="[{ name: null, label: 'Default', description: 'Set by the workflow column; falls back to engine default' }, ...availablePresets.map((p) => ({ name: p.name, label: p.params.label ?? p.name, description: p.params.description, params: p.params }))]"
           optionLabel="label"
           optionValue="name"
           size="small"
           class="input-preset-select"
+          title="Sampling preset — controls temperature and creativity for this conversation"
           @change="(e: { value: string | null }) => emit('update:samplingPresetOverride', e.value)"
         >
           <template #value="{ value }">
-            <span class="preset-select__value">{{ value != null ? (availablePresets.find((p) => p.name === value)?.params.label ?? value) : 'Auto' }}</span>
+            <span class="preset-select__value">Preset: {{ value != null ? (availablePresets.find((p) => p.name === value)?.params.label ?? value) : 'Default' }}</span>
           </template>
           <template #option="{ option }">
             <div class="preset-select__option">

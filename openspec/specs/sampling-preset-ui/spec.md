@@ -33,13 +33,13 @@ Defines the UI contract for exposing the per-conversation sampling preset select
 - **WHEN** `ConversationInput` renders with a Claude or Copilot model selected
 - **THEN** no preset selector element is present in the model row
 
-#### Scenario: Auto option shown as default
+#### Scenario: Default option shown when no override
 - **WHEN** the preset selector renders with `samplingPresetOverride` prop equal to null
-- **THEN** the selector displays "Auto" as the selected value
+- **THEN** the selector displays "Preset: Default" as the selected value
 
 #### Scenario: Preset option shows label (or key) and description
 - **WHEN** the preset dropdown is opened
-- **THEN** each non-Auto option displays `params.label ?? name` as the title, `params.description` as a subtitle (if present), and a detail line with its numeric parameter values (e.g., `temp: 0.3  top_p: 1.0`)
+- **THEN** each non-Default option displays `params.label ?? name` as the title, `params.description` as a subtitle (if present), and a detail line with its numeric parameter values (e.g., `temp: 0.3  top_p: 1.0`)
 
 #### Scenario: Closed selector shows label not key
 - **WHEN** a preset with `label: "Creative / Design"` and key `design` is selected
@@ -57,5 +57,5 @@ Defines the UI contract for exposing the per-conversation sampling preset select
 - **THEN** `conversations.setSamplingPreset` is called with the task's `conversationId` and the selected preset name, and `task.samplingPresetOverride` is updated in the local store
 
 #### Scenario: Selecting Auto clears the override
-- **WHEN** the user selects "Auto" in the preset selector
+- **WHEN** the user selects "Default" in the preset selector
 - **THEN** `conversations.setSamplingPreset` is called with `preset: null`

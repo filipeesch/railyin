@@ -67,13 +67,13 @@ test.describe("X — Sampling preset selector", () => {
         await openTaskDrawer(page, task.id);
 
         await expect(page.locator(".input-preset-select")).toBeVisible({ timeout: 3_000 });
-        // Default value is "Auto"
-        await expect(page.locator(".preset-select__value")).toContainText("Auto");
+        // Default value is "Default"
+        await expect(page.locator(".preset-select__value")).toContainText("Default");
     });
 
-    // ── X-63: open dropdown shows Auto + preset options ──────────────────────
+    // ── X-63: open dropdown shows Default + preset options ──────────────────────
 
-    test("X-63: open dropdown shows Auto and all available presets", async ({ page, api, task }) => {
+    test("X-63: open dropdown shows Default and all available presets", async ({ page, api, task }) => {
         api.handle("models.listEnabled", () => [PI_MODEL]);
         api.handle("tasks.list", () => [{ ...task, model: PI_MODEL.id }]);
 
@@ -85,13 +85,13 @@ test.describe("X — Sampling preset selector", () => {
         const dropdown = page.locator(".p-select-overlay, .p-dropdown-panel");
         await expect(dropdown).toBeVisible({ timeout: 2_000 });
 
-        // Auto option with "(column default)" description
-        await expect(dropdown.locator(".preset-select__option-title").first()).toContainText("Auto");
-        await expect(dropdown.locator(".preset-select__option-params").first()).toContainText("(column default)");
+        // Default option with description
+        await expect(dropdown.locator(".preset-select__option-title").first()).toContainText("Default");
+        await expect(dropdown.locator(".preset-select__option-params").first()).toContainText("Set by the workflow column");
 
         // Named presets
         const optionTitles = dropdown.locator(".preset-select__option-title");
-        await expect(optionTitles).toHaveCount(4); // Auto + 3 presets
+        await expect(optionTitles).toHaveCount(4); // Default + 3 presets
         await expect(optionTitles.nth(1)).toContainText("balanced");
         await expect(optionTitles.nth(2)).toContainText("creative");
         await expect(optionTitles.nth(3)).toContainText("precise");
@@ -147,9 +147,9 @@ test.describe("X — Sampling preset selector", () => {
         expect(capturedPreset).toBe("creative");
     });
 
-    // ── X-66: selecting Auto sends null preset ────────────────────────────────
+    // ── X-66: selecting Default sends null preset ────────────────────────────────
 
-    test("X-66: selecting Auto sends null to setSamplingPreset", async ({ page, api, task }) => {
+    test("X-66: selecting Default sends null to setSamplingPreset", async ({ page, api, task }) => {
         const piTask: Task = { ...task, model: PI_MODEL.id, samplingPresetOverride: "precise" };
         api.handle("models.listEnabled", () => [PI_MODEL]);
         api.handle("tasks.list", () => [piTask]);
@@ -170,9 +170,9 @@ test.describe("X — Sampling preset selector", () => {
 
         const dropdown = page.locator(".p-select-overlay, .p-dropdown-panel");
         await expect(dropdown).toBeVisible({ timeout: 2_000 });
-        await dropdown.locator(".preset-select__option-title:text('Auto')").click();
+        await dropdown.locator(".preset-select__option-title:text('Default')").click();
 
-        await expect(page.locator(".preset-select__value")).toContainText("Auto", { timeout: 2_000 });
+        await expect(page.locator(".preset-select__value")).toContainText("Default", { timeout: 2_000 });
         expect(capturedPreset).toBeNull();
     });
 
@@ -186,7 +186,7 @@ test.describe("X — Sampling preset selector", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        await expect(page.locator(".preset-select__value")).toContainText("Auto", { timeout: 3_000 });
+        await expect(page.locator(".preset-select__value")).toContainText("Default", { timeout: 3_000 });
 
         // Backend pushes updated task with override set
         ws.push({ type: "task.updated", payload: { ...piTask, samplingPresetOverride: "balanced" } });
@@ -209,7 +209,7 @@ test.describe("X — Sampling preset selector", () => {
         await openSessionDrawer(page, 5);
 
         await expect(page.locator(".input-preset-select")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".preset-select__value")).toContainText("Auto");
+        await expect(page.locator(".preset-select__value")).toContainText("Default");
     });
 
     // ── X-69: session chat — selecting preset calls setSamplingPreset ─────────
