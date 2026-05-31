@@ -999,3 +999,67 @@ test.describe("CD-K — file chip attachments", () => {
         expect(rawText).not.toContain("[#");
     });
 });
+
+// ─── Suite CD-L — Orphaned tool call regression guard ────────────────────────
+//
+// The original bug was first observed in a chat session ("brokers").
+// ConversationBody.vue is shared between task and session drawers.
+// This test guards against session-specific wrapper code diverging in future
+// and accidentally re-introducing the orphan-drop filter.
+
+test.describe("CD-L — Orphaned tool calls in session render as tool entries", () => {
+    test("CD-L-1: session with orphaned tool_call children (parent absent) renders .tc cards", async ({ page, api }) => {
+        const session = makeChatSession({ id: 498 });
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+
+        const delegateCallId = "tc-cdl-delegate";
+        let _nextSessionMsgId = 9000;
+
+        function makeChildCall(id: number, toolCallId: string): ReturnType<typeof makeChatMessage> {
+            return {
+                id: _nextSessionMsgId++,
+                taskId: null as unknown as number,
+                conversationId: session.conversationId,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "read_file", arguments: JSON.stringify({ path: `src/f${id}.ts` }) },
+                    id: toolCallId,
+                    display: { label: "read_file", subject: `src/f${id}.ts` },
+                }),
+                metadata: { parent_tool_call_id: delegateCallId },
+                createdAt: new Date().toISOString(),
+            };
+        }
+
+        function makeChildResult(id: number, toolCallId: string): ReturnType<typeof makeChatMessage> {
+            return {
+                id: _nextSessionMsgId++,
+                taskId: null as unknown as number,
+                conversationId: session.conversationId,
+                type: "tool_result",
+                role: "user",
+                content: JSON.stringify({ tool_use_id: toolCallId, content: "ok" }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            };
+        }
+
+        const messages = [
+            makeChildCall(1, "tc-cdl-c1"),
+            makeChildResult(1, "tc-cdl-c1"),
+            makeChildCall(2, "tc-cdl-c2"),
+            makeChildResult(2, "tc-cdl-c2"),
+        ];
+
+        stubSessionMessages(api, session.conversationId, messages);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        // Both orphaned children must render as visible tool call cards
+        await expect(page.locator(".session-chat-view .tc")).toHaveCount(2, { timeout: 3_000 });
+    });
+});

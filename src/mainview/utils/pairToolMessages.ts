@@ -41,6 +41,12 @@ function getParentCallId(msg: ConversationMessage): string | null {
  *   children of the spawn_agent entry that owns them, and removed from the
  *   top-level result list.
  *
+ *   When the parent is NOT present in the input slice (e.g., it lives on an
+ *   older paginated page), the child is promoted to the top-level result so
+ *   consumers can render it standalone. This is intentional: callers must NOT
+ *   apply an additional parent_tool_call_id filter on top of this function's
+ *   output.
+ *
  * Edge cases:
  *   - Orphaned results (no matching call) are silently dropped.
  *   - Unparseable tool_call content yields { result: null }.

@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 import { navigateToBoard } from "./fixtures/board-helpers";
-import { makeWorkspace } from "./fixtures/mock-data";
+import { makeChatSession, makeWorkspace } from "./fixtures/mock-data";
 
 test.describe("Board workspace navigation", () => {
     test("WS-NAV-1: clicking a workspace tab sets it as active (is-active class)", async ({
@@ -94,5 +94,66 @@ test.describe("Board workspace navigation", () => {
             localStorage.getItem("railyn.activeWorkspaceKey"),
         );
         expect(persisted).toBe(JSON.stringify("ws-2"));
+    });
+
+    test("WS-NAV-4: switching workspaces calls chatSessions.list with the new workspace key", async ({
+        page,
+        api,
+    }) => {
+        api.returns("workspace.list", [
+            { key: "test-workspace", name: "Test Workspace" },
+            { key: "ws-2", name: "Workspace 2" },
+        ]);
+        api.handle("workspace.getConfig", ({ workspaceKey }) =>
+            makeWorkspace({ key: workspaceKey ?? "test-workspace" }),
+        );
+
+        const sessionCalls = api.capture("chatSessions.list", []);
+
+        await navigateToBoard(page);
+
+        // Clear calls from initial mount load
+        sessionCalls.length = 0;
+
+        await page.locator(".workspace-tab", { hasText: "Workspace 2" }).click();
+
+        await expect.poll(() => sessionCalls.length).toBeGreaterThanOrEqual(1);
+        expect(sessionCalls.some((p) => p.workspaceKey === "ws-2")).toBe(true);
+    });
+
+    test("WS-NAV-5: switching workspaces shows new workspace sessions and clears old ones", async ({
+        page,
+        api,
+    }) => {
+        api.returns("workspace.list", [
+            { key: "test-workspace", name: "Test Workspace" },
+            { key: "ws-2", name: "Workspace 2" },
+        ]);
+        api.handle("workspace.getConfig", ({ workspaceKey }) =>
+            makeWorkspace({ key: workspaceKey ?? "test-workspace" }),
+        );
+
+        const sessionA = makeChatSession({ workspaceKey: "test-workspace", title: "Session WS-A" });
+        const sessionB = makeChatSession({ workspaceKey: "ws-2", title: "Session WS-B" });
+
+        api.handle("chatSessions.list", ({ workspaceKey }) =>
+            workspaceKey === "ws-2" ? [sessionB] : [sessionA],
+        );
+
+        await navigateToBoard(page);
+
+        // Open the chat sidebar
+        const sidebarToggle = page.locator("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
+        if (await sidebarToggle.count() > 0) await sidebarToggle.first().click();
+        await expect(page.locator(".chat-sidebar")).toBeVisible({ timeout: 3_000 });
+
+        // Session A visible in sidebar before switch
+        await expect(page.locator(".session-item", { hasText: "Session WS-A" })).toBeVisible();
+
+        await page.locator(".workspace-tab", { hasText: "Workspace 2" }).click();
+
+        // After switch: B visible, A gone
+        await expect(page.locator(".session-item", { hasText: "Session WS-B" })).toBeVisible();
+        await expect(page.locator(".session-item", { hasText: "Session WS-A" })).not.toBeVisible();
     });
 });
