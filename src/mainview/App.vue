@@ -106,7 +106,7 @@ useSessionSyncHandler({
   watchKey: () => workspaceStore.activeWorkspaceKey,
 });// Reload boards on workspace switch
 useBoardSyncHandler({
-  loadBoards: () => boardStore.loadBoards().catch(console.error),
+  loadBoards: (key) => boardStore.loadBoards(key).catch(console.error),
   watchKey: () => workspaceStore.activeWorkspaceKey,
 });
 
