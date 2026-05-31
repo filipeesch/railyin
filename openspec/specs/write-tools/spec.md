@@ -6,6 +6,8 @@ Write tools allow AI agents to create, modify, delete, and rename files within a
 ### Requirement: write_file creates or fully overwrites a file
 The system SHALL provide a `write_file` tool that creates a new file or fully overwrites an existing one. The path MUST be confined to the worktree root (path traversal SHALL be rejected). When overwriting an existing file, the tool SHALL compute a line-level diff using the Myers algorithm and emit a `file_diff` message with `hunks` containing up to 3 context lines per changed region. When creating a new file, the tool SHALL emit a `file_diff` message with `is_new: true`, `added` equal to the line count of the new content, and `hunks` containing all lines as `added`. The string returned to the LLM SHALL include a compact change summary (e.g. `"OK: wrote src/foo.ts (+12 -4)"`).
 
+The tool schema SHALL declare parameters in the order: `path`, `content`. The `content` field description SHALL include an explicit `REQUIRED` marker. The tool description SHALL include a required-params list and a concrete JSON example. The tool SHALL provide a `prepareArguments` hook that throws a targeted error if `content` is absent or not a string, before SDK AJV validation runs.
+
 #### Scenario: Creates a new file
 - **WHEN** an agent calls `write_file` with a path that does not exist and valid content
 - **THEN** the file is created, the LLM receives `"OK: wrote <path> (+N lines)"`, and a `file_diff` message is emitted with `is_new: true`, `added: N`, `removed: 0`, and `hunks` with all lines as `added`
@@ -18,8 +20,15 @@ The system SHALL provide a `write_file` tool that creates a new file or fully ov
 - **WHEN** an agent calls `write_file` with a path that resolves outside the worktree root (e.g. `../../etc/passwd`)
 - **THEN** the tool returns an error string and no file is written
 
+#### Scenario: Missing content returns targeted error before AJV
+- **WHEN** an agent calls `write_file` with `path` provided but `content` absent or not a string
+- **THEN** `prepareArguments` throws a targeted error message naming `"content"` specifically
+- **THEN** the model receives the targeted error (not a generic AJV message)
+
 ### Requirement: patch_file performs flexible in-place edits with multiple position modes
 The system SHALL provide a single `patch_file` tool with a `position` field. Each position mode SHALL apply `content` differently relative to the file or an `anchor` string. Position `"start"` and `"end"` need no anchor. Positions `"before"`, `"after"`, and `"replace"` require an `anchor` that appears exactly once in the file; the tool SHALL reject calls where the anchor appears zero or more than once times. On success, the tool SHALL emit a `file_diff` message. For `replace`, the anchor lines are `removed` and the content lines are `added`. For `before`/`after`, all content lines are `added` and `removed` is `0`. For `start`/`end`, all content lines are `added` and `removed` is `0`. The LLM return string SHALL include compact counts and, for anchor-based modes, the line number where the change was applied (e.g. `"OK: patched <path> (+2 -1 at line 47)"`). If the operation would result in no change to the file (e.g. empty content with `before`/`after`), the tool SHALL return an error rather than writing the unchanged file.
+
+The tool schema SHALL declare parameters in the order: `path`, `content`, `anchor`, `position`. The `content` field description SHALL include an explicit `REQUIRED` marker. The `anchor` field description SHALL note it is ignored when `position` is `start` or `end`. The tool description SHALL include a required-params list and a concrete JSON example showing all four parameters. The tool SHALL provide a `prepareArguments` hook that throws a targeted error if `content` is absent or not a string, before SDK AJV validation runs.
 
 #### Scenario: Prepend content to file (position=start)
 - **WHEN** an agent calls `patch_file` with `position: "start"` and `content`
@@ -56,6 +65,11 @@ The system SHALL provide a single `patch_file` tool with a `position` field. Eac
 #### Scenario: Path traversal is rejected
 - **WHEN** an agent calls `patch_file` with a path that resolves outside the worktree root
 - **THEN** the tool returns an error and no file is modified
+
+#### Scenario: Missing content returns targeted error before AJV
+- **WHEN** an agent calls `patch_file` with `path`, `anchor`, `position` provided but `content` absent or not a string
+- **THEN** `prepareArguments` throws a targeted error message naming `"content"` specifically
+- **THEN** the model receives the targeted error (not a generic AJV message)
 
 ### Requirement: read_file reads file contents with optional line range
 The system SHALL provide a `read_file` tool that returns the contents of a file within the worktree. The tool SHALL accept optional `start_line` and `end_line` integer parameters (1-based). When provided, only lines within the range SHALL be returned. When omitted, the full file is returned. The path MUST be confined to the worktree root.
