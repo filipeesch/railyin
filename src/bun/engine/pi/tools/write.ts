@@ -1,7 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
 import { Type } from "@earendil-works/pi-ai";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "./fs-ops.ts";
 import { join, resolve, relative, dirname, isAbsolute } from "node:path";
 import type { FileDiffPayload } from "../../../../shared/rpc-types.ts";
 import { computeFileDiff, splitLines } from "../../../utils/diff.ts";

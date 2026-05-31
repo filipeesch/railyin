@@ -145,4 +145,15 @@ describe("computeFileDiff — accurate counts", () => {
     expect(diff.removed).toBe(2);
     expect(diff.hunks).toHaveLength(2);
   });
+
+  it("SL-11: added/removed match hunk line type counts exactly", () => {
+    // Multi-hunk diff with independent substitutions — verify derived counts == exact line-type tallies
+    const before = ["a", "b", "c", "d", "e", "f", "g", "h"].join("\n") + "\n";
+    const after = ["A", "b", "c", "X", "e", "Y", "g", "h"].join("\n") + "\n";
+    const diff = computeFileDiff(before, after, "test.ts", "edit_file");
+    const exactAdded = (diff.hunks ?? []).flatMap((h) => h.lines).filter((l: { type: string }) => l.type === "added").length;
+    const exactRemoved = (diff.hunks ?? []).flatMap((h) => h.lines).filter((l: { type: string }) => l.type === "removed").length;
+    expect(diff.added).toBe(exactAdded);
+    expect(diff.removed).toBe(exactRemoved);
+  });
 });

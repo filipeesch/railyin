@@ -864,3 +864,103 @@ test.describe("F — Progressive streaming", () => {
     await expect(page.locator(".conv-body")).toContainText("Hello world", { timeout: 2_000 });
   });
 });
+// ─── Suite G — file_diff stat rendering (regression for PI-601) ────────────────
+
+test.describe("G — file_diff stat rendering", () => {
+  test("G-1: tool_result with writtenFiles shows +N -M stats on tool block header", async ({
+    page,
+    api,
+    task,
+  }) => {
+    const payload = JSON.stringify({
+      writtenFiles: [
+        { operation: "patch_file", path: "src/app.ts", added: 3, removed: 1 },
+      ],
+      text: "Done.",
+    });
+
+    api.returns("conversations.getMessages", {
+      messages: [
+        {
+          id: 3001,
+          taskId: task.id,
+          conversationId: task.conversationId,
+          type: "assistant",
+          role: "assistant",
+          content: "Applying changes...",
+          metadata: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 3002,
+          taskId: task.id,
+          conversationId: task.conversationId,
+          type: "tool_result",
+          role: null,
+          content: payload,
+          metadata: JSON.stringify({ tool_call_id: "call-test-1" }),
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      hasMore: false,
+    });
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await expect(page.locator(".tcg .tc__header")).toBeVisible();
+    await expect(page.locator(".tcg .tc__stat--added")).toContainText("+3", {
+      timeout: 5_000,
+    });
+    await expect(page.locator(".tcg .tc__stat--removed")).toContainText("-1", {
+      timeout: 5_000,
+    });
+  });
+
+  test("G-2: multiple writtenFiles entries show combined stats", async ({ page, api, task }) => {
+    const payload = JSON.stringify({
+      writtenFiles: [
+        { operation: "patch_file", path: "src/a.ts", added: 2, removed: 0 },
+        { operation: "delete_file", path: "src/b.ts", added: 0, removed: 5 },
+      ],
+      text: "Done.",
+    });
+
+    api.returns("conversations.getMessages", {
+      messages: [
+        {
+          id: 4001,
+          taskId: task.id,
+          conversationId: task.conversationId,
+          type: "assistant",
+          role: "assistant",
+          content: "Editing files...",
+          metadata: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 4002,
+          taskId: task.id,
+          conversationId: task.conversationId,
+          type: "tool_result",
+          role: null,
+          content: payload,
+          metadata: JSON.stringify({ tool_call_id: "call-test-2" }),
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      hasMore: false,
+    });
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await expect(page.locator(".tcg .tc__stat--added")).toContainText("+2", {
+      timeout: 5_000,
+    });
+    await expect(page.locator(".tcg .tc__stat--removed")).toContainText("-5", {
+      timeout: 5_000,
+    });
+  });
+});
+

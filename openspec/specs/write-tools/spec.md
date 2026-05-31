@@ -12,7 +12,7 @@ The system SHALL provide a `write_file` tool that creates a new file or fully ov
 
 #### Scenario: Overwrites an existing file
 - **WHEN** an agent calls `write_file` with a path that already exists
-- **THEN** the file is fully replaced, the LLM receives `"OK: wrote <path> (+N -M)"`, and a `file_diff` message is emitted with `added: N`, `removed: M`, and `hunks` computed by Myers diff
+- **THEN** the file is fully replaced, the LLM receives `"OK: wrote <path> (+N -M)"`, and a `file_diff` message is emitted with `added: N` and `removed: M` where N and M reflect only the actual added/removed lines from the diff hunks (not total file line counts)
 
 #### Scenario: Path traversal is rejected
 - **WHEN** an agent calls `write_file` with a path that resolves outside the worktree root (e.g. `../../etc/passwd`)
@@ -39,7 +39,7 @@ The system SHALL provide a single `patch_file` tool with a `position` field. Eac
 
 #### Scenario: Replace anchor with content (position=replace)
 - **WHEN** an agent calls `patch_file` with `position: "replace"`, a unique `anchor`, and `content`
-- **THEN** the anchor string is replaced with the content and a `file_diff` message is emitted with `removed` equal to the anchor's line count and `added` equal to the content line count
+- **THEN** the anchor string is replaced with the content and a `file_diff` message is emitted with `removed` equal to the number of actually removed lines from the diff and `added` equal to the number of actually added lines from the diff (computed from Myers diff hunks, not raw array lengths)
 
 #### Scenario: No-op patch is rejected
 - **WHEN** an agent calls `patch_file` with an operation that would not change the file content (e.g. empty `content` with `position: "before"`)
