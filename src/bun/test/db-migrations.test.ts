@@ -376,3 +376,50 @@ describe("runMigrations", () => {
     expect(sessionRows[1].enabled_mcp_tools).toBe("[]");
   });
 });
+
+describe("Migration 048 — chat cascade", () => {
+  it("M-048a: full migration stack completes without error", async () => {
+    await expect(runMigrations()).resolves.toBeUndefined();
+  });
+
+  it("M-048b: deleting a conversation cascades to conversation_messages", async () => {
+    await runMigrations();
+    const db = getDb();
+
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const { id: convId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+
+    db.run(
+      "INSERT INTO conversation_messages (conversation_id, type, content) VALUES (?, 'user', 'hi')",
+      [convId],
+    );
+    const before = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM conversation_messages").get()!.n;
+    expect(before).toBe(1);
+
+    db.run("DELETE FROM conversations WHERE id = ?", [convId]);
+
+    const after = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM conversation_messages").get()!.n;
+    expect(after).toBe(0);
+  });
+
+  it("M-048c: deleting a conversation cascades to stream_events", async () => {
+    await runMigrations();
+    const db = getDb();
+
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const { id: convId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+
+    db.run(
+      `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content)
+       VALUES (?, 0, 1, 'blk', 'text_chunk', 'data')`,
+      [convId],
+    );
+    const before = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
+    expect(before).toBe(1);
+
+    db.run("DELETE FROM conversations WHERE id = ?", [convId]);
+
+    const after = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
+    expect(after).toBe(0);
+  });
+});
