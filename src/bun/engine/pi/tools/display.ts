@@ -75,13 +75,6 @@ export function buildPiToolDisplay(name: string, args: Record<string, unknown>, 
       return { label: "rename file", subject };
     }
 
-    case "find":
-      return {
-        label: "find",
-        subject: str(args.pattern) || undefined,
-        contentType: "terminal",
-      };
-
     case "run_command":
       return {
         label: "run",
