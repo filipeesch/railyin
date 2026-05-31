@@ -254,4 +254,44 @@ describe("BP — board persistence", () => {
 
     expect(fakeStorage["railyn.activeBoardId"]).toBe(JSON.stringify(77));
   });
+
+  it("BP-7: loadBoards selects first board of target workspace when persisted activeBoardId belongs to different workspace", async () => {
+    fakeStorage["railyn.activeBoardId"] = JSON.stringify(99);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    apiMock.mockImplementation((async (method: string) => {
+      if (method === "boards.list") {
+        return [
+          makeBoard({ id: 10, workspaceKey: "ws-new" }),
+          makeBoard({ id: 11, workspaceKey: "ws-new" }),
+        ];
+      }
+      return [];
+    }) as any);
+
+    const store = useBoardStore();
+    await store.loadBoards("ws-new");
+
+    // Should select first board of ws-new, not the persisted ws-other board
+    expect(store.activeBoardId).toBe(10);
+  });
+
+  it("BP-8: loadBoards(undefined) retains previously selected board if it still exists in the list", async () => {
+    fakeStorage["railyn.activeBoardId"] = JSON.stringify(5);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    apiMock.mockImplementation((async (method: string) => {
+      if (method === "boards.list") {
+        return [
+          makeBoard({ id: 5, workspaceKey: "ws-a" }),
+          makeBoard({ id: 6, workspaceKey: "ws-a" }),
+        ];
+      }
+      return [];
+    }) as any);
+
+    const store = useBoardStore();
+    await store.loadBoards();
+
+    // Should retain the persisted board id since it still exists
+    expect(store.activeBoardId).toBe(5);
+  });
 });
