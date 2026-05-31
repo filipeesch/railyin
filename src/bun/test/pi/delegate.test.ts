@@ -288,4 +288,61 @@ describe("buildDelegateTool", () => {
     const tools = buildDelegateTool(fakeHarnessCtx, makeOpts({ engineConfig: config }));
     expect(tools).toHaveLength(0);
   });
+
+  test("DL-9: duplicate task ids — returns error, no children spawned", async () => {
+    let spawnCount = 0;
+    const factory: ChildSessionFactory = async () => {
+      spawnCount++;
+      throw new Error("should not be called");
+    };
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory }));
+    const result = await tool.execute("call-9", {
+      tasks: [
+        { id: "same", prompt: "p1" },
+        { id: "same", prompt: "p2" },
+      ],
+    }, undefined);
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/duplicate/i);
+    expect(text).toContain("same");
+    expect(spawnCount).toBe(0);
+  });
+
+  test("DL-10: empty task id — returns error, no children spawned", async () => {
+    let spawnCount = 0;
+    const factory: ChildSessionFactory = async () => {
+      spawnCount++;
+      throw new Error("should not be called");
+    };
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory }));
+    const result = await tool.execute("call-10", {
+      tasks: [{ id: "", prompt: "p1" }],
+    }, undefined);
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/empty/i);
+    expect(spawnCount).toBe(0);
+  });
+
+  test("DL-11: disallowed tool group in task.tools — returns error naming rejected group", async () => {
+    let spawnCount = 0;
+    const factory: ChildSessionFactory = async () => {
+      spawnCount++;
+      throw new Error("should not be called");
+    };
+    const config: PiEngineConfig = {
+      type: "pi",
+      harness: { delegate: { allow_tools: ["read"] } },
+    };
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory, engineConfig: config }));
+    const result = await tool.execute("call-11", {
+      tasks: [{ id: "t1", prompt: "p1", tools: ["shell"] }],
+    }, undefined);
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/disallowed/i);
+    expect(text).toContain("shell");
+    expect(spawnCount).toBe(0);
+  });
 });

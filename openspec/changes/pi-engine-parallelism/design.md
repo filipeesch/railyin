@@ -86,11 +86,13 @@ else
 
 **Why so restrictive**: Subagents that can write or transition tasks while running concurrently with their parent create undefined ordering for shared state. The lightweight v1 cannot model that — the constraint will be revisited only when persistence is added.
 
-### Decision 7 — Child sessions use a temporary on-disk session file, deleted on dispose
+### Decision 7 — Child sessions use in-memory sessions via `SessionManager.inMemory()`
 
-The Pi SDK 0.74's `SessionManager.open(path)` requires a filesystem path; an in-memory variant is not exposed. Children use `mkdtemp` + a unique `.jsonl` under `${PI_SESSIONS_DIR}/delegate-${parentConvId}/${jobId}.jsonl` and `rm` it in `finally`. No persistence semantics — this is purely an SDK requirement.
+During implementation, the Pi SDK 0.74 was found to expose a `SessionManager.inMemory()` factory. Children use this directly — no filesystem temp files are created or deleted. This is cleaner than the original design which anticipated needing `mkdtemp` + cleanup.
 
-**Why not a fake `SessionManager`**: The SDK has no abstract base; faking it risks behaviour drift when the SDK evolves. The temp-file approach is small and obvious.
+**Original assumption**: `SessionManager.open(path)` requires a filesystem path; an in-memory variant was not expected to be exposed. The original plan called for `mkdtemp` + a `.jsonl` under `${PI_SESSIONS_DIR}/delegate-${parentConvId}/${jobId}.jsonl`.
+
+**Actual implementation**: `SessionManager.inMemory()` is used directly in `child-session.ts`. No temp-file cleanup is needed in `finally`.
 
 ### Decision 8 — Failures isolated per child; parent always gets a result
 

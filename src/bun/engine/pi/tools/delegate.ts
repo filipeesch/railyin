@@ -139,6 +139,41 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
         };
       }
 
+      const emptyIdTask = args.tasks.find((t) => !t.id || t.id.trim() === "");
+      if (emptyIdTask !== undefined) {
+        return {
+          content: [{ type: "text", text: "Error: every task must have a non-empty id." }],
+          details: undefined,
+        };
+      }
+
+      const ids = args.tasks.map((t) => t.id);
+      const duplicateId = ids.find((id, i) => ids.indexOf(id) !== i);
+      if (duplicateId !== undefined) {
+        return {
+          content: [{ type: "text", text: `Error: duplicate task id "${duplicateId}". All task ids must be unique.` }],
+          details: undefined,
+        };
+      }
+
+      const allowedGroups = new Set(delegateConfig?.allow_tools ?? ["read"]);
+      allowedGroups.add("read"); // read is always allowed
+      for (const task of args.tasks) {
+        if (!task.tools) continue;
+        const rejected = task.tools.filter((g) => !allowedGroups.has(g) && g !== "delegate");
+        if (rejected.length > 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error: task "${task.id}" requests disallowed tool group(s): ${rejected.join(", ")}. Allowed: ${[...allowedGroups].join(", ")}.`,
+              },
+            ],
+            details: undefined,
+          };
+        }
+      }
+
       const providerName = model.provider;
       const providerSnapshot = registry.snapshot(providerName);
       const effectiveConcurrency =
