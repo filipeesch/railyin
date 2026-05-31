@@ -1,10 +1,10 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
 import { Type } from "@earendil-works/pi-ai";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "./fs-ops.ts";
+import { join, resolve, relative, dirname, isAbsolute } from "node:path";
 import type { FileDiffPayload } from "../../../../shared/rpc-types.ts";
-import { computeFileDiff } from "../../../utils/diff.ts";
+import { computeFileDiff, splitLines } from "../../../utils/diff.ts";
 import { safePath } from "./read.ts";
 
 const CONTENT_ERRORS: Record<string, string> = {
@@ -72,8 +72,11 @@ Use patch_file for targeted edits to existing files; use write_file only when re
         isNew: existingContent === null,
       });
 
+      const summary = existingContent === null
+        ? `(+${splitLines(args.content)})`
+        : `(+${diff.added} -${diff.removed})`;
       return {
-        content: [{ type: "text", text: `OK: wrote ${rel} [${opId}]` }],
+        content: [{ type: "text", text: `OK: wrote ${rel} ${summary} [${opId}]` }],
         details: { writtenFiles: [diff] },
       };
     },
@@ -179,6 +182,10 @@ ALWAYS save the op:XXXX to undo_write if needed.`,
         }
       }
 
+      // Compute anchor's 1-based line position
+      const anchorLineIndex = before.indexOf(args.anchor);
+      const anchorLine = anchorLineIndex !== -1 ? before.slice(0, anchorLineIndex).split("\n").length : 1;
+
       const opId = harnessCtx.undoStack.push({
         path: abs,
         type: "patch_file",
@@ -189,8 +196,9 @@ ALWAYS save the op:XXXX to undo_write if needed.`,
 
       const diff = computeFileDiff(before, after!, rel, "patch_file");
 
+      const summary = `(+${diff.added} -${diff.removed} at line ${anchorLine})`;
       return {
-        content: [{ type: "text", text: `OK: patched ${rel} [${opId}]` }],
+        content: [{ type: "text", text: `OK: patched ${rel} ${summary} [${opId}]` }],
         details: { writtenFiles: [diff] },
       };
     },
@@ -238,9 +246,11 @@ NEVER delete files outside the worktree.`,
 
       unlinkSync(abs);
 
+      const diff = computeFileDiff(content, "", rel, "delete_file");
+
       return {
-        content: [{ type: "text", text: `OK: deleted ${rel} [${opId}]` }],
-        details: { writtenFiles: [] },
+        content: [{ type: "text", text: `OK: deleted ${rel} (-${diff.removed}) [${opId}]` }],
+        details: { writtenFiles: [diff] },
       };
     },
   };
