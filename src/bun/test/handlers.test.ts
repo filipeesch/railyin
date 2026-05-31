@@ -1128,3 +1128,169 @@ describe("mcp.getProjectConfig / mcp.saveProjectConfig", () => {
     expect(invalidatedPath).toBe(projectDir);
   });
 });
+// ─── CS-M — Multi-Workspace Chat Session Isolation ────────────────────────────
+
+describe("CS-M — Multi-Workspace Chat Session Isolation", () => {
+  beforeEach(() => {
+    // In-memory DB is reset each time by beforeEach in parent describe
+  });
+
+  // ─── CS-M-1: creating session in ws-A does NOT appear in ws-B list ─────────
+
+  it("CS-M-1: session created in default does not appear when listing other-ws", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    // Seed an "other-ws" config so getWorkspaceConfig works for it
+    const cfgDir = mkdtempSync(join(tmpdir(), "railyn-cfg-"));
+    writeFileSync(
+      join(cfgDir, "workspace.other-ws.yaml"),
+      [
+        "name: Other Ws",
+        "default_model: copilot/mock-model",
+        `workspace_path: ${cfgDir}`,
+        "projects:",
+        "  - key: test-project",
+        "    name: Test Project",
+        "    project_path: test-project",
+        "    git_root_path: test-project",
+        "    default_branch: main",
+      ].join("\n") + "\n",
+    );
+    process.env.RAILYN_CONFIG_DIR = cfgDir;
+
+    const handlers = chatSessionHandlers(db, () => {}, null as unknown as ExecutionCoordinator);
+
+    // Create session in default workspace
+    const sessionA = await handlers["chatSessions.create"]({ workspaceKey: "default" });
+    expect(sessionA.workspaceKey).toBe("default");
+
+    // List sessions for other-ws — should be empty (DB has no sessions with that key)
+    const sessionsB = await handlers["chatSessions.list"]({ workspaceKey: "other-ws" });
+    expect(sessionsB).toHaveLength(0);
+
+    // List sessions for default — should have our session
+    const sessionsA = await handlers["chatSessions.list"]({ workspaceKey: "default" });
+    expect(sessionsA).toHaveLength(1);
+    expect(sessionsA[0].id).toBe(sessionA.id);
+
+    delete process.env.RAILYN_CONFIG_DIR;
+    rmSync(cfgDir, { recursive: true, force: true });
+    cfg.cleanup();
+  });
+
+  // ─── CS-M-2: creating session in ws-B does NOT leak to ws-A ────────────────
+
+  it("CS-M-2: session created in other-ws does not appear when listing default", async () => {
+    const cfg = setupTestConfig("", gitDir);
+
+    const handlers = chatSessionHandlers(db, () => {}, null as unknown as ExecutionCoordinator);
+
+    // Create session in other-ws
+    const sessionB = await handlers["chatSessions.create"]({ workspaceKey: "other-ws" });
+    expect(sessionB.workspaceKey).toBe("other-ws");
+
+    // List sessions for default — should be empty
+    const sessionsA = await handlers["chatSessions.list"]({ workspaceKey: "default" });
+    expect(sessionsA).toHaveLength(0);
+
+    // List sessions for other-ws — should have our session
+    const sessionsB = await handlers["chatSessions.list"]({ workspaceKey: "other-ws" });
+    expect(sessionsB).toHaveLength(1);
+    expect(sessionsB[0].id).toBe(sessionB.id);
+
+    cfg.cleanup();
+  });
+
+  // ─── CS-M-3: rename preserves workspace association ─────────────────────────
+
+  it("CS-M-3: renaming a session preserves its workspace association", async () => {
+    const cfg = setupTestConfig("", gitDir);
+
+    const handlers = chatSessionHandlers(db, () => {}, null as unknown as ExecutionCoordinator);
+
+    const sessionA = await handlers["chatSessions.create"]({ workspaceKey: "default" });
+    const originalTitle = sessionA.title;
+
+    await handlers["chatSessions.rename"]({ sessionId: sessionA.id, title: "Renamed!" });
+
+    const updated = await handlers["chatSessions.get"]({ sessionId: sessionA.id });
+    expect(updated.title).toBe("Renamed!");
+    expect(updated.workspaceKey).toBe("default");
+
+    cfg.cleanup();
+  });
+
+  // ─── CS-M-4: archive preserves workspace isolation across workspaces ────────
+
+  it("CS-M-4: archiving a session in one workspace does not affect another", async () => {
+    const cfg = setupTestConfig("", gitDir);
+
+    const handlers = chatSessionHandlers(db, () => {}, null as unknown as ExecutionCoordinator);
+
+    const sessionA = await handlers["chatSessions.create"]({ workspaceKey: "default" });
+    const sessionB = await handlers["chatSessions.create"]({ workspaceKey: "other-ws" });
+
+    // Archive session from default workspace
+    await handlers["chatSessions.archive"]({ sessionId: sessionA.id });
+
+    // Other-ws list should still show its unarchived session
+    const sessionsB = await handlers["chatSessions.list"]({ workspaceKey: "other-ws" });
+    expect(sessionsB).toHaveLength(1);
+    expect(sessionsB[0].status).toBe("idle");
+
+    // Default list should show zero (only archived session)
+    const sessionsA = await handlers["chatSessions.list"]({ workspaceKey: "default" });
+    expect(sessionsA).toHaveLength(0);
+
+    cfg.cleanup();
+  });
+
+  // ─── CS-M-5: normalized get handler returns same data as raw query ──────────
+
+  it("CS-M-5: normalized chatSessions.get handler returns correct session", async () => {
+    const cfg = setupTestConfig("", gitDir);
+
+    const handlers = chatSessionHandlers(db, () => {}, null as unknown as ExecutionCoordinator);
+
+    const session = await handlers["chatSessions.create"]({ workspaceKey: "default" });
+
+    // The normalized handler uses fetchChatSessionWithModel — verify it returns full data
+    const fetched = await handlers["chatSessions.get"]({ sessionId: session.id });
+    expect(fetched.id).toBe(session.id);
+    expect(fetched.workspaceKey).toBe("default");
+    expect(fetched.title).toBe(session.title);
+    expect(fetched.conversationId).toBe(session.conversationId);
+
+    cfg.cleanup();
+  });
+
+  // ─── CS-M-6: multi-workspace concurrent creation order preserved ────────────
+
+  it("CS-M-6: sessions from different workspaces maintain correct workspace keys", async () => {
+    const cfg = setupTestConfig("", gitDir);
+
+    const handlers = chatSessionHandlers(db, () => {}, null as unknown as ExecutionCoordinator);
+
+    // Create multiple sessions alternating between workspaces
+    const sessions = await Promise.all([
+      handlers["chatSessions.create"]({ workspaceKey: "default", title: "WsA-1" }),
+      handlers["chatSessions.create"]({ workspaceKey: "other-ws", title: "WsB-1" }),
+      handlers["chatSessions.create"]({ workspaceKey: "default", title: "WsA-2" }),
+      handlers["chatSessions.create"]({ workspaceKey: "other-ws", title: "WsB-2" }),
+    ]);
+
+    // Verify each session has correct workspace key
+    expect(sessions[0].workspaceKey).toBe("default");
+    expect(sessions[1].workspaceKey).toBe("other-ws");
+    expect(sessions[2].workspaceKey).toBe("default");
+    expect(sessions[3].workspaceKey).toBe("other-ws");
+
+    // Verify lists are correctly isolated
+    const defaultSessions = await handlers["chatSessions.list"]({ workspaceKey: "default" });
+    const otherSessions = await handlers["chatSessions.list"]({ workspaceKey: "other-ws" });
+    expect(defaultSessions).toHaveLength(2);
+    expect(otherSessions).toHaveLength(2);
+
+    cfg.cleanup();
+  });
+});
+

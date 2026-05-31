@@ -8,6 +8,11 @@ import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { QualifiedModelId } from "../engine/qualified-model-id.ts";
 
+/** Resolve workspace key from handler params, falling back to the default workspace. */
+export function resolveWorkspaceKey(params: { workspaceKey?: string }): string {
+  return params.workspaceKey ?? getDefaultWorkspaceKey();
+}
+
 function autoTitle(): string {
   const now = new Date();
   const month = now.toLocaleString('en-US', { month: 'short' });
@@ -20,7 +25,7 @@ export type OnChatSessionUpdated = (session: ChatSession) => void;
 export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessionUpdated, orchestrator: ExecutionCoordinator | null) {
   return {
     "chatSessions.list": async (params: { workspaceKey?: string; includeArchived?: boolean }): Promise<ChatSession[]> => {
-      const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();
+      const wsKey = resolveWorkspaceKey(params);
       const rows = db.query<ChatSessionRow, [string]>(
         params.includeArchived
           ? `SELECT cs.*, c.model AS conversation_model 
@@ -39,7 +44,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
     "chatSessions.create": async (params: { workspaceKey?: string; title?: string }): Promise<ChatSession> => {
 
-      const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();
+      const wsKey = resolveWorkspaceKey(params);
       const title = params.title ?? autoTitle();
 
       const session = db.transaction(() => {
@@ -93,14 +98,9 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
     },
 
     "chatSessions.get": async (params: { sessionId: number }): Promise<ChatSession> => {
-      const row = db.query<ChatSessionRow, [number]>(
-        `SELECT cs.*, c.model AS conversation_model 
-         FROM chat_sessions cs 
-         LEFT JOIN conversations c ON c.id = cs.conversation_id 
-         WHERE cs.id = ?`
-      ).get(params.sessionId);
-      if (!row) throw new Error(`Session ${params.sessionId} not found`);
-      return mapChatSession(row);
+      const session = fetchChatSessionWithModel(db, params.sessionId);
+      if (!session) throw new Error(`Session ${params.sessionId} not found`);
+      return session;
     },
 
     "chatSessions.sendMessage": async (params: {
@@ -201,9 +201,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       limit?: number;
     }): Promise<{ messages: ConversationMessage[]; hasMore: boolean }> => {
 
-      const session = db.query<ChatSessionRow, [number]>(
-        "SELECT conversation_id FROM chat_sessions WHERE id = ?"
-      ).get(params.sessionId);
+      const session = fetchChatSessionWithModel(db, params.sessionId);
       if (!session) return { messages: [], hasMore: false };
 
       const limit = params.limit ?? 50;
@@ -211,11 +209,11 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       if (params.beforeMessageId != null) {
         rows = db.query<ConversationMessageRow, [number, number, number]>(
           "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?"
-        ).all(session.conversation_id, params.beforeMessageId, limit + 1);
+        ).all(session.conversationId, params.beforeMessageId, limit + 1);
       } else {
         rows = db.query<ConversationMessageRow, [number, number]>(
           "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?"
-        ).all(session.conversation_id, limit + 1);
+        ).all(session.conversationId, limit + 1);
       }
       const hasMore = rows.length > limit;
       const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);
@@ -224,13 +222,13 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
     "chatSessions.cancel": async (params: { sessionId: number }): Promise<void> => {
 
-      const sessionRow = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      const sessionRow = fetchChatSessionWithModel(db, params.sessionId);
       if (!sessionRow) return;
       // Find the running execution for this conversation and cancel it via the orchestrator
       // so the streaming actually stops (not just the UI state).
       const execRow = db.query<{ id: number }, [number]>(
         "SELECT id FROM executions WHERE conversation_id = ? AND task_id IS NULL AND status = 'running' ORDER BY id DESC LIMIT 1"
-      ).get(sessionRow.conversation_id);
+      ).get(sessionRow.conversationId);
       if (execRow && orchestrator) {
         orchestrator.cancel(execRow.id);
       } else {

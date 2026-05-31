@@ -95,9 +95,6 @@ onMounted(async () => {
     router.push("/board");
   }
 
-  // Load chat sessions (workspace-scoped, not tied to a board)
-  chatStore.loadSessions(workspaceStore.activeWorkspaceKey ?? undefined).catch(console.error);
-
   // Load enabled models once now, then re-load on workspace switch
   workspaceStore.loadEnabledModels(workspaceStore.activeWorkspaceKey ?? undefined).catch(console.error);
 });

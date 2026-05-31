@@ -1,8 +1,8 @@
 ## 1. Frontend: Workspace switch reloads chat sessions
 
-- [ ] 1.1 Import `useChatStore` in workspace store and call `loadSessions(key)` on workspace change
-- [ ] 1.2 Close active session (`closeSession()`) when switching workspaces to prevent orphans
-- [ ] 1.3 Remove duplicate `chatStore.loadSessions(...)` call from `App.vue` onMounted (now handled by workspace store)
+- [x] 1.1 Import `useChatStore` in workspace store and call `loadSessions(key)` on workspace change
+- [x] 1.2 Close active session (`closeSession()`) when switching workspaces to prevent orphans
+- [x] 1.3 Remove duplicate `chatStore.loadSessions(...)` call from `App.vue` onMounted (now handled by workspace store)
 
 ## 2. Backend: Normalize chat session handlers
 

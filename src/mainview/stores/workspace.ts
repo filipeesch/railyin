@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { api } from "../rpc";
 import type { ModelInfo, ProviderModelList, WorkspaceConfig, WorkspaceSummary } from "@shared/rpc-types";
 import { readStorage, writeStorage } from "../utils/storage";
+import { useChatStore } from "./chat";
 
 const STORAGE_KEY_WORKSPACE = "railyn.activeWorkspaceKey";
 
@@ -14,6 +15,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const error = ref<string | null>(null);
   const availableModels = ref<ModelInfo[]>([]);
   const allProviderModels = ref<ProviderModelList[]>([]);
+
+  // Chat store dependency — injected at definition time (Pinia composable pattern)
+  const chatStore = useChatStore();
 
   watch(activeWorkspaceKey, (key) => {
     writeStorage(STORAGE_KEY_WORKSPACE, key);
@@ -70,8 +74,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function selectWorkspace(key: string) {
+    // Skip session reload if switching to the same workspace
+    const isSameWorkspace = key === activeWorkspaceKey.value;
     activeWorkspaceKey.value = key;
     await load();
+    if (!isSameWorkspace) {
+      chatStore.closeSession();
+      chatStore.loadSessions(key).catch(console.error);
+    }
   }
 
   async function loadEnabledModels(workspaceKey?: string) {
