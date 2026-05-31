@@ -189,8 +189,20 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
           return;
         }
 
+        const childBlockId = `child-${task.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const childGroups = (task.tools ?? delegateConfig?.allow_tools ?? ["read"]).filter((g) => g !== "delegate");
         const childTools = buildChildTools(childGroups);
+
+        // Emit a synthetic "agent" tool_start to give each child its own UI bubble.
+        delegateEmitRef?.emit?.({
+          type: "tool_start",
+          name: "agent",
+          callId: childBlockId,
+          arguments: JSON.stringify({ id: task.id }),
+          parentCallId: toolCallId,
+          isInternal: true,
+          display: { label: "agent", subject: task.id },
+        });
 
         let handle: Awaited<ReturnType<ChildSessionFactory>> | null = null;
         let unsubscribe: (() => void) | null = null;
@@ -206,12 +218,13 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
           });
 
           // Subscribe BEFORE prompting to capture all child events.
+          // Route child tool calls under childBlockId so they nest inside the per-child bubble.
           unsubscribe = handle.session.subscribe((event: AgentSessionEvent) => {
             if (!delegateEmitRef?.emit) return;
             const engineEvents = translateEvent(event as any, cwd);
             for (const ev of engineEvents) {
               if (ev.type === "tool_start" || ev.type === "tool_result") {
-                delegateEmitRef.emit({ ...ev, parentCallId: toolCallId, isInternal: true });
+                delegateEmitRef.emit({ ...ev, parentCallId: childBlockId, isInternal: true });
               }
             }
           });
@@ -230,11 +243,33 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
               .join("") ?? "(no result)";
 
           results[idx] = { status: "fulfilled", value: { id: task.id, text } };
+
+          // Close the per-child bubble as succeeded.
+          delegateEmitRef?.emit?.({
+            type: "tool_result",
+            name: "agent",
+            callId: childBlockId,
+            result: text,
+            parentCallId: toolCallId,
+            isInternal: true,
+          });
         } catch (err) {
+          const isAbort = err instanceof DOMException && err.name === "AbortError";
           results[idx] = {
             status: "rejected",
             reason: err instanceof Error ? err : new Error(String(err)),
           };
+
+          // Close the per-child bubble as errored.
+          delegateEmitRef?.emit?.({
+            type: "tool_result",
+            name: "agent",
+            callId: childBlockId,
+            result: isAbort ? "Aborted" : formatPiError(err instanceof Error ? err : new Error(String(err))),
+            isError: true,
+            parentCallId: toolCallId,
+            isInternal: true,
+          });
         } finally {
           unsubscribe?.();
           handle?.dispose();
