@@ -465,3 +465,162 @@ describe("Pi delegate — child session SDK built-in tool allowlist", () => {
     }
   });
 });
+
+// ─── buildToolAllowlist unit tests ────────────────────────────────────────────
+
+import { buildToolAllowlist } from "../engine/pi/constants.ts";
+
+function makeTool(name: string): { name: string } {
+  return { name };
+}
+
+describe("buildToolAllowlist", () => {
+  it("BTL-1: empty tools list returns exactly SDK built-in names", () => {
+    const result = buildToolAllowlist([]);
+    expect(result).toEqual([...SDK_BUILTIN_TOOL_NAMES]);
+  });
+
+  it("BTL-2: custom tools are appended after SDK built-ins", () => {
+    const result = buildToolAllowlist([makeTool("create_note"), makeTool("list_notes")]);
+    for (const name of SDK_BUILTIN_TOOL_NAMES) {
+      expect(result).toContain(name);
+    }
+    expect(result).toContain("create_note");
+    expect(result).toContain("list_notes");
+    const sdkCount = SDK_BUILTIN_TOOL_NAMES.length;
+    expect(result.indexOf("create_note")).toBeGreaterThanOrEqual(sdkCount);
+  });
+
+  it("BTL-3: result includes all SDK built-ins and all custom tool names", () => {
+    const customTools = [makeTool("create_note"), makeTool("list_notes"), makeTool("update_note")];
+    const result = buildToolAllowlist(customTools);
+    for (const name of SDK_BUILTIN_TOOL_NAMES) {
+      expect(result).toContain(name);
+    }
+    expect(result).toContain("create_note");
+    expect(result).toContain("list_notes");
+    expect(result).toContain("update_note");
+  });
+
+  it("BTL-4: no duplicate entries in the output", () => {
+    const tools = [makeTool("create_note"), makeTool("list_notes")];
+    const result = buildToolAllowlist(tools);
+    const unique = new Set(result);
+    expect(unique.size).toBe(result.length);
+  });
+});
+
+// ─── Pi SDK note tool allowlist ───────────────────────────────────────────────
+
+describe("Pi SDK session — note tool allowlist", () => {
+  it("IT-NOTE-1: note tools are in session active tools when created with buildToolAllowlist", async () => {
+    const noteToolNames = ["create_note", "list_notes", "update_note"];
+    const customTools = noteToolNames.map((name) =>
+      defineTool({
+        name,
+        label: name,
+        description: `${name} tool`,
+        parameters: z.object({}),
+        execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined }),
+      }),
+    );
+
+    const sessionManager = SessionManager.open(join(cwd, "session-note-1.jsonl"));
+    const agentDir = getAgentDir();
+    const resourceLoader = new DefaultResourceLoader({ cwd, agentDir });
+    await resourceLoader.reload();
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      model: faux.getModel() as any,
+      tools: buildToolAllowlist(customTools as any),
+      customTools,
+      sessionManager,
+      resourceLoader,
+      authStorage,
+    });
+    session.agent.state.thinkingLevel = "off";
+
+    const activeTools = session.getActiveToolNames();
+    for (const name of noteToolNames) {
+      expect(activeTools, `Expected '${name}' in active tools after session creation`).toContain(name);
+    }
+    session.dispose();
+  });
+
+  it("IT-NOTE-2: note tools remain present after setActiveToolsByName (session reuse path)", async () => {
+    const noteToolNames = ["create_note", "list_notes", "update_note"];
+    const customTools = noteToolNames.map((name) =>
+      defineTool({
+        name,
+        label: name,
+        description: `${name} tool`,
+        parameters: z.object({}),
+        execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined }),
+      }),
+    );
+
+    const sessionManager = SessionManager.open(join(cwd, "session-note-2.jsonl"));
+    const agentDir = getAgentDir();
+    const resourceLoader = new DefaultResourceLoader({ cwd, agentDir });
+    await resourceLoader.reload();
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      model: faux.getModel() as any,
+      tools: buildToolAllowlist(customTools as any),
+      customTools,
+      sessionManager,
+      resourceLoader,
+      authStorage,
+    });
+    session.agent.state.thinkingLevel = "off";
+
+    // Simulate session reuse path: re-set the allowlist with buildToolAllowlist
+    session.setActiveToolsByName(buildToolAllowlist(customTools as any));
+
+    const activeTools = session.getActiveToolNames();
+    for (const name of noteToolNames) {
+      expect(activeTools, `Expected '${name}' after setActiveToolsByName`).toContain(name);
+    }
+    for (const name of SDK_BUILTIN_TOOL_NAMES) {
+      expect(activeTools, `Expected SDK built-in '${name}' preserved`).toContain(name);
+    }
+    session.dispose();
+  });
+
+  it("IT-NOTE-3: create_note custom tool persists a note when invoked", async () => {
+    const { initDb } = await import("./helpers.ts");
+    const { NoteRepository } = await import("../db/repositories/note-repository.ts");
+
+    const db = initDb();
+    // Seed a conversation row to satisfy the FK on task_notes.conversation_id
+    db.run("INSERT INTO conversations (id, task_id) VALUES (1, NULL)");
+    const notes = new NoteRepository(db);
+    const conversationId = 1;
+
+    const createNoteTool = defineTool({
+      name: "create_note",
+      label: "create_note",
+      description: "Create a note",
+      parameters: z.object({ content: z.string() }),
+      execute: async (_callId, params: { content: string }) => {
+        const note = notes.createNote(conversationId, { content: params.content, isSourceAi: true });
+        return { content: [{ type: "text" as const, text: `Note #${note.id} created.` }], details: undefined };
+      },
+    });
+
+    // Call execute directly to verify persistence — the allowlist integration is covered by IT-NOTE-1
+    await createNoteTool.execute("call-1", { content: "test note" }, undefined, undefined, {} as any);
+
+    const storedNotes = notes.listByConversation(conversationId);
+    expect(storedNotes).toHaveLength(1);
+    expect(storedNotes[0].content).toBe("test note");
+  });
+});
