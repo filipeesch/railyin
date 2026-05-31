@@ -93,15 +93,6 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
                   "Short slug naming the scope. Use the file stem when possible, " +
                   'e.g. "auth-token" or "user-service-tests". If you cannot name it in 3–5 words the task is too broad.',
               },
-              intent: {
-                type: "string",
-                description:
-                  "Verb phrase (≤8 words) shown as the bubble header in the UI. " +
-                  "Must start with an action verb describing what this agent does. " +
-                  'Examples: "Analyze authentication module structure", "Map exported functions in utilities", ' +
-                  '"Find database schema and migrations". ' +
-                  "Do NOT use service names or file paths as the intent.",
-              },
               prompt: {
                 type: "string",
                 description:
@@ -113,6 +104,18 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
                   "DONE WHEN: a concrete, checkable condition — the agent stops as soon as this is met.\n" +
                   "OUTPUT FORMAT: how to return the result (e.g. markdown summary, bullet list of findings, code snippet).\n" +
                   "The child has no conversation history — everything it needs must be in this prompt.",
+              },
+              intent: {
+                type: "string",
+                description:
+                  "Describe the ACTION being performed, not the system being examined. " +
+                  "Format: <action verb> + <what you are looking for> + <where (optional)>. " +
+                  "Keep it ≤8 words.\n" +
+                  "BAD — names the system:  'payment-service', 'OrderRepository', 'config module'\n" +
+                  "BAD — vague:             'Analyze code', 'Check implementation'\n" +
+                  "GOOD:                    'Map error handling in payment flow'\n" +
+                  "GOOD:                    'Find DB queries in order repository'\n" +
+                  "GOOD:                    'Trace config loading across modules'",
               },
               tools: {
                 type: "array",
