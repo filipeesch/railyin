@@ -85,10 +85,65 @@ export interface OpenCodeProviderConfig {
 
 /** A named set of LLM sampling parameters for the Pi engine. All fields are optional. */
 export interface SamplingPreset {
+  /** Optional human-readable display name shown in the preset selector. Falls back to the YAML key. */
+  label?: string;
+  /** Optional description shown as subtitle in the preset selector dropdown option. */
+  description?: string;
   temperature?: number;
   top_p?: number;
   top_k?: number;
   presence_penalty?: number;
+}
+
+/** Per-provider concurrency and connection settings for the Pi engine. */
+export interface PiProviderConfig {
+  base_url: string;
+  api_key?: string;
+  /**
+   * Maximum concurrent in-flight LLM requests to this provider across all
+   * Pi sessions (parent, children, background compaction). Default: 8 (vLLM-shaped).
+   * Recommended values: vLLM/SGLang 8, Ollama 4, LM Studio 2.
+   */
+  max_inflight?: number;
+  /**
+   * Maximum time in milliseconds a request may wait in the queue before being
+   * rejected with a timeout error. Default: 60_000 (1 minute).
+   */
+  queue_timeout_ms?: number;
+}
+
+/** Harness-level config for the delegate fan-out tool. */
+export interface PiDelegateConfig {
+  /** When false, the delegate tool is not registered. Default: true. */
+  enabled?: boolean;
+  /**
+   * Maximum number of sub-jobs the model may submit in a single delegate call.
+   * Must be between 1 and 10. Default: 5.
+   */
+  max_per_call?: number;
+  /**
+   * Override for the effective concurrency cap per delegate call.
+   * When omitted, derived as min(max_per_call, provider.max_inflight).
+   */
+  max_concurrency?: number;
+  /**
+   * Tool groups children are allowed to use. Allowed values: "read", "web".
+   * Default: ["read"]. Children never receive write, shell, or delegate.
+   */
+  allow_tools?: ("read" | "web")[];
+}
+
+/** Harness-level config for opportunistic background compaction. */
+export interface PiBackgroundCompactionConfig {
+  /** When false, background compaction is disabled. Default: true. */
+  enabled?: boolean;
+  /**
+   * Additional token margin added to the SDK's reserveTokens (16,384) to compute
+   * the soft compaction threshold. Background compaction fires when context usage
+   * exceeds contextWindow - (reserveTokens + early_margin_tokens).
+   * Must be ≥ 1024. Default: 8192.
+   */
+  early_margin_tokens?: number;
 }
 
 /** Pi engine config — uses the Pi agent SDK for local LLMs (LM Studio, Ollama, OpenAI-compatible). */
@@ -106,11 +161,15 @@ export interface PiEngineConfig {
    * OpenAI-compatible provider endpoints keyed by provider name.
    * e.g. lmstudio: { base_url: "http://localhost:1234/v1" }
    */
-  providers?: Record<string, { base_url: string; api_key?: string }>;
+  providers?: Record<string, PiProviderConfig>;
   /** Harness-level tuning options. */
   harness?: {
     /** Maximum undo stack depth per conversation. Default: 50. */
     undo_stack_size?: number;
+    /** Fan-out delegate tool settings. */
+    delegate?: PiDelegateConfig;
+    /** Opportunistic background compaction settings. */
+    background_compaction?: PiBackgroundCompactionConfig;
   };
   /**
    * Slash-command dialect to use for command discovery and resolution.

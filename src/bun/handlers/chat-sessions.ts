@@ -23,12 +23,14 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const rows = db.query<ChatSessionRow, [string]>(
         params.includeArchived
-          ? `SELECT cs.*, c.model AS conversation_model 
+          ? `SELECT cs.*, c.model AS conversation_model,
+                    c.sampling_preset_override AS conversation_sampling_preset_override
              FROM chat_sessions cs 
              LEFT JOIN conversations c ON c.id = cs.conversation_id 
              WHERE cs.workspace_key = ? 
              ORDER BY cs.last_activity_at DESC`
-          : `SELECT cs.*, c.model AS conversation_model 
+          : `SELECT cs.*, c.model AS conversation_model,
+                    c.sampling_preset_override AS conversation_sampling_preset_override
              FROM chat_sessions cs 
              LEFT JOIN conversations c ON c.id = cs.conversation_id 
              WHERE cs.workspace_key = ? AND cs.status != 'archived' 
@@ -94,7 +96,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
     "chatSessions.get": async (params: { sessionId: number }): Promise<ChatSession> => {
       const row = db.query<ChatSessionRow, [number]>(
-        `SELECT cs.*, c.model AS conversation_model 
+        `SELECT cs.*, c.model AS conversation_model,
+                c.sampling_preset_override AS conversation_sampling_preset_override
          FROM chat_sessions cs 
          LEFT JOIN conversations c ON c.id = cs.conversation_id 
          WHERE cs.id = ?`
@@ -110,8 +113,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       model?: string | null;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ messageId: number; executionId: number }> => {
-      const session = db.query<ChatSessionRow & { conversation_model: string | null }, [number]>(
-        `SELECT cs.*, c.model AS conversation_model FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
+      const session = db.query<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }, [number]>(
+        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
       ).get(params.sessionId);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
@@ -156,8 +159,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
       generalNotes?: string;
     }): Promise<{ messageId: number; executionId: number }> => {
-      const session = db.query<ChatSessionRow & { conversation_model: string | null }, [number]>(
-        `SELECT cs.*, c.model AS conversation_model FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
+      const session = db.query<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }, [number]>(
+        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
       ).get(params.sessionId);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");

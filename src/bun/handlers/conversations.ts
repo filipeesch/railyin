@@ -84,5 +84,16 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       
       return new ContextEstimator(db).estimate(params.conversationId, maxTokens);
     },
+
+    "conversations.setSamplingPreset": async (params: {
+      conversationId: number;
+      presetName: string | null;
+    }): Promise<Record<string, never>> => {
+      db.run(
+        "UPDATE conversations SET sampling_preset_override = ? WHERE id = ?",
+        [params.presetName, params.conversationId],
+      );
+      return {};
+    },
   };
 }

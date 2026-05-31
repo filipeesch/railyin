@@ -222,6 +222,36 @@
         </div>
       </template>
 
+      <!-- Sampling preset selector (Pi engine only) -->
+      <template v-if="isPiEngine && availablePresets.length > 0">
+        <Select
+          :model-value="props.samplingPresetOverride ?? null"
+          :options="[{ name: null, label: 'Default', description: 'Set by the workflow column; falls back to engine default' }, ...availablePresets.map((p) => ({ name: p.name, label: p.params.label ?? p.name, description: p.params.description, params: p.params }))]"
+          optionLabel="label"
+          optionValue="name"
+          size="small"
+          class="input-preset-select"
+          title="Sampling preset — controls temperature and creativity for this conversation"
+          @change="(e: { value: string | null }) => emit('update:samplingPresetOverride', e.value)"
+        >
+          <template #value="{ value }">
+            <span class="preset-select__value">{{ value != null ? (availablePresets.find((p) => p.name === value)?.params.label ?? value) : 'Default' }}</span>
+          </template>
+          <template #option="{ option }">
+            <div class="preset-select__option">
+              <div class="preset-select__option-title">{{ option.label }}</div>
+              <div v-if="option.description" class="preset-select__option-params">{{ option.description }}</div>
+              <div v-if="option.params" class="preset-select__option-params">
+                <span v-if="option.params.temperature != null">temp: {{ option.params.temperature }}</span>
+                <span v-if="option.params.top_p != null">top_p: {{ option.params.top_p }}</span>
+                <span v-if="option.params.top_k != null">top_k: {{ option.params.top_k }}</span>
+                <span v-if="option.params.presence_penalty != null">penalty: {{ option.params.presence_penalty }}</span>
+              </div>
+            </div>
+          </template>
+        </Select>
+      </template>
+
       <!-- Context ring (when contextUsage provided) -->
       <button
         v-if="props.contextUsage"
@@ -343,6 +373,7 @@ const props = defineProps<{
   workspaceKey?: string | null;
   projectKey?: string | null;
   modelId?: string | null;
+  samplingPresetOverride?: string | null;
   contextUsage?: { usedTokens: number; maxTokens: number; fraction: number } | null;
   compacting?: boolean;
   enabledMcpTools?: string[] | null;
@@ -359,6 +390,7 @@ const emit = defineEmits<{
   cancelEdit: [];
   cancel: [];
   "update:modelId": [string | null];
+  "update:samplingPresetOverride": [string | null];
   compact: [];
   manageModels: [];
   toolsChanged: [target: Task | ChatSession];
@@ -450,6 +482,17 @@ const selectedModelOption = computed(() => {
   }
   return null;
 });
+
+const activeModelInfo = computed(() => {
+  const selectedId = props.modelId ?? (workspaceStore.availableModels[0]?.id ?? null);
+  return workspaceStore.availableModels.find((m) => m.id === selectedId) ?? null;
+});
+
+// Use presence of availablePresets as the signal — backend only attaches them for pi-type engines,
+// regardless of the engine's custom id (e.g. "pi-local").
+const availablePresets = computed(() => activeModelInfo.value?.availablePresets ?? []);
+
+const isPiEngine = computed(() => availablePresets.value.length > 0);
 
 const supportsManualCompact = computed(() => {
   // In task context (taskId is set), never fall back to the first available model —
@@ -707,6 +750,33 @@ defineExpose({ focus: () => chatEditorRef.value?.focus() });
 .model-select__option-title { font-size: 0.85rem; font-weight: 500; }
 .model-select__option-description { font-size: 0.7rem; color: var(--p-text-muted-color); }
 .model-select__option-id { font-size: 0.68rem; color: var(--p-text-muted-color); font-family: monospace; }
+
+.input-preset-select {
+  min-width: 80px;
+  font-size: 0.8rem;
+}
+
+.preset-select__value {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.preset-select__option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.preset-select__option-title { font-size: 0.85rem; font-weight: 500; }
+
+.preset-select__option-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 0.68rem;
+  color: var(--p-text-muted-color);
+  font-family: monospace;
+}
 
 .model-empty-state {
   display: flex;

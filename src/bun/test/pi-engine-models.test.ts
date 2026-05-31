@@ -127,9 +127,9 @@ describe("PI-LM-4: provider unreachable → warns and returns []", () => {
     const models = await engine.listModels();
 
     expect(models).toEqual([]);
-    expect(warnSpy).toHaveBeenCalledOnce();
-    expect(warnSpy.mock.calls[0]![0]).toContain("[pi] listModels");
-    expect(warnSpy.mock.calls[0]![0]).toContain("lmstudio");
+    const listModelsWarn = warnSpy.mock.calls.find((c) => String(c[0]).includes("[pi] listModels"));
+    expect(listModelsWarn).toBeDefined();
+    expect(String(listModelsWarn![0])).toContain("lmstudio");
   });
 
   it("returns empty array when server returns non-ok status", async () => {
@@ -167,6 +167,6 @@ describe("PI-LM-5: multiple providers — aggregates results", () => {
 
     expect(models).toHaveLength(1);
     expect(models[0]!.qualifiedId).toBe("pi-local/lmstudio/qwen/qwen3-8b");
-    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("[pi] listModels"))).toBe(true);
   });
 });

@@ -20,6 +20,7 @@ import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
+import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 
 const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 
@@ -500,6 +501,9 @@ columns:
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
       new CustomPromptInjector(),
+      undefined,
+      undefined,
+      new ExecutionParamsEnricher(db),
     );
 
     await executor.execute(taskId, "plan");

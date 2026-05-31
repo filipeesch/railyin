@@ -12,7 +12,7 @@ import type { StreamProcessor } from "../stream/stream-processor";
 import type { ConversationMessageRow, TaskRow } from "../../db/row-types";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
-import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
+import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 
 
@@ -24,7 +24,7 @@ export class ChatExecutor {
     private readonly streamProcessor: StreamProcessor,
     private readonly workdirResolver: IWorkingDirectoryResolver,
     private readonly customPromptInjector: CustomPromptInjector,
-    private readonly modelSettingsRepo?: ModelSettingsRepository,
+    private readonly paramsEnricher?: ExecutionParamsEnricher,
     private readonly boardTools?: IBoardToolExecutor,
     private readonly onNewMessage?: (msg: ConversationMessage) => void,
   ) {}
@@ -91,10 +91,10 @@ export class ChatExecutor {
     // Resolve custom prompts for chat execution
     const engineId = QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
 
-    const contextWindowOverride = this.modelSettingsRepo?.getContextWindow(workspaceKey, effectiveModel) ?? undefined;
+    const contextWindowOverride = this.paramsEnricher?.hasContextWindow(workspaceKey, effectiveModel) ?? false;
 
     // Pre-flight: Pi requires a configured context window — fail fast with a visible error
-    if (engineId === "pi" && contextWindowOverride == null) {
+    if (engineId === "pi" && !contextWindowOverride) {
       const errorContent = `Pi engine requires a context window to be configured for model '${effectiveModel}'. Go to Model Settings to configure it.`;
       const errorMsgId = appendMessage(db, null, conversationId, "system", null, errorContent);
       db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
@@ -129,7 +129,7 @@ export class ChatExecutor {
 
     const signal = this.streamProcessor.createSignal(executionId);
 
-    const execParams = {
+    const chatBase = {
       ...this.paramsBuilder.buildForChat(
         conversationId,
         executionId,
@@ -143,10 +143,17 @@ export class ChatExecutor {
         taskContext,
       ),
       ...(customSystemInstructions ? { systemInstructions: customSystemInstructions } : {}),
-      ...(contextWindowOverride != null ? { contextWindowOverride } : {}),
       ...(this.boardTools ? { boardTools: this.boardTools } : {}),
       onSoftCancel: () => this.streamProcessor.abort(executionId),
     };
+
+    const execParams = this.paramsEnricher
+      ? this.paramsEnricher.enrich(chatBase, {
+          workspaceKey,
+          conversationId,
+          model: effectiveModel,
+        })
+      : chatBase;
 
     this.streamProcessor.runNonNative(null, conversationId, executionId, engine, execParams);
 

@@ -36,6 +36,7 @@ export function mapTask(row: TaskRow): Task {
     executionCount: row.execution_count ?? 0,
     position: row.position ?? 0,
     enabledMcpTools: (() => { try { return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : []; } catch { return []; } })(),
+    samplingPresetOverride: (row as any).conversation_sampling_preset_override ?? null,
   };
 }
 
@@ -92,6 +93,7 @@ export function mapChatSession(row: ChatSessionRow): ChatSession {
         return [];
       }
     })(),
+    samplingPresetOverride: row.conversation_sampling_preset_override ?? null,
     lastActivityAt: row.last_activity_at,
     lastReadAt: row.last_read_at,
     archivedAt: row.archived_at,
