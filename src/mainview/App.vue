@@ -102,11 +102,14 @@ onMounted(async () => {
   workspaceStore.loadEnabledModels(workspaceStore.activeWorkspaceKey ?? undefined).catch(console.error);
 });
 
-// Re-load models whenever the active workspace changes
+// Re-load models and chat sessions whenever the active workspace changes
 watch(
   () => workspaceStore.activeWorkspaceKey,
   (key) => {
-    if (key) workspaceStore.loadEnabledModels(key).catch(console.error);
+    if (key) {
+      workspaceStore.loadEnabledModels(key).catch(console.error);
+      chatStore.loadSessions(key).catch(console.error);
+    }
   },
 );
 </script>
