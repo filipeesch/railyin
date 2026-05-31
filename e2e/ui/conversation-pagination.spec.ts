@@ -360,3 +360,187 @@ test.describe("PAG-10 — load-older uses task.conversationId", () => {
         await expect(page.locator(".conv-body .msg").first()).toContainText("Old message 1", { timeout: 3_000 });
     });
 });
+
+// ─── Suite PAG-11 — orphaned tool calls render standalone ────────────────────
+//
+// Regression guard: when a page contains only subagent children whose parent
+// delegate call lives on an older page, all children must render as standalone
+// tool call cards (not be silently dropped).
+
+test.describe("PAG-11 — orphaned tool calls render as standalone entries", () => {
+    test("PAG-11: subagent children without parent on current page render as tool entries", async ({ page, api, task }) => {
+        const delegateCallId = "tc-pag11-delegate";
+
+        function makeChildCall(id: number, toolCallId: string): ConversationMessage {
+            return {
+                id,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "read_file", arguments: JSON.stringify({ path: `src/file${id}.ts` }) },
+                    id: toolCallId,
+                    display: { label: "read_file", subject: `src/file${id}.ts` },
+                }),
+                metadata: { parent_tool_call_id: delegateCallId },
+                createdAt: new Date().toISOString(),
+            };
+        }
+
+        function makeChildResult(id: number, toolCallId: string): ConversationMessage {
+            return {
+                id,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_result",
+                role: "user",
+                content: JSON.stringify({ tool_use_id: toolCallId, content: "file contents" }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            };
+        }
+
+        const messages: ConversationMessage[] = [
+            makeChildCall(1, "tc-c1"),
+            makeChildResult(2, "tc-c1"),
+            makeChildCall(3, "tc-c2"),
+            makeChildResult(4, "tc-c2"),
+        ];
+
+        // hasMore: true signals the parent is on an older page.
+        // Return empty for any older-page requests (beforeMessageId set) to avoid
+        // PAG-9's immediate auto-trigger doubling the message list.
+        api.handle("conversations.getMessages", (params) => {
+            const p = params as { beforeMessageId?: number };
+            if (p.beforeMessageId != null) return { messages: [], hasMore: false };
+            return { messages, hasMore: true };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Both orphaned children must render as tool entries, not be dropped
+        await expect(page.locator(".conv-body .tc")).toHaveCount(2, { timeout: 3_000 });
+    });
+});
+
+// ─── Suite PAG-12 — re-nesting after paging in parent ────────────────────────
+//
+// When the user scrolls up and the older page loads the delegate parent,
+// orphaned children should re-nest under it: the .delegate-divider appears
+// and the orphaned .tc cards collapse into the delegate entry.
+
+test.describe("PAG-12 — orphaned children re-nest when parent is paged in", () => {
+    test("PAG-12: scrolling loads delegate parent and children collapse into delegate-divider", async ({ page, api, task }) => {
+        const delegateCallId = "tc-pag12-delegate";
+
+        function makeChildCall(id: number, toolCallId: string): ConversationMessage {
+            return {
+                id,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "read_file", arguments: JSON.stringify({ path: `src/f${id}.ts` }) },
+                    id: toolCallId,
+                    display: { label: "read_file", subject: `src/f${id}.ts` },
+                }),
+                metadata: { parent_tool_call_id: delegateCallId },
+                createdAt: new Date().toISOString(),
+            };
+        }
+
+        function makeChildResult(id: number, toolCallId: string): ConversationMessage {
+            return {
+                id,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_result",
+                role: "user",
+                content: JSON.stringify({ tool_use_id: toolCallId, content: "ok" }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            };
+        }
+
+        const delegateCall: ConversationMessage = {
+            id: 100,
+            taskId: task.id,
+            conversationId: task.id,
+            type: "tool_call",
+            role: "assistant",
+            content: JSON.stringify({
+                type: "function",
+                function: {
+                    name: "delegate",
+                    arguments: JSON.stringify({ intent: "parallel reads", tasks: [{ id: "a", prompt: "read a" }, { id: "b", prompt: "read b" }] }),
+                },
+                id: delegateCallId,
+                display: { label: "delegate", subject: "parallel reads" },
+            }),
+            metadata: null,
+            createdAt: new Date().toISOString(),
+        };
+
+        const delegateResult: ConversationMessage = {
+            id: 101,
+            taskId: task.id,
+            conversationId: task.id,
+            type: "tool_result",
+            role: "user",
+            content: JSON.stringify({ tool_use_id: delegateCallId, content: "done" }),
+            metadata: null,
+            createdAt: new Date().toISOString(),
+        };
+
+        // Current page: only orphaned children (parent is on older page).
+        // We use a gate promise to delay the older-page response until Phase 1 is
+        // verified, avoiding a race with PAG-9's immediate sentinel trigger.
+        const currentPage: ConversationMessage[] = [
+            makeChildCall(1, "tc-p12-c1"),
+            makeChildResult(2, "tc-p12-c1"),
+            makeChildCall(3, "tc-p12-c2"),
+            makeChildResult(4, "tc-p12-c2"),
+        ];
+
+        // Older page: the delegate parent + some padding message to avoid empty older page
+        const olderPage: ConversationMessage[] = [
+            makeAssistantMessage(task.id, "pre-delegate context", { id: 99, conversationId: task.id }),
+            delegateCall,
+            delegateResult,
+        ];
+
+        let releaseOlderPage!: () => void;
+        const olderPageGate = new Promise<void>((resolve) => { releaseOlderPage = resolve; });
+
+        api.handle("conversations.getMessages", async (params) => {
+            const p = params as { beforeMessageId?: number };
+            if (p.beforeMessageId != null) {
+                await olderPageGate;
+                return { messages: olderPage, hasMore: false };
+            }
+            return { messages: currentPage, hasMore: true };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Phase 1: orphaned children are visible as standalone .tc cards
+        // (older page is held behind the gate, so no race with PAG-9 auto-trigger)
+        await expect(page.locator(".conv-body .tc")).toHaveCount(2, { timeout: 5_000 });
+
+        // Release gate so the older page can now respond, then scroll to top
+        releaseOlderPage();
+        await page.locator(".task-detail .conv-body").evaluate((el) => (el.scrollTop = 0));
+
+        // Phase 2: after older page loads, delegate-divider appears (children are now nested)
+        await expect(page.locator(".conv-body .delegate-divider")).toBeVisible({ timeout: 5_000 });
+
+        // The previously-orphaned .tc cards collapse into the delegate entry
+        await expect(page.locator(".conv-body .tc")).toHaveCount(0, { timeout: 3_000 });
+    });
+});

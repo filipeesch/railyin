@@ -105,7 +105,8 @@ import MessageBubble from "./MessageBubble.vue";
 import TransitionEventCard from "./TransitionEventCard.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import SubagentBlock from "./SubagentBlock.vue";
-import { pairToolMessages, type ToolEntry } from "../utils/pairToolMessages";
+import { buildDisplayItems, type DisplayItem } from "../utils/buildDisplayItems";
+import type { ToolEntry } from "../utils/pairToolMessages";
 import StreamBlockNode from "./StreamBlockNode.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
 import type { ConversationMessage } from "@shared/rpc-types";
@@ -127,51 +128,13 @@ const emit = defineEmits<{
 
 // ─── Message grouping ─────────────────────────────────────────────────────────
 
-const TOOL_MSG_TYPES = new Set(["tool_call", "tool_result", "file_diff"]);
-
-type DisplayItem =
-  | { kind: "tool_entry"; entry: ToolEntry; key: string }
-  | { kind: "code_review"; message: ConversationMessage; key: string }
-  | { kind: "single"; message: ConversationMessage; msgIndex: number; key: string }
-  | { kind: "stream_tail"; key: string };
-
-const displayItems = computed<DisplayItem[]>(() => {
-  const msgs = props.messages;
-  const items: DisplayItem[] = [];
-  let i = 0;
-  while (i < msgs.length) {
-    if (msgs[i].type === "code_review") {
-      items.push({ kind: "code_review", message: msgs[i], key: `cr-${msgs[i].id}` });
-      i++;
-      if (i < msgs.length && msgs[i].type === "user" && msgs[i].content.startsWith("=== Code Review ===")) {
-        i++;
-      }
-    } else if (TOOL_MSG_TYPES.has(msgs[i].type)) {
-      const toolMsgs: ConversationMessage[] = [];
-      while (i < msgs.length && TOOL_MSG_TYPES.has(msgs[i].type)) {
-        toolMsgs.push(msgs[i]);
-        i++;
-      }
-      const entries = pairToolMessages(toolMsgs);
-      for (const entry of entries) {
-        const meta = entry.call.metadata as Record<string, unknown> | null;
-        if (typeof meta?.parent_tool_call_id === "string") continue;
-        items.push({ kind: "tool_entry", entry, key: `e-${entry.call.id}` });
-      }
-    } else {
-      items.push({ kind: "single", message: msgs[i], msgIndex: i, key: `s-${msgs[i].id}` });
-      i++;
-    }
-  }
-  if (hasStructuredTail.value) {
-    items.push({ kind: "stream_tail", key: "stream-tail" });
-  }
-  return items;
-});
-
 type ToolEntryItem = Extract<DisplayItem, { kind: "tool_entry" }>;
 type CodeReviewItem = Extract<DisplayItem, { kind: "code_review" }>;
 type SingleItem = Extract<DisplayItem, { kind: "single" }>;
+
+const displayItems = computed<DisplayItem[]>(() =>
+  buildDisplayItems(props.messages, hasStructuredTail.value),
+);
 
 function asToolEntry(i: number) { return displayItems.value[i] as ToolEntryItem; }
 function asCodeReview(i: number) { return displayItems.value[i] as CodeReviewItem; }

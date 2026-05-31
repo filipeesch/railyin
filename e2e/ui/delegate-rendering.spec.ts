@@ -160,3 +160,53 @@ test("S-D4: delegate divider does not render any nested tool call cards", async 
     // Child tool calls are not rendered as top-level .tc cards
     await expect(page.locator(".conversation-inner > * > .tc")).toHaveCount(0);
 });
+
+// ─── Suite S-D5 — orphaned children (parent on older page) ────────────────────
+
+test("S-D5: orphaned delegate children render as standalone tool entries when parent is on an older page", async ({ page, api, task }) => {
+    const delegateCallId = "tc-delegate-orphan";
+
+    function makeOrphanChild(id: number, toolCallId: string, toolName: string): ConversationMessage[] {
+        const call: ConversationMessage = {
+            id,
+            taskId: task.id,
+            conversationId: task.id,
+            type: "tool_call",
+            role: "assistant",
+            content: JSON.stringify({
+                type: "function",
+                function: { name: toolName, arguments: JSON.stringify({ path: "src/foo.ts" }) },
+                id: toolCallId,
+                display: { label: toolName, subject: "src/foo.ts" },
+            }),
+            metadata: { parent_tool_call_id: delegateCallId },
+            createdAt: new Date().toISOString(),
+        };
+        const result: ConversationMessage = {
+            id: id + 1,
+            taskId: task.id,
+            conversationId: task.id,
+            type: "tool_result",
+            role: "user",
+            content: JSON.stringify({ tool_use_id: toolCallId, content: "ok" }),
+            metadata: null,
+            createdAt: new Date().toISOString(),
+        };
+        return [call, result];
+    }
+
+    // Return only children — parent (delegateCallId) is absent (as if on an older page)
+    const messages: ConversationMessage[] = [
+        ...makeOrphanChild(1, "tc-child-1", "read_file"),
+        ...makeOrphanChild(3, "tc-child-2", "list_dir"),
+        ...makeOrphanChild(5, "tc-child-3", "write_file"),
+    ];
+
+    api.handle("conversations.getMessages", () => ({ messages, hasMore: true }));
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // All three orphaned children must render as standalone tool call cards
+    await expect(page.locator(".conversation-inner .tc")).toHaveCount(3, { timeout: 3_000 });
+});
