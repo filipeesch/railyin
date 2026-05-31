@@ -235,7 +235,7 @@
           @change="(e: { value: string | null }) => emit('update:samplingPresetOverride', e.value)"
         >
           <template #value="{ value }">
-            <span class="preset-select__value">Preset: {{ value != null ? (availablePresets.find((p) => p.name === value)?.params.label ?? value) : 'Default' }}</span>
+            <span class="preset-select__value">{{ value != null ? (availablePresets.find((p) => p.name === value)?.params.label ?? value) : 'Default' }}</span>
           </template>
           <template #option="{ option }">
             <div class="preset-select__option">
