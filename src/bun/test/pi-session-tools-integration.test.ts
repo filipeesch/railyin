@@ -26,7 +26,7 @@ import {
   getAgentDir,
   defineTool,
 } from "@earendil-works/pi-coding-agent";
-import { registerFauxProvider, fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { registerFauxProvider, fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
