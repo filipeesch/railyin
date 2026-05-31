@@ -31,9 +31,8 @@ describe("Test Plan: Validate search_text removal and SDK search tool replacemen
       columnGroups: ["read"],
     });
     const names = tools.map((t) => t.name);
-    // read_file was removed — the Pi SDK's built-in "read" handles file reading.
-    // The "read" group now only contributes "glob" from harness tools.
-    expect(names).toContain("glob");
+    // The "read" group is now empty — file discovery is handled by the Pi SDK's built-in "find" tool.
+    expect(names).not.toContain("glob");
     expect(names).not.toContain("read_file");
     expect(names).not.toContain("search_text");
   });

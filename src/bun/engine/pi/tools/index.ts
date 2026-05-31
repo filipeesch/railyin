@@ -20,7 +20,7 @@ import type { SkillResolver } from "../skill-resolver.ts";
  * Board/interaction tools from common-tools are always injected regardless of column config.
  */
 export const PI_TOOL_GROUPS = {
-  read: (harnessCtx: HarnessContext) => buildReadTools(harnessCtx),
+  read: () => buildReadTools(),
   write: (harnessCtx: HarnessContext) => [...buildWriteTools(harnessCtx), ...buildUndoTool(harnessCtx)],
   shell: (harnessCtx: HarnessContext) => buildShellTools(harnessCtx),
   web: (harnessCtx: HarnessContext) => buildWebTools(harnessCtx),

@@ -120,7 +120,7 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
     // both built-in and custom tools. We enable ALL active tools here.
     tools: [
       ...SDK_BUILTIN_TOOL_NAMES,
-      "glob", "run_command", "undo_write",
+      "run_command", "undo_write",
       "fetch_url", "search_internet",
       "write_file", "patch_file", "delete_file", "rename_file",
       "get_task", "get_board_summary", "list_tasks",
