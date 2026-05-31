@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Pi tool groups are configurable per workflow column
 The `PI_TOOL_GROUPS` map in `src/bun/engine/pi/tools/index.ts` SHALL include tool groups: `read`, `write`, `shell`, `web`. The `read` group SHALL return an empty tool list — file discovery is delegated entirely to the Pi SDK built-in `find` tool. Tool descriptions SHALL NOT reference tools that no longer exist — specifically `search_text`, `find_files`, and `glob`. The `run_command` tool description SHALL direct the model to use `grep` and `find` (Pi SDK built-in names) for file content search and file pattern matching respectively.
