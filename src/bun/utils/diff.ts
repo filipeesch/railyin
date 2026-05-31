@@ -1,4 +1,22 @@
 import type { FileDiffPayload, Hunk, HunkLine } from "../../shared/rpc-types.ts";
+// ---------------------------------------------------------------------------
+// splitLines
+// ---------------------------------------------------------------------------
+
+/**
+ * Count lines using consistent spec semantics:
+ * - Empty string → 0 lines
+ * - Single "\n" → 1 line (one blank line)
+ * - Trailing newline does NOT add an extra line
+ *   e.g. "a\nb\n" → 2 lines (same as "a\nb")
+ */
+export function splitLines(text: string): number {
+  if (text === "") return 0;
+  const newlineCount = (text.match(/\n/g) || []).length;
+  // If string doesn't end with \n, the last segment is a line
+  return text.endsWith("\n") ? newlineCount : newlineCount + 1;
+}
+
 
 export function myersDiff(before: string[], after: string[]): Hunk[] {
   const N = before.length;
@@ -125,9 +143,13 @@ export function computeFileDiff(
 ): FileDiffPayload {
   const beforeLines = before ? before.split("\n") : [];
   const afterLines = after ? after.split("\n") : [];
+  // Strip trailing empty string from split (caused by trailing newline)
+  if (beforeLines.length > 0 && beforeLines[beforeLines.length - 1] === "") beforeLines.pop();
+  if (afterLines.length > 0 && afterLines[afterLines.length - 1] === "") afterLines.pop();
   const hunks = myersDiff(beforeLines, afterLines);
-  const added = afterLines.length;
-  const removed = beforeLines.length;
+  // Derive counts from hunk results, not raw array lengths
+  const added = hunks.reduce((sum, h) => sum + h.lines.filter((l) => l.type === "added").length, 0);
+  const removed = hunks.reduce((sum, h) => sum + h.lines.filter((l) => l.type === "removed").length, 0);
   return {
     operation,
     path: relPath,

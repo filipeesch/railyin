@@ -864,3 +864,126 @@ test.describe("F — Progressive streaming", () => {
     await expect(page.locator(".conv-body")).toContainText("Hello world", { timeout: 2_000 });
   });
 });
+// ─── Suite G — file_diff stat rendering (regression for PI-601) ────────────────
+
+test.describe("G — file_diff stat rendering", () => {
+  test("G-1: tool_result with writtenFiles shows +N -M stats on tool block header", async ({
+    page,
+    api,
+    task,
+  }) => {
+    // Mock persisted messages via conversations.getMessages — these go through
+    // buildDisplayItems → pairToolMessages → ToolCallGroup.
+    // We need a tool_call + tool_result pair (ID-matched) for the result to not
+    // be orphaned and dropped by pairToolMessages. This mirrors copilotDiffMessages
+    // used by S-25 in tool-rendering.spec.ts.
+    const toolCallId = "tc-g1";
+    const payload = JSON.stringify({
+      tool_use_id: toolCallId,
+      content: "OK.",
+      writtenFiles: [
+        { operation: "patch_file", path: "src/app.ts", added: 3, removed: 1 },
+      ],
+    });
+
+    api.returns("conversations.getMessages", {
+      messages: [
+        {
+          id: 3001,
+          taskId: task.id,
+          conversationId: task.conversationId,
+          type: "tool_call",
+          role: "assistant",
+          content: JSON.stringify({
+            type: "function",
+            function: { name: "patch_file", arguments: '{"path":"src/app.ts"}' },
+            id: toolCallId,
+            display: { label: "patch_file", subject: "src/app.ts" },
+          }),
+          metadata: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 3002,
+          taskId: task.id,
+          conversationId: task.conversationId,
+          type: "tool_result",
+          role: "user",
+          content: payload,
+          metadata: null,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      hasMore: false,
+    });
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // Persisted messages render in ConversationBody via the virtualized displayItems
+    // system, not via StreamBlockNode. Use ".tc__stat" (no .tcg prefix).
+    await expect(page.locator(".conversation-inner .tc .tc__header")).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.locator(".tc__stat--added")).toContainText("+3", {
+      timeout: 5_000,
+    });
+    await expect(page.locator(".tc__stat--removed")).toContainText("-1", {
+      timeout: 5_000,
+    });
+  });
+
+  test("G-2: multiple writtenFiles entries show combined stats", async ({ page, api, task }) => {
+    const toolCallId = "tc-g2";
+    const payload = JSON.stringify({
+      tool_use_id: toolCallId,
+      content: "OK.",
+      writtenFiles: [
+        { operation: "patch_file", path: "src/a.ts", added: 2, removed: 0 },
+        { operation: "delete_file", path: "src/b.ts", added: 0, removed: 5 },
+      ],
+    });
+
+    api.returns("conversations.getMessages", {
+      messages: [
+        {
+          id: 4001,
+          taskId: task.id,
+          conversationId: task.conversationId,
+          type: "tool_call",
+          role: "assistant",
+          content: JSON.stringify({
+            type: "function",
+            function: { name: "batch_edit", arguments: '{"files":[]}' },
+            id: toolCallId,
+            display: { label: "batch_edit" },
+          }),
+          metadata: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 4002,
+          taskId: task.id,
+          conversationId: task.conversationId,
+          type: "tool_result",
+          role: "user",
+          content: payload,
+          metadata: null,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      hasMore: false,
+    });
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await expect(page.locator(".tc__stat--added")).toContainText("+2", {
+      timeout: 5_000,
+    });
+    await expect(page.locator(".tc__stat--removed")).toContainText("-5", {
+      timeout: 5_000,
+    });
+  });
+});
+
