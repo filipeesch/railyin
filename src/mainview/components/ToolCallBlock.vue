@@ -3,7 +3,7 @@
     <button class="tc__header" @click="open = !open">
       <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right', 'tc__chevron']" />
       <i :class="['pi', statusIcon, 'tc__tool-icon']" :style="statusIconStyle" />
-      <code class="tc__tool-name">{{ label }}</code>
+      <code v-if="label" class="tc__tool-name">{{ label }}</code>
       <span v-if="formattedSubject" class="tc__primary-arg" :title="subjectTitle">{{ formattedSubject }}</span>
       <span v-if="totalAdded > 0" class="tc__stat tc__stat--added">+{{ totalAdded }}</span>
       <span v-if="totalRemoved > 0" class="tc__stat tc__stat--removed">-{{ totalRemoved }}</span>

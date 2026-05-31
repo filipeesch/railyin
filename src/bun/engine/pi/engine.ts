@@ -10,6 +10,7 @@ import type {
   CommonToolContext,
 } from "../types.ts";
 import { resolveSamplingPreset } from "./sampling-params.ts";
+import { SDK_BUILTIN_TOOL_NAMES } from "./constants.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
@@ -56,6 +57,10 @@ import { translateEvent } from "./event-translator.ts";
 import { getDb } from "../../db/index.ts";
 import { appendMessage } from "../../conversation/messages.ts";
 import { AsyncQueue } from "./async-queue.ts";
+import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
+import { runWithLimiter } from "./provider-transport.ts";
+import { formatPiError } from "./pi-error.ts";
+import { validatePiEngineConfig } from "./pi-config-validation.ts";
 import { createHash } from "crypto";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
@@ -64,7 +69,6 @@ import { join } from "path";
 const PI_SESSIONS_DIR = join(homedir(), ".railyin", "pi-sessions");
 
 /** SDK built-in tool names always included in the active tool set. */
-const SDK_BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 
 function piSessionPathForConversation(conversationId: number): string {
   const hash = createHash("sha1").update(`railyin-pi-conversation-${conversationId}`).digest("hex");
@@ -131,6 +135,7 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
       "lsp_go_to_definition", "lsp_find_references", "lsp_document_symbols", "lsp_workspace_symbols",
       "lsp_hover", "lsp_rename", "lsp_incoming_calls", "lsp_outgoing_calls", "lsp_diagnostics", "lsp_type_definition",
       "skill",
+      "delegate",
     ],
     sessionManager,
     resourceLoader,
@@ -147,6 +152,16 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
   return session;
 }
 
+function isLmStudioUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  try {
+    const { hostname, port } = new URL(baseUrl);
+    return (hostname === "localhost" || hostname === "127.0.0.1") && port === "1234";
+  } catch {
+    return false;
+  }
+}
+
 export class PiEngine implements ExecutionEngine {
   private readonly engineId: string;
   private readonly config: PiEngineConfig;
@@ -158,12 +173,18 @@ export class PiEngine implements ExecutionEngine {
   private readonly sessions = new Map<number, AgentSession>();
   /** Map<conversationId, SuspendRef> — mutable ref updated at each execution start. */
   private readonly suspendRefs = new Map<number, { onSuspend?: (event: EngineEvent) => void }>();
+  /** Map<conversationId, DelegateEmitRef> — emit target for child session events, wired per execution. */
+  private readonly delegateEmitRefs = new Map<number, { emit?: (event: EngineEvent) => void }>();
   /** Map<executionId, conversationId> — lets cancel() find the right session. */
   private readonly executionToConversation = new Map<number, number>();
   private readonly pendingResumes = new Map<
     number,
     { resolve: (input: EngineResumeInput) => void; reject: (error: Error) => void }
   >();
+  /** Shared per-provider concurrency limiter for all sessions and background compaction. */
+  private readonly registry: ProviderLimiterRegistry;
+  /** Map<conversationId, Promise<void>> — tracks in-flight background compactions. */
+  private readonly bgCompactions = new Map<number, Promise<void>>();
 
   constructor(
     engineId: string,
@@ -176,10 +197,27 @@ export class PiEngine implements ExecutionEngine {
   ) {
     this.engineId = engineId;
     this.config = config;
+    validatePiEngineConfig(config);
     this._onTaskUpdated = onTaskUpdated;
     this.dialect = dialect;
     this.modelSettingsRepo = modelSettingsRepo;
     this.sessionFactory = sessionFactory;
+
+    // Build the provider limiter registry from configured providers.
+    this.registry = new ProviderLimiterRegistry();
+    for (const [name, providerCfg] of Object.entries(config.providers ?? {})) {
+      this.registry.register(
+        name,
+        providerCfg.max_inflight ?? PROVIDER_LIMITER_DEFAULTS.max_inflight,
+        providerCfg.queue_timeout_ms ?? PROVIDER_LIMITER_DEFAULTS.queue_timeout_ms,
+      );
+      if ((providerCfg.max_inflight ?? PROVIDER_LIMITER_DEFAULTS.max_inflight) > 2 && isLmStudioUrl(providerCfg.base_url)) {
+        console.warn(
+          `[pi] Provider "${name}" has max_inflight=${providerCfg.max_inflight ?? PROVIDER_LIMITER_DEFAULTS.max_inflight} but base_url looks like LM Studio (:1234). ` +
+          "LM Studio handles 1-2 concurrent requests; reduce max_inflight to 1 or 2.",
+        );
+      }
+    }
   }
 
   // ─── ExecutionEngine interface ──────────────────────────────────────────────
@@ -245,8 +283,23 @@ export class PiEngine implements ExecutionEngine {
     const skillPaths = this.dialect.getSkillPaths(workingDirectory ?? process.cwd(), projectPath);
     const skillResolver = new FileSystemSkillResolver(skillPaths);
 
-    const tools = buildAllTools({ harnessCtx, commonCtx, skillResolver, suspendRef: this.getOrCreateSuspendRef(conversationId) });
     const piModel = this.buildModel(modelOverride, contextWindowOverride);
+    const providerName = piModel.provider;
+
+    const tools = buildAllTools({
+      harnessCtx,
+      commonCtx,
+      skillResolver,
+      suspendRef: this.getOrCreateSuspendRef(conversationId),
+      delegateEmitRef: this.getOrCreateDelegateEmitRef(conversationId),
+      limiterRegistry: this.registry,
+      parentModel: piModel,
+      parentSystemPrompt: enrichedSystem,
+      parentConversationId: conversationId,
+      parentCwd: workingDirectory ?? process.cwd(),
+      engineConfig: this.config,
+      onRawModelMessage,
+    });
 
     // Look up the project path before session creation so it can be used when
     // wiring dialect skill paths into the Pi resource loader.
@@ -273,6 +326,10 @@ export class PiEngine implements ExecutionEngine {
       session.abort().catch(() => {});
     };
 
+    // Wire the delegate emit ref for this execution so child session events flow into the queue.
+    const delegateEmitRef = this.getOrCreateDelegateEmitRef(conversationId);
+    delegateEmitRef.emit = (event: EngineEvent) => queue.push(event);
+
     // Abort: tell Pi to stop AND close the queue so the for-await exits immediately.
     const onAbort = () => {
       session.abort().catch(() => {});
@@ -296,6 +353,31 @@ export class PiEngine implements ExecutionEngine {
         const usage = session.getContextUsage();
         if (usage?.tokens != null) {
           queue.push({ type: "usage", inputTokens: usage.tokens, outputTokens: 0, contextWindow: piModel.contextWindow });
+        }
+
+        // Opportunistic background compaction: fire before the SDK's hard threshold.
+        if (this.config.harness?.background_compaction?.enabled !== false && usage?.tokens != null) {
+          const earlyMargin = this.config.harness?.background_compaction?.early_margin_tokens ?? 8192;
+          const softThreshold = piModel.contextWindow - (16384 + earlyMargin);
+          if (usage.tokens > softThreshold && !this.bgCompactions.has(conversationId)) {
+            const release = this.registry.tryAcquire(providerName);
+            if (release !== null) {
+              const p = (async () => {
+                try {
+                  const result = await session.compact();
+                  if (result?.summary) {
+                    appendMessage(getDb(), null, conversationId, "compaction_summary", null, result.summary);
+                  }
+                } catch (err) {
+                  console.error("[pi] background compaction failed:", err);
+                } finally {
+                  release();
+                  this.bgCompactions.delete(conversationId);
+                }
+              })();
+              this.bgCompactions.set(conversationId, p);
+            }
+          }
         }
       }
 
@@ -321,7 +403,7 @@ export class PiEngine implements ExecutionEngine {
       return;
     }
 
-    this.runPromptWithCompaction(session, resolvedPrompt, conversationId, queue, errorRef);
+    this.runPromptWithCompaction(session, resolvedPrompt, conversationId, queue, errorRef, providerName, signal);
 
     try {
       for await (const event of queue) {
@@ -371,13 +453,7 @@ export class PiEngine implements ExecutionEngine {
       }
 
       // Provide a clear hint for the known LM Studio MLX backend bug
-      const isTreeReduceBug = errorRef.error.message.includes("tree_reduce");
-      const message = isTreeReduceBug
-        ? `LM Studio MLX backend error: '${errorRef.error.message}'. ` +
-          "This is a known bug in MLX models with conversation history. " +
-          "Switch to a GGUF model (llama.cpp backend) in LM Studio to fix this."
-        : errorRef.error.message;
-      yield { type: "error", message, fatal: false };
+      yield { type: "error", message: formatPiError(errorRef.error), fatal: false };
       return;
     }
 
@@ -516,9 +592,15 @@ export class PiEngine implements ExecutionEngine {
       try { session.dispose(); } catch { /* ignore */ }
     }
     this.sessions.clear();
+    // Wait for any in-flight background compactions to settle before tearing down.
+    for (const [, p] of this.bgCompactions) {
+      await p.catch(() => {});
+    }
+    this.bgCompactions.clear();
     this.harnessContexts.clear();
     this.commonCtxRefs.clear();
     this.suspendRefs.clear();
+    this.delegateEmitRefs.clear();
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
@@ -562,6 +644,19 @@ export class PiEngine implements ExecutionEngine {
       this.suspendRefs.set(conversationId, ref);
     }
     return ref;
+  }
+
+  private getOrCreateDelegateEmitRef(conversationId: number): { emit?: (event: EngineEvent) => void } {
+    let ref = this.delegateEmitRefs.get(conversationId);
+    if (!ref) {
+      ref = {};
+      this.delegateEmitRefs.set(conversationId, ref);
+    }
+    return ref;
+  }
+
+  getPiProviderStatus(): import("./provider-limiter.ts").ProviderLimiterSnapshot[] {
+    return this.registry.snapshots();
   }
 
   private getOrCreateHarnessContext(conversationId: number, worktreePath: string): HarnessContext {
@@ -715,9 +810,10 @@ export class PiEngine implements ExecutionEngine {
     conversationId: number,
     queue: AsyncQueue<EngineEvent>,
     errorRef: { error?: Error },
+    providerName: string,
+    signal?: AbortSignal,
   ): void {
-    session
-      .prompt(resolvedPrompt)
+    runWithLimiter(this.registry, providerName, signal, () => session.prompt(resolvedPrompt))
       .catch((err: unknown) => {
         errorRef.error = err instanceof Error ? err : new Error(String(err));
       })
