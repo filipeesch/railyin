@@ -15,6 +15,7 @@ import { buildUndoTool } from "./undo.ts";
 import { buildShellTools } from "./shell.ts";
 import { buildWebTools } from "./web.ts";
 import { buildCommonTools, type SuspendRef } from "./common.ts";
+import { COMMON_TOOL_DEFINITIONS } from "../../common-tools.ts";
 import { buildSkillTool } from "./skill.ts";
 import { buildDelegateTool } from "./delegate.ts";
 import type { SkillResolver } from "../skill-resolver.ts";
@@ -66,6 +67,50 @@ export interface AllToolsOptions {
 export type { SuspendRef };
 
 /**
+ * Common tools available to delegated child (subagent) sessions.
+ * Children get TODO tools ONLY — never board-mutating tools (create/move/edit task),
+ * decision tools, or note tools. Board orchestration stays with the parent.
+ */
+export const CHILD_COMMON_TOOL_NAMES = new Set<string>([
+  "create_todo",
+  "edit_todo",
+  "list_todos",
+  "get_todo",
+  "reorganize_todos",
+  "update_todo_status",
+]);
+
+/**
+ * Build the tool surface for a delegated child (subagent) session.
+ *
+ * Children share the parent worktree and CAN edit files / run shell commands when
+ * those groups are requested (read/write/shell/web). The ONLY exclusions are:
+ *   - the `delegate` tool itself (no recursive fan-out), and
+ *   - board/decision/note common tools (children get TODO tools only).
+ * SDK built-in tools (read/grep/find/ls) are added by the child-session factory
+ * via the tool allowlist.
+ */
+export function buildChildTools(
+  opts: Pick<AllToolsOptions, "harnessCtx" | "commonCtx" | "suspendRef">,
+  groups: string[],
+): AgentTool<any>[] {
+  const { harnessCtx, commonCtx, suspendRef } = opts;
+
+  const childGroups = (groups ?? ["read", "write", "shell"]).filter(
+    (g): g is PiToolGroupName => g in PI_TOOL_GROUPS,
+  );
+
+  const childHarnessTools = childGroups.flatMap((group) => PI_TOOL_GROUPS[group](harnessCtx));
+
+  const childCommonDefs = COMMON_TOOL_DEFINITIONS.filter((def) =>
+    CHILD_COMMON_TOOL_NAMES.has(def.name),
+  );
+  const childCommonTools = buildCommonTools(commonCtx, harnessCtx, suspendRef, childCommonDefs);
+
+  return [...childHarnessTools, ...childCommonTools];
+}
+
+/**
  * Build the tool set for a Pi agent session.
  * When `columnGroups` is provided, only tools belonging to those groups are included.
  * Board and interaction tools (common-tools) are always included.
@@ -81,8 +126,9 @@ export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
   const harnessTools = activeGroups.flatMap((group) => PI_TOOL_GROUPS[group](harnessCtx));
 
   // Build child tools without delegate options — design decision: delegate is NEVER in children's tool set.
+  // Children share the parent worktree and can read/write/run shell (per requested groups), plus TODO tools.
   const childToolsBuilder = (groups: string[]): AgentTool<any>[] =>
-    buildAllTools({ harnessCtx, commonCtx, skillResolver, columnGroups: groups });
+    buildChildTools({ harnessCtx, commonCtx, suspendRef }, groups);
 
   const delegateTools = buildDelegateTool(harnessCtx, { ...opts, buildChildTools: childToolsBuilder });
 

@@ -81,15 +81,15 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
     label: "Delegate tasks",
     description:
       "Fan out 2+ independent sub-tasks to parallel child agents and receive a markdown digest of all results.\n\n" +
+      "Children share your worktree and can read, edit files, and run shell commands. They CANNOT delegate further.\n\n" +
       "WHEN TO USE\n" +
-      "- You can split the work into tasks with no shared files and no sequential dependency between them.\n" +
+      "- You can split the work into tasks with NO shared files and no sequential dependency between them.\n" +
       "- Each task can be fully described without referencing another task's output.\n" +
       "- You have at least 2 tasks (for a single task, just do it yourself).\n\n" +
       "DO NOT DELEGATE IF\n" +
-      "- Two tasks touch the same file (last-write-wins, no merge).\n" +
+      "- Two tasks touch the same file (last-write-wins, no merge — assign each child a DISJOINT file set).\n" +
       "- Task B needs Task A's output as input.\n" +
-      "- Tasks share mutable state (lock files, package.json, git index).\n" +
-      "- Tasks need shell commands — shell state is global, not safe to parallelise.",
+      "- Tasks share mutable state (lock files, package.json, git index) — parallel writes there will clobber.",
     parameters: {
       type: "object",
       properties: {
@@ -131,10 +131,11 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
               },
               tools: {
                 type: "array",
-                items: { type: "string", enum: ["read", "web"] },
+                items: { type: "string", enum: ["read", "write", "shell", "web"] },
                 description:
-                  'Tool groups available to this child. Defaults to config.allow_tools ?? ["read"]. ' +
-                  "Do not include shell — shell state is shared and not safe to parallelise.",
+                  'Tool groups available to this child. Defaults to config.allow_tools ?? ["read","write","shell"]. ' +
+                  "Children share the parent worktree, so assign each child a DISJOINT set of files — " +
+                  "two children editing the same file is last-write-wins with no merge.",
               },
               workingDirectory: {
                 type: "string",
@@ -187,7 +188,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
         };
       }
 
-      const allowedGroups = new Set(delegateConfig?.allow_tools ?? ["read"]);
+      const allowedGroups = new Set(delegateConfig?.allow_tools ?? ["read", "write", "shell"]);
       allowedGroups.add("read"); // read is always allowed
       for (const task of args.tasks) {
         if (!task.tools) continue;
@@ -237,7 +238,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
 
         const childCwd = task.workingDirectory ? join(cwd, task.workingDirectory) : cwd;
         const childBlockId = `child-${task.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const childGroups = (task.tools ?? delegateConfig?.allow_tools ?? ["read"]).filter((g) => g !== "delegate");
+        const childGroups = (task.tools ?? delegateConfig?.allow_tools ?? ["read", "write", "shell"]).filter((g) => g !== "delegate");
         const childTools = buildChildTools(childGroups);
 
         // Emit a subagent_start event to give each child its own root-level bubble.

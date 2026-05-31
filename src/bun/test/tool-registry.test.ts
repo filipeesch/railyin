@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PI_TOOL_GROUPS, DEFAULT_PI_TOOL_GROUPS, buildAllTools, type PiToolGroupName } from "../engine/pi/tools/index.ts";
+import { PI_TOOL_GROUPS, DEFAULT_PI_TOOL_GROUPS, buildAllTools, buildChildTools, type PiToolGroupName } from "../engine/pi/tools/index.ts";
 import { InMemorySkillResolver } from "./pi/fixtures/InMemorySkillResolver.ts";
 
 describe("Test Plan: Validate search_text removal and SDK search tool replacement", () => {
@@ -93,5 +93,75 @@ describe("run_command tool description", () => {
     const runCommand = tools.find((t) => t.name === "run_command");
     expect(runCommand!.description).toContain("grep");
     expect(runCommand!.description).toContain("find");
+  });
+});
+
+describe("buildChildTools: delegated subagent tool surface", () => {
+  const mockHarnessCtx = {
+    hashCache: {} as any,
+    undoStack: {} as any,
+    worktreePath: "/tmp/test",
+  } as any;
+  const mockCommonCtx = {
+    runtime: { worktreePath: "/tmp/test" },
+    task: {} as any,
+    repos: {} as any,
+    workflow: {} as any,
+  } as any;
+
+  const childToolNames = (groups: string[]) =>
+    buildChildTools({ harnessCtx: mockHarnessCtx, commonCtx: mockCommonCtx }, groups).map((t) => t.name);
+
+  it("includes write and shell tools when those groups are requested", () => {
+    const names = childToolNames(["read", "write", "shell"]);
+    for (const writable of ["write_file", "patch_file", "delete_file", "run_command"]) {
+      expect(names).toContain(writable);
+    }
+  });
+
+  it("includes the todo tools so children can track their own work", () => {
+    const names = childToolNames(["read", "write", "shell"]);
+    for (const todoTool of [
+      "create_todo",
+      "edit_todo",
+      "list_todos",
+      "get_todo",
+      "reorganize_todos",
+      "update_todo_status",
+    ]) {
+      expect(names).toContain(todoTool);
+    }
+  });
+
+  it("excludes delegate, board-mutating, decision, and note tools", () => {
+    const names = childToolNames(["read", "write", "shell"]);
+    for (const forbidden of [
+      "delegate",
+      "create_task",
+      "edit_task",
+      "delete_task",
+      "move_task",
+      "message_task",
+      "get_task",
+      "list_tasks",
+      "get_board_summary",
+      "record_decision",
+      "update_decision",
+      "delete_decision",
+      "list_decisions",
+      "decision_request",
+      "create_note",
+      "list_notes",
+      "update_note",
+      "skill",
+    ]) {
+      expect(names).not.toContain(forbidden);
+    }
+  });
+
+  it("respects requested groups: read-only request yields no write/shell tools", () => {
+    const names = childToolNames(["read"]);
+    expect(names).not.toContain("write_file");
+    expect(names).not.toContain("run_command");
   });
 });
