@@ -1,86 +1,95 @@
 import { test, expect } from "./fixtures";
-import { makeChatSession, makeWorkspace } from "./fixtures/mock-data";
+import { navigateToBoard } from "./fixtures/board-helpers";
+import { makeChatSession, makeBoard, makeWorkspace } from "./fixtures/mock-data";
 
 test.describe("WS reconnect session state", () => {
-    test("WS-REC-1: chatSession.updated push for active workspace is accepted", async ({ page, api }) => {
+    test("WS-REC-1: chatSessions.list is called after WebSocket reconnects", async ({ page, api, ws }) => {
         api.returns("workspace.list", [{ key: "test-workspace", name: "Test Workspace" }]);
         api.handle("workspace.getConfig", ({ workspaceKey }) =>
             makeWorkspace({ key: workspaceKey ?? "test-workspace" }),
         );
-        api.returns("boards.list", [{ id: 1, workspaceKey: "test-workspace", name: "Test Board", workflowTemplateId: "default", projectKeys: [], taskCount: 0, template: { id: "default", name: "Default", columns: [], groups: [] } }]);
 
         const sessionCalls = api.capture("chatSessions.list", []);
 
-        await page.goto("/");
+        await navigateToBoard(page);
 
-        // Clear initial mount calls
+        // Clear initial mount call
         sessionCalls.length = 0;
 
-        // The ws fixture can push events. In a real scenario, the WS would push
-        // a chatSession.updated event. For this test, we verify the API call
-        // pattern is correct by checking that loadSessions is called on WS reconnect.
-        await expect.poll(() => sessionCalls.length).toBeGreaterThanOrEqual(0);
+        // Simulate WS drop — browser will reconnect after ~250ms backoff
+        ws.disconnect();
+
+        // onWsReconnect fires on the next successful connect → loadSessions() is called
+        await expect.poll(() => sessionCalls.length, { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
     });
 
-    test("WS-REC-2: no duplicate sessions after reload", async ({ page, api }) => {
+    test("WS-REC-2: no duplicate sessions after reload on reconnect", async ({ page, api, ws }) => {
         api.returns("workspace.list", [{ key: "test-workspace", name: "Test Workspace" }]);
         api.handle("workspace.getConfig", ({ workspaceKey }) =>
             makeWorkspace({ key: workspaceKey ?? "test-workspace" }),
         );
-        api.returns("boards.list", [{ id: 1, workspaceKey: "test-workspace", name: "Test Board", workflowTemplateId: "default", projectKeys: [], taskCount: 0, template: { id: "default", name: "Default", columns: [], groups: [] } }]);
 
-        const existingSession = makeChatSession({
-            id: 1,
-            workspaceKey: "test-workspace",
-            title: "Existing Session",
-            status: "idle",
-        });
+        const session1 = makeChatSession({ id: 1, workspaceKey: "test-workspace", title: "Session Alpha" });
+        const session2 = makeChatSession({ id: 2, workspaceKey: "test-workspace", title: "Session Beta" });
 
-        // Mock chatSessions.list to return the same session
-        api.handle("chatSessions.list", () => [existingSession]);
+        api.handle("chatSessions.list", () => [session1, session2]);
 
-        await page.goto("/");
+        await navigateToBoard(page);
 
-        // Verify the session list has exactly 1 entry (no duplicates)
-        const sessionCount = await page.evaluate(() => {
-            // Count session items in the DOM
-            return document.querySelectorAll('.session-item').length;
-        });
-        expect(sessionCount).toBeLessThanOrEqual(1);
+        // Open the chat sidebar so sessions are visible in the DOM
+        const sidebarToggle = page.locator("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
+        if (await sidebarToggle.count() > 0) await sidebarToggle.first().click();
+        await expect(page.locator(".chat-sidebar")).toBeVisible({ timeout: 3_000 });
+
+        // Both sessions visible before disconnect
+        await expect(page.locator(".session-item", { hasText: "Session Alpha" })).toBeVisible();
+        await expect(page.locator(".session-item", { hasText: "Session Beta" })).toBeVisible();
+
+        // Set up capture for post-reconnect call
+        const sessionCalls = api.capture("chatSessions.list", [session1, session2]);
+
+        // Simulate WS drop
+        ws.disconnect();
+
+        // Wait for reconnect to trigger chatSessions.list
+        await expect.poll(() => sessionCalls.length, { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
+
+        // Verify no duplicates — still exactly 2 session items
+        await expect(page.locator(".session-item")).toHaveCount(2, { timeout: 3_000 });
     });
 
-    test("WS-REC-3: session list reflects updated status after reload", async ({ page, api }) => {
+    test("WS-REC-3: session list reflects updated data after reconnect reload", async ({ page, api, ws }) => {
         api.returns("workspace.list", [{ key: "test-workspace", name: "Test Workspace" }]);
         api.handle("workspace.getConfig", ({ workspaceKey }) =>
             makeWorkspace({ key: workspaceKey ?? "test-workspace" }),
         );
-        api.returns("boards.list", [{ id: 1, workspaceKey: "test-workspace", name: "Test Board", workflowTemplateId: "default", projectKeys: [], taskCount: 0, template: { id: "default", name: "Default", columns: [], groups: [] } }]);
 
-        const idleSession = makeChatSession({
-            id: 1,
-            workspaceKey: "test-workspace",
-            title: "Idle Session",
-            status: "idle",
-            lastActivityAt: new Date(Date.now() - 60000).toISOString(),
-        });
+        const sessionA = makeChatSession({ id: 1, workspaceKey: "test-workspace", title: "Session Old" });
+        const sessionA_new = makeChatSession({ id: 1, workspaceKey: "test-workspace", title: "Session Updated" });
+        const sessionB = makeChatSession({ id: 2, workspaceKey: "test-workspace", title: "Session New" });
 
-        const runningSession = {
-            ...idleSession,
-            status: "running" as const,
-            lastActivityAt: new Date().toISOString(),
-        };
-
-        let currentStatus = "idle";
+        let postReconnect = false;
         api.handle("chatSessions.list", () =>
-            currentStatus === "running" ? [runningSession] : [idleSession],
+            postReconnect ? [sessionA_new, sessionB] : [sessionA],
         );
 
-        await page.goto("/");
+        await navigateToBoard(page);
 
-        // Verify session count is 1
-        const sessionCount = await page.evaluate(() => {
-            return document.querySelectorAll('.session-item').length;
-        });
-        expect(sessionCount).toBeLessThanOrEqual(1);
+        // Open the chat sidebar
+        const sidebarToggle = page.locator("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
+        if (await sidebarToggle.count() > 0) await sidebarToggle.first().click();
+        await expect(page.locator(".chat-sidebar")).toBeVisible({ timeout: 3_000 });
+
+        // Before disconnect: only Session Old visible
+        await expect(page.locator(".session-item", { hasText: "Session Old" })).toBeVisible();
+
+        // Switch to updated data and simulate reconnect
+        postReconnect = true;
+        ws.disconnect();
+
+        // After reconnect, the updated session list is loaded
+        await expect(page.locator(".session-item", { hasText: "Session Updated" })).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".session-item", { hasText: "Session New" })).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".session-item", { hasText: "Session Old" })).not.toBeVisible();
     });
 });

@@ -104,6 +104,15 @@ export class WsMock {
         this.push({ type: "message.new", payload: message });
     }
 
+    /**
+     * Close the server-side WebSocket, simulating a network disconnect.
+     * The browser's reconnect logic will fire `_onWsReconnect` on the next successful connection.
+     * The first reconnect attempt happens after ~250ms (initial backoff).
+     */
+    disconnect(): void {
+        this._server?.close();
+    }
+
     /** Wait for the browser to send a WebSocket message (e.g. after user action). */
     nextMessage(timeoutMs = 5_000): Promise<string> {
         return new Promise((resolve, reject) => {

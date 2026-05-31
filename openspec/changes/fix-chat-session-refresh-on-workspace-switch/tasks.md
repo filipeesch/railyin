@@ -20,6 +20,6 @@
 ## 4. Validation
 
 - [x] 4.1 Run unit tests: `bun test src/mainview/stores/*` — all existing tests pass (5 pre-existing batch failures due to Pinia state leakage, all pass individually)
-- [ ] 4.2 Run E2E tests: `bun run test:e2e:board` — workspace nav tests should still pass
-- [ ] 4.3 Manual smoke test: create board in WS-A while viewing WS-B, switch to A, confirm new board visible
-- [ ] 4.4 Manual smoke test: rapid switching (A→B→C) converges to correct final state
+- [x] 4.2 Run E2E tests: `bun run test:e2e:board` — workspace nav tests should still pass
+- [x] 4.3 Manual smoke test: create board in WS-A while viewing WS-B, switch to A, confirm new board visible
+- [x] 4.4 Manual smoke test: rapid switching (A→B→C) converges to correct final state
