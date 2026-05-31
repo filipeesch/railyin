@@ -642,7 +642,8 @@ async function executeCommonToolText(
     case "update_note": {
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const content = args.content != null ? (args.content as string) : undefined;
+      const content = args.content != null ? (args.content as string).trim() : "";
+      if (!content) return "Error: content is required";
       const note = ctx.repos.notes.updateNote(id, { content });
       if (!note) return `Error: Note #${id} not found.`;
       return `Note #${id} updated.`;

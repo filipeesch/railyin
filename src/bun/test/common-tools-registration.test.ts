@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../engine/common-tools.ts";
+import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from "../engine/common-tools.ts";
 import { buildCopilotTools } from "../engine/copilot/tools.ts";
 import { buildClaudeToolServer } from "../engine/claude/tools.ts";
 import { TodoRepository } from "../db/todos.ts";
@@ -196,5 +196,37 @@ describe("LSP tool registration in common tools", () => {
     for (const name of LSP_SPLIT_TOOLS) {
       expect(registeredNames).toContain(name);
     }
+  });
+});
+
+describe("note tools", () => {
+  it("CTR-N1: create_note is present in COMMON_TOOL_DEFINITIONS with required content parameter", () => {
+    const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "create_note");
+    expect(def).toBeDefined();
+    expect(def!.parameters.properties).toHaveProperty("content");
+    expect((def!.parameters.properties as Record<string, { type: string }>)["content"].type).toBe("string");
+    expect(def!.parameters.required).toContain("content");
+  });
+
+  it("CTR-N2: list_notes is present in COMMON_TOOL_DEFINITIONS with no required parameters", () => {
+    const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "list_notes");
+    expect(def).toBeDefined();
+    expect(def!.parameters.required ?? []).toHaveLength(0);
+  });
+
+  it("CTR-N3: update_note is present in COMMON_TOOL_DEFINITIONS with id (number) and content (string) required", () => {
+    const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "update_note");
+    expect(def).toBeDefined();
+    const props = def!.parameters.properties as Record<string, { type: string }>;
+    expect(props["id"].type).toBe("number");
+    expect(props["content"].type).toBe("string");
+    expect(def!.parameters.required).toContain("id");
+    expect(def!.parameters.required).toContain("content");
+  });
+
+  it("CTR-N4: all three note tool names are in COMMON_TOOL_NAMES", () => {
+    expect(COMMON_TOOL_NAMES.has("create_note")).toBe(true);
+    expect(COMMON_TOOL_NAMES.has("list_notes")).toBe(true);
+    expect(COMMON_TOOL_NAMES.has("update_note")).toBe(true);
   });
 });
