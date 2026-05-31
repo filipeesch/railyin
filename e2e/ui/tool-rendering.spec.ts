@@ -385,3 +385,39 @@ test("S-30: lsp_rename result renders diff card with added/removed stat badges",
     await expect(page.locator(".fdiff__line--added .fdiff__content")).toContainText("function bar()");
     await expect(page.locator(".fdiff__line--removed .fdiff__content")).toContainText("function foo()");
 });
+
+test("S-31: subagent result renders as markdown, not raw JSON", async ({ page, api, task }) => {
+    const mdResult = "## Analysis\n\nFound **3 issues** in the codebase.";
+    const messages: ConversationMessage[] = [
+        ...makeToolCallMessage(task.id, 60, "tc-sa", "subagent", { intent: "analyze codebase", prompt: "Analyze the codebase" }),
+        {
+            id: 61,
+            taskId: task.id,
+            conversationId: task.id,
+            type: "tool_result",
+            role: "user",
+            // Persisted format: content is a plain string (not an array)
+            content: JSON.stringify({ tool_use_id: "tc-sa", content: mdResult }),
+            metadata: null,
+            createdAt: new Date().toISOString(),
+        },
+    ];
+    api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    // Expand the subagent block
+    const sa = page.locator(".conversation-inner .sa");
+    await expect(sa).toBeVisible({ timeout: 3_000 });
+    await sa.locator(".sa__header").click();
+
+    // Result should render as markdown — heading and bold text
+    const result = sa.locator(".sa__result");
+    await expect(result).toBeVisible({ timeout: 2_000 });
+    await expect(result.locator("h2")).toContainText("Analysis");
+    await expect(result.locator("strong")).toContainText("3 issues");
+
+    // Raw JSON must NOT appear
+    await expect(result).not.toContainText("tool_use_id");
+});

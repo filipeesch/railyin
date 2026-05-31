@@ -19,6 +19,7 @@ export type EngineEvent = (
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
   | { type: "tool_start"; name: string; arguments: string; callId?: string; parentCallId?: string; isInternal?: boolean; display?: ToolCallDisplay }
+  | { type: "subagent_start"; callId: string; intent: string; prompt: string }
   | {
     type: "tool_result";
     name: string;
@@ -117,6 +118,8 @@ export interface ExecutionParams {
 export interface RawModelMessage {
   engine: string;
   sessionId?: string;
+  /** Set when the message originates from a child session spawned by the `delegate` tool. */
+  parentToolCallId?: string;
   direction: "inbound" | "outbound" | "control";
   eventType: string;
   eventSubtype?: string;

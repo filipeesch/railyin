@@ -58,8 +58,22 @@ engines:
   #   providers:
   #     lmstudio:
   #       base_url: http://localhost:1234/v1
+  #       max_inflight: 2        # max concurrent requests (default: 8; use 1-2 for LM Studio)
+  #       queue_timeout_ms: 60000  # queue wait timeout in ms (default: 60000)
+  #       # Note: for vLLM, max_inflight: 8 is a good default
+  #       # Note: for Ollama, max_inflight: 4 is recommended
   #   harness:
   #     undo_stack_size: 50      # optional; default 50
+  #     delegate:
+  #       enabled: true          # set false to disable the delegate tool entirely
+  #       max_per_call: 5        # max sub-tasks per delegate call (1-10, default: 5)
+  #       # max_concurrency: 3   # optional: override effective concurrency cap
+  #       allow_tools:           # tool groups children may use (default: ["read"])
+  #         - read
+  #         # - web
+  #     background_compaction:
+  #       enabled: true          # opportunistic bg compaction (default: true)
+  #       early_margin_tokens: 8192  # trigger this many tokens before SDK's hard threshold
   #   # dialect: none            # Slash-command convention to use for this Pi engine.
   #                              # copilot → .github/prompts/*.prompt.md
   #                              # claude  → .claude/commands/**/*.md (colon-namespaced subdirs)

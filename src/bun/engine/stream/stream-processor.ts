@@ -232,22 +232,43 @@ export class StreamProcessor {
             break;
           }
 
-          case "tool_start": {
-            if (event.isInternal) break;
+          case "subagent_start": {
             hadOutput = true;
-            if (reasoningAccum) {
-              const rBlockId = `${executionId}-pre-r${++reasoningFlushCount}`;
-              convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
-              convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
-              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: rBlockId, type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
-              reasoningBlockId = rBlockId;
-              reasoningAccum = "";
-            }
-            if (tokenAccum) {
-              convBuffer.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, notify: true });
-              convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
-              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
-              tokenAccum = "";
+            const subagentArgs = JSON.stringify({ intent: event.intent, prompt: event.prompt });
+            const subagentCallContent = JSON.stringify({
+              type: "function",
+              function: { name: "subagent", arguments: subagentArgs },
+              id: event.callId,
+              display: { label: event.intent },
+            });
+            const subagentMeta = { parent_tool_call_id: null };
+            convBuffer.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: subagentCallContent, metadata: subagentMeta, notify: true });
+            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: event.callId, type: "tool_call", content: subagentCallContent, metadata: JSON.stringify(subagentMeta), parentBlockId: null, done: false, subagentId: event.callId });
+            // Do NOT push to callStack — subagent blocks are structural containers, not call frames
+            break;
+          }
+
+          case "tool_start": {
+            // Suppress truly internal events (e.g. Copilot skill-planner tools).
+            // Subagent child events (isInternal + parentCallId) are persisted and nested.
+            if (event.isInternal && !event.parentCallId) break;
+            hadOutput = true;
+            if (!event.isInternal) {
+              if (reasoningAccum) {
+                const rBlockId = `${executionId}-pre-r${++reasoningFlushCount}`;
+                convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
+                convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+                this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: rBlockId, type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
+                reasoningBlockId = rBlockId;
+                reasoningAccum = "";
+              }
+              if (tokenAccum) {
+                convBuffer.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, notify: true });
+                convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+                this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
+                tokenAccum = "";
+              }
             }
             const callId = event.callId ?? `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
             const toolCallMsg = JSON.stringify({
@@ -263,14 +284,16 @@ export class StreamProcessor {
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             const toolParentBlockId = event.parentCallId ?? null;
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: callId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false, subagentId: null });
-            callStack.push(callId);
+            if (!event.isInternal) callStack.push(callId);
             break;
           }
 
           case "tool_result": {
-            if (event.isInternal) break;
+            // Suppress truly internal events (e.g. Copilot skill-planner tools).
+            // Subagent child events (isInternal + parentCallId) are persisted and nested.
+            if (event.isInternal && !event.parentCallId) break;
             hadOutput = true;
-            if (reasoningAccum) {
+            if (!event.isInternal && reasoningAccum) {
               convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
               convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
@@ -294,8 +317,10 @@ export class StreamProcessor {
             const resultMsgRow = flushedResult[0];
             if (resultMsgRow) this.onNewMessage(resultMsgRow);
             const resultCallId = event.callId ?? (resultMsgRow?.id.toString() ?? "");
-            const stackIdx = callStack.lastIndexOf(resultCallId);
-            if (stackIdx !== -1) callStack.splice(stackIdx, 1);
+            if (!event.isInternal) {
+              const stackIdx = callStack.lastIndexOf(resultCallId);
+              if (stackIdx !== -1) callStack.splice(stackIdx, 1);
+            }
             const resultParentBlockId = event.parentCallId ?? null;
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: resultCallId, type: "tool_result", content: resultMsg, metadata: JSON.stringify(resultMeta), parentBlockId: resultParentBlockId, done: false, subagentId: null });
 
