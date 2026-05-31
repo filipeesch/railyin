@@ -79,12 +79,12 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
     parameters: {
       type: "object",
       properties: {
-        description: {
+        intent: {
           type: "string",
           description:
-            "Required. One sentence: what each task covers and why they are independent. " +
-            'Example: "job-a writes src/auth/token.ts, job-b writes src/user/service.ts — no shared files." ' +
-            "Keep it short — this appears as the bubble header in the UI.",
+            "Required. Max 8 words summarising what is being parallelised. " +
+            'Example: "implement auth and user modules in parallel". ' +
+            "This appears as the bubble header in the UI — keep it short.",
         },
         tasks: {
           type: "array",
@@ -119,7 +119,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
           },
         },
       },
-      required: ["description", "tasks"],
+      required: ["intent", "tasks"],
     },
     execute: async (
       toolCallId: string,
