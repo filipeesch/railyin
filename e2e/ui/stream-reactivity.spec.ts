@@ -872,11 +872,18 @@ test.describe("G — file_diff stat rendering", () => {
     api,
     task,
   }) => {
+    // Mock persisted messages via conversations.getMessages — these go through
+    // buildDisplayItems → pairToolMessages → ToolCallGroup.
+    // We need a tool_call + tool_result pair (ID-matched) for the result to not
+    // be orphaned and dropped by pairToolMessages. This mirrors copilotDiffMessages
+    // used by S-25 in tool-rendering.spec.ts.
+    const toolCallId = "tc-g1";
     const payload = JSON.stringify({
+      tool_use_id: toolCallId,
+      content: "OK.",
       writtenFiles: [
         { operation: "patch_file", path: "src/app.ts", added: 3, removed: 1 },
       ],
-      text: "Done.",
     });
 
     api.returns("conversations.getMessages", {
@@ -885,9 +892,14 @@ test.describe("G — file_diff stat rendering", () => {
           id: 3001,
           taskId: task.id,
           conversationId: task.conversationId,
-          type: "assistant",
+          type: "tool_call",
           role: "assistant",
-          content: "Applying changes...",
+          content: JSON.stringify({
+            type: "function",
+            function: { name: "patch_file", arguments: '{"path":"src/app.ts"}' },
+            id: toolCallId,
+            display: { label: "patch_file", subject: "src/app.ts" },
+          }),
           metadata: null,
           createdAt: new Date().toISOString(),
         },
@@ -896,9 +908,9 @@ test.describe("G — file_diff stat rendering", () => {
           taskId: task.id,
           conversationId: task.conversationId,
           type: "tool_result",
-          role: null,
+          role: "user",
           content: payload,
-          metadata: JSON.stringify({ tool_call_id: "call-test-1" }),
+          metadata: null,
           createdAt: new Date().toISOString(),
         },
       ],
@@ -908,22 +920,28 @@ test.describe("G — file_diff stat rendering", () => {
     await page.goto("/");
     await openTaskDrawer(page, task.id);
 
-    await expect(page.locator(".tcg .tc__header")).toBeVisible();
-    await expect(page.locator(".tcg .tc__stat--added")).toContainText("+3", {
+    // Persisted messages render in ConversationBody via the virtualized displayItems
+    // system, not via StreamBlockNode. Use ".tc__stat" (no .tcg prefix).
+    await expect(page.locator(".conversation-inner .tc .tc__header")).toBeVisible({
       timeout: 5_000,
     });
-    await expect(page.locator(".tcg .tc__stat--removed")).toContainText("-1", {
+    await expect(page.locator(".tc__stat--added")).toContainText("+3", {
+      timeout: 5_000,
+    });
+    await expect(page.locator(".tc__stat--removed")).toContainText("-1", {
       timeout: 5_000,
     });
   });
 
   test("G-2: multiple writtenFiles entries show combined stats", async ({ page, api, task }) => {
+    const toolCallId = "tc-g2";
     const payload = JSON.stringify({
+      tool_use_id: toolCallId,
+      content: "OK.",
       writtenFiles: [
         { operation: "patch_file", path: "src/a.ts", added: 2, removed: 0 },
         { operation: "delete_file", path: "src/b.ts", added: 0, removed: 5 },
       ],
-      text: "Done.",
     });
 
     api.returns("conversations.getMessages", {
@@ -932,9 +950,14 @@ test.describe("G — file_diff stat rendering", () => {
           id: 4001,
           taskId: task.id,
           conversationId: task.conversationId,
-          type: "assistant",
+          type: "tool_call",
           role: "assistant",
-          content: "Editing files...",
+          content: JSON.stringify({
+            type: "function",
+            function: { name: "batch_edit", arguments: '{"files":[]}' },
+            id: toolCallId,
+            display: { label: "batch_edit" },
+          }),
           metadata: null,
           createdAt: new Date().toISOString(),
         },
@@ -943,9 +966,9 @@ test.describe("G — file_diff stat rendering", () => {
           taskId: task.id,
           conversationId: task.conversationId,
           type: "tool_result",
-          role: null,
+          role: "user",
           content: payload,
-          metadata: JSON.stringify({ tool_call_id: "call-test-2" }),
+          metadata: null,
           createdAt: new Date().toISOString(),
         },
       ],
@@ -955,10 +978,10 @@ test.describe("G — file_diff stat rendering", () => {
     await page.goto("/");
     await openTaskDrawer(page, task.id);
 
-    await expect(page.locator(".tcg .tc__stat--added")).toContainText("+2", {
+    await expect(page.locator(".tc__stat--added")).toContainText("+2", {
       timeout: 5_000,
     });
-    await expect(page.locator(".tcg .tc__stat--removed")).toContainText("-5", {
+    await expect(page.locator(".tc__stat--removed")).toContainText("-5", {
       timeout: 5_000,
     });
   });
