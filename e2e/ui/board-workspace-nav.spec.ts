@@ -255,4 +255,33 @@ test.describe("Board workspace navigation", () => {
         await expect.poll(() => sessionCalls.length).toBeGreaterThanOrEqual(1);
         await expect.poll(() => boardCalls.length).toBeGreaterThanOrEqual(1);
     });
+
+    test("WS-NAV-9: switching workspace activates first board of target workspace (not stale board from previous workspace)", async ({ page, api }) => {
+        // Two workspaces, each with their own board
+        api.returns("workspace.list", [
+            { key: "ws-a", name: "Workspace A" },
+            { key: "ws-b", name: "Workspace B" },
+        ]);
+        api.handle("workspace.getConfig", ({ workspaceKey }) =>
+            makeWorkspace({ key: workspaceKey ?? "ws-a", name: workspaceKey === "ws-b" ? "Workspace B" : "Workspace A" }),
+        );
+
+        const boardA = makeBoard({ id: 1, workspaceKey: "ws-a", name: "Board of A" });
+        const boardB = makeBoard({ id: 2, workspaceKey: "ws-b", name: "Board of B" });
+
+        // boards.list always returns the full list — the store uses the workspace key to select the right one
+        api.returns("boards.list", [boardA, boardB]);
+
+        await navigateToBoard(page);
+
+        // Initially on ws-a → Board of A should be active in the selector
+        await expect(page.locator(".board-selector")).toContainText("Board of A");
+
+        // Switch to ws-b
+        await page.locator(".workspace-tab", { hasText: "Workspace B" }).click();
+
+        // Board selector must update to reflect the board belonging to ws-b
+        await expect(page.locator(".board-selector")).toContainText("Board of B");
+        await expect(page.locator(".board-selector")).not.toContainText("Board of A");
+    });
 });
