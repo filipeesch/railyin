@@ -232,6 +232,23 @@ export class StreamProcessor {
             break;
           }
 
+          case "subagent_start": {
+            hadOutput = true;
+            const subagentArgs = JSON.stringify({ intent: event.intent, prompt: event.prompt });
+            const subagentCallContent = JSON.stringify({
+              type: "function",
+              function: { name: "subagent", arguments: subagentArgs },
+              id: event.callId,
+              display: { label: event.intent },
+            });
+            const subagentMeta = { parent_tool_call_id: null };
+            convBuffer.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: subagentCallContent, metadata: subagentMeta, notify: true });
+            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: event.callId, type: "tool_call", content: subagentCallContent, metadata: JSON.stringify(subagentMeta), parentBlockId: null, done: false, subagentId: event.callId });
+            // Do NOT push to callStack — subagent blocks are structural containers, not call frames
+            break;
+          }
+
           case "tool_start": {
             // Suppress truly internal events (e.g. Copilot skill-planner tools).
             // Subagent child events (isInternal + parentCallId) are persisted and nested.

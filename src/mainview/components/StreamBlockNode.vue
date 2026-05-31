@@ -32,6 +32,24 @@
       </div>
     </div>
 
+    <!-- Subagent bubble (root-level, spawned by delegate) -->
+    <SubagentBlock
+      v-else-if="block.type === 'tool_call' && subagentContent"
+      :intent="subagentContent.intent"
+      :prompt="subagentContent.prompt"
+      :done="block.done"
+      :isError="subagentContent.isError"
+      :result="subagentContent.result"
+      :childBlockIds="nonDiffChildIds"
+      :blocks="blocks"
+      :renderMd="renderMd"
+    />
+
+    <!-- Delegate call divider (the parent agent's tool_call for delegate itself) -->
+    <div v-else-if="block.type === 'tool_call' && isDelegateCall" class="delegate-divider">
+      <span class="delegate-divider__label">Spawning agents…</span>
+    </div>
+
     <!-- Tool call (collapsible with children inside) -->
     <ToolCallBlock
       v-else-if="block.type === 'tool_call'"
@@ -104,6 +122,7 @@ import { useMarkdown } from "../composables/useMarkdown";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import FileDiff from "./FileDiff.vue";
 import ToolCallBlock, { type ToolCallProps } from "./ToolCallBlock.vue";
+import SubagentBlock from "./SubagentBlock.vue";
 
 const props = defineProps<{
   blockId: string;
@@ -196,6 +215,42 @@ const nonDiffChildIds = computed(() => {
   const b = block.value;
   if (!b) return [];
   return b.children.filter((id) => props.blocks.get(id)?.type !== "file_diff");
+});
+
+function parseToolCallFunctionName(content: string): string | null {
+  try {
+    const p = JSON.parse(content) as { function?: { name?: string } };
+    return p.function?.name ?? null;
+  } catch { return null; }
+}
+
+function parseToolCallArguments(content: string): Record<string, unknown> | null {
+  try {
+    const p = JSON.parse(content) as { function?: { arguments?: string } };
+    if (!p.function?.arguments) return null;
+    return JSON.parse(p.function.arguments) as Record<string, unknown>;
+  } catch { return null; }
+}
+
+const subagentContent = computed(() => {
+  const b = block.value;
+  if (!b || b.type !== "tool_call") return null;
+  if (parseToolCallFunctionName(b.content) !== "subagent") return null;
+  const args = parseToolCallArguments(b.content);
+  const meta = b.metadata ? tryParseJson(b.metadata) : null;
+  const resultContent = (meta?.resultContent as string) ?? undefined;
+  return {
+    intent: (args?.intent as string) ?? "Subagent",
+    prompt: (args?.prompt as string) ?? "",
+    isError: !!(meta?.isError),
+    result: resultContent,
+  };
+});
+
+const isDelegateCall = computed(() => {
+  const b = block.value;
+  if (!b || b.type !== "tool_call") return false;
+  return parseToolCallFunctionName(b.content) === "delegate";
 });
 
 function parseUnifiedDiff(
@@ -426,5 +481,28 @@ html.dark-mode .tcg__badge {
 }
 html.dark-mode .tcg__children {
   border-left-color: var(--p-surface-700, #334155);
+}
+</style>
+
+<style scoped>
+.delegate-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--p-text-muted-color, #94a3b8);
+  font-size: 0.72rem;
+}
+
+.delegate-divider::before,
+.delegate-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--p-surface-200, #e2e8f0);
+}
+
+.delegate-divider__label {
+  white-space: nowrap;
 }
 </style>

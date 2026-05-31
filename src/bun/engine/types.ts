@@ -19,6 +19,7 @@ export type EngineEvent = (
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
   | { type: "tool_start"; name: string; arguments: string; callId?: string; parentCallId?: string; isInternal?: boolean; display?: ToolCallDisplay }
+  | { type: "subagent_start"; callId: string; intent: string; prompt: string }
   | {
     type: "tool_result";
     name: string;

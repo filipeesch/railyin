@@ -32,7 +32,7 @@ export interface DelegateToolOptions {
   buildChildTools?: (groups: string[]) => AgentTool<any>[];
 }
 
-type DelegateTask = { id: string; prompt: string; tools?: string[] };
+type DelegateTask = { id: string; intent?: string; prompt: string; tools?: string[] };
 
 export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToolOptions): AgentTool<any>[] {
   const {
@@ -79,13 +79,6 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
     parameters: {
       type: "object",
       properties: {
-        intent: {
-          type: "string",
-          description:
-            "Required. Max 8 words summarising what is being parallelised. " +
-            'Example: "implement auth and user modules in parallel". ' +
-            "This appears as the bubble header in the UI — keep it short.",
-        },
         tasks: {
           type: "array",
           description: "Sub-tasks to run in parallel. Each becomes an independent child agent call.",
@@ -97,6 +90,13 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
                 description:
                   "Short slug naming the scope. Use the file stem when possible, " +
                   'e.g. "auth-token" or "user-service-tests". If you cannot name it in 3–5 words the task is too broad.',
+              },
+              intent: {
+                type: "string",
+                description:
+                  "Max 8 words describing what this specific agent will do. " +
+                  'Examples: "analyze auth module structure", "list exported functions in utils". ' +
+                  "Shown as the bubble header in the UI.",
               },
               prompt: {
                 type: "string",
@@ -119,14 +119,14 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
           },
         },
       },
-      required: ["intent", "tasks"],
+      required: ["tasks"],
     },
     execute: async (
       toolCallId: string,
       _rawArgs: unknown,
       signal?: AbortSignal,
     ): Promise<AgentToolResult<undefined>> => {
-      const args = _rawArgs as { tasks: DelegateTask[]; description?: string };
+      const args = _rawArgs as { tasks: DelegateTask[] };
       if (args.tasks.length > maxPerCall) {
         return {
           content: [
@@ -193,15 +193,12 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
         const childGroups = (task.tools ?? delegateConfig?.allow_tools ?? ["read"]).filter((g) => g !== "delegate");
         const childTools = buildChildTools(childGroups);
 
-        // Emit a synthetic "agent" tool_start to give each child its own UI bubble.
+        // Emit a subagent_start event to give each child its own root-level bubble.
         delegateEmitRef?.emit?.({
-          type: "tool_start",
-          name: "agent",
+          type: "subagent_start",
           callId: childBlockId,
-          arguments: JSON.stringify({ id: task.id }),
-          parentCallId: toolCallId,
-          isInternal: true,
-          display: { label: "agent", subject: task.id },
+          intent: task.intent ?? task.id,
+          prompt: task.prompt,
         });
 
         let handle: Awaited<ReturnType<ChildSessionFactory>> | null = null;
@@ -218,7 +215,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
           });
 
           // Subscribe BEFORE prompting to capture all child events.
-          // Route child tool calls under childBlockId so they nest inside the per-child bubble.
+          // Route child tool calls under childBlockId so they nest inside the per-child subagent bubble.
           unsubscribe = handle.session.subscribe((event: AgentSessionEvent) => {
             if (!delegateEmitRef?.emit) return;
             const engineEvents = translateEvent(event as any, cwd);
@@ -244,14 +241,13 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
 
           results[idx] = { status: "fulfilled", value: { id: task.id, text } };
 
-          // Close the per-child bubble as succeeded.
+          // Close the subagent bubble as succeeded (no parentCallId → root level).
           delegateEmitRef?.emit?.({
             type: "tool_result",
-            name: "agent",
+            name: "subagent",
             callId: childBlockId,
             result: text,
-            parentCallId: toolCallId,
-            isInternal: true,
+            isInternal: false,
           });
         } catch (err) {
           const isAbort = err instanceof DOMException && err.name === "AbortError";
@@ -260,15 +256,14 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
             reason: err instanceof Error ? err : new Error(String(err)),
           };
 
-          // Close the per-child bubble as errored.
+          // Close the subagent bubble as errored (no parentCallId → root level).
           delegateEmitRef?.emit?.({
             type: "tool_result",
-            name: "agent",
+            name: "subagent",
             callId: childBlockId,
             result: isAbort ? "Aborted" : formatPiError(err instanceof Error ? err : new Error(String(err))),
             isError: true,
-            parentCallId: toolCallId,
-            isInternal: true,
+            isInternal: false,
           });
         } finally {
           unsubscribe?.();

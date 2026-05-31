@@ -243,7 +243,7 @@ describe("buildDelegateTool", () => {
     expect(text).toMatch(/error|abort/i);
   });
 
-  test("DL-6: child tool events are forwarded as isInternal with parentCallId = toolCallId", async () => {
+  test("DL-6: child tool events are forwarded as isInternal with parentCallId = childBlockId (not toolCallId)", async () => {
     const emitted: EngineEvent[] = [];
     const opts = makeOpts({}, emitted);
     const tools = buildDelegateTool(fakeHarnessCtx, opts);
@@ -252,10 +252,18 @@ describe("buildDelegateTool", () => {
     const toolCallId = "call-6";
     await tool.execute(toolCallId, { tasks: [{ id: "fwd-job", prompt: "do it" }] }, undefined);
 
+    // subagent_start event emitted at root level (not internal)
+    const subagentStartEvents = emitted.filter((e) => (e as any).type === "subagent_start");
+    expect(subagentStartEvents.length).toBe(1);
+    const childBlockId = (subagentStartEvents[0] as any).callId as string;
+    expect(typeof childBlockId).toBe("string");
+    expect(childBlockId.length).toBeGreaterThan(0);
+
+    // Internal events (child tool calls) should have parentCallId = childBlockId
     const internalEvents = emitted.filter((e) => (e as any).isInternal === true);
     expect(internalEvents.length).toBeGreaterThan(0);
     for (const ev of internalEvents) {
-      expect((ev as any).parentCallId).toBe(toolCallId);
+      expect((ev as any).parentCallId).toBe(childBlockId);
     }
   });
 

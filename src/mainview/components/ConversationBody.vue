@@ -29,8 +29,19 @@
             transform: `translateY(${vitem.start}px)`,
           }"
         >
+          <SubagentBlock
+            v-if="displayItems[vitem.index].kind === 'tool_entry' && isSubagentEntry(asToolEntry(vitem.index).entry)"
+            v-bind="subagentEntryProps(asToolEntry(vitem.index).entry)"
+            :renderMd="renderMd"
+          />
+          <div
+            v-else-if="displayItems[vitem.index].kind === 'tool_entry' && isDelegateEntry(asToolEntry(vitem.index).entry)"
+            class="delegate-divider"
+          >
+            <span class="delegate-divider__label">Spawning agents…</span>
+          </div>
           <ToolCallGroup
-            v-if="displayItems[vitem.index].kind === 'tool_entry'"
+            v-else-if="displayItems[vitem.index].kind === 'tool_entry'"
             :entry="asToolEntry(vitem.index).entry"
           />
           <CodeReviewCard
@@ -91,6 +102,7 @@ import ProgressSpinner from "primevue/progressspinner";
 import MessageBubble from "./MessageBubble.vue";
 import TransitionEventCard from "./TransitionEventCard.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
+import SubagentBlock from "./SubagentBlock.vue";
 import { pairToolMessages, type ToolEntry } from "../utils/pairToolMessages";
 import StreamBlockNode from "./StreamBlockNode.vue";
 import CodeReviewCard from "./CodeReviewCard.vue";
@@ -162,6 +174,50 @@ type SingleItem = Extract<DisplayItem, { kind: "single" }>;
 function asToolEntry(i: number) { return displayItems.value[i] as ToolEntryItem; }
 function asCodeReview(i: number) { return displayItems.value[i] as CodeReviewItem; }
 function asSingle(i: number) { return displayItems.value[i] as SingleItem; }
+
+function parseEntryFunctionName(entry: ToolEntry): string | null {
+  try {
+    const p = JSON.parse(entry.call.content) as { function?: { name?: string } };
+    return p.function?.name ?? null;
+  } catch { return null; }
+}
+
+function parseEntryArguments(entry: ToolEntry): Record<string, unknown> | null {
+  try {
+    const p = JSON.parse(entry.call.content) as { function?: { arguments?: string } };
+    if (!p.function?.arguments) return null;
+    return JSON.parse(p.function.arguments) as Record<string, unknown>;
+  } catch { return null; }
+}
+
+function isSubagentEntry(entry: ToolEntry): boolean {
+  return parseEntryFunctionName(entry) === "subagent";
+}
+
+function isDelegateEntry(entry: ToolEntry): boolean {
+  return parseEntryFunctionName(entry) === "delegate";
+}
+
+function subagentEntryProps(entry: ToolEntry) {
+  const args = parseEntryArguments(entry);
+  let resultContent: string | undefined;
+  if (entry.result) {
+    try {
+      const r = JSON.parse(entry.result.content) as { content?: Array<{ text?: string }> };
+      resultContent = r.content?.map((c) => c.text ?? "").join("") || undefined;
+    } catch {
+      resultContent = entry.result.content;
+    }
+  }
+  return {
+    intent: (args?.intent as string) ?? "Subagent",
+    prompt: (args?.prompt as string) ?? "",
+    done: !!entry.result,
+    isError: false,
+    result: resultContent,
+    childEntries: entry.children,
+  };
+}
 
 const hasStructuredTail = computed(() => {
   const state = props.streamState;
@@ -493,6 +549,27 @@ defineExpose({ scrollToBottom, scheduleScrollToBottomIfAuto });
 </script>
 
 <style scoped>
+.delegate-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--p-text-muted-color, #94a3b8);
+  font-size: 0.72rem;
+}
+
+.delegate-divider::before,
+.delegate-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--p-surface-200, #e2e8f0);
+}
+
+.delegate-divider__label {
+  white-space: nowrap;
+}
+
 .conv-body {
   flex: 1;
   overflow-y: auto;
