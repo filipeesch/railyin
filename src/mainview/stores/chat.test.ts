@@ -8,6 +8,7 @@ vi.mock("../rpc", () => ({
 
 const { useChatStore } = await import("./chat");
 const { useConversationStore } = await import("./conversation");
+const { useWorkspaceStore } = await import("./workspace");
 
 function makeChatSession(overrides: Partial<import("@shared/rpc-types").ChatSession> = {}): import("@shared/rpc-types").ChatSession {
   return {
@@ -165,5 +166,86 @@ describe("chatStore", () => {
     }
 
     expect(store.unreadSessionIds).toBe(setRef);
+  });
+});
+
+describe("chatStore — workspace filter", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    apiMock.mockImplementation(async () => []);
+  });
+
+  it("C7a: onChatSessionUpdated adds session when workspaceKey matches activeWorkspaceKey", () => {
+    const store = useChatStore();
+    const wsStore = useWorkspaceStore();
+    wsStore.activeWorkspaceKey = "ws-1";
+
+    store.onChatSessionUpdated(makeChatSession({ id: 10, workspaceKey: "ws-1" }));
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0].id).toBe(10);
+  });
+
+  it("C7b: onChatSessionUpdated ignores session when workspaceKey does not match", () => {
+    const store = useChatStore();
+    const wsStore = useWorkspaceStore();
+    wsStore.activeWorkspaceKey = "ws-1";
+
+    store.onChatSessionUpdated(makeChatSession({ id: 20, workspaceKey: "ws-other" }));
+    expect(store.sessions).toHaveLength(0);
+  });
+
+  it("C7c: onChatSessionUpdated passes all sessions when activeWorkspaceKey is null", () => {
+    const store = useChatStore();
+    const wsStore = useWorkspaceStore();
+    wsStore.activeWorkspaceKey = null;
+
+    store.onChatSessionUpdated(makeChatSession({ id: 30, workspaceKey: "any-ws" }));
+    expect(store.sessions).toHaveLength(1);
+  });
+});
+
+describe("chatStore — loadSessions idempotency", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("C8a: calling loadSessions twice replaces sessions (no duplicates)", async () => {
+    const singleSession = [makeChatSession({ id: 1 })];
+    apiMock.mockResolvedValue(singleSession);
+    const store = useChatStore();
+
+    await store.loadSessions("ws-1");
+    await store.loadSessions("ws-1");
+
+    expect(store.sessions).toHaveLength(1);
+  });
+
+  it("C8b: loadSessions passes the workspaceKey to the API", async () => {
+    apiMock.mockResolvedValue([]);
+    const store = useChatStore();
+
+    await store.loadSessions("ws-2");
+
+    expect(apiMock).toHaveBeenCalledWith("chatSessions.list", { workspaceKey: "ws-2" });
+  });
+
+  it("C8c: second loadSessions with different key replaces sessions from first call", async () => {
+    const ws1Sessions = [makeChatSession({ id: 1, workspaceKey: "ws-1" })];
+    const ws2Sessions = [
+      makeChatSession({ id: 2, workspaceKey: "ws-2" }),
+      makeChatSession({ id: 3, workspaceKey: "ws-2" }),
+    ];
+    apiMock
+      .mockResolvedValueOnce(ws1Sessions)
+      .mockResolvedValueOnce(ws2Sessions);
+
+    const store = useChatStore();
+
+    await store.loadSessions("ws-1");
+    expect(store.sessions).toHaveLength(1);
+
+    await store.loadSessions("ws-2");
+    expect(store.sessions).toHaveLength(2);
+    expect(store.sessions.every((s) => s.workspaceKey === "ws-2")).toBe(true);
   });
 });

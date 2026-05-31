@@ -2,12 +2,14 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
+import { useWorkspaceStore } from "./workspace";
 import type { ChatSession, ConversationMessage, StreamEvent } from "@shared/rpc-types";
 import { useConversationStore } from "./conversation";
 import { type QueuedMessage, type QueueState, emptyQueueState } from "./queue-types";
 
 export const useChatStore = defineStore("chat", () => {
   const conversationStore = useConversationStore();
+  const workspaceStore = useWorkspaceStore();
   const sessions = ref<ChatSession[]>([]);
   const activeChatSessionId = ref<number | null>(null);
   const unreadSessionIds = ref(new Set<number>());
@@ -37,6 +39,9 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function onChatSessionUpdated(session: ChatSession) {
+    const activeKey = workspaceStore.activeWorkspaceKey;
+    if (activeKey !== null && session.workspaceKey !== activeKey) return;
+
     const idx = sessions.value.findIndex(s => s.id === session.id);
     const previous = idx !== -1 ? sessions.value[idx] : null;
     if (idx !== -1) {

@@ -57,16 +57,19 @@
           @click="(e) => settingsMenu.toggle(e)"
         />
         <Menu ref="settingsMenu" :model="settingsMenuItems" popup />
-        <Button
-          icon="pi pi-comments"
-          severity="secondary"
-          text
-          rounded
-          aria-label="Chat sessions"
-          class="chat-sidebar-toggle toolbar-btn--chat"
-          :class="{ 'is-active': chatSidebarOpen }"
-          @click="chatSidebarOpen = !chatSidebarOpen"
-        />
+        <div class="p-overlay-badge">
+          <Button
+            icon="pi pi-comments"
+            severity="secondary"
+            text
+            rounded
+            aria-label="Chat sessions"
+            class="chat-sidebar-toggle toolbar-btn--chat"
+            :class="{ 'is-active': chatSidebarOpen }"
+            @click="chatSidebarOpen = !chatSidebarOpen"
+          />
+          <Badge v-if="activeChatSessionCount > 0" :value="activeChatSessionCount" class="chat-session-badge" />
+        </div>
 
       </div>
     </div>
@@ -271,6 +274,10 @@ const visibleBoards = computed(() => {
   if (workspaceKey == null) return boardStore.boards;
   return boardStore.boards.filter((board) => board.workspaceKey === workspaceKey);
 });
+
+const activeChatSessionCount = computed(
+  () => chatStore.sessions.filter((s) => s.status !== "archived").length,
+);
 
 // Reload board when backend notifies workflow was saved
 onWorkflowReloaded(async () => {
