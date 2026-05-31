@@ -349,7 +349,7 @@ describe("stream block state", () => {
     expect(block.done).toBe(true);
   });
 
-  it("SB-5: done for NON-active conversation clears blocks/roots but retains shell with isDone:true", () => {
+  it("SB-5: done for NON-active conversation removes the stream state entirely", () => {
     const store = useConversationStore();
     store.setActiveConversation(99); // different conversation is active
 
@@ -358,12 +358,7 @@ describe("stream block state", () => {
       makeStreamEvent(1, "done", { seq: 2, blockId: "done-1", content: "", done: true }),
     );
 
-    const state = store.streamStates.get(1);
-    expect(state).toBeDefined();
-    expect(state!.isDone).toBe(true);
-    expect(state!.blocks.size).toBe(0);
-    expect(state!.roots).toHaveLength(0);
-    expect(state!.executionId).toBe(1);
+    expect(store.streamStates.get(1)).toBeUndefined();
   });
 
   it("SB-6: done for ACTIVE conversation does NOT clear blocks", () => {
@@ -417,7 +412,7 @@ describe("stream block state", () => {
     expect(store.contextUsageByConversation.has(1)).toBe(false);
   });
 
-  it("SB-9: stream state shell accessible via streamStates.get(id) after done for non-active", () => {
+  it("SB-9: stream state is removed from streamStates after done for non-active conversation", () => {
     const store = useConversationStore();
     store.setActiveConversation(99);
 
@@ -426,10 +421,7 @@ describe("stream block state", () => {
       makeStreamEvent(1, "done", { seq: 2, blockId: "done-1", content: "", done: true }),
     );
 
-    const shell = store.streamStates.get(1);
-    expect(shell).toBeDefined();
-    expect(shell!.isDone).toBe(true);
-    expect(shell!.executionId).toBe(1);
+    expect(store.streamStates.get(1)).toBeUndefined();
   });
 
   it("SB-10: concurrent streams for two conversations are independent", () => {
@@ -561,6 +553,26 @@ describe("stream block state", () => {
 
     const contextUsageCalls = apiMock.mock.calls.filter(([method]) => method === "conversations.contextUsage");
     expect(contextUsageCalls).toHaveLength(0);
+  });
+
+  it("SB-NEW-3: streamStates Map does not retain entries for non-active conversations after done", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // Simulate 10 background conversations receiving events and completing
+    for (let convId = 100; convId < 110; convId++) {
+      store.onStreamEvent(makeStreamEvent(convId, "text_chunk", { seq: 1 }));
+      store.onStreamEvent(
+        makeStreamEvent(convId, "done", { seq: 2, blockId: `done-${convId}`, content: "", done: true }),
+      );
+    }
+
+    // None of the background conversation states should remain in the Map
+    for (let convId = 100; convId < 110; convId++) {
+      expect(store.streamStates.get(convId)).toBeUndefined();
+    }
+    // The active conversation state is unaffected (not in map since no events sent)
+    expect(store.streamStates.size).toBe(0);
   });
 });
 

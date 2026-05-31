@@ -576,6 +576,14 @@ defineExpose({
       changes: { from: 0, to: editorView.state.doc.length, insert: "" },
     });
   },
+  /** Replace the entire editor content */
+  setText(text: string) {
+    if (!editorView) return;
+    editorView.dispatch({
+      changes: { from: 0, to: editorView.state.doc.length, insert: text },
+      selection: { anchor: text.length },
+    });
+  },
   /** Programmatically trigger send */
   send: extractAndSend,
 });

@@ -95,7 +95,7 @@
         placeholder="Send a message… (Shift+Enter for newline)"
         class="flex-1"
         @send="onChatEditorSend"
-        @text-change="inputText = $event"
+        @text-change="onTextChange"
       />
 
       <!-- Attach button (task mode only, not running) -->
@@ -350,7 +350,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import Button from "primevue/button";
 import Select from "primevue/select";
 import ToggleSwitch from "primevue/toggleswitch";
@@ -365,6 +365,7 @@ import { api } from "../rpc";
 import type { Attachment, ChatSession, CodeRef, McpServerStatus, Task } from "@shared/rpc-types";
 import type { QueueState } from "../stores/queue-types";
 import { segmentChipText } from "../utils/chat-chips";
+import { useDraftStore } from "../stores/draft";
 
 const props = defineProps<{
   executionState: string;
@@ -400,6 +401,7 @@ const emit = defineEmits<{
 const workspaceStore = useWorkspaceStore();
 const codeServerStore = useCodeServerStore();
 const toast = useToast();
+const draftStore = useDraftStore();
 
 // ─── State ─────────────────────────────────────────────────────────────────────
 
@@ -427,6 +429,21 @@ const canSend = computed(() => (
   pendingAttachments.value.length > 0 ||
   pendingCodeRefs.value.length > 0
 ));
+
+const draftKey = computed(() =>
+  props.taskId != null ? `task:${props.taskId}` : props.sessionId != null ? `session:${props.sessionId}` : null
+);
+
+onMounted(() => {
+  const key = draftKey.value;
+  if (key) {
+    const draft = draftStore.get(key);
+    if (draft) {
+      inputText.value = draft.text;
+      chatEditorRef.value?.setText(draft.text);
+    }
+  }
+});
 
 const queueItems = computed(() => props.queueState?.items ?? []);
 const editingId = computed(() => props.queueState?.editingId ?? null);
@@ -506,6 +523,12 @@ const supportsManualCompact = computed(() => {
 
 // ─── Send logic ───────────────────────────────────────────────────────────────
 
+function onTextChange(text: string): void {
+  inputText.value = text;
+  const key = draftKey.value;
+  if (key) draftStore.set(key, text);
+}
+
 function send() {
   if (!canSend.value && !isRunning.value) return;
   if (!inputText.value.trim() && !isRunning.value) return;
@@ -523,6 +546,8 @@ async function onChatEditorSend(content: string, engineContent: string, editorAt
   const finalContent = [refPrefix, trimmed].filter(Boolean).join("\n\n");
   const finalEngineContent = [refPrefix, engineContent.trim()].filter(Boolean).join("\n\n");
   inputText.value = "";
+  const key = draftKey.value;
+  if (key) draftStore.clear(key);
   pendingAttachments.value = [];
   if (props.taskId != null) {
     codeServerStore.clearRefs(props.taskId);

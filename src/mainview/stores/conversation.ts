@@ -273,21 +273,19 @@ export const useConversationStore = defineStore("conversation", () => {
     }
 
     if (event.type === "done") {
+      if (event.conversationId !== activeConversationId.value) {
+        streamStates.value.delete(event.conversationId);
+        return;
+      }
       state.isDone = true;
       state.statusMessage = "";
       const liveTypes = new Set(["text_chunk", "reasoning_chunk"]);
       for (const [, block] of state.blocks) {
         if (liveTypes.has(block.type)) block.done = true;
       }
-      if (event.conversationId !== activeConversationId.value) {
-        state.blocks.clear();
-        state.roots = [];
-      }
       streamStates.value.set(event.conversationId, state);
-      if (event.conversationId === activeConversationId.value) {
-        refreshLatestPage({ conversationId: event.conversationId }).catch(console.error);
-        fetchContextUsage({ conversationId: event.conversationId }).catch(console.error);
-      }
+      refreshLatestPage({ conversationId: event.conversationId }).catch(console.error);
+      fetchContextUsage({ conversationId: event.conversationId }).catch(console.error);
       return;
     }
 

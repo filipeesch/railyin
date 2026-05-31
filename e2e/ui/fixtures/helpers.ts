@@ -24,10 +24,14 @@ export async function sendMessage(page: Page, text: string): Promise<void> {
 
 /** Open the session chat sidebar and wait for it to be visible. */
 export async function openSidebar(page: Page): Promise<void> {
-    const btn = page.locator("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
-    const count = await btn.count();
-    if (count > 0) await btn.first().click();
-    await expect(page.locator(".chat-sidebar")).toBeVisible({ timeout: 3_000 });
+    const sidebar = page.locator(".chat-sidebar");
+    const isAlreadyOpen = await sidebar.isVisible();
+    if (!isAlreadyOpen) {
+        const btn = page.locator("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
+        const count = await btn.count();
+        if (count > 0) await btn.first().click();
+    }
+    await expect(sidebar).toBeVisible({ timeout: 3_000 });
 }
 
 /** Open the sidebar, click a session, and wait for the session chat view to appear. */

@@ -86,4 +86,26 @@ test.describe("SS — stream state isolation", () => {
         await expect(page.locator(".task-chat-view .msg__bubble.streaming")).toBeVisible({ timeout: 3_000 });
         await expect(page.locator(".task-chat-view .msg__bubble.streaming")).toContainText("Persisted streaming content");
     });
+
+    test("SS-3: stream event for a background task does not appear in the active task's conversation", async ({ page, api, ws }) => {
+        const taskA = makeTask({ id: 20 });
+        const taskB = makeTask({ id: 21 });
+
+        api.handle("tasks.list", () => [taskA, taskB]);
+        api.handle("conversations.getMessages", () => ({ messages: [], hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, taskA.id);
+
+        // Emit a stream event scoped to taskB (background) — should NOT appear in taskA's view
+        ws.pushStreamEvent(taskTextChunk(taskB.id, taskB.conversationId, 0, "Background task content"));
+
+        // Give the UI a moment to process
+        await page.waitForTimeout(500);
+
+        // taskA's conversation body must remain empty — no contamination
+        await expect(page.locator(".task-chat-view .msg__bubble.streaming")).not.toBeVisible();
+        await expect(page.locator(".task-chat-view .msg--assistant")).toHaveCount(0);
+        await expect(page.locator(".task-chat-view .msg--user")).toHaveCount(0);
+    });
 });

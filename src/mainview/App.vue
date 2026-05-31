@@ -68,7 +68,6 @@ onMounted(async () => {
 
   onNewMessage((message) => {
     conversationStore.onNewMessage(message);
-    taskStore.onTaskNewMessage(message);
     chatStore.onChatNewMessage(message);
   });
 
