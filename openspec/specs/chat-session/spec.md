@@ -4,7 +4,7 @@ Defines standalone workspace chat sessions and their sidebar lifecycle.
 ## Requirements
 
 ### Requirement: Workspace-level chat sessions
-The system SHALL support standalone AI chat sessions that are not associated with any task. Sessions SHALL exist at workspace scope and persist across application restarts.
+The system SHALL support standalone AI chat sessions that are not associated with any task. Sessions SHALL exist at workspace scope and persist across application restarts. **When the user switches to a different workspace, the session list MUST be reloaded from the backend to display only sessions belonging to the newly active workspace.**
 
 #### Scenario: Chat session persists after restart
 - **WHEN** the user creates a chat session and closes the app
@@ -13,6 +13,10 @@ The system SHALL support standalone AI chat sessions that are not associated wit
 #### Scenario: Session not tied to a task
 - **WHEN** a chat session is created from the sidebar
 - **THEN** no task is created and the session does not appear on the board
+
+#### Scenario: Session list reflects current workspace after switch
+- **WHEN** the user clicks a workspace tab to switch workspaces
+- **THEN** the sidebar displays only sessions scoped to the selected workspace (sessions from other workspaces are no longer visible)
 
 ### Requirement: Session creation
 The system SHALL allow the user to create a new chat session from the sidebar via a "New Chat" button. The system SHALL auto-generate a session title based on the creation timestamp (format: "Chat – Mon DD").
@@ -37,7 +41,7 @@ The system SHALL allow the user to rename a session via a pencil icon button vis
 - **THEN** the new title is persisted and shown in both the sidebar and detail panel
 
 ### Requirement: Session list sorted by recent activity
-The system SHALL display sessions in the sidebar sorted by `last_activity_at` descending (most recently active first).
+The system SHALL display sessions in the sidebar sorted by `last_activity_at` descending (most recently active first). **After reloading on workspace switch, the list MUST be re-sorted by the new workspace's sessions.**
 
 #### Scenario: Recent session appears at top
 - **WHEN** a session receives a new AI response
