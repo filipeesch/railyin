@@ -226,7 +226,7 @@
       <template v-if="isPiEngine && availablePresets.length > 0">
         <Select
           :model-value="props.samplingPresetOverride ?? null"
-          :options="[{ name: null, label: 'Auto' }, ...availablePresets.map((p) => ({ name: p.name, label: p.name, params: p.params }))]"
+          :options="[{ name: null, label: 'Auto', description: '(column default)' }, ...availablePresets.map((p) => ({ name: p.name, label: p.name, params: p.params }))]"
           optionLabel="label"
           optionValue="name"
           size="small"
@@ -239,6 +239,7 @@
           <template #option="{ option }">
             <div class="preset-select__option">
               <div class="preset-select__option-title">{{ option.label }}</div>
+              <div v-if="option.description" class="preset-select__option-params">{{ option.description }}</div>
               <div v-if="option.params" class="preset-select__option-params">
                 <span v-if="option.params.temperature != null">temp: {{ option.params.temperature }}</span>
                 <span v-if="option.params.top_p != null">top_p: {{ option.params.top_p }}</span>

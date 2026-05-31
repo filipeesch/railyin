@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Database } from "bun:sqlite";
 import { ChatExecutor } from "../engine/execution/chat-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
+import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
@@ -71,6 +72,9 @@ function makeExecutor(opts: {
   streamProcessor?: StubStreamProcessor;
 }): { executor: ChatExecutor; streamProcessor: StubStreamProcessor } {
   const streamProcessor = opts.streamProcessor ?? new StubStreamProcessor();
+  const paramsEnricher = opts.modelSettingsRepo
+    ? new ExecutionParamsEnricher(db, opts.modelSettingsRepo)
+    : undefined;
   const executor = new ChatExecutor(
     db,
     makeTestRegistry(new PassThroughEngine()),
@@ -78,7 +82,7 @@ function makeExecutor(opts: {
     streamProcessor,
     new StubWorkdirResolver(),
     new CustomPromptInjector(),
-    opts.modelSettingsRepo,
+    paramsEnricher,
     opts.boardTools,
     opts.onNewMessage,
   );

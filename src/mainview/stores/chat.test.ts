@@ -18,6 +18,7 @@ function makeChatSession(overrides: Partial<import("@shared/rpc-types").ChatSess
     conversationId: 10,
     model: null,
     enabledMcpTools: null,
+    samplingPresetOverride: null,
     lastActivityAt: new Date().toISOString(),
     lastReadAt: new Date().toISOString(),
     archivedAt: null,

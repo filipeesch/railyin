@@ -2,9 +2,8 @@ import type { Database } from "bun:sqlite";
 import type { ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
-import { getDefaultWorkspaceKey } from "../workspace-context.ts";
-import { getWorkspaceConfig } from "../config/index.ts";
-import type { PiEngineConfig } from "../config/index.ts";
+import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
+import type { PiEngineConfig, SamplingPreset as ConfigSamplingPreset } from "../config/index.ts";
 
 function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinator {
   if (!o) throw new Error("Engine not initialized — check workspace config");
@@ -119,9 +118,10 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
       );
 
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
-      const piEngine = workspaceConfig.engines.find((e): e is PiEngineConfig => e.type === "pi");
-      const piPresets = piEngine?.sampling_presets
-        ? Object.entries(piEngine.sampling_presets).map(([name, params]) => ({ name, params }))
+      const piEngineEntry = workspaceConfig.engines.find((e) => e.config.type === "pi");
+      const piConfig = piEngineEntry?.config as PiEngineConfig | undefined;
+      const piPresets: Array<{ name: string; params: ConfigSamplingPreset }> | undefined = piConfig?.sampling_presets
+        ? Object.entries(piConfig.sampling_presets).map(([name, params]) => ({ name, params }))
         : undefined;
 
       return filteredModels
