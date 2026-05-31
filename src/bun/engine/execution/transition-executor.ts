@@ -16,9 +16,9 @@ import type { IWorkspaceRepository } from "../../db/workspace-repository";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
-import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
 import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
+import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 
 
 export class TransitionExecutor {
@@ -35,7 +35,7 @@ export class TransitionExecutor {
     private readonly customPromptInjector: CustomPromptInjector,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
-    private readonly modelSettingsRepo?: ModelSettingsRepository,
+    private readonly paramsEnricher?: ExecutionParamsEnricher,
   ) {}
 
   async execute(
@@ -133,7 +133,7 @@ export class TransitionExecutor {
     
     const userContent = [historyBlock, decisionsBlock, resolvedPrompt].filter(Boolean).join("\n\n");
 
-    const execParams = {
+    const baseParams = {
       ...this.paramsBuilder.build(
         updatedRow,
         conversationId,
@@ -151,9 +151,16 @@ export class TransitionExecutor {
       onSoftCancel: () => this.streamProcessor.abort(executionId),
       ...(this.onTransitionCallback ? { onTransition: this.onTransitionCallback } : {}),
       ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
-      ...(this.modelSettingsRepo && effectiveModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, effectiveModel) ?? undefined } : {}),
-      ...(column.sampling_preset !== undefined ? { samplingPresetName: column.sampling_preset } : {}),
     };
+
+    const execParams = this.paramsEnricher
+      ? this.paramsEnricher.enrich(baseParams, {
+          workspaceKey,
+          conversationId,
+          columnPreset: column.sampling_preset,
+          model: effectiveModel ?? "",
+        })
+      : baseParams;
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);

@@ -16,6 +16,7 @@ export interface ConversationRow {
   task_id: number | null;
   model: string | null;
   decisions_injected_after_compaction_id: number | null;
+  sampling_preset_override: string | null;
 }
 
 export interface TaskRow {
@@ -44,6 +45,7 @@ export interface TaskRow {
   needs_column_prompt: number;
   // Field from LEFT JOIN conversations (populated by extended queries)
   conversation_model?: string | null;
+  conversation_sampling_preset_override?: string | null;
 }
 
 export interface TaskGitContextRow {
@@ -129,4 +131,5 @@ export interface ChatSessionRow {
   archived_at: string | null;
   created_at: string;
   conversation_model?: string | null;
+  conversation_sampling_preset_override?: string | null;
 }
