@@ -90,6 +90,31 @@ test.describe("A — Live streaming", () => {
       timeout: 5_000,
     });
   });
+
+  test("A-3: tool_call with humanized label renders correctly in .tc__tool-name", async ({ page, api, ws, task }) => {
+    api.returns("conversations.getMessages", { messages: [], hasMore: false });
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    const humanizedToolCallEvent: StreamEvent = {
+      taskId: task.id,
+      conversationId: task.conversationId,
+      executionId: EXEC_ID,
+      seq: 1,
+      blockId: "tool-block-humanized",
+      type: "tool_call",
+      content: JSON.stringify({ display: { label: "other-server do thing" } }),
+      metadata: null,
+      parentBlockId: null,
+      subagentId: null,
+      done: false,
+    };
+    ws.pushStreamEvent(humanizedToolCallEvent);
+
+    await expect(page.locator(".conv-body .tc__tool-name").first()).toContainText("other-server do thing", {
+      timeout: 5_000,
+    });
+  });
 });
 
 // ─── Suite B — Rendering isolation ────────────────────────────────────────────

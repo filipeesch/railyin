@@ -179,3 +179,36 @@ describe("Copilot watchdog heartbeat (Bug B)", () => {
     expect(heartbeatCount.value).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("Copilot unknown tool name humanization", () => {
+  it("humanizes underscore-separated tool name in display label", async () => {
+    const session = new MockCopilotSession().queueTurn({
+      steps: [
+        toolStart("c1", "my_custom_tool", {}),
+        toolResult("c1", "ok"),
+        done(),
+      ],
+    });
+
+    const events = await collectEvents(session);
+    const toolStartEvent = events.find((e): e is Extract<EngineEvent, { type: "tool_start" }> => e.type === "tool_start");
+
+    expect(toolStartEvent).toBeDefined();
+    expect(toolStartEvent?.display?.label).toBe("my custom tool");
+  });
+
+  it("humanizes external MCP tool name to server-tool label", async () => {
+    const session = new MockCopilotSession().queueTurn({
+      steps: [
+        toolStart("c1", "mcp__other-server__do_thing", {}),
+        toolResult("c1", "ok"),
+        done(),
+      ],
+    });
+
+    const events = await collectEvents(session);
+    const toolStartEvent = events.find((e): e is Extract<EngineEvent, { type: "tool_start" }> => e.type === "tool_start");
+
+    expect(toolStartEvent?.display?.label).toBe("other-server do thing");
+  });
+});
