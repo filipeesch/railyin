@@ -420,7 +420,6 @@ async function onBoardChange() {
 
 async function onWorkspaceChange(workspaceKey: string) {
   await workspaceStore.selectWorkspace(workspaceKey);
-  boardStore.selectFirstBoardInWorkspace(workspaceKey);
 }
 
 function onCardPointerDown(event: PointerEvent, taskId: number) {

@@ -3,6 +3,7 @@
  *
  * Suites:
  *   WS-P — workspace persistence (localStorage)
+ *   WS-SW — workspace switch
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -104,5 +105,70 @@ describe("WS-P — workspace persistence", () => {
         await nextTick();
 
         expect(fakeStorage["railyn.activeWorkspaceKey"]).toBe(JSON.stringify("new-ws"));
+    });
+});
+
+// ─── WS-SW — workspace switch ────────────────────────────────────────────────
+
+describe("WS-SW — workspace switch", () => {
+    beforeEach(() => {
+        fakeStorage = {};
+        setActivePinia(createPinia());
+        apiMock.mockReset();
+    });
+
+    it("WS-SW-1: selectWorkspace() triggers workspace.getConfig with new key", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        apiMock.mockImplementation((async (method: string, params: unknown) => {
+            if (method === "workspace.getConfig") {
+                return { key: (params as { workspaceKey?: string }).workspaceKey, name: "Test", workflows: [] };
+            }
+            return [];
+        }) as any);
+
+        const store = useWorkspaceStore();
+        await store.selectWorkspace("ws-new");
+
+        expect(apiMock).toHaveBeenCalledWith("workspace.getConfig", { workspaceKey: "ws-new" });
+    });
+
+    it("WS-SW-2: selectWorkspace() persists key AND loads config in sequence", async () => {
+        let configCalled = false;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        apiMock.mockImplementation((async (method: string, params: unknown) => {
+            if (method === "workspace.getConfig") {
+                configCalled = true;
+                return { key: (params as { workspaceKey?: string }).workspaceKey, name: "Test", workflows: [] };
+            }
+            return [];
+        }) as any);
+
+        const store = useWorkspaceStore();
+        await store.selectWorkspace("ws-new");
+
+        // Key should be persisted to localStorage
+        expect(fakeStorage["railyn.activeWorkspaceKey"]).toBe(JSON.stringify("ws-new"));
+        // Config should have been loaded
+        expect(configCalled).toBe(true);
+    });
+
+    it("WS-SW-3: rapid selectWorkspace() calls converge — last key wins", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        apiMock.mockImplementation((async (method: string, params: unknown) => {
+            if (method === "workspace.getConfig") {
+                return { key: (params as { workspaceKey?: string }).workspaceKey, name: "Test", workflows: [] };
+            }
+            return [];
+        }) as any);
+
+        const store = useWorkspaceStore();
+        // Rapid calls without awaiting between each
+        store.selectWorkspace("ws-a");
+        store.selectWorkspace("ws-b");
+        await store.selectWorkspace("ws-c");
+
+        // Final key should be "ws-c"
+        expect(store.activeWorkspaceKey).toBe("ws-c");
+        expect(fakeStorage["railyn.activeWorkspaceKey"]).toBe(JSON.stringify("ws-c"));
     });
 });
