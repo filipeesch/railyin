@@ -4,7 +4,7 @@ Defines the sampling parameter preset system for the Pi engine — how presets a
 ## Requirements
 
 ### Requirement: Sampling preset definition in engines.yaml
-The Pi engine config in `engines.yaml` SHALL support an optional `sampling_presets` map where keys are preset names and values are objects containing any combination of `temperature` (number), `top_p` (number), `top_k` (number), and `presence_penalty` (number). The Pi engine config SHALL also support an optional `default_sampling_preset` string that names which preset to apply when a column specifies none. All preset fields are optional — omitted fields are not sent to the LLM API.
+The Pi engine config in `engines.yaml` SHALL support an optional `sampling_presets` map where keys are preset names (stable identifiers used in column config and the DB) and values are objects containing any combination of `label` (string), `description` (string), `temperature` (number), `top_p` (number), `top_k` (number), and `presence_penalty` (number). `label` is the human-readable display name shown in the UI selector; if omitted, the YAML key is used as the label. `description` is optional explanatory text shown as a subtitle in the selector dropdown. Numeric sampling fields are optional — omitted fields are not sent to the LLM API. The Pi engine config SHALL also support an optional `default_sampling_preset` string that names which preset to apply when a column specifies none. All preset fields are optional — omitted fields are not sent to the LLM API.
 
 #### Scenario: Pi engine config with sampling_presets is parsed
 - **WHEN** `engines.yaml` contains a Pi engine entry with `sampling_presets` and `default_sampling_preset`
@@ -13,6 +13,14 @@ The Pi engine config in `engines.yaml` SHALL support an optional `sampling_prese
 #### Scenario: Pi engine config without sampling_presets is valid
 - **WHEN** `engines.yaml` contains a Pi engine entry with no `sampling_presets` field
 - **THEN** the engine loads successfully with `sampling_presets` defaulting to an empty map and `default_sampling_preset` defaulting to `undefined`
+
+#### Scenario: Pi engine preset with label and description
+- **WHEN** a preset entry contains `label: "Creative / Design"` and `description: "High temp for brainstorming"`
+- **THEN** `SamplingPreset.label` is `"Creative / Design"` and `SamplingPreset.description` is `"High temp for brainstorming"`
+
+#### Scenario: Pi engine preset without label falls back to key
+- **WHEN** a preset entry has no `label` field
+- **THEN** `SamplingPreset.label` is `undefined` and the UI falls back to displaying the YAML key as the name
 
 ### Requirement: Workflow column references a sampling preset by name
 A workflow column config SHALL support an optional `sampling_preset` string field that references a preset name defined in the Pi engine's `sampling_presets` map.

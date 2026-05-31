@@ -226,7 +226,7 @@
       <template v-if="isPiEngine && availablePresets.length > 0">
         <Select
           :model-value="props.samplingPresetOverride ?? null"
-          :options="[{ name: null, label: 'Auto', description: '(column default)' }, ...availablePresets.map((p) => ({ name: p.name, label: p.name, params: p.params }))]"
+          :options="[{ name: null, label: 'Auto', description: '(column default)' }, ...availablePresets.map((p) => ({ name: p.name, label: p.params.label ?? p.name, description: p.params.description, params: p.params }))]"
           optionLabel="label"
           optionValue="name"
           size="small"
@@ -234,7 +234,7 @@
           @change="(e: { value: string | null }) => emit('update:samplingPresetOverride', e.value)"
         >
           <template #value="{ value }">
-            <span class="preset-select__value">{{ value ?? 'Auto' }}</span>
+            <span class="preset-select__value">{{ value != null ? (availablePresets.find((p) => p.name === value)?.params.label ?? value) : 'Auto' }}</span>
           </template>
           <template #option="{ option }">
             <div class="preset-select__option">

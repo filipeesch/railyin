@@ -118,6 +118,10 @@ export interface ModelInfo {
 
 /** Sampling parameters for a named preset (Pi engine). */
 export interface SamplingPreset {
+  /** Optional human-readable display name shown in the preset selector. Falls back to the preset key. */
+  label?: string;
+  /** Optional description shown as subtitle in the preset selector dropdown option. */
+  description?: string;
   temperature?: number;
   top_p?: number;
   top_k?: number;
