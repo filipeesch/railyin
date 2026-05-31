@@ -487,11 +487,11 @@ const activeModelInfo = computed(() => {
   return workspaceStore.availableModels.find((m) => m.id === selectedId) ?? null;
 });
 
-const isPiEngine = computed(() => activeModelInfo.value?.engineId === "pi");
+// Use presence of availablePresets as the signal — backend only attaches them for pi-type engines,
+// regardless of the engine's custom id (e.g. "pi-local").
+const availablePresets = computed(() => activeModelInfo.value?.availablePresets ?? []);
 
-const availablePresets = computed(() =>
-  isPiEngine.value ? (activeModelInfo.value?.availablePresets ?? []) : []
-);
+const isPiEngine = computed(() => availablePresets.value.length > 0);
 
 const supportsManualCompact = computed(() => {
   // In task context (taskId is set), never fall back to the first available model —

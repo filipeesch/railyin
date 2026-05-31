@@ -118,11 +118,20 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
       );
 
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
-      const piEngineEntry = workspaceConfig.engines.find((e) => e.config.type === "pi");
-      const piConfig = piEngineEntry?.config as PiEngineConfig | undefined;
-      const piPresets: Array<{ name: string; params: ConfigSamplingPreset }> | undefined = piConfig?.sampling_presets
-        ? Object.entries(piConfig.sampling_presets).map(([name, params]) => ({ name, params }))
-        : undefined;
+
+      // Build a map of engineId → presets for all pi-type engines (id may differ from "pi")
+      const piPresetsByEngineId = new Map<string, Array<{ name: string; params: ConfigSamplingPreset }>>();
+      for (const entry of workspaceConfig.engines) {
+        if (entry.config.type === "pi") {
+          const piConfig = entry.config as PiEngineConfig;
+          if (piConfig.sampling_presets) {
+            piPresetsByEngineId.set(
+              entry.id,
+              Object.entries(piConfig.sampling_presets).map(([name, params]) => ({ name, params })),
+            );
+          }
+        }
+      }
 
       return filteredModels
         .map((m) => {
@@ -131,6 +140,7 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
             : null;
           const contextWindow = dbOverride ?? m.contextWindow ?? null;
           const engineId = m.qualifiedId != null ? m.qualifiedId.split("/")[0] : "copilot";
+          const availablePresets = piPresetsByEngineId.get(engineId);
           return {
             id: m.qualifiedId,
             displayName: m.displayName,
@@ -139,7 +149,7 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
             supportsManualCompact: m.supportsManualCompact,
             ...(m.contextWindowEditable ? { contextWindowEditable: true } : {}),
             engineId,
-            ...(engineId === "pi" && piPresets ? { availablePresets: piPresets } : {}),
+            ...(availablePresets ? { availablePresets } : {}),
           };
         })
         .filter((m) => !m.contextWindowEditable || m.contextWindow != null);
