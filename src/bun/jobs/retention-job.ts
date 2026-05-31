@@ -19,7 +19,8 @@ export class RetentionJob {
     this.db.run("DELETE FROM model_raw_messages WHERE created_at < datetime('now', '-1 day')");
     this.db.run("DELETE FROM stream_events WHERE created_at < datetime('now', '-4 hours')");
     // Collect conversation IDs owned by expired archived chat sessions, then delete
-    // the chat sessions first (to free the FK reference), then delete the conversations
+    // the chat sessions first (to free the FK reference), then clean up executions
+    // (no FK cascade in production — must be explicit), then delete the conversations
     // so that ON DELETE CASCADE propagates to conversation_messages and stream_events.
     const staleConversationIds = this.db
       .query<{ conversation_id: number }, []>(
@@ -35,6 +36,16 @@ export class RetentionJob {
 
     if (staleConversationIds.length > 0) {
       const placeholders = staleConversationIds.map(() => "?").join(", ");
+      // Delete task_execution_checkpoints before executions (no ON DELETE CASCADE on execution_id)
+      this.db.run(
+        `DELETE FROM task_execution_checkpoints WHERE execution_id IN (SELECT id FROM executions WHERE conversation_id IN (${placeholders}))`,
+        staleConversationIds,
+      );
+      // executions.conversation_id has no FK cascade — delete explicitly
+      this.db.run(
+        `DELETE FROM executions WHERE conversation_id IN (${placeholders})`,
+        staleConversationIds,
+      );
       this.db.run(`DELETE FROM conversations WHERE id IN (${placeholders})`, staleConversationIds);
     }
   }
@@ -63,7 +74,7 @@ export class RetentionJob {
     while (this.running) {
       await new Promise<void>((resolve) => {
         this.tickResolve = resolve;
-        this.waitFn(5 * 60_000).then(() => {
+        this.waitFn(60 * 60_000).then(() => {
           if (this.tickResolve === resolve) {
             this.tickResolve = null;
             resolve();

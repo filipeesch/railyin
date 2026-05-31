@@ -254,4 +254,25 @@ describe("RetentionJob — RJ-5: archived chat session hard-delete", () => {
     expect(countChatSessions(db)).toBe(0);
     expect(countStreamEvents(db)).toBe(0);
   });
+
+  it("RJ-5f: explicitly deletes executions linked to hard-deleted sessions", () => {
+    const { sessionId, conversationId } = seedChatSession(db);
+    db.run(
+      "INSERT INTO executions (conversation_id, from_state, to_state, status, attempt) VALUES (?, 'idle', 'idle', 'completed', 1)",
+      [conversationId],
+    );
+    db.run(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+      [sessionId],
+    );
+    const execCount = () => db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM executions").get()!.n;
+    expect(execCount()).toBe(2); // 1 from beforeEach + 1 for chat session
+
+    const job = new RetentionJob(db);
+    job.runNow();
+
+    expect(countChatSessions(db)).toBe(0);
+    // The chat execution is removed; the task execution from beforeEach remains
+    expect(execCount()).toBe(1);
+  });
 });
