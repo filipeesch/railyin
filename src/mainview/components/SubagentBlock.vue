@@ -65,7 +65,7 @@ defineProps<{
   childEntries?: ToolEntry[];
 }>();
 
-const open = ref(true);
+const open = ref(false);
 </script>
 
 <style scoped>

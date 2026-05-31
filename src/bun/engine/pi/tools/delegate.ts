@@ -103,11 +103,14 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
               prompt: {
                 type: "string",
                 description:
-                  "Self-contained instruction for a fresh agent with no prior context. " +
-                  "Include: file path(s), expected interface/contract, relevant constraints. " +
-                  "The child has no conversation history — everything it needs must be here. " +
-                  'Bad: "Implement the auth module." ' +
-                  'Good: "Create src/auth/token.ts exporting signToken(payload, secret) and verifyToken(token, secret) using the jose library already in package.json."',
+                  "Self-contained brief for a fresh agent with no prior context. " +
+                  "Structure it with these sections:\n" +
+                  "GOAL: one sentence stating exactly what to produce.\n" +
+                  "SCOPE: explicit file paths or directories to look at — be specific.\n" +
+                  "OUT OF SCOPE: what to skip even if encountered (avoids rabbit holes).\n" +
+                  "DONE WHEN: a concrete, checkable condition — the agent stops as soon as this is met.\n" +
+                  "OUTPUT FORMAT: how to return the result (e.g. markdown summary, bullet list of findings, code snippet).\n" +
+                  "The child has no conversation history — everything it needs must be in this prompt.",
               },
               tools: {
                 type: "array",
