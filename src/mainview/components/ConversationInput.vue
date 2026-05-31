@@ -752,14 +752,11 @@ defineExpose({ focus: () => chatEditorRef.value?.focus() });
 
 .input-preset-select {
   min-width: 80px;
-  max-width: 160px;
   font-size: 0.8rem;
 }
 
 .preset-select__value {
   font-size: 0.8rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
