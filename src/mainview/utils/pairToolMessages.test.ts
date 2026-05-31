@@ -122,4 +122,28 @@ describe("pairToolMessages", () => {
     expect(entries[0].call).toBe(badCall);
     expect(entries[0].result).toBeNull();
   });
+
+  // NEW: orphaned child (parent absent from slice) is promoted to top-level
+  test("orphaned subagent child (parent missing) — returned as top-level entry", () => {
+    const orphan = makeCall("call_ORPHAN", { parentCallId: "call_MISSING" });
+    const entries = pairToolMessages([orphan]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].call).toBe(orphan);
+    expect(entries[0].children).toHaveLength(0);
+  });
+
+  // NEW: mixed page — nested child stays nested; orphan floats to top-level
+  test("mixed page — child with present parent nests, child with absent parent is top-level", () => {
+    const spawnCall = makeCall("call_SPAWN", { name: "spawn_agent" });
+    const childA = makeCall("call_CA", { parentCallId: "call_SPAWN" });
+    const childB = makeCall("call_CB", { parentCallId: "call_MISSING" });
+
+    const entries = pairToolMessages([spawnCall, childA, childB]);
+    expect(entries).toHaveLength(2); // spawnCall + childB
+    expect(entries[0].call).toBe(spawnCall);
+    expect(entries[0].children).toHaveLength(1);
+    expect(entries[0].children[0].call).toBe(childA);
+    expect(entries[1].call).toBe(childB);
+    expect(entries[1].children).toHaveLength(0);
+  });
 });

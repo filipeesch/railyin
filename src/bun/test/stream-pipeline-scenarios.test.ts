@@ -535,6 +535,97 @@ describe("S-11 [file-diff]: cancel/retry preserves nested file_diff parent assoc
 });
 
 // ---------------------------------------------------------------------------
+// S-13: Parallel subagent children with colliding callIds stay distinct in the
+// live stream. Local models (vLLM/Qwen) reuse per-session ids like "call_0", so
+// two parallel children can emit the SAME child tool callId. The live broadcast
+// blockId MUST be namespaced by the parent subagent bubble so the frontend store
+// (which keys blocks by blockId) does not silently drop the colliding sibling.
+// ---------------------------------------------------------------------------
+
+describe("S-13 [subagent]: parallel children with colliding callIds get distinct live blockIds", () => {
+    it("namespaces child tool_call/tool_result blockId by parent bubble; siblings do not collide", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            { type: "subagent_start", callId: "bubble-a", intent: "search A", prompt: "find A" },
+            scriptToolStart("call_0", "read_file", { path: "a.ts" }, { parentCallId: "bubble-a", isInternal: true }),
+            scriptToolResultWithOptions("call_0", "read_file", "content a", { parentCallId: "bubble-a", isInternal: true }),
+            { type: "subagent_start", callId: "bubble-b", intent: "search B", prompt: "find B" },
+            scriptToolStart("call_0", "read_file", { path: "b.ts" }, { parentCallId: "bubble-b", isInternal: true }),
+            scriptToolResultWithOptions("call_0", "read_file", "content b", { parentCallId: "bubble-b", isInternal: true }),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "delegate" });
+        await runtime.recorder.waitForStreamDone(executionId);
+
+        const ipc = runtime.getIpcEvents(executionId);
+        const childCalls = ipc.filter((e) => e.type === "tool_call" && (e.parentBlockId === "bubble-a" || e.parentBlockId === "bubble-b"));
+        const childResults = ipc.filter((e) => e.type === "tool_result" && (e.parentBlockId === "bubble-a" || e.parentBlockId === "bubble-b"));
+
+        const callA = childCalls.find((e) => e.parentBlockId === "bubble-a");
+        const callB = childCalls.find((e) => e.parentBlockId === "bubble-b");
+        expect(callA).toBeDefined();
+        expect(callB).toBeDefined();
+
+        // Same raw callId in both children, but distinct live blockIds.
+        expect(callA!.blockId).not.toBe(callB!.blockId);
+
+        // Each child's tool_result must reuse its own (namespaced) tool_call blockId so the store can mark it done.
+        const resultA = childResults.find((e) => e.parentBlockId === "bubble-a");
+        const resultB = childResults.find((e) => e.parentBlockId === "bubble-b");
+        expect(resultA?.blockId).toBe(callA!.blockId);
+        expect(resultB?.blockId).toBe(callB!.blockId);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S-14: SINGLE subagent child that REUSES the same callId across SEQUENTIAL tool
+// calls. Local models (vLLM/Qwen) emit "call_0" again for the second tool call in
+// the same child session. Both occurrences must produce DISTINCT live blockIds so
+// the frontend store (keyed by blockId) renders BOTH nested tool calls instead of
+// silently dropping the second. Each tool_result must still resolve to its own
+// occurrence. This is the single-task variant of the streaming-nesting bug.
+// ---------------------------------------------------------------------------
+
+describe("S-14 [subagent]: single child reusing a callId sequentially gets distinct live blockIds", () => {
+    it("each occurrence of a repeated child callId is a distinct live block; results match their own occurrence", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            { type: "subagent_start", callId: "bubble", intent: "investigate", prompt: "look" },
+            // First tool call in the child: callId "call_0".
+            scriptToolStart("call_0", "read_file", { path: "first.ts" }, { parentCallId: "bubble", isInternal: true }),
+            scriptToolResultWithOptions("call_0", "read_file", "first content", { parentCallId: "bubble", isInternal: true }),
+            // Second tool call in the SAME child REUSES "call_0".
+            scriptToolStart("call_0", "read_file", { path: "second.ts" }, { parentCallId: "bubble", isInternal: true }),
+            scriptToolResultWithOptions("call_0", "read_file", "second content", { parentCallId: "bubble", isInternal: true }),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "delegate" });
+        await runtime.recorder.waitForStreamDone(executionId);
+
+        const ipc = runtime.getIpcEvents(executionId);
+        const childCalls = ipc.filter((e) => e.type === "tool_call" && e.parentBlockId === "bubble");
+        const childResults = ipc.filter((e) => e.type === "tool_result" && e.parentBlockId === "bubble");
+
+        // Both sequential occurrences must be broadcast (the second must NOT be dropped).
+        expect(childCalls).toHaveLength(2);
+        expect(childResults).toHaveLength(2);
+
+        // The two occurrences must have DISTINCT live blockIds despite sharing the raw callId.
+        expect(childCalls[0]!.blockId).not.toBe(childCalls[1]!.blockId);
+
+        // Each result must reuse the blockId of its own (matching) tool_call occurrence.
+        expect(childResults[0]!.blockId).toBe(childCalls[0]!.blockId);
+        expect(childResults[1]!.blockId).toBe(childCalls[1]!.blockId);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // S-12: Cancel stops streaming — no text_chunk events after done in IPC
 // Validates that the cancel abort signal propagates through the orchestrator
 // and prevents post-cancel events from being broadcast.

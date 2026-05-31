@@ -81,7 +81,7 @@ export function initDb(): Database {
     CREATE TABLE IF NOT EXISTS conversation_messages (
        id              INTEGER PRIMARY KEY AUTOINCREMENT,
        task_id         INTEGER REFERENCES tasks(id),
-       conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+       conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
        type            TEXT NOT NULL,
       role            TEXT,
       content         TEXT NOT NULL DEFAULT '',
@@ -157,7 +157,7 @@ export function initDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
     CREATE TABLE IF NOT EXISTS stream_events (
        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-       conversation_id INTEGER NOT NULL,
+       conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
        execution_id    INTEGER NOT NULL,
        seq             INTEGER NOT NULL,
        block_id        TEXT NOT NULL,

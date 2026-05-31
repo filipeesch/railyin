@@ -45,7 +45,7 @@ let _onNewMessage: (message: ConversationMessage) => void = () => { };
 let _onWorkflowReloaded: () => void = () => { };
 let _onCodeRef: (ref: CodeRef) => void = () => { };
 let _onChatSessionUpdated: (session: ChatSession) => void = () => { };
-let _onChatSessionCreated: (session: ChatSession) => void = () => { };
+let _onWsReconnect: (() => void) | null = null;
 
 // Per-token install line listeners — keyed by token, auto-cleaned when unregistered
 const _installLineListeners = new Map<string, (line: string) => void>();
@@ -57,7 +57,7 @@ export function onNewMessage(cb: (message: ConversationMessage) => void) { _onNe
 export function onWorkflowReloaded(cb: () => void) { _onWorkflowReloaded = cb; }
 export function onCodeRef(cb: (ref: CodeRef) => void) { _onCodeRef = cb; }
 export function onChatSessionUpdated(cb: (session: ChatSession) => void) { _onChatSessionUpdated = cb; }
-export function onChatSessionCreated(cb: (session: ChatSession) => void) { _onChatSessionCreated = cb; }
+export function onWsReconnect(cb: () => void) { _onWsReconnect = cb; }
 
 export function onInstallLine(token: string, cb: (line: string) => void) {
   _installLineListeners.set(token, cb);
@@ -76,6 +76,7 @@ function connectWs(): void {
   const ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
+    if (_wsRetries > 0) _onWsReconnect?.();
     _wsRetries = 0;
   };
 
@@ -94,7 +95,6 @@ function connectWs(): void {
       case "workflow.reloaded": _onWorkflowReloaded(); break;
       case "code.ref": _onCodeRef(msg.payload); break;
       case "chatSession.updated": _onChatSessionUpdated(msg.payload); break;
-      case "chatSession.created": _onChatSessionCreated(msg.payload); break;
       case "lsp.install.line": {
         const listener = _installLineListeners.get(msg.payload.token);
         if (listener) listener(msg.payload.line);

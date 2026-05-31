@@ -131,7 +131,7 @@ export function scriptStatus(message: string): EngineEvent {
     return { type: "status", message };
 }
 
-export function scriptToolStart(callId: string, name: string, args: Record<string, unknown> = {}, opts: { parentCallId?: string } = {}): EngineEvent {
+export function scriptToolStart(callId: string, name: string, args: Record<string, unknown> = {}, opts: { parentCallId?: string; isInternal?: boolean } = {}): EngineEvent {
     return { type: "tool_start", callId, name, arguments: JSON.stringify(args), ...opts };
 }
 
@@ -146,6 +146,8 @@ export function scriptToolResultWithOptions(
     options: {
         isError?: boolean;
         writtenFiles?: Array<import("../../../shared/rpc-types.ts").FileDiffPayload>;
+        parentCallId?: string;
+        isInternal?: boolean;
     } = {},
 ): EngineEvent {
     return {
@@ -155,6 +157,8 @@ export function scriptToolResultWithOptions(
         result,
         isError: options.isError ?? false,
         writtenFiles: options.writtenFiles,
+        ...(options.parentCallId !== undefined ? { parentCallId: options.parentCallId } : {}),
+        ...(options.isInternal !== undefined ? { isInternal: options.isInternal } : {}),
     };
 }
 

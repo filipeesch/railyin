@@ -13,7 +13,8 @@ import Toast from "primevue/toast";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
-import { onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef, onChatSessionUpdated, onChatSessionCreated } from "./rpc";
+import { onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef, onChatSessionUpdated, onWsReconnect } from "./rpc";
+import { useSessionSyncHandler } from "./composables/useSessionSyncHandler";
 import { getTaskActivityToast } from "./task-activity";
 import { useCodeServerStore } from "./stores/codeServer";
 import { useChatStore } from "./stores/chat";
@@ -76,7 +77,6 @@ onMounted(async () => {
   });
 
   onChatSessionUpdated((session) => chatStore.onChatSessionUpdated(session));
-  onChatSessionCreated((session) => chatStore.onChatSessionUpdated(session));
 
   // Boot: load workspace config
   await workspaceStore.loadWorkspaces();
@@ -95,11 +95,15 @@ onMounted(async () => {
     router.push("/board");
   }
 
-  // Load chat sessions (workspace-scoped, not tied to a board)
-  chatStore.loadSessions(workspaceStore.activeWorkspaceKey ?? undefined).catch(console.error);
-
   // Load enabled models once now, then re-load on workspace switch
   workspaceStore.loadEnabledModels(workspaceStore.activeWorkspaceKey ?? undefined).catch(console.error);
+});
+
+// Reload sessions on workspace switch and WS reconnect
+useSessionSyncHandler({
+  onWsReconnect,
+  loadSessions: (key) => chatStore.loadSessions(key).catch(console.error),
+  watchKey: () => workspaceStore.activeWorkspaceKey,
 });
 
 // Re-load models whenever the active workspace changes

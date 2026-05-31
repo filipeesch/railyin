@@ -1115,5 +1115,4 @@ export type PushMessage =
   | { type: "workflow.reloaded"; payload: Record<string, never> }
   | { type: "code.ref"; payload: CodeRef }
   | { type: "chatSession.updated"; payload: ChatSession }
-  | { type: "chatSession.created"; payload: ChatSession }
   | { type: "lsp.install.line"; payload: { token: string; line: string } };

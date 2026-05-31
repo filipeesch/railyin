@@ -89,6 +89,8 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "create_task",
     description:
+      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to create a board task/card. " +
+      "Do NOT use this to track your own work or break down your current task — use the todo tools (create_todo) for that.\n\n" +
       "Create a new task in the backlog column of a board.\n\n" +
       "Usage:\n" +
       "- Starts in 'idle' execution state; use move_task to start it\n" +
@@ -109,6 +111,8 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "edit_task",
     description:
+      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to edit a board task/card. " +
+      "Do NOT use this to track your own work — use the todo tools (edit_todo) for that.\n\n" +
       "Update the title and/or description of a task.\n\n" +
       "Usage:\n" +
       "- Only allowed before a worktree/branch has been created\n" +
@@ -126,6 +130,8 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "delete_task",
     description:
+      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to delete a board task/card. " +
+      "Never use this to manage your own work items — use the todo tools instead.\n\n" +
       "Fully delete a task and all its data including conversation history, executions, and worktree.\n\n" +
       "Usage:\n" +
       "- Git branch is preserved; only task data is removed\n" +
@@ -141,6 +147,8 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "move_task",
     description:
+      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to move a board task/card between columns. " +
+      "Do NOT use this to mark your own progress — use update_todo_status for that.\n\n" +
       "Move a task to a different workflow column.\n\n" +
       "Usage:\n" +
       "- workflow_state is updated immediately\n" +
@@ -158,6 +166,8 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "message_task",
     description:
+      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to message another board task. " +
+      "This is for inter-task communication, not for your own notes or work tracking.\n\n" +
       "Append a message to another task's conversation and trigger its AI model.\n\n" +
       "Usage:\n" +
       "- Returns 'delivered' (idle/waiting) or 'queued' (running — delivered when execution finishes)\n" +

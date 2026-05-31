@@ -68,8 +68,10 @@ engines:
   #       enabled: true          # set false to disable the delegate tool entirely
   #       max_per_call: 5        # max sub-tasks per delegate call (1-10, default: 5)
   #       # max_concurrency: 3   # optional: override effective concurrency cap
-  #       allow_tools:           # tool groups children may use (default: ["read"])
-  #         - read
+  #       allow_tools:           # tool groups children may use (default: ["read","write","shell"])
+  #         - read               # children share the parent worktree and can edit files / run shell
+  #         - write
+  #         - shell
   #         # - web
   #     background_compaction:
   #       enabled: true          # opportunistic bg compaction (default: true)

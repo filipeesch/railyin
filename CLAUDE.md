@@ -31,7 +31,7 @@ The Pi engine has three parallelism features to leverage concurrent request capa
 
 **Provider concurrency limiter** — `PiProviderConfig.max_inflight` (default: 8) caps concurrent in-flight requests to each provider across all Pi sessions. All inference calls (parent, delegate children, background compaction) share this pool.
 
-**`delegate` tool** — When enabled (`harness.delegate.enabled: true`), the parent agent can fan out independent sub-tasks to parallel child sessions via the `delegate` tool. Children run concurrently up to `min(max_per_call, provider.max_inflight)` and return a markdown digest. Children get read-only tools only; they never receive write, shell, or delegate.
+**`delegate` tool** — When enabled (`harness.delegate.enabled: true`), the parent agent can fan out independent sub-tasks to parallel child sessions via the `delegate` tool. Children run concurrently up to `min(max_per_call, provider.max_inflight)` and return a markdown digest. Children operate on the shared parent worktree and can read, edit files, and run shell commands (default groups `read`, `write`, `shell`); they additionally get TODO tools. Children never receive `delegate` (no recursive fan-out) or board-mutating/decision/note common tools. Assign each child a disjoint file scope — concurrent edits to the same file are last-write-wins.
 
 **Background compaction** — When `harness.background_compaction.enabled: true`, compaction is triggered opportunistically between turns when context usage exceeds `contextWindow - (16384 + early_margin_tokens)`. Uses a non-blocking slot acquire so it never blocks foreground requests.
 
