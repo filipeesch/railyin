@@ -156,4 +156,98 @@ test.describe("Board workspace navigation", () => {
         await expect(page.locator(".session-item", { hasText: "Session WS-B" })).toBeVisible();
         await expect(page.locator(".session-item", { hasText: "Session WS-A" })).not.toBeVisible();
     });
+
+    test("WS-NAV-6: rapid switching converges to correct final state", async ({ page, api }) => {
+        api.returns("workspace.list", [
+            { key: "ws-a", name: "Workspace A" },
+            { key: "ws-b", name: "Workspace B" },
+            { key: "ws-c", name: "Workspace C" },
+        ]);
+        api.handle("workspace.getConfig", ({ workspaceKey }) =>
+            makeWorkspace({ key: workspaceKey ?? "ws-a" }),
+        );
+
+        const sessionCalls = api.capture("chatSessions.list", []);
+
+        await navigateToBoard(page);
+
+        // Clear calls from initial mount
+        sessionCalls.length = 0;
+
+        // Rapidly click three workspace tabs
+        await page.locator(".workspace-tab", { hasText: "Workspace A" }).click();
+        await page.locator(".workspace-tab", { hasText: "Workspace B" }).click();
+        await page.locator(".workspace-tab", { hasText: "Workspace C" }).click();
+
+        // Final state should show ws-c sessions
+        await expect.poll(() => sessionCalls.length).toBeGreaterThanOrEqual(1);
+        const lastCall = sessionCalls[sessionCalls.length - 1];
+        expect(lastCall.workspaceKey).toBe("ws-c");
+    });
+
+    test("WS-NAV-7: revisit workspace restores sessions and boards (A→B→A round trip)", async ({ page, api }) => {
+        api.returns("workspace.list", [
+            { key: "ws-a", name: "Workspace A" },
+            { key: "ws-b", name: "Workspace B" },
+        ]);
+        api.handle("workspace.getConfig", ({ workspaceKey }) =>
+            makeWorkspace({ key: workspaceKey ?? "ws-a" }),
+        );
+
+        const sessionCalls = api.capture("chatSessions.list", []);
+
+        await navigateToBoard(page);
+
+        // Clear initial mount calls
+        sessionCalls.length = 0;
+
+        // Session A
+        const sessionA = makeChatSession({ workspaceKey: "ws-a", title: "Session A" });
+        // Session B
+        const sessionB = makeChatSession({ workspaceKey: "ws-b", title: "Session B" });
+
+        api.handle("chatSessions.list", ({ workspaceKey }) =>
+            workspaceKey === "ws-b" ? [sessionB] : [sessionA],
+        );
+
+        // Open sidebar to see sessions
+        const sidebarToggle = page.locator("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
+        if (await sidebarToggle.count() > 0) await sidebarToggle.first().click();
+        await expect(page.locator(".chat-sidebar")).toBeVisible({ timeout: 3_000 });
+
+        // Click Workspace B
+        await page.locator(".workspace-tab", { hasText: "Workspace B" }).click();
+        await expect(page.locator(".session-item", { hasText: "Session B" })).toBeVisible();
+
+        // Click back to Workspace A
+        await page.locator(".workspace-tab", { hasText: "Workspace A" }).click();
+        await expect(page.locator(".session-item", { hasText: "Session A" })).toBeVisible();
+        await expect(page.locator(".session-item", { hasText: "Session B" })).not.toBeVisible();
+    });
+
+    test("WS-NAV-8: workspace creation flow — create new WS, select it, verify stores refreshed", async ({ page, api }) => {
+        api.returns("workspace.list", [
+            { key: "ws-a", name: "Workspace A" },
+            { key: "ws-new", name: "New Workspace" },
+        ]);
+        api.handle("workspace.getConfig", ({ workspaceKey }) =>
+            makeWorkspace({ key: workspaceKey ?? "ws-a" }),
+        );
+
+        const sessionCalls = api.capture("chatSessions.list", []);
+        const boardCalls = api.capture("boards.list", []);
+
+        await navigateToBoard(page);
+
+        // Clear initial mount calls
+        sessionCalls.length = 0;
+        boardCalls.length = 0;
+
+        // Simulate selecting the newly created workspace
+        await page.locator(".workspace-tab", { hasText: "New Workspace" }).click();
+
+        // Both sessions and boards should have been reloaded for the new workspace
+        await expect.poll(() => sessionCalls.length).toBeGreaterThanOrEqual(1);
+        await expect.poll(() => boardCalls.length).toBeGreaterThanOrEqual(1);
+    });
 });

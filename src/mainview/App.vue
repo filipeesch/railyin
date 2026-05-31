@@ -14,7 +14,7 @@ import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
 import { onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef, onChatSessionUpdated, onWsReconnect } from "./rpc";
-import { useSessionSyncHandler } from "./composables/useSessionSyncHandler";
+import { useSessionSyncHandler } from "./composables/useSessionSyncHandler";import { useBoardSyncHandler } from "./composables/useBoardSyncHandler";
 import { getTaskActivityToast } from "./task-activity";
 import { useCodeServerStore } from "./stores/codeServer";
 import { useChatStore } from "./stores/chat";
@@ -103,6 +103,10 @@ onMounted(async () => {
 useSessionSyncHandler({
   onWsReconnect,
   loadSessions: (key) => chatStore.loadSessions(key).catch(console.error),
+  watchKey: () => workspaceStore.activeWorkspaceKey,
+});// Reload boards on workspace switch
+useBoardSyncHandler({
+  loadBoards: () => boardStore.loadBoards().catch(console.error),
   watchKey: () => workspaceStore.activeWorkspaceKey,
 });
 

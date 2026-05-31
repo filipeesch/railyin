@@ -249,3 +249,30 @@ describe("chatStore — loadSessions idempotency", () => {
     expect(store.sessions.every((s) => s.workspaceKey === "ws-2")).toBe(true);
   });
 });
+
+describe("chatStore — rapid key changes", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("C9: onChatSessionUpdated handles session arrival during rapid key changes", async () => {
+    const store = useChatStore();
+    const wsStore = useWorkspaceStore();
+
+    // Simulate rapid key changes: ws-1 → ws-2 → ws-3
+    wsStore.activeWorkspaceKey = "ws-1";
+    wsStore.activeWorkspaceKey = "ws-2";
+    wsStore.activeWorkspaceKey = "ws-3";
+
+    // Session arrives for ws-2 (the middle key that was quickly overwritten)
+    store.onChatSessionUpdated(makeChatSession({ id: 100, workspaceKey: "ws-2" }));
+
+    // Should be ignored since current key is ws-3, not ws-2
+    expect(store.sessions).toHaveLength(0);
+
+    // Session for current workspace should be accepted
+    store.onChatSessionUpdated(makeChatSession({ id: 101, workspaceKey: "ws-3" }));
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0].id).toBe(101);
+  });
+});
