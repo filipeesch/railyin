@@ -4,7 +4,7 @@
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
-import type { CommonToolContext, EngineEvent } from "../../types.ts";
+import type { CommonToolContext, EngineEvent, RawModelMessage } from "../../types.ts";
 import type { ChildSessionFactory } from "../child-session.ts";
 import type { ProviderLimiterRegistry } from "../provider-limiter.ts";
 import type { PiEngineConfig } from "../../../config/index.ts";
@@ -59,6 +59,8 @@ export interface AllToolsOptions {
   parentCwd?: string;
   /** Parent engine config — used by the delegate tool for its own config. */
   engineConfig?: PiEngineConfig;
+  /** Callback for forwarding child raw-model events to the observability pipeline. */
+  onRawModelMessage?: (message: RawModelMessage) => void;
 }
 
 export type { SuspendRef };

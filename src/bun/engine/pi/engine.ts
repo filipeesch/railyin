@@ -298,6 +298,7 @@ export class PiEngine implements ExecutionEngine {
       parentConversationId: conversationId,
       parentCwd: workingDirectory ?? process.cwd(),
       engineConfig: this.config,
+      onRawModelMessage,
     });
 
     // Look up the project path before session creation so it can be used when

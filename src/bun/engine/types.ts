@@ -118,6 +118,8 @@ export interface ExecutionParams {
 export interface RawModelMessage {
   engine: string;
   sessionId?: string;
+  /** Set when the message originates from a child session spawned by the `delegate` tool. */
+  parentToolCallId?: string;
   direction: "inbound" | "outbound" | "control";
   eventType: string;
   eventSubtype?: string;

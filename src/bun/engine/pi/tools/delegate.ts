@@ -12,7 +12,7 @@ import { statSync } from "node:fs";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { HarnessContext } from "../harness/context.ts";
-import type { EngineEvent } from "../../types.ts";
+import type { EngineEvent, RawModelMessage } from "../../types.ts";
 import type { ChildSessionFactory } from "../child-session.ts";
 import type { ProviderLimiterRegistry } from "../provider-limiter.ts";
 import type { PiEngineConfig } from "../../../config/index.ts";
@@ -29,20 +29,32 @@ export interface DelegateToolOptions {
   parentModel?: Model<"openai-completions">;
   parentSystemPrompt?: string;
   parentCwd?: string;
+  parentConversationId?: number;
   engineConfig?: PiEngineConfig;
+  /** Callback for forwarding child raw-model events to the parent's observability pipeline. */
+  onRawModelMessage?: (message: RawModelMessage) => void;
   /** Builds tools for child sessions — injected by buildAllTools to avoid circular imports. */
   buildChildTools?: (groups: string[]) => AgentTool<any>[];
 }
 
 type DelegateTask = { id: string; intent?: string; prompt: string; tools?: string[]; workingDirectory?: string };
 
+interface DelegateJobSummary {
+  id: string;
+  status: "ok" | "error";
+  durationMs: number;
+  tokens?: number;
+}
+
 export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToolOptions): AgentTool<any>[] {
   const {
     limiterRegistry,
     parentModel,
     parentCwd,
+    parentConversationId,
     engineConfig,
     delegateEmitRef,
+    onRawModelMessage,
     childSessionFactory = defaultChildSessionFactory,
     buildChildTools = () => [],
   } = opts;
@@ -144,7 +156,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
       toolCallId: string,
       _rawArgs: unknown,
       signal?: AbortSignal,
-    ): Promise<AgentToolResult<undefined>> => {
+    ): Promise<AgentToolResult<{ jobs: DelegateJobSummary[] } | undefined>> => {
       const args = _rawArgs as { tasks: DelegateTask[] };
       if (args.tasks.length > maxPerCall) {
         return {
@@ -213,10 +225,13 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
       const tasks = args.tasks;
       let taskPtr = 0;
       const results = new Array<PromiseSettledResult<{ id: string; text: string }>>(tasks.length);
+      const jobSummaries = new Array<DelegateJobSummary>(tasks.length);
 
       async function runChildTask(task: DelegateTask, idx: number): Promise<void> {
+        const startMs = Date.now();
         if (signal?.aborted) {
           results[idx] = { status: "rejected", reason: new DOMException("Aborted", "AbortError") };
+          jobSummaries[idx] = { id: task.id, status: "error", durationMs: Date.now() - startMs };
           return;
         }
 
@@ -247,14 +262,28 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
           });
 
           // Subscribe BEFORE prompting to capture all child events.
-          // Route child tool calls under childBlockId so they nest inside the per-child subagent bubble.
+          // - UI path: route tool_start/tool_result under childBlockId so they nest in the per-child bubble.
+          // - Observability path: forward raw inbound events via onRawModelMessage tagged with the delegate callId.
+          const childSessionId = parentConversationId != null ? `${parentConversationId}/${task.id}` : task.id;
           unsubscribe = handle.session.subscribe((event: AgentSessionEvent) => {
-            if (!delegateEmitRef?.emit) return;
-            const engineEvents = translateEvent(event as any, cwd);
-            for (const ev of engineEvents) {
-              if (ev.type === "tool_start" || ev.type === "tool_result") {
-                delegateEmitRef.emit({ ...ev, parentCallId: childBlockId, isInternal: true });
+            if (delegateEmitRef?.emit) {
+              const engineEvents = translateEvent(event as any, cwd);
+              for (const ev of engineEvents) {
+                if (ev.type === "tool_start" || ev.type === "tool_result") {
+                  delegateEmitRef.emit({ ...ev, parentCallId: childBlockId, isInternal: true });
+                }
               }
+            }
+
+            if (onRawModelMessage) {
+              onRawModelMessage({
+                engine: "pi",
+                sessionId: childSessionId,
+                parentToolCallId: toolCallId,
+                direction: "inbound",
+                eventType: event.type,
+                payload: event as unknown as Record<string, unknown>,
+              });
             }
           });
 
@@ -272,6 +301,8 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
               .join("") ?? "(no result)";
 
           results[idx] = { status: "fulfilled", value: { id: task.id, text } };
+          const usage = handle.session.getContextUsage?.();
+          jobSummaries[idx] = { id: task.id, status: "ok", durationMs: Date.now() - startMs, tokens: usage?.tokens };
 
           // Close the subagent bubble as succeeded (no parentCallId → root level).
           delegateEmitRef?.emit?.({
@@ -287,6 +318,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
             status: "rejected",
             reason: err instanceof Error ? err : new Error(String(err)),
           };
+          jobSummaries[idx] = { id: task.id, status: "error", durationMs: Date.now() - startMs };
 
           // Close the subagent bubble as errored (no parentCallId → root level).
           delegateEmitRef?.emit?.({
@@ -330,7 +362,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
         }
       }
 
-      return { content: [{ type: "text", text: lines.join("\n") }], details: undefined };
+      return { content: [{ type: "text", text: lines.join("\n") }], details: { jobs: jobSummaries } };
     },
   };
 

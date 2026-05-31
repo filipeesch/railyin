@@ -34,7 +34,9 @@ Five decisions framing this design (recorded via `decision_request` during explo
 
 ### Decision 1 — Subagent communication is one-shot tool semantics, plus UI-only progress
 
-The `delegate` tool is invoked once by the parent with `tasks: Array<{id, prompt, tools?}>`. Each child runs independently to completion. The final tool result is a single markdown digest the parent reads on its next turn. Per-child progress is visible in the UI through child `tool_start`/`tool_result` events tagged with `parentCallId = delegate_tool_call_id` and `isInternal: true` — these render as collapsible nested cards under the `delegate` tool call using the existing S-26 pattern, with no new UI code or new `EngineEvent` types required.
+The `delegate` tool is invoked once by the parent with `tasks: Array<{id, prompt, tools?}>`. Each child runs independently to completion. The final tool result is a single markdown digest the parent reads on its next turn.
+
+Per-child progress is visible in the UI through **root-level subagent bubbles**: each child emits a `subagent_start` event (a new `EngineEvent` type added for this feature) which creates its own top-level bubble. Child `tool_start`/`tool_result` events are tagged with `parentCallId = childBlockId` (the subagent bubble's own callId, not the delegate call's callId) and `isInternal: true`, so they render as nested cards inside each child's bubble. This was chosen over the original S-26 nested-under-delegate approach because it provides clearer per-agent status and intent display.
 
 **Why not richer protocols**: Bidirectional messaging (AutoGen / CrewAI shape) costs an extra LLM round-trip per message and is reliably mishandled by local models under 70B. A child→parent `report` tool was considered and rejected for v1: it introduces a new contract that local models would over- or under-use, and the same information arrives via the final digest anyway. The pure one-shot pattern matches Claude Code's `Task` and Copilot's `explore`/`research` subagents.
 
