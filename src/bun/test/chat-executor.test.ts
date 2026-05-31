@@ -7,6 +7,7 @@ import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
+import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
@@ -70,6 +71,7 @@ function makeExecutor(opts: {
   boardTools?: BoardToolExecutor;
   onNewMessage?: (msg: ConversationMessage) => void;
   streamProcessor?: StubStreamProcessor;
+  crossEngineInjector?: CrossEngineContextInjector;
 }): { executor: ChatExecutor; streamProcessor: StubStreamProcessor } {
   const streamProcessor = opts.streamProcessor ?? new StubStreamProcessor();
   const paramsEnricher = opts.modelSettingsRepo
@@ -82,6 +84,7 @@ function makeExecutor(opts: {
     streamProcessor,
     new StubWorkdirResolver(),
     new CustomPromptInjector(),
+    opts.crossEngineInjector ?? new CrossEngineContextInjector(db),
     paramsEnricher,
     opts.boardTools,
     opts.onNewMessage,
@@ -275,5 +278,155 @@ describe("CE-7: onNewMessage not called in pre-flight phase on successful execut
     await executor.execute(sessionId, conversationId, "hello", "copilot/gpt-4o");
 
     expect(called).toBe(false);
+  });
+});
+
+// ─── CE-8: historyBlock injected into params.prompt on engine switch ──────────
+
+describe("CE-8: historyBlock injected into params.prompt on engine switch", () => {
+  it("params.prompt contains <message_history> when last_engine_type differs from target engine", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "copilot/mock-model",
+      lastEngineType: "claude",
+    });
+    const { executor, streamProcessor } = makeExecutor({});
+
+    await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
+
+    expect(streamProcessor.lastRun).not.toBeNull();
+    expect(streamProcessor.lastRun!.params.prompt).toContain("<message_history>");
+  });
+
+  it("params.prompt starts with the engine-switch context header on switch", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "copilot/mock-model",
+      lastEngineType: "claude",
+    });
+    const { executor, streamProcessor } = makeExecutor({});
+
+    await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
+
+    expect(streamProcessor.lastRun).not.toBeNull();
+    expect(streamProcessor.lastRun!.params.prompt).toContain(
+      "## Context from previous conversation (engine switch)",
+    );
+  });
+});
+
+// ─── CE-9: no injection when same engine ──────────────────────────────────────
+
+describe("CE-9: no historyBlock injection when last_engine_type matches target engine", () => {
+  it("params.prompt equals the raw user content when engine has not changed", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "copilot/mock-model",
+      lastEngineType: "copilot",
+    });
+    const { executor, streamProcessor } = makeExecutor({});
+
+    await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
+
+    expect(streamProcessor.lastRun).not.toBeNull();
+    expect(streamProcessor.lastRun!.params.prompt).toBe("hello");
+  });
+});
+
+// ─── CE-10: no injection on first turn (null last_engine_type) ────────────────
+
+describe("CE-10: no historyBlock injection on first turn (null last_engine_type)", () => {
+  it("params.prompt equals the raw user content when last_engine_type is null", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
+    const { executor, streamProcessor } = makeExecutor({});
+
+    await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
+
+    expect(streamProcessor.lastRun).not.toBeNull();
+    expect(streamProcessor.lastRun!.params.prompt).toBe("hello");
+  });
+});
+
+// ─── CE-11: historyBlock not stored in conversation_messages ─────────────────
+
+describe("CE-11: historyBlock not stored in user conversation_messages row", () => {
+  it("the persisted user message content equals the original input, not the injected prompt", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "copilot/mock-model",
+      lastEngineType: "claude",
+    });
+    const { executor } = makeExecutor({});
+
+    await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
+
+    const userMsg = db.query<{ content: string }, [number]>(
+      "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'user'",
+    ).get(conversationId);
+    expect(userMsg).not.toBeNull();
+    expect(userMsg!.content).toBe("hello");
+    expect(userMsg!.content).not.toContain("<message_history>");
+  });
+});
+
+// ─── CE-12: conversations.last_engine_type written after execute ──────────────
+
+describe("CE-12: conversations.last_engine_type written after execute", () => {
+  it("sets last_engine_type to 'copilot' after executing with 'copilot/mock-model'", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
+    const { executor } = makeExecutor({});
+
+    await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
+
+    const row = db.query<{ last_engine_type: string | null }, [number]>(
+      "SELECT last_engine_type FROM conversations WHERE id = ?",
+    ).get(conversationId);
+    expect(row?.last_engine_type).toBe("copilot");
+  });
+
+  it("updates last_engine_type to 'claude' after switching from copilot to 'claude/claude-sonnet-4-5'", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "copilot/mock-model",
+      lastEngineType: "copilot",
+    });
+    const { executor } = makeExecutor({});
+
+    await executor.execute(sessionId, conversationId, "hello", "claude/claude-sonnet-4-5");
+
+    const row = db.query<{ last_engine_type: string | null }, [number]>(
+      "SELECT last_engine_type FROM conversations WHERE id = ?",
+    ).get(conversationId);
+    expect(row?.last_engine_type).toBe("claude");
+  });
+});
+
+// ─── CE-13: last_engine_type NOT written on Pi pre-flight failure ─────────────
+
+describe("CE-13: last_engine_type not written when Pi pre-flight exits early", () => {
+  it("leaves last_engine_type unchanged when Pi engine has no configured context window", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "pi/some-model",
+      lastEngineType: "copilot",
+    });
+    const { executor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
+
+    await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
+
+    const row = db.query<{ last_engine_type: string | null }, [number]>(
+      "SELECT last_engine_type FROM conversations WHERE id = ?",
+    ).get(conversationId);
+    expect(row?.last_engine_type).toBe("copilot");
+  });
+});
+
+// ─── CE-14: model-update condition syncs DB model when model changes ──────────
+
+describe("CE-14: model-update syncs conversations.model when model changes", () => {
+  it("updates conversations.model when execute is called with a different model", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/v1" });
+    const { executor } = makeExecutor({});
+
+    await executor.execute(sessionId, conversationId, "hello", "copilot/v2");
+
+    const row = db.query<{ model: string | null }, [number]>(
+      "SELECT model FROM conversations WHERE id = ?",
+    ).get(conversationId);
+    expect(row?.model).toBe("copilot/v2");
   });
 });
