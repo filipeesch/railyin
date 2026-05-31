@@ -83,8 +83,8 @@ function dispatchMessage(
   chat: ReturnType<typeof useChatStore>,
   message: import("@shared/rpc-types").ConversationMessage,
 ) {
+  void task;
   conv.onNewMessage(message);
-  task.onTaskNewMessage(message);
   chat.onChatNewMessage(message);
 }
 

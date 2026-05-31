@@ -132,6 +132,30 @@ test.describe("DR — draft persistence", () => {
         await expect(page.locator(TASK_EDITOR)).toContainText("Survives reload");
     });
 
+    test("DR-E2E-1: task draft survives Chat→Info→Chat tab switch", async ({ page, api, task }) => {
+        api.handle("conversations.getMessages", () => ({ messages: [], hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Type a draft message
+        const editor = page.locator(TASK_EDITOR);
+        await editor.click();
+        await editor.pressSequentially("Draft before tab switch");
+
+        // Switch to the Info tab
+        const infoTab = page.locator(".tab-btn", { hasText: "Info" });
+        await infoTab.click();
+        await expect(editor).not.toBeVisible({ timeout: 2_000 });
+
+        // Switch back to the Chat tab
+        const chatTab = page.locator(".tab-btn", { hasText: "Chat" });
+        await chatTab.click();
+
+        // The draft text should be restored
+        await expect(page.locator(TASK_EDITOR)).toContainText("Draft before tab switch");
+    });
+
     test("DR-E2E-5: session draft is restored after closing and reopening the session", async ({ page, api }) => {
         const session = makeChatSession({ id: 200 });
 
@@ -154,5 +178,33 @@ test.describe("DR — draft persistence", () => {
         // Reopen the same session
         await openSessionDrawer(page, session.id);
         await expect(page.locator(SESSION_EDITOR)).toContainText("Session draft text");
+    });
+
+    test("DR-E2E-6: session draft survives Decisions→Chat tab switch", async ({ page, api }) => {
+        const session = makeChatSession({ id: 201 });
+
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+        api.returns("chatSessions.getMessages", { messages: [], hasMore: false });
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        // Type a draft in the session input
+        const editor = page.locator(SESSION_EDITOR);
+        await editor.click();
+        await editor.pressSequentially("Session tab-switch draft");
+
+        // Switch to the Decisions tab (destroys ConversationInput via v-if)
+        const decisionsTab = page.locator(".scv-tab-btn", { hasText: "Decisions" });
+        await decisionsTab.click();
+        await expect(editor).not.toBeVisible({ timeout: 2_000 });
+
+        // Switch back to the Chat tab (remounts ConversationInput, triggers onMounted restore)
+        const chatTab = page.locator(".scv-tab-btn", { hasText: "Chat" });
+        await chatTab.click();
+
+        // The draft should be restored
+        await expect(page.locator(SESSION_EDITOR)).toContainText("Session tab-switch draft");
     });
 });
