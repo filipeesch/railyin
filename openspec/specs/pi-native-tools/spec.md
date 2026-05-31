@@ -72,9 +72,6 @@ Lists files and directories at a path. Returns sorted relative paths; directorie
 ### Requirement: search_text tool
 Searches for a regex/string pattern across worktree files. Supports glob filter and context lines.
 
-### Requirement: find_files tool
-Finds files matching a glob pattern. Returns up to 500 relative paths, sorted.
-
 ### Requirement: run_command tool
 Runs a free-form shell command in the worktree directory for read/inspect purposes.
 
