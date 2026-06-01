@@ -387,6 +387,29 @@ describe("taskStore", () => {
     expect(conversationStore.messages.some((m) => m.taskId === 2)).toBe(false);
   });
 
+  it("T-SC-4: sendMessage for active task syncs conversationId when backend assigns a new one (0→N)", async () => {
+    const store = useTaskStore();
+    const conversationStore = useConversationStore();
+    // Task starts with conversationId=0 (backend hasn't assigned one yet)
+    const task = makeTask({ id: 1, boardId: 1, conversationId: 0 });
+    apiMock.mockResolvedValueOnce([task]);
+    await store.loadTasks(1);
+
+    apiMock.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await store.selectTask(1);
+
+    // Backend creates a real conversation (id=99) on first message
+    const userMessage = { id: 50, taskId: 1, conversationId: 99, type: "user", role: "user", content: "hello", metadata: null, createdAt: new Date().toISOString() };
+    apiMock.mockResolvedValueOnce({ message: userMessage, executionId: null });
+
+    await store.sendMessage(1, "hello");
+
+    // Active conversation must be updated to 99 and message must appear
+    expect(conversationStore.activeConversationId).toBe(99);
+    expect(conversationStore.messages).toContainEqual(userMessage);
+    expect(store.taskIndex[1]?.conversationId).toBe(99);
+  });
+
   it("T-WT-1: onTaskUpdated preserves worktreePath in taskIndex", async () => {
     const store = useTaskStore();
     const task = makeTask({ id: 20, boardId: 1, worktreePath: null });

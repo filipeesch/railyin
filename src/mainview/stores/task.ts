@@ -148,13 +148,27 @@ export const useTaskStore = defineStore("task", () => {
       ...(attachments?.length ? { attachments } : {}),
     });
     void executionId;
+    // Background task: skip display to prevent cross-chat contamination.
     if (taskId !== activeTaskId.value) return;
+    // Active task: sync conversationId if backend assigned a new one (e.g. first message: 0→N).
+    if (message.conversationId !== conversationStore.activeConversationId) {
+      conversationStore.setActiveConversation(message.conversationId);
+      const task = taskIndex.value[taskId];
+      if (task) taskIndex.value[taskId] = { ...task, conversationId: message.conversationId };
+    }
     conversationStore.appendMessage(message);
   }
 
   async function submitDecisions(taskId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string) {
     const { message } = await api("tasks.submitDecisions", { taskId, answers, generalNotes });
+    // Background task: skip display to prevent cross-chat contamination.
     if (taskId !== activeTaskId.value) return;
+    // Active task: sync conversationId if backend assigned a new one (e.g. first message: 0→N).
+    if (message.conversationId !== conversationStore.activeConversationId) {
+      conversationStore.setActiveConversation(message.conversationId);
+      const task = taskIndex.value[taskId];
+      if (task) taskIndex.value[taskId] = { ...task, conversationId: message.conversationId };
+    }
     conversationStore.appendMessage(message);
   }
 
