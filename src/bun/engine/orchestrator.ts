@@ -121,7 +121,7 @@ export class Orchestrator implements ExecutionCoordinator {
     );
     this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, customPromptInjector, paramsEnricher);
     this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, customPromptInjector);
-    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, paramsEnricher, boardTools, onNewMessage);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, new CrossEngineContextInjector(db), paramsEnricher, boardTools, onNewMessage);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────

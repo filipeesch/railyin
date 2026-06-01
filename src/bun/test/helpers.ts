@@ -397,7 +397,7 @@ import { getWorkspaceConfig, getDefaultWorkspaceKey } from "../workspace-context
  */
 export function seedChatSession(
   db: Database,
-  overrides: { workspaceKey?: string; title?: string; model?: string } = {},
+  overrides: { workspaceKey?: string; title?: string; model?: string; lastEngineType?: string | null } = {},
 ): { sessionId: number; conversationId: number } {
   const workspaceKey = overrides.workspaceKey ?? "default";
   const title = overrides.title ?? "Test Session";
@@ -407,6 +407,10 @@ export function seedChatSession(
 
   if (overrides.model) {
     db.run("UPDATE conversations SET model = ? WHERE id = ?", [overrides.model, conversationId]);
+  }
+
+  if (overrides.lastEngineType !== undefined) {
+    db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [overrides.lastEngineType, conversationId]);
   }
 
   db.run(
@@ -428,4 +432,13 @@ export function makeTestRegistry(engine: ExecutionEngine): EngineRegistry {
   const config = getWorkspaceConfig(getDefaultWorkspaceKey());
   const engineId = config.engines[0]?.id ?? "copilot";
   return new EngineRegistry(new Map([[engineId, engine]]), getWorkspaceConfig);
+}
+
+/**
+ * Build an `EngineRegistry` from an explicit Map of engine ID → engine instance.
+ * Useful for multi-engine test scenarios where the default single-engine factory
+ * is insufficient (e.g., testing engine-switch context injection).
+ */
+export function makeTestRegistryWith(engines: Map<string, ExecutionEngine>): EngineRegistry {
+  return new EngineRegistry(engines, getWorkspaceConfig);
 }
