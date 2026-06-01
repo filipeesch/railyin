@@ -7,10 +7,12 @@ import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent }
 import { useConversationStore } from "./conversation";
 import { useWorkspaceStore } from "./workspace";
 import { type QueuedMessage, type QueueState, emptyQueueState } from "./queue-types";
+import { useDraftStore } from "./draft";
 
 export const useTaskStore = defineStore("task", () => {
   const conversationStore = useConversationStore();
   const workspaceStore = useWorkspaceStore();
+  const draftStore = useDraftStore();
 
   // All tasks keyed by boardId
   const tasksByBoard = ref<Record<number, Task[]>>({});
@@ -146,9 +148,9 @@ export const useTaskStore = defineStore("task", () => {
       ...(attachments?.length ? { attachments } : {}),
     });
     void executionId;
-    // The first message on a brand-new task creates a real conversation on the backend
-    // (conversationId changes from 0 → N).  Sync the store before appendMessage so the
-    // message isn't silently dropped by the conversationId guard in appendMessage.
+    // Background task: skip display to prevent cross-chat contamination.
+    if (taskId !== activeTaskId.value) return;
+    // Active task: sync conversationId if backend assigned a new one (e.g. first message: 0→N).
     if (message.conversationId !== conversationStore.activeConversationId) {
       conversationStore.setActiveConversation(message.conversationId);
       const task = taskIndex.value[taskId];
@@ -159,6 +161,9 @@ export const useTaskStore = defineStore("task", () => {
 
   async function submitDecisions(taskId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string) {
     const { message } = await api("tasks.submitDecisions", { taskId, answers, generalNotes });
+    // Background task: skip display to prevent cross-chat contamination.
+    if (taskId !== activeTaskId.value) return;
+    // Active task: sync conversationId if backend assigned a new one (e.g. first message: 0→N).
     if (message.conversationId !== conversationStore.activeConversationId) {
       conversationStore.setActiveConversation(message.conversationId);
       const task = taskIndex.value[taskId];
@@ -312,6 +317,7 @@ export const useTaskStore = defineStore("task", () => {
     delete taskIndex.value[taskId];
     delete taskQueues.value[taskId];
     clearTaskUnread(taskId);
+    draftStore.clear(`task:${taskId}`);
     return { warning: result.warning };
   }
 
@@ -420,10 +426,6 @@ export const useTaskStore = defineStore("task", () => {
     }
   }
 
-  function onTaskNewMessage(message: ConversationMessage): void {
-    if (message.taskId == null) return;
-  }
-
   return {
     tasksByBoard,
     activeTaskId,
@@ -462,7 +464,6 @@ export const useTaskStore = defineStore("task", () => {
     workspaceHasUnread,
     onTaskUpdated,
     onTaskStreamEvent,
-    onTaskNewMessage,
     // Queue
     taskQueues,
     enqueueMessage,

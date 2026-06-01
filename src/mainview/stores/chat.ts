@@ -6,10 +6,12 @@ import { useWorkspaceStore } from "./workspace";
 import type { ChatSession, ConversationMessage, StreamEvent } from "@shared/rpc-types";
 import { useConversationStore } from "./conversation";
 import { type QueuedMessage, type QueueState, emptyQueueState } from "./queue-types";
+import { useDraftStore } from "./draft";
 
 export const useChatStore = defineStore("chat", () => {
   const conversationStore = useConversationStore();
   const workspaceStore = useWorkspaceStore();
+  const draftStore = useDraftStore();
   const sessions = ref<ChatSession[]>([]);
   const activeChatSessionId = ref<number | null>(null);
   const unreadSessionIds = ref(new Set<number>());
@@ -219,6 +221,7 @@ export const useChatStore = defineStore("chat", () => {
       sessions.value[idx] = { ...sessions.value[idx], status: 'archived' };
     }
     delete sessionQueues.value[sessionId];
+    draftStore.clear(`session:${sessionId}`);
     if (activeChatSessionId.value === sessionId) {
       closeSession();
     }
