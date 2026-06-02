@@ -1,5 +1,8 @@
 import type { EngineEvent } from "../types.ts";
 import type { ToolCallDisplay } from "../../../shared/rpc-types.ts";
+import { computeFileDiff } from "../../utils/diff.ts";
+import type { FileStateCache } from "./file-state-cache.ts";
+import { readFileSync } from "node:fs";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { canonicalToolDisplayLabel, stripRailyinMcpPrefix, humanizeToolName, stripWorktreePath } from "../tool-display.ts";
 
@@ -49,10 +52,11 @@ type ClaudeSdkMessage = ClaudeAssistantMessage | ClaudeResultMessage | ClaudeSys
 
 export function translateClaudeMessage(
   message: ClaudeSdkMessage,
-  options?: { toolMetaByCallId?: Map<string, ToolMetadata>; worktreePath?: string },
+  options?: { toolMetaByCallId?: Map<string, ToolMetadata>; worktreePath?: string; fileStateCache?: FileStateCache },
 ): EngineEvent[] {
   const toolMetaByCallId = options?.toolMetaByCallId;
   const worktreePath = options?.worktreePath;
+  const fileStateCache = options?.fileStateCache;
   const raw = message as Record<string, unknown>;
   // For system/init log the slash_commands list specifically; for everything else truncate
   if (raw["type"] === "system" && raw["subtype"] === "init") {
@@ -78,6 +82,19 @@ export function translateClaudeMessage(
               name: resolvedName,
               arguments: block.input,
             });
+          }          // Store tool metadata for later pairing with tool_result
+          if (toolMetaByCallId) {
+            toolMetaByCallId.set(block.id, {
+              name: resolvedName,
+              arguments: block.input,
+            });
+          }
+          // Capture file content before tool executes (for write/edit/multiedit diff accuracy)
+          if (fileStateCache && isWriteToolName(resolvedName) && block.input && typeof block.input === "object") {
+            const filePath = (block.input as Record<string, unknown>).file_path as string | undefined;
+            if (filePath) {
+              fileStateCache.capture(block.id, worktreePath ?? "", filePath);
+            }
           }
           // Emit tool_start event with preserved callId
           events.push({
@@ -183,6 +200,17 @@ export function translateClaudeMessage(
             }
           } catch { /* not JSON envelope */ }
 
+          // Compute accurate file diff for write/edit/multiedit tools
+          // detailedResult contains the after-content from the tool's JSON envelope
+          const writtenFiles = computeWrittenFiles(
+            toolName,
+            meta?.arguments,
+            block.tool_use_id,
+            fileStateCache,
+            worktreePath ?? "",
+            detailedResult,
+          );
+
           events.push({
             type: "tool_result",
             callId: block.tool_use_id,
@@ -190,7 +218,7 @@ export function translateClaudeMessage(
             result: normalizedContent,
             detailedResult,
             isError: block.is_error ?? false,
-            writtenFiles: extractWrittenFilesFromClaudeToolArgs(toolName, meta?.arguments),
+            writtenFiles,
           });
 
           // Clean up from map
@@ -221,17 +249,74 @@ export function translateClaudeMessage(
   }
 }
 
-function extractWrittenFilesFromClaudeToolArgs(
+/** Tool names that operate on files and need before-content capture for diff accuracy. */
+function isWriteToolName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower === "write" || lower === "edit" || lower === "multiedit";
+}
+
+/**
+ * Compute accurate file diff for write/edit/multiedit tools.
+ * Uses captured before-content + current disk state to produce hunk-level detail.
+ *
+ * @param afterContent - Optional explicit after-content for testing. When provided,
+ *                       bypasses disk read (useful for unit tests with stub cache).
+ */
+function computeWrittenFiles(
   toolName: string,
-  args?: unknown,
+  args: unknown | undefined,
+  callId: string,
+  cache: FileStateCache | undefined,
+  worktreePath: string,
+  afterContent?: string,
 ): import("../../../shared/rpc-types.ts").FileDiffPayload[] | undefined {
   const input = args as Record<string, unknown> | undefined;
   const filePath = typeof input?.file_path === "string" ? input.file_path : null;
   if (!filePath) return undefined;
+
   const lower = toolName.toLowerCase();
-  if (lower === "write") return [{ operation: "write_file", path: filePath, added: 0, removed: 0 }];
-  if (lower === "edit" || lower === "multiedit") return [{ operation: "edit_file", path: filePath, added: 0, removed: 0 }];
-  return undefined;
+  if (lower !== "write" && lower !== "edit" && lower !== "multiedit") return undefined;
+
+  const operation: import("../../../shared/rpc-types.ts").FileDiffPayload["operation"] =
+    lower === "write" ? "write_file" : "edit_file";
+
+  // Get captured before-content
+  const before = cache?.get(callId);
+
+  if (before === undefined) {
+    // Not captured (e.g., non-write tool or cache not provided) — shallow fallback
+    return [{ operation, path: filePath, added: 0, removed: 0 }];
+  }
+
+  // Determine after-content: explicit param > disk read
+  let after: string;
+  if (afterContent !== undefined) {
+    after = afterContent;
+  } else {
+    // Read current file state (after tool execution)
+    const absPath = worktreePath ? `${worktreePath}/${filePath}` : filePath;
+    try {
+      after = readFileSync(absPath, "utf-8");
+    } catch {
+      // File may have been deleted or unreadable
+      after = "";
+    }
+  }
+
+  // Compute diff
+  const isNew = before === null;
+  const payload = computeFileDiff(
+    before ?? "",
+    after,
+    filePath,
+    operation,
+    isNew ? { isNew: true } : undefined,
+  );
+
+  // Release cache entry
+  cache?.delete(callId);
+
+  return [payload];
 }
 
 function buildClaudeBuiltinDisplay(name: string, input: Record<string, unknown>, worktreePath?: string): ToolCallDisplay {

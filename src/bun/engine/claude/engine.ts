@@ -2,10 +2,11 @@ import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, En
 import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
 import { claudeSessionIdForConversation, claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
 import type { ToolMetadata } from "./events.ts";
+import { DefaultFileStateCache } from "./file-state-cache.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { readdirSync, existsSync, readFileSync } from "fs";
-import { join, relative, extname, basename } from "path";
+import { join, extname, basename } from "path";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
@@ -35,6 +36,8 @@ export class ClaudeEngine implements ExecutionEngine {
 
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
+    // Create a cache to capture file content before write/edit tools for accurate diffs
+    const fileStateCache = new DefaultFileStateCache();
 
     const config = getConfig();
     const lspManager = taskLspRegistry.getManager(
@@ -97,15 +100,20 @@ export class ClaudeEngine implements ExecutionEngine {
         });
       },
       toolMetaByCallId,
+      fileStateCache,
       externalMcpServers,
       enabledMcpTools,
     };
 
     // Wrap the adapter execution to ensure cleanup happens
-    return this.createManagedExecution(runConfig, toolMetaByCallId);
+    return this.createManagedExecution(runConfig, toolMetaByCallId, fileStateCache);
   }
 
-  private async *createManagedExecution(config: ClaudeRunConfig, toolMetaByCallId: Map<string, any>): AsyncGenerator<EngineEvent> {
+  private async *createManagedExecution(
+    config: ClaudeRunConfig,
+    toolMetaByCallId: Map<string, any>,
+    fileStateCache: DefaultFileStateCache,
+  ): AsyncGenerator<EngineEvent> {
     try {
       for await (const event of this.sdkAdapter.run(config)) {
         yield event;
@@ -113,6 +121,8 @@ export class ClaudeEngine implements ExecutionEngine {
     } finally {
       // Clean up tool metadata map on execution end
       toolMetaByCallId.clear();
+      // Clear file state cache to release captured before-content
+      fileStateCache.clear();
     }
   }
 

@@ -642,35 +642,11 @@ export class StreamProcessor {
   ): Promise<void> {
     const db = this.db;
 
-    let worktreePath = "";
-    if (taskId != null) {
-      const gitRow = db
-        .query<{ worktree_path: string | null; worktree_status: string | null }, [number]>(
-          "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-        )
-        .get(taskId);
-      worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
-    }
-
+    // Emit the received FileDiffPayload directly — no diff computation or file I/O.
+    // Accurate hunks are already computed by the engine (e.g., Claude engine in events.ts
+    // via FileStateCache + computeFileDiff). This method is a pure relay.
     for (const file of writtenFiles) {
       const payload: Record<string, unknown> = { ...file };
-
-      if (worktreePath && file.path) {
-        try {
-          const proc = Bun.spawn(["git", "diff", "HEAD", "--", file.path], {
-            cwd: worktreePath,
-            stdout: "pipe",
-            stderr: "pipe",
-          });
-          await proc.exited;
-          const diffOut = await new Response(proc.stdout).text();
-          if (diffOut.trim()) {
-            payload.rawDiff = diffOut;
-          }
-        } catch {
-          // git diff failure is non-fatal
-        }
-      }
 
       const diffMeta = { tool_call_id: callId };
       const diffContent = JSON.stringify(payload);

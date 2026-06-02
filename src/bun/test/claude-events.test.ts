@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "vitest";
+import { describe, expect, it, test, beforeEach, afterEach } from "vitest";
 import { translateClaudeMessage, type ToolMetadata } from "../engine/claude/events.ts";
 
 describe("Claude message translator - tool events", () => {
@@ -522,3 +522,212 @@ describe("Claude message translator - MCP-prefixed tool name handling", () => {
     expect(toolStart?.display?.label).toBe("my custom tool");
   });
 });
+
+// ─── FileStateCache integration with translateClaudeMessage ──────────────────
+
+import { StubFileStateCache } from "./support/stub-file-state-cache.ts";
+
+describe("FileStateCache integration with translateClaudeMessage", () => {
+  let stub: StubFileStateCache;
+  let toolMetaMap: Map<string, { name: string; arguments?: unknown }>;
+
+  beforeEach(() => {
+    stub = new StubFileStateCache();
+    toolMetaMap = new Map();
+  });
+
+  afterEach(() => {
+    stub.reset();
+  });
+
+  test("CE-WF-1: write with existing-file before-content → correct added/removed", () => {
+    const beforeContent = "line1\nline2\nline3\n";
+    const afterContent = "line1\nCHANGED\nline3\n";
+    const callId = "call-write-1";
+
+    stub.preset(callId, beforeContent);
+    toolMetaMap.set(callId, { name: "write", arguments: { file_path: "test.txt" } });
+
+    const message = {
+      type: "user",
+      message: {
+        content: [{
+          type: "tool_result",
+          tool_use_id: callId,
+          content: JSON.stringify({ detailedContent: afterContent }),
+          is_error: false,
+        }],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, {
+      toolMetaByCallId: toolMetaMap,
+      fileStateCache: stub,
+      worktreePath: "/fake",
+    });
+
+    expect(events).toHaveLength(1);
+    const toolResult = events[0] as any;
+    expect(toolResult.type).toBe("tool_result");
+    expect(toolResult.writtenFiles).toHaveLength(1);
+    expect(toolResult.writtenFiles[0].added).toBe(1);
+    expect(toolResult.writtenFiles[0].removed).toBe(1);
+    expect(toolResult.writtenFiles[0].hunks).toHaveLength(1);
+    expect(toolResult.writtenFiles[0].is_new).toBeUndefined();
+  });
+
+  test("CE-WF-2: write with null before-content → is_new: true, removed: 0", () => {
+    const afterContent = "brand new file\nline 2\n";
+    const callId = "call-write-new";
+
+    stub.preset(callId, null); // signals new file
+    toolMetaMap.set(callId, { name: "write", arguments: { file_path: "new.txt" } });
+
+    const message = {
+      type: "user",
+      message: {
+        content: [{
+          type: "tool_result",
+          tool_use_id: callId,
+          content: JSON.stringify({ detailedContent: afterContent }),
+          is_error: false,
+        }],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, {
+      toolMetaByCallId: toolMetaMap,
+      fileStateCache: stub,
+      worktreePath: "/fake",
+    });
+
+    const toolResult = events[0] as any;
+    expect(toolResult.writtenFiles[0].is_new).toBe(true);
+    expect(toolResult.writtenFiles[0].removed).toBe(0);
+    expect(toolResult.writtenFiles[0].added).toBeGreaterThan(0);
+  });
+
+  test("CE-WF-3: write with undefined before-content (not captured) → shallow fallback", () => {
+    // No preset for this callId → get() returns undefined
+    toolMetaMap.set("call-uncaptured", { name: "write", arguments: { file_path: "x.txt" } });
+
+    const message = {
+      type: "user",
+      message: {
+        content: [{
+          type: "tool_result",
+          tool_use_id: "call-uncaptured",
+          content: "result",
+          is_error: false,
+        }],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, {
+      toolMetaByCallId: toolMetaMap,
+      fileStateCache: stub,
+      worktreePath: "/fake",
+    });
+
+    const toolResult = events[0] as any;
+    expect(toolResult.writtenFiles).toHaveLength(1);
+    expect(toolResult.writtenFiles[0].added).toBe(0);
+    expect(toolResult.writtenFiles[0].removed).toBe(0);
+    expect(toolResult.writtenFiles[0].hunks).toBeUndefined();
+  });
+
+  test("CE-EF-1: edit with string before-content → correct hunk diff", () => {
+    const beforeContent = "function foo() {\n  return 1;\n}\n";
+    const afterContent = "function foo() {\n  return 42;\n}\n";
+    const callId = "call-edit-1";
+
+    stub.preset(callId, beforeContent);
+    toolMetaMap.set(callId, { name: "edit", arguments: { file_path: "app.ts" } });
+
+    const message = {
+      type: "user",
+      message: {
+        content: [{
+          type: "tool_result",
+          tool_use_id: callId,
+          content: JSON.stringify({ detailedContent: afterContent }),
+          is_error: false,
+        }],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, {
+      toolMetaByCallId: toolMetaMap,
+      fileStateCache: stub,
+      worktreePath: "/fake",
+    });
+
+    const toolResult = events[0] as any;
+    expect(toolResult.writtenFiles[0].operation).toBe("edit_file");
+    expect(toolResult.writtenFiles[0].added).toBe(1);
+    expect(toolResult.writtenFiles[0].removed).toBe(1);
+  });
+
+  test("CE-MF-1: multiedit with string before-content → correct hunk diff", () => {
+    const beforeContent = "a\nb\nc\n";
+    const afterContent = "A\nB\nC\n";
+    const callId = "call-multi-1";
+
+    stub.preset(callId, beforeContent);
+    toolMetaMap.set(callId, { name: "multiedit", arguments: { file_path: "data.txt" } });
+
+    const message = {
+      type: "user",
+      message: {
+        content: [{
+          type: "tool_result",
+          tool_use_id: callId,
+          content: JSON.stringify({ detailedContent: afterContent }),
+          is_error: false,
+        }],
+      },
+    };
+
+    const events = translateClaudeMessage(message as any, {
+      toolMetaByCallId: toolMetaMap,
+      fileStateCache: stub,
+      worktreePath: "/fake",
+    });
+
+    const toolResult = events[0] as any;
+    expect(toolResult.writtenFiles[0].operation).toBe("edit_file");
+    expect(toolResult.writtenFiles[0].added).toBe(3);
+    expect(toolResult.writtenFiles[0].removed).toBe(3);
+  });
+
+  test("CE-DEL-1: after tool_result translated, stub.trace.deleted contains the callId", () => {
+    const beforeContent = "old content";
+    const callId = "call-delete-me";
+
+    stub.preset(callId, beforeContent);
+    toolMetaMap.set(callId, { name: "write", arguments: { file_path: "del.txt" } });
+
+    const message = {
+      type: "user",
+      message: {
+        content: [{
+          type: "tool_result",
+          tool_use_id: callId,
+          content: "new content",
+          is_error: false,
+        }],
+      },
+    };
+
+    translateClaudeMessage(message as any, {
+      toolMetaByCallId: toolMetaMap,
+      fileStateCache: stub,
+      worktreePath: "/fake",
+    });
+
+    expect(stub.trace.deleted).toContain(callId);
+    // After delete, get() should return undefined
+    expect(stub.get(callId)).toBeUndefined();
+  });
+});
+

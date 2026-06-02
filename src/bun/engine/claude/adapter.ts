@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types.ts";
 import { buildClaudeToolServer } from "./tools.ts";
 import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
+import type { FileStateCache } from "./file-state-cache.ts";
 import { appendApprovedCommands, getApprovedCommands, parseShellBinaries } from "../approved-commands.ts";
 import { getDb } from "../../db/index.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
@@ -41,6 +42,8 @@ export interface ClaudeRunConfig {
   waitForResume: (request: ClaudeResumeRequest | ClaudeShellApprovalRequest) => Promise<EngineResumeInput>;
   onRawMessage?: (message: Record<string, unknown>) => void;
   toolMetaByCallId?: Map<string, ToolMetadata>;
+  /** Captures file content before write/edit tools for accurate per-call diffs. */
+  fileStateCache?: FileStateCache;
   /** External MCP server configs to pass natively to the Claude SDK. */
   externalMcpServers?: McpServerConfig[];
   /** Tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
@@ -514,7 +517,11 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           // A "failed" status means the MCP server process didn't start or the in-process
           // bridge failed — this is the definitive signal that railyin tools won't be available.
           // Ref: https://code.claude.com/docs/en/agent-sdk/mcp#error-handling
-          for (const event of translateClaudeMessage(message as { type: string }, { toolMetaByCallId: config.toolMetaByCallId, worktreePath: config.workingDirectory })) {
+          for (const event of translateClaudeMessage(message as { type: string }, {
+            toolMetaByCallId: config.toolMetaByCallId,
+            worktreePath: config.workingDirectory,
+            fileStateCache: config.fileStateCache,
+          })) {
             emit(event);
           }
         }
