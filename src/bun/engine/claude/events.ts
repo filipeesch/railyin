@@ -82,12 +82,6 @@ export function translateClaudeMessage(
               name: resolvedName,
               arguments: block.input,
             });
-          }          // Store tool metadata for later pairing with tool_result
-          if (toolMetaByCallId) {
-            toolMetaByCallId.set(block.id, {
-              name: resolvedName,
-              arguments: block.input,
-            });
           }
           // Capture file content before tool executes (for write/edit/multiedit diff accuracy)
           if (fileStateCache && isWriteToolName(resolvedName) && block.input && typeof block.input === "object") {
