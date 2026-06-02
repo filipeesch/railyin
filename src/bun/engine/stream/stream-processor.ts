@@ -15,9 +15,6 @@ import { ConvMessageBuffer } from "../../conversation/conv-message-buffer.ts";
 import type { WriteBuffer } from "../../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "./raw-message-buffer.ts";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { computeFileDiff } from "../../utils/diff.ts";
 
 /**
  * Per-token delta event types that are broadcast immediately but not persisted to
@@ -168,21 +165,6 @@ export class StreamProcessor {
     let childToolSeq = 0;
     const childLiveBlockIdByCall = new Map<string, string>();
     const childCallKey = (parentCallId: string, callId: string) => `${parentCallId}\u0000${callId}`;
-    // Cache file content BEFORE write/edit/multiedit tools execute so we can produce
-    // accurate per-call diffs (not accumulated git diff from HEAD).
-    // null = file did not exist before the call (new file).
-    const beforeContentByCallId = new Map<string, string | null>();
-
-    // Worktree path for the task (stable for the duration of the execution).
-    let worktreePath = "";
-    if (taskId != null) {
-      const gitRow = db
-        .query<{ worktree_path: string | null; worktree_status: string | null }, [number]>(
-          "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-        )
-        .get(taskId);
-      worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
-    }
 
     try {
       const abortController = this.abortControllers.get(executionId) ?? (() => {
@@ -329,26 +311,6 @@ export class StreamProcessor {
             }
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: liveToolBlockId, type: "tool_call", content: toolCallMsg, metadata: JSON.stringify(toolMeta), parentBlockId: toolParentBlockId, done: false, subagentId: null });
             if (!event.isInternal) callStack.push(callId);
-            // Cache file content before write/edit/multiedit so we can diff accurately later.
-            if (worktreePath && !event.isInternal) {
-              const nameLower = event.name.toLowerCase();
-              if (nameLower === "write" || nameLower === "edit" || nameLower === "multiedit") {
-                try {
-                  const input = JSON.parse(event.arguments) as Record<string, unknown>;
-                  const filePath = typeof input.file_path === "string" ? input.file_path : null;
-                  if (filePath) {
-                    const abs = resolve(worktreePath, filePath);
-                    try {
-                      beforeContentByCallId.set(callId, readFileSync(abs, "utf-8"));
-                    } catch {
-                      beforeContentByCallId.set(callId, null); // file does not exist yet
-                    }
-                  }
-                } catch {
-                  // args not parseable — skip caching
-                }
-              }
-            }
             break;
           }
 
@@ -400,17 +362,13 @@ export class StreamProcessor {
             if (!event.isError && event.callId) {
               const writtenFiles = event.writtenFiles ?? [];
               if (writtenFiles.length > 0) {
-                const beforeContent = beforeContentByCallId.get(event.callId);
-                beforeContentByCallId.delete(event.callId);
-                this._emitFileDiffFromWrittenFiles(
+                await this._emitFileDiffFromWrittenFiles(
                   convBuffer,
                   taskId,
                   conversationId,
                   executionId,
                   event.callId,
                   writtenFiles,
-                  worktreePath,
-                  beforeContent,
                   // Child file diffs must nest under the namespaced live tool block, not the
                   // raw callId (which may collide). Persisted metadata keeps the raw callId.
                   (event.isInternal && event.parentCallId) ? liveResultBlockId : undefined,
@@ -673,32 +631,44 @@ export class StreamProcessor {
     this.onToken(taskId, conversationId, executionId, "", true);
   }
 
-  private _emitFileDiffFromWrittenFiles(
+  private async _emitFileDiffFromWrittenFiles(
     convBuffer: ConvMessageBuffer,
     taskId: number | null,
     conversationId: number,
     executionId: number,
     callId: string,
     writtenFiles: Array<import("../../../shared/rpc-types.ts").FileDiffPayload>,
-    worktreePath: string,
-    /** Content of the file before this tool call ran. null = new file, undefined = not captured. */
-    beforeContent: string | null | undefined,
     liveParentBlockIdOverride?: string,
-  ): void {
+  ): Promise<void> {
+    const db = this.db;
+
+    let worktreePath = "";
+    if (taskId != null) {
+      const gitRow = db
+        .query<{ worktree_path: string | null; worktree_status: string | null }, [number]>(
+          "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
+        )
+        .get(taskId);
+      worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
+    }
+
     for (const file of writtenFiles) {
-      let payload: import("../../../shared/rpc-types.ts").FileDiffPayload = { ...file };
+      const payload: Record<string, unknown> = { ...file };
 
       if (worktreePath && file.path) {
         try {
-          const abs = resolve(worktreePath, file.path);
-          const after = readFileSync(abs, "utf-8");
-          const before = beforeContent ?? "";
-          const diff = computeFileDiff(before, after, file.path, file.operation, {
-            isNew: beforeContent === null,
+          const proc = Bun.spawn(["git", "diff", "HEAD", "--", file.path], {
+            cwd: worktreePath,
+            stdout: "pipe",
+            stderr: "pipe",
           });
-          payload = diff;
+          await proc.exited;
+          const diffOut = await new Response(proc.stdout).text();
+          if (diffOut.trim()) {
+            payload.rawDiff = diffOut;
+          }
         } catch {
-          // diff computation failure is non-fatal — fall back to the shallow payload
+          // git diff failure is non-fatal
         }
       }
 
