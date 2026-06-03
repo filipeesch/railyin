@@ -93,9 +93,9 @@ HumanTurnExecutor and TransitionExecutor correctly inject cross-engine history o
 - **WHEN** engine switches and the current user message was appended before `prepareSwitch`
 - **THEN** the user message content does NOT appear inside `<message_history>` in `ExecutionParams.prompt`
 
-#### Scenario: TE-CE-1 TransitionExecutor injects historyBlock into systemInstructions on engine switch
+#### Scenario: TE-CE-1 TransitionExecutor injects historyBlock into prompt on engine switch
 - **WHEN** `last_engine_type = "copilot"` and transition target engine is `"claude"` and prior copilot messages exist
-- **THEN** `ExecutionParams.systemInstructions` starts with the engine-switch context header
+- **THEN** `ExecutionParams.prompt` contains `<message_history>` with the prior engine turns
 
 #### Scenario: TE-CE-2 TransitionExecutor resolves sourceEngine from last_engine_type not conversation_model (BUG A regression guard)
 - **WHEN** `last_engine_type = "pi"` and `conversation_model = "claude/sonnet"` and session exceeds compact threshold
