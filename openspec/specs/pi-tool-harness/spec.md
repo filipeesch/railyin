@@ -20,3 +20,13 @@ The `PI_TOOL_GROUPS` map in `src/bun/engine/pi/tools/index.ts` SHALL include too
 - **THEN** its description does NOT contain the string `search_text`
 - **AND** its description does NOT contain the string `glob`
 - **AND** its description directs the model to prefer `grep` for searching file content and `find` for finding files by pattern
+
+### Requirement: HarnessContext exposes a ToolLoopDetector
+`HarnessContext` SHALL include a `loopDetector: ToolLoopDetector` field. This field SHALL be initialized when `getOrCreateHarnessContext()` creates a new context entry.
+
+### Requirement: HarnessContext loopDetector initialization is tested
+`src/bun/test/pi-harness.test.ts` SHALL contain the following additional test cases:
+
+- **HLC-1** `getOrCreateHarnessContext()` returns a context with a non-null `loopDetector` instance on first call
+- **HLC-2** Second call for the same `conversationId` returns the same `loopDetector` instance (not a new one)
+- **HLC-3** Fresh `loopDetector` has clean state — calling `record()` once returns `false`
