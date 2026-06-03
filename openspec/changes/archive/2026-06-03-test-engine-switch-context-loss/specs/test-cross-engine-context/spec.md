@@ -1,10 +1,4 @@
-# Spec: test-cross-engine-context
-
-## Purpose
-
-Specifies behavior of the `CrossEngineContextInjector` — when it injects cross-engine context, what that context contains, and how it persists engine state across turns.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: CEC-injection-trigger
 `CrossEngineContextInjector.prepareSwitch()` injects only when the engine type changes. Constructor signature is now `(db: Database, engineRegistry: EngineRegistry)`. The `sourceEngine` parameter is removed from `prepareSwitch()`.
@@ -24,19 +18,6 @@ Specifies behavior of the `CrossEngineContextInjector` — when it injects cross
 #### Scenario: CEC-4 context block contains messages since last compaction anchor (inclusive)
 - **WHEN** DB has a `compaction_summary` message and later assistant/user turns
 - **THEN** the returned context block includes the compaction_summary row (as `<SUMMARY>`) AND the turns after it
-
----
-
-### Requirement: CEC-last-engine-type-persistence
-`last_engine_type` is updated after execution regardless of outcome.
-
-#### Scenario: CEC-5 success path updates last_engine_type
-- **WHEN** execution completes successfully with `targetQmid.engineId === "claude"`
-- **THEN** `conversations.last_engine_type = "claude"` in DB
-
-#### Scenario: CEC-6 failure path still updates last_engine_type
-- **WHEN** execution fails midway
-- **THEN** `conversations.last_engine_type` is still updated to the target engine ID
 
 ---
 
@@ -61,14 +42,7 @@ Pre-switch compaction is triggered when token estimate exceeds 75% of target con
 
 ---
 
-### Requirement: CEC-user-message-injection
-Injected context block is prepended to the first user message content; `systemInstructions` is NOT modified.
-
-#### Scenario: CEC-11 injected block prepended to user message content, system prompt unchanged
-- **WHEN** executor has existing `systemInstructions` and `prepareSwitch()` returns a `{ historyBlock }` result
-- **THEN** the user message sent to the engine starts with `<message_history>`, followed by the original user content; `systemInstructions` is identical to what it would be without injection
-
----
+## ADDED Requirements
 
 ### Requirement: CEC-b-to-a-context-preservation
 When switching back to a previously-used engine (e.g. Claude→Pi→Claude), all messages from the intermediate engine session SHALL appear in the history block.

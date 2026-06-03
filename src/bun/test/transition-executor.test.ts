@@ -19,7 +19,9 @@ import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
-import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";
+import { appendMessage } from "../conversation/messages.ts";
+import type { EngineRegistry } from "../engine/engine-registry.ts";
 import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 
 const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
@@ -549,5 +551,65 @@ columns:
     await executor.execute(taskId, "plan");
 
     expect(streamProcessor.lastRun?.params.samplingPresetName).toBeUndefined();
+  });
+});
+
+// ─── TE-CE-1..2: cross-engine context injection for transitions ──────────────
+
+function makeTransitionExecutorWith(engine: TestEngine, registry?: EngineRegistry) {
+  const builder = new CapturingParamsBuilder();
+  const streamProcessor = new StubStreamProcessor();
+  const usedRegistry = registry ?? makeTestRegistry(engine);
+  const executor = new TransitionExecutor(
+    db,
+    usedRegistry,
+    builder,
+    new StubWorkdirResolver(gitDir),
+    streamProcessor,
+    boardTools,
+    wsRepo,
+    new CrossEngineContextInjector(db, usedRegistry),
+    new DecisionContextInjector(db),
+    new CustomPromptInjector(),
+  );
+  return { builder, streamProcessor, executor };
+}
+
+describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
+  it("TE-CE-1: prior copilot turns appear in prompt when engine switches (copilot → claude)", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
+    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
+
+    const engine = new TestEngine();
+    const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
+    const { streamProcessor, executor } = makeTransitionExecutorWith(engine, registry);
+
+    await executor.execute(taskId, "plan");
+
+    const prompt = streamProcessor.lastRun?.params.prompt ?? "";
+    expect(prompt).toContain("<message_history>");
+    expect(prompt).toContain("Copilot assistant response");
+  });
+
+  it("TE-CE-2: no engine switch (last_engine_type = null) → no <message_history> injected", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = ?", [conversationId]);
+    appendMessage(db, taskId, conversationId, "assistant", null, "Some prior response");
+
+    const engine = new TestEngine();
+    const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
+    const { streamProcessor, executor } = makeTransitionExecutorWith(engine, registry);
+
+    await executor.execute(taskId, "review");
+
+    const prompt = streamProcessor.lastRun?.params.prompt ?? "";
+    expect(prompt).not.toContain("<message_history>");
   });
 });

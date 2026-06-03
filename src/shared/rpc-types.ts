@@ -126,6 +126,14 @@ export interface SamplingPreset {
   top_p?: number;
   top_k?: number;
   presence_penalty?: number;
+  /** Penalizes tokens based on how often they appear, reducing repetition. Supported by vLLM, SGLang, OpenRouter. */
+  repetition_penalty?: number;
+  /** Penalizes tokens based on frequency in the text so far. Supported by OpenAI, vLLM, SGLang, OpenRouter. */
+  frequency_penalty?: number;
+  /** Seed for reproducible outputs. Supported by vLLM, SGLang, OpenRouter, Ollama. */
+  seed?: number;
+  /** Alternative to temperature/top_p, more stable across models. Supported by vLLM, SGLang. */
+  min_p?: number;
 }
 
 export interface ProviderModelList {

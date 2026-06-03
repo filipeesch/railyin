@@ -12,9 +12,11 @@ import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage, OnTaskUpdated } from "../engine/types.ts";
+import type { EngineRegistry } from "../engine/engine-registry.ts";
 import type { Task } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
-import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";
+import { appendMessage } from "../conversation/messages.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
@@ -99,19 +101,20 @@ afterEach(() => {
   resetConfig();
 });
 
-function makeExecutor(engine: TestEngine, onTaskUpdated?: OnTaskUpdated) {
+function makeExecutor(engine: TestEngine, onTaskUpdated?: OnTaskUpdated, registry?: EngineRegistry) {
   const builder = new CapturingParamsBuilder();
   const streamProcessor = new StubStreamProcessor();
+  const usedRegistry = registry ?? makeTestRegistry(engine);
   const executor = new HumanTurnExecutor(
     db,
-    makeTestRegistry(engine),
+    usedRegistry,
     builder,
     new StubWorkdirResolver(gitDir),
     streamProcessor,
     onTaskUpdated ?? (() => {}),
     wsRepo,
     boardTools,
-    new CrossEngineContextInjector(db),
+    new CrossEngineContextInjector(db, usedRegistry),
     new DecisionContextInjector(db),
       new CustomPromptInjector(),
   );
@@ -316,5 +319,65 @@ describe("HumanTurnExecutor — git context propagation via onTaskUpdated", () =
     expect(capturedTask).not.toBeNull();
     expect(capturedTask!.worktreePath).toBe("/wt/1");
     expect(capturedTask!.worktreeStatus).toBe("ready");
+  });
+});
+
+// ─── HT-CE-1..3: cross-engine context injection for human turns ──────────────
+
+describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
+  it("HT-CE-1: prior copilot turns appear in prompt when engine switches (copilot → claude)", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
+    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
+
+    const engine = new TestEngine();
+    const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
+    const { builder, executor } = makeExecutor(engine, undefined, registry);
+
+    await executor.execute(taskId, "new claude question");
+
+    const prompt = builder.lastBuilt?.prompt ?? "";
+    expect(prompt).toContain("<message_history>");
+    expect(prompt).toContain("Copilot assistant response");
+  });
+
+  it("HT-CE-2: current user message is NOT inside <message_history> block", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
+    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot prior response");
+
+    const engine = new TestEngine();
+    const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
+    const { builder, executor } = makeExecutor(engine, undefined, registry);
+
+    await executor.execute(taskId, "current user question");
+
+    const prompt = builder.lastBuilt?.prompt ?? "";
+    const historySection = prompt.includes("<message_history>")
+      ? prompt.slice(prompt.indexOf("<message_history>"), prompt.indexOf("</message_history>"))
+      : "";
+    expect(historySection).not.toContain("current user question");
+  });
+
+  it("HT-CE-3: no engine switch (same engine) → no <message_history> injected", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    // last_engine_type = null means no prior engine, so no cross-engine injection
+    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = ?", [conversationId]);
+    appendMessage(db, taskId, conversationId, "assistant", null, "Some prior assistant response");
+
+    const engine = new TestEngine();
+    const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
+    const { builder, executor } = makeExecutor(engine, undefined, registry);
+
+    await executor.execute(taskId, "user question with same engine");
+
+    const prompt = builder.lastBuilt?.prompt ?? "";
+    expect(prompt).not.toContain("<message_history>");
   });
 });
