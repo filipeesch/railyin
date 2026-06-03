@@ -1,8 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export interface SkillResolver {
   resolve(name: string): Promise<string | null>;
+  list(): Promise<string[]>;
 }
 
 /**
@@ -24,5 +25,27 @@ export class FileSystemSkillResolver implements SkillResolver {
       }
     }
     return null;
+  }
+
+  async list(): Promise<string[]> {
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const dir of this.paths) {
+      if (!existsSync(dir)) continue;
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (seen.has(entry)) continue;
+        if (existsSync(join(dir, entry, "SKILL.md"))) {
+          seen.add(entry);
+          names.push(entry);
+        }
+      }
+    }
+    return names;
   }
 }

@@ -4,68 +4,67 @@ export const DECISION_REQUEST_TOOL_DEFINITION: AIToolDefinition = {
     name: "decision_request",
     description:
         "Conduct a structured interview to gather direction on complex, high-stakes decisions.\n\n" +
-        "ALWAYS use this tool - never plain prose - when the conversation requires architectural choices, technology selection, design tradeoffs, ASCII Art and layout options, or any decision where the implications are non-trivial and the user needs to understand what they are committing to.\n\n" +
-        "How to write great questions:\n" +
-        "- Ask one clear, focused question per item. Avoid compound questions.\n" +
-        "- The 'question' field is rendered as markdown — write multiple lines if the decision needs context, and use **bold** to highlight the key decision point.\n" +
-        "- Set 'weight' honestly: 'critical' = hard to change later (data model, engine choice), 'medium' = requires effort to change, 'easy' = easily revisited.\n" +
-        "- Set 'model_lean' to your recommended option title and explain WHY in 'model_lean_reason'. Be transparent, not neutral.\n" +
-        "- Set 'answers_affect_followup: true' when the answer to this question should change what you ask next.\n\n" +
-        "How to write great options:\n" +
-        "- Every option MUST have a 'title' (short, scannable) and a 'description' (rich markdown).\n" +
-        "- The 'description' is the most important field. It's markdown rendered so you can show rich content, mermaid diagrams are supported and use ASCII Art for UX/UI illustrations. It should explain: what this choice means in practice, its concrete pros and cons, when it's the right fit, and what it forecloses. Write at least 3-5 sentences. Use bullet lists for pros/cons.\n" +
-        "- Always include an 'Other' option implicitly - the UI adds it automatically.\n" +
-        "- Avoid listing more than 4-5 options. Fewer, well-explained options beat a long list.\n\n" +
-        "Use 'context' to set the stage. Write it as structured markdown — use paragraphs and bullet lists. Explain why this decision is being made now, what constraints exist, what has already been decided.\n\n" +
-        "Use 'non_exclusive' when the user can reasonably combine multiple options (e.g. testing strategies, feature flags). Use 'exclusive' when options are mutually incompatible.\n\n" +
-        "Use 'freetext' for open-ended questions where no preset options make sense - e.g. 'Any additional constraints?' or 'What is your target timeline?'.\n\n" +
-        "ALWAYS batch all related decisions into one call. If more clarification is needed you can call decision_request again with follow-up questions in batch.\n\n" +
-        "IMPORTANT: After the user submits their answers, you MUST call record_decision (or update_decision if a record already exists) for EVERY question answered — never skip this step.",
+        "ALWAYS use this tool — never plain prose — for architectural choices, technology selection, design tradeoffs, or any decision with non-trivial implications.\n\n" +
+        "CRITICAL RULES:\n" +
+        "- For 'exclusive' or 'non_exclusive' questions you MUST supply at least 2 entries in the 'options' array. NEVER embed choices or alternatives in the 'question' text — put them in 'options'.\n" +
+        "- 'freetext' questions have no options — omit the 'options' field entirely.\n" +
+        "- Batch all related decisions into one call.\n" +
+        "- After the user submits answers, call record_decision (or update_decision if a record already exists) for EVERY question — never skip this step.\n\n" +
+        "Writing effective questions:\n" +
+        "- One focused decision per question. Use **bold** to highlight the key choice.\n" +
+        "- Set 'weight' honestly: 'critical' (hard to undo), 'medium' (costly to undo), 'easy' (easily revisited).\n" +
+        "- Set 'model_lean' to your recommended option title (must match exactly) and explain why in 'model_lean_reason'. Be transparent, not neutral.\n" +
+        "- Set 'answers_affect_followup: true' when this answer should change subsequent questions.\n\n" +
+        "Writing effective options (required for exclusive/non_exclusive):\n" +
+        "- Each option needs a 'title' (2–5 words, scannable) and a 'description' (rich markdown: what this means in practice, pros/cons as bullet lists, when it's the right fit, what it forecloses — at least 3–5 sentences). Mermaid diagrams and ASCII Art are supported.\n" +
+        "- Aim for 2–5 options per question. Quality beats quantity.\n" +
+        "- An 'Other' option is added automatically by the UI — do not add it manually.",
     parameters: {
         type: "object",
         properties: {
             context: {
                 type: "string",
-                description: "Write as structured markdown, rendered directly to the user. Use paragraphs, bullet lists, or headings to set the stage: why this decision is being made now, relevant constraints, and what has already been decided.",
+                description: "Optional markdown preamble shown before the questions: why this decision is being made now, relevant constraints, and what has already been decided.",
             },
             questions: {
                 type: "array",
-                description: "One or more questions. Batch all related decisions into a single call - do not call decision_request multiple times in sequence.",
+                description: "One or more questions. Batch all related decisions into a single call.",
                 minItems: 1,
                 items: {
                     type: "object",
                     properties: {
-                        question: { type: "string", description: "The question text. Be specific and focused — one decision per question. Write as markdown rendered directly to the user; use **bold** to highlight the key decision point. Use multiple paragraphs if the question needs context." },
+                        question: { type: "string", description: "The question text as markdown. One focused decision per question; use **bold** to highlight the key choice. NEVER embed options or alternatives here — use the 'options' array." },
                         type: {
                             type: "string",
                             enum: ["exclusive", "non_exclusive", "freetext"],
-                            description: "'exclusive' for mutually exclusive single choice. 'non_exclusive' for multi-select (user can pick several). 'freetext' for open-ended input with no preset options.",
+                            description: "'exclusive': single choice from options. 'non_exclusive': user can pick several options. 'freetext': open-ended text answer, no options.",
                         },
                         weight: {
                             type: "string",
                             enum: ["critical", "medium", "easy"],
-                            description: "Reversibility signal. 'critical' = foundational, hard to change (e.g. DB schema, engine choice). 'medium' = changeable but requires significant effort. 'easy' = easily revisited.",
+                            description: "Reversibility: 'critical' = hard to undo (e.g. DB schema), 'medium' = costly to undo, 'easy' = easily revisited.",
                         },
                         model_lean: {
                             type: "string",
-                            description: "The exact title of the option you recommend. Must match one of the option titles exactly. Be transparent - do not leave blank if you have a clear preference.",
+                            description: "Title of your recommended option. Must match one of the option titles exactly.",
                         },
                         model_lean_reason: {
                             type: "string",
-                            description: "One sentence explaining WHY you lean toward that option. Be specific, not generic (e.g. 'Already used throughout the codebase, no new dependency' not 'It is a good fit').",
+                            description: "One sentence explaining why you lean toward that option. Be specific (e.g. 'Already used throughout the codebase, no new dependency').",
                         },
                         answers_affect_followup: {
                             type: "boolean",
-                            description: "Set true when the answer to this question should shape what you ask or recommend next.",
+                            description: "Set true when the answer should shape what you ask or recommend next.",
                         },
                         options: {
                             type: "array",
-                            description: "Options to present. Required for 'exclusive' and 'non_exclusive'. Aim for 2-5 options. Quality over quantity - fewer, well-explained options are better.",
+                            description: "Required for 'exclusive' and 'non_exclusive' — must contain at least 2 entries. Each option needs a 'title' (2–5 words) and a 'description' (markdown: pros/cons, when it fits, what it forecloses — at least 3–5 sentences).",
+                            minItems: 2,
                             items: {
                                 type: "object",
                                 properties: {
-                                    title: { type: "string", description: "Short, scannable option title (e.g. 'SQLite WAL', 'Redis Pub/Sub'). 2-5 words." },
-                                    description: { type: "string", description: "THE KEY FIELD. Rich markdown explaining: what this choice means in practice, concrete pros and cons (use bullet lists), when it is the right fit, what it forecloses or makes harder. Write at least 3-5 substantive sentences, mermaid diagrams supported, use ASCII Art to illustrate UX/UI. The user will read this to understand what they are committing to." },
+                                    title: { type: "string", description: "Short, scannable label (2–5 words, e.g. 'SQLite WAL', 'Redis Pub/Sub')." },
+                                    description: { type: "string", description: "Rich markdown: what this choice means in practice, pros/cons (bullet lists), when it's the right fit, what it forecloses. At least 3–5 sentences. Mermaid diagrams and ASCII Art are supported." },
                                 },
                                 required: ["title", "description"],
                             },

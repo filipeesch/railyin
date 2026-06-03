@@ -14,4 +14,8 @@ export class InMemorySkillResolver implements SkillResolver {
   async resolve(name: string): Promise<string | null> {
     return this.skills.get(name) ?? null;
   }
+
+  async list(): Promise<string[]> {
+    return Array.from(this.skills.keys());
+  }
 }
