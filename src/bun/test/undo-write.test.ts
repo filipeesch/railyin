@@ -10,6 +10,7 @@ function makeHarness(dir: string): HarnessContext {
   return {
     undoStack: new UndoStack(),
     worktreePath: dir,
+    loopDetector: {} as any,
   };
 }
 

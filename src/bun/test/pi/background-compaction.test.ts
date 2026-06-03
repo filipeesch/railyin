@@ -53,6 +53,7 @@ class MockBgSession {
       messages: [] as any[],
     },
     onPayload: undefined as any,
+    beforeToolCall: undefined as any,
   };
 
   setActiveToolsCallCount = 0;

@@ -17,6 +17,7 @@ describe("Test Plan: Validate search_text removal and SDK search tool replacemen
       hashCache: {} as any,
       undoStack: {} as any,
       worktreePath: "/tmp/test",
+      loopDetector: {} as any,
     };
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
@@ -54,6 +55,7 @@ describe("run_command tool description", () => {
       hashCache: {} as any,
       undoStack: {} as any,
       worktreePath: "/tmp/test",
+      loopDetector: {} as any,
     };
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
@@ -77,6 +79,7 @@ describe("run_command tool description", () => {
       hashCache: {} as any,
       undoStack: {} as any,
       worktreePath: "/tmp/test",
+      loopDetector: {} as any,
     };
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
@@ -101,6 +104,7 @@ describe("buildChildTools: delegated subagent tool surface", () => {
     hashCache: {} as any,
     undoStack: {} as any,
     worktreePath: "/tmp/test",
+      loopDetector: {} as any,
   } as any;
   const mockCommonCtx = {
     runtime: { worktreePath: "/tmp/test" },

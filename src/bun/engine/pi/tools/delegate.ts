@@ -10,6 +10,7 @@
 import { join, isAbsolute, resolve } from "node:path";
 import { statSync } from "node:fs";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { ToolLoopDetector, LOOP_MAX_REPEAT, LOOP_WINDOW_SIZE } from "../harness/tool-loop-detector.ts";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { HarnessContext } from "../harness/context.ts";
 import type { EngineEvent, RawModelMessage } from "../../types.ts";
@@ -261,6 +262,18 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
             parentSystemPrompt: opts.parentSystemPrompt,
             cwd: childCwd,
           });
+
+          const childLoopDetector = new ToolLoopDetector();
+          handle.session.agent.beforeToolCall = async (ctx) => {
+            const looping = childLoopDetector.record(ctx.toolCall.name, ctx.args as unknown);
+            if (looping) {
+              return {
+                block: true,
+                reason: `Tool loop detected: '${ctx.toolCall.name}' (or a group including it) has been called with the same arguments ${LOOP_MAX_REPEAT} times in the last ${LOOP_WINDOW_SIZE} calls. Try a different approach or summarize your findings.`,
+              };
+            }
+            return undefined;
+          };
 
           // Subscribe BEFORE prompting to capture all child events.
           // - UI path: route tool_start/tool_result under childBlockId so they nest in the per-child bubble.

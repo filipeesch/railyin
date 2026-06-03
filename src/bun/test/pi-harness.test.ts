@@ -378,3 +378,38 @@ describe("PiEngine abort & cancel", () => {
     expect(eng.executionToConversation.has(42)).toBe(false);
   });
 });
+
+// ─── HarnessContext.loopDetector ─────────────────────────────────────────────
+
+import { ToolLoopDetector } from "../engine/pi/harness/tool-loop-detector.ts";
+
+describe("HarnessContext.loopDetector", () => {
+  it("HLC-1: getOrCreateHarnessContext initializes loopDetector as ToolLoopDetector instance", () => {
+    const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const eng = engine as any;
+
+    const ctx = eng.getOrCreateHarnessContext(1, "/test-cwd");
+    expect(ctx.loopDetector).toBeInstanceOf(ToolLoopDetector);
+  });
+
+  it("HLC-2: same conversationId returns the same loopDetector instance", () => {
+    const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const eng = engine as any;
+
+    const ctx1 = eng.getOrCreateHarnessContext(5, "/test-cwd");
+    const ctx2 = eng.getOrCreateHarnessContext(5, "/test-cwd");
+    expect(ctx1.loopDetector).toBe(ctx2.loopDetector);
+  });
+
+  it("HLC-3: different conversationIds get different loopDetector instances", () => {
+    const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const eng = engine as any;
+
+    const ctx1 = eng.getOrCreateHarnessContext(10, "/test-cwd");
+    const ctx2 = eng.getOrCreateHarnessContext(11, "/test-cwd");
+    expect(ctx1.loopDetector).not.toBe(ctx2.loopDetector);
+  });
+});

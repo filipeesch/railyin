@@ -13,7 +13,7 @@ import type { FileDiffPayload } from "@shared/rpc-types";
 /* ------------------------------------------------------------------ */
 
 function makeHarness(dir: string): HarnessContext {
-	return { undoStack: new UndoStack(), worktreePath: dir };
+	return { undoStack: new UndoStack(), worktreePath: dir, loopDetector: {} as any };
 }
 
 /* ------------------------------------------------------------------ */
