@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
-import type { ExecutionEngine, EngineModelInfo } from "../engine/types.ts";
+import type { EngineModelInfo } from "../engine/types.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
+import type { EngineRegistry } from "../engine/engine-registry.ts";
 import { ContextEstimator } from "./context-estimator.ts";
 
 export interface PrepareResult {
@@ -8,15 +9,18 @@ export interface PrepareResult {
 }
 
 export class CrossEngineContextInjector {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly engineRegistry?: EngineRegistry,
+  ) {}
 
   async prepareSwitch(
     conversationId: number,
     targetEngineId: string,
-    sourceEngine: ExecutionEngine | null,
     targetModelInfo: EngineModelInfo | undefined,
     workingDirectory: string,
     workspaceKey: string,
+    excludeBeforeMsgId?: number,
   ): Promise<PrepareResult> {
     const conv = this.db
       .query<{ last_engine_type: string | null }, [number]>(
@@ -32,7 +36,9 @@ export class CrossEngineContextInjector {
       return { historyBlock: undefined };
     }
 
-    let messages = this.fetchMessagesSinceAnchor(conversationId);
+    const sourceEngine = this.engineRegistry?.getEngineById(conv.last_engine_type) ?? null;
+
+    let messages = this.fetchMessagesSinceAnchor(conversationId, excludeBeforeMsgId);
 
     if (
       targetModelInfo?.contextWindow != null &&
@@ -46,7 +52,7 @@ export class CrossEngineContextInjector {
       );
       if (est.fraction > 0.75) {
         await sourceEngine.compact(null, conversationId, workingDirectory, workspaceKey);
-        messages = this.fetchMessagesSinceAnchor(conversationId);
+        messages = this.fetchMessagesSinceAnchor(conversationId, excludeBeforeMsgId);
       }
     }
 
@@ -54,18 +60,31 @@ export class CrossEngineContextInjector {
     return { historyBlock };
   }
 
-  private fetchMessagesSinceAnchor(conversationId: number): ConversationMessageRow[] {
+  private fetchMessagesSinceAnchor(
+    conversationId: number,
+    excludeBeforeMsgId?: number,
+  ): ConversationMessageRow[] {
     const anchor = this.db
       .query<{ id: number }, [number]>(
         "SELECT id FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
       )
       .get(conversationId);
 
+    const anchorId = anchor?.id ?? 0;
+
+    if (excludeBeforeMsgId != null) {
+      return this.db
+        .query<ConversationMessageRow, [number, number, number]>(
+          "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id >= ? AND id < ? ORDER BY id ASC LIMIT 200",
+        )
+        .all(conversationId, anchorId, excludeBeforeMsgId);
+    }
+
     return this.db
       .query<ConversationMessageRow, [number, number]>(
-        "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id > ? ORDER BY id ASC LIMIT 200",
+        "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id >= ? ORDER BY id ASC LIMIT 200",
       )
-      .all(conversationId, anchor?.id ?? 0);
+      .all(conversationId, anchorId);
   }
 
   private formatHistoryBlock(messages: ConversationMessageRow[]): string {

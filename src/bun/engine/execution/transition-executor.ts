@@ -108,12 +108,10 @@ export class TransitionExecutor {
     const freshTask = fetchTaskWithModel(db, taskId)!;
     const signal = this.streamProcessor.createSignal(executionId);
 
-    const sourceEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
     const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === effectiveModel);
     const { historyBlock } = await this.crossEngineInjector.prepareSwitch(
       conversationId,
       targetEngineId,
-      sourceEngine,
       targetModelInfo,
       workingDirectory,
       workspaceKey,
