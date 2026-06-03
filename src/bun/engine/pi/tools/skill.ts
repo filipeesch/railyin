@@ -19,8 +19,22 @@ The name must exactly match the <name> field from the available skills list.`,
     execute: async (_toolCallId, args) => {
       const content = await resolver.resolve(args.name);
       if (content === null) {
+        const available = await resolver.list();
+        const errorParts: string[] = [];
+        if (available.length === 0) {
+          errorParts.push(`Skill '${args.name}' not found. No skills are currently available.`);
+        } else {
+          const lowerQuery = args.name.toLowerCase();
+          const fuzzyMatch = available.find((n) => n.toLowerCase() === lowerQuery);
+          if (fuzzyMatch) {
+            errorParts.push(`Skill '${args.name}' not found. Did you mean: \`${fuzzyMatch}\`?`);
+          } else {
+            errorParts.push(`Skill '${args.name}' not found.`);
+          }
+          errorParts.push(`Available skills: ${available.map((n) => `\`${n}\``).join(", ")}`);
+        }
         return {
-          content: [{ type: "text", text: `Skill '${args.name}' not found. Check the <available_skills> list for valid skill names.` }],
+          content: [{ type: "text", text: errorParts.join(" ") }],
           details: { name: args.name },
           isError: true,
         };

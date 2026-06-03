@@ -157,16 +157,11 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       "Return a high-level summary of task distribution across board columns.\n\n" +
       "Usage:\n" +
       "- Shows total count and breakdown by execution_state (idle, running, completed, failed) per column\n" +
-      "- Omit board_id to summarise the current task's board\n" +
+      "- Always operates on the current task's board\n" +
       "- Use to get an overview before listing individual tasks",
     parameters: {
       type: "object",
-      properties: {
-        board_id: {
-          type: "number",
-          description: "The board to summarise. Defaults to the current task's board when omitted.",
-        },
-      },
+      properties: {},
       required: [],
     },
   },
@@ -177,14 +172,10 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       "Usage:\n" +
       "- Filter by workflow_state, execution_state, project_key\n" +
       "- Use query for case-insensitive text search across title and description\n" +
-      "- Omit board_id to search the current task's board; default limit 50 (max 200)",
+      "- Always searches the current task's board; default limit 50 (max 200)",
     parameters: {
       type: "object",
       properties: {
-        board_id: {
-          type: "number",
-          description: "Board to list tasks from. Defaults to the current task's board.",
-        },
         workflow_state: {
           type: "string",
           description: "Filter by exact workflow column id (e.g. 'backlog', 'in-progress').",
@@ -213,10 +204,9 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "create_task",
     description:
-      "Create a new task in the backlog column of a board.\n\n" +
+      "Create a new task in the backlog column of the current board.\n\n" +
       "Usage:\n" +
       "- Starts in 'idle' execution state; use move_task to start it\n" +
-      "- Omit board_id to create on the current task's board\n" +
       "- Use model parameter to override the default model for this task",
     parameters: {
       type: "object",
@@ -232,10 +222,6 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
         description: {
           type: "string",
           description: "The task description.",
-        },
-        board_id: {
-          type: "number",
-          description: "Board to create the task on. Defaults to the current task's board.",
         },
         model: {
           type: "string",
@@ -525,9 +511,9 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["fetch_url", "fetch_url(url): fetch a public URL and return its text content (HTML stripped to readable text). Use for documentation, API references, web pages."],
   ["search_internet", "search_internet(query): search the web for ranked results (title, URL, snippet). Requires search config in workspace.yaml. Follow up with fetch_url for full content."],
   ["get_task", "get_task(task_id, include_messages?): get task metadata (title, description, state, model, branch). Use include_messages=N for last N conversation messages."],
-  ["get_board_summary", "get_board_summary(board_id?): overview of task distribution across board columns with execution_state breakdown. Omit board_id for current board."],
-  ["list_tasks", "list_tasks(board_id?, state?, query?, limit?): list tasks with filters. Use query for case-insensitive text search across title and description."],
-  ["create_task", "create_task(title, description?, board_id?, state?): create a new task in backlog. Use move_task to start it."],
+  ["get_board_summary", "get_board_summary(): overview of task distribution across board columns with execution_state breakdown. Always uses the current board."],
+  ["list_tasks", "list_tasks(state?, query?, limit?): list tasks with filters. Use query for case-insensitive text search across title and description."],
+  ["create_task", "create_task(title, description?): create a new task in backlog on the current board. Use move_task to start it."],
   ["edit_task", "edit_task(task_id, title?, description?): update task title or description (only before worktree creation)."],
   ["delete_task", "delete_task(task_id): permanently delete a task and all its data. Git branch is preserved."],
   ["move_task", "move_task(task_id, to_state): move a task to a different workflow column. Triggers on_enter_prompt if configured."],

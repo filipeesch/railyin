@@ -173,7 +173,7 @@ describe("executeCommonTool — decision_request input validation", () => {
 
   it("suspends with valid exclusive question", async () => {
     const questions = [
-      { question: "Pick a DB", type: "exclusive", options: [{ title: "PG", description: "Postgres" }] },
+      { question: "Pick a DB", type: "exclusive", options: [{ title: "PG", description: "Postgres" }, { title: "SQLite", description: "SQLite embedded" }] },
     ];
     const result = await executeCommonTool("decision_request", { questions }, ctx);
     expect(result.type).toBe("suspend");
@@ -181,7 +181,7 @@ describe("executeCommonTool — decision_request input validation", () => {
 
   it("suspends with valid non_exclusive question", async () => {
     const questions = [
-      { question: "Pick strategies", type: "non_exclusive", options: [{ title: "A", description: "opt A" }] },
+      { question: "Pick strategies", type: "non_exclusive", options: [{ title: "A", description: "opt A" }, { title: "B", description: "opt B" }] },
     ];
     const result = await executeCommonTool("decision_request", { questions }, ctx);
     expect(result.type).toBe("suspend");

@@ -89,7 +89,7 @@ describe("executeCommonTool / decision_request", () => {
                     {
                         question: "Which option?",
                         type: "exclusive",
-                        options: [{ title: "A", description: "Option A" }],
+                        options: [{ title: "A", description: "Option A" }, { title: "B", description: "Option B" }],
                     },
                 ],
             },

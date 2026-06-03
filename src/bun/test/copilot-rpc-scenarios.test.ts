@@ -195,7 +195,7 @@ describe("Copilot backend RPC scenarios", () => {
                 {
                     question: "Choose architecture",
                     type: "exclusive",
-                    options: [{ title: "Option A", description: "Tradeoffs" }],
+                    options: [{ title: "Option A", description: "Tradeoffs" }, { title: "Option B", description: "Alternative tradeoffs" }],
                 },
             ],
         };
