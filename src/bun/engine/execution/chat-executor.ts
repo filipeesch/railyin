@@ -113,16 +113,14 @@ export class ChatExecutor {
       return { message: mapConversationMessage(userMsgRow), executionId: -1 };
     }
 
-    const lastEngineType = conversationRow?.last_engine_type ?? null;
-    const sourceEngine = lastEngineType ? (this.engineRegistry.getEngineById(lastEngineType) ?? null) : null;
     const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === effectiveModel);
     const { historyBlock } = await this.crossEngineInjector.prepareSwitch(
       conversationId,
       engineId,
-      sourceEngine,
       targetModelInfo,
       workingDirectory,
       workspaceKey,
+      msgId,
     );
 
     const enginePrompt = [historyBlock, engineContent ?? content].filter(Boolean).join("\n\n");

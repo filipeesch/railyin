@@ -100,10 +100,11 @@ export class Orchestrator implements ExecutionCoordinator {
     this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
     const customPromptInjector = new CustomPromptInjector();
     const paramsEnricher = new ExecutionParamsEnricher(db, modelSettingsRepo);
+    const crossEngineInjector = new CrossEngineContextInjector(db, registry);
 
     this.transitionExecutor = new TransitionExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, boardTools, wsRepo,
-      new CrossEngineContextInjector(db),
+      crossEngineInjector,
       new DecisionContextInjector(db),
       customPromptInjector,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
@@ -112,7 +113,7 @@ export class Orchestrator implements ExecutionCoordinator {
     );
     this.humanTurnExecutor = new HumanTurnExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
-      new CrossEngineContextInjector(db),
+      crossEngineInjector,
       new DecisionContextInjector(db),
       customPromptInjector,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
@@ -121,7 +122,7 @@ export class Orchestrator implements ExecutionCoordinator {
     );
     this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, customPromptInjector, paramsEnricher);
     this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, customPromptInjector);
-    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, new CrossEngineContextInjector(db), paramsEnricher, boardTools, onNewMessage);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, crossEngineInjector, paramsEnricher, boardTools, onNewMessage);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────

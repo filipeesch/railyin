@@ -13,7 +13,8 @@ import type { ModelSettingsRepository } from "../db/repositories/model-settings-
 import type { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, RawModelMessage } from "../engine/types.ts";
 import type { ConversationMessage } from "../../shared/rpc-types.ts";
-import { initDb, setupTestConfig, makeTestRegistry, seedChatSession } from "./helpers.ts";
+import { initDb, setupTestConfig, makeTestRegistry, makeTestRegistryWith, seedChatSession } from "./helpers.ts";
+import { appendMessage } from "../conversation/messages.ts";
 import { resetConfig } from "../config/index.ts";
 
 let db: Database;
@@ -84,7 +85,7 @@ function makeExecutor(opts: {
     streamProcessor,
     new StubWorkdirResolver(),
     new CustomPromptInjector(),
-    opts.crossEngineInjector ?? new CrossEngineContextInjector(db),
+    opts.crossEngineInjector ?? new CrossEngineContextInjector(db, makeTestRegistry(new PassThroughEngine())),
     paramsEnricher,
     opts.boardTools,
     opts.onNewMessage,
@@ -430,3 +431,69 @@ describe("CE-14: model-update syncs conversations.model when model changes", () 
     expect(row?.model).toBe("copilot/v2");
   });
 });
+
+// ─── CE-15..17: cross-engine context injection ───────────────────────────────
+
+describe("CE-15..17: cross-engine context injection", () => {
+  it("CE-15: prior engine turns appear in prompt when engine switches (pi → claude)", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "claude/opus",
+      lastEngineType: "pi",
+    });
+    appendMessage(db, null, conversationId, "assistant", null, "Pi assistant response");
+
+    const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
+      ["pi", new PassThroughEngine()],
+    ])));
+    const { executor, streamProcessor } = makeExecutor({ crossEngineInjector: injector });
+
+    await executor.execute(sessionId, conversationId, "new claude question", "claude/opus");
+
+    const prompt = streamProcessor.lastRun?.params.prompt ?? "";
+    expect(prompt).toContain("<ASSISTANT>");
+    expect(prompt).toContain("Pi assistant response");
+  });
+
+  it("CE-16: compaction_summary + pi turns → prompt contains <SUMMARY> and post-compaction turns", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "claude/opus",
+      lastEngineType: "pi",
+    });
+    appendMessage(db, null, conversationId, "compaction_summary", null, "Pi compaction summary");
+    appendMessage(db, null, conversationId, "assistant", null, "Pi post-compaction response");
+
+    const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
+      ["pi", new PassThroughEngine()],
+    ])));
+    const { executor, streamProcessor } = makeExecutor({ crossEngineInjector: injector });
+
+    await executor.execute(sessionId, conversationId, "question", "claude/opus");
+
+    const prompt = streamProcessor.lastRun?.params.prompt ?? "";
+    expect(prompt).toContain("<SUMMARY>");
+    expect(prompt).toContain("Pi compaction summary");
+    expect(prompt).toContain("Pi post-compaction response");
+  });
+
+  it("CE-17: current user message is NOT included inside <message_history> block", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "claude/opus",
+      lastEngineType: "copilot",
+    });
+    appendMessage(db, null, conversationId, "assistant", null, "Copilot prior response");
+
+    const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
+      ["copilot", new PassThroughEngine()],
+    ])));
+    const { executor, streamProcessor } = makeExecutor({ crossEngineInjector: injector });
+
+    await executor.execute(sessionId, conversationId, "current user question", "claude/opus");
+
+    const prompt = streamProcessor.lastRun?.params.prompt ?? "";
+    const historySection = prompt.includes("<message_history>")
+      ? prompt.slice(prompt.indexOf("<message_history>"), prompt.indexOf("</message_history>"))
+      : "";
+    expect(historySection).not.toContain("current user question");
+  });
+});
+

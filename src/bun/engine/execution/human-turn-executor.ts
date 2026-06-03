@@ -172,15 +172,14 @@ export class HumanTurnExecutor {
     const workingDirectory = this.workdirResolver.resolve(taskForExecution);
     const targetEngineId = QualifiedModelId.tryParse(resolvedModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, resolvedModel);
-    const sourceEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
     const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === resolvedModel);
     const { historyBlock } = await this.crossEngineInjector.prepareSwitch(
       conversationId,
       targetEngineId,
-      sourceEngine,
       targetModelInfo,
       workingDirectory,
       workspaceKey,
+      msgId,
     );
     const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
 
