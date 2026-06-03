@@ -107,3 +107,19 @@ engines:
   #   #     temperature: 1.2
   #   #     top_p: 0.98
   #   #     presence_penalty: 0.3
+  #   #
+  #   # Additional sampling parameters (optional):
+  #   #   repetition_penalty: 1.1   # penalizes tokens based on frequency (vLLM, SGLang, OpenRouter)
+  #   #   frequency_penalty: 0.5    # penalizes based on text so far (OpenAI, vLLM, SGLang, OpenRouter)
+  #   #   seed: 42                  # reproducible outputs (vLLM, SGLang, OpenRouter, Ollama)
+  #   #   min_p: 0.1                # alternative to temperature/top_p (vLLM, SGLang)
+  #   #   top_k: 40                 # limits to top-k tokens (vLLM, SGLang, Ollama, OpenRouter)
+  #   #
+  #   # Backend support matrix:
+  #   #   vLLM      ✅ repetition_penalty, frequency_penalty, seed, min_p, top_k
+  #   #   SGLang    ✅ repetition_penalty, frequency_penalty, seed, min_p, top_k
+  #   #   LM Studio ✅ (backed by vLLM) — same as vLLM
+  #   #   OpenRouter ✅ repetition_penalty, frequency_penalty, seed (min_p varies by provider)
+  #   #   Ollama    ❌ repetition_penalty (uses repeat_penalty natively), ✅ seed
+  #   #   Groq      ❌ (only temperature, top_p, frequency_penalty, presence_penalty)
+  #   #   Mistral   ❌ (only temperature, top_p, max_tokens)

@@ -245,7 +245,11 @@
                 <span v-if="option.params.temperature != null">temp: {{ option.params.temperature }}</span>
                 <span v-if="option.params.top_p != null">top_p: {{ option.params.top_p }}</span>
                 <span v-if="option.params.top_k != null">top_k: {{ option.params.top_k }}</span>
-                <span v-if="option.params.presence_penalty != null">penalty: {{ option.params.presence_penalty }}</span>
+                <span v-if="option.params.presence_penalty != null">presence: {{ option.params.presence_penalty }}</span>
+                <span v-if="option.params.repetition_penalty != null">repetition: {{ option.params.repetition_penalty }}</span>
+                <span v-if="option.params.frequency_penalty != null">frequency: {{ option.params.frequency_penalty }}</span>
+                <span v-if="option.params.seed != null">seed: {{ option.params.seed }}</span>
+                <span v-if="option.params.min_p != null">min_p: {{ option.params.min_p }}</span>
               </div>
             </div>
           </template>

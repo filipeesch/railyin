@@ -1,14 +1,51 @@
 import type { PiEngineConfig, SamplingPreset } from "../../config/index.ts";
 
 /**
- * Returns a copy of `preset` containing only the fields that are not `undefined`.
- * Guards against accidentally sending `undefined` values to the LLM API payload.
+ * LLM-facing sampling parameters — the subset of SamplingPreset fields that
+ * are actually forwarded into the provider request body.
+ *
+ * Separate from SamplingPreset (which also carries label/description for UI)
+ * so that filterDefined can return a clean, payload-only type.
+ */
+export type SamplingParams = {
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  presence_penalty?: number;
+  repetition_penalty?: number;
+  frequency_penalty?: number;
+  seed?: number;
+  min_p?: number;
+};
+
+/**
+ * Runtime allowlist of keys that belong in the LLM payload.
+ * Keeps filterDefined explicit and maintainable — adding a new sampling
+ * param requires updating both SamplingParams and this set.
+ */
+const SAMPLING_KEYS = new Set<keyof SamplingParams>([
+  "temperature",
+  "top_p",
+  "top_k",
+  "presence_penalty",
+  "repetition_penalty",
+  "frequency_penalty",
+  "seed",
+  "min_p",
+]);
+
+/**
+ * Returns a copy of `preset` containing only the LLM-facing fields that are
+ * not `undefined`. Guards against accidentally sending `undefined` values or
+ * UI-only fields (label, description) to the LLM API payload.
  * Note: a field value of `0` or `false` is intentionally preserved.
  */
-function filterDefined(preset: SamplingPreset): SamplingPreset {
+function filterDefined(preset: SamplingPreset): SamplingParams {
   return Object.fromEntries(
-    Object.entries(preset).filter(([, v]) => v !== undefined),
-  ) as SamplingPreset;
+    Object.entries(preset).filter(
+      ([k, v]) => v !== undefined && SAMPLING_KEYS.has(k as keyof SamplingParams),
+    ),
+  ) as SamplingParams;
 }
 
 /**
@@ -25,7 +62,7 @@ function filterDefined(preset: SamplingPreset): SamplingPreset {
 export function resolveSamplingPreset(
   presetName: string | undefined,
   config: PiEngineConfig,
-): SamplingPreset | undefined {
+): SamplingParams | undefined {
   const presets = config.sampling_presets ?? {};
 
   if (presetName !== undefined) {
