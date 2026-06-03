@@ -112,7 +112,7 @@ describe("validateToolArgs — V-6: decision_request valid", () => {
         {
           question: "Which DB?",
           type: "exclusive",
-          options: [{ title: "PG", description: "Postgres" }],
+          options: [{ title: "PG", description: "Postgres" }, { title: "SQLite", description: "SQLite embedded" }],
         },
       ],
     };

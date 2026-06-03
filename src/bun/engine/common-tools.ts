@@ -524,6 +524,23 @@ export async function executeCommonTool(
     if (err) return { type: "result", text: err };
   }
   if (name === "decision_request") {
+    const questions = args.questions;
+    if (Array.isArray(questions)) {
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i] as Record<string, unknown>;
+        if (q.type === "exclusive" || q.type === "non_exclusive") {
+          const options = q.options;
+          if (!Array.isArray(options) || options.length < 2) {
+            return {
+              type: "result",
+              text:
+                `Error in question[${i}]: '${q.type}' questions require at least 2 options in the 'options' array. ` +
+                `Do NOT embed choices or alternatives in the 'question' text — list them as separate entries in 'options'.`,
+            };
+          }
+        }
+      }
+    }
     const context = typeof args.context === "string" ? args.context.trim() : "";
     const payload: Record<string, unknown> = { questions: args.questions };
     if (context) payload.context = context;

@@ -34,6 +34,9 @@ describe("buildSkillTool", () => {
         calls.push(name);
         return null;
       },
+      async list() {
+        return [];
+      },
     };
     const tool = buildSkillTool(resolver);
     await tool.execute("tool-call-3", { name: "test-skill" }, {} as any);
