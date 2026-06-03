@@ -50,6 +50,7 @@ import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { UndoStack } from "./harness/undo-stack.ts";
+import { ToolLoopDetector, LOOP_MAX_REPEAT, LOOP_WINDOW_SIZE } from "./harness/tool-loop-detector.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { buildAllTools } from "./tools/index.ts";
 import { FileSystemSkillResolver } from "./skill-resolver.ts";
@@ -293,6 +294,18 @@ export class PiEngine implements ExecutionEngine {
     const session = await this.getOrCreateSession(conversationId, piModel, tools, enrichedSystem, workingDirectory ?? process.cwd());
 
     this._applyPresetToSession(session, samplingPresetName);
+
+    harnessCtx.loopDetector.reset();
+    session.agent.beforeToolCall = async (ctx) => {
+      const looping = harnessCtx.loopDetector.record(ctx.toolCall.name, ctx.args as unknown);
+      if (looping) {
+        return {
+          block: true,
+          reason: `Tool loop detected: '${ctx.toolCall.name}' (or a group including it) has been called with the same arguments ${LOOP_MAX_REPEAT} times in the last ${LOOP_WINDOW_SIZE} calls. Try a different approach or summarize your findings.`,
+        };
+      }
+      return undefined;
+    };
 
     this.executionToConversation.set(executionId, conversationId);
 
@@ -652,6 +665,7 @@ export class PiEngine implements ExecutionEngine {
       ctx = {
         undoStack: new UndoStack(this.config.harness?.undo_stack_size),
         worktreePath,
+        loopDetector: new ToolLoopDetector(),
       };
       this.harnessContexts.set(conversationId, ctx);
     } else {

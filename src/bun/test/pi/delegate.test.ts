@@ -17,18 +17,33 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 type SessionCallback = (event: any) => void;
 
+interface SimulatedToolCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+
 class MockChildSession {
   private callback: SessionCallback | null = null;
-  readonly agent = {
+  blockedCalls: string[] = [];
+
+  readonly agent: {
+    state: {
+      thinkingLevel: string;
+      messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>;
+    };
+    beforeToolCall: ((ctx: any) => Promise<any>) | undefined;
+  } = {
     state: {
       thinkingLevel: "off" as string,
       messages: [] as Array<{ role: string; content: Array<{ type: string; text?: string }> }>,
     },
+    beforeToolCall: undefined as any,
   };
 
   constructor(
     private readonly jobId: string,
     private readonly response: string | Error,
+    private readonly toolCallSequence: SimulatedToolCall[] = [],
   ) {}
 
   subscribe(cb: SessionCallback): () => void {
@@ -40,6 +55,22 @@ class MockChildSession {
     if (this.response instanceof Error) {
       throw this.response;
     }
+
+    // Simulate tool calls through beforeToolCall if configured
+    for (const call of this.toolCallSequence) {
+      if (this.agent.beforeToolCall) {
+        const result = await this.agent.beforeToolCall({
+          toolCall: { name: call.name },
+          args: call.args,
+          assistantMessage: {},
+          context: {},
+        });
+        if (result?.block) {
+          this.blockedCalls.push(call.name);
+        }
+      }
+    }
+
     // Emit a tool_execution_start event so DL-6 can verify forwarding
     this.callback?.({
       type: "tool_execution_start",
@@ -69,9 +100,9 @@ class MockChildSession {
 
 // ─── Factory helpers ──────────────────────────────────────────────────────────
 
-function makeChildFactory(response: string | Error): ChildSessionFactory {
+function makeChildFactory(response: string | Error, toolCallSequence: SimulatedToolCall[] = []): ChildSessionFactory {
   return async (opts): Promise<ChildSessionHandle> => {
-    const session = new MockChildSession(opts.jobId, response);
+    const session = new MockChildSession(opts.jobId, response, toolCallSequence);
     return { session: session as any, dispose: () => {} };
   };
 }
@@ -400,4 +431,137 @@ describe("buildDelegateTool", () => {
     expect(receivedCwds).toHaveLength(1);
     expect(receivedCwds[0]).toBe(`${parentCwd}/src`);
   });
+
+  test("DL-15: child session gets its own loop detector — 3 identical tool calls trigger block", async () => {
+    const toolCallSequence: SimulatedToolCall[] = [
+      { name: "read", args: { path: "/a.ts" } },
+      { name: "read", args: { path: "/a.ts" } },
+      { name: "read", args: { path: "/a.ts" } },
+    ];
+    let capturedSession: MockChildSession | null = null;
+    const factory: ChildSessionFactory = async (opts) => {
+      const session = new MockChildSession(opts.jobId, "done", toolCallSequence);
+      capturedSession = session;
+      return { session: session as any, dispose: () => {} };
+    };
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory }));
+    await tool.execute("call-15", { tasks: [{ id: "child-1", prompt: "do work" }] }, undefined);
+
+    expect(capturedSession).not.toBeNull();
+    expect(capturedSession!.blockedCalls.length).toBeGreaterThanOrEqual(1);
+    expect(capturedSession!.blockedCalls[0]).toBe("read");
+  });
+
+  test("DL-16: each child job gets an independent loop detector (one child triggers, other does not)", async () => {
+    const repeatingSequence: SimulatedToolCall[] = [
+      { name: "read", args: { path: "/a.ts" } },
+      { name: "read", args: { path: "/a.ts" } },
+      { name: "read", args: { path: "/a.ts" } },
+    ];
+    const normalSequence: SimulatedToolCall[] = [
+      { name: "read", args: { path: "/a.ts" } },
+      { name: "read", args: { path: "/b.ts" } },
+    ];
+
+    const capturedSessions: MockChildSession[] = [];
+    let callIdx = 0;
+    const factory: ChildSessionFactory = async (opts) => {
+      const seq = callIdx++ === 0 ? repeatingSequence : normalSequence;
+      const session = new MockChildSession(opts.jobId, "done", seq);
+      capturedSessions.push(session);
+      return { session: session as any, dispose: () => {} };
+    };
+
+    const config: PiEngineConfig = { type: "pi", harness: { delegate: { max_concurrency: 1 } } };
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory, engineConfig: config }));
+    await tool.execute("call-16", {
+      tasks: [
+        { id: "looping-child", prompt: "looping work" },
+        { id: "normal-child", prompt: "normal work" },
+      ],
+    }, undefined);
+
+    expect(capturedSessions).toHaveLength(2);
+    expect(capturedSessions[0].blockedCalls.length).toBeGreaterThanOrEqual(1);
+    expect(capturedSessions[1].blockedCalls).toHaveLength(0);
+  });
+
+  test("DL-17: child loop detector does not share state with parent (fresh detector per job)", async () => {
+    // Two sequential jobs each with 2 identical calls — neither should trigger (2 < 3)
+    const twoCallSequence: SimulatedToolCall[] = [
+      { name: "read", args: { path: "/a.ts" } },
+      { name: "read", args: { path: "/a.ts" } },
+    ];
+
+    const capturedSessions: MockChildSession[] = [];
+    const factory: ChildSessionFactory = async (opts) => {
+      const session = new MockChildSession(opts.jobId, "done", twoCallSequence);
+      capturedSessions.push(session);
+      return { session: session as any, dispose: () => {} };
+    };
+
+    const config: PiEngineConfig = { type: "pi", harness: { delegate: { max_concurrency: 1 } } };
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory, engineConfig: config }));
+    await tool.execute("call-17", {
+      tasks: [
+        { id: "job-1", prompt: "work 1" },
+        { id: "job-2", prompt: "work 2" },
+      ],
+    }, undefined);
+
+    expect(capturedSessions[0].blockedCalls).toHaveLength(0);
+    expect(capturedSessions[1].blockedCalls).toHaveLength(0);
+  });
+
+  test("DL-18: block hint message contains tool name and instructions to try a different approach", async () => {
+    const toolCallSequence: SimulatedToolCall[] = [
+      { name: "search", args: { query: "foo" } },
+      { name: "search", args: { query: "foo" } },
+      { name: "search", args: { query: "foo" } },
+    ];
+    let capturedSession: MockChildSession | null = null;
+    let lastBlockReason = "";
+
+    const factory: ChildSessionFactory = async (opts) => {
+      const session = new MockChildSession(opts.jobId, "done", toolCallSequence);
+      capturedSession = session;
+      // Intercept the beforeToolCall to capture the reason
+      return {
+        session: {
+          ...session,
+          get agent() { return session.agent; },
+          subscribe: session.subscribe.bind(session),
+          prompt: async (text: string) => {
+            // Override prompt to capture reason
+            for (const call of toolCallSequence) {
+              if (session.agent.beforeToolCall) {
+                const result = await session.agent.beforeToolCall({
+                  toolCall: { name: call.name },
+                  args: call.args,
+                  assistantMessage: {},
+                  context: {},
+                });
+                if (result?.block) {
+                  session.blockedCalls.push(call.name);
+                  lastBlockReason = result.reason ?? "";
+                }
+              }
+            }
+            session.agent.state.messages = [{ role: "assistant", content: [{ type: "text", text: "done" }] }];
+          },
+          dispose: session.dispose.bind(session),
+          abort: session.abort.bind(session),
+        } as any,
+        dispose: () => {},
+      };
+    };
+
+    const [tool] = buildDelegateTool(fakeHarnessCtx, makeOpts({ childSessionFactory: factory }));
+    await tool.execute("call-18", { tasks: [{ id: "hint-test", prompt: "work" }] }, undefined);
+
+    expect(capturedSession!.blockedCalls.length).toBeGreaterThanOrEqual(1);
+    expect(lastBlockReason).toContain("search");
+    expect(lastBlockReason.toLowerCase()).toContain("different approach");
+  });
 });
+
