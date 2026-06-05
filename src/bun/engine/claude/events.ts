@@ -58,13 +58,6 @@ export function translateClaudeMessage(
   const worktreePath = options?.worktreePath;
   const fileStateCache = options?.fileStateCache;
   const raw = message as Record<string, unknown>;
-  // For system/init log the slash_commands list specifically; for everything else truncate
-  if (raw["type"] === "system" && raw["subtype"] === "init") {
-    const slashCommands = (raw as Record<string, unknown>)["slash_commands"];
-    console.error("[claude-events] system/init slash_commands:", JSON.stringify(slashCommands));
-  } else {
-    console.error("[claude-events] raw message:", JSON.stringify(raw).slice(0, 500));
-  }
 
   switch (message.type) {
     case "assistant": {

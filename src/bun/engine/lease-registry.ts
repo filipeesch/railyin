@@ -14,10 +14,7 @@ export class LeaseRegistry {
     private readonly engine: string,
     private readonly idleTimeoutMs: number,
     private readonly onExpire: (leaseKey: string, metadata: EngineLeaseMetadata) => Promise<void>,
-    private readonly logger: Logger = (message, payload) => {
-      if (payload) console.log(message, payload);
-      else console.log(message);
-    },
+    private readonly logger: Logger = () => {},
   ) { }
 
   touch(leaseKey: string, state?: EngineLeaseState): EngineLeaseMetadata {

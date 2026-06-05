@@ -684,7 +684,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
     const executions = this.leaseExecutions.get(sessionId);
     if (!executions || executions.size === 0) return;
 
-    console.log("[claude] Closing lease executions", { sessionId, reason, count: executions.size });
     await Promise.all(
       [...executions].map(async (executionId) => {
         const query = this.activeQueries.get(executionId);
