@@ -6,8 +6,8 @@
  * @github/copilot-sdk Tool format, using raw JSON schemas as parameters.
  *
  * Tool groups registered:
- * - tasks_read: get_task, list_tasks, get_board_summary
- * - tasks_write: create_task, edit_task, delete_task, move_task, message_task
+ * - cards_read: list_boards, get_card, list_cards, get_board_summary
+ * - cards_write: create_card, edit_card, delete_card, move_card, message_card
  */
 
 import type { Tool } from "@github/copilot-sdk";
