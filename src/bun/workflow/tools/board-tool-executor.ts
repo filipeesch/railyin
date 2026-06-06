@@ -271,7 +271,18 @@ export class BoardToolExecutor implements IBoardToolExecutor {
     return JSON.stringify({ status: "delivered", task_id: taskId });
   }
 
-  async execListBoards(_args: Record<string, unknown>, _ctx: BoardToolContext): Promise<string> {
+  async execListBoards(_args: Record<string, unknown>, ctx: BoardToolContext): Promise<string> {
+    // Filter by workspace if we have a board context
+    if (ctx.boardId) {
+      const wsKey = this.wsRepo.getBoardWorkspaceKey(ctx.boardId);
+      const rows = this.db
+        .query<{ id: number; name: string }, [string]>(
+          "SELECT id, name FROM boards WHERE workspace_key = ? ORDER BY created_at ASC",
+        )
+        .all(wsKey);
+      return JSON.stringify(rows);
+    }
+    // Fallback: list all boards (for chat sessions without board context)
     const rows = this.db
       .query<{ id: number; name: string }, []>("SELECT id, name FROM boards ORDER BY created_at ASC")
       .all();
