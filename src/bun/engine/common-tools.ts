@@ -400,6 +400,7 @@ async function executeCommonToolText(
   const boardCtx: BoardToolContext = {
     taskId: ctx.task.id ?? undefined,
     boardId: ctx.task.boardId ?? undefined,
+    workspaceKey: ctx.workspaceKey,
     onTransition: ctx.workflow.onTransition,
     onHumanTurn: ctx.workflow.onHumanTurn,
     onCancel: ctx.workflow.onCancel,

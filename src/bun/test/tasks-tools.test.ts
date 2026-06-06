@@ -37,6 +37,7 @@ const commonCtx = (overrides?: {
       boardId: overrides && "boardId" in overrides ? (overrides.boardId ?? null) : boardId,
       conversationId,
     },
+    workspaceKey: "default",
     repos: {
       todos: new TodoRepository(db),
       decisions: new DecisionRepository(db),

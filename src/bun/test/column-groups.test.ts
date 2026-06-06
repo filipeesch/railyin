@@ -258,6 +258,7 @@ describe("card limit enforcement in tasks.transition", () => {
 const noop = () => { };
 const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
   task: { id: taskId, boardId, conversationId: 0 },
+  workspaceKey: "default",
   repos: {
     todos: new TodoRepository(db),
     decisions: new DecisionRepository(db),
