@@ -80,7 +80,7 @@ describe("TOOL_GROUPS", () => {
     });
 });
 
-// ─── get_task ─────────────────────────────────────────────────────────────────
+// ─── get_card ─────────────────────────────────────────────────────────────────
 
 describe("executeCommonTool / get_card", () => {
     it("returns task metadata for a valid task_id", async () => {
@@ -161,7 +161,7 @@ describe("executeCommonTool / get_board_summary", () => {
     });
 });
 
-// ─── list_tasks ───────────────────────────────────────────────────────────────
+// ─── list_cards ───────────────────────────────────────────────────────────────
 
 describe("executeCommonTool / list_cards", () => {
     it("lists all tasks on the board using ctx.boardId", async () => {
@@ -222,7 +222,7 @@ describe("executeCommonTool / list_cards", () => {
     });
 });
 
-// ─── create_task ──────────────────────────────────────────────────────────────
+// ─── create_card ──────────────────────────────────────────────────────────────
 
 describe("executeCommonTool / create_card", () => {
     it("creates a task and returns it in backlog state", async () => {
@@ -305,7 +305,7 @@ describe("executeCommonTool / create_card", () => {
     });
 });
 
-// ─── edit_task ────────────────────────────────────────────────────────────────
+// ─── edit_card ────────────────────────────────────────────────────────────────
 
 describe("executeCommonTool / edit_card", () => {
     it("updates title and description before a branch is created", async () => {
@@ -347,7 +347,7 @@ describe("executeCommonTool / edit_card", () => {
     });
 });
 
-// ─── delete_task ──────────────────────────────────────────────────────────────
+// ─── delete_card ──────────────────────────────────────────────────────────────
 
 describe("executeCommonTool / delete_card", () => {
     it("deletes the task and all cascaded data", async () => {
@@ -408,7 +408,7 @@ describe("executeCommonTool / delete_card", () => {
     });
 });
 
-// ─── move_task ────────────────────────────────────────────────────────────────
+// ─── move_card ────────────────────────────────────────────────────────────────
 
 describe("executeCommonTool / move_card", () => {
     it("moves a task to a valid workflow column", async () => {
@@ -532,7 +532,7 @@ describe("executeCommonTool / move_card", () => {
     });
 });
 
-// ─── message_task ─────────────────────────────────────────────────────────────
+// ─── message_card ─────────────────────────────────────────────────────────────
 
 describe("executeCommonTool / message_card", () => {
     it("delivers message (fires onHumanTurn) when task is idle", async () => {

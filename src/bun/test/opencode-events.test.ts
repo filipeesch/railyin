@@ -57,7 +57,7 @@ describe("translatePart — ToolPart", () => {
     });
   });
 
-  it("maps running state for move_task (common tool) to tool_start with display", () => {
+  it("maps running state for move_card (common tool) to tool_start with display", () => {
     const events = translatePart(part({
       type: "tool",
       tool: "move_card",
