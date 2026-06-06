@@ -37,29 +37,22 @@ function deriveCommonToolDisplay(name: string, args: Record<string, unknown>): T
         case "list_boards":
             return { label: "list boards" };
         case "get_card":
-        case "get_card":
             return { label: "get card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-        case "list_cards":
         case "list_cards":
             return { label: "list cards", subject: asString(args.workflow_state ?? args.query) };
         case "get_board_summary":
             return { label: "board summary" };
         case "create_card":
-        case "create_card":
             return { label: "create card", subject: asString(args.title) };
-        case "edit_card":
         case "edit_card":
             return { label: "edit card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
         case "delete_card":
-        case "delete_card":
             return { label: "delete card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-        case "move_card":
         case "move_card": {
             const id = args.task_id != null ? `#${args.task_id}` : undefined;
             const target = asString(args.workflow_state);
             return { label: "move card", subject: id && target ? `${id} → ${target}` : id ?? target };
         }
-        case "message_card":
         case "message_card":
             return { label: "message card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
         case "interview_me":
