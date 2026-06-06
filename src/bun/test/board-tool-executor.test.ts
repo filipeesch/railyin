@@ -28,6 +28,7 @@ function makeCtx(overrides?: Partial<BoardToolContext>): BoardToolContext {
   return {
     taskId,
     boardId,
+    workspaceKey: "default",
     onTransition: noop,
     onHumanTurn: noop,
     onCancel: noop,

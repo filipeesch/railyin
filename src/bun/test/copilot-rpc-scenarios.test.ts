@@ -80,10 +80,10 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(new MockCopilotSession().queueTurn({
-                steps: [toolStart("call-tool-1", "create_task"), toolResult("call-tool-1", "ok"), token("tool finished"), done()],
+                steps: [toolStart("call-tool-1", "create_card"), toolResult("call-tool-1", "ok"), token("tool finished"), done()],
             }))
             .queueResumeSuccess(new MockCopilotSession().queueTurn({
-                steps: [toolStart("call-tool-2", "edit_task"), toolResult("call-tool-2", "failed", false), token("recovered"), done()],
+                steps: [toolStart("call-tool-2", "edit_card"), toolResult("call-tool-2", "failed", false), token("recovered"), done()],
             }));
         const runtime = createCopilotRuntime(adapter);
 
@@ -670,7 +670,7 @@ describe("Copilot lease timeout fixes (Bug B + Bug C)", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(new MockCopilotSession().queueTurn({
-                steps: [toolStart("t1", "create_task"), toolResult("t1", "ok"), token("done"), done()],
+                steps: [toolStart("t1", "create_card"), toolResult("t1", "ok"), token("done"), done()],
             }));
         const runtime = createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();

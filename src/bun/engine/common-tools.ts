@@ -26,161 +26,13 @@ import {
   executeLspTypeDefinition,
 } from "../workflow/tools/lsp-tools.ts";
 import { validateToolArgs } from "./validate-tool-args.ts";
+import { CARD_TOOL_DEFINITIONS, CARD_TOOL_NAMES } from "./card-tool-definitions.ts";
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
 
 export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
-  // ── tasks_read ───────────────────────────────────────────────────────────
-  {
-    name: "get_task",
-    description:
-      "Fetch metadata for a specific task by ID.\n\n" +
-      "Usage:\n" +
-      "- Returns title, description, workflow_state, execution_state, model, branch, worktree path, execution count\n" +
-      "- Use include_messages=N for the last N conversation messages in chronological order\n" +
-      "- Returns metadata only — use read_file to inspect files in the task's worktree",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "number", description: "The id of the task to fetch." },
-        include_messages: { type: "number", description: "If provided, include the last N conversation messages in chronological order." },
-      },
-      required: ["task_id"],
-    },
-  },
-  {
-    name: "get_board_summary",
-    description:
-      "Return a high-level summary of task distribution across board columns.\n\n" +
-      "Usage:\n" +
-      "- Shows total count and breakdown by execution_state (idle, running, completed, failed) per column\n" +
-      "- Omit board_id to summarise the current task's board\n" +
-      "- Use to get an overview before listing individual tasks",
-    parameters: {
-      type: "object",
-      properties: {
-        board_id: { type: "number", description: "The board to summarise. Defaults to the current task's board when omitted." },
-      },
-      required: [],
-    },
-  },
-  {
-    name: "list_tasks",
-    description:
-      "List tasks on a board with optional filters.\n\n" +
-      "Usage:\n" +
-      "- Filter by workflow_state, execution_state, project_key\n" +
-      "- Use query for case-insensitive text search across title and description\n" +
-      "- Omit board_id to search the current task's board; default limit 50 (max 200)",
-    parameters: {
-      type: "object",
-      properties: {
-        board_id: { type: "number", description: "Board to list tasks from. Defaults to the current task's board." },
-        workflow_state: { type: "string", description: "Filter by exact workflow column id (e.g. 'backlog', 'in-progress')." },
-        execution_state: { type: "string", description: "Filter by execution state (e.g. 'idle', 'running', 'failed')." },
-        project_key: { type: "string", description: "Filter tasks belonging to a specific project." },
-        query: { type: "string", description: "Case-insensitive substring search across title and description." },
-        limit: { type: "number", description: "Maximum number of results to return (default 50, max 200)." },
-      },
-      required: [],
-    },
-  },
-  // ── tasks_write ──────────────────────────────────────────────────────────
-  {
-    name: "create_task",
-    description:
-      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to create a board task/card. " +
-      "Do NOT use this to track your own work or break down your current task — use the todo tools (create_todo) for that.\n\n" +
-      "Create a new task in the backlog column of a board.\n\n" +
-      "Usage:\n" +
-      "- Starts in 'idle' execution state; use move_task to start it\n" +
-      "- Omit board_id to create on the current task's board\n" +
-      "- Use model parameter to override the default model for this task",
-    parameters: {
-      type: "object",
-      properties: {
-        project_key: { type: "string", description: "The project this task belongs to." },
-        title: { type: "string", description: "The task title." },
-        description: { type: "string", description: "The task description." },
-        board_id: { type: "number", description: "Board to create the task on. Defaults to the current task's board." },
-        model: { type: "string", description: "Optional model override for this task (e.g. 'lmstudio/qwen3-8b')." },
-      },
-      required: ["project_key", "title", "description"],
-    },
-  },
-  {
-    name: "edit_task",
-    description:
-      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to edit a board task/card. " +
-      "Do NOT use this to track your own work — use the todo tools (edit_todo) for that.\n\n" +
-      "Update the title and/or description of a task.\n\n" +
-      "Usage:\n" +
-      "- Only allowed before a worktree/branch has been created\n" +
-      "- At least one of title or description must be provided",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "number", description: "The id of the task to edit." },
-        title: { type: "string", description: "New title for the task." },
-        description: { type: "string", description: "New description for the task." },
-      },
-      required: ["task_id"],
-    },
-  },
-  {
-    name: "delete_task",
-    description:
-      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to delete a board task/card. " +
-      "Never use this to manage your own work items — use the todo tools instead.\n\n" +
-      "Fully delete a task and all its data including conversation history, executions, and worktree.\n\n" +
-      "Usage:\n" +
-      "- Git branch is preserved; only task data is removed\n" +
-      "- Running tasks are cancelled first; this action is permanent and cannot be undone",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "number", description: "The id of the task to delete." },
-      },
-      required: ["task_id"],
-    },
-  },
-  {
-    name: "move_task",
-    description:
-      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to move a board task/card between columns. " +
-      "Do NOT use this to mark your own progress — use update_todo_status for that.\n\n" +
-      "Move a task to a different workflow column.\n\n" +
-      "Usage:\n" +
-      "- workflow_state is updated immediately\n" +
-      "- If the target column has an on_enter_prompt, it is triggered asynchronously\n" +
-      "- Returns immediately without waiting for triggered execution to complete",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "number", description: "The id of the task to move." },
-        workflow_state: { type: "string", description: "The target column id (e.g. 'backlog', 'in-progress', 'done')." },
-      },
-      required: ["task_id", "workflow_state"],
-    },
-  },
-  {
-    name: "message_task",
-    description:
-      "⚠️ BOARD TOOL — use ONLY when the user EXPLICITLY asks to message another board task. " +
-      "This is for inter-task communication, not for your own notes or work tracking.\n\n" +
-      "Append a message to another task's conversation and trigger its AI model.\n\n" +
-      "Usage:\n" +
-      "- Returns 'delivered' (idle/waiting) or 'queued' (running — delivered when execution finishes)\n" +
-      "- Use for inter-task communication: sending results, requesting actions",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "number", description: "The id of the task to message." },
-        message: { type: "string", description: "The message content to send." },
-      },
-      required: ["task_id", "message"],
-    },
-  },
+  // ── cards_read + cards_write ─────────────────────────────────────────────
+  ...CARD_TOOL_DEFINITIONS,
   DECISION_REQUEST_TOOL_DEFINITION,
   // ── decision tools ───────────────────────────────────────────────────────────
   {
@@ -413,35 +265,21 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   ...LSP_TOOL_DEFINITIONS,
 ];
 
-export const COMMON_TOOL_NAMES = new Set(COMMON_TOOL_DEFINITIONS.map((t) => t.name));
+export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request", "list_decisions", "record_decision", "update_decision", "delete_decision", "create_note", "list_notes", "update_note", "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status", ...LSP_TOOL_DEFINITIONS.map((t) => t.name)]);
 
 // ─── Display builder ──────────────────────────────────────────────────────────
 
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import { humanizeToolName } from "./tool-display.ts";
+import { buildCardToolDisplay } from "./card-tool-definitions.ts";
 
 export function buildCommonToolDisplay(name: string, args: Record<string, unknown>): ToolCallDisplay {
+  // Card tools — delegated to card-tool-definitions.ts (single source of truth)
+  const cardDisplay = buildCardToolDisplay(name, args);
+  if (cardDisplay) return cardDisplay;
+
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name) {
-    case "get_task":
-      return { label: "get task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-    case "list_tasks":
-      return { label: "list tasks", subject: str(args.workflow_state || args.query) || undefined };
-    case "get_board_summary":
-      return { label: "board summary" };
-    case "create_task":
-      return { label: "create task", subject: str(args.title) || undefined };
-    case "edit_task":
-      return { label: "edit task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-    case "delete_task":
-      return { label: "delete task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-    case "move_task": {
-      const id = args.task_id != null ? `#${args.task_id}` : null;
-      const to = str(args.workflow_state) || null;
-      return { label: "move task", subject: id && to ? `${id} → ${to}` : id ?? to ?? undefined };
-    }
-    case "message_task":
-      return { label: "message task", subject: args.task_id != null ? `#${args.task_id}` : undefined };
     case "decision_request":
       return { label: "decision request" };
     case "list_decisions":
@@ -563,6 +401,7 @@ async function executeCommonToolText(
   const boardCtx: BoardToolContext = {
     taskId: ctx.task.id ?? undefined,
     boardId: ctx.task.boardId ?? undefined,
+    workspaceKey: ctx.workspaceKey,
     onTransition: ctx.workflow.onTransition,
     onHumanTurn: ctx.workflow.onHumanTurn,
     onCancel: ctx.workflow.onCancel,
@@ -570,21 +409,23 @@ async function executeCommonToolText(
   };
 
   switch (name) {
-    case "get_task":
+    case "list_boards":
+      return ctx.repos.boardTools.execListBoards(args, boardCtx);
+    case "get_card":
       return ctx.repos.boardTools.execGetTask(args, boardCtx);
     case "get_board_summary":
       return ctx.repos.boardTools.execGetBoardSummary(args, boardCtx);
-    case "list_tasks":
+    case "list_cards":
       return ctx.repos.boardTools.execListTasks(args, boardCtx);
-    case "create_task":
+    case "create_card":
       return ctx.repos.boardTools.execCreateTask(args, boardCtx);
-    case "edit_task":
+    case "edit_card":
       return ctx.repos.boardTools.execEditTask(args, boardCtx);
-    case "delete_task":
+    case "delete_card":
       return ctx.repos.boardTools.execDeleteTask(args, boardCtx);
-    case "move_task":
+    case "move_card":
       return ctx.repos.boardTools.execMoveTask(args, boardCtx);
-    case "message_task":
+    case "message_card":
       return ctx.repos.boardTools.execMessageTask(args, boardCtx);
 
     case "list_decisions": {

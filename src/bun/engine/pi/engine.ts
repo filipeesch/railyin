@@ -1,3 +1,4 @@
+import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 import type {
   ExecutionEngine,
   ExecutionParams,
@@ -694,6 +695,7 @@ export class PiEngine implements ExecutionEngine {
       return existing;
     }
     const ctx: CommonToolContext = {
+      workspaceKey: getDefaultWorkspaceKey(),
       task: { id: taskId ?? null, boardId: boardId ?? null, conversationId },
       repos: {
         todos: new TodoRepository(),

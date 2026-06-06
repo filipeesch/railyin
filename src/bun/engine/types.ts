@@ -227,6 +227,7 @@ export interface CommonToolContext {
     boardId: number | null;    // null for chat sessions
     conversationId: number;    // ALWAYS set — universal routing key
   };
+  workspaceKey: string;
   repos: {
     todos: import("../db/todos.ts").TodoRepository;
     decisions: import("../db/repositories/decision-repository.ts").DecisionRepository;

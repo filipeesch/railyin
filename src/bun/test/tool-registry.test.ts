@@ -22,6 +22,7 @@ describe("Test Plan: Validate search_text removal and SDK search tool replacemen
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
       task: {} as any,
+      workspaceKey: "default",
       repos: {} as any,
       workflow: {} as any,
     };
@@ -60,6 +61,7 @@ describe("run_command tool description", () => {
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
       task: {} as any,
+      workspaceKey: "default",
       repos: {} as any,
       workflow: {} as any,
     };
@@ -84,6 +86,7 @@ describe("run_command tool description", () => {
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
       task: {} as any,
+      workspaceKey: "default",
       repos: {} as any,
       workflow: {} as any,
     };
@@ -109,6 +112,7 @@ describe("buildChildTools: delegated subagent tool surface", () => {
   const mockCommonCtx = {
     runtime: { worktreePath: "/tmp/test" },
     task: {} as any,
+      workspaceKey: "default",
     repos: {} as any,
     workflow: {} as any,
   } as any;
@@ -141,13 +145,13 @@ describe("buildChildTools: delegated subagent tool surface", () => {
     const names = childToolNames(["read", "write", "shell"]);
     for (const forbidden of [
       "delegate",
-      "create_task",
-      "edit_task",
-      "delete_task",
-      "move_task",
-      "message_task",
-      "get_task",
-      "list_tasks",
+      "create_card",
+      "edit_card",
+      "delete_card",
+      "move_card",
+      "message_card",
+      "get_card",
+      "list_cards",
       "get_board_summary",
       "record_decision",
       "update_decision",

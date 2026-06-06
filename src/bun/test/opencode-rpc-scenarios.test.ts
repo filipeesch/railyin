@@ -72,10 +72,10 @@ describe("OpenCode backend RPC scenarios", () => {
     const adapter = new MockOpenCodeSdkAdapter();
     adapter
       .queueCreate({
-        steps: [toolStart("call-tool-1", "create_task"), toolResult("call-tool-1", "create_task", "ok"), token("tool finished"), done()],
+        steps: [toolStart("call-tool-1", "create_card"), toolResult("call-tool-1", "create_card", "ok"), token("tool finished"), done()],
       })
       .queueCreate({
-        steps: [toolStart("call-tool-2", "edit_task"), toolResult("call-tool-2", "edit_task", "failed", true), token("recovered"), done()],
+        steps: [toolStart("call-tool-2", "edit_card"), toolResult("call-tool-2", "edit_card", "failed", true), token("recovered"), done()],
       });
     const runtime = createOpenCodeRuntime(adapter);
 

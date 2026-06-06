@@ -253,11 +253,12 @@ describe("card limit enforcement in tasks.transition", () => {
   });
 });
 
-// ─── Card limit enforcement (move_task agent tool) ────────────────────────────
+// ─── Card limit enforcement (move_card agent tool) ────────────────────────────
 
 const noop = () => { };
 const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
   task: { id: taskId, boardId, conversationId: 0 },
+  workspaceKey: "default",
   repos: {
     todos: new TodoRepository(db),
     decisions: new DecisionRepository(db),
@@ -273,7 +274,7 @@ const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
   runtime: {},
 });
 
-describe("card limit enforcement in move_task", () => {
+describe("card limit enforcement in move_card", () => {
   it("returns an error string when target column is at capacity", async () => {
     const { boardId, insertTask } = seedBoardWithLimit();
 
@@ -285,7 +286,7 @@ describe("card limit enforcement in move_task", () => {
     const taskId = insertTask("backlog", 500);
 
     const result = await executeCommonTool(
-      "move_task",
+      "move_card",
       { task_id: taskId, workflow_state: "inprogress" },
       makeCommonCtx(taskId, boardId),
     );
@@ -301,7 +302,7 @@ describe("card limit enforcement in move_task", () => {
     const taskId = insertTask("backlog", 500);
 
     const result = await executeCommonTool(
-      "move_task",
+      "move_card",
       { task_id: taskId, workflow_state: "inprogress" },
       makeCommonCtx(taskId, boardId),
     );
