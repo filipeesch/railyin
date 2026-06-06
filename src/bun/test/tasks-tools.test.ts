@@ -65,26 +65,26 @@ afterEach(() => {
 // ─── TOOL_GROUPS registration ─────────────────────────────────────────────────
 
 describe("TOOL_GROUPS", () => {
-    it("registers tasks_read group with the three read tools", () => {
-        expect(TOOL_GROUPS.get("tasks_read")).toEqual(["get_task", "get_board_summary", "list_tasks"]);
+    it("registers cards_read group with the four read tools", () => {
+        expect(TOOL_GROUPS.get("cards_read")).toEqual(["list_boards", "get_card", "get_board_summary", "list_cards"]);
     });
 
-    it("registers tasks_write group with the five write tools", () => {
-        expect(TOOL_GROUPS.get("tasks_write")).toEqual([
-            "create_task",
-            "edit_task",
-            "delete_task",
-            "move_task",
-            "message_task",
+    it("registers cards_write group with the five write tools", () => {
+        expect(TOOL_GROUPS.get("cards_write")).toEqual([
+            "create_card",
+            "edit_card",
+            "delete_card",
+            "move_card",
+            "message_card",
         ]);
     });
 });
 
 // ─── get_task ─────────────────────────────────────────────────────────────────
 
-describe("executeCommonTool / get_task", () => {
+describe("executeCommonTool / get_card", () => {
     it("returns task metadata for a valid task_id", async () => {
-        const result = await executeCommonTool("get_task", { task_id: taskId }, commonCtx());
+        const result = await executeCommonTool("get_card", { task_id: taskId }, commonCtx());
         const task = JSON.parse(result.text);
         expect(task.id).toBe(taskId);
         expect(task.title).toBe("Test task");
@@ -92,12 +92,12 @@ describe("executeCommonTool / get_task", () => {
     });
 
     it("returns error when task_id is missing", async () => {
-        const result = await executeCommonTool("get_task", {}, commonCtx());
+        const result = await executeCommonTool("get_card", {}, commonCtx());
         expect(result.text).toContain("Error: field 'task_id' is required");
     });
 
     it("returns error for a nonexistent task_id", async () => {
-        const result = await executeCommonTool("get_task", { task_id: 999999 }, commonCtx());
+        const result = await executeCommonTool("get_card", { task_id: 999999 }, commonCtx());
         expect(result.text).toContain("Error: task 999999 not found");
     });
 
@@ -107,7 +107,7 @@ describe("executeCommonTool / get_task", () => {
             [taskId, conversationId],
         );
         const result = await executeCommonTool(
-            "get_task",
+            "get_card",
             { task_id: taskId, include_messages: 5 },
             commonCtx(),
         );
@@ -163,9 +163,9 @@ describe("executeCommonTool / get_board_summary", () => {
 
 // ─── list_tasks ───────────────────────────────────────────────────────────────
 
-describe("executeCommonTool / list_tasks", () => {
+describe("executeCommonTool / list_cards", () => {
     it("lists all tasks on the board using ctx.boardId", async () => {
-        const result = await executeCommonTool("list_tasks", {}, commonCtx());
+        const result = await executeCommonTool("list_cards", {}, commonCtx());
         const tasks = JSON.parse(result.text) as Array<{ id: number }>;
         expect(tasks.length).toBe(1);
         expect(tasks[0].id).toBe(taskId);
@@ -173,7 +173,7 @@ describe("executeCommonTool / list_tasks", () => {
 
     it("filters by workflow_state", async () => {
         const result = await executeCommonTool(
-            "list_tasks",
+            "list_cards",
             { workflow_state: "backlog" },
             commonCtx(),
         );
@@ -183,7 +183,7 @@ describe("executeCommonTool / list_tasks", () => {
 
     it("returns the task when workflow_state matches", async () => {
         const result = await executeCommonTool(
-            "list_tasks",
+            "list_cards",
             { workflow_state: "plan" },
             commonCtx(),
         );
@@ -194,7 +194,7 @@ describe("executeCommonTool / list_tasks", () => {
 
     it("filters by query string (matches title)", async () => {
         const result = await executeCommonTool(
-            "list_tasks",
+            "list_cards",
             { query: "Test" },
             commonCtx(),
         );
@@ -204,7 +204,7 @@ describe("executeCommonTool / list_tasks", () => {
 
     it("returns empty when query doesn't match anything", async () => {
         const result = await executeCommonTool(
-            "list_tasks",
+            "list_cards",
             { query: "zzznomatch" },
             commonCtx(),
         );
@@ -214,7 +214,7 @@ describe("executeCommonTool / list_tasks", () => {
 
     it("returns error when no board_id is available", async () => {
         const result = await executeCommonTool(
-            "list_tasks",
+            "list_cards",
             {},
             commonCtx({ boardId: undefined }),
         );
@@ -224,10 +224,10 @@ describe("executeCommonTool / list_tasks", () => {
 
 // ─── create_task ──────────────────────────────────────────────────────────────
 
-describe("executeCommonTool / create_task", () => {
+describe("executeCommonTool / create_card", () => {
     it("creates a task and returns it in backlog state", async () => {
         const result = await executeCommonTool(
-            "create_task",
+            "create_card",
             { project_key: projectKey, title: "New task", description: "Do something" },
             commonCtx(),
         );
@@ -240,7 +240,7 @@ describe("executeCommonTool / create_task", () => {
 
     it("creates a task with a model override", async () => {
         const result = await executeCommonTool(
-            "create_task",
+            "create_card",
             { project_key: projectKey, title: "Modeled task", description: "", model: "fake/qwq" },
             commonCtx(),
         );
@@ -250,7 +250,7 @@ describe("executeCommonTool / create_task", () => {
 
     it("returns error when project_key is missing", async () => {
         const result = await executeCommonTool(
-            "create_task",
+            "create_card",
             { title: "No project", description: "" },
             commonCtx(),
         );
@@ -259,7 +259,7 @@ describe("executeCommonTool / create_task", () => {
 
     it("returns error when title is missing", async () => {
         const result = await executeCommonTool(
-            "create_task",
+            "create_card",
             { project_key: projectKey, title: "", description: "" },
             commonCtx(),
         );
@@ -268,7 +268,7 @@ describe("executeCommonTool / create_task", () => {
 
     it("returns error when board_id is missing from both arg and ctx", async () => {
         const result = await executeCommonTool(
-            "create_task",
+            "create_card",
             { project_key: projectKey, title: "X", description: "" },
             commonCtx({ boardId: undefined }),
         );
@@ -277,7 +277,7 @@ describe("executeCommonTool / create_task", () => {
 
     it("returns error for nonexistent project", async () => {
         const result = await executeCommonTool(
-            "create_task",
+            "create_card",
             { project_key: "nonexistent-proj", title: "X", description: "" },
             commonCtx(),
         );
@@ -286,7 +286,7 @@ describe("executeCommonTool / create_task", () => {
 
     it("creates task without model when no model arg is given", async () => {
         const result = await executeCommonTool(
-            "create_task",
+            "create_card",
             { project_key: projectKey, title: "No model task", description: "" },
             commonCtx(),
         );
@@ -296,7 +296,7 @@ describe("executeCommonTool / create_task", () => {
 
     it("uses explicit model arg when provided", async () => {
         const result = await executeCommonTool(
-            "create_task",
+            "create_card",
             { project_key: projectKey, title: "Explicit model task", description: "", model: "copilot/explicit" },
             commonCtx(),
         );
@@ -307,10 +307,10 @@ describe("executeCommonTool / create_task", () => {
 
 // ─── edit_task ────────────────────────────────────────────────────────────────
 
-describe("executeCommonTool / edit_task", () => {
+describe("executeCommonTool / edit_card", () => {
     it("updates title and description before a branch is created", async () => {
         const result = await executeCommonTool(
-            "edit_task",
+            "edit_card",
             { task_id: taskId, title: "Updated", description: "New desc" },
             commonCtx(),
         );
@@ -321,7 +321,7 @@ describe("executeCommonTool / edit_task", () => {
 
     it("returns error if task does not exist", async () => {
         const result = await executeCommonTool(
-            "edit_task",
+            "edit_card",
             { task_id: 999999, title: "x" },
             commonCtx(),
         );
@@ -334,7 +334,7 @@ describe("executeCommonTool / edit_task", () => {
             [taskId],
         );
         const result = await executeCommonTool(
-            "edit_task",
+            "edit_card",
             { task_id: taskId, title: "Should fail" },
             commonCtx(),
         );
@@ -342,17 +342,17 @@ describe("executeCommonTool / edit_task", () => {
     });
 
     it("returns error when task_id is missing", async () => {
-        const result = await executeCommonTool("edit_task", {}, commonCtx());
+        const result = await executeCommonTool("edit_card", {}, commonCtx());
         expect(result.text).toContain("Error: field 'task_id' is required");
     });
 });
 
 // ─── delete_task ──────────────────────────────────────────────────────────────
 
-describe("executeCommonTool / delete_task", () => {
+describe("executeCommonTool / delete_card", () => {
     it("deletes the task and all cascaded data", async () => {
         const result = await executeCommonTool(
-            "delete_task",
+            "delete_card",
             { task_id: taskId },
             commonCtx(),
         );
@@ -373,7 +373,7 @@ describe("executeCommonTool / delete_task", () => {
 
     it("returns error for a nonexistent task", async () => {
         const result = await executeCommonTool(
-            "delete_task",
+            "delete_card",
             { task_id: 999999 },
             commonCtx(),
         );
@@ -381,7 +381,7 @@ describe("executeCommonTool / delete_task", () => {
     });
 
     it("returns error when task_id is missing", async () => {
-        const result = await executeCommonTool("delete_task", {}, commonCtx());
+        const result = await executeCommonTool("delete_card", {}, commonCtx());
         expect(result.text).toContain("Error: field 'task_id' is required");
     });
 
@@ -399,7 +399,7 @@ describe("executeCommonTool / delete_task", () => {
 
         let cancelledId: number | null = null;
         await executeCommonTool(
-            "delete_task",
+            "delete_card",
             { task_id: taskId },
             commonCtx({ onCancel: (id) => { cancelledId = id; } }),
         );
@@ -410,10 +410,10 @@ describe("executeCommonTool / delete_task", () => {
 
 // ─── move_task ────────────────────────────────────────────────────────────────
 
-describe("executeCommonTool / move_task", () => {
+describe("executeCommonTool / move_card", () => {
     it("moves a task to a valid workflow column", async () => {
         const result = await executeCommonTool(
-            "move_task",
+            "move_card",
             { task_id: taskId, workflow_state: "done" },
             commonCtx(),
         );
@@ -429,7 +429,7 @@ describe("executeCommonTool / move_task", () => {
 
     it("returns error for an invalid workflow column", async () => {
         const result = await executeCommonTool(
-            "move_task",
+            "move_card",
             { task_id: taskId, workflow_state: "nonexistent" },
             commonCtx(),
         );
@@ -446,7 +446,7 @@ describe("executeCommonTool / move_task", () => {
 
         let calledWith: [number, string] | null = null;
         await executeCommonTool(
-            "move_task",
+            "move_card",
             { task_id: otherTaskId, workflow_state: "plan" },
             commonCtx({ onTransition: (id, state) => { calledWith = [id, state]; } }),
         );
@@ -457,7 +457,7 @@ describe("executeCommonTool / move_task", () => {
         let calledWith: [number, string] | null = null;
         // ctx.taskId === task_id (self-move), target column "plan" has on_enter_prompt
         await executeCommonTool(
-            "move_task",
+            "move_card",
             { task_id: taskId, workflow_state: "plan" },
             { ...commonCtx({ taskId }), workflow: { ...commonCtx({ taskId }).workflow, onTransition: (id: number, state: string) => { calledWith = [id, state]; } } },
         );
@@ -472,7 +472,7 @@ describe("executeCommonTool / move_task", () => {
     it("does not fire onTransition (Case C) when target column has no prompt", async () => {
         let calledWith: [number, string] | null = null;
         await executeCommonTool(
-            "move_task",
+            "move_card",
             { task_id: taskId, workflow_state: "done" },
             commonCtx({ onTransition: (id, state) => { calledWith = [id, state]; } }),
         );
@@ -493,7 +493,7 @@ describe("executeCommonTool / move_task", () => {
 
         let calledWith: [number, string] | null = null;
         await executeCommonTool(
-            "move_task",
+            "move_card",
             { task_id: runningTaskId, workflow_state: "plan" },
             commonCtx({ onTransition: (id, state) => { calledWith = [id, state]; } }),
         );
@@ -506,7 +506,7 @@ describe("executeCommonTool / move_task", () => {
 
     it("returns error when task 999999 does not exist", async () => {
         const result = await executeCommonTool(
-            "move_task",
+            "move_card",
             { task_id: 999999, workflow_state: "done" },
             commonCtx(),
         );
@@ -514,17 +514,17 @@ describe("executeCommonTool / move_task", () => {
     });
 
     it("returns error when task_id is missing", async () => {
-        const result = await executeCommonTool("move_task", { workflow_state: "done" }, commonCtx());
+        const result = await executeCommonTool("move_card", { workflow_state: "done" }, commonCtx());
         expect(result.text).toContain("Error: field 'task_id' is required");
     });
 
     it("returns error when workflow_state is missing", async () => {
-        const result = await executeCommonTool("move_task", { task_id: taskId }, commonCtx());
+        const result = await executeCommonTool("move_card", { task_id: taskId }, commonCtx());
         expect(result.text).toContain("Error: field 'workflow_state' is required");
     });
 
     it("sets position to 500 when moving to an empty column", async () => {
-        await executeCommonTool("move_task", { task_id: taskId, workflow_state: "done" }, commonCtx());
+        await executeCommonTool("move_card", { task_id: taskId, workflow_state: "done" }, commonCtx());
         const row = db
             .query<{ position: number }, [number]>("SELECT position FROM tasks WHERE id = ?")
             .get(taskId);
@@ -534,12 +534,12 @@ describe("executeCommonTool / move_task", () => {
 
 // ─── message_task ─────────────────────────────────────────────────────────────
 
-describe("executeCommonTool / message_task", () => {
+describe("executeCommonTool / message_card", () => {
     it("delivers message (fires onHumanTurn) when task is idle", async () => {
         let deliveredTo: number | null = null;
         let deliveredMsg: string | null = null;
         const result = await executeCommonTool(
-            "message_task",
+            "message_card",
             { task_id: taskId, message: "Please review" },
             commonCtx({ onHumanTurn: (id, msg) => { deliveredTo = id; deliveredMsg = msg; } }),
         );
@@ -553,7 +553,7 @@ describe("executeCommonTool / message_task", () => {
         db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
 
         const result = await executeCommonTool(
-            "message_task",
+            "message_card",
             { task_id: taskId, message: "Queue me" },
             commonCtx(),
         );
@@ -570,7 +570,7 @@ describe("executeCommonTool / message_task", () => {
 
     it("returns error when task does not exist", async () => {
         const result = await executeCommonTool(
-            "message_task",
+            "message_card",
             { task_id: 999999, message: "Hi" },
             commonCtx(),
         );
@@ -579,7 +579,7 @@ describe("executeCommonTool / message_task", () => {
 
     it("returns error when message is missing", async () => {
         const result = await executeCommonTool(
-            "message_task",
+            "message_card",
             { task_id: taskId },
             commonCtx(),
         );
@@ -588,7 +588,7 @@ describe("executeCommonTool / message_task", () => {
 
     it("returns error when task_id is missing", async () => {
         const result = await executeCommonTool(
-            "message_task",
+            "message_card",
             { message: "Hi" },
             commonCtx(),
         );
@@ -712,5 +712,103 @@ describe("executeCommonTool / list_todos", () => {
         expect(items).toHaveLength(2);
         expect(items.find((t: { title: string }) => t.title === "No phase").phase).toBeNull();
         expect(items.find((t: { title: string }) => t.title === "Backlog only").phase).toBe("backlog");
+    });
+});// ─── list_boards ──────────────────────────────────────────────────────────────
+
+describe("executeCommonTool / list_boards", () => {
+    it("returns board id and name for seeded boards", async () => {
+        const result = await executeCommonTool("list_boards", {}, commonCtx());
+        const boards = JSON.parse(result.text) as Array<{ id: number; name: string }>;
+        expect(boards.length).toBe(1);
+        expect(boards[0].id).toBe(boardId);
+        expect(boards[0].name).toBe("test-board");
+    });
+
+    it("returns empty array when no boards exist", async () => {
+        db.run("DELETE FROM tasks; DELETE FROM boards");
+        const result = await executeCommonTool("list_boards", {}, commonCtx());
+        const boards = JSON.parse(result.text) as Array<unknown>;
+        expect(boards.length).toBe(0);
+    });
+
+    it("is included in cards_read group", () => {
+        expect(TOOL_GROUPS.get("cards_read")).toContain("list_boards");
+    });
+});
+
+// ─── Chat context board tools ─────────────────────────────────────────────────
+
+describe("executeCommonTool / chat context board tools", () => {
+    it("list_cards succeeds with explicit board_id in chat context", async () => {
+        const result = await executeCommonTool(
+            "list_cards",
+            { board_id: boardId },
+            commonCtx({ boardId: undefined }),
+        );
+        const cards = JSON.parse(result.text) as Array<{ id: number }>;
+        expect(cards.length).toBe(1);
+        expect(cards[0].id).toBe(taskId);
+    });
+
+    it("create_card succeeds with explicit board_id in chat context", async () => {
+        const result = await executeCommonTool(
+            "create_card",
+            { board_id: boardId, project_key: projectKey, title: "Chat card", description: "Created from chat" },
+            commonCtx({ boardId: undefined }),
+        );
+        const card = JSON.parse(result.text);
+        expect(card.id).toBeGreaterThan(0);
+        expect(card.title).toBe("Chat card");
+    });
+
+    it("get_board_summary succeeds with explicit board_id in chat context", async () => {
+        const result = await executeCommonTool(
+            "get_board_summary",
+            { board_id: boardId },
+            commonCtx({ boardId: undefined }),
+        );
+        const summary = JSON.parse(result.text);
+        expect(summary.board_id).toBe(boardId);
+    });
+
+    it("create_card error mentions list_boards when board_id missing in chat context", async () => {
+        const result = await executeCommonTool(
+            "create_card",
+            { project_key: projectKey, title: "X", description: "" },
+            commonCtx({ boardId: undefined }),
+        );
+        expect(result.text).toContain("list_boards");
+    });
+
+    it("list_cards error mentions list_boards when board_id missing in chat context", async () => {
+        const result = await executeCommonTool(
+            "list_cards",
+            {},
+            commonCtx({ boardId: undefined }),
+        );
+        expect(result.text).toContain("list_boards");
+    });
+});
+
+// ─── Display labels ───────────────────────────────────────────────────────────
+
+import { buildCommonToolDisplay } from "../engine/common-tools.ts";
+
+describe("buildCommonToolDisplay / card tools", () => {
+    it("create_card display label is 'create card'", () => {
+        const result = buildCommonToolDisplay("create_card", { title: "Test" });
+        expect(result.label).toBe("create card");
+        expect(result.subject).toBe("Test");
+    });
+
+    it("get_card display label is 'get card'", () => {
+        const result = buildCommonToolDisplay("get_card", { task_id: 1 });
+        expect(result.label).toBe("get card");
+        expect(result.subject).toBe("#1");
+    });
+
+    it("list_boards display label is 'list boards'", () => {
+        const result = buildCommonToolDisplay("list_boards", {});
+        expect(result.label).toBe("list boards");
     });
 });

@@ -20,6 +20,7 @@ export interface IBoardToolExecutor {
   execDeleteTask(args: Record<string, unknown>, ctx: BoardToolContext): Promise<string>;
   execMoveTask(args: Record<string, unknown>, ctx: BoardToolContext): Promise<string>;
   execMessageTask(args: Record<string, unknown>, ctx: BoardToolContext): Promise<string>;
+  execListBoards(args: Record<string, unknown>, ctx: BoardToolContext): Promise<string>;
 }
 
 const TASK_WITH_GIT = `
@@ -65,7 +66,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
 
   async execGetBoardSummary(args: Record<string, unknown>, ctx: BoardToolContext): Promise<string> {
     const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
-    if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
+    if (!boardId) return "Error: board_id is required. Use list_boards to discover available boards.";
     const boardRow = this.db
       .query<{ id: number }, [number]>("SELECT id FROM boards WHERE id = ?")
       .get(boardId);
@@ -89,7 +90,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
 
   async execListTasks(args: Record<string, unknown>, ctx: BoardToolContext): Promise<string> {
     const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
-    if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
+    if (!boardId) return "Error: board_id is required. Use list_boards to discover available boards.";
     const limitRaw = args.limit != null ? Number(args.limit) : 50;
     const limit = Math.min(Math.max(1, limitRaw), 200);
     const conditions: string[] = ["t.board_id = ?"];
@@ -121,7 +122,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
     if (!title) return "Error: title is required";
     const description = ((args.description as string) ?? "").trim();
     const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
-    if (!boardId) return "Error: board_id is required (or run this tool from a task on a board)";
+    if (!boardId) return "Error: board_id is required. Use list_boards to discover available boards.";
     const boardRow = this.db
       .query<{ id: number; workspace_key: string }, [number]>(
         "SELECT id, workspace_key FROM boards WHERE id = ?",
@@ -268,5 +269,12 @@ export class BoardToolExecutor implements IBoardToolExecutor {
     }
     ctx.onHumanTurn(taskId, message);
     return JSON.stringify({ status: "delivered", task_id: taskId });
+  }
+
+  async execListBoards(_args: Record<string, unknown>, _ctx: BoardToolContext): Promise<string> {
+    const rows = this.db
+      .query<{ id: number; name: string }, []>("SELECT id, name FROM boards ORDER BY created_at ASC")
+      .all();
+    return JSON.stringify(rows);
   }
 }

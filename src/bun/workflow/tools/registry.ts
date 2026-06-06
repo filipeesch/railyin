@@ -1,6 +1,7 @@
 import type { AIToolDefinition } from "../../ai/types.ts";
 import { DECISION_REQUEST_TOOL_DEFINITION } from "../../engine/decision-request-tool-definition.ts";
 import { LSP_TOOL_DEFINITIONS } from "../../engine/lsp-tool-definitions.ts";
+import { CARD_TOOL_DEFINITIONS } from "../../engine/card-tool-definitions.ts";
 
 export const TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
@@ -127,199 +128,8 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ["query"],
     },
   },
-  // ── tasks_read group ───────────────────────────────────────────────────────
-  {
-    name: "get_task",
-    description:
-      "Fetch metadata for a specific task by ID.\n\n" +
-      "Usage:\n" +
-      "- Returns title, description, workflow_state, execution_state, model, branch, worktree path, execution count\n" +
-      "- Use include_messages=N for the last N conversation messages in chronological order\n" +
-      "- Returns metadata only — use read_file to inspect files in the task's worktree",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: {
-          type: "number",
-          description: "The id of the task to fetch.",
-        },
-        include_messages: {
-          type: "number",
-          description: "If provided, include the last N conversation messages in chronological order.",
-        },
-      },
-      required: ["task_id"],
-    },
-  },
-  {
-    name: "get_board_summary",
-    description:
-      "Return a high-level summary of task distribution across board columns.\n\n" +
-      "Usage:\n" +
-      "- Shows total count and breakdown by execution_state (idle, running, completed, failed) per column\n" +
-      "- Always operates on the current task's board\n" +
-      "- Use to get an overview before listing individual tasks",
-    parameters: {
-      type: "object",
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: "list_tasks",
-    description:
-      "List tasks on a board with optional filters.\n\n" +
-      "Usage:\n" +
-      "- Filter by workflow_state, execution_state, project_key\n" +
-      "- Use query for case-insensitive text search across title and description\n" +
-      "- Always searches the current task's board; default limit 50 (max 200)",
-    parameters: {
-      type: "object",
-      properties: {
-        workflow_state: {
-          type: "string",
-          description: "Filter by exact workflow column id (e.g. 'backlog', 'in-progress').",
-        },
-        execution_state: {
-          type: "string",
-          description: "Filter by execution state (e.g. 'idle', 'running', 'failed').",
-        },
-        project_key: {
-          type: "string",
-          description: "Filter tasks belonging to a specific project.",
-        },
-        query: {
-          type: "string",
-          description: "Case-insensitive substring search across title and description.",
-        },
-        limit: {
-          type: "number",
-          description: "Maximum number of results to return (default 50, max 200).",
-        },
-      },
-      required: [],
-    },
-  },
-  // ── tasks_write group ──────────────────────────────────────────────────────
-  {
-    name: "create_task",
-    description:
-      "Create a new task in the backlog column of the current board.\n\n" +
-      "Usage:\n" +
-      "- Starts in 'idle' execution state; use move_task to start it\n" +
-      "- Use model parameter to override the default model for this task",
-    parameters: {
-      type: "object",
-      properties: {
-        project_key: {
-          type: "string",
-          description: "The project this task belongs to.",
-        },
-        title: {
-          type: "string",
-          description: "The task title.",
-        },
-        description: {
-          type: "string",
-          description: "The task description.",
-        },
-        model: {
-          type: "string",
-          description: "Optional model override for this task (e.g. 'lmstudio/qwen3-8b').",
-        },
-      },
-      required: ["project_key", "title", "description"],
-    },
-  },
-  {
-    name: "edit_task",
-    description:
-      "Update the title and/or description of a task.\n\n" +
-      "Usage:\n" +
-      "- Only allowed before a worktree/branch has been created\n" +
-      "- At least one of title or description must be provided",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: {
-          type: "number",
-          description: "The id of the task to edit.",
-        },
-        title: {
-          type: "string",
-          description: "New title for the task.",
-        },
-        description: {
-          type: "string",
-          description: "New description for the task.",
-        },
-      },
-      required: ["task_id"],
-    },
-  },
-  {
-    name: "delete_task",
-    description:
-      "Fully delete a task and all its data including conversation history, executions, and worktree.\n\n" +
-      "Usage:\n" +
-      "- Git branch is preserved; only task data is removed\n" +
-      "- Running tasks are cancelled first; this action is permanent and cannot be undone",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: {
-          type: "number",
-          description: "The id of the task to delete.",
-        },
-      },
-      required: ["task_id"],
-    },
-  },
-  {
-    name: "move_task",
-    description:
-      "Move a task to a different workflow column.\n\n" +
-      "Usage:\n" +
-      "- workflow_state is updated immediately\n" +
-      "- If the target column has an on_enter_prompt, it is triggered asynchronously\n" +
-      "- Returns immediately without waiting for triggered execution to complete",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: {
-          type: "number",
-          description: "The id of the task to move.",
-        },
-        workflow_state: {
-          type: "string",
-          description: "The target column id (e.g. 'backlog', 'in-progress', 'done').",
-        },
-      },
-      required: ["task_id", "workflow_state"],
-    },
-  },
-  {
-    name: "message_task",
-    description:
-      "Append a message to another task's conversation and trigger its AI model.\n\n" +
-      "Usage:\n" +
-      "- Returns 'delivered' (idle/waiting) or 'queued' (running — delivered when execution finishes)\n" +
-      "- Use for inter-task communication: sending results, requesting actions",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: {
-          type: "number",
-          description: "The id of the task to message.",
-        },
-        message: {
-          type: "string",
-          description: "The message content to send.",
-        },
-      },
-      required: ["task_id", "message"],
-    },
-  },
+  // ── cards_read + cards_write group ─────────────────────────────────────────
+  ...CARD_TOOL_DEFINITIONS,
   // ── todos group ────────────────────────────────────────────────────────────
   {
     name: "create_todo",
@@ -482,8 +292,8 @@ export const TOOL_GROUPS: Map<string, string[]> = new Map([
   ["interactions", ["ask_me", "decision_request"]],
   ["agents", ["spawn_agent"]],
   ["web", ["fetch_url", "search_internet"]],
-  ["tasks_read", ["get_task", "get_board_summary", "list_tasks"]],
-  ["tasks_write", ["create_task", "edit_task", "delete_task", "move_task", "message_task"]],
+  ["cards_read", ["list_boards", "get_card", "get_board_summary", "list_cards"]],
+  ["cards_write", ["create_card", "edit_card", "delete_card", "move_card", "message_card"]],
   ["todos", ["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"]],
   ["decisions", ["list_decisions", "record_decision", "update_decision", "delete_decision"]],
   ["lsp", [
@@ -501,7 +311,7 @@ export const TOOL_GROUPS: Map<string, string[]> = new Map([
 ]);
 
 /** Default tool names used when a column has no explicit 'tools' config. */
-export const DEFAULT_TOOL_NAMES = ["tasks_read", "tasks_write"];
+export const DEFAULT_TOOL_NAMES = ["cards_read", "cards_write"];
 
 /** One-line natural-language description for each tool, used in the worktree context block. */
 const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
@@ -510,14 +320,15 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["spawn_agent", "spawn_agent(children): run parallel sub-agents. Each child needs self-contained instructions and tools array — no access to parent conversation. Returns JSON array of results."],
   ["fetch_url", "fetch_url(url): fetch a public URL and return its text content (HTML stripped to readable text). Use for documentation, API references, web pages."],
   ["search_internet", "search_internet(query): search the web for ranked results (title, URL, snippet). Requires search config in workspace.yaml. Follow up with fetch_url for full content."],
-  ["get_task", "get_task(task_id, include_messages?): get task metadata (title, description, state, model, branch). Use include_messages=N for last N conversation messages."],
-  ["get_board_summary", "get_board_summary(): overview of task distribution across board columns with execution_state breakdown. Always uses the current board."],
-  ["list_tasks", "list_tasks(state?, query?, limit?): list tasks with filters. Use query for case-insensitive text search across title and description."],
-  ["create_task", "create_task(title, description?): create a new task in backlog on the current board. Use move_task to start it."],
-  ["edit_task", "edit_task(task_id, title?, description?): update task title or description (only before worktree creation)."],
-  ["delete_task", "delete_task(task_id): permanently delete a task and all its data. Git branch is preserved."],
-  ["move_task", "move_task(task_id, to_state): move a task to a different workflow column. Triggers on_enter_prompt if configured."],
-  ["message_task", "message_task(task_id, message): send a message to another task's conversation and trigger its AI model."],
+  ["list_boards", "list_boards(): list all boards in the workspace (id + name). Use to discover boards before calling board tools."],
+  ["get_card", "get_card(task_id, include_messages?): get card metadata (title, description, state, model, branch). Use include_messages=N for last N conversation messages."],
+  ["get_board_summary", "get_board_summary(board_id?): overview of card distribution across board columns with execution_state breakdown. Uses current board if board_id omitted."],
+  ["list_cards", "list_cards(board_id?, state?, query?, limit?): list cards with filters. Use query for case-insensitive text search across title and description."],
+  ["create_card", "create_card(title, description?, board_id?): create a new card in backlog. Use move_card to start it. Board required in chat sessions."],
+  ["edit_card", "edit_card(task_id, title?, description?): update card title or description (only before worktree creation)."],
+  ["delete_card", "delete_card(task_id): permanently delete a card and all its data. Git branch is preserved."],
+  ["move_card", "move_card(task_id, to_state): move a card to a different workflow column. Triggers on_enter_prompt if configured."],
+  ["message_card", "message_card(task_id, message): send a message to another card's conversation and trigger its AI model."],
   ["create_todo", "create_todo(number, title, description): create a todo subtask with rich markdown description for context memory."],
   ["edit_todo", "edit_todo(id, number?, title?, description?): update number, title, or description of a todo. Use update_todo_status to change status."],
   ["list_todos", "list_todos(): list active todos for this task (id, number, title, status). Call before creating todos."],
@@ -545,8 +356,8 @@ const TOOL_GROUP_LABELS: Array<[groupName: string, label: string]> = [
   ["web", "Web tools"],
   ["interactions", "Interaction tool"],
   ["agents", "Agent tool"],
-  ["tasks_read", "Task read tools"],
-  ["tasks_write", "Task write tools"],
+  ["cards_read", "Card read tools"],
+  ["cards_write", "Card write tools"],
   ["todos", "Todo tools"],
   ["decisions", "Decision tools"],
   ["lsp", "LSP tools"],
