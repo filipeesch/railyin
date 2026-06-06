@@ -22,6 +22,7 @@ describe("Test Plan: Validate search_text removal and SDK search tool replacemen
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
       task: {} as any,
+      workspaceKey: "default",
       repos: {} as any,
       workflow: {} as any,
     };
@@ -60,6 +61,7 @@ describe("run_command tool description", () => {
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
       task: {} as any,
+      workspaceKey: "default",
       repos: {} as any,
       workflow: {} as any,
     };
@@ -84,6 +86,7 @@ describe("run_command tool description", () => {
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
       task: {} as any,
+      workspaceKey: "default",
       repos: {} as any,
       workflow: {} as any,
     };
@@ -109,6 +112,7 @@ describe("buildChildTools: delegated subagent tool surface", () => {
   const mockCommonCtx = {
     runtime: { worktreePath: "/tmp/test" },
     task: {} as any,
+      workspaceKey: "default",
     repos: {} as any,
     workflow: {} as any,
   } as any;

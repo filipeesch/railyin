@@ -19,6 +19,7 @@ beforeEach(() => {
   const wsRepo = new WorkspaceRepository(db);
   ctx = {
     task: { id: 1, boardId: 1, conversationId: 1 },
+    workspaceKey: "default",
     repos: {
       todos: new TodoRepository(db),
       decisions: new DecisionRepository(db),

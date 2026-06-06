@@ -269,6 +269,7 @@ export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request"
 
 // ─── Display builder ──────────────────────────────────────────────────────────
 
+import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import { humanizeToolName } from "./tool-display.ts";
 import { buildCardToolDisplay } from "./card-tool-definitions.ts";
 

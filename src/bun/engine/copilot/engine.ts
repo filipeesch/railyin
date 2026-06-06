@@ -25,6 +25,7 @@ import { parseFileRef } from "../../utils/resolve-file-attachments.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
+import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 
 function utf16LineOffsets(text: string): number[] {
   const offsets = [0];
@@ -168,6 +169,7 @@ export class CopilotEngine implements ExecutionEngine {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
       },
+      workspaceKey: getDefaultWorkspaceKey(),
     };
 
     const tools = buildCopilotTools(toolContext, params.mcpRegistry ?? null, params.enabledMcpTools ?? [], onSuspend);

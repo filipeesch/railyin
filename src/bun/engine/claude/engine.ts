@@ -10,6 +10,8 @@ import { join, extname, basename } from "path";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
+import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
+
 
 export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
@@ -71,6 +73,7 @@ export class ClaudeEngine implements ExecutionEngine {
           boardId: boardId ?? null,
           conversationId: params.conversationId,
         },
+        workspaceKey: getDefaultWorkspaceKey(),
         repos: {
           todos: new TodoRepository(),
           decisions: new DecisionRepository(),
