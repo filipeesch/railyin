@@ -269,33 +269,16 @@ export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request"
 
 // ─── Display builder ──────────────────────────────────────────────────────────
 
-import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import { humanizeToolName } from "./tool-display.ts";
+import { buildCardToolDisplay } from "./card-tool-definitions.ts";
 
 export function buildCommonToolDisplay(name: string, args: Record<string, unknown>): ToolCallDisplay {
+  // Card tools — delegated to card-tool-definitions.ts (single source of truth)
+  const cardDisplay = buildCardToolDisplay(name, args);
+  if (cardDisplay) return cardDisplay;
+
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name) {
-    case "list_boards":
-      return { label: "list boards" };
-    case "get_card":
-      return { label: "get card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-    case "list_cards":
-      return { label: "list cards", subject: str(args.workflow_state || args.query) || undefined };
-    case "get_board_summary":
-      return { label: "board summary" };
-    case "create_card":
-      return { label: "create card", subject: str(args.title) || undefined };
-    case "edit_card":
-      return { label: "edit card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-    case "delete_card":
-      return { label: "delete card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
-    case "move_card": {
-      const id = args.task_id != null ? `#${args.task_id}` : null;
-      const to = str(args.workflow_state) || null;
-      return { label: "move card", subject: id && to ? `${id} → ${to}` : id ?? to ?? undefined };
-    }
-    case "message_card":
-      return { label: "message card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
     case "decision_request":
       return { label: "decision request" };
     case "list_decisions":

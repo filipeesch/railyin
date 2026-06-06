@@ -182,3 +182,38 @@ export const CARD_TOOL_DEFINITIONS: AIToolDefinition[] = [
 ];
 
 export const CARD_TOOL_NAMES = new Set(CARD_TOOL_DEFINITIONS.map((t) => t.name));
+
+// ─── Display builder for card tools ───────────────────────────────────────────
+// Used by common-tools.ts to build UI display labels for card tool calls.
+
+import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
+
+export function buildCardToolDisplay(name: string, args: Record<string, unknown>): ToolCallDisplay | null {
+  const str = (v: unknown): string => (v != null ? String(v) : "");
+  switch (name) {
+    case "list_boards":
+      return { label: "list boards" };
+    case "get_card":
+      return { label: "get card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
+    case "list_cards":
+      return { label: "list cards", subject: str(args.workflow_state || args.query) || undefined };
+    case "get_board_summary":
+      return { label: "board summary" };
+    case "create_card":
+      return { label: "create card", subject: str(args.title) || undefined };
+    case "edit_card":
+      return { label: "edit card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
+    case "delete_card":
+      return { label: "delete card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
+    case "move_card": {
+      const id = args.task_id != null ? `#${args.task_id}` : null;
+      const to = str(args.workflow_state) || null;
+      return { label: "move card", subject: id && to ? `${id} → ${to}` : id ?? to ?? undefined };
+    }
+    case "message_card":
+      return { label: "message card", subject: args.task_id != null ? `#${args.task_id}` : undefined };
+    default:
+      return null;
+  }
+}
+
