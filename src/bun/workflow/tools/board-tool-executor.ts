@@ -1,5 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
+import type { IBoardRepository } from "../../db/board-repository.ts";
+import { buildBoardNotFoundError } from "./board-error-format.ts";
 import type { TaskRow, ConversationMessageRow } from "../../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
 import type { WorktreeManager } from "../../git/WorktreeManager.ts";
@@ -39,6 +41,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
   constructor(
     private readonly db: Database,
     private readonly wsRepo: IWorkspaceRepository,
+    private readonly boardRepo: IBoardRepository,
     private readonly worktreeManager?: WorktreeManager,
   ) {
     this.positionService = new PositionService(db);
@@ -66,11 +69,8 @@ export class BoardToolExecutor implements IBoardToolExecutor {
 
   async execGetBoardSummary(args: Record<string, unknown>, ctx: BoardToolContext): Promise<string> {
     const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
-    if (!boardId) return "Error: board_id is required. Use list_boards to discover available boards.";
-    const boardRow = this.db
-      .query<{ id: number }, [number]>("SELECT id FROM boards WHERE id = ?")
-      .get(boardId);
-    if (!boardRow) return `Error: board ${boardId} not found`;
+    if (!boardId) return buildBoardNotFoundError(this.boardRepo.listByWorkspace(ctx.workspaceKey));
+    if (!this.boardRepo.exists(boardId)) return `Error: board ${boardId} not found`;
     const rows = this.db
       .query<{ workflow_state: string; execution_state: string; count: number }, [number]>(
         `SELECT workflow_state, execution_state, COUNT(*) as count
@@ -90,7 +90,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
 
   async execListTasks(args: Record<string, unknown>, ctx: BoardToolContext): Promise<string> {
     const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
-    if (!boardId) return "Error: board_id is required. Use list_boards to discover available boards.";
+    if (!boardId) return buildBoardNotFoundError(this.boardRepo.listByWorkspace(ctx.workspaceKey));
     const limitRaw = args.limit != null ? Number(args.limit) : 50;
     const limit = Math.min(Math.max(1, limitRaw), 200);
     const conditions: string[] = ["t.board_id = ?"];
@@ -122,14 +122,10 @@ export class BoardToolExecutor implements IBoardToolExecutor {
     if (!title) return "Error: title is required";
     const description = ((args.description as string) ?? "").trim();
     const boardId = args.board_id != null ? Number(args.board_id) : (ctx.boardId ?? 0);
-    if (!boardId) return "Error: board_id is required. Use list_boards to discover available boards.";
-    const boardRow = this.db
-      .query<{ id: number; workspace_key: string }, [number]>(
-        "SELECT id, workspace_key FROM boards WHERE id = ?",
-      )
-      .get(boardId);
-    if (!boardRow) return `Error: board ${boardId} not found`;
-    const project = getProjectByKey(boardRow.workspace_key, projectKey);
+    if (!boardId) return buildBoardNotFoundError(this.boardRepo.listByWorkspace(ctx.workspaceKey));
+    const board = this.boardRepo.getById(boardId);
+    if (!board) return `Error: board ${boardId} not found`;
+    const project = getProjectByKey(board.workspaceKey, projectKey);
     if (!project) return `Error: project ${projectKey} not found`;
     const convRes = this.db.run("INSERT INTO conversations (task_id) VALUES (0)");
     const convId = convRes.lastInsertRowid as number;
@@ -272,11 +268,6 @@ export class BoardToolExecutor implements IBoardToolExecutor {
   }
 
   async execListBoards(_args: Record<string, unknown>, ctx: BoardToolContext): Promise<string> {
-    const rows = this.db
-      .query<{ id: number; name: string }, [string]>(
-        "SELECT id, name FROM boards WHERE workspace_key = ? ORDER BY created_at ASC",
-      )
-      .all(ctx.workspaceKey);
-    return JSON.stringify(rows);
+    return JSON.stringify(this.boardRepo.listByWorkspace(ctx.workspaceKey));
   }
 }

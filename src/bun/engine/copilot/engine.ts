@@ -26,6 +26,7 @@ import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
+import type { IBoardRepository } from "../../db/board-repository.ts";
 
 function utf16LineOffsets(text: string): number[] {
   const offsets = [0];
@@ -68,6 +69,7 @@ export class CopilotEngine implements ExecutionEngine {
   private readonly sdkAdapter: CopilotSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
   private readonly dialect: CopilotDialect;
+  private readonly boardRepo: IBoardRepository;
 
   /** Active sessions keyed by executionId. */
   private readonly sessions = new Map<number, CopilotSdkSession>();
@@ -81,12 +83,12 @@ export class CopilotEngine implements ExecutionEngine {
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: CopilotSdkAdapter = createDefaultCopilotSdkAdapter(),
+    boardRepo: IBoardRepository,
     dialect: CopilotDialect = new CopilotDialect(),
-    // cliPath is only used when constructing the default adapter above;
-    // when a custom sdkAdapter is injected (tests) this parameter is unused.
   ) {
     this._onTaskUpdated = onTaskUpdated;
     this.sdkAdapter = sdkAdapter;
+    this.boardRepo = boardRepo;
     this.dialect = dialect;
   }
 
@@ -491,10 +493,7 @@ export class CopilotEngine implements ExecutionEngine {
 
     let projectPath: string | undefined;
     if (taskRow) {
-      const wsKey =
-        db.query<{ workspace_key: string }, [number]>(
-          "SELECT workspace_key FROM boards WHERE id = ?",
-        ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+      const wsKey = this.boardRepo.getWorkspaceKey(taskRow.board_id) ?? getDefaultWorkspaceKey();
       const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
       if (project?.projectPath && project.projectPath !== worktreePath) {
         projectPath = project.projectPath;

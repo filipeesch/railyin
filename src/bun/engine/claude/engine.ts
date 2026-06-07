@@ -11,6 +11,7 @@ import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
+import type { IBoardRepository } from "../../db/board-repository.ts";
 
 
 export class ClaudeEngine implements ExecutionEngine {
@@ -27,6 +28,7 @@ export class ClaudeEngine implements ExecutionEngine {
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: ClaudeSdkAdapter = createDefaultClaudeSdkAdapter(),
+    private readonly boardRepo: IBoardRepository,
   ) {
     this.defaultModel = defaultModel;
     this._onTaskUpdated = onTaskUpdated;
@@ -187,10 +189,7 @@ export class ClaudeEngine implements ExecutionEngine {
       )
       .get(taskId);
 
-    const wsKey =
-      db.query<{ workspace_key: string }, [number]>(
-        "SELECT workspace_key FROM boards WHERE id = ?",
-      ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+    const wsKey = this.boardRepo.getWorkspaceKey(taskRow.board_id) ?? getDefaultWorkspaceKey();
     const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
     const cwd = project?.projectPath || gitRow?.worktree_path || process.cwd();
 
