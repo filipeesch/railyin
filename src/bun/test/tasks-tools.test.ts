@@ -772,22 +772,22 @@ describe("executeCommonTool / chat context board tools", () => {
         expect(summary.board_id).toBe(boardId);
     });
 
-    it("create_card error mentions list_boards when board_id missing in chat context", async () => {
+    it("create_card error includes board list when board_id missing in chat context", async () => {
         const result = await executeCommonTool(
             "create_card",
             { project_key: projectKey, title: "X", description: "" },
             commonCtx({ boardId: undefined }),
         );
-        expect(result.text).toContain("list_boards");
+        expect(result.text).toContain("Available boards:");
     });
 
-    it("list_cards error mentions list_boards when board_id missing in chat context", async () => {
+    it("list_cards error includes board list when board_id missing in chat context", async () => {
         const result = await executeCommonTool(
             "list_cards",
             {},
             commonCtx({ boardId: undefined }),
         );
-        expect(result.text).toContain("list_boards");
+        expect(result.text).toContain("Available boards:");
     });
 });
 
