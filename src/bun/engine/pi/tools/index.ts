@@ -70,15 +70,11 @@ export type { SuspendRef };
  * Common tools available to delegated child (subagent) sessions.
  * Children get TODO tools ONLY — never board-mutating tools (create/move/edit task),
  * decision tools, or note tools. Board orchestration stays with the parent.
+ * Auto-derived from COMMON_TOOL_DEFINITIONS via childAllowed flag.
  */
-export const CHILD_COMMON_TOOL_NAMES = new Set<string>([
-  "create_todo",
-  "edit_todo",
-  "list_todos",
-  "get_todo",
-  "reorganize_todos",
-  "update_todo_status",
-]);
+export const CHILD_COMMON_TOOL_NAMES = new Set(
+  COMMON_TOOL_DEFINITIONS.filter((t) => t.childAllowed).map((t) => t.name),
+);
 
 /**
  * Build the tool surface for a delegated child (subagent) session.

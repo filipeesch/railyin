@@ -233,6 +233,7 @@ export interface CommonToolContext {
     decisions: import("../db/repositories/decision-repository.ts").DecisionRepository;
     notes: import("../db/repositories/note-repository.ts").NoteRepository;
     boardTools: IBoardToolExecutor;
+    projects: import("../db/project-repository.ts").IProjectRepository;
   };
   workflow: {
     onTransition: (taskId: number, toState: string) => void;

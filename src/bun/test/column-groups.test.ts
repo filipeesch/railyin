@@ -264,6 +264,7 @@ const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
     decisions: new DecisionRepository(db),
     notes: new NoteRepository(db),
     boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+    projects: { listByWorkspace: () => [] },
   },
   workflow: {
     onTransition: noop,

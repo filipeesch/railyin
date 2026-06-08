@@ -24,6 +24,7 @@ beforeEach(() => {
             decisions: new DecisionRepository(db),
             notes: new NoteRepository(db),
             boardTools: new BoardToolExecutor(db, wsRepo),
+            projects: { listByWorkspace: () => [] },
         },
         workflow: {
             onTransition: () => { },

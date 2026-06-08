@@ -35,7 +35,24 @@ function makeHarness(dir: string): HarnessContext {
 }
 
 function makeCtx(): CommonToolContext {
-  return {} as CommonToolContext;
+  return {
+    task: { id: 1, boardId: 1, conversationId: 1 },
+    workspaceKey: "default",
+    repos: {
+      todos: {} as any,
+      decisions: {} as any,
+      notes: {} as any,
+      boardTools: {} as any,
+      projects: { listByWorkspace: () => [] },
+    },
+    workflow: {
+      onTransition: () => {},
+      onHumanTurn: () => {},
+      onCancel: () => {},
+      onTaskUpdated: () => {},
+    },
+    runtime: {},
+  };
 }
 
 describe("Pi common-tools bridge (PCB)", () => {
