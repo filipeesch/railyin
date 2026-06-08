@@ -29,7 +29,7 @@ export const WORKSPACE_TOOL_NAMES = new Set(WORKSPACE_TOOL_DEFINITIONS.map((t) =
 
 // ─── Display builder for workspace tools ──────────────────────────────────────
 
-import type { ToolCallDisplay } from "../../../shared/rpc-types.ts";
+import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 
 export function buildWorkspaceToolDisplay(name: string, _args: Record<string, unknown>): ToolCallDisplay | null {
   switch (name) {

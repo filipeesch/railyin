@@ -1,5 +1,5 @@
-import type { Project } from "../../../shared/rpc-types.ts";
-import { listProjectsForWorkspace } from "../../project-store.ts";
+import type { Project } from "../../shared/rpc-types.ts";
+import { listProjectsForWorkspace } from "../project-store.ts";
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 
