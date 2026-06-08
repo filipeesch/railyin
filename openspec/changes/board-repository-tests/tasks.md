@@ -41,7 +41,7 @@
 ## Phase 4: Engine DI Tests
 
 - [x] 4.1 Add ER-DI-5 through ER-DI-8 to `engine-registry.test.ts` (mechanical - constructor accepts parameter)
-- [x] 4.2 Update ALL existing engine test files (11 files) — all engine constructors updated
+- [x] 4.2 Update ALL existing engine test files (11 files, 27 constructor calls) — all engine constructors pass `new BoardRepository(db)` or `new BoardRepository(initDb())`
 
 ## Phase 5: Validation
 
