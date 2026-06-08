@@ -26,8 +26,8 @@ import {
   executeLspTypeDefinition,
 } from "../workflow/tools/lsp-tools.ts";
 import { validateToolArgs } from "./validate-tool-args.ts";
-import { CARD_TOOL_DEFINITIONS, CARD_TOOL_NAMES } from "./card-tool-definitions.ts";
-import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_TOOL_NAMES, buildWorkspaceToolDisplay } from "./workspace-tool-definitions.ts";
+import { CARD_TOOL_DEFINITIONS } from "./card-tool-definitions.ts";
+import { WORKSPACE_TOOL_DEFINITIONS, buildWorkspaceToolDisplay } from "./workspace-tool-definitions.ts";
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
 
