@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { CopilotEngine } from "../engine/copilot/engine.ts";
+import { BoardRepository } from "../db/board-repository.ts";
+import { initDb } from "./helpers.ts";
 import { copilotSessionIdForConversation } from "../engine/copilot/session.ts";
 import type { BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import { createBackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
@@ -49,7 +51,7 @@ function createCopilotRuntime(adapter: MockCopilotSdkAdapter): BackendRpcRuntime
     const runtime = createBackendRpcRuntime({
         taskModel: "copilot/mock-model",
         createEngine: ({ onTaskUpdated, onNewMessage }) =>
-            new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
+            new CopilotEngine(onTaskUpdated, onNewMessage, adapter, new BoardRepository(initDb())),
     });
     runtimes.push(runtime);
     return runtime;
@@ -624,7 +626,7 @@ describe("Copilot engine — systemInstructions propagation", () => {
         const runtime = createBackendRpcRuntime({
             taskModel: "copilot/mock-model",
             createEngine: ({ onTaskUpdated, onNewMessage }) =>
-                new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
+                new CopilotEngine(onTaskUpdated, onNewMessage, adapter, new BoardRepository(initDb())),
         });
         runtimes.push(runtime);
         const { taskId } = await runtime.createTask();

@@ -6,6 +6,7 @@ import { ClaudeEngine } from "../engine/claude/engine.ts";
 import { CopilotDialect } from "../engine/dialects/copilot-dialect.ts";
 import { MockClaudeSdkAdapter } from "./support/claude-sdk-mock.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import { BoardRepository } from "../db/board-repository.ts";
 import type { Database } from "bun:sqlite";
 
 let tmpDir: string;
@@ -141,7 +142,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
       return origListCommands(cwd);
     };
 
-    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter, new BoardRepository(db));
     await engine.listCommands(taskId);
 
     expect(capturedCwds).toHaveLength(1);
@@ -166,7 +167,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
       return [];
     };
 
-    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter, new BoardRepository(db));
     await engine.listCommands(taskId);
 
     expect(capturedCwds).toHaveLength(1);
@@ -175,7 +176,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
 
   it("returns empty array when task row does not exist", async () => {
     const adapter = new MockClaudeSdkAdapter();
-    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter, new BoardRepository(db));
 
     const result = await engine.listCommands(999999);
 
@@ -191,7 +192,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
       { name: "opsx:propose", description: "" },
     ];
 
-    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter, new BoardRepository(db));
     const commands = await engine.listCommands(taskId);
 
     expect(commands).toEqual([

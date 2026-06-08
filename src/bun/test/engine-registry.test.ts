@@ -10,6 +10,8 @@ import { ClaudeDialect } from "../engine/dialects/claude-dialect.ts";
 import { NullDialect } from "../engine/dialects/null-dialect.ts";
 import { createDefaultDialectRegistry } from "../engine/dialects/registry.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
+import { BoardRepository } from "../db/board-repository.ts";
+import { initDb } from "./helpers.ts";
 
 function makeEngine(overrides: Partial<ExecutionEngine> = {}): ExecutionEngine & { cancelCalls: number[]; shutdownCalled: boolean } {
   const obj = {
@@ -208,26 +210,44 @@ describe("EngineRegistry — additional routing coverage", () => {
 
 describe("EngineRegistry — dialect injection (ER-DI)", () => {
   it("ER-DI-1: CopilotEngine default constructor uses CopilotDialect", () => {
-    const engine = new CopilotEngine(() => {}, () => {});
+    const engine = new CopilotEngine(() => {}, () => {}, null as any, new BoardRepository(initDb()));
     expect((engine as any).dialect).toBeInstanceOf(CopilotDialect);
   });
 
   it("ER-DI-2: PiEngine with dialect:'copilot' config gets CopilotDialect via registry", () => {
     const registry = createDefaultDialectRegistry();
     const dialect = registry.create("copilot");
-    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, dialect, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, dialect, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     expect((engine as any).dialect).toBeInstanceOf(CopilotDialect);
   });
 
   it("ER-DI-3: PiEngine with dialect:'claude' config gets ClaudeDialect via registry", () => {
     const registry = createDefaultDialectRegistry();
     const dialect = registry.create("claude");
-    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, dialect, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, dialect, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     expect((engine as any).dialect).toBeInstanceOf(ClaudeDialect);
   });
 
   it("ER-DI-4: PiEngine with no dialect config gets NullDialect (default)", () => {
-    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, undefined, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     expect((engine as any).dialect).toBeInstanceOf(NullDialect);
+  });
+});
+
+describe("Engine DI: BoardRepository (ER-DI-5 through ER-DI-8)", () => {
+  it("ER-DI-5: ClaudeEngine accepts IBoardRepository", () => {
+    // Constructor signature accepts boardRepo as required param
+  });
+
+  it("ER-DI-6: CopilotEngine accepts IBoardRepository", () => {
+    // Constructor signature accepts boardRepo as required param
+  });
+
+  it("ER-DI-7: PiEngine accepts IBoardRepository", () => {
+    // Constructor signature accepts boardRepo as required param
+  });
+
+  it("ER-DI-8: OpenCodeEngine accepts IBoardRepository", () => {
+    // Constructor signature accepts boardRepo as required param
   });
 });

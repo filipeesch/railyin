@@ -7,6 +7,8 @@ import type { SlashCommandDialect, ResolvedPrompt } from "../engine/dialects/sla
 import { NullDialect } from "../engine/dialects/null-dialect.ts";
 import type { CommandInfo } from "../engine/types.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
+import { BoardRepository } from "../db/board-repository.ts";
+import { initDb } from "./helpers.ts";
 
 // ─── UndoStack ────────────────────────────────────────────────────────────────
 
@@ -230,20 +232,20 @@ describe("PiEngine dialect injection", () => {
   it("SPY-1: dialect passed to constructor is stored and accessible", () => {
     const spy = new SpyDialect();
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     expect((engine as any).dialect).toBe(spy);
   });
 
   it("SPY-2: default dialect is NullDialect when none is provided", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     expect((engine as any).dialect).toBeInstanceOf(NullDialect);
   });
 
   it("SPY-3: pre-aborted execution does NOT call dialect.resolvePrompt", async () => {
     const spy = new SpyDialect();
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     const controller = new AbortController();
     controller.abort();
 
@@ -268,7 +270,7 @@ describe("PiEngine dialect injection", () => {
 
 function makePiEngine(): PiEngine {
   const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-  return new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+  return new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository(), new BoardRepository(initDb()));
 }
 
 /** Minimal fake AgentSession — only needs abort() */
@@ -386,7 +388,7 @@ import { ToolLoopDetector } from "../engine/pi/harness/tool-loop-detector.ts";
 describe("HarnessContext.loopDetector", () => {
   it("HLC-1: getOrCreateHarnessContext initializes loopDetector as ToolLoopDetector instance", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     const eng = engine as any;
 
     const ctx = eng.getOrCreateHarnessContext(1, "/test-cwd");
@@ -395,7 +397,7 @@ describe("HarnessContext.loopDetector", () => {
 
   it("HLC-2: same conversationId returns the same loopDetector instance", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     const eng = engine as any;
 
     const ctx1 = eng.getOrCreateHarnessContext(5, "/test-cwd");
@@ -405,7 +407,7 @@ describe("HarnessContext.loopDetector", () => {
 
   it("HLC-3: different conversationIds get different loopDetector instances", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository(), new BoardRepository(initDb()));
     const eng = engine as any;
 
     const ctx1 = eng.getOrCreateHarnessContext(10, "/test-cwd");

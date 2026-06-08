@@ -8,8 +8,9 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { PiEngine } from "../../engine/pi/engine.ts";
+import { BoardRepository } from "../../db/board-repository.ts";
+import { initDb } from "../helpers.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
-import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { NullModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import type { Database } from "bun:sqlite";
 import type { ExecutionParams } from "../../engine/types.ts";
@@ -92,6 +93,7 @@ function makePiEngine(session: MockLoopSession, config: PiEngineConfig = { type:
     () => {},
     undefined,
     new NullModelSettingsRepository(),
+    new BoardRepository(initDb()),
     async () => session as any,
   );
 }

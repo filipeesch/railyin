@@ -8,6 +8,10 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { PiEngine } from "../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../config/index.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
+import { BoardRepository } from "../db/board-repository.ts";
+import { initDb } from "./helpers.ts";
+import { BoardRepository } from "../db/board-repository.ts";
+import { initDb } from "./helpers.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -16,7 +20,7 @@ function makeEngine(providers: PiEngineConfig["providers"] = {}): PiEngine {
     type: "pi",
     providers,
   };
-  return new PiEngine("pi-local", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+  return new PiEngine("pi-local", config, () => {}, () => {}, undefined, new NullModelSettingsRepository(), new BoardRepository(initDb()));
 }
 
 function okJsonResponse(body: unknown): Response {
