@@ -83,9 +83,11 @@ describe("BR-4: exists", () => {
   });
 
   it("returns false for unknown board", () => {
-    const allIds = db.query<{ id: number }, []>("SELECT id FROM boards ORDER BY id").all();
-    const maxId = allIds.length > 0 ? allIds[allIds.length - 1]!.id : 0;
-    const unknownId = maxId + 1;
+    // Use a very large ID that can't possibly exist
+    const unknownId = 999999999;
+    // Verify via direct SQL too
+    const directCheck = db.query<{ id: number }, [number]>("SELECT id FROM boards WHERE id = ?").get(unknownId);
+    expect(directCheck).toBeUndefined();
     expect(repo.exists(unknownId)).toBe(false);
   });
 });
