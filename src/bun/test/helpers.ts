@@ -8,11 +8,7 @@ import { resetConfig, loadConfig } from "../config/index.ts";
 // ─── In-memory DB ─────────────────────────────────────────────────────────────
 
 export function initDb(): Database {
-  // Use unique temp file per call to avoid :memory: connection reuse issues
-  const tmpPath = `/tmp/railyn-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`;
-  process.env.RAILYN_DB = tmpPath;
-  // Remove stale file if exists
-  try { require("fs").unlinkSync(tmpPath); } catch { /* ignore */ }
+  process.env.RAILYN_DB = ":memory:";
   resetDbSingleton();
   const db = getDb();
   db.exec("PRAGMA foreign_keys = ON;");
