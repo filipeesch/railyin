@@ -1,3 +1,4 @@
+import { BoardRepository } from "../db/board-repository.ts";
 import { describe, expect, it, beforeEach } from "vitest";
 import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from "../engine/common-tools.ts";
 import { buildCopilotTools } from "../engine/copilot/tools.ts";
@@ -23,7 +24,7 @@ beforeEach(() => {
             todos: new TodoRepository(db),
             decisions: new DecisionRepository(db),
             notes: new NoteRepository(db),
-            boardTools: new BoardToolExecutor(db, wsRepo),
+            boardTools: new BoardToolExecutor(db, wsRepo, new BoardRepository(db)),
         },
         workflow: {
             onTransition: () => { },

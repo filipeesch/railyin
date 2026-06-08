@@ -1,3 +1,4 @@
+import { BoardRepository } from "../db/board-repository.ts";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
@@ -263,7 +264,7 @@ const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
     todos: new TodoRepository(db),
     decisions: new DecisionRepository(db),
     notes: new NoteRepository(db),
-    boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+    boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db), new BoardRepository(db)),
   },
   workflow: {
     onTransition: noop,

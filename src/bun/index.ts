@@ -41,6 +41,8 @@ import type { PiEngineConfig } from "./config/index.ts";
 import { createDefaultDialectRegistry } from "./engine/dialects/registry.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
 import { WorkspaceRepository } from "./db/workspace-repository.ts";
+import { BoardRepository } from "./db/board-repository.ts";
+import type { IBoardRepository } from "./db/board-repository.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
 import type { Task, ConversationMessage, ChatSession } from "../shared/rpc-types.ts";
 import { setupFileLogging } from "./server/file-logger.ts";
@@ -88,6 +90,7 @@ seedDefaultWorkspace();
 const db = getDb();
 const modelSettingsRepo = new SqliteModelSettingsRepository(db);
 const wsRepo = new WorkspaceRepository(db);
+const boardRepo = new BoardRepository(db);
 
 const projectResolver = new ProjectResolver();
 const taskGitContextRepo = new TaskGitContextRepository(db);
@@ -137,19 +140,19 @@ const streamProc = new StreamEventProcessor(channel, db);
 
 // ─── Engine factory map (composition root) ───────────────────────────────────
 
-type EngineFactory = (engineId: string, cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) => ExecutionEngine;
+type EngineFactory = (engineId: string, cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage, boardRepo: BoardRepository) => ExecutionEngine;
 
 const engineFactories: Record<string, EngineFactory> = {
-  copilot: (_engineId, _cfg, onTaskUpdated, onNewMessage) =>
-    new CopilotEngine(onTaskUpdated, onNewMessage, createDefaultCopilotSdkAdapter()),
-  claude: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
-    new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
-  opencode: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
-    new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
-  pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
+  copilot: (_engineId, _cfg, onTaskUpdated, onNewMessage, boardRepo) =>
+    new CopilotEngine(onTaskUpdated, onNewMessage, createDefaultCopilotSdkAdapter(), boardRepo),
+  claude: (_engineId, cfg, onTaskUpdated, onNewMessage, boardRepo) =>
+    new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter(), boardRepo),
+  opencode: (_engineId, cfg, onTaskUpdated, onNewMessage, boardRepo) =>
+    new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0]), boardRepo),
+  pi: (engineId, cfg, onTaskUpdated, onNewMessage, boardRepo) => {
     const piCfg = cfg as PiEngineConfig;
     const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
-    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo);
+    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo, boardRepo);
   },
   scripted: () => new MockExecutionEngine(),
 };
@@ -159,6 +162,7 @@ function buildEngineInstances(
   factories: Record<string, EngineFactory>,
   onTaskUpdated: OnTaskUpdated,
   onNewMessage: OnNewMessage,
+  boardRepo: BoardRepository,
 ): Map<string, ExecutionEngine> {
   const map = new Map<string, ExecutionEngine>();
   for (const entry of engines) {
@@ -168,7 +172,7 @@ function buildEngineInstances(
       continue;
     }
     try {
-      map.set(entry.id, factory(entry.id, entry.config, onTaskUpdated, onNewMessage));
+      map.set(entry.id, factory(entry.id, entry.config, onTaskUpdated, onNewMessage, boardRepo));
     } catch (err) {
       console.error(`[engine] Failed to construct engine '${entry.id}':`, err);
     }
@@ -213,6 +217,7 @@ if (injectedEngine) {
     engineFactories,
     notifier.notifyTaskUpdated.bind(notifier),
     notifier.notifyNewMessage.bind(notifier),
+    boardRepo,
   );
   engineRegistry = new EngineRegistry(instanceMap, getWorkspaceConfig);
 }

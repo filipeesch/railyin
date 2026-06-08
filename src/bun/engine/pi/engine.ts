@@ -1,4 +1,5 @@
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
+import type { IBoardRepository } from "../../db/board-repository.ts";
 import type {
   ExecutionEngine,
   ExecutionParams,
@@ -158,6 +159,7 @@ export class PiEngine implements ExecutionEngine {
   private readonly dialect: SlashCommandDialect;
   private readonly modelSettingsRepo: ModelSettingsRepository;
   private readonly sessionFactory: SessionFactory;
+  private readonly boardRepo: IBoardRepository;
   /** Map<conversationId, AgentSession> — one Pi session per conversation. */
   private readonly sessions = new Map<number, AgentSession>();
   /** Map<conversationId, SuspendRef> — mutable ref updated at each execution start. */
@@ -182,6 +184,7 @@ export class PiEngine implements ExecutionEngine {
     _onNewMessage: OnNewMessage,
     dialect: SlashCommandDialect = new NullDialect(),
     modelSettingsRepo: ModelSettingsRepository,
+    boardRepo: IBoardRepository,
     sessionFactory: SessionFactory = defaultSessionFactory,
   ) {
     this.engineId = engineId;
@@ -190,6 +193,7 @@ export class PiEngine implements ExecutionEngine {
     this._onTaskUpdated = onTaskUpdated;
     this.dialect = dialect;
     this.modelSettingsRepo = modelSettingsRepo;
+    this.boardRepo = boardRepo;
     this.sessionFactory = sessionFactory;
 
     // Build the provider limiter registry from configured providers.
@@ -541,10 +545,7 @@ export class PiEngine implements ExecutionEngine {
 
     let projectPath: string | undefined;
     if (taskRow) {
-      const wsKey =
-        db.query<{ workspace_key: string }, [number]>(
-          "SELECT workspace_key FROM boards WHERE id = ?",
-        ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+      const wsKey = this.boardRepo.getWorkspaceKey(taskRow.board_id) ?? getDefaultWorkspaceKey();
       const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
       if (project?.projectPath && project.projectPath !== worktreePath) {
         projectPath = project.projectPath;
@@ -621,10 +622,7 @@ export class PiEngine implements ExecutionEngine {
 
     if (!taskRow) return undefined;
 
-    const wsKey =
-      db.query<{ workspace_key: string }, [number]>(
-        "SELECT workspace_key FROM boards WHERE id = ?",
-      ).get(boardId)?.workspace_key ?? getDefaultWorkspaceKey();
+    const wsKey = this.boardRepo.getWorkspaceKey(boardId) ?? getDefaultWorkspaceKey();
 
     const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
     if (project?.projectPath && project.projectPath !== worktreePath) {

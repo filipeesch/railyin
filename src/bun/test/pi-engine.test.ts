@@ -3,6 +3,7 @@ import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { PiEngine } from "../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../config/index.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
+import { BoardRepository } from "../db/board-repository.ts";
 import type { Database } from "bun:sqlite";
 
 // ─── MockAgentSession ─────────────────────────────────────────────────────────
@@ -69,6 +70,7 @@ function makePiEngine(session: MockAgentSession): PiEngine {
     () => {},
     undefined,
     new StubModelSettingsRepository(128_000),
+    new BoardRepository(db),
     async () => session as any,
   );
 }
@@ -116,6 +118,7 @@ describe("PiEngine.compact()", () => {
       () => {},
       undefined,
       new StubModelSettingsRepository(128_000),
+      new BoardRepository(db),
       async () => { factoryCallCount++; return session as any; },
     );
 
@@ -208,6 +211,7 @@ function makePiEngineWithPresets(session: MockAgentSession): PiEngine {
     () => {},
     undefined,
     new StubModelSettingsRepository(128_000),
+    new BoardRepository(initDb()),
     async () => session as any,
   );
 }
@@ -263,6 +267,7 @@ describe("_applyPresetToSession", () => {
       () => {},
       undefined,
       new StubModelSettingsRepository(128_000),
+      new BoardRepository(initDb()),
       async () => session as any,
     );
     (engine as any)._applyPresetToSession(session, "balanced");

@@ -8,6 +8,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { PiEngine } from "../../engine/pi/engine.ts";
+import { BoardRepository } from "../../db/board-repository.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { NullModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
@@ -111,6 +112,7 @@ function makePiEngine(session: MockBgSession, config: PiEngineConfig): PiEngine 
     () => {},
     undefined,
     new StubModelSettingsRepository(128_000),
+    new BoardRepository(db),
     async () => session as any,
   );
 }

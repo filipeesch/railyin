@@ -14,11 +14,13 @@ import { DecisionRepository } from "../../db/repositories/decision-repository.ts
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 import type { CommonToolContext } from "../types.ts";
+import type { IBoardRepository } from "../../db/board-repository.ts";
 
 
 export class OpenCodeEngine implements ExecutionEngine {
   private readonly sdkAdapter: OpenCodeSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
+  private readonly boardRepo: IBoardRepository;
   private readonly pendingResumes = new Map<number, {
     resolve: (input: EngineResumeInput) => void;
     reject: (error: Error) => void;
@@ -28,9 +30,11 @@ export class OpenCodeEngine implements ExecutionEngine {
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: OpenCodeSdkAdapter,
+    boardRepo: IBoardRepository,
   ) {
     this._onTaskUpdated = onTaskUpdated;
     this.sdkAdapter = sdkAdapter;
+    this.boardRepo = boardRepo;
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -181,10 +185,7 @@ export class OpenCodeEngine implements ExecutionEngine {
       )
       .get(taskId);
 
-    const wsKey =
-      db.query<{ workspace_key: string }, [number]>(
-        "SELECT workspace_key FROM boards WHERE id = ?",
-      ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+    const wsKey = this.boardRepo.getWorkspaceKey(taskRow.board_id) ?? getDefaultWorkspaceKey();
     const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
     const cwd = project?.projectPath || gitRow?.worktree_path || process.cwd();
 

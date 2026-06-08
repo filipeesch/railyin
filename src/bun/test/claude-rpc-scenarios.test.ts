@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ClaudeEngine } from "../engine/claude/engine.ts";
+import { BoardRepository } from "../db/board-repository.ts";
+import { initDb } from "./helpers.ts";
 import type { BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import { createBackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import {
@@ -42,7 +44,7 @@ function createClaudeRuntime(adapter: MockClaudeSdkAdapter): BackendRpcRuntime {
   const runtime = createBackendRpcRuntime({
     taskModel: "claude/claude-sonnet-4-6",
     createEngine: ({ onTaskUpdated, onNewMessage }) =>
-      new ClaudeEngine("claude-sonnet-4-6", onTaskUpdated, onNewMessage, adapter),
+      new ClaudeEngine("claude-sonnet-4-6", onTaskUpdated, onNewMessage, adapter, new BoardRepository(initDb())),
   });
   runtimes.push(runtime);
   return runtime;

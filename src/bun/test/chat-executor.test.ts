@@ -1,3 +1,4 @@
+import { BoardRepository } from "../db/board-repository.ts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Database } from "bun:sqlite";
 import { ChatExecutor } from "../engine/execution/chat-executor.ts";
@@ -134,7 +135,7 @@ describe("CE-2: boardTools injected into ExecutionParams", () => {
   it("passes boardTools instance into ExecutionParams", async () => {
     const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
     const wsRepo = new WorkspaceRepository(db);
-    const boardTools = new BoardToolExecutor(db, wsRepo);
+    const boardTools = new BoardToolExecutor(db, wsRepo, new BoardRepository(db));
     const { executor, streamProcessor } = makeExecutor({ boardTools });
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");

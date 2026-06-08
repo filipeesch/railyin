@@ -1,3 +1,4 @@
+import { BoardRepository } from "../db/board-repository.ts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Database } from "bun:sqlite";
 import { execSync } from "child_process";
@@ -87,7 +88,7 @@ class StubStreamProcessor extends StreamProcessor {
 beforeEach(() => {
   db = initDb();
   wsRepo = new WorkspaceRepository(db);
-  boardTools = new BoardToolExecutor(db, wsRepo);
+  boardTools = new BoardToolExecutor(db, wsRepo, new BoardRepository(db));
   gitDir = mkdtempSync(join(tmpdir(), "railyn-ht-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });

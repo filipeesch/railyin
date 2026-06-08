@@ -11,6 +11,7 @@ import { IWorkingDirectoryResolver } from "../engine/execution/working-directory
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
+import { BoardRepository } from "../db/board-repository.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
@@ -76,7 +77,7 @@ class StubStreamProcessor extends StreamProcessor {
 beforeEach(() => {
   db = initDb();
   wsRepo = new WorkspaceRepository(db);
-  boardTools = new BoardToolExecutor(db, wsRepo);
+  boardTools = new BoardToolExecutor(db, wsRepo, new BoardRepository(db));
   gitDir = mkdtempSync(join(tmpdir(), "railyn-retry-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });

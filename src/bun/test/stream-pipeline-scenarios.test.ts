@@ -41,6 +41,8 @@ import {
     scriptCheckpoint,
 } from "./support/scripted-engine.ts";
 import { ClaudeEngine } from "../engine/claude/engine.ts";
+import { BoardRepository } from "../db/board-repository.ts";
+import { initDb } from "./helpers.ts";
 import type { ClaudeSdkAdapter, ClaudeRunConfig, ClaudeSdkModelInfo } from "../engine/claude/adapter.ts";
 import type { EngineEvent } from "../engine/types.ts";
 import type { StreamEvent } from "../../shared/rpc-types.ts";
@@ -731,7 +733,7 @@ class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
 
 function makeClaudeRuntime(sdkAdapter: ClaudeSdkAdapter): BackendRpcRuntime {
     return createBackendRpcRuntime({
-        createEngine: () => new ClaudeEngine(undefined, () => {}, () => {}, sdkAdapter),
+        createEngine: () => new ClaudeEngine(undefined, () => {}, () => {}, sdkAdapter, new BoardRepository(initDb())),
     });
 }
 

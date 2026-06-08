@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { OpenCodeEngine } from "../engine/opencode/engine.ts";
+import { BoardRepository } from "../db/board-repository.ts";
+import { initDb } from "./helpers.ts";
 import type { BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import { createBackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import {
@@ -41,7 +43,7 @@ function createOpenCodeRuntime(adapter: MockOpenCodeSdkAdapter): BackendRpcRunti
   const runtime = createBackendRpcRuntime({
     taskModel: TASK_MODEL,
     createEngine: ({ onTaskUpdated, onNewMessage }) =>
-      new OpenCodeEngine(onTaskUpdated, onNewMessage, adapter),
+      new OpenCodeEngine(onTaskUpdated, onNewMessage, adapter, new BoardRepository(initDb())),
   });
   runtimes.push(runtime);
   return runtime;

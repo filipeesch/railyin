@@ -1,3 +1,4 @@
+import { BoardRepository } from "../db/board-repository.ts";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
 import { TOOL_GROUPS } from "../workflow/tools.ts";
@@ -42,7 +43,7 @@ const commonCtx = (overrides?: {
       todos: new TodoRepository(db),
       decisions: new DecisionRepository(db),
       notes: new NoteRepository(db),
-      boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+      boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db), new BoardRepository(db)),
     },
     workflow: {
       onTransition: overrides?.onTransition ?? noop,
@@ -153,12 +154,15 @@ describe("executeCommonTool / get_board_summary", () => {
     });
 
     it("returns error for a nonexistent board", async () => {
+        // Use an ID that's definitely not in the DB
+        const maxId = db.query<{ max: number }, []>("SELECT COALESCE(MAX(id), 0) as max FROM boards").get()!.max;
+        const nonexistentId = maxId + 999999;
         const result = await executeCommonTool(
             "get_board_summary",
-            { board_id: 999999 },
+            { board_id: nonexistentId },
             commonCtx(),
         );
-        expect(result.text).toContain("Error: board 999999 not found");
+        expect(result.text).toMatch(/^Error: board \d+ not found/);
     });
 });
 
@@ -772,22 +776,22 @@ describe("executeCommonTool / chat context board tools", () => {
         expect(summary.board_id).toBe(boardId);
     });
 
-    it("create_card error mentions list_boards when board_id missing in chat context", async () => {
+    it("create_card error includes board list when board_id missing in chat context", async () => {
         const result = await executeCommonTool(
             "create_card",
             { project_key: projectKey, title: "X", description: "" },
             commonCtx({ boardId: undefined }),
         );
-        expect(result.text).toContain("list_boards");
+        expect(result.text).toContain("Available boards:");
     });
 
-    it("list_cards error mentions list_boards when board_id missing in chat context", async () => {
+    it("list_cards error includes board list when board_id missing in chat context", async () => {
         const result = await executeCommonTool(
             "list_cards",
             {},
             commonCtx({ boardId: undefined }),
         );
-        expect(result.text).toContain("list_boards");
+        expect(result.text).toContain("Available boards:");
     });
 });
 

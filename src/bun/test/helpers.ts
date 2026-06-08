@@ -257,6 +257,28 @@ export function makeTempDir(): { dir: string; cleanup: () => void } {
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+// ─── Seed multiple boards ─────────────────────────────────────────────────────
+
+/**
+ * Seed multiple boards across workspaces.
+ * @returns Array of board IDs in the order they were inserted.
+ */
+export function seedBoards(
+  db: Database,
+  boards: Array<{ workspaceKey: string; name: string }>,
+): number[] {
+  const ids: number[] = [];
+  for (const b of boards) {
+    db.run(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES (?, ?, 'delivery')",
+      [b.workspaceKey, b.name],
+    );
+    const id = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    ids.push(id);
+  }
+  return ids;
+}
+
 // ─── Seed a project + board + task ───────────────────────────────────────────
 
 export function seedProjectAndTask(
