@@ -1,13 +1,25 @@
+import { Database } from "bun:sqlite";
 import { describe, it, expect, beforeEach } from "vitest";
-import type { Database } from "bun:sqlite";
-import { initDb } from "./helpers.ts";
+import type { Database as DbType } from "bun:sqlite";
 import { BoardRepository, type IBoardRepository } from "../db/board-repository.ts";
 
-let db: Database;
+let db: DbType;
 let repo: BoardRepository;
 
 beforeEach(() => {
-  db = initDb();
+  // Create a truly fresh in-memory DB for each test (not shared singleton)
+  db = new Database(":memory:");
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec(`
+    CREATE TABLE boards (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_key        TEXT NOT NULL DEFAULT 'default',
+      name                 TEXT NOT NULL,
+      workflow_template_id TEXT NOT NULL,
+      project_keys         TEXT NOT NULL DEFAULT '[]',
+      created_at           TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
   repo = new BoardRepository(db);
 });
 
