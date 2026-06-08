@@ -26,13 +26,16 @@ import {
   executeLspTypeDefinition,
 } from "../workflow/tools/lsp-tools.ts";
 import { validateToolArgs } from "./validate-tool-args.ts";
-import { CARD_TOOL_DEFINITIONS, CARD_TOOL_NAMES } from "./card-tool-definitions.ts";
+import { CARD_TOOL_DEFINITIONS } from "./card-tool-definitions.ts";
+import { WORKSPACE_TOOL_DEFINITIONS, buildWorkspaceToolDisplay } from "./workspace-tool-definitions.ts";
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
 
 export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   // ── cards_read + cards_write ─────────────────────────────────────────────
   ...CARD_TOOL_DEFINITIONS,
+  // ── workspace tools ──────────────────────────────────────────────────────
+  ...WORKSPACE_TOOL_DEFINITIONS,
   DECISION_REQUEST_TOOL_DEFINITION,
   // ── decision tools ───────────────────────────────────────────────────────────
   {
@@ -126,6 +129,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   // ── todo tools ───────────────────────────────────────────────────────────────
   {
     name: "create_todo",
+    childAllowed: true,
     description:
       "Create a new todo subtask to help track complex multi-step work without losing context across compactions.\n\n" +
       "ALWAYS use create_todo when:\n" +
@@ -162,6 +166,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: "edit_todo",
+    childAllowed: true,
     description:
       "Update one or more fields of a todo item by ID (number, title, or description).\n\n" +
       "ALWAYS call get_todo before editing to see the current content.\n" +
@@ -186,6 +191,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: "list_todos",
+    childAllowed: true,
     description:
       "List all active todo items for the current task. Returns id, number, title, status, and phase for each item.\n\n" +
       "ALWAYS call list_todos before creating todos to avoid duplicates.\n" +
@@ -200,6 +206,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: "get_todo",
+    childAllowed: true,
     description:
       "Get all fields of a todo item including the full markdown description.\n\n" +
       "ALWAYS call get_todo before editing a todo's description to see its current content.\n" +
@@ -215,6 +222,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: "reorganize_todos",
+    childAllowed: true,
     description:
       "Atomically update the execution order of multiple todo items in a single call.\n\n" +
       "ALWAYS use reorganize_todos instead of multiple edit_todo calls when reordering.\n" +
@@ -241,6 +249,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: "update_todo_status",
+    childAllowed: true,
     description:
       "Update the status of a todo item.\n\n" +
       "ALWAYS use update_todo_status (not edit_todo) when changing status.\n" +
@@ -265,7 +274,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   ...LSP_TOOL_DEFINITIONS,
 ];
 
-export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request", "list_decisions", "record_decision", "update_decision", "delete_decision", "create_note", "list_notes", "update_note", "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status", ...LSP_TOOL_DEFINITIONS.map((t) => t.name)]);
+export const COMMON_TOOL_NAMES = new Set(COMMON_TOOL_DEFINITIONS.map((t) => t.name));
 
 // ─── Display builder ──────────────────────────────────────────────────────────
 
@@ -277,6 +286,10 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
   // Card tools — delegated to card-tool-definitions.ts (single source of truth)
   const cardDisplay = buildCardToolDisplay(name, args);
   if (cardDisplay) return cardDisplay;
+
+  // Workspace tools — delegated to workspace-tool-definitions.ts (single source of truth)
+  const workspaceDisplay = buildWorkspaceToolDisplay(name, args);
+  if (workspaceDisplay) return workspaceDisplay;
 
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name) {
@@ -427,6 +440,21 @@ async function executeCommonToolText(
       return ctx.repos.boardTools.execMoveTask(args, boardCtx);
     case "message_card":
       return ctx.repos.boardTools.execMessageTask(args, boardCtx);
+
+    case "list_projects": {
+      const projects = ctx.repos.projects.listByWorkspace(ctx.workspaceKey);
+      if (projects.length === 0) return "No projects configured in this workspace.";
+      const lines = projects.map((p) => {
+        const parts = [`- **${p.key}** — ${p.name}`];
+        parts.push(`  Path: ${p.projectPath.relative}`);
+        parts.push(`  Git: ${p.gitRootPath.relative}`);
+        parts.push(`  Branch: ${p.defaultBranch}`);
+        if (p.slug) parts.push(`  Slug: ${p.slug}`);
+        if (p.description) parts.push(`  Description: ${p.description}`);
+        return parts.join("\n");
+      });
+      return JSON.stringify({ detailedContent: `${projects.length} project${projects.length !== 1 ? "s" : ""}:\n${lines.join("\n\n")}`, data: projects });
+    }
 
     case "list_decisions": {
       const records = ctx.repos.decisions.listByConversation(ctx.task.conversationId);

@@ -43,6 +43,7 @@ const commonCtx = (overrides?: {
       decisions: new DecisionRepository(db),
       notes: new NoteRepository(db),
       boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+      projects: { listByWorkspace: () => [] },
     },
     workflow: {
       onTransition: overrides?.onTransition ?? noop,

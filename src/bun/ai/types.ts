@@ -20,6 +20,8 @@ export interface AIToolDefinition {
   name: string;
   description: string;
   parameters: JSONSchema7;
+  /** When true, the tool is allowed in child (subagent) sessions. */
+  childAllowed?: boolean;
 }
 
 export interface AIToolCall {

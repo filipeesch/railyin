@@ -12,6 +12,7 @@ import type { OpenCodeSdkAdapter } from "./types.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
+import { ConfigProjectRepository } from "../../db/project-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 import type { CommonToolContext } from "../types.ts";
 
@@ -74,6 +75,7 @@ export class OpenCodeEngine implements ExecutionEngine {
         decisions: new DecisionRepository(),
         notes: new NoteRepository(),
         boardTools: boardTools!,
+        projects: new ConfigProjectRepository(),
       },
       workspaceKey: getDefaultWorkspaceKey(),
       workflow: {
