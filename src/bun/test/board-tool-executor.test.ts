@@ -163,7 +163,9 @@ describe("BE-7: Error includes board list when boards exist", () => {
 
 describe("BE-8: Error indicates no boards when workspace is empty", () => {
   it("error contains no boards available message", async () => {
+    db.exec("PRAGMA foreign_keys = OFF;");
     db.run("DELETE FROM boards WHERE workspace_key = 'default'");
+    db.exec("PRAGMA foreign_keys = ON;");
     const result = await executor.execGetBoardSummary({}, makeCtx({ boardId: undefined }));
     expect(result).toContain("No boards are currently available");
   });

@@ -8,6 +8,7 @@ let repo: BoardRepository;
 
 beforeEach(() => {
   db = initDb();
+  db.exec("DELETE FROM boards;");
   repo = new BoardRepository(db);
 });
 

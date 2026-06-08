@@ -70,7 +70,7 @@ function makePiEngine(session: MockAgentSession): PiEngine {
     () => {},
     undefined,
     new StubModelSettingsRepository(128_000),
-    new BoardRepository(initDb()),
+    new BoardRepository(db),
     async () => session as any,
   );
 }
@@ -118,7 +118,7 @@ describe("PiEngine.compact()", () => {
       () => {},
       undefined,
       new StubModelSettingsRepository(128_000),
-      new BoardRepository(initDb()),
+      new BoardRepository(db),
       async () => { factoryCallCount++; return session as any; },
     );
 
