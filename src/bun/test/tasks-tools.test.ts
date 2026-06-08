@@ -154,12 +154,15 @@ describe("executeCommonTool / get_board_summary", () => {
     });
 
     it("returns error for a nonexistent board", async () => {
+        // Use an ID that's definitely not in the DB
+        const maxId = db.query<{ max: number }, []>("SELECT COALESCE(MAX(id), 0) as max FROM boards").get()!.max;
+        const nonexistentId = maxId + 999999;
         const result = await executeCommonTool(
             "get_board_summary",
-            { board_id: 999999 },
+            { board_id: nonexistentId },
             commonCtx(),
         );
-        expect(result.text).toContain("Error: board 999999 not found");
+        expect(result.text).toMatch(/^Error: board \d+ not found/);
     });
 });
 

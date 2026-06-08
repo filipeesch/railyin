@@ -8,7 +8,6 @@ let repo: BoardRepository;
 
 beforeEach(() => {
   db = initDb();
-  db.exec("DELETE FROM boards;");
   repo = new BoardRepository(db);
 });
 
@@ -84,7 +83,8 @@ describe("BR-4: exists", () => {
   });
 
   it("returns false for unknown board", () => {
-    const maxId = (db.query<{ max: number }, []>("SELECT COALESCE(MAX(id), 0) as max FROM boards").get()!).max;
+    const allIds = db.query<{ id: number }, []>("SELECT id FROM boards ORDER BY id").all();
+    const maxId = allIds.length > 0 ? allIds[allIds.length - 1]!.id : 0;
     const unknownId = maxId + 1;
     expect(repo.exists(unknownId)).toBe(false);
   });
