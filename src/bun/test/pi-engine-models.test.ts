@@ -10,8 +10,6 @@ import type { PiEngineConfig } from "../config/index.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { BoardRepository } from "../db/board-repository.ts";
 import { initDb } from "./helpers.ts";
-import { BoardRepository } from "../db/board-repository.ts";
-import { initDb } from "./helpers.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

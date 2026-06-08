@@ -1,3 +1,4 @@
+import { BoardRepository } from "../db/board-repository.ts";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
 import { TOOL_GROUPS } from "../workflow/tools.ts";
@@ -42,7 +43,7 @@ const commonCtx = (overrides?: {
       todos: new TodoRepository(db),
       decisions: new DecisionRepository(db),
       notes: new NoteRepository(db),
-      boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db)),
+      boardTools: new BoardToolExecutor(db, new WorkspaceRepository(db), new BoardRepository(db)),
     },
     workflow: {
       onTransition: overrides?.onTransition ?? noop,

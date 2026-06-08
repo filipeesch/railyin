@@ -1,3 +1,4 @@
+import { BoardRepository } from "../db/board-repository.ts";
 import { describe, it, expect, beforeEach } from "vitest";
 import { executeCommonTool } from "../engine/common-tools.ts";
 import { NoteRepository } from "../db/repositories/note-repository.ts";
@@ -24,7 +25,7 @@ beforeEach(() => {
       todos: new TodoRepository(db),
       decisions: new DecisionRepository(db),
       notes: new NoteRepository(db),
-      boardTools: new BoardToolExecutor(db, wsRepo),
+      boardTools: new BoardToolExecutor(db, wsRepo, new BoardRepository(db)),
     },
     workflow: {
       onTransition: () => {},

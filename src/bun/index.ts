@@ -42,7 +42,6 @@ import { createDefaultDialectRegistry } from "./engine/dialects/registry.ts";
 import { getWorkspaceConfig } from "./workspace-context.ts";
 import { WorkspaceRepository } from "./db/workspace-repository.ts";
 import { BoardRepository } from "./db/board-repository.ts";
-import { BoardRepository } from "./db/board-repository.ts";
 import type { IBoardRepository } from "./db/board-repository.ts";
 import { getResolvedShellEnv } from "./shell-env.ts";
 import type { Task, ConversationMessage, ChatSession } from "../shared/rpc-types.ts";

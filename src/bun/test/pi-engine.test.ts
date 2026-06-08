@@ -4,7 +4,6 @@ import { PiEngine } from "../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../config/index.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { BoardRepository } from "../db/board-repository.ts";
-import { BoardRepository } from "../db/board-repository.ts";
 import type { Database } from "bun:sqlite";
 
 // ─── MockAgentSession ─────────────────────────────────────────────────────────
