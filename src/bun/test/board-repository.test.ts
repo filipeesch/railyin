@@ -84,7 +84,9 @@ describe("BR-4: exists", () => {
   });
 
   it("returns false for unknown board", () => {
-    expect(repo.exists(999)).toBe(false);
+    const maxId = (db.query<{ max: number }, []>("SELECT COALESCE(MAX(id), 0) as max FROM boards").get()!).max;
+    const unknownId = maxId + 1;
+    expect(repo.exists(unknownId)).toBe(false);
   });
 });
 
