@@ -232,3 +232,207 @@ describe("note tools", () => {
     expect(COMMON_TOOL_NAMES.has("update_note")).toBe(true);
   });
 });
+
+// ─── list_projects tool registration (LPT-R) ──────────────────────────────────
+
+describe("list_projects tool registration", () => {
+  it("LPT-R1: list_projects in COMMON_TOOL_DEFINITIONS (single entry)", () => {
+    const matches = COMMON_TOOL_DEFINITIONS.filter((t) => t.name === "list_projects");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].parameters.required ?? []).toHaveLength(0);
+  });
+
+  it("LPT-R2: list_projects in COMMON_TOOL_NAMES", () => {
+    expect(COMMON_TOOL_NAMES.has("list_projects")).toBe(true);
+  });
+
+  it("LPT-R3: buildCommonToolDisplay returns correct label", () => {
+    const { buildCommonToolDisplay } = require("../engine/common-tools.ts");
+    const display = buildCommonToolDisplay("list_projects", {});
+    expect(display).toEqual({ label: "list projects" });
+  });
+
+  it("LPT-R4: Copilot engine registers list_projects", () => {
+    const tools = buildCopilotTools(baseContext);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("list_projects");
+  });
+
+  it("LPT-R5: Claude engine registers list_projects", () => {
+    const registeredNames: string[] = [];
+    const sdk = {
+      tool: (name: string, _d: string, _s: unknown, _h: unknown) => {
+        registeredNames.push(name);
+        return { name };
+      },
+      createSdkMcpServer: (o: unknown) => o,
+    };
+    const scalar = () => ({ optional: () => ({}) });
+    const z = {
+      string: scalar, number: scalar, boolean: scalar, any: scalar,
+      array: (_i: unknown) => ({ optional: () => ({}) }),
+      object: (_s: unknown) => ({ optional: () => ({}) }),
+      enum: (_v: [string, ...string[]]) => ({ optional: () => ({}) }),
+    };
+
+    buildClaudeToolServer(sdk as any, z as any, baseContext);
+    expect(registeredNames).toContain("list_projects");
+  });
+});
+
+// ─── list_projects execution (LPT-E) ──────────────────────────────────────────
+
+describe("list_projects execution", () => {
+  it("LPT-E1: Empty workspace returns no projects message", async () => {
+    baseContext.repos.projects.listByWorkspace = () => [];
+    const result = await executeCommonTool("list_projects", {}, baseContext);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      expect(result.text).toBe("No projects configured in this workspace.");
+    }
+  });
+
+  it("LPT-E2: Single project returns JSON with detailedContent and data", async () => {
+    const mockProject = {
+      key: "my-project", name: "My Project", workspaceKey: "default",
+      projectPath: { absolute: "/workspace/my-project", relative: "my-project" },
+      gitRootPath: { absolute: "/workspace/my-project", relative: "my-project" },
+      defaultBranch: "main",
+    };
+    baseContext.repos.projects.listByWorkspace = () => [mockProject];
+    const result = await executeCommonTool("list_projects", {}, baseContext);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      expect(typeof parsed.detailedContent).toBe("string");
+      expect(Array.isArray(parsed.data)).toBe(true);
+      expect(parsed.data).toHaveLength(1);
+    }
+  });
+
+  it("LPT-E3: Multiple projects all appear in data array", async () => {
+    const mockProjects = [
+      { key: "a", name: "A", workspaceKey: "default", projectPath: { absolute: "/a", relative: "a" }, gitRootPath: { absolute: "/a", relative: "a" }, defaultBranch: "main" },
+      { key: "b", name: "B", workspaceKey: "default", projectPath: { absolute: "/b", relative: "b" }, gitRootPath: { absolute: "/b", relative: "b" }, defaultBranch: "main" },
+      { key: "c", name: "C", workspaceKey: "default", projectPath: { absolute: "/c", relative: "c" }, gitRootPath: { absolute: "/c", relative: "c" }, defaultBranch: "main" },
+    ];
+    baseContext.repos.projects.listByWorkspace = () => mockProjects;
+    const result = await executeCommonTool("list_projects", {}, baseContext);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      expect(parsed.data).toHaveLength(3);
+      expect(parsed.data.map((p: any) => p.key)).toEqual(["a", "b", "c"]);
+    }
+  });
+
+  it("LPT-E4: detailedContent uses relative paths only (no absolute paths)", async () => {
+    const mockProject = {
+      key: "my-project", name: "My Project", workspaceKey: "default",
+      projectPath: { absolute: "/home/user/workspace/my-project", relative: "my-project" },
+      gitRootPath: { absolute: "/home/user/workspace/my-project", relative: "my-project" },
+      defaultBranch: "main",
+    };
+    baseContext.repos.projects.listByWorkspace = () => [mockProject];
+    const result = await executeCommonTool("list_projects", {}, baseContext);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      expect(parsed.detailedContent).toContain("my-project");
+      expect(parsed.detailedContent).not.toContain("/home/user/workspace");
+    }
+  });
+
+  it("LPT-E5: data includes all Project fields when set", async () => {
+    const mockProject = {
+      key: "full-project", name: "Full Project", workspaceKey: "default",
+      projectPath: { absolute: "/full", relative: "full" },
+      gitRootPath: { absolute: "/full", relative: "full" },
+      defaultBranch: "develop", slug: "full-slug", description: "A full project",
+    };
+    baseContext.repos.projects.listByWorkspace = () => [mockProject];
+    const result = await executeCommonTool("list_projects", {}, baseContext);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      const p = parsed.data[0];
+      expect(p.key).toBe("full-project");
+      expect(p.name).toBe("Full Project");
+      expect(p.defaultBranch).toBe("develop");
+      expect(p.slug).toBe("full-slug");
+      expect(p.description).toBe("A full project");
+    }
+  });
+
+  it("LPT-E6: data omits optional fields when not set", async () => {
+    const mockProject = {
+      key: "minimal", name: "Minimal", workspaceKey: "default",
+      projectPath: { absolute: "/min", relative: "min" },
+      gitRootPath: { absolute: "/min", relative: "min" },
+      defaultBranch: "main",
+    };
+    baseContext.repos.projects.listByWorkspace = () => [mockProject];
+    const result = await executeCommonTool("list_projects", {}, baseContext);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      const p = parsed.data[0];
+      expect(p.slug).toBeUndefined();
+      expect(p.description).toBeUndefined();
+    }
+  });
+
+  it("LPT-E7: Workspace scoping — mock returns only projects for ctx.workspaceKey", async () => {
+    const defaultProjects = [{ key: "def", name: "Default", workspaceKey: "default", projectPath: { absolute: "/def", relative: "def" }, gitRootPath: { absolute: "/def", relative: "def" }, defaultBranch: "main" }];
+    const otherProjects = [{ key: "other", name: "Other", workspaceKey: "other", projectPath: { absolute: "/other", relative: "other" }, gitRootPath: { absolute: "/other", relative: "other" }, defaultBranch: "main" }];
+    baseContext.repos.projects.listByWorkspace = (wk: string) => wk === "default" ? defaultProjects : otherProjects;
+    baseContext.workspaceKey = "default";
+    const result = await executeCommonTool("list_projects", {}, baseContext);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      expect(parsed.data).toHaveLength(1);
+      expect(parsed.data[0].key).toBe("def");
+    }
+  });
+});
+
+// ─── auto-derived names tests (LPT-AD) ────────────────────────────────────────
+
+describe("auto-derived tool names", () => {
+  it("LPT-AD1: COMMON_TOOL_NAMES matches COMMON_TOOL_DEFINITIONS (no extras, no missing)", () => {
+    const defNames = COMMON_TOOL_DEFINITIONS.map((t) => t.name);
+    for (const name of defNames) {
+      expect(COMMON_TOOL_NAMES.has(name)).toBe(true);
+    }
+    for (const name of COMMON_TOOL_NAMES) {
+      expect(defNames).toContain(name);
+    }
+  });
+
+  it("LPT-AD2: CHILD_COMMON_TOOL_NAMES contains exactly 6 todo tool names", async () => {
+    const { CHILD_COMMON_TOOL_NAMES } = await import("../engine/pi/tools/index.ts");
+    const todoTools = ["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"];
+    expect(CHILD_COMMON_TOOL_NAMES.size).toBe(6);
+    for (const name of todoTools) {
+      expect(CHILD_COMMON_TOOL_NAMES.has(name)).toBe(true);
+    }
+  });
+
+  it("LPT-AD3: Todo tools have childAllowed true in COMMON_TOOL_DEFINITIONS", () => {
+    const todoNames = ["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"];
+    for (const name of todoNames) {
+      const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === name);
+      expect(def).toBeDefined();
+      expect(def!.childAllowed).toBe(true);
+    }
+  });
+
+  it("LPT-AD4: Non-todo tools are NOT in CHILD_COMMON_TOOL_NAMES", async () => {
+    const { CHILD_COMMON_TOOL_NAMES } = await import("../engine/pi/tools/index.ts");
+    const nonTodoTools = ["list_projects", "decision_request", "list_decisions", "create_note", "get_card", "list_cards"];
+    for (const name of nonTodoTools) {
+      expect(CHILD_COMMON_TOOL_NAMES.has(name)).toBe(false);
+    }
+  });
+});
