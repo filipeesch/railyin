@@ -44,15 +44,15 @@ Railyin currently supports multiple AI engine types (Copilot, Claude, OpenCode, 
 - Easier to test with mocks
 - Clear separation between adapter (SDK wrapper) and engine (event stream)
 
-### 2. Session Management: Platform-based Persistent Agents
+### 2. Session Management: Fresh Agent per Execution, No Resume
 
-**Decision:** Use `createAgentPlatform()` and `Agent.create()` / `Agent.resume()` for agent lifecycle, with agent IDs based on `cursor-${conversationId}`.
+**Decision:** Each execution calls `Agent.create({ apiKey, model, local: { cwd, customTools } })` and runs to completion. `CursorEngine.resume()` throws — there is no in-turn resume path. Conversation continuity is provided by Railyin's own conversation/history layer prepended to the prompt, not by SDK-side agent persistence.
 
 **Rationale:**
-- Cursor SDK provides durable agent storage via platform API
-- Agent persistence survives Railyin restarts
-- `cursor-${conversationId}` pattern matches existing `copilotSessionIdForConversation()` and `claudeSessionIdForConversation()` patterns
-- Minimal config needed - cursor-cli needs to be installed by user
+- The Cursor SDK has no in-turn resume primitive: `decision_request` / `ask_user` tool calls terminate the run as soon as they fire. There is no API to deliver the user response *into* the same SDK run.
+- Throwing in `resume()` is the documented contract that `HumanTurnExecutor` uses to roll back the optimistic "running" state and start a fresh execution with the user's response appended (see `human-turn-executor.ts` catch branch).
+- `sessionId = cursor-${conversationId}` is computed and forwarded to `onRawMessage` for raw-message persistence keying, but not used for SDK-side agent identity.
+- Cleanest match for the SDK's actual lifecycle, and consistent with how the engine is exercised end-to-end.
 
 ### 3. Event Streaming: Direct from Run.stream()
 
@@ -64,51 +64,66 @@ Railyin currently supports multiple AI engine types (Copilot, Claude, OpenCode, 
 - Aligns with Copilot and Claude patterns
 - No need for custom delta event handling (Cursor SDK handles this internally)
 
-### 4. Tool Support: All Built-in Tools + Common Tools
+### 4. Tool Support: Built-in Tools + Common Tools as customTools (+ Bypass Tools)
 
-**Decision:** Enable all Cursor built-in tools (read_file, write_file, edit, glob, grep, shell, task, etc.) plus common engine tools via MCP servers configuration.
-
-**Rationale:**
-- Full functionality matches Copilot/Claude behavior
-- Common tools (tasks_read, tasks_write) via MCP servers option
-- Users get the same capabilities as Copilot engine
-
-### 5. Config Structure: Minimal
-
-**Decision:** `CursorEngineConfig` only includes `model?: string`, no `apiKey` field.
+**Decision:** Cursor's built-in tools (Read/Edit/etc.) remain available — the SDK does not expose a knob to disable them. Railyin's common task tools (`COMMON_TOOL_DEFINITIONS`) and MCP-registry tools are registered as `SDKCustomTool` entries via `LocalAgentOptions.customTools`. Additionally, `tools.ts` exposes Railyin-native equivalents (`railyin_shell`, `railyin_grep`, `railyin_glob`, `railyin_read`) and a system-prompt prefix steering the agent to prefer them.
 
 **Rationale:**
-- Cursor SDK handles auth via environment variables or Cursor CLI setup
-- NPM package includes platform binaries
-- User configures Cursor separately (via `cursor login` or env vars)
-- Simpler than Copilot which has authentication via gh CLI
+- The Cursor SDK has no MCP-server config slot in the local-agent path; `customTools` is the only injection point for Railyin tools.
+- Suspend-loop tools (e.g. `decision_request`) need to terminate the run. The custom-tool wrapper invokes `executeCommonTool`, and on `result.type === "suspend"` it calls the engine's `onSuspend` callback, which aborts the run and surfaces a `decision_request` event upstream.
+- The bypass tools exist because the SDK 1.0.18 built-in `Shell` / `Grep` / `Glob` fail on non-trivial workloads (the same transport limit that motivated Decision 6, but on the SDK's *own* server replies — not something the subprocess fixes). Steering the agent to `railyin_*` keeps tool execution reliable.
+
+### 5. Config Structure: API key in engines.yaml
+
+**Decision:** `CursorEngineConfig` includes optional `api_key?: string` (read by the adapter via `CursorAdapterOptions.apiKey`). Falls back to `process.env.CURSOR_API_KEY` when omitted.
+
+**Rationale:**
+- The Cursor SDK's `Agent.create({ apiKey })` requires an API key explicitly — there is no CLI-style ambient auth for SDK consumers
+- Co-locating the key in `engines.yaml` matches how other engines configure secrets in this codebase
+- Env-var fallback keeps deployments that already provision `CURSOR_API_KEY` working
+
+### 6. Subprocess Isolation for Transport (Bun workaround)
+
+**Decision:** Run `@cursor/sdk` in a long-lived Node.js subprocess (`src/bun/engine/cursor/worker.mjs`, hosted by `worker-client.ts`). The Bun parent communicates with it over line-delimited JSON on stdio (wire types in `worker-protocol.ts`). Tool callbacks remain on the Bun side and are proxied back over the same channel; the public `CursorSdkAdapter` interface is unchanged so `engine.ts` is agnostic to the transport.
+
+**Rationale:**
+- The Cursor SDK uses HTTP/2 via `@connectrpc/connect-node`. Bun's HTTP/2 client has a runtime bug: `session.settings({ maxFrameSize })` updates the JS-visible `localSettings` property and the server ACKs the new value, but nghttp2's internal `max_frame_size` used for *inbound* frame validation stays at the 16 KB default. Cursor's backend streams DATA frames larger than 16 KB during any meaningful agent run, which Bun rejects with `NGHTTP2_FRAME_SIZE_ERROR` before the SDK can complete a single response.
+- The bug is in Bun's nghttp2 binding, not reachable from JavaScript — verified empirically with extensive logging (every patch attempt, including pre-connect SETTINGS gating and waiting for the `localSettings` ACK event, still fails because nghttp2 keeps the old internal limit).
+- Node's `http2` honors `session.settings()` correctly, so the subprocess solves the transport problem without rewriting the SDK or its dependencies.
+- A single long-lived worker (not one per run) keeps startup cost amortised: ~150-300 ms at boot, ~1-3 ms per IPC message, both negligible relative to model latency.
+
+**Trade-offs:**
+- Extra ~50-80 MB resident from the Node process while the Cursor engine is in use
+- An additional binary requirement (`node` on PATH, or `RAILYIN_CURSOR_NODE` env override)
+- Tool callbacks are now async-over-IPC instead of in-process — adds one round-trip but still completes well inside model-call latency budgets
 
 ## Risks / Trade-offs
 
 ### Risk: SDK is New and May Change
 
-**Mitigation:** 
-- Use version-pinned `@cursor/sdk@1.0.12` (already installed)
-- SDK is marked as `public` on npm, suggesting stability commitment
-- Platform API (`createAgentPlatform`, `Agent.create`) provides stable abstraction
+**Mitigation:**
+- Version-pinned `@cursor/sdk@1.0.18`
+- Adapter surface (`CursorSdkAdapter`) is narrow — only `run`, `cancel`, `listModels`, `listCommands`, `shutdownAll` — so SDK changes are absorbed inside the worker
 
-### Risk: gRPC/Connect vs STDIO Communication
+### Risk: Bun HTTP/2 incompatibility (the bug above)
+
+**Mitigation:** Decision 6 — run the SDK out-of-process under Node. If Bun later fixes the nghttp2 binding, the subprocess can be reverted to an in-process adapter without changing `engine.ts` or `tools.ts`.
+
+### Risk: Subprocess crash mid-run
 
 **Mitigation:**
-- Cursor SDK handles gRPC internally (not our problem to manage)
-- We only use the SDK's JS API, not raw gRPC
-- No process spawning or terminal management needed
+- Worker exit triggers `pushError` on every active run, which propagates as a fatal `EngineEvent` upstream
+- Pending tool-call promises are rejected so they don't dangle
+- Next call to the adapter respawns the worker
 
-### Risk: Platform Storage Location
-
-**Mitigation:**
-- Cursor SDK manages agent storage (in `~/.cursor/` or project-based)
-- No need to specify custom paths - SDK handles it
-- We use platform API with `cwd` option when needed
-
-### Risk: Missing Cursor CLI / Platform Binaries
+### Risk: Missing Node binary
 
 **Mitigation:**
-- NPM package ships platform binaries as optional dependencies
-- Should be installed automatically via `bun install`
-- Error message will guide user to run `bun install` if missing
+- Default to `node` on PATH; override via `RAILYIN_CURSOR_NODE`
+- If `node` is missing, the spawn fails with a clear error surfaced as `EngineEvent.error` rather than a silent hang
+
+### Risk: Missing Cursor platform binaries (ripgrep)
+
+**Mitigation:**
+- NPM package ships platform binaries as optional dependencies; installed automatically via `bun install`
+- `cursor/tools.ts:findBundledRipgrep()` falls back to `rg` on PATH if the bundled binary is unavailable

@@ -64,11 +64,14 @@ function findBundledRipgrep(): string {
 }
 
 /**
- * Bypass tools for Cursor's broken built-ins. In @cursor/sdk 1.0.18 the
- * Shell/Glob/Grep tools fail with NGHTTP2 transport errors on directories of
- * non-trivial size even with our maxFrameSize patch (because the SDK's own
- * server-side reply still violates internal limits). We expose Railyn-native
- * equivalents the agent can use instead.
+ * Bypass tools — Railyn-native equivalents to Cursor's built-in Shell/Grep/Glob.
+ * Registered as custom tools and surfaced via prompt steering (see engine.ts).
+ *
+ * Originally added to work around HTTP/2 frame-size failures the SDK's built-ins
+ * triggered when streaming large outputs back to Cursor's backend. The Node
+ * subprocess (see adapter.ts) likely resolves that, but the bypasses stay as
+ * defense-in-depth: they run entirely in-process inside the Bun parent, so
+ * their output bypasses Cursor's transport entirely.
  */
 function buildBypassTools(worktreePath: string): Record<string, SDKCustomTool> {
   const rgPath = findBundledRipgrep();
@@ -77,7 +80,7 @@ function buildBypassTools(worktreePath: string): Record<string, SDKCustomTool> {
     railyin_shell: {
       description:
         "Execute a shell command in the working directory and return stdout, stderr, and exit code. " +
-        "USE THIS instead of the built-in `Shell` tool, which is broken in this environment. " +
+        "Prefer this over the built-in `Shell` tool — runs in-process so the output never crosses Cursor's transport. " +
         "Command runs through /bin/bash -lc. Output is truncated to 64 KB.",
       inputSchema: {
         type: "object",
@@ -100,7 +103,7 @@ function buildBypassTools(worktreePath: string): Record<string, SDKCustomTool> {
     railyin_grep: {
       description:
         "Search file contents with ripgrep. " +
-        "USE THIS instead of the built-in `Grep` tool, which is broken in this environment. " +
+        "Prefer this over the built-in `Grep` tool — runs in-process so the output never crosses Cursor's transport. " +
         "Output is truncated to 64 KB.",
       inputSchema: {
         type: "object",
@@ -133,7 +136,7 @@ function buildBypassTools(worktreePath: string): Record<string, SDKCustomTool> {
     railyin_glob: {
       description:
         "Find files matching a glob pattern. " +
-        "USE THIS instead of the built-in `Glob` tool, which is broken in this environment. " +
+        "Prefer this over the built-in `Glob` tool — runs in-process so the output never crosses Cursor's transport. " +
         "Returns one path per line, capped at 1000 entries.",
       inputSchema: {
         type: "object",
@@ -161,7 +164,7 @@ function buildBypassTools(worktreePath: string): Record<string, SDKCustomTool> {
 
     railyin_read: {
       description:
-        "Read a file. Mostly a fallback — the built-in `Read` tool works for single files in this environment, but use this if it fails. " +
+        "Read a file. Fallback for the built-in `Read` tool. " +
         "Output is truncated to 64 KB. Supports optional offset/limit (in bytes).",
       inputSchema: {
         type: "object",
