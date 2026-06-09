@@ -12,6 +12,7 @@
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated, OnNewMessage, CommonToolContext } from "../types.ts";
 import { createDefaultCursorSdkAdapter, type CursorSdkAdapter } from "./adapter.ts";
 import { buildCursorTools } from "./tools.ts";
+import { buildCursorToolDisplay } from "./events.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { TodoRepository } from "../../db/todos.ts";
@@ -195,6 +196,12 @@ export class CursorEngine implements ExecutionEngine {
         // Swallow the adapter's terminal "done" — we emit our own terminal
         // event (either decision_request or done) once the stream ends.
         if (event.type === "done") break;
+        if (event.type === "tool_start" && !event.display) {
+          let parsedArgs: Record<string, unknown> = {};
+          try { parsedArgs = JSON.parse(event.arguments) as Record<string, unknown>; } catch { /* keep empty */ }
+          yield { ...event, display: buildCursorToolDisplay(event.name, parsedArgs, workingDirectory) };
+          continue;
+        }
         yield event;
       }
 
