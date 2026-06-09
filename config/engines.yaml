@@ -1,0 +1,3 @@
+engines:
+  - id: copilot
+    type: copilot
