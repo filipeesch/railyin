@@ -109,14 +109,26 @@ export class HumanTurnExecutor {
         this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
 
         const signal = this.streamProcessor.createSignal(newExecutionId);
+        const fallbackWorkingDirectory = this.workdirResolver.resolve(taskForFallback);
+        const fallbackTargetEngineId =
+          QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
+        const fallbackAssembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
+        const fallbackPromptFilter: PromptFilterContext = {
+          modelId: effectiveModel ?? "",
+          engineId: fallbackTargetEngineId,
+          executionType: "task",
+          projectPath: fallbackWorkingDirectory,
+        };
+        fallbackAssembler.addCustomPrompts(this.customPromptInjector, fallbackPromptFilter);
+        const fallbackSystemInstructions = fallbackAssembler.assemble();
         const fallbackBase = {
           ...this.paramsBuilder.build(
             taskForFallback,
             conversationId,
             newExecutionId,
             engineContent ?? content,
-            undefined,
-            this.workdirResolver.resolve(taskForFallback),
+            fallbackSystemInstructions,
+            fallbackWorkingDirectory,
             signal,
             this.streamProcessor.makePersistCallback(taskId, conversationId, newExecutionId),
             attachments,

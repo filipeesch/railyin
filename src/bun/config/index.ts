@@ -200,6 +200,8 @@ export interface CursorEngineConfig {
   type: "cursor";
   /** Default model for the Cursor agent. If unset, Cursor uses its default model. */
   model?: string;
+  /** Cursor API key. Falls back to `process.env.CURSOR_API_KEY` when omitted. */
+  api_key?: string;
 }
 export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig | PiEngineConfig | CursorEngineConfig;
 
