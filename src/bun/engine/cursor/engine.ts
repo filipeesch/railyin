@@ -153,12 +153,12 @@ export class CursorEngine implements ExecutionEngine {
       ? [`## Task`, `**Title:** ${taskContext.title}`, ...(taskContext.description ? [`**Description:** ${taskContext.description}`] : [])].join("\n")
       : null;
     const systemBlock = systemInstructions ?? null;
-    // The Cursor SDK 1.0.18 has broken built-in tools (Shell/Grep/Glob fail
-    // over the gRPC transport on non-trivial workloads). Redirect the agent
-    // to Railyn-native equivalents registered as custom tools.
+    // Steer the agent toward Railyn-native equivalents over Cursor's built-in
+    // Shell/Grep/Glob. The Railyn tools run in-process inside Bun, so their
+    // output bypasses Cursor's transport entirely — safer for large results.
     const bypassNotice = [
       "## Tool routing (IMPORTANT)",
-      "The built-in `Shell`, `Grep`, and `Glob` tools are unreliable in this environment. ALWAYS prefer these Railyn-native equivalents:",
+      "ALWAYS prefer these Railyn-native equivalents over the built-ins:",
       "- Shell → `railyin_shell`",
       "- Grep → `railyin_grep`",
       "- Glob → `railyin_glob`",
