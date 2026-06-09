@@ -194,17 +194,22 @@ function translateCursorMessage(message) {
       break;
     }
     case "tool_call": {
+      // Cursor wraps every custom-tool call under name "mcp" with the real
+      // tool name nested at args.toolName and real args at args.args.
+      const isMcpEnvelope = message.name === "mcp" && message.args && typeof message.args.toolName === "string";
+      const resolvedName = isMcpEnvelope ? message.args.toolName : message.name;
+      const resolvedArgs = isMcpEnvelope ? (message.args.args ?? {}) : (message.args ?? {});
       if (message.status === "running") {
         events.push({
           type: "tool_start",
-          name: message.name,
-          arguments: JSON.stringify(message.args ?? {}),
+          name: resolvedName,
+          arguments: JSON.stringify(resolvedArgs),
           callId: message.call_id,
         });
       } else if (message.status === "completed" || message.status === "error") {
         events.push({
           type: "tool_result",
-          name: message.name,
+          name: resolvedName,
           result: JSON.stringify(message.result ?? ""),
           callId: message.call_id,
           isError: message.status === "error",
