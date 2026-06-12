@@ -746,7 +746,11 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
   const workflows: WorkflowTemplateConfig[] = [];
 
   if (existsSync(workflowsDir)) {
-    const files = readdirSync(workflowsDir).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"));
+    // Sort so workflow load order is deterministic across filesystems —
+    // macOS APFS returns readdirSync alphabetically, Linux ext4 doesn't,
+    // which previously made tests asserting "first available workflow"
+    // platform-dependent.
+    const files = readdirSync(workflowsDir).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).sort();
     for (const file of files) {
       try {
         const raw = readFileSync(join(workflowsDir, file), "utf-8");
