@@ -178,6 +178,38 @@ function handleShutdown() {
  * Mirrors src/bun/engine/cursor/events.ts — duplicated here to avoid pulling
  * the TS toolchain into the Node worker.
  */
+// Mirrors normalizeCursorToolResult in events.ts. Cursor wraps custom-tool
+// results in { status, value: { content: [{ text: { text: "..." } }],
+// isError } } and SDK builtins in { type: "tool_result", content, is_error }
+// where `content` can be a string or array of { type: "text", text } blocks.
+function extractTextFromBlock(b) {
+  if (typeof b === "string") return b;
+  if (!b || typeof b !== "object") return "";
+  if (b.text && typeof b.text === "object" && typeof b.text.text === "string") return b.text.text;
+  if (typeof b.text === "string") return b.text;
+  return "";
+}
+
+function extractCursorContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map(extractTextFromBlock).filter((t) => t.length > 0).join("\n");
+}
+
+function normalizeCursorToolResult(rawResult) {
+  if (rawResult == null) return "";
+  if (typeof rawResult === "string") return rawResult;
+  if (typeof rawResult !== "object") return String(rawResult);
+  if (typeof rawResult.status === "string" && rawResult.value !== undefined) {
+    return normalizeCursorToolResult(rawResult.value);
+  }
+  if (rawResult.type === "tool_result") return extractCursorContent(rawResult.content);
+  if (Array.isArray(rawResult.content)) return extractCursorContent(rawResult.content);
+  if (typeof rawResult.content === "string") return rawResult.content;
+  if (typeof rawResult.text === "string") return rawResult.text;
+  try { return JSON.stringify(rawResult, null, 2); } catch { return String(rawResult); }
+}
+
 function translateCursorMessage(message) {
   const events = [];
   switch (message.type) {
@@ -207,12 +239,15 @@ function translateCursorMessage(message) {
           callId: message.call_id,
         });
       } else if (message.status === "completed" || message.status === "error") {
+        const isError = message.status === "error";
+        const text = normalizeCursorToolResult(message.result);
+        const result = text.length > 0 ? text : isError ? "(tool returned an error with no message)" : "(no output)";
         events.push({
           type: "tool_result",
           name: resolvedName,
-          result: JSON.stringify(message.result ?? ""),
+          result,
           callId: message.call_id,
-          isError: message.status === "error",
+          isError,
         });
       }
       break;

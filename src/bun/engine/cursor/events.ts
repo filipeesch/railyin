@@ -39,6 +39,75 @@ export function unwrapCursorToolName(
   return { name, args: args ?? {} };
 }
 
+/**
+ * Extract a human-readable text result from a Cursor SDK tool_call message.
+ *
+ * Observed shapes for `message.result`:
+ *
+ *   1. Custom tools (railyin_*, MCP, common tools) — Cursor wraps the user's
+ *      return value in `{ status: "success"|"error", value: { content: [{
+ *      text: { text: "<actual output>" } }], isError } }`. Note the doubled
+ *      `text.text` nesting — Cursor's content blocks aren't the Anthropic
+ *      `{ type: "text", text }` shape.
+ *   2. SDK built-in tools (Read/Write/Shell/Grep/Glob) — Anthropic-style
+ *      `{ type: "tool_result", tool_use_id, content, is_error }` block,
+ *      where `content` is either a string or an array of `{ type: "text",
+ *      text }` blocks.
+ *   3. Plain string (rare — some MCP tools).
+ *
+ * Without this normalization the UI rendered the raw JSON envelope.
+ */
+export function normalizeCursorToolResult(rawResult: unknown): string {
+  if (rawResult == null) return "";
+  if (typeof rawResult === "string") return rawResult;
+  if (typeof rawResult !== "object") return String(rawResult);
+  const obj = rawResult as Record<string, unknown>;
+
+  // Shape 1: { status, value: { content, isError } } — unwrap one level
+  if (typeof obj.status === "string" && obj.value !== undefined) {
+    return normalizeCursorToolResult(obj.value);
+  }
+
+  // Shape 2: { type: "tool_result", content, is_error }
+  if (obj.type === "tool_result") {
+    return extractCursorContent(obj.content);
+  }
+
+  // Inner of shape 1, or top-level content array on its own
+  if (Array.isArray(obj.content)) return extractCursorContent(obj.content);
+  if (typeof obj.content === "string") return obj.content;
+  if (typeof obj.text === "string") return obj.text;
+
+  try {
+    return JSON.stringify(rawResult, null, 2);
+  } catch {
+    return String(rawResult);
+  }
+}
+
+function extractCursorContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => extractTextFromBlock(block))
+    .filter((t) => t.length > 0)
+    .join("\n");
+}
+
+function extractTextFromBlock(block: unknown): string {
+  if (typeof block === "string") return block;
+  if (!block || typeof block !== "object") return "";
+  const b = block as Record<string, unknown>;
+  // Cursor nests: { text: { text: "..." } }
+  if (b.text && typeof b.text === "object") {
+    const inner = b.text as Record<string, unknown>;
+    if (typeof inner.text === "string") return inner.text;
+  }
+  // Anthropic: { type: "text", text: "..." } (or just { text: "..." })
+  if (typeof b.text === "string") return b.text;
+  return "";
+}
+
 export function translateCursorMessage(message: SDKMessage): EngineEvent[] {
   const events: EngineEvent[] = [];
 
@@ -78,12 +147,15 @@ export function translateCursorMessage(message: SDKMessage): EngineEvent[] {
           callId: message.call_id,
         });
       } else if (message.status === "completed" || message.status === "error") {
+        const isError = message.status === "error";
+        const text = normalizeCursorToolResult(message.result);
+        const result = text.length > 0 ? text : isError ? "(tool returned an error with no message)" : "(no output)";
         events.push({
           type: "tool_result",
           name: resolvedName,
-          result: JSON.stringify(message.result ?? ""),
+          result,
           callId: message.call_id,
-          isError: message.status === "error",
+          isError,
         });
       }
       break;
