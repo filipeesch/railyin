@@ -29,7 +29,14 @@ function anthropicSse(events: Array<{ type: string; data: Record<string, unknown
   return events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify({ type: e.type, ...e.data })}\n\n`).join("");
 }
 
-beforeEach(() => clearProviderCache());
+beforeEach(() => {
+  // Reset the global DB before each test — without this, tests that exercise
+  // realLogger (1.2's AnthropicProvider via resolveProvider, 3.3 directly)
+  // inherit whatever DB state a previous suite left in `getDb()`. On Linux
+  // CI that can be a connection without the `logs` table.
+  initDb();
+  clearProviderCache();
+});
 afterEach(() => clearProviderCache());
 
 // ─────────────────────────────────────────────────────────────────────────────
