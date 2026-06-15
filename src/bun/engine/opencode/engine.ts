@@ -58,6 +58,7 @@ export class OpenCodeEngine implements ExecutionEngine {
       onTransition,
       onHumanTurn,
       boardTools,
+      workspaceKey,
     } = params;
 
     const sessionId = await this.sdkAdapter.getOrCreateSession(conversationId, workingDirectory);
@@ -83,7 +84,7 @@ export class OpenCodeEngine implements ExecutionEngine {
         notes: new NoteRepository(),
         boardTools: boardTools!,
       },
-      workspaceKey: getDefaultWorkspaceKey(),
+      workspaceKey: workspaceKey ?? getDefaultWorkspaceKey(),
       workflow: {
         onTransition: onTransition ?? (() => {}),
         onHumanTurn: onHumanTurn ?? (() => {}),

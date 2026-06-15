@@ -151,6 +151,7 @@ export class ChatExecutor {
         enginePrompt,
         workingDirectory,
         effectiveModel,
+        workspaceKey,
         signal,
         this.streamProcessor.makePersistCallback(null, conversationId, executionId),
         enabledMcpTools ?? null,

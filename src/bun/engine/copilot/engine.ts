@@ -106,7 +106,7 @@ export class CopilotEngine implements ExecutionEngine {
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
-    const { executionId, taskId, boardId, prompt, systemInstructions, taskContext, workingDirectory, model, boardTools } = params;
+    const { executionId, taskId, boardId, prompt, systemInstructions, taskContext, workingDirectory, model, boardTools, workspaceKey } = params;
 
     // Collect status messages from the adapter (download/setup progress)
     // so we can yield them as engine events for the UI.
@@ -169,7 +169,7 @@ export class CopilotEngine implements ExecutionEngine {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
       },
-      workspaceKey: getDefaultWorkspaceKey(),
+      workspaceKey: workspaceKey ?? getDefaultWorkspaceKey(),
     };
 
     const tools = buildCopilotTools(toolContext, params.mcpRegistry ?? null, params.enabledMcpTools ?? [], onSuspend);
