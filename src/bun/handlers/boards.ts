@@ -1,7 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { listBoardsByWorkspace } from "../db/board-queries.ts";
 
-
 import { getConfig } from "../config/index.ts";
 import type { Board, WorkflowTemplate } from "../../shared/rpc-types.ts";
 import type { BoardRow } from "../db/row-types.ts";
@@ -17,8 +16,8 @@ function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"]
       label: c.label,
       model: c.model,
       limit: c.limit,
-      allowedTransitions: c.allowed_transitions,
-      samplingPreset: c.sampling_preset,
+      allowed_transitions: c.allowed_transitions,
+      sampling_preset: c.sampling_preset,
     })),
     groups: t.groups,
   };
@@ -27,18 +26,16 @@ function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"]
 export function boardHandlers(db: Database) {
   return {
     "boards.list": async (): Promise<Array<Board & { template: WorkflowTemplate }>> => {
-      // Use extracted function for board data, then enrich with task counts and templates
+      // Use extracted function to get board IDs, then query with task counts
       const boardRows = listBoardsByWorkspace(db);
       if (boardRows.length === 0) return [];
 
+      // Build parameterized query with individual placeholders for each board ID
       const boardIds = boardRows.map((b) => b.id);
       const placeholders = boardIds.map(() => "?").join(", ");
       const rows = db
-        .query<BoardRow & { task_count: number }, [number[]]>(
-          `SELECT b.*, COUNT(t.id) as task_count FROM boards b LEFT JOIN tasks t ON t.board_id = b.id WHERE b.id IN (${placeholders}) GROUP BY b.id ORDER BY b.created_at ASC`,
-          [boardIds],
-        )
-        .all();
+        .prepare(`SELECT b.*, COUNT(t.id) as task_count FROM boards b LEFT JOIN tasks t ON t.board_id = b.id WHERE b.id IN (${placeholders}) GROUP BY b.id ORDER BY b.created_at ASC`)
+        .all(boardIds) as BoardRow & { task_count: number }[];
 
       return rows.map((row) => {
         const board = mapBoard(row, row.task_count);
