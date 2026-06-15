@@ -26,7 +26,8 @@ import {
   executeLspTypeDefinition,
 } from "../workflow/tools/lsp-tools.ts";
 import { validateToolArgs } from "./validate-tool-args.ts";
-import { CARD_TOOL_DEFINITIONS, CARD_TOOL_NAMES } from "./card-tool-definitions.ts";
+import { CARD_TOOL_DEFINITIONS, CARD_TOOL_NAMES } from "./card-tool-definitions.ts";import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_TOOL_NAMES } from "./workspace-tool-definitions.ts";
+
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
 
@@ -263,9 +264,10 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
     },
   },
   ...LSP_TOOL_DEFINITIONS,
+  ...WORKSPACE_TOOL_DEFINITIONS,
 ];
 
-export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request", "list_decisions", "record_decision", "update_decision", "delete_decision", "create_note", "list_notes", "update_note", "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status", ...LSP_TOOL_DEFINITIONS.map((t) => t.name)]);
+export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request", "list_decisions", "record_decision", "update_decision", "delete_decision", "create_note", "list_notes", "update_note", "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status", ...LSP_TOOL_DEFINITIONS.map((t) => t.name), ...WORKSPACE_TOOL_NAMES]);
 
 // ─── Display builder ──────────────────────────────────────────────────────────
 
@@ -331,6 +333,10 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
       return { label: "diagnostics", subject: args.file_path != null ? String(args.file_path) : undefined };
     case "lsp_type_definition":
       return { label: "type definition", subject: args.file_path != null ? String(args.file_path) : undefined };
+    case "list_projects":
+      return { label: "list projects" };
+    case "list_workflows":
+      return { label: "list workflows" };
     default:
       return { label: humanizeToolName(name) };
   }
@@ -597,6 +603,20 @@ async function executeCommonToolText(
         case "lsp_diagnostics": return executeLspDiagnostics(args, lsp, wtp);
         default: return executeLspTypeDefinition(args, lsp, wtp);
       }
+    }
+
+    case "list_projects": {
+      const { listProjectsForWorkspace } = await import("../project-store.ts");
+      const projects = listProjectsForWorkspace(ctx.workspaceKey);
+      return JSON.stringify(projects);
+    }
+
+    case "list_workflows": {
+      const { listBoardsByWorkspace } = await import("../db/board-queries.ts");
+      const { getDb } = await import("../db/index.ts");
+      const db = getDb();
+      const boards = listBoardsByWorkspace(db, ctx.workspaceKey);
+      return JSON.stringify(boards);
     }
 
     default:
