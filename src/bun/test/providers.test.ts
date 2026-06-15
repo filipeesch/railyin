@@ -1608,6 +1608,7 @@ describe("OpenAICompatibleProvider.stream() — usage event (6.3)", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("instantiateProvider — base_url forwarding", () => {
+  beforeEach(() => initDb());
   it("1.2 passes base_url from config to AnthropicProvider", async () => {
     const receivedUrls: string[] = [];
     const server = Bun.serve({
