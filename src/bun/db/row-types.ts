@@ -126,6 +126,8 @@ export interface ChatSessionRow {
   status: string;
   conversation_id: number;
   enabled_mcp_tools?: string | null;
+  shell_auto_approve: number;
+  approved_commands: string | null;
   last_activity_at: string;
   last_read_at: string | null;
   archived_at: string | null;

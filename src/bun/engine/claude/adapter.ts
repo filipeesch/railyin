@@ -3,8 +3,7 @@ import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types
 import { buildClaudeToolServer } from "./tools.ts";
 import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
 import type { FileStateCache } from "./file-state-cache.ts";
-import { appendApprovedCommands, getApprovedCommands, parseShellBinaries } from "../approved-commands.ts";
-import { getDb } from "../../db/index.ts";
+import { ShellApprovalRepository, getUnapprovedShellBinaries, type ShellApprovalScope } from "../../db/repositories/shell-approval-repository.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
 import type { McpServerConfig } from "../../mcp/types.ts";
@@ -29,7 +28,8 @@ export interface ClaudeShellApprovalRequest {
 
 export interface ClaudeRunConfig {
   executionId: number;
-  taskId: number;
+  taskId: number | null;
+  shellScope: ShellApprovalScope;
   prompt: string;
   workingDirectory: string;
   model?: string;
@@ -255,19 +255,8 @@ function permissionDecisionToResult(
   );
 }
 
-export function getUnapprovedShellBinaries(command: string, approvedCommands: string[]): string[] {
-  return parseShellBinaries(command).filter((binary) => !approvedCommands.includes(binary));
-}
+export { getUnapprovedShellBinaries };
 
-function getApprovedShellState(taskId: number): { shellAutoApprove: boolean; approvedCommands: string[] } {
-  const db = getDb();
-  return {
-    shellAutoApprove: db
-      .query<{ shell_auto_approve: number }, [number]>("SELECT shell_auto_approve FROM tasks WHERE id = ?")
-      .get(taskId)?.shell_auto_approve === 1,
-    approvedCommands: getApprovedCommands(taskId),
-  };
-}
 
 export function claudeSessionIdForTask(taskId: number): string {
   const hash = createHash("sha1").update(`railyin-claude-task-${taskId}`).digest("hex");
@@ -298,6 +287,12 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   private readonly executionToSession = new Map<number, string>();
   private readonly leaseExecutions = new Map<string, Set<number>>();
   private _modelsFetch: Promise<ClaudeSdkModelInfo[]> | null = null;
+  private readonly shellApprovalRepo: ShellApprovalRepository;
+
+  constructor(shellApprovalRepo?: ShellApprovalRepository) {
+    this.shellApprovalRepo = shellApprovalRepo ?? new ShellApprovalRepository();
+  }
+
   private readonly leases = new LeaseRegistry(
     "claude",
     this.idleTimeoutMs,
@@ -460,11 +455,11 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
                 return buildAllowPermissionResult(input);
               }
               const command = extractShellCommand(toolName, input, options.title);
-              const taskShellState = getApprovedShellState(config.taskId);
-              if (taskShellState.shellAutoApprove) {
+              const shellState = this.shellApprovalRepo.getState(config.shellScope);
+              if (shellState.shellAutoApprove) {
                 return buildAllowPermissionResult(input);
               }
-              const unapproved = getUnapprovedShellBinaries(command, taskShellState.approvedCommands);
+              const unapproved = getUnapprovedShellBinaries(command, shellState.approvedCommands);
               if (unapproved.length === 0) {
                 return buildAllowPermissionResult(input);
               }
@@ -480,7 +475,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
               });
               this.leases.touch(config.sessionId, "running");
               if (resumeInput.type === "shell_approval" && resumeInput.decision === "approve_all") {
-                appendApprovedCommands(config.taskId, unapproved);
+                this.shellApprovalRepo.appendApprovedCommands(config.shellScope, unapproved);
               }
               return permissionDecisionToResult(resumeInput, input, options.suggestions);
             },
@@ -696,6 +691,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   }
 }
 
-export function createDefaultClaudeSdkAdapter(): ClaudeSdkAdapter {
-  return new DefaultClaudeSdkAdapter();
+export function createDefaultClaudeSdkAdapter(shellApprovalRepo?: ShellApprovalRepository): ClaudeSdkAdapter {
+  return new DefaultClaudeSdkAdapter(shellApprovalRepo);
 }

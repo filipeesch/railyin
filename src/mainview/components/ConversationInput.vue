@@ -336,9 +336,9 @@
         />
       </template>
 
-      <!-- Shell auto-approve toggle (task mode only) -->
+      <!-- Shell auto-approve toggle (task or chat session) -->
       <div
-        v-if="props.taskId != null"
+        v-if="props.taskId != null || props.sessionId != null"
         class="shell-autoapprove-toggle"
         :title="props.shellAutoApprove ? 'Shell auto-approve ON — commands run without prompting' : 'Shell auto-approve OFF — commands require approval'"
       >

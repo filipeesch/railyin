@@ -93,6 +93,14 @@ export function mapChatSession(row: ChatSessionRow): ChatSession {
         return [];
       }
     })(),
+    shellAutoApprove: row.shell_auto_approve === 1,
+    approvedCommands: (() => {
+      try {
+        return row.approved_commands ? JSON.parse(row.approved_commands) : [];
+      } catch {
+        return [];
+      }
+    })(),
     samplingPresetOverride: row.conversation_sampling_preset_override ?? null,
     lastActivityAt: row.last_activity_at,
     lastReadAt: row.last_read_at,

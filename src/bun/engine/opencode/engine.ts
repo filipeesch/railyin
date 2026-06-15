@@ -12,6 +12,7 @@ import type { OpenCodeSdkAdapter } from "./types.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
+import { ShellApprovalRepository, type ShellApprovalScope } from "../../db/repositories/shell-approval-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 import type { CommonToolContext } from "../types.ts";
 
@@ -19,6 +20,7 @@ import type { CommonToolContext } from "../types.ts";
 export class OpenCodeEngine implements ExecutionEngine {
   private readonly sdkAdapter: OpenCodeSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
+  private readonly shellApprovalRepo: ShellApprovalRepository;
   private readonly pendingResumes = new Map<number, {
     resolve: (input: EngineResumeInput) => void;
     reject: (error: Error) => void;
@@ -28,9 +30,11 @@ export class OpenCodeEngine implements ExecutionEngine {
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     sdkAdapter: OpenCodeSdkAdapter,
+    shellApprovalRepo?: ShellApprovalRepository,
   ) {
     this._onTaskUpdated = onTaskUpdated;
     this.sdkAdapter = sdkAdapter;
+    this.shellApprovalRepo = shellApprovalRepo ?? new ShellApprovalRepository();
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -58,6 +62,10 @@ export class OpenCodeEngine implements ExecutionEngine {
     } = params;
 
     const sessionId = await this.sdkAdapter.getOrCreateSession(conversationId, workingDirectory);
+
+    const shellScope: ShellApprovalScope = params.taskId != null
+      ? { kind: "task", taskId: params.taskId }
+      : { kind: "chat", conversationId: params.conversationId };
 
     const taskBlock = taskContext
       ? [`## Task`, `**Title:** ${taskContext.title}`, ...(taskContext.description ? [`**Description:** ${taskContext.description}`] : [])].join("\n")
@@ -115,6 +123,11 @@ export class OpenCodeEngine implements ExecutionEngine {
         onRawEvent,
       })) {
         if (event.type === "shell_approval") {
+          const shellState = this.shellApprovalRepo.getState(shellScope);
+          if (shellState.shellAutoApprove) {
+            await this.sdkAdapter.respondPermission(executionId, "approve_all");
+            continue;
+          }
           yield event;
           try {
             await this.waitForResume(executionId, { type: "shell_approval" }, signal);
