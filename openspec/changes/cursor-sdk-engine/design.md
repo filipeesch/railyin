@@ -44,15 +44,22 @@ Railyin currently supports multiple AI engine types (Copilot, Claude, OpenCode, 
 - Easier to test with mocks
 - Clear separation between adapter (SDK wrapper) and engine (event stream)
 
-### 2. Session Management: Fresh Agent per Execution, No Resume
+### 2. Session Management: Resume Cursor Agent per Conversation
 
-**Decision:** Each execution calls `Agent.create({ apiKey, model, local: { cwd, customTools } })` and runs to completion. `CursorEngine.resume()` throws — there is no in-turn resume path. Conversation continuity is provided by Railyin's own conversation/history layer prepended to the prompt, not by SDK-side agent persistence.
+**Decision:** Each execution looks up a Cursor `agentId` keyed by `conversationId`. If one exists, the worker calls `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools } })`; otherwise it calls `Agent.create(...)` and persists the returned id. The agent is closed at the end of each turn — the next turn resumes the same agent so the SDK keeps the chat history. `CursorEngine.resume()` (the executor-level resume entry point used by `HumanTurnExecutor`) still throws — there is no in-turn resume of an *aborted* run; that path remains a fresh-execution restart.
+
+**Storage:** A dedicated table `cursor_sessions(conversation_id PK, agent_id, created_at, last_used_at)` with `ON DELETE CASCADE` from `conversations`. Engine-specific state is kept out of the shared `conversations` row.
 
 **Rationale:**
-- The Cursor SDK has no in-turn resume primitive: `decision_request` / `ask_user` tool calls terminate the run as soon as they fire. There is no API to deliver the user response *into* the same SDK run.
-- Throwing in `resume()` is the documented contract that `HumanTurnExecutor` uses to roll back the optimistic "running" state and start a fresh execution with the user's response appended (see `human-turn-executor.ts` catch branch).
-- `sessionId = cursor-${conversationId}` is computed and forwarded to `onRawMessage` for raw-message persistence keying, but not used for SDK-side agent identity.
-- Cleanest match for the SDK's actual lifecycle, and consistent with how the engine is exercised end-to-end.
+- The earlier "fresh Agent.create per turn" design dropped all SDK-side conversation history. The orchestrator passes only the latest user message as the `prompt` (chat-executor.ts:126), expecting the engine to hold history. Cursor's SDK does hold it — per `SDKAgent` — but only when the same `agentId` is resumed across turns.
+- Repeated `Agent.create()` calls within the same worker process also leaked abort listeners on internal SDK signals (`MaxListenersExceededWarning: 11 abort listeners added to [AbortSignal]`). Resuming a single agent per conversation eliminates the listener accumulation as a side effect.
+- The Cursor SDK has no in-turn resume primitive for suspend-loop tools (`decision_request` / `ask_user` still terminate the run). Those continue to be handled by `HumanTurnExecutor`'s fresh-execution restart branch; the new behavior only restores cross-turn continuity, not mid-turn resume.
+- `sessionId = cursor-${conversationId}` remains the persistence key for raw-message logging; it is independent of the SDK `agentId`.
+
+**Trade-offs:**
+- One extra indexed PK lookup per turn (~µs); negligible.
+- An additional small table and a tiny repository (`CursorSessionRepository`) on the Bun side.
+- A stale `agent_id` (deleted server-side or local-store gone) falls back to `Agent.create` and persists the new id — see the worker's `Agent.resume` try/catch.
 
 ### 3. Event Streaming: Direct from Run.stream()
 

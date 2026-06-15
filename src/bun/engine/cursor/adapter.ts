@@ -55,6 +55,14 @@ export interface CursorRunConfig {
    * model_raw_messages for later inspection.
    */
   onRawMessage?: (message: unknown) => void;
+  /**
+   * Cursor agentId from a prior run on this conversation. When set the
+   * worker tries `Agent.resume(agentId, ...)` first; on failure it falls back
+   * to `Agent.create(...)` and reports the new id via `onAgentCreated`.
+   */
+  agentId?: string;
+  /** Fired after a fresh Agent.create() so the caller can persist the id. */
+  onAgentCreated?: (agentId: string) => void;
 }
 
 export interface CursorAdapterOptions {

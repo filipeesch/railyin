@@ -18,6 +18,7 @@ import { getConfig } from "../../config/index.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
+import { CursorSessionRepository } from "../../db/repositories/cursor-session-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 import type { Task } from "../../../shared/rpc-types.ts";
 
@@ -31,14 +32,17 @@ export class CursorEngine implements ExecutionEngine {
   private readonly adapter: CursorSdkAdapter;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly executions = new Map<number, ExecutionState>();
+  private readonly sessions: CursorSessionRepository;
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     adapter: CursorSdkAdapter = createDefaultCursorSdkAdapter(),
+    sessions: CursorSessionRepository = new CursorSessionRepository(),
   ) {
     this.onTaskUpdated = onTaskUpdated;
     this.adapter = adapter;
+    this.sessions = sessions;
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -169,6 +173,16 @@ export class CursorEngine implements ExecutionEngine {
     const prefix = [systemBlock, taskBlock, bypassNotice].filter(Boolean).join("\n\n");
     const composedPrompt = prefix ? `${prefix}\n\n---\n\n${prompt}` : prompt;
 
+    // Resume the prior Cursor agent for this conversation when one exists, so
+    // chat history is preserved across turns. Without this, each turn would
+    // start a fresh Agent.create() with no memory of earlier messages.
+    const savedAgentId = params.conversationId
+      ? this.sessions.getAgentId(params.conversationId)
+      : null;
+    if (savedAgentId && params.conversationId) {
+      this.sessions.touch(params.conversationId);
+    }
+
     const runConfig = {
       executionId,
       taskId: taskId || 0,
@@ -180,6 +194,12 @@ export class CursorEngine implements ExecutionEngine {
       signal: combinedAbort.signal,
       sessionId,
       customTools,
+      ...(savedAgentId ? { agentId: savedAgentId } : {}),
+      onAgentCreated: (newAgentId: string) => {
+        if (params.conversationId) {
+          this.sessions.upsert(params.conversationId, newAgentId);
+        }
+      },
       onRawMessage: (message: unknown) => {
         params.onRawModelMessage?.({
           engine: "cursor",

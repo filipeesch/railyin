@@ -16,7 +16,16 @@
 
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
+import { setMaxListeners } from "node:events";
 import { Agent, Cursor } from "@cursor/sdk";
+
+// The Cursor SDK registers abort listeners on shared internal AbortSignals
+// per Agent.create()/resume() call and doesn't always tear them down on
+// agent.close(). Across many turns the count crosses Node's default of 10
+// and triggers a MaxListenersExceededWarning. Disabling the cap here is
+// safe — this worker is dedicated to the SDK and has no other listener
+// sources we need to monitor.
+setMaxListeners(0);
 
 const send = (msg) => {
   process.stdout.write(JSON.stringify(msg) + "\n");
@@ -46,7 +55,7 @@ function makeProxyTool(runId, schema) {
 }
 
 async function handleStartRun(msg) {
-  const { runId, apiKey, workingDirectory, model, prompt, toolSchemas } = msg;
+  const { runId, apiKey, workingDirectory, model, prompt, toolSchemas, agentId } = msg;
   const customTools = {};
   for (const schema of toolSchemas) {
     customTools[schema.name] = makeProxyTool(runId, schema);
@@ -56,11 +65,24 @@ async function handleStartRun(msg) {
   runs.set(runId, state);
 
   try {
-    state.agent = await Agent.create({
+    const baseOptions = {
       model: model ? { id: model } : undefined,
       apiKey,
       local: { cwd: workingDirectory, customTools },
-    });
+    };
+
+    if (agentId) {
+      try {
+        state.agent = await Agent.resume(agentId, baseOptions);
+      } catch (resumeErr) {
+        log("warn", `Agent.resume(${agentId}) failed, creating new agent: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
+        state.agent = null;
+      }
+    }
+    if (!state.agent) {
+      state.agent = await Agent.create(baseOptions);
+      send({ type: "agentCreated", runId, agentId: state.agent.agentId });
+    }
     state.run = await state.agent.send(prompt);
 
     for await (const message of state.run.stream()) {

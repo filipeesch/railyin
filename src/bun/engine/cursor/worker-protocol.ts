@@ -41,6 +41,13 @@ export interface StartRunRequest {
   model?: string;
   prompt: string;
   toolSchemas: ToolSchema[];
+  /**
+   * Cursor agent id from a prior run on this conversation. When present the
+   * worker tries Agent.resume(agentId, ...) so chat history is preserved; on
+   * resume failure (or when omitted) it falls back to Agent.create and reports
+   * the new id via an `agentCreated` message.
+   */
+  agentId?: string;
 }
 
 export interface CancelRunRequest {
@@ -69,6 +76,7 @@ export type WorkerToBun =
   | ToolCallRequest
   | RawMessage
   | RunDoneMessage
+  | AgentCreatedMessage
   | WorkerLog
   | WorkerReady;
 
@@ -105,6 +113,17 @@ export interface RunDoneMessage {
   status: "ok" | "error";
   /** Error/result detail from SDK run.wait().result; only set when status === "error". */
   detail?: string;
+}
+
+/**
+ * Reported after a successful Agent.create() so the Bun side can persist the
+ * new agent id keyed by conversation. Not emitted when a run resumed an
+ * existing agent — the id already matches what the parent stored.
+ */
+export interface AgentCreatedMessage {
+  type: "agentCreated";
+  runId: string;
+  agentId: string;
 }
 
 export interface WorkerLog {

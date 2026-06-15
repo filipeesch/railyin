@@ -29,22 +29,73 @@ The system SHALL run the Cursor SDK in a Node.js subprocess, not in the Bun pare
 - **AND** any pending tool-call promises are rejected
 - **AND** the next adapter call respawns the worker
 
-### Requirement: Per-execution agent lifecycle
+### Requirement: Per-conversation agent lifecycle
 
-The system SHALL create a fresh Cursor agent for each execution and SHALL NOT attempt SDK-level resume.
+The system SHALL maintain one Cursor agent per `conversation_id`, resuming the prior agent across turns so SDK-side chat history is preserved.
 
-#### Scenario: New execution
+#### Scenario: First execution on a conversation
 
-- **WHEN** an execution starts
+- **WHEN** an execution starts and no `agent_id` is persisted in `cursor_sessions` for the `conversation_id`
 - **THEN** the worker calls `Agent.create({ apiKey, model, local: { cwd, customTools } })`
-- **AND** sends the prompt via `session.send(prompt)`
+- **AND** sends the prompt via `agent.send(prompt)`
+- **AND** the worker emits an `agentCreated` IPC message with the newly assigned `agentId`
+- **AND** the Bun side persists `{ conversation_id, agent_id }` in `cursor_sessions`
 - **AND** the agent's working directory is the task's worktree path
 
-#### Scenario: Resume is rejected to force fresh execution
+#### Scenario: Subsequent execution resumes the agent
 
-- **WHEN** `CursorEngine.resume(executionId, input)` is called
+- **WHEN** an execution starts and `cursor_sessions` already has an `agent_id` for the `conversation_id`
+- **THEN** the engine forwards the stored `agentId` to the worker via `StartRunRequest.agentId`
+- **AND** the worker calls `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools } })`
+- **AND** the worker does NOT emit `agentCreated`
+- **AND** the Bun side updates `last_used_at` on the row
+
+#### Scenario: Resume failure falls back to create
+
+- **WHEN** `Agent.resume(agentId, ...)` throws (agent deleted, local store missing, server-side eviction)
+- **THEN** the worker logs a warning, calls `Agent.create(...)`, and emits `agentCreated` with the new `agentId`
+- **AND** the Bun side overwrites the stored `agent_id` for that `conversation_id`
+
+#### Scenario: In-turn resume is rejected to force fresh execution
+
+- **WHEN** `CursorEngine.resume(executionId, input)` is called (suspend-loop tools)
 - **THEN** it throws an `Error`
 - **AND** the calling `HumanTurnExecutor` falls into its fallback restart branch, which starts a new execution with the user input prepended to the prompt
+
+#### Scenario: Conversation deletion cleans up the session
+
+- **WHEN** a row in `conversations` is deleted
+- **THEN** the matching `cursor_sessions` row is removed via `ON DELETE CASCADE`
+
+### Requirement: Session persistence storage
+
+The system SHALL persist the Cursor `agent_id` per conversation in a dedicated table.
+
+#### Scenario: Schema
+
+- **WHEN** migrations run
+- **THEN** a table `cursor_sessions` exists with columns `conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE`, `agent_id TEXT NOT NULL`, `created_at TEXT NOT NULL DEFAULT (datetime('now'))`, `last_used_at TEXT NOT NULL DEFAULT (datetime('now'))`
+
+#### Scenario: Repository contract
+
+- **WHEN** `CursorSessionRepository` is constructed
+- **THEN** it exposes `getAgentId(conversationId)`, `upsert(conversationId, agentId)`, `touch(conversationId)`, and `delete(conversationId)`
+- **AND** `upsert` uses `INSERT ... ON CONFLICT(conversation_id) DO UPDATE SET agent_id = excluded.agent_id, last_used_at = datetime('now')`
+
+### Requirement: IPC for agent resume
+
+The worker IPC SHALL carry the per-conversation `agent_id` from Bun to the worker and report newly created ids back.
+
+#### Scenario: StartRun carries optional agentId
+
+- **WHEN** the Bun adapter sends `startRun`
+- **THEN** it includes `agentId` exactly when the engine has a persisted id for the conversation
+
+#### Scenario: Worker reports new agent ids
+
+- **WHEN** the worker calls `Agent.create(...)` (either no `agentId` was provided, or `Agent.resume` failed)
+- **THEN** it emits `{ type: "agentCreated", runId, agentId }` to the Bun parent before the first stream event
+- **AND** the Bun adapter dispatches the message to the run's `onAgentCreated` callback
 
 ### Requirement: Streaming event translation
 

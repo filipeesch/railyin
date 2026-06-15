@@ -39,6 +39,7 @@ interface ActiveRun {
   runId: string;
   customTools: Record<string, SDKCustomTool>;
   onRawMessage?: (message: unknown) => void;
+  onAgentCreated?: (agentId: string) => void;
   pushEvent: (event: EngineEvent | null) => void; // null = end of stream
   pushError: (err: Error) => void;
 }
@@ -144,6 +145,11 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
         run?.onRawMessage?.(msg.message);
         return;
       }
+      case "agentCreated": {
+        const run = this.runs.get(msg.runId);
+        run?.onAgentCreated?.(msg.agentId);
+        return;
+      }
       case "toolCall": {
         this.handleToolCall(msg.runId, msg.callId, msg.toolName, msg.args);
         return;
@@ -233,6 +239,7 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
       runId,
       customTools: config.customTools ?? {},
       onRawMessage: config.onRawMessage,
+      onAgentCreated: config.onAgentCreated,
       pushEvent,
       pushError,
     });
@@ -253,6 +260,7 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
       model: config.model,
       prompt: config.prompt,
       toolSchemas,
+      ...(config.agentId ? { agentId: config.agentId } : {}),
     };
     this.send(startMsg);
 
