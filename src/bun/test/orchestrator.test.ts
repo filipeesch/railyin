@@ -299,7 +299,7 @@ describe("Orchestrator.executeChatTurn", () => {
   });
 });
 
-describe("Orchestrator.respondShellApproval", () => {
+describe("Orchestrator.respondShellApprovalByExecution", () => {
   it("keeps waiting_user state when resume fails", async () => {
     let seededExecutionId = 0;
     class RejectingResumeEngine implements ExecutionEngine {
@@ -335,7 +335,7 @@ describe("Orchestrator.respondShellApproval", () => {
       [executionId, taskId],
     );
 
-    await expect(approvalOrchestrator.respondShellApproval(taskId, "approve_once")).rejects.toThrow(
+    await expect(approvalOrchestrator.respondShellApprovalByExecution(executionId, "approve_once")).rejects.toThrow(
       `Execution ${executionId} is not waiting for resume input`,
     );
 

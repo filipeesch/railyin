@@ -144,7 +144,7 @@ describe("Claude backend RPC scenarios", () => {
     await runtime.waitForExecutionStatus(first.executionId, "waiting_user");
     expect(runtime.getMessages(taskId).some((message) => message.type === "ask_user_prompt" && message.content.includes('"subtype":"shell_approval"'))).toBe(true);
 
-    await runtime.handlers["tasks.respondShellApproval"]({ taskId, decision: "approve_once" });
+    await runtime.handlers["executions.respondShellApproval"]({ executionId: first.executionId, decision: "approve_once" });
     await runtime.recorder.waitForStreamDone(first.executionId);
     await runtime.waitForExecutionStatus(first.executionId, "completed");
   });

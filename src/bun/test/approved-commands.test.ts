@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseShellBinaries } from "../engine/approved-commands.ts";
+import { parseShellBinaries } from "../db/repositories/shell-approval-repository.ts";
 
 describe("parseShellBinaries", () => {
     it("returns empty array for empty string", () => {

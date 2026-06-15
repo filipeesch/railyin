@@ -57,8 +57,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         }
 
         const sessionResult = db.run(
-          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools) VALUES (?, ?, 'idle', ?, '[]')`,
-          [wsKey, title, conversationId]
+          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools, shell_auto_approve) VALUES (?, ?, 'idle', ?, '[]', ?)`,
+          [wsKey, title, conversationId, workspaceConfig.workspace.shell_auto_approve ? 1 : 0]
         );
         const sessionId = sessionResult.lastInsertRowid as number;
 
@@ -261,6 +261,18 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       db.run("UPDATE conversations SET model = ? WHERE id = ?", [params.model, session.conversation_id]);
       const updated = fetchChatSessionWithModel(db, params.sessionId);
       if (!updated) throw new Error(`Chat session ${params.sessionId} not found after update`);
+      onSessionUpdated(updated);
+      return updated;
+    },
+
+    // ─── chatSessions.setShellAutoApprove ────────────────────────────────────
+    "chatSessions.setShellAutoApprove": async (params: { sessionId: number; enabled: boolean }): Promise<ChatSession> => {
+      db.run(
+        "UPDATE chat_sessions SET shell_auto_approve = ? WHERE id = ?",
+        [params.enabled ? 1 : 0, params.sessionId],
+      );
+      const updated = fetchChatSessionWithModel(db, params.sessionId);
+      if (!updated) throw new Error(`Chat session ${params.sessionId} not found`);
       onSessionUpdated(updated);
       return updated;
     },

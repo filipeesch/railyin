@@ -461,7 +461,7 @@ export class StreamProcessor {
               convBuffer,
               taskId,
               conversationId,
-              JSON.stringify({ subtype: "shell_approval", command: event.command, unapprovedBinaries: [] }),
+              JSON.stringify({ subtype: "shell_approval", command: event.command, unapprovedBinaries: [], executionId }),
             );
             this._pauseExecution(taskId, conversationId, executionId);
             break;

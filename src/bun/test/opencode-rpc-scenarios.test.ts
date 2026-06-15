@@ -162,7 +162,7 @@ describe("OpenCode shell_approval", () => {
       (m) => m.type === "ask_user_prompt" && m.content.includes('"subtype":"shell_approval"'),
     )).toBe(true);
 
-    await runtime.handlers["tasks.respondShellApproval"]({ taskId, decision: "approve_once" });
+    await runtime.handlers["executions.respondShellApproval"]({ executionId: result.executionId, decision: "approve_once" });
     await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
   });
@@ -178,7 +178,7 @@ describe("OpenCode shell_approval", () => {
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Delete everything" });
     await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
 
-    await runtime.handlers["tasks.respondShellApproval"]({ taskId, decision: "deny" });
+    await runtime.handlers["executions.respondShellApproval"]({ executionId: result.executionId, decision: "deny" });
     await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
   });
