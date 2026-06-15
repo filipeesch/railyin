@@ -299,7 +299,7 @@ describe("Orchestrator.executeChatTurn", () => {
   });
 });
 
-describe("Orchestrator.respondShellApproval", () => {
+describe("Orchestrator.respondShellApprovalByExecution", () => {
   it("keeps waiting_user state when resume fails", async () => {
     let seededExecutionId = 0;
     class RejectingResumeEngine implements ExecutionEngine {
