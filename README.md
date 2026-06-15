@@ -96,3 +96,4 @@ bun run dev
 For `.app` builds, the ~100–300ms startup cost is worth the tool visibility improvement.
 
 
+# Debug
