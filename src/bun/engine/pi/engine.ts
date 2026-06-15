@@ -233,6 +233,7 @@ export class PiEngine implements ExecutionEngine {
       boardTools,
       contextWindowOverride,
       samplingPresetName,
+      workspaceKey,
     } = params;
 
     // Bail immediately if already cancelled before we even start.
@@ -262,6 +263,7 @@ export class PiEngine implements ExecutionEngine {
       boardTools,
       onTransition,
       onHumanTurn,
+      workspaceKey,
     );
 
     // Hoist project/skill path resolution so the skill resolver is ready before buildAllTools.
@@ -684,6 +686,7 @@ export class PiEngine implements ExecutionEngine {
     boardTools: ExecutionParams["boardTools"],
     onTransition: ExecutionParams["onTransition"],
     onHumanTurn: ExecutionParams["onHumanTurn"],
+    workspaceKey?: string,
   ): CommonToolContext {
     const existing = this.commonCtxRefs.get(conversationId);
     if (existing) {
@@ -695,7 +698,7 @@ export class PiEngine implements ExecutionEngine {
       return existing;
     }
     const ctx: CommonToolContext = {
-      workspaceKey: getDefaultWorkspaceKey(),
+      workspaceKey: workspaceKey ?? getDefaultWorkspaceKey(),
       task: { id: taskId ?? null, boardId: boardId ?? null, conversationId },
       repos: {
         todos: new TodoRepository(),

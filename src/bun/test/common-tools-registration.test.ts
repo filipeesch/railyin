@@ -231,3 +231,83 @@ describe("note tools", () => {
     expect(COMMON_TOOL_NAMES.has("update_note")).toBe(true);
   });
 });
+describe("workspace tool registration", () => {
+  it("CTR-WK-1: list_projects is present in COMMON_TOOL_DEFINITIONS with no required params", () => {
+    const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "list_projects");
+    expect(def).toBeDefined();
+    expect(def!.parameters.required ?? []).toHaveLength(0);
+    expect(def!.parameters.properties).toEqual({});
+  });
+
+  it("CTR-WK-2: list_workflows is present in COMMON_TOOL_DEFINITIONS with no required params", () => {
+    const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "list_workflows");
+    expect(def).toBeDefined();
+    expect(def!.parameters.required ?? []).toHaveLength(0);
+    expect(def!.parameters.properties).toEqual({});
+  });
+
+  it("CTR-WK-3: both workspace tool names are in COMMON_TOOL_NAMES", () => {
+    expect(COMMON_TOOL_NAMES.has("list_projects")).toBe(true);
+    expect(COMMON_TOOL_NAMES.has("list_workflows")).toBe(true);
+  });
+
+  it("CTR-WK-4: Copilot engine registers list_projects via buildCopilotTools()", () => {
+    const tools = buildCopilotTools(baseContext);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("list_projects");
+  });
+
+  it("CTR-WK-5: Copilot engine registers list_workflows via buildCopilotTools()", () => {
+    const tools = buildCopilotTools(baseContext);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("list_workflows");
+  });
+
+  it("CTR-WK-6: Claude engine registers list_projects via buildClaudeToolServer()", () => {
+    const registeredNames: string[] = [];
+    const sdk = {
+      tool: (name: string, _desc: string, _schema: unknown, _handler: unknown) => {
+        registeredNames.push(name);
+        return { name };
+      },
+      createSdkMcpServer: (options: unknown) => options,
+    };
+    const scalar = () => ({ optional: () => ({}) });
+    const z = {
+      string: scalar,
+      number: scalar,
+      boolean: scalar,
+      any: scalar,
+      array: (_item: unknown) => ({ optional: () => ({}) }),
+      object: (_shape: unknown) => ({ optional: () => ({}) }),
+      enum: (_values: [string, ...string[]]) => ({ optional: () => ({}) }),
+    };
+
+    buildClaudeToolServer(sdk as any, z as any, baseContext);
+    expect(registeredNames).toContain("list_projects");
+  });
+
+  it("CTR-WK-7: Claude engine registers list_workflows via buildClaudeToolServer()", () => {
+    const registeredNames: string[] = [];
+    const sdk = {
+      tool: (name: string, _desc: string, _schema: unknown, _handler: unknown) => {
+        registeredNames.push(name);
+        return { name };
+      },
+      createSdkMcpServer: (options: unknown) => options,
+    };
+    const scalar = () => ({ optional: () => ({}) });
+    const z = {
+      string: scalar,
+      number: scalar,
+      boolean: scalar,
+      any: scalar,
+      array: (_item: unknown) => ({ optional: () => ({}) }),
+      object: (_shape: unknown) => ({ optional: () => ({}) }),
+      enum: (_values: [string, ...string[]]) => ({ optional: () => ({}) }),
+    };
+
+    buildClaudeToolServer(sdk as any, z as any, baseContext);
+    expect(registeredNames).toContain("list_workflows");
+  });
+});

@@ -35,7 +35,7 @@ export class ClaudeEngine implements ExecutionEngine {
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
-    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, taskContext, enabledMcpTools, boardTools } = params;
+    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, taskContext, enabledMcpTools, boardTools, workspaceKey } = params;
 
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
@@ -79,7 +79,7 @@ export class ClaudeEngine implements ExecutionEngine {
           boardId: boardId ?? null,
           conversationId: params.conversationId,
         },
-        workspaceKey: getDefaultWorkspaceKey(),
+        workspaceKey: workspaceKey ?? getDefaultWorkspaceKey(),
         repos: {
           todos: new TodoRepository(),
           decisions: new DecisionRepository(),
