@@ -11,6 +11,7 @@ import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
+import type { ShellApprovalScope } from "../../db/repositories/shell-approval-repository.ts";
 
 
 export class ClaudeEngine implements ExecutionEngine {
@@ -57,9 +58,14 @@ export class ClaudeEngine implements ExecutionEngine {
           .filter((c): c is NonNullable<typeof c> => c !== undefined)
       : undefined;
 
+    const shellScope: ShellApprovalScope = taskId != null
+      ? { kind: "task", taskId }
+      : { kind: "chat", conversationId: params.conversationId };
+
     const runConfig: ClaudeRunConfig = {
       executionId,
-      taskId: taskId ?? 0,
+      taskId,
+      shellScope,
       prompt,
       workingDirectory,
       model: model || this.defaultModel,

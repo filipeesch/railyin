@@ -260,28 +260,50 @@ export class Orchestrator implements ExecutionCoordinator {
 
   // ─── Shell approval ─────────────────────────────────────────────────────────
 
-  async respondShellApproval(
-    taskId: number,
+  async respondShellApprovalByExecution(
+    executionId: number,
     decision: "approve_once" | "approve_all" | "deny",
   ): Promise<void> {
     const db = this.db;
-    const task = db
-      .query<TaskRow & { conversation_model: string | null }, [number]>(
-        `SELECT t.*, c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?`,
+
+    const execRow = db
+      .query<{ task_id: number | null; conversation_id: number | null; model: string | null }, [number]>(
+        `SELECT e.task_id, e.conversation_id, c.model
+         FROM executions e
+         LEFT JOIN conversations c ON c.id = e.conversation_id
+         WHERE e.id = ?`,
       )
-      .get(taskId);
-    if (!task?.current_execution_id) return;
+      .get(executionId);
 
-    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
-    const engine = this.registry.resolveEngineForModel(workspaceKey, task.conversation_model);
-    await engine.resume(task.current_execution_id, { type: "shell_approval", decision });
+    if (!execRow) return;
 
-    db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
-    db.run(
-      "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
-      [task.current_execution_id],
-    );
-    this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
+    const { task_id: taskId, conversation_id: conversationId } = execRow;
+
+    const workspaceKey = taskId != null
+      ? this.wsRepo.getTaskWorkspaceKey(taskId)
+      : (db
+          .query<{ workspace_key: string }, [number]>(
+            "SELECT cs.workspace_key FROM chat_sessions cs WHERE cs.conversation_id = ?",
+          )
+          .get(conversationId ?? 0)?.workspace_key ?? getDefaultWorkspaceKey());
+
+    const engine = this.registry.resolveEngineForModel(workspaceKey, execRow.model);
+    await engine.resume(executionId, { type: "shell_approval", decision });
+
+    if (taskId != null) {
+      db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+      db.run(
+        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
+        [executionId],
+      );
+      this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
+    } else if (conversationId != null) {
+      db.run("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = ?", [conversationId]);
+      db.run(
+        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
+        [executionId],
+      );
+    }
   }
 
   async compactTask(taskId: number): Promise<void> {

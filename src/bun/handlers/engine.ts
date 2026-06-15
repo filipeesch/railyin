@@ -7,5 +7,12 @@ export function engineHandlers(orchestrator: ExecutionCoordinator | null) {
       if (!orchestrator) return [];
       return orchestrator.listCommands(params.taskId);
     },
+
+    // ─── executions.respondShellApproval ─────────────────────────────────────
+    "executions.respondShellApproval": async (params: { executionId: number; decision: "approve_once" | "approve_all" | "deny" }): Promise<{ ok: boolean }> => {
+      if (!orchestrator) return { ok: false };
+      await orchestrator.respondShellApprovalByExecution(params.executionId, params.decision);
+      return { ok: true };
+    },
   };
 }

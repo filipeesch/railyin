@@ -183,6 +183,8 @@ export function initDb(): Database {
       status           TEXT NOT NULL DEFAULT 'idle',
       conversation_id  INTEGER NOT NULL REFERENCES conversations(id),
       enabled_mcp_tools TEXT,
+      shell_auto_approve INTEGER NOT NULL DEFAULT 0,
+      approved_commands  TEXT NOT NULL DEFAULT '[]',
       created_at       TEXT NOT NULL DEFAULT (datetime('now')),
       last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
       archived_at      TEXT,

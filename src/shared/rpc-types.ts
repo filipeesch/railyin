@@ -64,6 +64,8 @@ export interface ChatSession {
   conversationId: number;
   model: string | null;
   enabledMcpTools: string[] | null;
+  shellAutoApprove: boolean;
+  approvedCommands: string[];
   samplingPresetOverride: string | null;
   lastActivityAt: string;
   lastReadAt: string | null;
@@ -897,13 +899,17 @@ export type RailynAPI = {
     params: { taskId: number };
     response: { content: string | null };
   };
-  "tasks.respondShellApproval": {
-    params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" };
-    response: { ok: boolean };
-  };
   "tasks.setShellAutoApprove": {
     params: { taskId: number; enabled: boolean };
     response: Task;
+  };
+  "executions.respondShellApproval": {
+    params: { executionId: number; decision: "approve_once" | "approve_all" | "deny" };
+    response: { ok: boolean };
+  };
+  "chatSessions.setShellAutoApprove": {
+    params: { sessionId: number; enabled: boolean };
+    response: ChatSession;
   };
   "todos.list": {
     params: { taskId: number; includeDeleted?: boolean };

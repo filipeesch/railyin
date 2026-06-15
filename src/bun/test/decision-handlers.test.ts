@@ -95,7 +95,7 @@ function makeCapturingOrchestrator(): ExecutionCoordinator & { captured: Capture
     },
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
-    respondShellApproval: async () => { throw new Error("not implemented"); },
+    respondShellApprovalByExecution: async () => { throw new Error("not implemented"); },
     executeChatTurn: async (_sessionId: number, convId: number, content: string, _model: unknown, _mcp: unknown, _ws: unknown, _att: unknown, engineContent: string) => {
       captured.push({ userContent: content, engineContent: engineContent ?? undefined });
       return { message: fakeMessage(convId) as ConversationMessage, executionId: 1 };
