@@ -481,13 +481,6 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       return { content: readSessionMemory(params.taskId) };
     },
 
-    // ─── tasks.respondShellApproval ──────────────────────────────────────────
-    "tasks.respondShellApproval": async (params: { taskId: number; decision: "approve_once" | "approve_all" | "deny" }): Promise<{ ok: boolean }> => {
-      if (!orchestrator) return { ok: false };
-      await orchestrator.respondShellApproval(params.taskId, params.decision);
-      return { ok: true };
-    },
-
     // ─── tasks.setShellAutoApprove ────────────────────────────────────────────
     "tasks.setShellAutoApprove": async (params: { taskId: number; enabled: boolean }): Promise<Task> => {
 

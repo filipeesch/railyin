@@ -167,7 +167,7 @@ async function onAskSubmit(answer: string) {
 
 // ─── Shell approval support ───────────────────────────────────────────────────
 
-type ShellApprovalPayload = { subtype: "shell_approval"; command: string; unapprovedBinaries: string[] };
+type ShellApprovalPayload = { subtype: "shell_approval"; command: string; unapprovedBinaries: string[]; executionId?: number };
 
 const shellApprovalPayload = computed<ShellApprovalPayload | null>(() => {
   if (props.chunk.type !== "ask_user_prompt") return null;
@@ -178,6 +178,7 @@ const shellApprovalPayload = computed<ShellApprovalPayload | null>(() => {
         subtype: "shell_approval",
         command: String(raw.command ?? ""),
         unapprovedBinaries: Array.isArray(raw.unapprovedBinaries) ? raw.unapprovedBinaries as string[] : [],
+        executionId: typeof raw.executionId === "number" ? raw.executionId : undefined,
       };
     }
   } catch { /* not a shell_approval message */ }
@@ -185,9 +186,9 @@ const shellApprovalPayload = computed<ShellApprovalPayload | null>(() => {
 });
 
 async function onShellApprovalRespond(decision: "approve_once" | "approve_all" | "deny") {
-  const taskId = taskStore.activeTaskId;
-  if (taskId === null) return;
-  await api("tasks.respondShellApproval", { taskId, decision });
+  const executionId = shellApprovalPayload.value?.executionId;
+  if (executionId == null) return;
+  await api("executions.respondShellApproval", { executionId, decision });
 }
 
 // ─── decision_request_prompt support ─────────────────────────────────────────

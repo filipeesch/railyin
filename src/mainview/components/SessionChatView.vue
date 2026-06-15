@@ -99,6 +99,7 @@
       :compacting="compacting"
       :enabled-mcp-tools="session.enabledMcpTools ?? null"
       :queue-state="chatStore.sessionQueues[session.id] ?? null"
+      :shell-auto-approve="session.shellAutoApprove"
       @send="onSend"
       @enqueue="onEnqueue"
       @confirm-edit="onConfirmEdit"
@@ -111,6 +112,7 @@
       @compact="compactConversation"
       @manage-models="manageModelsOpen = true"
       @tools-changed="chatStore.onChatSessionUpdated"
+      @update:shell-auto-approve="onShellAutoApproveChange"
     />
 
     <!-- Manage Models modal -->
@@ -203,6 +205,15 @@ async function onSamplingPresetChange(presetName: string | null) {
     });
   } catch (err) {
     console.error('[SessionChatView] Failed to set sampling preset:', err);
+  }
+}
+
+async function onShellAutoApproveChange(enabled: boolean) {
+  if (!session.value) return;
+  try {
+    await api("chatSessions.setShellAutoApprove", { sessionId: session.value.id, enabled });
+  } catch (err) {
+    console.error('[SessionChatView] Failed to set shell auto-approve:', err);
   }
 }
 

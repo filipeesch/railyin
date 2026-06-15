@@ -250,6 +250,19 @@ describe("runMigrations", () => {
         qualified_model_id TEXT NOT NULL,
         PRIMARY KEY (workspace_key, qualified_model_id)
       );
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_key TEXT NOT NULL,
+        conversation_id INTEGER NOT NULL,
+        title TEXT NOT NULL DEFAULT 'New Chat',
+        status TEXT NOT NULL DEFAULT 'idle',
+        model TEXT,
+        enabled_mcp_tools TEXT,
+        last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_read_at TEXT,
+        archived_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       INSERT INTO stream_events (id, task_id, execution_id, seq, block_id, type, content) VALUES
         (201, 1, 11, 0, 'exec-first', 'assistant', 'alpha'),
         (202, 2, 12, 0, 'task-fallback', 'assistant', 'beta'),
