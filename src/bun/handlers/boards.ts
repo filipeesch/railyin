@@ -31,11 +31,11 @@ export function boardHandlers(db: Database) {
       if (boardRows.length === 0) return [];
 
       // Build parameterized query with individual placeholders for each board ID
-      const boardIds = boardRows.map((b) => b.id);
+      const boardIds: number[] = boardRows.map((b) => b.id);
       const placeholders = boardIds.map(() => "?").join(", ");
-      const rows = db
+      const rows = (db
         .prepare(`SELECT b.*, COUNT(t.id) as task_count FROM boards b LEFT JOIN tasks t ON t.board_id = b.id WHERE b.id IN (${placeholders}) GROUP BY b.id ORDER BY b.created_at ASC`)
-        .all(boardIds) as BoardRow & { task_count: number }[];
+        .all(boardIds as any) as unknown) as Array<BoardRow & { task_count: number }>;
 
       return rows.map((row) => {
         const board = mapBoard(row, row.task_count);

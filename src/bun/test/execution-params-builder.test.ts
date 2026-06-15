@@ -111,6 +111,7 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
   it("sets taskId to null", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
+      "default",
       new AbortController().signal, noop, null,
     );
 
@@ -120,11 +121,13 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
   it("has no boardId property", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
+      "default",
       new AbortController().signal, noop, null,
     );
 
     expect("boardId" in params).toBe(false);
   });
+
 
   it("passes enabled_mcp_tools array through", () => {
     const tools = ["tool-x", "tool-y"];
@@ -163,6 +166,7 @@ describe("ExecutionParamsBuilder — decisions NOT in systemInstructions", () =>
   it("EPB-D-2: buildForChat() does not append any decisions block to systemInstructions", () => {
     const params = builder.buildForChat(
       1, 1, "prompt", "/w", "fake/model",
+      "default",
       new AbortController().signal, noop, null,
     );
     // systemInstructions is undefined when no instructions are provided — no decisions injection
@@ -180,13 +184,13 @@ describe("ExecutionParamsBuilder.buildForChat — workspaceKey", () => {
     expect(params.workspaceKey).toBe("default");
   });
 
-  it("EPB-WK-2: buildForChat() without workspaceKey leaves it undefined (backward compat)", () => {
+  it("EPB-WK-2: buildForChat() with workspaceKey sets it correctly", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
-      undefined,
+      "test-workspace",
       new AbortController().signal, noop, null,
     );
 
-    expect(params.workspaceKey).toBeUndefined();
+    expect(params.workspaceKey).toBe("test-workspace");
   });
 });
