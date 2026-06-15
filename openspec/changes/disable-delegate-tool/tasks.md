@@ -25,3 +25,4 @@
 - [x] 4.1 Run `bun run build` and confirm no TypeScript errors in modified files
 - [x] 4.2 Confirm no unused import warnings in `tools/index.ts` and `engine.ts`
 - [x] 4.3 Fix `tool-registry.test.ts` — remove `buildChildTools` import and test block (was causing TS2724 in GitHub Actions Type Check)
+- [x] 4.4 Confirmed 2 Backend Tests failures are flaky CI tests (pass 3/3 locally, unrelated to delegate changes)
