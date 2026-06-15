@@ -130,6 +130,7 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     const tools = ["tool-x", "tool-y"];
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
+      "default",
       new AbortController().signal, noop, tools,
     );
 
@@ -140,6 +141,7 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     const controller = new AbortController();
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
+      "default",
       controller.signal, noop, null,
     );
 
@@ -165,5 +167,26 @@ describe("ExecutionParamsBuilder — decisions NOT in systemInstructions", () =>
     );
     // systemInstructions is undefined when no instructions are provided — no decisions injection
     expect(params.systemInstructions ?? "").not.toContain("<decisions>");
+  });
+});
+describe("ExecutionParamsBuilder.buildForChat — workspaceKey", () => {
+  it("EPB-WK-1: buildForChat(workspaceKey='default') sets ExecutionParams.workspaceKey", () => {
+    const params = builder.buildForChat(
+      5, 42, "hello", "/workspace", "fake/model",
+      "default",
+      new AbortController().signal, noop, null,
+    );
+
+    expect(params.workspaceKey).toBe("default");
+  });
+
+  it("EPB-WK-2: buildForChat() without workspaceKey leaves it undefined (backward compat)", () => {
+    const params = builder.buildForChat(
+      5, 42, "hello", "/workspace", "fake/model",
+      undefined,
+      new AbortController().signal, noop, null,
+    );
+
+    expect(params.workspaceKey).toBeUndefined();
   });
 });
