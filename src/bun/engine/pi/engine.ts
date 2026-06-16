@@ -162,8 +162,8 @@ export class PiEngine implements ExecutionEngine {
   private readonly sessions = new Map<number, AgentSession>();
   /** Map<conversationId, SuspendRef> — mutable ref updated at each execution start. */
   private readonly suspendRefs = new Map<number, { onSuspend?: (event: EngineEvent) => void }>();
-  /** Map<conversationId, DelegateEmitRef> — emit target for child session events, wired per execution. */
-  private readonly delegateEmitRefs = new Map<number, { emit?: (event: EngineEvent) => void }>();
+  // /** Map<conversationId, DelegateEmitRef> — emit target for child session events, wired per execution. */
+  // private readonly delegateEmitRefs = new Map<number, { emit?: (event: EngineEvent) => void }>();
   /** Map<executionId, conversationId> — lets cancel() find the right session. */
   private readonly executionToConversation = new Map<number, number>();
   private readonly pendingResumes = new Map<
@@ -282,14 +282,14 @@ export class PiEngine implements ExecutionEngine {
       commonCtx,
       skillResolver,
       suspendRef: this.getOrCreateSuspendRef(conversationId),
-      delegateEmitRef: this.getOrCreateDelegateEmitRef(conversationId),
-      limiterRegistry: this.registry,
-      parentModel: piModel,
-      parentSystemPrompt: enrichedSystem,
-      parentConversationId: conversationId,
-      parentCwd: workingDirectory ?? process.cwd(),
-      engineConfig: this.config,
-      onRawModelMessage,
+      // delegateEmitRef: this.getOrCreateDelegateEmitRef(conversationId),
+      // limiterRegistry: this.registry,
+      // parentModel: piModel,
+      // parentSystemPrompt: enrichedSystem,
+      // parentConversationId: conversationId,
+      // parentCwd: workingDirectory ?? process.cwd(),
+      // engineConfig: this.config,
+      // onRawModelMessage,
     });
 
     // Look up the project path before session creation so it can be used when
@@ -330,8 +330,8 @@ export class PiEngine implements ExecutionEngine {
     };
 
     // Wire the delegate emit ref for this execution so child session events flow into the queue.
-    const delegateEmitRef = this.getOrCreateDelegateEmitRef(conversationId);
-    delegateEmitRef.emit = (event: EngineEvent) => queue.push(event);
+    // const delegateEmitRef = this.getOrCreateDelegateEmitRef(conversationId);
+    // delegateEmitRef.emit = (event: EngineEvent) => queue.push(event);
 
     // Abort: tell Pi to stop AND close the queue so the for-await exits immediately.
     const onAbort = () => {
@@ -603,7 +603,7 @@ export class PiEngine implements ExecutionEngine {
     this.harnessContexts.clear();
     this.commonCtxRefs.clear();
     this.suspendRefs.clear();
-    this.delegateEmitRefs.clear();
+    // this.delegateEmitRefs.clear();
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
@@ -649,14 +649,14 @@ export class PiEngine implements ExecutionEngine {
     return ref;
   }
 
-  private getOrCreateDelegateEmitRef(conversationId: number): { emit?: (event: EngineEvent) => void } {
-    let ref = this.delegateEmitRefs.get(conversationId);
-    if (!ref) {
-      ref = {};
-      this.delegateEmitRefs.set(conversationId, ref);
-    }
-    return ref;
-  }
+  // private getOrCreateDelegateEmitRef(conversationId: number): { emit?: (event: EngineEvent) => void } {
+  //   let ref = this.delegateEmitRefs.get(conversationId);
+  //   if (!ref) {
+  //     ref = {};
+  //     this.delegateEmitRefs.set(conversationId, ref);
+  //   }
+  //   return ref;
+  // }
 
   getPiProviderStatus(): import("./provider-limiter.ts").ProviderLimiterSnapshot[] {
     return this.registry.snapshots();
