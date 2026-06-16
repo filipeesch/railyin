@@ -36,14 +36,14 @@ The system SHALL use a caller-defined deterministic Cursor `agentId` per convers
 #### Scenario: Deterministic id derivation
 
 - **WHEN** an execution starts on a conversation
-- **THEN** the engine computes `agentId` as `railyin-task-${taskId}` when the conversation is task-scoped, or `railyin-conversation-${conversationId}` otherwise
+- **THEN** the engine computes `agentId` as a UUIDv5 derived from a fixed Railyin namespace and the name `task:${taskId}` when the conversation is task-scoped, or `conversation:${conversationId}` otherwise
 - **AND** forwards it to the worker via `StartRunRequest.agentId`
+- **AND** the derivation is pure: the same `(taskId, conversationId)` always yields the same UUID, and task-scoped ids are independent of `conversationId`
 
 #### Scenario: First execution on a conversation
 
 - **WHEN** the worker receives `startRun` and `Agent.resume(agentId, ...)` throws (no agent exists yet)
-- **THEN** the worker logs the resume failure at `info` level
-- **AND** calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools } })` with the same caller-supplied `agentId`
+- **THEN** the worker calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools } })` with the same caller-supplied `agentId`
 - **AND** sends the prompt via `agent.send(prompt)`
 - **AND** the agent's working directory is the task's worktree path
 
@@ -56,7 +56,7 @@ The system SHALL use a caller-defined deterministic Cursor `agentId` per convers
 #### Scenario: Resume failure of an existing agent falls back to create
 
 - **WHEN** `Agent.resume(agentId, ...)` throws for any reason on a turn where an agent should exist (local store corruption, manual deletion)
-- **THEN** the worker logs the failure and calls `Agent.create({ agentId, ... })` with the same id, replacing the prior agent
+- **THEN** the worker silently calls `Agent.create({ agentId, ... })` with the same id, replacing the prior agent
 
 #### Scenario: In-turn resume is rejected to force fresh execution
 

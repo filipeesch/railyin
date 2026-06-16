@@ -18,6 +18,7 @@ import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import { setMaxListeners } from "node:events";
 import { Agent, Cursor } from "@cursor/sdk";
+import { resumeOrCreateAgent } from "./worker-resume.mjs";
 
 // The SDK assigns its own agent id when Agent.create is called without one,
 // but it also honors a caller-supplied id (AgentOptions.agentId is forwarded
@@ -76,17 +77,7 @@ async function handleStartRun(msg) {
       local: { cwd: workingDirectory, customTools },
     };
 
-    if (agentId) {
-      try {
-        state.agent = await Agent.resume(agentId, baseOptions);
-      } catch {
-        // First turn for this conversation (no agent yet) — create one with
-        // the caller-supplied id so the next turn can resume it.
-        state.agent = await Agent.create({ ...baseOptions, agentId });
-      }
-    } else {
-      state.agent = await Agent.create(baseOptions);
-    }
+    state.agent = await resumeOrCreateAgent(Agent, agentId, baseOptions);
     state.run = await state.agent.send(prompt);
 
     for await (const message of state.run.stream()) {

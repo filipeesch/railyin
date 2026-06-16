@@ -33,7 +33,7 @@ import type {
   CursorSdkModelInfo,
 } from "./adapter.ts";
 
-const WORKER_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "worker.mjs");
+const DEFAULT_WORKER_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "worker.mjs");
 
 interface ActiveRun {
   runId: string;
@@ -50,6 +50,7 @@ interface PendingResponse {
 
 export class SubprocessCursorAdapter implements CursorSdkAdapter {
   private readonly apiKey?: string;
+  private readonly workerScriptPath: string;
   private worker: ChildProcessByStdio<Writable, Readable, Readable> | null = null;
   private workerReady: Promise<void> | null = null;
   private readonly runs = new Map<string, ActiveRun>();
@@ -58,6 +59,7 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
 
   constructor(options: CursorAdapterOptions = {}) {
     this.apiKey = options.apiKey;
+    this.workerScriptPath = options.workerScriptPath ?? DEFAULT_WORKER_SCRIPT;
   }
 
   private resolveApiKey(): string | undefined {
@@ -70,7 +72,7 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
     }
 
     const nodeBin = process.env.RAILYIN_CURSOR_NODE ?? "node";
-    const child = spawn(nodeBin, [WORKER_SCRIPT], {
+    const child = spawn(nodeBin, [this.workerScriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env },
     }) as ChildProcessByStdio<Writable, Readable, Readable>;

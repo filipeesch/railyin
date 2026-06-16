@@ -50,7 +50,7 @@
 
 ## 4. Session Continuity (Caller-Defined Agent Id)
 
-- [x] 4.1 Add `cursorAgentIdForConversation(taskId, conversationId)` helper in `engine.ts` deriving `railyin-task-${taskId}` or `railyin-conversation-${conversationId}`
+- [x] 4.1 Add `cursorAgentIdForConversation(taskId, conversationId)` helper in `engine.ts` deriving a UUIDv5 from a fixed Railyin namespace and the name `task:${taskId}` (task-scoped) or `conversation:${conversationId}` (otherwise)
 - [x] 4.2 Extend `CursorRunConfig` with optional `agentId` (no `onAgentCreated` — id is caller-known)
 - [x] 4.3 Extend worker IPC: `StartRunRequest.agentId?` (Bun→worker only; no `AgentCreatedMessage` back)
 - [x] 4.4 `SubprocessCursorAdapter.run` forwards `agentId` to the worker
@@ -63,25 +63,26 @@
 
 ## 6. Testing
 
-- [x] 6.1 Mock `CursorSdkAdapter` + RPC runtime exist as `src/bun/test/cursor/mocks.ts` and `src/bun/test/support/cursor-rpc-runtime.ts`
-- [ ] 6.2 Adapter unit tests covering event translation, suspend-loop handling, and cancellation
-  - [x] 6.2.1 Event translation (assistant → token, thinking → reasoning, tool_call) — `src/bun/test/cursor/adapter.test.ts`
-  - [x] 6.2.2 Cancellation — `src/bun/test/cursor/adapter.test.ts`
-  - [ ] 6.2.3 Suspend-loop (`onSuspend` → `decision_request` event after stream cut)
-- [ ] 6.3 Integration scenarios in `src/bun/test/cursor/integration.test.ts` (reusing `shared-rpc-scenarios.ts` where applicable)
-  - [x] 6.3.1 Single-turn chat scenario
-  - [ ] 6.3.2 Multi-turn chat scenario
-  - [ ] 6.3.3 Tool success scenario
-  - [ ] 6.3.4 Tool failure scenario
-  - [~] 6.3.5 ask_user / decision_request suspension scenario (smoke-only; does not yet assert the `decision_request` event payload)
-  - [ ] 6.3.6 Cancellation scenario
-  - [ ] 6.3.7 Fatal failure scenario
-  - [ ] 6.3.8 Model listing scenario
-- [ ] 6.4 Subprocess-specific tests
-  - [ ] 6.4.1 Worker boot + `ready` handshake
-  - [ ] 6.4.2 Worker crash mid-run surfaces fatal `EngineEvent.error` and respawns on next call
-  - [ ] 6.4.3 `toolCall` ↔ `toolResult` round-trip via the IPC channel
-- [ ] 6.5 Session-continuity tests
-  - [ ] 6.5.1 Engine forwards `cursorAgentIdForConversation(...)` as `agentId` on every run
-  - [ ] 6.5.2 Worker calls `Agent.resume(agentId, ...)` first; on success no `Agent.create` is called
-  - [ ] 6.5.3 Worker falls back to `Agent.create({ agentId, ... })` when `Agent.resume` throws
+- [x] 6.1 Mock `CursorSdkAdapter` + RPC runtime exist as `src/bun/test/cursor/mocks.ts` and `src/bun/test/support/cursor-rpc-runtime.ts` (mock grown into a copilot-style queue/step-builder API so cursor can drive `shared-rpc-scenarios.ts`)
+- [x] 6.2 Adapter unit tests covering event translation, suspend-loop handling, and cancellation
+  - [x] 6.2.1 Event translation (token, reasoning, status, tool_start/tool_result) — `src/bun/test/cursor/adapter.test.ts`
+  - [x] 6.2.2 Cancellation (signal abort during `waitForAbort` step omits the terminal `done`) — `src/bun/test/cursor/adapter.test.ts`
+  - [x] 6.2.3 Suspend-loop via `callTool` — the custom tool's `onSuspend` side-effect aborts the run and the post-stream steps are skipped — `src/bun/test/cursor/adapter.test.ts`
+- [x] 6.3 Integration scenarios in `src/bun/test/cursor/rpc-scenarios.test.ts` (reusing `shared-rpc-scenarios.ts` where applicable)
+  - [x] 6.3.1 Single-turn chat scenario — `runSingleTurnChatScenario`
+  - [x] 6.3.2 Multi-turn chat scenario — `runMultiTurnChatScenario`
+  - [x] 6.3.3 Tool success scenario — `runToolSuccessScenario`
+  - [x] 6.3.4 Tool failure scenario — `runToolFailureScenario`
+  - [x] 6.3.5 decision_request suspension — asserts `decision_request_prompt` persists and `waiting_user` transition; follow-up message starts a fresh execution (cursor's `engine.resume()` throws by contract). NB: cursor never emits raw `ask_user` events — only the decision_request suspend path applies
+  - [x] 6.3.6 Cancellation scenario — `runCancellationScenario`
+  - [x] 6.3.7 Fatal failure scenario — `runFatalFailureScenario` (turn `sendError`) + streamed `error` event variant
+  - [x] 6.3.8 Model listing scenario — `runModelListingScenario`
+- [x] 6.4 Subprocess-specific tests — `src/bun/test/cursor/worker-client.test.ts` driving `SubprocessCursorAdapter` against a controllable Node fixture at `src/bun/test/cursor/fixtures/test-worker.mjs`
+  - [x] 6.4.1 Worker boot + `ready` handshake (`startRun` gated on delayed `ready`)
+  - [x] 6.4.2 Worker crash mid-run surfaces fatal `EngineEvent.error` (thrown by the async iterator) and respawns on the next call
+  - [x] 6.4.3 `toolCall` ↔ `toolResult` round-trip via the IPC channel
+- [x] 6.5 Session-continuity tests
+  - [x] 6.5.1 Engine forwards `cursorAgentIdForConversation(...)` as `agentId` on every run; helper is deterministic (same `(taskId, conversationId)` → same UUID), task-scoped ids ignore `conversationId`, and the value matches the RFC 4122 v5 format — `src/bun/test/cursor/engine.test.ts`
+  - [x] 6.5.2 Worker calls `Agent.resume(agentId, ...)` first; on success no `Agent.create` is called — `src/bun/test/cursor/worker-resume.test.ts`
+  - [x] 6.5.3 Worker falls back to `Agent.create({ agentId, ... })` when `Agent.resume` throws — `src/bun/test/cursor/worker-resume.test.ts`
+  - [x] 6.5.4 Resume/create fallthrough extracted to `src/bun/engine/cursor/worker-resume.mjs` so it is unit-testable without spawning the `@cursor/sdk` subprocess; `worker.mjs` imports it

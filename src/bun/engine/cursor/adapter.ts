@@ -68,6 +68,11 @@ export interface CursorRunConfig {
 export interface CursorAdapterOptions {
   /** Cursor API key. Falls back to `process.env.CURSOR_API_KEY` when omitted. */
   apiKey?: string;
+  /**
+   * Override the path to the worker script. Defaults to the bundled
+   * `worker.mjs`. Tests use this to inject a controllable stub worker.
+   */
+  workerScriptPath?: string;
 }
 
 export function createDefaultCursorSdkAdapter(options: CursorAdapterOptions = {}): CursorSdkAdapter {
