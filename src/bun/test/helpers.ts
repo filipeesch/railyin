@@ -248,12 +248,6 @@ export function initDb(): Database {
       context_window      INTEGER,
       PRIMARY KEY (workspace_key, qualified_model_id)
     );
-    CREATE TABLE IF NOT EXISTS cursor_sessions (
-      conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
-      agent_id        TEXT    NOT NULL,
-      created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-      last_used_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
   `);
   return db;
 }

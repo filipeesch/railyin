@@ -18,7 +18,7 @@ No breaking changes - purely additive functionality.
 
 ### New Capabilities
 - `cursor-sdk`: Integration with Cursor SDK for agent execution, supporting:
-  - **Per-conversation agent resume.** The worker calls `Agent.resume(agentId, ...)` when an id is already persisted for the conversation, falling back to `Agent.create({ apiKey, model, local: { cwd, customTools } })` and persisting the returned id (`cursor_sessions` table). This preserves Cursor's chat history across turns. `CursorEngine.resume()` (the in-turn resume entry point used by `HumanTurnExecutor`) still throws, so suspend-loop tools restart a fresh execution as before
+  - **Per-conversation agent resume.** The engine derives a deterministic Cursor `agentId` from `(taskId, conversationId)` and passes it on every run. The worker calls `Agent.resume(agentId, ...)` first, falling back to `Agent.create({ agentId, apiKey, model, local: { cwd, customTools } })` with the same id on the first turn (or after a resume failure). This preserves Cursor's chat history across turns without any Railyin-side persistence. `CursorEngine.resume()` (the in-turn resume entry point used by `HumanTurnExecutor`) still throws, so suspend-loop tools restart a fresh execution as before
   - Direct streaming from `Run.stream()` for real-time token streaming
   - Cursor's built-in tools remain available (no SDK knob to disable)
   - Railyin's common task tools (`COMMON_TOOL_DEFINITIONS`) and MCP-registry tools registered as `SDKCustomTool` entries via `LocalAgentOptions.customTools`
@@ -38,8 +38,6 @@ None - no existing requirements are changing.
 - `src/bun/engine/cursor/worker-protocol.ts` — Bun↔Node IPC wire types
 - `src/bun/engine/cursor/worker-client.ts` — `SubprocessCursorAdapter` (Bun side)
 - `src/bun/engine/cursor/worker.mjs` — Node ESM worker that imports `@cursor/sdk` and proxies tool calls back over stdio (the only `.mjs` file in the codebase)
-- `src/bun/db/migrations/049_cursor_sessions.ts` — `cursor_sessions(conversation_id PK, agent_id, created_at, last_used_at)` with `ON DELETE CASCADE`
-- `src/bun/db/repositories/cursor-session-repository.ts` — `CursorSessionRepository` (`getAgentId` / `upsert` / `touch` / `delete`)
 
 **Modified Files:**
 - `src/bun/config/index.ts` — Add `CursorEngineConfig` interface

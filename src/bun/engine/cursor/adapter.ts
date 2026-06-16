@@ -56,13 +56,13 @@ export interface CursorRunConfig {
    */
   onRawMessage?: (message: unknown) => void;
   /**
-   * Cursor agentId from a prior run on this conversation. When set the
-   * worker tries `Agent.resume(agentId, ...)` first; on failure it falls back
-   * to `Agent.create(...)` and reports the new id via `onAgentCreated`.
+   * Caller-defined Cursor agent id (derived deterministically from the
+   * conversation). The worker tries `Agent.resume(agentId, ...)` first; on
+   * the first turn (or after a resume failure) it falls back to
+   * `Agent.create({ agentId, ... })` with the same id, so subsequent turns
+   * always resume the same SDK agent and preserve chat history.
    */
   agentId?: string;
-  /** Fired after a fresh Agent.create() so the caller can persist the id. */
-  onAgentCreated?: (agentId: string) => void;
 }
 
 export interface CursorAdapterOptions {

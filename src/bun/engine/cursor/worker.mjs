@@ -19,6 +19,11 @@ import { randomUUID } from "node:crypto";
 import { setMaxListeners } from "node:events";
 import { Agent, Cursor } from "@cursor/sdk";
 
+// The SDK assigns its own agent id when Agent.create is called without one,
+// but it also honors a caller-supplied id (AgentOptions.agentId is forwarded
+// to the underlying local store). We pass the same deterministic id on every
+// turn so resume always finds the prior conversation state.
+
 // The Cursor SDK registers abort listeners on shared internal AbortSignals
 // per Agent.create()/resume() call and doesn't always tear them down on
 // agent.close(). Across many turns the count crosses Node's default of 10
@@ -74,14 +79,13 @@ async function handleStartRun(msg) {
     if (agentId) {
       try {
         state.agent = await Agent.resume(agentId, baseOptions);
-      } catch (resumeErr) {
-        log("warn", `Agent.resume(${agentId}) failed, creating new agent: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
-        state.agent = null;
+      } catch {
+        // First turn for this conversation (no agent yet) — create one with
+        // the caller-supplied id so the next turn can resume it.
+        state.agent = await Agent.create({ ...baseOptions, agentId });
       }
-    }
-    if (!state.agent) {
+    } else {
       state.agent = await Agent.create(baseOptions);
-      send({ type: "agentCreated", runId, agentId: state.agent.agentId });
     }
     state.run = await state.agent.send(prompt);
 

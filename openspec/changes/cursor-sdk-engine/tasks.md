@@ -16,8 +16,7 @@
   - [x] 2.3.3 Implement `cancel()` method via the shared `AbortController`
   - [x] 2.3.4 Implement `listModels()` mapping SDK ids to `cursor/${id}` qualified ids
   - [x] 2.3.5 Implement `listCommands()` (returns empty — SDK does not surface commands here)
-  - [x] 2.3.6 Read saved `agentId` via `CursorSessionRepository.getAgentId(conversationId)` and pass it through `runConfig.agentId`; persist new ids via `runConfig.onAgentCreated` (Decision 2)
-  - [x] 2.3.7 `touch()` the row on resume so `last_used_at` reflects activity
+  - [x] 2.3.6 Compute deterministic `agentId` via `cursorAgentIdForConversation(taskId, conversationId)` and pass it through `runConfig.agentId` on every run (Decision 2)
 - [x] 2.4 Implement `events.ts` with event translation functions
   - [x] 2.4.1 Map `SDKMessage` to `EngineEvent` types
   - [x] 2.4.2 Handle token streaming from `assistant` messages
@@ -34,7 +33,7 @@
 - [x] 3.1 Define IPC wire types in `cursor/worker-protocol.ts` (BunToWorker / WorkerToBun)
 - [x] 3.2 Implement `cursor/worker.mjs` (Node ESM — the only `.mjs` file in the codebase)
   - [x] 3.2.1 Boot, signal `ready`
-  - [x] 3.2.2 Handle `startRun` — try `Agent.resume(agentId, ...)` when `agentId` is provided; fall back to `Agent.create(...)` and emit `agentCreated` with the new id; stream events
+  - [x] 3.2.2 Handle `startRun` — try `Agent.resume(agentId, ...)` first; on failure fall back to `Agent.create({ agentId, ...baseOptions })` with the same caller-supplied id; stream events
   - [x] 3.2.3 Handle `cancelRun` — abort via `run.cancel()`
   - [x] 3.2.4 Handle `toolResult` — resolve the matching pending tool call
   - [x] 3.2.5 Handle `listModels` — proxy to `Cursor.models.list({ apiKey })`
@@ -49,13 +48,12 @@
   - [x] 3.3.5 On worker exit (or early child error before `ready`), surface fatal `EngineEvent.error` to every active run and reject `workerReady`
 - [x] 3.4 Switch `createDefaultCursorSdkAdapter()` to return `SubprocessCursorAdapter`; remove all in-process HTTP/2 monkey-patches
 
-## 4. Session Persistence
+## 4. Session Continuity (Caller-Defined Agent Id)
 
-- [x] 4.1 Add migration `src/bun/db/migrations/049_cursor_sessions.ts` creating `cursor_sessions(conversation_id PK, agent_id, created_at, last_used_at)` with `ON DELETE CASCADE` from `conversations`
-- [x] 4.2 Add `src/bun/db/repositories/cursor-session-repository.ts` exposing `getAgentId`, `upsert`, `touch`, `delete`
-- [x] 4.3 Extend `CursorRunConfig` with optional `agentId` and `onAgentCreated(agentId)` callback
-- [x] 4.4 Extend worker IPC: `StartRunRequest.agentId?` (Bun→worker) and `AgentCreatedMessage { runId, agentId }` (worker→Bun)
-- [x] 4.5 `SubprocessCursorAdapter.run` forwards `agentId` to the worker and dispatches `agentCreated` to the run's `onAgentCreated`
+- [x] 4.1 Add `cursorAgentIdForConversation(taskId, conversationId)` helper in `engine.ts` deriving `railyin-task-${taskId}` or `railyin-conversation-${conversationId}`
+- [x] 4.2 Extend `CursorRunConfig` with optional `agentId` (no `onAgentCreated` — id is caller-known)
+- [x] 4.3 Extend worker IPC: `StartRunRequest.agentId?` (Bun→worker only; no `AgentCreatedMessage` back)
+- [x] 4.4 `SubprocessCursorAdapter.run` forwards `agentId` to the worker
 
 ## 5. Engine Registration
 
@@ -83,8 +81,7 @@
   - [ ] 6.4.1 Worker boot + `ready` handshake
   - [ ] 6.4.2 Worker crash mid-run surfaces fatal `EngineEvent.error` and respawns on next call
   - [ ] 6.4.3 `toolCall` ↔ `toolResult` round-trip via the IPC channel
-- [ ] 6.5 Session-persistence tests
-  - [ ] 6.5.1 First turn on a conversation creates a fresh agent and persists the returned `agent_id` in `cursor_sessions`
-  - [ ] 6.5.2 Second turn on the same conversation resumes the persisted `agent_id` (no `Agent.create` call)
-  - [ ] 6.5.3 `Agent.resume` failure falls back to `Agent.create` and overwrites the stored id
-  - [ ] 6.5.4 Deleting a conversation cascades to its `cursor_sessions` row
+- [ ] 6.5 Session-continuity tests
+  - [ ] 6.5.1 Engine forwards `cursorAgentIdForConversation(...)` as `agentId` on every run
+  - [ ] 6.5.2 Worker calls `Agent.resume(agentId, ...)` first; on success no `Agent.create` is called
+  - [ ] 6.5.3 Worker falls back to `Agent.create({ agentId, ... })` when `Agent.resume` throws

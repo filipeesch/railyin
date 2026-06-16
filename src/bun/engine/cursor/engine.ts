@@ -9,6 +9,7 @@
  *
  * Auth: handled via the api_key in engines.yaml or process.env.CURSOR_API_KEY.
  */
+import { createHash } from "node:crypto";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated, OnNewMessage, CommonToolContext } from "../types.ts";
 import { createDefaultCursorSdkAdapter, type CursorSdkAdapter } from "./adapter.ts";
 import { buildCursorTools } from "./tools.ts";
@@ -18,7 +19,6 @@ import { getConfig } from "../../config/index.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
-import { CursorSessionRepository } from "../../db/repositories/cursor-session-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 import type { Task } from "../../../shared/rpc-types.ts";
 
@@ -32,17 +32,14 @@ export class CursorEngine implements ExecutionEngine {
   private readonly adapter: CursorSdkAdapter;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly executions = new Map<number, ExecutionState>();
-  private readonly sessions: CursorSessionRepository;
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     adapter: CursorSdkAdapter = createDefaultCursorSdkAdapter(),
-    sessions: CursorSessionRepository = new CursorSessionRepository(),
   ) {
     this.onTaskUpdated = onTaskUpdated;
     this.adapter = adapter;
-    this.sessions = sessions;
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -173,15 +170,12 @@ export class CursorEngine implements ExecutionEngine {
     const prefix = [systemBlock, taskBlock, bypassNotice].filter(Boolean).join("\n\n");
     const composedPrompt = prefix ? `${prefix}\n\n---\n\n${prompt}` : prompt;
 
-    // Resume the prior Cursor agent for this conversation when one exists, so
-    // chat history is preserved across turns. Without this, each turn would
-    // start a fresh Agent.create() with no memory of earlier messages.
-    const savedAgentId = params.conversationId
-      ? this.sessions.getAgentId(params.conversationId)
-      : null;
-    if (savedAgentId && params.conversationId) {
-      this.sessions.touch(params.conversationId);
-    }
+    // Deterministic agent id derived from the conversation so the Cursor SDK
+    // resumes the same agent across turns without any DB state. The worker
+    // tries Agent.resume(agentId, ...) first and falls back to
+    // Agent.create({ agentId, ... }) on the first turn (or after a resume
+    // failure). Mirrors the Copilot session-id pattern.
+    const agentId = cursorAgentIdForConversation(taskId ?? null, params.conversationId);
 
     const runConfig = {
       executionId,
@@ -194,12 +188,7 @@ export class CursorEngine implements ExecutionEngine {
       signal: combinedAbort.signal,
       sessionId,
       customTools,
-      ...(savedAgentId ? { agentId: savedAgentId } : {}),
-      onAgentCreated: (newAgentId: string) => {
-        if (params.conversationId) {
-          this.sessions.upsert(params.conversationId, newAgentId);
-        }
-      },
+      agentId,
       onRawMessage: (message: unknown) => {
         params.onRawModelMessage?.({
           engine: "cursor",
@@ -245,4 +234,39 @@ export class CursorEngine implements ExecutionEngine {
       this.executions.delete(executionId);
     }
   }
+}
+
+/**
+ * Deterministic Cursor agent id for a conversation, as a UUIDv5.
+ *
+ * The id is computed (not stored) so the worker can always retry
+ * Agent.resume(agentId) and fall back to Agent.create({ agentId }) on the
+ * first turn. UUID format matches what the SDK auto-generates for local
+ * agents, keeping the id opaque in any UI that surfaces it.
+ *
+ * Task-scoped conversations key on the task id so the agent survives even
+ * if the conversation row is rebuilt. Detached chats key on the conversation
+ * id.
+ */
+export function cursorAgentIdForConversation(
+  taskId: number | null,
+  conversationId: number,
+): string {
+  const name = taskId != null ? `task:${taskId}` : `conversation:${conversationId}`;
+  return uuidv5(name, CURSOR_AGENT_NAMESPACE);
+}
+
+// Fixed namespace UUID for Railyin's Cursor agent ids. Generated once; do not
+// change — every existing agent in a local store is keyed by the id derived
+// from this namespace.
+const CURSOR_AGENT_NAMESPACE = "a3f5e2d4-7b8c-4d9e-9f0a-1b2c3d4e5f60";
+
+function uuidv5(name: string, namespace: string): string {
+  const nsBytes = Buffer.from(namespace.replace(/-/g, ""), "hex");
+  const hash = createHash("sha1").update(Buffer.concat([nsBytes, Buffer.from(name)])).digest();
+  const bytes = Buffer.from(hash.subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x50; // version 5
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }

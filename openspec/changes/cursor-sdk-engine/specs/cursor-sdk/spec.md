@@ -31,30 +31,32 @@ The system SHALL run the Cursor SDK in a Node.js subprocess, not in the Bun pare
 
 ### Requirement: Per-conversation agent lifecycle
 
-The system SHALL maintain one Cursor agent per `conversation_id`, resuming the prior agent across turns so SDK-side chat history is preserved.
+The system SHALL use a caller-defined deterministic Cursor `agentId` per conversation and resume the same agent across turns so SDK-side chat history is preserved without any Railyin-side persistence.
+
+#### Scenario: Deterministic id derivation
+
+- **WHEN** an execution starts on a conversation
+- **THEN** the engine computes `agentId` as `railyin-task-${taskId}` when the conversation is task-scoped, or `railyin-conversation-${conversationId}` otherwise
+- **AND** forwards it to the worker via `StartRunRequest.agentId`
 
 #### Scenario: First execution on a conversation
 
-- **WHEN** an execution starts and no `agent_id` is persisted in `cursor_sessions` for the `conversation_id`
-- **THEN** the worker calls `Agent.create({ apiKey, model, local: { cwd, customTools } })`
+- **WHEN** the worker receives `startRun` and `Agent.resume(agentId, ...)` throws (no agent exists yet)
+- **THEN** the worker logs the resume failure at `info` level
+- **AND** calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools } })` with the same caller-supplied `agentId`
 - **AND** sends the prompt via `agent.send(prompt)`
-- **AND** the worker emits an `agentCreated` IPC message with the newly assigned `agentId`
-- **AND** the Bun side persists `{ conversation_id, agent_id }` in `cursor_sessions`
 - **AND** the agent's working directory is the task's worktree path
 
 #### Scenario: Subsequent execution resumes the agent
 
-- **WHEN** an execution starts and `cursor_sessions` already has an `agent_id` for the `conversation_id`
-- **THEN** the engine forwards the stored `agentId` to the worker via `StartRunRequest.agentId`
-- **AND** the worker calls `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools } })`
-- **AND** the worker does NOT emit `agentCreated`
-- **AND** the Bun side updates `last_used_at` on the row
+- **WHEN** the worker receives `startRun` with the same `agentId` and an agent already exists in the SDK's local store
+- **THEN** `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools } })` succeeds and returns the prior agent
+- **AND** the worker does NOT call `Agent.create`
 
-#### Scenario: Resume failure falls back to create
+#### Scenario: Resume failure of an existing agent falls back to create
 
-- **WHEN** `Agent.resume(agentId, ...)` throws (agent deleted, local store missing, server-side eviction)
-- **THEN** the worker logs a warning, calls `Agent.create(...)`, and emits `agentCreated` with the new `agentId`
-- **AND** the Bun side overwrites the stored `agent_id` for that `conversation_id`
+- **WHEN** `Agent.resume(agentId, ...)` throws for any reason on a turn where an agent should exist (local store corruption, manual deletion)
+- **THEN** the worker logs the failure and calls `Agent.create({ agentId, ... })` with the same id, replacing the prior agent
 
 #### Scenario: In-turn resume is rejected to force fresh execution
 
@@ -62,40 +64,14 @@ The system SHALL maintain one Cursor agent per `conversation_id`, resuming the p
 - **THEN** it throws an `Error`
 - **AND** the calling `HumanTurnExecutor` falls into its fallback restart branch, which starts a new execution with the user input prepended to the prompt
 
-#### Scenario: Conversation deletion cleans up the session
-
-- **WHEN** a row in `conversations` is deleted
-- **THEN** the matching `cursor_sessions` row is removed via `ON DELETE CASCADE`
-
-### Requirement: Session persistence storage
-
-The system SHALL persist the Cursor `agent_id` per conversation in a dedicated table.
-
-#### Scenario: Schema
-
-- **WHEN** migrations run
-- **THEN** a table `cursor_sessions` exists with columns `conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE`, `agent_id TEXT NOT NULL`, `created_at TEXT NOT NULL DEFAULT (datetime('now'))`, `last_used_at TEXT NOT NULL DEFAULT (datetime('now'))`
-
-#### Scenario: Repository contract
-
-- **WHEN** `CursorSessionRepository` is constructed
-- **THEN** it exposes `getAgentId(conversationId)`, `upsert(conversationId, agentId)`, `touch(conversationId)`, and `delete(conversationId)`
-- **AND** `upsert` uses `INSERT ... ON CONFLICT(conversation_id) DO UPDATE SET agent_id = excluded.agent_id, last_used_at = datetime('now')`
-
 ### Requirement: IPC for agent resume
 
-The worker IPC SHALL carry the per-conversation `agent_id` from Bun to the worker and report newly created ids back.
+The worker IPC SHALL carry the per-conversation `agent_id` from Bun to the worker.
 
-#### Scenario: StartRun carries optional agentId
+#### Scenario: StartRun carries the deterministic agentId
 
 - **WHEN** the Bun adapter sends `startRun`
-- **THEN** it includes `agentId` exactly when the engine has a persisted id for the conversation
-
-#### Scenario: Worker reports new agent ids
-
-- **WHEN** the worker calls `Agent.create(...)` (either no `agentId` was provided, or `Agent.resume` failed)
-- **THEN** it emits `{ type: "agentCreated", runId, agentId }` to the Bun parent before the first stream event
-- **AND** the Bun adapter dispatches the message to the run's `onAgentCreated` callback
+- **THEN** it includes `agentId` derived from `(taskId, conversationId)` (see Per-conversation agent lifecycle)
 
 ### Requirement: Streaming event translation
 

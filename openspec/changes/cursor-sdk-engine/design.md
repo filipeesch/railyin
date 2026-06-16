@@ -44,22 +44,24 @@ Railyin currently supports multiple AI engine types (Copilot, Claude, OpenCode, 
 - Easier to test with mocks
 - Clear separation between adapter (SDK wrapper) and engine (event stream)
 
-### 2. Session Management: Resume Cursor Agent per Conversation
+### 2. Session Management: Resume Cursor Agent per Conversation (Caller-Defined Id)
 
-**Decision:** Each execution looks up a Cursor `agentId` keyed by `conversationId`. If one exists, the worker calls `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools } })`; otherwise it calls `Agent.create(...)` and persists the returned id. The agent is closed at the end of each turn — the next turn resumes the same agent so the SDK keeps the chat history. `CursorEngine.resume()` (the executor-level resume entry point used by `HumanTurnExecutor`) still throws — there is no in-turn resume of an *aborted* run; that path remains a fresh-execution restart.
+**Decision:** Compute a deterministic Cursor `agentId` from the conversation (`railyin-task-${taskId}` when task-scoped, `railyin-conversation-${conversationId}` otherwise) and pass it on every run. The worker tries `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools } })` first and falls back to `Agent.create({ agentId, ...baseOptions })` with the same id on resume failure (typically the first turn). The agent is closed at the end of each turn; the next turn resumes the same id so the SDK keeps the chat history. `CursorEngine.resume()` (the executor-level resume entry point used by `HumanTurnExecutor`) still throws — there is no in-turn resume of an *aborted* run; that path remains a fresh-execution restart.
 
-**Storage:** A dedicated table `cursor_sessions(conversation_id PK, agent_id, created_at, last_used_at)` with `ON DELETE CASCADE` from `conversations`. Engine-specific state is kept out of the shared `conversations` row.
+**Storage:** None. The id is derived; no Railyin table is needed.
 
 **Rationale:**
 - The earlier "fresh Agent.create per turn" design dropped all SDK-side conversation history. The orchestrator passes only the latest user message as the `prompt` (chat-executor.ts:126), expecting the engine to hold history. Cursor's SDK does hold it — per `SDKAgent` — but only when the same `agentId` is resumed across turns.
+- `AgentOptions.agentId` is honored by the SDK: in `Agent.create`, the SDK uses the caller-supplied id verbatim and only auto-generates one when omitted (verified in `@cursor/sdk/dist/esm/index.js` — `e.agentId ?? generated_id`). The local agent store keys by this id, so passing the same id on subsequent calls resumes the prior conversation state.
+- A computed id mirrors the Copilot engine's `copilotSessionIdForConversation(taskId, conversationId)` pattern (`engine/copilot/session.ts`) and removes the engine-specific DB column entirely.
 - Repeated `Agent.create()` calls within the same worker process also leaked abort listeners on internal SDK signals (`MaxListenersExceededWarning: 11 abort listeners added to [AbortSignal]`). Resuming a single agent per conversation eliminates the listener accumulation as a side effect.
 - The Cursor SDK has no in-turn resume primitive for suspend-loop tools (`decision_request` / `ask_user` still terminate the run). Those continue to be handled by `HumanTurnExecutor`'s fresh-execution restart branch; the new behavior only restores cross-turn continuity, not mid-turn resume.
 - `sessionId = cursor-${conversationId}` remains the persistence key for raw-message logging; it is independent of the SDK `agentId`.
 
 **Trade-offs:**
-- One extra indexed PK lookup per turn (~µs); negligible.
-- An additional small table and a tiny repository (`CursorSessionRepository`) on the Bun side.
-- A stale `agent_id` (deleted server-side or local-store gone) falls back to `Agent.create` and persists the new id — see the worker's `Agent.resume` try/catch.
+- One failed `Agent.resume` round-trip on every first turn before falling through to `Agent.create`. Negligible vs. model latency.
+- No room for engine-managed id rotation — the deterministic id is the contract.
+- If Cursor cloud agents are added later, they auto-issue `bc-` prefixed ids and reject caller-supplied ones; this scheme would need to revert to persisted ids at that point. Currently moot — local agents only.
 
 ### 3. Event Streaming: Direct from Run.stream()
 
