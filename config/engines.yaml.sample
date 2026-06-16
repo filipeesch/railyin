@@ -46,7 +46,14 @@ engines:
   #     ollama:
   #       base_url: http://localhost:11434/v1
 
-  # Pi — local LLM first engine (LM Studio, Ollama, any OpenAI-compatible endpoint)
+  # Cursor — uses the Cursor Agent SDK for AI agent execution.
+  # Requires a Cursor API key (cursor.com → settings → API keys).
+  # Set `api_key:` here, or leave it unset to fall back to the CURSOR_API_KEY env var.
+  # - id: cursor
+  #   type: cursor
+  #   api_key: cur_xxx     # optional; otherwise reads from $CURSOR_API_KEY
+  #   model: cursor/latest # optional, defaults to Cursor's default model
+# Pi — local LLM first engine (LM Studio, Ollama, any OpenAI-compatible endpoint)
   # Uses Railyin-native tools with content-hash dedup and per-path undo stack.
   # - id: pi-local
   #   type: pi

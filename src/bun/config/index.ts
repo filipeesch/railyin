@@ -195,7 +195,15 @@ export interface PiEngineConfig {
   default_sampling_preset?: string;
 }
 
-export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig | PiEngineConfig;
+/** Cursor engine config — uses the Cursor Agent SDK. */
+export interface CursorEngineConfig {
+  type: "cursor";
+  /** Default model for the Cursor agent. If unset, Cursor uses its default model. */
+  model?: string;
+  /** Cursor API key. Falls back to `process.env.CURSOR_API_KEY` when omitted. */
+  api_key?: string;
+}
+export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEngineConfig | OpenCodeEngineConfig | PiEngineConfig | CursorEngineConfig;
 
 /**
  * A single engine entry from `engines.yaml`.
@@ -738,6 +746,10 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
   const workflows: WorkflowTemplateConfig[] = [];
 
   if (existsSync(workflowsDir)) {
+    // Sort so workflow load order is deterministic across filesystems —
+    // macOS APFS returns readdirSync alphabetically, Linux ext4 doesn't,
+    // which previously made tests asserting "first available workflow"
+    // platform-dependent.
     const files = readdirSync(workflowsDir)
       .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
       .sort();
