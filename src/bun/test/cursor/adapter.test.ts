@@ -147,7 +147,7 @@ describe("MockCursorSdkAdapter", () => {
     });
   });
 
-  describe("listModels / listCommands", () => {
+  describe("listModels", () => {
     it("returns the default mock model unless overridden", async () => {
       const adapter = new MockCursorSdkAdapter();
       const models = await adapter.listModels("/tmp");
@@ -163,11 +163,6 @@ describe("MockCursorSdkAdapter", () => {
       expect(models).toEqual([
         { value: "claude-sonnet-4-6", displayName: "Sonnet", supportsThinking: true },
       ]);
-    });
-
-    it("returns no slash commands", async () => {
-      const adapter = new MockCursorSdkAdapter();
-      expect(await adapter.listCommands("/tmp")).toEqual([]);
     });
   });
 

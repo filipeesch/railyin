@@ -47,11 +47,17 @@ function maybeAddWrittenFiles(
   let removed = 0;
 
   if (EDIT_TOOL_NAMES.has(name)) {
-    const addedMatch = /(\d+) lines? added/.exec(event.result);
-    const removedMatch = /(\d+) lines? removed/.exec(event.result);
-    added = addedMatch ? parseInt(addedMatch[1], 10) : 0;
-    removed = removedMatch ? parseInt(removedMatch[1], 10) : 0;
+    // Parse counts from the unified diff spec directly — decoupled from prose wording.
+    // If no diff is available (e.g. "No changes"), both counts stay 0.
+    const rawDiffStr = event.detailedResult;
+    if (rawDiffStr) {
+      for (const line of rawDiffStr.split('\n')) {
+        if (line.startsWith('+') && !line.startsWith('+++')) added++;
+        else if (line.startsWith('-') && !line.startsWith('---')) removed++;
+      }
+    }
   } else {
+    // Write: "File written (N lines)" — internal format we fully control.
     const match = /\((\d+) lines?\)/.exec(event.result);
     added = match ? parseInt(match[1], 10) : 0;
   }

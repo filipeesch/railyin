@@ -43,7 +43,6 @@ export class MockCursorSdkAdapter implements CursorSdkAdapter {
     runConfigs: [] as CursorRunConfig[],
     cancelCalls: 0,
     listModelsCalls: 0,
-    listCommandsCalls: 0,
     shutdownCalls: 0,
   };
 
@@ -114,11 +113,6 @@ export class MockCursorSdkAdapter implements CursorSdkAdapter {
   async listModels(_workingDirectory: string): Promise<CursorSdkModelInfo[]> {
     this.trace.listModelsCalls += 1;
     return this.models;
-  }
-
-  async listCommands(_workingDirectory: string): Promise<Array<{ name: string; description: string }>> {
-    this.trace.listCommandsCalls += 1;
-    return [];
   }
 
   async shutdownAll(): Promise<void> {
