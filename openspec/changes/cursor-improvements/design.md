@@ -32,11 +32,13 @@ The Cursor engine is missing all of these behaviors.
 
 ### 2. Worker sends `detailedResult` for Edit/Write tool results
 
-The Cursor SDK's `Edit` built-in returns `{ status: "success", value: { linesAdded?, linesRemoved?, diffString? } }`. The `Write` built-in returns `{ status: "success", value: { path, linesCreated, fileSize } }`.
+The Cursor SDK's built-in tools arrive with **lowercase names** (`"edit"`, `"write"`, `"multiedit"`, `"read"`, `"shell"`, `"grep"`, `"glob"`). All name comparisons in `normalizeBuiltinToolResult`, `EDIT_TOOL_NAMES`, `WRITE_TOOL_NAMES`, and `buildCursorToolDisplay` must handle these lowercase variants (capitalized variants kept as fallback).
+
+The Cursor SDK's `edit` built-in returns `{ status: "success", value: { linesAdded?, linesRemoved?, diffString? } }`. The `write` built-in returns `{ status: "success", value: { path, linesCreated, fileSize } }`.
 
 Rather than passing the raw JSON to the engine and re-parsing there, the worker normalizes:
-- `result` → human-readable: `"3 lines added, 1 removed"` (Edit) / `"File written (10 lines)"` (Write)
-- `detailedResult` → `diffString` when available (Edit only)
+- `result` → human-readable: `"3 lines added, 1 line removed"` (edit) / `"File written (10 lines)"` (write)
+- `detailedResult` → `diffString` when available (edit only)
 
 The `EngineEvent` type already has `detailedResult?: string`, so `EventMessage` (which wraps `EngineEvent`) carries this without any protocol change.
 
