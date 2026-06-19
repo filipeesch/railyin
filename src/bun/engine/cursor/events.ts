@@ -65,7 +65,7 @@ export function normalizeBuiltinToolResult(
   name: string,
   rawResult: unknown,
 ): { result: string; detailedResult?: string } {
-  if (name === "Edit" || name === "MultiEdit") {
+  if (name === "edit" || name === "multiedit" || name === "Edit" || name === "MultiEdit") {
     const raw = rawResult as Record<string, unknown> | null | undefined;
     const value = (raw?.value != null && typeof raw.value === "object")
       ? (raw.value as Record<string, unknown>)
@@ -79,7 +79,7 @@ export function normalizeBuiltinToolResult(
     const result = parts.length > 0 ? parts.join(", ") : "No changes";
     return diffString ? { result, detailedResult: diffString } : { result };
   }
-  if (name === "Write") {
+  if (name === "write" || name === "Write") {
     const raw = rawResult as Record<string, unknown> | null | undefined;
     const value = (raw?.value != null && typeof raw.value === "object")
       ? (raw.value as Record<string, unknown>)
@@ -230,6 +230,7 @@ export function buildCursorToolDisplay(
   if (COMMON_TOOL_NAMES.has(name)) return buildCommonToolDisplay(name, args);
   const str = (v: unknown): string => (v != null ? String(v) : "");
   switch (name) {
+    case "read":
     case "Read":
     case "railyin_read":
       return {
@@ -238,12 +239,15 @@ export function buildCursorToolDisplay(
         contentType: "file",
         startLine: typeof args.start_line === "number" && args.start_line > 0 ? args.start_line : undefined,
       };
+    case "write":
     case "Write":
       return {
         label: canonicalToolDisplayLabel("write"),
         subject: stripWorktreePath(str(args.path || args.file_path) || undefined, worktreePath),
         contentType: "file",
       };
+    case "edit":
+    case "multiedit":
     case "Edit":
     case "MultiEdit":
       return {
@@ -251,6 +255,7 @@ export function buildCursorToolDisplay(
         subject: stripWorktreePath(str(args.path || args.file_path) || undefined, worktreePath),
         contentType: "file",
       };
+    case "shell":
     case "Shell":
     case "Bash":
     case "railyin_shell":
@@ -259,12 +264,14 @@ export function buildCursorToolDisplay(
         subject: stripWorktreePath(str(args.command || args.cmd) || undefined, worktreePath),
         contentType: "terminal",
       };
+    case "grep":
     case "Grep":
     case "railyin_grep":
       return {
         label: canonicalToolDisplayLabel("grep"),
         subject: str(args.pattern || args.query) || undefined,
       };
+    case "glob":
     case "Glob":
     case "railyin_glob":
       return {

@@ -27,8 +27,8 @@ import type { Task } from "../../../shared/rpc-types.ts";
 
 export { createDefaultCursorSdkAdapter };
 
-const EDIT_TOOL_NAMES = new Set(["Edit", "MultiEdit"]);
-const WRITE_TOOL_NAMES = new Set(["Write"]);
+const EDIT_TOOL_NAMES = new Set(["edit", "multiedit", "Edit", "MultiEdit"]);
+const WRITE_TOOL_NAMES = new Set(["write", "Write"]);
 
 type ToolResultEvent = Extract<EngineEvent, { type: "tool_result" }>;
 

@@ -231,7 +231,7 @@ function normalizeCursorToolResult(rawResult) {
 // objects instead of content arrays. Falls back to normalizeCursorToolResult
 // for all other tools (custom/MCP) which already handle their shapes correctly.
 function normalizeBuiltinToolResult(name, rawResult) {
-  if (name === "Edit" || name === "MultiEdit") {
+  if (name === "edit" || name === "multiedit" || name === "Edit" || name === "MultiEdit") {
     const value = (rawResult?.value != null && typeof rawResult.value === "object") ? rawResult.value : {};
     const added = typeof value.linesAdded === "number" ? value.linesAdded : 0;
     const removed = typeof value.linesRemoved === "number" ? value.linesRemoved : 0;
@@ -242,7 +242,7 @@ function normalizeBuiltinToolResult(name, rawResult) {
     const result = parts.length > 0 ? parts.join(", ") : "No changes";
     return diffString ? { result, detailedResult: diffString } : { result };
   }
-  if (name === "Write") {
+  if (name === "write" || name === "Write") {
     const value = (rawResult?.value != null && typeof rawResult.value === "object") ? rawResult.value : {};
     const linesCreated = typeof value.linesCreated === "number" ? value.linesCreated : 0;
     return { result: `File written (${linesCreated} line${linesCreated === 1 ? "" : "s"})` };
