@@ -227,6 +227,29 @@ function normalizeCursorToolResult(rawResult) {
   try { return JSON.stringify(rawResult, null, 2); } catch { return String(rawResult); }
 }
 
+// Special-cases Cursor SDK built-in tool results that return structured value
+// objects instead of content arrays. Falls back to normalizeCursorToolResult
+// for all other tools (custom/MCP) which already handle their shapes correctly.
+function normalizeBuiltinToolResult(name, rawResult) {
+  if (name === "edit" || name === "multiedit" || name === "Edit" || name === "MultiEdit") {
+    const value = (rawResult?.value != null && typeof rawResult.value === "object") ? rawResult.value : {};
+    const added = typeof value.linesAdded === "number" ? value.linesAdded : 0;
+    const removed = typeof value.linesRemoved === "number" ? value.linesRemoved : 0;
+    const diffString = typeof value.diffString === "string" ? value.diffString : undefined;
+    const parts = [];
+    if (added > 0) parts.push(`${added} line${added === 1 ? "" : "s"} added`);
+    if (removed > 0) parts.push(`${removed} line${removed === 1 ? "" : "s"} removed`);
+    const result = parts.length > 0 ? parts.join(", ") : "No changes";
+    return diffString ? { result, detailedResult: diffString } : { result };
+  }
+  if (name === "write" || name === "Write") {
+    const value = (rawResult?.value != null && typeof rawResult.value === "object") ? rawResult.value : {};
+    const linesCreated = typeof value.linesCreated === "number" ? value.linesCreated : 0;
+    return { result: `File written (${linesCreated} line${linesCreated === 1 ? "" : "s"})` };
+  }
+  return { result: normalizeCursorToolResult(rawResult) };
+}
+
 function translateCursorMessage(message) {
   const events = [];
   switch (message.type) {
@@ -257,14 +280,15 @@ function translateCursorMessage(message) {
         });
       } else if (message.status === "completed" || message.status === "error") {
         const isError = message.status === "error";
-        const text = normalizeCursorToolResult(message.result);
-        const result = text.length > 0 ? text : isError ? "(tool returned an error with no message)" : "(no output)";
+        const { result: rawText, detailedResult } = normalizeBuiltinToolResult(resolvedName, message.result);
+        const result = rawText.length > 0 ? rawText : isError ? "(tool returned an error with no message)" : "(no output)";
         events.push({
           type: "tool_result",
           name: resolvedName,
           result,
           callId: message.call_id,
           isError,
+          ...(detailedResult ? { detailedResult } : {}),
         });
       }
       break;

@@ -22,7 +22,6 @@ export interface CursorSdkAdapter {
   run(config: CursorRunConfig): AsyncIterable<EngineEvent>;
   cancel(executionId: number): Promise<void>;
   listModels(workingDirectory: string): Promise<CursorSdkModelInfo[]>;
-  listCommands(workingDirectory: string): Promise<Array<{ name: string; description: string }>>;
   shutdownAll?(): Promise<void>;
 }
 

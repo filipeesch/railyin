@@ -14,6 +14,9 @@ import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, Co
 import { createDefaultCursorSdkAdapter, type CursorSdkAdapter } from "./adapter.ts";
 import { buildCursorTools } from "./tools.ts";
 import { buildCursorToolDisplay } from "./events.ts";
+import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
+import { CopilotDialect } from "../dialects/copilot-dialect.ts";
+import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { TodoRepository } from "../../db/todos.ts";
@@ -24,6 +27,54 @@ import type { Task } from "../../../shared/rpc-types.ts";
 
 export { createDefaultCursorSdkAdapter };
 
+const EDIT_TOOL_NAMES = new Set(["edit", "multiedit", "Edit", "MultiEdit"]);
+const WRITE_TOOL_NAMES = new Set(["write", "Write"]);
+
+type ToolResultEvent = Extract<EngineEvent, { type: "tool_result" }>;
+
+function maybeAddWrittenFiles(
+  event: ToolResultEvent,
+  tracked: { name: string; args: Record<string, unknown> } | undefined,
+): EngineEvent {
+  if (!tracked) return event;
+  const { name, args } = tracked;
+  if (!EDIT_TOOL_NAMES.has(name) && !WRITE_TOOL_NAMES.has(name)) return event;
+
+  const path = String(args.path ?? args.file_path ?? "");
+  if (!path) return event;
+
+  let added = 0;
+  let removed = 0;
+
+  if (EDIT_TOOL_NAMES.has(name)) {
+    // Parse counts from the unified diff spec directly — decoupled from prose wording.
+    // If no diff is available (e.g. "No changes"), both counts stay 0.
+    const rawDiffStr = event.detailedResult;
+    if (rawDiffStr) {
+      for (const line of rawDiffStr.split('\n')) {
+        if (line.startsWith('+') && !line.startsWith('+++')) added++;
+        else if (line.startsWith('-') && !line.startsWith('---')) removed++;
+      }
+    }
+  } else {
+    // Write: "File written (N lines)" — internal format we fully control.
+    const match = /\((\d+) lines?\)/.exec(event.result);
+    added = match ? parseInt(match[1], 10) : 0;
+  }
+
+  const rawDiff = event.detailedResult;
+  const operation = WRITE_TOOL_NAMES.has(name) ? "write_file" : "edit_file";
+  const writtenFile = {
+    operation,
+    path,
+    added,
+    removed,
+    ...(rawDiff ? { rawDiff } : {}),
+  } as FileDiffPayload & { rawDiff?: string };
+
+  return { ...event, writtenFiles: [writtenFile] };
+}
+
 interface ExecutionState {
   abort: AbortController;
 }
@@ -31,15 +82,18 @@ interface ExecutionState {
 export class CursorEngine implements ExecutionEngine {
   private readonly adapter: CursorSdkAdapter;
   private readonly onTaskUpdated: OnTaskUpdated;
+  private readonly dialect: SlashCommandDialect;
   private readonly executions = new Map<number, ExecutionState>();
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     adapter: CursorSdkAdapter = createDefaultCursorSdkAdapter(),
+    dialect: SlashCommandDialect = new CopilotDialect(),
   ) {
     this.onTaskUpdated = onTaskUpdated;
     this.adapter = adapter;
+    this.dialect = dialect;
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -72,8 +126,39 @@ export class CursorEngine implements ExecutionEngine {
     }));
   }
 
-  async listCommands(_taskId: number): Promise<CommandInfo[]> {
-    return await this.adapter.listCommands(process.cwd());
+  async listCommands(taskId: number): Promise<CommandInfo[]> {
+    const { getDb } = await import("../../db/index.ts");
+    const { getDefaultWorkspaceKey } = await import("../../workspace-context.ts");
+    const { getLoadedProjectByKey } = await import("../../project-store.ts");
+
+    const db = getDb();
+    const taskRow = db
+      .query<{ board_id: number; project_key: string }, [number]>(
+        "SELECT board_id, project_key FROM tasks WHERE id = ?",
+      )
+      .get(taskId);
+
+    const gitRow = db
+      .query<{ worktree_path: string | null }, [number]>(
+        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+      )
+      .get(taskId);
+
+    const worktreePath = gitRow?.worktree_path ?? process.cwd();
+
+    let projectPath: string | undefined;
+    if (taskRow) {
+      const wsKey =
+        db.query<{ workspace_key: string }, [number]>(
+          "SELECT workspace_key FROM boards WHERE id = ?",
+        ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+      const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
+      if (project?.projectPath && project.projectPath !== worktreePath) {
+        projectPath = project.projectPath;
+      }
+    }
+
+    return this.dialect.listCommands(worktreePath, projectPath);
   }
 
   async shutdown(_options?: unknown): Promise<void> {
@@ -149,6 +234,17 @@ export class CursorEngine implements ExecutionEngine {
       onSuspend,
     );
 
+    // Resolve slash-command references (e.g. "/opsx-explore ...") to the
+    // contents of .github/prompts/<name>.prompt.md before composing the prompt.
+    let resolvedPrompt: string;
+    try {
+      const resolved = await this.dialect.resolvePrompt(prompt, workingDirectory ?? "");
+      resolvedPrompt = resolved.content;
+    } catch (err) {
+      yield { type: "error", message: err instanceof Error ? err.message : String(err), fatal: true };
+      return;
+    }
+
     // The Cursor SDK has no system-message slot — inline the task context and
     // stage instructions as a prefix to the user prompt.
     const taskBlock = taskContext
@@ -168,7 +264,7 @@ export class CursorEngine implements ExecutionEngine {
       "Use the built-in `Read` only for single, known files; otherwise use the Railyn tools.",
     ].join("\n");
     const prefix = [systemBlock, taskBlock, bypassNotice].filter(Boolean).join("\n\n");
-    const composedPrompt = prefix ? `${prefix}\n\n---\n\n${prompt}` : prompt;
+    const composedPrompt = prefix ? `${prefix}\n\n---\n\n${resolvedPrompt}` : resolvedPrompt;
 
     // Deterministic agent id derived from the conversation so the Cursor SDK
     // resumes the same agent across turns without any DB state. The worker
@@ -200,17 +296,33 @@ export class CursorEngine implements ExecutionEngine {
       },
     };
 
+    const toolArgsByCallId = new Map<string, { name: string; args: Record<string, unknown> }>();
+
     try {
       for await (const event of this.adapter.run(runConfig)) {
         // Swallow the adapter's terminal "done" — we emit our own terminal
         // event (either decision_request or done) once the stream ends.
         if (event.type === "done") break;
-        if (event.type === "tool_start" && !event.display) {
+
+        if (event.type === "tool_start") {
           let parsedArgs: Record<string, unknown> = {};
           try { parsedArgs = JSON.parse(event.arguments) as Record<string, unknown>; } catch { /* keep empty */ }
-          yield { ...event, display: buildCursorToolDisplay(event.name, parsedArgs, workingDirectory) };
+          if (event.callId) {
+            toolArgsByCallId.set(event.callId, { name: event.name, args: parsedArgs });
+          }
+          if (!event.display) {
+            yield { ...event, display: buildCursorToolDisplay(event.name, parsedArgs, workingDirectory) };
+            continue;
+          }
+        }
+
+        if (event.type === "tool_result" && event.callId) {
+          const tracked = toolArgsByCallId.get(event.callId);
+          toolArgsByCallId.delete(event.callId);
+          yield maybeAddWrittenFiles(event, tracked);
           continue;
         }
+
         yield event;
       }
 

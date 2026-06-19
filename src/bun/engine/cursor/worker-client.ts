@@ -299,10 +299,6 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
     } as any);
   }
 
-  async listCommands(_workingDirectory: string): Promise<Array<{ name: string; description: string }>> {
-    return [];
-  }
-
   async shutdownAll(): Promise<void> {
     if (!this.worker) return;
     this.shuttingDown = true;
