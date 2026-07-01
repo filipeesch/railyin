@@ -37,9 +37,10 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
 
   override build(
     task: TaskRow, conversationId: number, executionId: number, prompt: string, systemInstructions: string | undefined, workingDirectory: string, signal: AbortSignal, onRawModelMessage: (raw: RawModelMessage) => void, attachments?: import("../../shared/rpc-types.ts").Attachment[],
+    model?: string, projectPath?: string, workspaceKey?: string,
   ) {
     const params = super.build(
-      task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments,
+      task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments, model, projectPath, workspaceKey,
     );
     this.lastBuilt = params;
     return params;
@@ -167,5 +168,22 @@ describe("RetryExecutor — git context propagation", () => {
     const result = await executor.execute(taskId);
 
     expect(result.task.worktreePath).toBe("/wt/1");
+  });
+});
+
+// ─── RE-WK-1: workspaceKey propagation through retry ──────────────
+
+describe("RE-WK-1: workspaceKey propagation through retry", () => {
+  it("RE-WK-1: retry preserves task's board workspaceKey", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', execution_state = 'failed' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const { builder, executor } = makeExecutor();
+    await executor.execute(taskId);
+
+    expect(builder.lastBuilt?.workspaceKey).toBe("ws-other");
   });
 });

@@ -56,6 +56,8 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
     onRawModelMessage: (raw: RawModelMessage) => void,
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
     model?: string,
+    projectPath?: string,
+    workspaceKey?: string,
   ) {
     const params = super.build(
       task,
@@ -68,6 +70,8 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
       onRawModelMessage,
       attachments,
       model,
+      projectPath,
+      workspaceKey,
     );
     this.lastBuilt = params;
     return params;
@@ -611,5 +615,63 @@ describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
 
     const prompt = streamProcessor.lastRun?.params.prompt ?? "";
     expect(prompt).not.toContain("<message_history>");
+  });
+});
+
+// ─── TE-WK-1..2: workspaceKey propagation through transition ──────────────
+
+describe("TE-WK-1..2: workspaceKey propagation through transition", () => {
+  it("TE-WK-1: transition uses task's board workspaceKey in ExecutionParams", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(streamProcessor.lastRun?.params.workspaceKey).toBe("ws-other");
+  });
+
+  it("TE-WK-2: transition with non-default workspace key flows through", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workspace_key = 'test-workspace' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(streamProcessor.lastRun?.params.workspaceKey).toBe("test-workspace");
   });
 });
