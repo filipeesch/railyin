@@ -10,6 +10,10 @@
  * Auth: handled via the api_key in engines.yaml or process.env.CURSOR_API_KEY.
  */
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
+import { CursorDialect } from "../dialects/cursor-dialect.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated, OnNewMessage, CommonToolContext } from "../types.ts";
 import { createDefaultCursorSdkAdapter, type CursorSdkAdapter } from "./adapter.ts";
 import { buildCursorTools } from "./tools.ts";
@@ -19,7 +23,6 @@ import { getConfig } from "../../config/index.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
-import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 import type { Task } from "../../../shared/rpc-types.ts";
 
 export { createDefaultCursorSdkAdapter };
@@ -31,15 +34,18 @@ interface ExecutionState {
 export class CursorEngine implements ExecutionEngine {
   private readonly adapter: CursorSdkAdapter;
   private readonly onTaskUpdated: OnTaskUpdated;
+  private readonly dialect: SlashCommandDialect;
   private readonly executions = new Map<number, ExecutionState>();
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
     _onNewMessage: OnNewMessage,
     adapter: CursorSdkAdapter = createDefaultCursorSdkAdapter(),
+    dialect: SlashCommandDialect = new CursorDialect(),
   ) {
     this.onTaskUpdated = onTaskUpdated;
     this.adapter = adapter;
+    this.dialect = dialect;
   }
 
   execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -72,8 +78,39 @@ export class CursorEngine implements ExecutionEngine {
     }));
   }
 
-  async listCommands(_taskId: number): Promise<CommandInfo[]> {
-    return await this.adapter.listCommands(process.cwd());
+  async listCommands(taskId: number): Promise<CommandInfo[]> {
+    const { getDb } = await import("../../db/index.ts");
+    const { getDefaultWorkspaceKey } = await import("../../workspace-context.ts");
+    const { getLoadedProjectByKey } = await import("../../project-store.ts");
+
+    const db = getDb();
+    const taskRow = db
+      .query<{ board_id: number; project_key: string }, [number]>(
+        "SELECT board_id, project_key FROM tasks WHERE id = ?",
+      )
+      .get(taskId);
+
+    const gitRow = db
+      .query<{ worktree_path: string | null }, [number]>(
+        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+      )
+      .get(taskId);
+
+    const worktreePath = gitRow?.worktree_path ?? process.cwd();
+
+    let projectPath: string | undefined;
+    if (taskRow) {
+      const wsKey =
+        db.query<{ workspace_key: string }, [number]>(
+          "SELECT workspace_key FROM boards WHERE id = ?",
+        ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+      const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
+      if (project?.projectPath && project.projectPath !== worktreePath) {
+        projectPath = project.projectPath;
+      }
+    }
+
+    return this.dialect.listCommands(worktreePath, projectPath);
   }
 
   async shutdown(_options?: unknown): Promise<void> {
@@ -167,8 +204,30 @@ export class CursorEngine implements ExecutionEngine {
       "- Read (fallback) → `railyin_read`",
       "Use the built-in `Read` only for single, known files; otherwise use the Railyn tools.",
     ].join("\n");
-    const prefix = [systemBlock, taskBlock, bypassNotice].filter(Boolean).join("\n\n");
-    const composedPrompt = prefix ? `${prefix}\n\n---\n\n${prompt}` : prompt;
+    // Resolve slash-command references (e.g. /create-or-update-pr → XML-wrapped body)
+    const resolvedPrompt = await this.dialect.resolvePrompt(prompt, workingDirectory);
+    const effectivePrompt = resolvedPrompt.content;
+
+    // Read skill SKILL.md files and prepend to system instructions
+    const skillPaths = this.dialect.getSkillPaths(workingDirectory);
+    const skillBlocks: string[] = [];
+    for (const skillDir of skillPaths) {
+      if (!existsSync(skillDir)) continue;
+      const skillFiles = readdirSync(skillDir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name);
+      for (const name of skillFiles) {
+        const skillMd = join(skillDir, name, "SKILL.md");
+        if (existsSync(skillMd)) {
+          try {
+            const content = readFileSync(skillMd, "utf-8");
+            skillBlocks.push(`## Skill: ${name}\n\n${content}`);
+          } catch { /* skip unreadable */ }
+        }
+      }
+    }
+    const skillsBlock = skillBlocks.length > 0 ? skillBlocks.join("\n\n") : null;
+
+    const prefix = [skillsBlock, systemBlock, taskBlock, bypassNotice].filter(Boolean).join("\n\n");
+    const composedPrompt = prefix ? `${prefix}\n\n---\n\n${effectivePrompt}` : effectivePrompt;
 
     // Deterministic agent id derived from the conversation so the Cursor SDK
     // resumes the same agent across turns without any DB state. The worker
@@ -202,6 +261,7 @@ export class CursorEngine implements ExecutionEngine {
     };
 
     try {
+      if (combinedAbort.signal.aborted) return;
       for await (const event of this.adapter.run(runConfig)) {
         // Swallow the adapter's terminal "done" — we emit our own terminal
         // event (either decision_request or done) once the stream ends.

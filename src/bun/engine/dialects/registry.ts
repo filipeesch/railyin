@@ -2,6 +2,7 @@ import type { SlashCommandDialect } from "./slash-command-dialect.ts";
 import { NullDialect } from "./null-dialect.ts";
 import { CopilotDialect } from "./copilot-dialect.ts";
 import { ClaudeDialect } from "./claude-dialect.ts";
+import { CursorDialect } from "./cursor-dialect.ts";
 
 /**
  * Registry that maps dialect names to factory functions.
@@ -48,11 +49,13 @@ export class SlashCommandDialectRegistry {
  * Build the default registry pre-loaded with the built-in dialects:
  *   - "copilot" -> CopilotDialect (.github/prompts/*.prompt.md)
  *   - "claude"  -> ClaudeDialect  (.claude/commands/ recursive)
+ *   - "cursor"  -> CursorDialect  (.cursor/commands/ recursive)
  *   - "none"    -> NullDialect    (no-op)
  */
 export function createDefaultDialectRegistry(): SlashCommandDialectRegistry {
   return new SlashCommandDialectRegistry()
     .register("copilot", () => new CopilotDialect())
     .register("claude", () => new ClaudeDialect())
+    .register("cursor", () => new CursorDialect())
     .register("none", () => new NullDialect());
 }

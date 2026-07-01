@@ -17,7 +17,7 @@
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import { setMaxListeners } from "node:events";
-import { Agent, Cursor } from "@cursor/sdk";
+import { Agent, AgentBusyError, Cursor } from "@cursor/sdk";
 import { resumeOrCreateAgent } from "./worker-resume.mjs";
 
 // The SDK assigns its own agent id when Agent.create is called without one,
@@ -60,6 +60,42 @@ function makeProxyTool(runId, schema) {
   };
 }
 
+/**
+ * Build the base options for Agent.create / Agent.resume.
+ * settingSources: ["project"] ensures .cursorrules and .cursor/rules/*.mdc
+ * are loaded automatically from the working directory.
+ */
+export function buildBaseOptions(apiKey, model, workingDirectory, customTools) {
+  return {
+    model: model ? { id: model } : undefined,
+    apiKey,
+    local: {
+      cwd: workingDirectory,
+      customTools,
+      settingSources: ["project"],
+    },
+  };
+}
+
+/**
+ * Send a prompt to the agent, retrying once with force:true on AgentBusyError.
+ *
+ * AgentBusyError can occur after a decision_request abort: run.cancel() is
+ * fire-and-forget, so the next turn's agent.send() may arrive before
+ * "cancelled" is committed to the SDK's SQLite store. force:true expires
+ * the stale persisted run atomically.
+ */
+export async function sendWithBusyRetry(agent, prompt) {
+  try {
+    return await agent.send(prompt);
+  } catch (err) {
+    if (err instanceof AgentBusyError) {
+      return await agent.send(prompt, { local: { force: true } });
+    }
+    throw err;
+  }
+}
+
 async function handleStartRun(msg) {
   const { runId, apiKey, workingDirectory, model, prompt, toolSchemas, agentId } = msg;
   const customTools = {};
@@ -71,14 +107,10 @@ async function handleStartRun(msg) {
   runs.set(runId, state);
 
   try {
-    const baseOptions = {
-      model: model ? { id: model } : undefined,
-      apiKey,
-      local: { cwd: workingDirectory, customTools },
-    };
+    const baseOptions = buildBaseOptions(apiKey, model, workingDirectory, customTools);
 
     state.agent = await resumeOrCreateAgent(Agent, agentId, baseOptions);
-    state.run = await state.agent.send(prompt);
+    state.run = await sendWithBusyRetry(state.agent, prompt);
 
     for await (const message of state.run.stream()) {
       if (state.aborted) break;
