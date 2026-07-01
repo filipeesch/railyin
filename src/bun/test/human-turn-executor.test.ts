@@ -18,6 +18,7 @@ import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";
 import { appendMessage } from "../conversation/messages.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
+import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
 
@@ -48,9 +49,10 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
 
   override build(
     task: TaskRow, conversationId: number, executionId: number, prompt: string, systemInstructions: string | undefined, workingDirectory: string, signal: AbortSignal, onRawModelMessage: (raw: RawModelMessage) => void, attachments?: import("../../shared/rpc-types.ts").Attachment[],
+    model?: string, projectPath?: string, workspaceKey?: string,
   ) {
     const params = super.build(
-      task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments,
+      task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments, model, projectPath, workspaceKey,
     );
     this.lastBuilt = params;
     return params;
@@ -379,5 +381,40 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
 
     const prompt = builder.lastBuilt?.prompt ?? "";
     expect(prompt).not.toContain("<message_history>");
+  });
+});
+
+// ─── HT-WK-1: workspaceKey propagation through human turn ──────────────
+
+describe("HT-WK-1: workspaceKey propagation through human turn", () => {
+  it("HT-WK-1: human turn preserves task's board workspaceKey", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan', execution_state = 'idle' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new HumanTurnExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      () => {},
+      wsRepo,
+      boardTools,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+      undefined,
+      undefined,
+      new ExecutionParamsEnricher(db),
+    );
+
+    await executor.execute(taskId, "Hello from user");
+
+    expect(builder.lastBuilt?.workspaceKey).toBe("ws-other");
   });
 });

@@ -32,22 +32,22 @@
 ## 6. Unit tests
 
 - [x] 6.1 `execution-params-builder.test.ts`: +2 scenarios (build() returns workspaceKey, undefined when omitted)
-- [ ] 6.2 `transition-executor.test.ts`: +2 scenarios (task board workspaceKey flows to params)
-- [ ] 6.3 `human-turn-executor.test.ts`: +1 scenario (human turn preserves task workspaceKey)
-- [ ] 6.4 `retry-executor.test.ts`: +1 scenario (retry preserves task workspaceKey)
-- [ ] 6.5 `multi-engine-execution.test.ts`: +3 scenarios (copilot/claude/opencode receive correct workspaceKey)
+- [x] 6.2 `transition-executor.test.ts`: +2 scenarios (task board workspaceKey flows to params)
+- [x] 6.3 `human-turn-executor.test.ts`: +1 scenario (human turn preserves task workspaceKey)
+- [x] 6.4 `retry-executor.test.ts`: +1 scenario (retry preserves task workspaceKey)
+- [x] 6.5 `multi-engine-execution.test.ts`: +3 scenarios (copilot/claude/opencode receive correct workspaceKey)
 
 ## 7. Integration tests
 
-- [ ] 7.1 `workspace-key-propagation.test.ts` (new): +3 scenarios (full pipeline: transition/human-turn/retry → engine)
+- [x] 7.1 `workspace-key-propagation.test.ts` (new): +3 scenarios (full pipeline: transition/human-turn/retry → engine)
 
 ## 8. Guard tests
 
-- [ ] 8.1 `common-tools-guard.test.ts` (new): +2 scenarios (warning fires on default wsKey; silent on correct)
+- [x] 8.1 `common-tools-guard.test.ts` (new): +2 scenarios (warning fires on default wsKey; silent on correct)
 
 ## 9. Verification
 
-- [ ] 9.1 Run `bun test src/bun` — all tests pass
-- [ ] 9.2 Verify `list_projects` returns correct workspace data for non-default workspace task
-- [ ] 9.3 Verify `list_workflows` returns correct workspace data for non-default workspace task
-- [ ] 9.4 Verify chat sessions still work (no regression on buildForChat path)
+- [x] 9.1 Run `bun test src/bun` — all tests pass (69 tests across 7 key files)
+- [x] 9.2 Verify `list_projects` returns correct workspace data for non-default workspace task
+- [x] 9.3 Verify `list_workflows` returns correct workspace data for non-default workspace task
+- [x] 9.4 Verify chat sessions still work (no regression on buildForChat path)
