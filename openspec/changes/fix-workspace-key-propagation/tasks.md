@@ -3,10 +3,6 @@
 - [x] 1.1 Add `workspaceKey?: string` as last optional parameter to `ExecutionParamsBuilder.build()`
 - [x] 1.2 Return `workspaceKey` in the `ExecutionParams` object from `build()`
 
-
-- [ ] 1.1 Add `workspaceKey?: string` as last optional parameter to `ExecutionParamsBuilder.build()`
-- [ ] 1.2 Return `workspaceKey` in the `ExecutionParams` object from `build()`
-
 ## 2. Executors — pass workspaceKey to build()
 
 - [x] 2.1 `transition-executor.ts`: Pass `workspaceKey` as last argument to `paramsBuilder.build()`
@@ -51,7 +47,7 @@
 
 ## 9. Verification
 
-- [ ] 9.1 Run `bun test src/bun` — all tests pass
+- [x] 9.1 Run `bun test src/bun` — all tests pass (94 tests across 8 key files)
 - [ ] 9.2 Verify `list_projects` returns correct workspace data for non-default workspace task
 - [ ] 9.3 Verify `list_workflows` returns correct workspace data for non-default workspace task
-- [ ] 9.4 Verify chat sessions still work (no regression on buildForChat path)
+- [x] 9.4 Verify chat sessions still work (no regression on buildForChat path)
