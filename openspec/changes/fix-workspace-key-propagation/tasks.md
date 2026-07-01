@@ -3,10 +3,6 @@
 - [x] 1.1 Add `workspaceKey?: string` as last optional parameter to `ExecutionParamsBuilder.build()`
 - [x] 1.2 Return `workspaceKey` in the `ExecutionParams` object from `build()`
 
-
-- [ ] 1.1 Add `workspaceKey?: string` as last optional parameter to `ExecutionParamsBuilder.build()`
-- [ ] 1.2 Return `workspaceKey` in the `ExecutionParams` object from `build()`
-
 ## 2. Executors — pass workspaceKey to build()
 
 - [x] 2.1 `transition-executor.ts`: Pass `workspaceKey` as last argument to `paramsBuilder.build()`
