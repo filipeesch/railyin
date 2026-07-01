@@ -151,7 +151,7 @@ describe("CursorEngine dialect injection", () => {
         model: "cursor/mock-model",
         workingDirectory: tmpDir,
         prompt: "/my-cmd my-arg",
-        signal: undefined,
+        signal: new AbortController().signal,
         boardTools: {} as any,
       });
       const events: string[] = [];
@@ -179,7 +179,7 @@ describe("CursorEngine dialect injection", () => {
       model: "cursor/mock-model",
       workingDirectory: process.cwd(),
       prompt: "plain text prompt",
-      signal: undefined,
+      signal: new AbortController().signal,
       boardTools: {} as any,
     });
     for await (const _ of gen) {}
@@ -208,7 +208,7 @@ describe("CursorEngine dialect injection", () => {
         model: "cursor/mock-model",
         workingDirectory: tmpDir,
         prompt: "do something",
-        signal: undefined,
+        signal: new AbortController().signal,
         boardTools: {} as any,
       });
       for await (const _ of gen) {}
@@ -237,7 +237,7 @@ describe("CursorEngine dialect injection", () => {
       model: "cursor/mock-model",
       workingDirectory: process.cwd(),
       prompt: "hello world",
-      signal: undefined,
+      signal: new AbortController().signal,
       boardTools: {} as any,
     });
     for await (const _ of gen) {}
