@@ -28,6 +28,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import type { Model } from "@earendil-works/pi-ai";
+import { isContextOverflow } from "@earendil-works/pi-ai";
 
 /** Options passed to a SessionFactory when creating a new Pi agent session. */
 export interface SessionFactoryOptions {
@@ -130,7 +131,9 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
     resourceLoader,
     authStorage,
     settingsManager: SettingsManager.inMemory({
-      compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+      // Threshold-based compaction is managed by our turn_end handler (background_compaction config).
+      // Disabling the SDK's own threshold trigger prevents races with our session.compact() call.
+      compaction: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
     }),
   });
 
@@ -183,6 +186,7 @@ export class PiEngine implements ExecutionEngine {
     dialect: SlashCommandDialect = new NullDialect(),
     modelSettingsRepo: ModelSettingsRepository,
     sessionFactory: SessionFactory = defaultSessionFactory,
+    registry?: ProviderLimiterRegistry,
   ) {
     this.engineId = engineId;
     this.config = config;
@@ -193,7 +197,8 @@ export class PiEngine implements ExecutionEngine {
     this.sessionFactory = sessionFactory;
 
     // Build the provider limiter registry from configured providers.
-    this.registry = new ProviderLimiterRegistry();
+    // An injected registry is used as-is (primarily for testing); otherwise, build from config.
+    this.registry = registry ?? new ProviderLimiterRegistry();
     for (const [name, providerCfg] of Object.entries(config.providers ?? {})) {
       this.registry.register(
         name,
@@ -318,6 +323,7 @@ export class PiEngine implements ExecutionEngine {
     // close() terminates the for-await instantly regardless of timing.
     const queue = new AsyncQueue<EngineEvent>();
     const errorRef: { error?: Error } = {};
+    const sdkWillRetryRef = { value: false };
     let suspendedForDecision = false;
 
     // Wire the suspend callback for this execution into the shared ref.
@@ -387,6 +393,13 @@ export class PiEngine implements ExecutionEngine {
       for (const engineEvent of translateEvent(event as any, workingDirectory)) {
         queue.push(engineEvent);
       }
+
+      // Detect SDK overflow auto-compaction retry: when compaction_end fires with
+      // willRetry=true, the SDK has already deferred agent.continue() via setTimeout(100).
+      // We must not call continue() ourselves; instead we wait for agent_end.
+      if (event.type === "compaction_end" && !event.aborted && event.willRetry) {
+        sdkWillRetryRef.value = true;
+      }
     });
 
     // Start the prompt. On error, push an error event and then close the queue.
@@ -406,7 +419,7 @@ export class PiEngine implements ExecutionEngine {
       return;
     }
 
-    this.runPromptWithCompaction(session, resolvedPrompt, conversationId, queue, errorRef, providerName, signal);
+    this.runPromptWithCompaction(session, resolvedPrompt, conversationId, queue, errorRef, sdkWillRetryRef, providerName, signal);
 
     try {
       for await (const event of queue) {
@@ -816,16 +829,90 @@ export class PiEngine implements ExecutionEngine {
     conversationId: number,
     queue: AsyncQueue<EngineEvent>,
     errorRef: { error?: Error },
+    sdkWillRetryRef: { value: boolean },
     providerName: string,
     signal?: AbortSignal,
   ): void {
-    runWithLimiter(this.registry, providerName, signal, () => session.prompt(resolvedPrompt))
+    this.runWithCompactionResume(session, resolvedPrompt, conversationId, sdkWillRetryRef, providerName, signal)
       .catch((err: unknown) => {
         errorRef.error = err instanceof Error ? err : new Error(String(err));
       })
       .finally(() => {
         queue.close();
       });
+  }
+
+  /**
+   * Runs the agent prompt in a loop, resuming after background compaction or SDK overflow
+   * auto-compaction. Keeps the AsyncQueue open for the full lifetime of the agent run.
+   *
+   * Loop invariant:
+   * - First iteration: session.prompt(resolvedPrompt)
+   * - Subsequent iterations: session.agent.continue()
+   *
+   * Exit conditions (checked after each await):
+   * 1. SDK overflow retry (sdkWillRetryRef.value): await agent_end, then continue loop.
+   * 2. Background compaction in flight: await it, then check last message role.
+   *    - role !== "assistant" → agent was mid-turn when aborted → continue loop.
+   *    - role === "assistant" (and not overflow) → agent finished cleanly → break.
+   * 3. Neither applies → normal completion → break.
+   */
+  private async runWithCompactionResume(
+    session: AgentSession,
+    resolvedPrompt: string,
+    conversationId: number,
+    sdkWillRetryRef: { value: boolean },
+    providerName: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    let isFirstIteration = true;
+    while (true) {
+      if (isFirstIteration) {
+        isFirstIteration = false;
+        await runWithLimiter(this.registry, providerName, signal, () => session.prompt(resolvedPrompt));
+      } else {
+        await runWithLimiter(this.registry, providerName, signal, () => session.agent.continue());
+      }
+
+      // SDK overflow auto-compaction: the SDK deferred agent.continue() via setTimeout.
+      // Await agent_end instead of calling continue() ourselves to avoid a double-call.
+      if (sdkWillRetryRef.value) {
+        sdkWillRetryRef.value = false;
+        await this.waitForNextAgentEnd(session);
+        continue;
+      }
+
+      // Background compaction: session.compact() aborted the prompt mid-turn.
+      // If the agent was still mid-turn, we must continue; if it finished cleanly, we're done.
+      const bgCompaction = this.bgCompactions.get(conversationId);
+      if (bgCompaction) {
+        await bgCompaction;
+        const lastMsg = (session.agent.state.messages as any[]).at(-1);
+        if (lastMsg?.role !== "assistant" || isContextOverflow(lastMsg)) {
+          continue;
+        }
+        break;
+      }
+
+      // Normal completion.
+      break;
+    }
+  }
+
+  /**
+   * Subscribes to the session and resolves when the next `agent_end` event fires.
+   * Used to wait for the SDK's own overflow retry (which calls agent.continue() internally
+   * via setTimeout) without calling continue() ourselves.
+   */
+  private async waitForNextAgentEnd(session: AgentSession): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const unsub = session.subscribe((evt) => {
+        if (evt.type === "agent_end") {
+          unsub();
+          resolve();
+        }
+      });
+    });
   }
 
 }
