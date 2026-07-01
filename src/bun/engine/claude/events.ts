@@ -15,6 +15,11 @@ interface ClaudeContentBlock {
   input?: Record<string, unknown>;  // tool_use blocks have input
   tool_use_id?: string;  // tool_result blocks reference a tool_use_id
   content?: string | Array<{ type: string; text?: string }>;
+  /** SDK 0.3.x: sidecar with display-friendly names and icon URLs for tool calls. */
+  tool_use_meta?: {
+    name?: string;
+    icon_url?: string;
+  };
 }
 
 interface ClaudeAssistantMessage {
@@ -83,6 +88,11 @@ export function translateClaudeMessage(
               fileStateCache.capture(block.id, worktreePath ?? "", filePath);
             }
           }
+          // Build display: prefer tool_use_meta icon_url for MCP tools, fallback to built-in builder
+          const iconUrl = block.tool_use_meta?.icon_url;
+          const display = COMMON_TOOL_NAMES.has(resolvedName)
+            ? buildCommonToolDisplay(resolvedName, block.input ?? {})
+            : { ...buildClaudeBuiltinDisplay(resolvedName, block.input ?? {}, worktreePath), iconUrl };
           // Emit tool_start event with preserved callId
           events.push({
             type: "tool_start",
@@ -90,9 +100,7 @@ export function translateClaudeMessage(
             name: resolvedName,
             arguments: JSON.stringify(block.input ?? {}),
             isInternal: isInternalClaudeToolName(resolvedName),
-            display: COMMON_TOOL_NAMES.has(resolvedName)
-              ? buildCommonToolDisplay(resolvedName, block.input ?? {})
-              : buildClaudeBuiltinDisplay(resolvedName, block.input ?? {}, worktreePath),
+            display,
           });
         }
       }
