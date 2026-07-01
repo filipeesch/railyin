@@ -26,7 +26,9 @@ import {
   executeLspTypeDefinition,
 } from "../workflow/tools/lsp-tools.ts";
 import { validateToolArgs } from "./validate-tool-args.ts";
-import { CARD_TOOL_DEFINITIONS, CARD_TOOL_NAMES } from "./card-tool-definitions.ts";import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_TOOL_NAMES } from "./workspace-tool-definitions.ts";
+import { CARD_TOOL_DEFINITIONS, CARD_TOOL_NAMES } from "./card-tool-definitions.ts";
+import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_TOOL_NAMES } from "./workspace-tool-definitions.ts";
+import { getDefaultWorkspaceKey } from "../workspace-context.ts";
 
 
 // ─── Tool definitions (metadata + JSON schema) ────────────────────────────────
@@ -404,6 +406,12 @@ async function executeCommonToolText(
   args: Record<string, unknown>,
   ctx: CommonToolContext,
 ): Promise<string> {
+  const { getDefaultWorkspaceKey } = await import("../workspace-context.ts");
+  if (ctx.workspaceKey === getDefaultWorkspaceKey()) {
+    console.warn(
+      `[workspace-guard] ${name} executed with default workspaceKey="${ctx.workspaceKey}" (task=${ctx.task.id}, chat=${ctx.task.conversationId})`,
+    );
+  }
   const boardCtx: BoardToolContext = {
     taskId: ctx.task.id ?? undefined,
     boardId: ctx.task.boardId ?? undefined,

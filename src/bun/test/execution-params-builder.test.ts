@@ -194,3 +194,24 @@ describe("ExecutionParamsBuilder.buildForChat — workspaceKey", () => {
     expect(params.workspaceKey).toBe("test-workspace");
   });
 });
+
+describe("ExecutionParamsBuilder.build — workspaceKey", () => {
+  it("EPB-WK-3: build(workspaceKey='ws-other') sets ExecutionParams.workspaceKey", () => {
+    const params = builder.build(
+      makeTask(), 1, 1, "prompt", undefined, "/w",
+      new AbortController().signal, noop,
+      undefined, undefined, undefined, "ws-other",
+    );
+
+    expect(params.workspaceKey).toBe("ws-other");
+  });
+
+  it("EPB-WK-4: build() without workspaceKey leaves it undefined", () => {
+    const params = builder.build(
+      makeTask(), 1, 1, "prompt", undefined, "/w",
+      new AbortController().signal, noop,
+    );
+
+    expect(params.workspaceKey).toBeUndefined();
+  });
+});

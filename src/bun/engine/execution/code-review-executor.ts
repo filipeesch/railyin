@@ -190,6 +190,7 @@ export class CodeReviewExecutor {
         undefined,
         undefined,
         config.projects.find((p) => p.key === task.project_key)?.projectPath,
+        workspaceKey,
       ),
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),
