@@ -92,93 +92,83 @@ let claudeEngine: CapturingEngine;
 let opencodeEngine: CapturingEngine;
 
 beforeEach(() => {
-  const cfg = setupTestConfig();
-  configCleanup = cfg.cleanup;
   db = initDb();
-
-  gitDir = mkdtempSync(join(tmpdir(), "railyn-me-"));
+  gitDir = mkdtempSync(join(tmpdir(), "railyn-multi-engine-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
   execSync('git config user.name "T"', { cwd: gitDir });
-  writeFileSync(join(gitDir, "index.ts"), "export const a = 1;");
-  execSync("git add . && git commit -m init", { cwd: gitDir });
+  writeFileSync(join(gitDir, "index.ts"), "export const a = 1;\n");
 
   copilotEngine = new CapturingEngine([
-    { qualifiedId: "copilot/gpt-4.1", displayName: "GPT-4.1", contextWindow: 128_000 },
+    { qualifiedId: "copilot/gpt-4.1", displayName: "GPT-4.1" },
   ]);
   claudeEngine = new CapturingEngine([
-    { qualifiedId: "claude/claude-sonnet-4-5", displayName: "Claude Sonnet 4.5", contextWindow: 200_000 },
+    { qualifiedId: "claude/claude-sonnet-4-5", displayName: "Claude Sonnet 4.5" },
   ]);
   opencodeEngine = new CapturingEngine([
-    { qualifiedId: "opencode/anthropic/claude-sonnet-4-5", displayName: "OpenCode Sonnet", contextWindow: 200_000 },
+    { qualifiedId: "opencode/anthropic/claude-sonnet-4-5", displayName: "Claude Sonnet 4.5 (OpenCode)" },
   ]);
+
+  const cfg = setupTestConfig("", gitDir);
+  configCleanup = cfg.cleanup;
 });
 
 afterEach(() => {
   rmSync(gitDir, { recursive: true, force: true });
-  configCleanup();
+  configCleanup?.();
 });
 
-// ─── ME-1: copilot model → copilot engine ────────────────────────────────────
+// ─── ME-1..2: execution routing to correct engine ────────────────────────────
 
-describe("ME-1: copilot model routes to copilot engine", () => {
+describe("ME-1..2: execution routing to correct engine", () => {
   it("only copilot engine receives the execution", async () => {
     const registry = makeMultiEngineRegistry(
       { copilot: copilotEngine, claude: claudeEngine },
       ["copilot", "claude"],
     );
     const orchestrator = makeOrchestrator(db, registry);
+
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = ?", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "Hello from copilot model");
 
-    expect(copilotEngine.executedParams).toHaveLength(1);
-    expect(claudeEngine.executedParams).toHaveLength(0);
+    expect(copilotEngine.executedParams.length).toBe(1);
+    expect(claudeEngine.executedParams.length).toBe(0);
   });
-});
 
-// ─── ME-2: claude model → claude engine ──────────────────────────────────────
-
-describe("ME-2: claude model routes to claude engine", () => {
   it("only claude engine receives the execution", async () => {
     const registry = makeMultiEngineRegistry(
       { copilot: copilotEngine, claude: claudeEngine },
       ["copilot", "claude"],
     );
     const orchestrator = makeOrchestrator(db, registry);
+
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "Hello from claude model");
 
-    expect(claudeEngine.executedParams).toHaveLength(1);
-    expect(copilotEngine.executedParams).toHaveLength(0);
+    expect(claudeEngine.executedParams.length).toBe(1);
+    expect(copilotEngine.executedParams.length).toBe(0);
   });
-});
 
-// ─── ME-3: 3-part opencode model → opencode engine ───────────────────────────
-
-describe("ME-3: opencode/provider/model (3-part) routes to opencode engine", () => {
   it("opencode engine receives execution for 3-part qualified ID", async () => {
     const registry = makeMultiEngineRegistry(
       { copilot: copilotEngine, opencode: opencodeEngine },
       ["copilot", "opencode"],
     );
     const orchestrator = makeOrchestrator(db, registry);
+
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE conversations SET model = 'opencode/anthropic/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "Hello from opencode model");
 
-    expect(opencodeEngine.executedParams).toHaveLength(1);
-    expect(copilotEngine.executedParams).toHaveLength(0);
+    expect(opencodeEngine.executedParams.length).toBe(1);
+    expect(copilotEngine.executedParams.length).toBe(0);
   });
-});
 
-// ─── ME-4: two tasks with different models route to different engines ─────────
-
-describe("ME-4: two tasks with different engines execute via their respective engines", () => {
   it("copilot task and claude task each execute on their engine", async () => {
     const registry = makeMultiEngineRegistry(
       { copilot: copilotEngine, claude: claudeEngine },
@@ -192,36 +182,37 @@ describe("ME-4: two tasks with different engines execute via their respective en
     const { taskId: task2, conversationId: conv2 } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = ?", [conv2]);
 
-    await orchestrator.executeHumanTurn(task1, "Copilot task");
-    await orchestrator.executeHumanTurn(task2, "Claude task");
+    await orchestrator.executeHumanTurn(task1, "copilot turn");
+    await orchestrator.executeHumanTurn(task2, "claude turn");
 
-    expect(copilotEngine.executedParams).toHaveLength(1);
-    expect(claudeEngine.executedParams).toHaveLength(1);
+    expect(copilotEngine.executedParams.length).toBe(1);
+    expect(claudeEngine.executedParams.length).toBe(1);
   });
 });
 
-// ─── ME-5: null model → default (first) engine ───────────────────────────────
+// ─── ME-6: default engine selection ──────────────────────────────────────────
 
-describe("ME-5: null model falls back to default engine", () => {
+describe("ME-6: default engine selection", () => {
   it("uses the first engine in the registry when model is null", async () => {
     const registry = makeMultiEngineRegistry(
       { copilot: copilotEngine, claude: claudeEngine },
       ["copilot", "claude"],
     );
     const orchestrator = makeOrchestrator(db, registry);
+
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE conversations SET model = NULL WHERE id = ?", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "No model set");
 
-    expect(copilotEngine.executedParams).toHaveLength(1);
-    expect(claudeEngine.executedParams).toHaveLength(0);
+    expect(copilotEngine.executedParams.length).toBe(1);
+    expect(claudeEngine.executedParams.length).toBe(0);
   });
 });
 
-// ─── ME-6: listModels() aggregates from all engines ──────────────────────────
+// ─── ME-7: listModels() ──────────────────────────────────────────────────────
 
-describe("ME-6: listModels() aggregates models from all engines", () => {
+describe("ME-7: listModels() aggregates from all engines", () => {
   it("returns combined model list from copilot + claude engines", async () => {
     const registry = makeMultiEngineRegistry(
       { copilot: copilotEngine, claude: claudeEngine },
@@ -237,9 +228,9 @@ describe("ME-6: listModels() aggregates models from all engines", () => {
   });
 });
 
-// ─── ME-7: listModels() respects allowed_engines filter ──────────────────────
+// ─── ME-8: listModels() respects allowed_engines filter ──────────────────────
 
-describe("ME-7: listModels() respects allowed_engines filter", () => {
+describe("ME-8: listModels() respects allowed_engines filter", () => {
   it("only returns models from allowed engines when filter is set", async () => {
     const registry = makeMultiEngineRegistry(
       { copilot: copilotEngine, claude: claudeEngine },
@@ -253,5 +244,58 @@ describe("ME-7: listModels() respects allowed_engines filter", () => {
 
     expect(ids).toContain("claude/claude-sonnet-4-5");
     expect(ids).not.toContain("copilot/gpt-4.1");
+  });
+});
+
+// ─── ME-WK-1..3: workspaceKey propagation through multi-engine ──────────────
+
+describe("ME-WK-1..3: workspaceKey propagation through multi-engine", () => {
+  it("ME-WK-1: copilot engine receives correct workspaceKey from params", async () => {
+    const registry = makeMultiEngineRegistry(
+      { copilot: copilotEngine, claude: claudeEngine },
+      ["copilot", "claude"],
+      ["copilot"],
+    );
+    const orchestrator = makeOrchestrator(db, registry);
+
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = ?", [conversationId]);
+
+    await orchestrator.executeHumanTurn(taskId, "test message");
+
+    expect(copilotEngine.executedParams[0]?.workspaceKey).toBe("default");
+  });
+
+  it("ME-WK-2: claude engine receives correct workspaceKey from params", async () => {
+    const registry = makeMultiEngineRegistry(
+      { copilot: copilotEngine, claude: claudeEngine },
+      ["copilot", "claude"],
+      ["claude"],
+    );
+    const orchestrator = makeOrchestrator(db, registry);
+
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
+
+    await orchestrator.executeHumanTurn(taskId, "test message");
+
+    expect(claudeEngine.executedParams[0]?.workspaceKey).toBe("default");
+  });
+
+  it("ME-WK-3: opencode engine receives correct workspaceKey from params", async () => {
+    const opencodeEngine = new CapturingEngine([{ qualifiedId: "opencode/test", displayName: "test" }]);
+    const registry = makeMultiEngineRegistry(
+      { copilot: copilotEngine, claude: claudeEngine, opencode: opencodeEngine },
+      ["copilot", "claude", "opencode"],
+      ["opencode"],
+    );
+    const orchestrator = makeOrchestrator(db, registry);
+
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'opencode/anthropic/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
+
+    await orchestrator.executeHumanTurn(taskId, "test message");
+
+    expect(opencodeEngine.executedParams[0]?.workspaceKey).toBe("default");
   });
 });
