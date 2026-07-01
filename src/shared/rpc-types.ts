@@ -192,6 +192,8 @@ export interface ToolCallDisplay {
   contentType?: "file" | "terminal";
   /** Optional line offset for file-oriented renderers. */
   startLine?: number;
+  /** Optional icon URL from MCP server metadata (tool_use_meta sidecar). */
+  iconUrl?: string;
 }
 
 // ─── Transition event metadata ────────────────────────────────────────────────
