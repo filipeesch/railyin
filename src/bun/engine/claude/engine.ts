@@ -79,7 +79,7 @@ export class ClaudeEngine implements ExecutionEngine {
           boardId: boardId ?? null,
           conversationId: params.conversationId,
         },
-        workspaceKey: workspaceKey ?? getDefaultWorkspaceKey(),
+        workspaceKey: params.workspaceKey!,
         repos: {
           todos: new TodoRepository(),
           decisions: new DecisionRepository(),

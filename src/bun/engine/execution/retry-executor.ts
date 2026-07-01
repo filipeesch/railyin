@@ -98,6 +98,7 @@ export class RetryExecutor {
         undefined,
         undefined,
         config.projects.find((p) => p.key === updatedRow.project_key)?.projectPath,
+        workspaceKey,
       ),
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),

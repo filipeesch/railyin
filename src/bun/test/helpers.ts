@@ -264,10 +264,11 @@ export function makeTempDir(): { dir: string; cleanup: () => void } {
 export function seedProjectAndTask(
   db: Database,
   _gitRootPath: string,
-): { projectKey: string; boardId: number; taskId: number; conversationId: number } {
+  { workspaceKey = "default" }: { workspaceKey?: string } = {},
+): { projectKey: string; boardId: number; taskId: number; conversationId: number; workspaceKey: string } {
   const projectKey = "test-project";
 
-  db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery')");
+  db.run(`INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('${workspaceKey}', 'test-board', 'delivery')`);
   const boardId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
 
   db.run("INSERT INTO conversations (task_id) VALUES (0)");
@@ -280,7 +281,7 @@ export function seedProjectAndTask(
   const taskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
   db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
 
-  return { projectKey, boardId, taskId, conversationId };
+  return { projectKey, boardId, taskId, conversationId, workspaceKey };
 }
 
 // ─── Minimal config for tests (provider: fake) ───────────────────────────────

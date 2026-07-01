@@ -169,7 +169,7 @@ export class CopilotEngine implements ExecutionEngine {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
       },
-      workspaceKey: workspaceKey ?? getDefaultWorkspaceKey(),
+      workspaceKey: params.workspaceKey!,
     };
 
     const tools = buildCopilotTools(toolContext, params.mcpRegistry ?? null, params.enabledMcpTools ?? [], onSuspend);

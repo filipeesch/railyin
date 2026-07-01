@@ -177,8 +177,8 @@ export function createBackendRpcRuntime(options: {
             rmSync(gitDir, { recursive: true, force: true });
             cfg.cleanup();
         },
-        createTask: async (model = options.taskModel ?? "copilot/mock-model") => {
-            const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+        createTask: async (model = options.taskModel ?? "copilot/mock-model", { workspaceKey = "default" }: { workspaceKey?: string } = {}) => {
+            const { taskId, conversationId } = seedProjectAndTask(db, gitDir, { workspaceKey });
             db.run("DELETE FROM task_git_context WHERE task_id = ?", [taskId]);
             db.run(
                 `INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name)
