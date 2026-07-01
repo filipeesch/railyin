@@ -17,7 +17,7 @@
 **Tests passing**: 145+ across 10+ test files
 
 **Remaining tasks** (marked in tasks.md):
-- 6.2-6.5: Unit test scenarios for executors and multi-engine
-- 7.1: Integration test file (workspace-key-propagation.test.ts)
-- 8.1: Guard test file (common-tools-guard.test.ts)
+- 6.2-6.5: Unit tests for executors and multi-engine
+- 7.1: Integration test file
+- 8.1: Guard test file
 - 9.1-9.4: Verification

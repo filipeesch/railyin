@@ -698,7 +698,7 @@ export class PiEngine implements ExecutionEngine {
       return existing;
     }
     const ctx: CommonToolContext = {
-      workspaceKey: params.workspaceKey,
+      workspaceKey: workspaceKey!,
       task: { id: taskId ?? null, boardId: boardId ?? null, conversationId },
       repos: {
         todos: new TodoRepository(),

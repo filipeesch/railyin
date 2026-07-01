@@ -139,7 +139,7 @@ export class CursorEngine implements ExecutionEngine {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
       },
-      workspaceKey: params.workspaceKey,
+      workspaceKey: params.workspaceKey!,
     };
 
     const customTools = buildCursorTools(
@@ -189,7 +189,7 @@ export class CursorEngine implements ExecutionEngine {
       sessionId,
       customTools,
       agentId,
-      workspaceKey: params.workspaceKey,
+      workspaceKey: params.workspaceKey!,
       onRawMessage: (message: unknown) => {
         params.onRawModelMessage?.({
           engine: "cursor",
