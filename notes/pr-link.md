@@ -4,15 +4,20 @@
 
 **Branch**: `task/494-list-project-anmd-workflows-issue`
 
-**What**: Fix `list_projects` and `list_workflows` always returning data from the first/default workspace instead of the task's workspace.
+**Status**: Implementation complete, tests passing
 
-**Root cause**: `workspaceKey` never threaded through `ExecutionParamsBuilder.build()` for task executions. All engines fall back to `getDefaultWorkspaceKey()`.
+**What was implemented**:
+- `ExecutionParamsBuilder.build()` now accepts and returns `workspaceKey`
+- All 4 executors (transition, human-turn, retry, code-review) pass `workspaceKey` to `build()`
+- All 5 engines (Copilot, Claude, Pi, OpenCode, Cursor) use `params.workspaceKey` directly
+- Runtime guard in `common-tools.ts` warns when workspaceKey equals default
+- Test helpers extended: `seedProjectAndTask`, `createTask`, `MockCursorSdkAdapter`
+- Unit tests added: `execution-params-builder.test.ts` (+2 scenarios)
 
-**Changes**:
-- Add `workspaceKey` to `build()` and return it in `ExecutionParams`
-- Update 4 executors to pass `workspaceKey`
-- Fix 5 engines to use `params.workspaceKey` directly (no fallback)
-- Add runtime guard warning in `common-tools.ts`
-- ~20 test scenarios (unit + integration + guard)
+**Tests passing**: 145+ across 10+ test files
 
-**Files**: 11 production + 7 test files
+**Remaining tasks** (marked in tasks.md):
+- 6.2-6.5: Unit test scenarios for executors and multi-engine
+- 7.1: Integration test file (workspace-key-propagation.test.ts)
+- 8.1: Guard test file (common-tools-guard.test.ts)
+- 9.1-9.4: Verification
