@@ -84,7 +84,7 @@ export class OpenCodeEngine implements ExecutionEngine {
         notes: new NoteRepository(),
         boardTools: boardTools!,
       },
-      workspaceKey: workspaceKey ?? getDefaultWorkspaceKey(),
+      workspaceKey: params.workspaceKey,
       workflow: {
         onTransition: onTransition ?? (() => {}),
         onHumanTurn: onHumanTurn ?? (() => {}),

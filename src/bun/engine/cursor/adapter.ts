@@ -63,6 +63,7 @@ export interface CursorRunConfig {
    * always resume the same SDK agent and preserve chat history.
    */
   agentId?: string;
+  workspaceKey?: string;
 }
 
 export interface CursorAdapterOptions {

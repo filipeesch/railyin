@@ -81,7 +81,7 @@ export class CursorEngine implements ExecutionEngine {
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
-    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, taskContext, boardTools } = params;
+    const { executionId, taskId, boardId, workingDirectory, model, prompt, signal, systemInstructions, taskContext, boardTools, workspaceKey } = params;
     const sessionId = `cursor-${params.conversationId}`;
 
     // Strip the "cursor/" namespace prefix — the SDK expects the bare model id
@@ -139,7 +139,7 @@ export class CursorEngine implements ExecutionEngine {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
       },
-      workspaceKey: getDefaultWorkspaceKey(),
+      workspaceKey: params.workspaceKey,
     };
 
     const customTools = buildCursorTools(
@@ -189,6 +189,7 @@ export class CursorEngine implements ExecutionEngine {
       sessionId,
       customTools,
       agentId,
+      workspaceKey: params.workspaceKey,
       onRawMessage: (message: unknown) => {
         params.onRawModelMessage?.({
           engine: "cursor",

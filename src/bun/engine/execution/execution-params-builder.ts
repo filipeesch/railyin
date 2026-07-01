@@ -49,6 +49,7 @@ export class ExecutionParamsBuilder {
     attachments?: Attachment[],
     model?: string,
     projectPath?: string,
+    workspaceKey?: string,
   ): ExecutionParams {
     const taskContext: ExecutionParams["taskContext"] = {
       title: task.title,
@@ -77,6 +78,7 @@ export class ExecutionParamsBuilder {
       onRawModelMessage,
       enabledMcpTools,
       mcpRegistry,
+      ...(workspaceKey !== undefined ? { workspaceKey } : {}),
     };
   }
 
