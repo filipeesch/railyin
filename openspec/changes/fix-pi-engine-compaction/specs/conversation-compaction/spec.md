@@ -4,7 +4,7 @@
 
 Pi engine tasks SHALL support both manual and auto-compaction via Pi SDK. Compaction events MUST be forwarded to Railyin's stream processor so the conversation UI reflects the compaction lifecycle. The Pi engine SHALL own the full compaction lifecycle: the SDK's threshold-based auto-compaction is disabled; threshold compaction is managed by the engine's `turn_end`-based background compaction mechanism. Overflow auto-compaction is handled by the SDK autonomously and detected by the engine via `compaction_end.willRetry`.
 
-When the SDK emits `compaction_end` with `willRetry: true` (overflow auto-compaction), the engine SHALL detect this via a `sdkWillRetryRef` closure ref set in the session subscriber. The execution loop SHALL await the SDK's own deferred `agent.continue()` call (scheduled internally by the SDK via `setTimeout(..., 100)`) by subscribing to the next `agent_end` event. The engine SHALL NOT call `session.agent.continue()` itself in this path — doing so would conflict with the SDK's own deferred call.
+When the SDK emits `compaction_end` with `willRetry: true` (overflow auto-compaction), the engine SHALL detect this via a `sdkWillRetryRef` closure ref set in the session subscriber. The execution loop SHALL await the SDK's own deferred `agent.continue()` call (scheduled internally by the SDK via `setTimeout(..., 100)`) by subscribing to the next `agent_end` event via `waitForNextAgentEnd()`. After `agent_end` fires, the loop continues to the next iteration and calls `session.agent.continue()` via `runWithLimiter` to resume the turn. The engine SHALL NOT duplicate the SDK's own deferred `agent.continue()` call — `waitForNextAgentEnd` ensures the SDK's retry has completed before the loop proceeds.
 
 The `AsyncQueue` SHALL remain open throughout SDK overflow compaction and the subsequent retry turn. The subscriber remains active so all `compaction_start`, `compaction_done`, and post-retry events flow to the UI.
 
@@ -14,7 +14,7 @@ The `AsyncQueue` SHALL remain open throughout SDK overflow compaction and the su
 
 #### Scenario: SDK overflow compaction fires and execution continues
 - **WHEN** the LLM returns a context overflow error and the SDK emits `compaction_start { reason: "overflow" }` followed by `compaction_end { reason: "overflow", willRetry: true }`
-- **THEN** `PiEngine` forwards both events to the stream; sets `sdkWillRetryRef.value = true`; and after `session.prompt()` resolves, awaits the next `agent_end` from the SDK's own deferred retry; then the execution loop continues normally
+- **THEN** `PiEngine` forwards both events to the stream; sets `sdkWillRetryRef.value = true`; after `session.prompt()` resolves, awaits the next `agent_end` from the SDK's own deferred retry via `waitForNextAgentEnd()`; then on the next loop iteration calls `session.agent.continue()` via `runWithLimiter` to resume the conversation
 
 #### Scenario: Manual compact triggers via compact button
 - **WHEN** the user clicks the compact button in the task drawer
