@@ -12,6 +12,11 @@ import { test, expect } from "./fixtures";
 import { makeTask } from "./fixtures/mock-data";
 import type { ConversationMessage } from "@shared/rpc-types";
 
+// Tests in this file share the same conversation state and use page.route()
+// which is global to the page. Running them in parallel causes route clobbering
+// where one test's install() unroutes another test's handler.
+test.describe.configure({ mode: "serial" });
+
 async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
     await page.locator(`[data-task-id="${taskId}"]`).click();
     await expect(page.locator(".task-detail")).toBeVisible();
