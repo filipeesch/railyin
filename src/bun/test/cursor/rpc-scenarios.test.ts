@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { createCursorRpcRuntime } from "@bun/test/support/cursor-rpc-runtime.ts";
 import type { BackendRpcRuntime } from "@bun/test/support/backend-rpc-runtime.ts";
 import {
@@ -157,5 +159,39 @@ describe("Cursor backend RPC scenarios", () => {
 
         await runModelListingScenario(runtime);
         expect(adapter.trace.listModelsCalls).toBeGreaterThan(0);
+    });
+});
+
+describe("Cursor slash-command resolution", () => {
+    it("resolves slash prompt via dialect before sending to adapter; raw chip is stored in conversation_messages", async () => {
+        const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("resolved response")] });
+        const runtime = createRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        // Write a .cursor/commands/ file in the task's worktree (gitDir)
+        const cmdDir = join(runtime.gitDir, ".cursor", "commands");
+        mkdirSync(cmdDir, { recursive: true });
+        writeFileSync(join(cmdDir, "opsx-propose.md"), "Resolved body: $input", "utf-8");
+
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "[/opsx-propose|/opsx-propose] add-dark-mode",
+        });
+        await runtime.recorder.waitForStreamDone(result.executionId);
+
+        // The adapter received the resolved XML body, not the raw slash chip
+        const sentPrompt = adapter.trace.runConfigs[0]!.prompt;
+        expect(sentPrompt).toContain('<command name="opsx-propose"');
+        expect(sentPrompt).toContain("Resolved body: add-dark-mode");
+        expect(sentPrompt).not.toContain("[/opsx-propose|/opsx-propose]");
+
+        // The raw chip was stored verbatim in conversation_messages
+        const persisted = runtime.db
+            .query<{ content: string; role: string | null }, [number]>(
+                "SELECT content, role FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
+            )
+            .get(taskId);
+        expect(persisted?.role).toBe("user");
+        expect(persisted?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
     });
 });
