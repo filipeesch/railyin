@@ -3,6 +3,7 @@ import { SlashCommandDialectRegistry, createDefaultDialectRegistry } from "@bun/
 import { CopilotDialect } from "@bun/engine/dialects/copilot-dialect.ts";
 import { ClaudeDialect } from "@bun/engine/dialects/claude-dialect.ts";
 import { NullDialect } from "@bun/engine/dialects/null-dialect.ts";
+import { CursorDialect } from "@bun/engine/dialects/cursor-dialect.ts";
 
 describe("createDefaultDialectRegistry", () => {
   it('creates a CopilotDialect for "copilot"', () => {
@@ -13,6 +14,11 @@ describe("createDefaultDialectRegistry", () => {
   it('creates a ClaudeDialect for "claude"', () => {
     const registry = createDefaultDialectRegistry();
     expect(registry.create("claude")).toBeInstanceOf(ClaudeDialect);
+  });
+
+  it('creates a CursorDialect for "cursor"', () => {
+    const registry = createDefaultDialectRegistry();
+    expect(registry.create("cursor")).toBeInstanceOf(CursorDialect);
   });
 
   it('creates a NullDialect for "none"', () => {

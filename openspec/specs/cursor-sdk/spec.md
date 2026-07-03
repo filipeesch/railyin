@@ -46,20 +46,22 @@ The system SHALL use a caller-defined deterministic Cursor `agentId` per convers
 #### Scenario: First execution on a conversation
 
 - **WHEN** the worker receives `startRun` and `Agent.resume(agentId, ...)` throws (no agent exists yet)
-- **THEN** the worker calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools } })` with the same caller-supplied `agentId`
+- **THEN** the worker calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` with the same caller-supplied `agentId`
 - **AND** sends the prompt via `agent.send(prompt)`
 - **AND** the agent's working directory is the task's worktree path
+- **AND** if `agent.send(prompt)` throws `AgentBusyError`, the worker retries with `{ local: { force: true } }`
 
 #### Scenario: Subsequent execution resumes the agent
 
 - **WHEN** the worker receives `startRun` with the same `agentId` and an agent already exists in the SDK's local store
-- **THEN** `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools } })` succeeds and returns the prior agent
+- **THEN** `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` succeeds and returns the prior agent
 - **AND** the worker does NOT call `Agent.create`
 
 #### Scenario: Resume failure of an existing agent falls back to create
 
-- **WHEN** `Agent.resume(agentId, ...)` throws for any reason on a turn where an agent should exist (local store corruption, manual deletion)
-- **THEN** the worker silently calls `Agent.create({ agentId, ... })` with the same id, replacing the prior agent
+- **WHEN** `Agent.resume(agentId, ...)` throws for any reason
+- **THEN** the worker falls back to `Agent.create({ ...baseOptions, agentId })` with the same `agentId`
+- **AND** the new agent can be resumed on future turns
 
 #### Scenario: In-turn resume is rejected to force fresh execution
 
@@ -172,3 +174,57 @@ The system SHALL accept `cursor` engine configuration via `engines.yaml` with an
 - **WHEN** `engines.yaml` omits `api_key`
 - **THEN** the adapter falls back to `process.env.CURSOR_API_KEY`
 - **AND** if neither is set, runs fail fast with a clear authentication error and `listModels` returns an empty list
+
+### Requirement: Slash command resolution via CursorDialect
+The system SHALL resolve slash-command references in Cursor engine prompts via `CursorDialect.resolvePrompt()` before dispatching to the SDK. Raw slash references SHALL never be sent to the Cursor SDK unresolved.
+
+#### Scenario: on_enter_prompt with slash reference is expanded
+- **WHEN** a task transitions to a column whose `on_enter_prompt` is `/gsd-execute-phase`
+- **THEN** `CursorEngine` resolves it via `CursorDialect.resolvePrompt()` to the XML-wrapped file body
+- **AND** the resolved content is sent to the Cursor SDK as the agent prompt, not the raw `/gsd-execute-phase` string
+
+#### Scenario: Plain prompt is passed through unchanged
+- **WHEN** the prompt does not start with a slash reference
+- **THEN** `CursorEngine` sends it to the SDK unchanged
+
+### Requirement: Skill content injected into system-instructions prefix
+The system SHALL inject the content of `SKILL.md` files from `CursorDialect.getSkillPaths()` into the system-instructions prefix that is prepended to every Cursor agent run, so agents have project skill context on every turn.
+
+#### Scenario: Skills prepended to prompt prefix
+- **WHEN** `.cursor/skills/<name>/SKILL.md` files exist in the paths returned by `getSkillPaths()`
+- **THEN** each `SKILL.md` content is read and prepended to the `systemBlock` in the Cursor engine's prompt prefix
+- **AND** each skill section is preceded by a header identifying the skill directory name
+
+#### Scenario: No skill directories — no change to prefix
+- **WHEN** no `.cursor/skills/` directories exist for the task's paths
+- **THEN** the prompt prefix is unchanged (no empty section is injected)
+
+### Requirement: Cursor native project rules loaded automatically
+The system SHALL pass `settingSources: ["project"]` to the Cursor SDK's local agent options so `.cursorrules` and `.cursor/rules/*.mdc` files are loaded automatically on every run.
+
+#### Scenario: settingSources injected in worker startRun
+- **WHEN** the Bun adapter sends a `startRun` message to the worker
+- **THEN** the worker includes `settingSources: ["project"]` in the `local` options passed to `Agent.create` / `Agent.resume`
+- **AND** the SDK loads `.cursorrules` and `.cursor/rules/*.mdc` from the project working directory
+
+### Requirement: AgentBusyError recovery after decision_request abort
+The system SHALL recover transparently from `AgentBusyError` on the subsequent turn after a `decision_request`-triggered run abort, without surfacing an error to the user.
+
+#### Scenario: AgentBusyError on turn following decision_request is retried automatically
+- **WHEN** `agent.send(prompt)` throws `AgentBusyError` in the worker
+- **THEN** the worker retries immediately with `agent.send(prompt, { local: { force: true } })`
+- **AND** the run proceeds normally from that point
+- **AND** no error is surfaced to the Bun parent or the user
+
+#### Scenario: Non-AgentBusyError errors are not swallowed
+- **WHEN** `agent.send(prompt)` throws an error that is not `AgentBusyError`
+- **THEN** the worker propagates the error as a fatal `runDone` status, not as a retry
+
+### Requirement: listCommands resolves paths from DB like other engines
+The system SHALL resolve the task's worktree path and project path from the database in `CursorEngine.listCommands()`, identical to the pattern used by `CopilotEngine` and `ClaudeEngine`.
+
+#### Scenario: listCommands returns commands from worktree and project paths
+- **WHEN** `CursorEngine.listCommands(taskId)` is called for a task with a known worktree and project
+- **THEN** it queries `task_git_context.worktree_path` for the worktree
+- **AND** resolves the project path via `getLoadedProjectByKey`
+- **AND** delegates to `CursorDialect.listCommands(worktreePath, projectPath)`

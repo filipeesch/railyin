@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { ClaudeEngine } from "../engine/claude/engine.ts";
+import { CursorEngine } from "../engine/cursor/engine.ts";
+import { MockCursorSdkAdapter } from "./cursor/mocks.ts";
 import { CopilotDialect } from "../engine/dialects/copilot-dialect.ts";
 import { MockClaudeSdkAdapter } from "./support/claude-sdk-mock.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
@@ -198,5 +200,80 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
       { name: "opsx:apply", description: "Apply a change" },
       { name: "opsx:propose", description: undefined },
     ]);
+  });
+});
+
+// ─── CursorEngine.listCommands — path resolution ──────────────────────────────
+
+describe("CursorEngine.listCommands — path resolution", () => {
+  let db: Database;
+  let projectDir: string;
+  let worktreeDir: string;
+  let configCleanup: () => void;
+
+  beforeEach(() => {
+    db = initDb();
+    projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
+    worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
+    const cfg = setupTestConfig("", projectDir);
+    configCleanup = cfg.cleanup;
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(worktreeDir, { recursive: true, force: true });
+    configCleanup();
+  });
+
+  it("delegates to dialect.listCommands with worktreePath from task_git_context", async () => {
+    const { taskId } = seedProjectAndTask(db, worktreeDir);
+    db.run(
+      "INSERT INTO task_git_context (task_id, worktree_path, git_root_path, branch_name) VALUES (?, ?, ?, ?)",
+      [taskId, worktreeDir, worktreeDir, "main"],
+    );
+
+    const dialectCalls: { worktreePath: string; projectPath?: string }[] = [];
+    const spyDialect = {
+      listCommands: (wt: string, pp?: string) => { dialectCalls.push({ worktreePath: wt, projectPath: pp }); return []; },
+      resolvePrompt: async (v: string) => ({ content: v, wasSlash: false }),
+      getSkillPaths: () => [],
+    };
+
+    const engine = new CursorEngine(() => {}, () => {}, new MockCursorSdkAdapter(), spyDialect);
+    await engine.listCommands(taskId);
+
+    expect(dialectCalls).toHaveLength(1);
+    expect(dialectCalls[0]!.worktreePath).toBe(worktreeDir);
+  });
+
+  it("falls back to process.cwd() when no task_git_context row exists", async () => {
+    const { taskId } = seedProjectAndTask(db, worktreeDir);
+    // Remove the git context row so fallback triggers
+    db.run("DELETE FROM task_git_context WHERE task_id = ?", [taskId]);
+
+    const dialectCalls: { worktreePath: string; projectPath?: string }[] = [];
+    const spyDialect = {
+      listCommands: (wt: string, pp?: string) => { dialectCalls.push({ worktreePath: wt, projectPath: pp }); return []; },
+      resolvePrompt: async (v: string) => ({ content: v, wasSlash: false }),
+      getSkillPaths: () => [],
+    };
+
+    const engine = new CursorEngine(() => {}, () => {}, new MockCursorSdkAdapter(), spyDialect);
+    await engine.listCommands(taskId);
+
+    expect(dialectCalls).toHaveLength(1);
+    // Falls back to process.cwd()
+    expect(dialectCalls[0]!.worktreePath).toBe(process.cwd());
+  });
+
+  it("returns empty array when task row does not exist", async () => {
+    const spyDialect = {
+      listCommands: () => [],
+      resolvePrompt: async (v: string) => ({ content: v, wasSlash: false }),
+      getSkillPaths: () => [],
+    };
+    const engine = new CursorEngine(() => {}, () => {}, new MockCursorSdkAdapter(), spyDialect);
+    const result = await engine.listCommands(999999);
+    expect(result).toEqual([]);
   });
 });
