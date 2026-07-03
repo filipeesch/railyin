@@ -31,3 +31,9 @@
 - [x] 5.4 Confirm `buildCursorToolDisplay("delete", {path: "/a/b/c"}, "/a/b")` returns `{ label: "delete", subject: "c", contentType: "file" }`
 - [x] 5.5 Confirm `extractStructuredResult({status:"success", value:{exitCode:0, stdout:"out", stderr:"err"}})` returns `{ detailedResult: "out\nerr" }`
 - [x] 5.6 Confirm `extractStructuredResult({status:"success", value:{linesAdded:1, linesRemoved:1, diffString:"--- a/f\n+++ b/f\n@@ ...\n+x\n-y\n"}})` returns `{ writtenFiles: [{ path: "f", operation: "edit_file", hunks: [...] }] }`
+
+## 6. Additional tasks
+
+- [x] 6.1 Create `translate-consistency.test.ts` — Bun vs Node consistency tests (5 scenarios)
+- [x] 6.2 Add `runCursorShellToolScenario` and `runCursorEditToolScenario` to `shared-rpc-scenarios.ts`
+- [x] 6.3 Add integration test cases in `cursor/rpc-scenarios.test.ts` for shell and edit tools
