@@ -83,8 +83,16 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
       const rl = readline.createInterface({ input: child.stdout });
       rl.on("line", (line) => {
         if (!line.trim()) return;
+        // Try to parse as JSON (our protocol). If it fails, check if it's
+        // a known SDK log message — the @cursor/sdk library sometimes
+        // writes INFO/WARN logs directly to stdout during initialization.
         let msg: WorkerToBun;
-        try { msg = JSON.parse(line) as WorkerToBun; } catch {
+        try {
+          msg = JSON.parse(line) as WorkerToBun;
+        } catch {
+          // Silently skip non-JSON lines that look like SDK logs (INFO, WARN, ERROR prefixes)
+          // These are harmless side-effects of the SDK's internal logging.
+          if (/^\d{2}:\d{2}:\d{2}\.\d{3} (INFO|WARN|ERROR)\s/.test(line)) return;
           console.error("[cursor-worker] malformed line:", line);
           return;
         }
