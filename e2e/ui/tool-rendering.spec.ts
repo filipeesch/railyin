@@ -532,8 +532,8 @@ test.describe("S-29 to S-33 — cursor tool rendering", () => {
 
         await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
         // Stat badges should render for added/removed lines
-        await expect(page.locator(".tc__stat-badge")).toContainText("+5");
-        await expect(page.locator(".tc__stat-badge")).toContainText("-2");
+        await expect(page.locator(".tc__stat--added")).toContainText("+5", { timeout: 3_000 });
+        await expect(page.locator(".tc__stat--removed")).toContainText("-2");
     });
 
     test("S-32: Cursor write diff renders stat badges", async ({ page, api, task }) => {
@@ -578,7 +578,7 @@ test.describe("S-29 to S-33 — cursor tool rendering", () => {
         await openTaskDrawer(page, task.id);
 
         await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator(".tc__stat-badge")).toContainText("+10");
+        await expect(page.locator(".tc__stat--added")).toContainText("+10", { timeout: 3_000 });
     });
 
     test("S-33: Cursor delete shows '(file deleted)' when expanded", async ({ page, api, task }) => {
@@ -620,7 +620,7 @@ test.describe("S-29 to S-33 — cursor tool rendering", () => {
 
         await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
         // Expand the tool result to see the "(file deleted)" text
-        await page.locator(".tc__toggle").first().click();
-        await expect(page.locator(".tc__result")).toContainText("(file deleted)");
+        await page.locator(".tc__header").first().click();
+        await expect(page.locator(".rv__content")).toContainText("(file deleted)");
     });
 });
