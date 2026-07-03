@@ -30,6 +30,7 @@ interface CompactResult {
 
 class MockBgSession {
   compactCallCount = 0;
+  continueCallCount = 0;
   compactResult: CompactResult | null = { summary: "bg compaction summary" };
   compactError: Error | null = null;
   isCompacting = false;
@@ -40,6 +41,8 @@ class MockBgSession {
     fraction: 0,
     percent: 0,
   };
+  /** If set, agent.continue() uses this context usage for its turn_end event. */
+  continueContextUsage: ContextUsage | null = null;
   /** Number of turn_end events to fire per prompt() call. */
   turnEndCount = 1;
 
@@ -54,6 +57,19 @@ class MockBgSession {
     },
     onPayload: undefined as any,
     beforeToolCall: undefined as any,
+    continue: async (): Promise<void> => {
+      this.continueCallCount++;
+      // Optionally fire a turn_end with a per-continue context usage override (for BC-7).
+      if (this.continueContextUsage) {
+        const prev = this.contextUsage;
+        this.contextUsage = this.continueContextUsage;
+        this.callback?.({ type: "turn_end" });
+        this.contextUsage = prev;
+      }
+      // Add an assistant message so the resume loop's post-bgCompaction break condition fires.
+      this.agent.state.messages.push({ role: "assistant", stopReason: "stop", usage: { input: 100, output: 50, cacheRead: 0 }, content: [] });
+      this.callback?.({ type: "agent_end" });
+    },
   };
 
   setActiveToolsCallCount = 0;
@@ -78,6 +94,10 @@ class MockBgSession {
   async compact(): Promise<CompactResult | null> {
     this.compactCallCount++;
     if (this.compactError) throw this.compactError;
+    // Delay one macrotask so the bgCompactions map entry is visible to the resume loop
+    // before the finally block deletes it. In production, session.compact() takes real
+    // time (LLM call), so the map entry is always observable when the prompt loop checks.
+    await new Promise<void>((r) => setTimeout(r, 0));
     return this.compactResult;
   }
 
@@ -251,5 +271,47 @@ describe("PiEngine background compaction", () => {
 
     expect(row).toBeDefined();
     expect(row!.content).toBe("the background summary");
+  });
+
+  test("BC-6: BG compaction fires mid-execution → queue stays open until agent.continue() completes", async () => {
+    // Verify the fix: execution must not terminate prematurely (before agent.continue() runs).
+    // soft threshold = 128_000 - (16384 + 8192) = 103_424; tokens = 110_000 > 103_424
+    const session = new MockBgSession();
+    session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
+
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1", max_inflight: 8 } },
+    };
+    const engine = makePiEngine(session, config);
+
+    await runExecution(engine, conversationId);
+    await flushAsync();
+
+    // With the fix, the loop calls agent.continue() after the bg compact finishes.
+    // Without the fix, queue.close() would have been called before agent.continue().
+    expect(session.compactCallCount).toBe(1);
+    expect(session.continueCallCount).toBe(1);
+  });
+
+  test("BC-7: second turn_end below threshold after BG compact → no second compaction", async () => {
+    // After BG compact + agent.continue(), the continue() fires a second turn_end
+    // with low token count → must not trigger a second compact.
+    const session = new MockBgSession();
+    session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
+    // continue() fires turn_end with this low usage: 1_000 tokens < 103_424 threshold
+    session.continueContextUsage = { tokens: 1_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.008, percent: 0.8 };
+
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1", max_inflight: 8 } },
+    };
+    const engine = makePiEngine(session, config);
+
+    await runExecution(engine, conversationId);
+    await flushAsync();
+
+    expect(session.compactCallCount).toBe(1);  // only the first turn_end triggered compact
+    expect(session.continueCallCount).toBe(1);  // continue was called once
   });
 });

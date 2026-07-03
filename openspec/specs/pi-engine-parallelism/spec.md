@@ -148,7 +148,13 @@ else
    do nothing
 ```
 
-`early_margin_tokens` SHALL default to 8192 and SHALL be greater than zero. The SDK's hard threshold (`contextWindow - reserveTokens`) SHALL remain active as a safety net and SHALL NOT be disabled.
+`early_margin_tokens` SHALL default to 8192 and SHALL be greater than zero. The SDK's threshold-based auto-compaction SHALL be disabled (`SettingsManager.inMemory({ compaction: { enabled: false } })`) because the engine owns the full compaction lifecycle; `reserveTokens` and `keepRecentTokens` still apply to `session.compact()` calls.
+
+When `session.compact()` fires, it internally calls `session.abort()`, which resolves `session.prompt()` early. The execution loop SHALL detect this condition by checking `bgCompactions.get(conversationId)` after `session.prompt()` resolves, and SHALL await the in-flight compaction promise before resuming. After awaiting, it SHALL inspect the last message in `session.agent.state.messages`:
+- If `role !== "assistant"`: the agent was mid-turn when aborted; the loop SHALL call `session.agent.continue()` (wrapped in `runWithLimiter`) to resume.
+- If `role === "assistant"`: the agent had already completed its turn before the abort; the loop SHALL exit normally.
+
+The `AsyncQueue` SHALL remain open throughout this pause-and-resume cycle. The subscriber is never torn down during compaction, so `compaction_start` and `compaction_done` events continue flowing to the UI.
 
 #### Scenario: Fires when slot is free
 - **WHEN** context usage crosses the soft threshold at `turn_end` and the limiter has at least one free slot
@@ -169,6 +175,18 @@ else
 #### Scenario: Summary persisted on success
 - **WHEN** a background compaction completes successfully with a non-empty `summary`
 - **THEN** the summary is appended to the conversation as a `compaction_summary` message via `appendMessage`
+
+#### Scenario: Queue stays open during background compaction
+- **WHEN** background compaction fires mid-execution and `session.abort()` resolves `session.prompt()` early
+- **THEN** the `AsyncQueue` is NOT closed; `compaction_start` and `compaction_done` events emitted by the subscriber flow to the UI; the execution loop awaits the compaction promise and then calls `session.agent.continue()` if the agent was mid-turn
+
+#### Scenario: Execution resumes after background compaction (mid-turn abort)
+- **WHEN** background compaction fires while the agent is in the middle of a turn (last message role is not `assistant`)
+- **THEN** after the compaction promise resolves, `session.agent.continue()` is called via `runWithLimiter` and the agent continues from where it left off
+
+#### Scenario: Execution ends after background compaction (turn-boundary abort)
+- **WHEN** background compaction fires at the boundary of a completed turn (last message role is `assistant`)
+- **THEN** after the compaction promise resolves, the execution loop exits normally without calling `session.agent.continue()`
 
 ### Requirement: Shutdown cancels in-flight background compactions
 
