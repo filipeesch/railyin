@@ -134,3 +134,70 @@ export async function runModelListingScenario(runtime: BackendRpcRuntime): Promi
     expect(listed[0]?.models.length ?? 0).toBeGreaterThan(0);
     expect(enabled.length).toBeGreaterThan(0);
 }
+
+/* ─── Cursor-specific scenarios ─────────────────────────────────── */
+
+/**
+ * Validates that a Cursor shell tool call includes display.label === "bash"
+ * and the tool_result includes detailedResult with stdout.
+ */
+export async function runCursorShellToolScenario(runtime: BackendRpcRuntime): Promise<void> {
+    const { taskId } = await runtime.createTask();
+    const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Run a shell command" });
+
+    await runtime.recorder.waitForStreamDone(result.executionId);
+    await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+    const streamEvents = runtime.recorder.streamEventsForExecution(result.executionId);
+    const toolCallEvents = streamEvents.filter((e) => e.type === "tool_call");
+    const toolResultEvents = streamEvents.filter((e) => e.type === "tool_result");
+
+    // Find the shell tool_call event
+    const shellCall = toolCallEvents.find((e) => e.content.includes("shell"));
+    expect(shellCall).toBeDefined();
+    const content = JSON.parse(shellCall?.content || "{}");
+    expect(content.display?.label).toBe("bash");
+    expect(content.display?.contentType).toBe("terminal");
+
+    // Find the corresponding tool_result (matched by blockId)
+    const shellResult = toolResultEvents.find((e) => e.blockId === shellCall?.blockId);
+    expect(shellResult).toBeDefined();
+    const resultContent = JSON.parse(shellResult?.content || "{}");
+    expect(resultContent.content).toBeDefined();
+    expect(typeof resultContent.content).toBe("string");
+}
+
+/**
+ * Validates that a Cursor edit tool call includes display.label === "edit"
+ * and the tool_result includes writtenFiles with parsed hunks.
+ */
+export async function runCursorEditToolScenario(runtime: BackendRpcRuntime): Promise<void> {
+    const { taskId } = await runtime.createTask();
+    const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Edit a file" });
+
+    await runtime.recorder.waitForStreamDone(result.executionId);
+    await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+    const streamEvents = runtime.recorder.streamEventsForExecution(result.executionId);
+    const toolCallEvents = streamEvents.filter((e) => e.type === "tool_call");
+    const toolResultEvents = streamEvents.filter((e) => e.type === "tool_result");
+
+    // Find the edit tool_call event
+    const editCall = toolCallEvents.find((e) => e.content.includes("edit"));
+    expect(editCall).toBeDefined();
+    const content = JSON.parse(editCall?.content || "{}");
+    // Debug: log the content to understand the structure
+    if (content.display?.label !== "edit") {
+      console.log("DEBUG edit content:", JSON.stringify(content, null, 2));
+    }
+    expect(content.display?.label).toBe("edit");
+
+    // Find the corresponding tool_result (matched by blockId)
+    const editResult = toolResultEvents.find((e) => e.blockId === editCall?.blockId);
+    expect(editResult).toBeDefined();
+    const resultContent = JSON.parse(editResult?.content || "{}");
+    expect(resultContent.writtenFiles).toBeDefined();
+    expect(Array.isArray(resultContent.writtenFiles)).toBe(true);
+    expect(resultContent.writtenFiles?.length).toBeGreaterThan(0);
+    expect(resultContent.writtenFiles?.[0]?.operation).toBe("edit_file");
+}

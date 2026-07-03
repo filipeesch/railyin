@@ -1,8 +1,6 @@
 ## Purpose
 Defines the Cursor SDK engine integration: how Railyin spawns and talks to the `@cursor/sdk` runtime in a Node subprocess, how SDK events are translated to `EngineEvent`s, how per-conversation agent identity is derived and resumed, how Railyin's common tools and MCP tools are registered as Cursor `SDKCustomTool` entries, and how the engine is configured and discovered.
-
 ## Requirements
-
 ### Requirement: Cursor SDK engine support
 
 The system SHALL support `cursor` as an engine type, providing agent execution capabilities through the `@cursor/sdk` package.
@@ -80,28 +78,31 @@ The worker IPC SHALL carry the per-conversation `agent_id` from Bun to the worke
 
 ### Requirement: Streaming event translation
 
-The system SHALL translate `@cursor/sdk` `SDKMessage` events to Railyin's `EngineEvent` stream format and SHALL relay them across the IPC boundary.
+The system SHALL translate `@cursor/sdk` `SDKMessage` events to Railyin's `EngineEvent` stream format and SHALL relay them across the IPC boundary. Tool events MUST include display metadata, structured result data, and file diff information.
 
 #### Scenario: Token streaming
-
 - **WHEN** the SDK emits a `type: "assistant"` message containing text blocks
 - **THEN** the worker yields one `EngineEvent` of `type: "token"` per non-empty content concatenation
 - **AND** the Bun adapter forwards it to the caller's async iterable
 
 #### Scenario: Reasoning
-
 - **WHEN** the SDK emits a `type: "thinking"` message with a non-empty `text`
 - **THEN** the worker yields `EngineEvent` of `type: "reasoning"`
 
-#### Scenario: Tool call lifecycle
-
+#### Scenario: Tool call start includes display metadata
 - **WHEN** the SDK emits a `type: "tool_call"` message with `status: "running"`
-- **THEN** a `tool_start` `EngineEvent` is yielded with `name`, stringified `arguments`, and `callId`
-- **AND** when a `type: "tool_call"` message with `status: "completed"` or `status: "error"` follows
-- **THEN** a `tool_result` `EngineEvent` is yielded with the same `callId`, stringified `result`, and `isError` set when applicable
+- **THEN** a `tool_start` `EngineEvent` is yielded with `name`, stringified `arguments`, `callId`, and `display` metadata (including `label`, `subject`, and `contentType`)
+- **AND** the `display.label` uses lowercase tool names matching the SDK (e.g., `"read"`, `"shell"`, `"edit"`, `"write"`, `"delete"`, `"glob"`, `"grep"`)
+- **AND** the `display.subject` extracts the primary argument (file path for read/write/edit/delete, command for shell, pattern for glob/grep)
+
+#### Scenario: Tool call completion includes structured result
+- **WHEN** the SDK emits a `type: "tool_call"` message with `status: "completed"` or `status: "error"`
+- **THEN** a `tool_result` `EngineEvent` is yielded with the same `callId`, stringified `result`, `isError` set when applicable, and `display` metadata
+- **AND** when the tool is `shell`, the `detailedResult` is set to `result.value.stdout` (with stderr appended if present)
+- **AND** when the tool is `edit` or `write` with a `diffString`, the `writtenFiles` is set to parsed `FileDiffPayload` entries with hunks
+- **AND** when the tool is `read`, the `result` contains the file content
 
 #### Scenario: Run completion
-
 - **WHEN** the SDK stream ends
 - **THEN** the worker awaits `run.wait()`
 - **AND** if `result.status === "error"` the adapter emits a fatal `EngineEvent.error` with the SDK's error detail (or "Cursor agent run failed with no detail" when the SDK omits it)
@@ -228,3 +229,4 @@ The system SHALL resolve the task's worktree path and project path from the data
 - **THEN** it queries `task_git_context.worktree_path` for the worktree
 - **AND** resolves the project path via `getLoadedProjectByKey`
 - **AND** delegates to `CursorDialect.listCommands(worktreePath, projectPath)`
+

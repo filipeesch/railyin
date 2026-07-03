@@ -14,6 +14,7 @@
 
 import type { EngineEvent } from "@bun/engine/types";
 import type { CursorRunConfig, CursorSdkAdapter, CursorSdkModelInfo } from "@bun/engine/cursor/adapter";
+import type { ToolCallDisplay, FileDiffPayload } from "@shared/rpc-types";
 
 export type CursorMockStep =
   | { kind: "emit"; event: EngineEvent }
@@ -172,4 +173,55 @@ export function waitForAbort(): CursorMockStep {
 
 export function fatalError(message: string): CursorMockStep {
   return { kind: "error", message, fatal: true };
+}
+
+/* ─── Display-aware step builders ─────────────────────────────────── */
+
+/**
+ * Emit a tool_start event with display metadata pre-populated.
+ * Useful for testing that the UI renders tool call labels and subjects correctly.
+ */
+export function toolStartWithDisplay(
+  callId: string,
+  name: string,
+  args: unknown = {},
+  display: ToolCallDisplay,
+): CursorMockStep {
+  return {
+    kind: "emit",
+    event: {
+      type: "tool_start",
+      name,
+      arguments: JSON.stringify(args),
+      callId,
+      display,
+    },
+  };
+}
+
+/**
+ * Emit a tool_result event with structured data (detailedResult, writtenFiles).
+ * Useful for testing that the UI renders shell stdout and edit diffs correctly.
+ */
+export function toolResultWithStructuredData(
+  callId: string,
+  result: string,
+  options?: {
+    detailedResult?: string;
+    writtenFiles?: FileDiffPayload[];
+    success?: boolean;
+  },
+): CursorMockStep {
+  return {
+    kind: "emit",
+    event: {
+      type: "tool_result",
+      name: "",
+      result,
+      callId,
+      isError: options?.success === false,
+      detailedResult: options?.detailedResult,
+      writtenFiles: options?.writtenFiles,
+    },
+  };
 }

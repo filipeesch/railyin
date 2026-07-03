@@ -224,13 +224,29 @@ function handleShutdown() {
 
 /**
  * Translation of @cursor/sdk message stream to Railyn EngineEvent shapes.
- * Mirrors src/bun/engine/cursor/events.ts — duplicated here to avoid pulling
- * the TS toolchain into the Node worker.
+ *
+ * INLINE COPY of src/bun/engine/cursor/translate-events.ts — kept here because
+ * worker.mjs runs under plain Node (not Bun) and cannot import .ts files.
+ *
+ * CRITICAL: This copy MUST stay in sync with translate-events.ts.
+ * When updating translate-events.ts, copy the changes here.
+ * See translate-events.ts for the canonical implementation.
  */
-// Mirrors normalizeCursorToolResult in events.ts. Cursor wraps custom-tool
-// results in { status, value: { content: [{ text: { text: "..." } }],
-// isError } } and SDK builtins in { type: "tool_result", content, is_error }
-// where `content` can be a string or array of { type: "text", text } blocks.
+
+// ─── MCP Envelope Unwrapping ───
+
+function unwrapCursorToolName(name, args) {
+  if (name === "mcp" && args && typeof args.toolName === "string") {
+    return {
+      name: args.toolName,
+      args: args.args ?? {},
+    };
+  }
+  return { name, args: args ?? {} };
+}
+
+// ─── Normalize Cursor Tool Result ───
+
 function extractTextFromBlock(b) {
   if (typeof b === "string") return b;
   if (!b || typeof b !== "object") return "";
@@ -259,11 +275,177 @@ function normalizeCursorToolResult(rawResult) {
   try { return JSON.stringify(rawResult, null, 2); } catch { return String(rawResult); }
 }
 
+// ─── Structured Result Extraction ───
+
+function extractStructuredResult(rawResult) {
+  if (rawResult == null || typeof rawResult !== "object") return {};
+  const obj = rawResult;
+
+  // Unwrap Cursor's { status, value } envelope
+  if (typeof obj.status === "string" && obj.value !== undefined) {
+    return extractStructuredResult(obj.value);
+  }
+
+  const value = obj;
+
+  // Shell: { exitCode, signal, stdout, stderr }
+  if (typeof value.exitCode === "number" || typeof value.stdout === "string") {
+    const stdout = typeof value.stdout === "string" ? value.stdout : "";
+    const stderr = typeof value.stderr === "string" && value.stderr ? "\n" + value.stderr : "";
+    return { detailedResult: stdout + stderr };
+  }
+
+  // Edit/Write: { linesAdded, linesRemoved, diffString }
+  if (typeof value.diffString === "string" && value.diffString.includes("@@")) {
+    const linesAdded = typeof value.linesAdded === "number" ? value.linesAdded : 0;
+    const linesRemoved = typeof value.linesRemoved === "number" ? value.linesRemoved : 0;
+    const diffPath = extractPathFromDiff(value.diffString);
+    return {
+      writtenFiles: [{
+        operation: "edit_file",
+        path: diffPath || "unknown",
+        added: linesAdded,
+        removed: linesRemoved,
+        hunks: parseUnifiedDiff(value.diffString, diffPath || "unknown", "edit_file"),
+      }],
+    };
+  }
+
+  // Delete: { } (empty value)
+  if (Object.keys(value).length === 0) {
+    return { detailedResult: "(file deleted)" };
+  }
+
+  // Read: { content: "..." }
+  if (typeof value.content === "string") {
+    return { detailedResult: value.content };
+  }
+
+  // Fallback: JSON stringify
+  try {
+    return { detailedResult: JSON.stringify(rawResult, null, 2) };
+  } catch {
+    return {};
+  }
+}
+
+function extractPathFromDiff(diffString) {
+  const lines = diffString.split("\n");
+  for (const line of lines) {
+    if (line.startsWith("--- ")) {
+      const raw = line.slice(4).trim().replace(/^[ab]\//, "");
+      if (raw !== "/dev/null") return raw;
+    }
+  }
+  return undefined;
+}
+
+function parseUnifiedDiff(diffText, fallbackPath, operation) {
+  const lines = diffText.split("\n");
+  const hunks = [];
+  let currentHunk = null;
+  let oldLine = 0;
+  let newLine = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("--- ") || line.startsWith("+++ ")) continue;
+    const header = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (header) {
+      currentHunk = { old_start: Number(header[1]), new_start: Number(header[2]), lines: [] };
+      hunks.push(currentHunk);
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      continue;
+    }
+    if (!currentHunk) continue;
+    if (line.startsWith("+") && !line.startsWith("++")) {
+      currentHunk.lines.push({ type: "added", new_line: newLine, content: line.slice(1) });
+      newLine++;
+      continue;
+    }
+    if (line.startsWith("-") && !line.startsWith("--")) {
+      currentHunk.lines.push({ type: "removed", old_line: oldLine, content: line.slice(1) });
+      oldLine++;
+      continue;
+    }
+    if (line.startsWith(" ")) {
+      currentHunk.lines.push({ type: "context", old_line: oldLine, new_line: newLine, content: line.slice(1) });
+      oldLine++;
+      newLine++;
+    }
+  }
+
+  return hunks;
+}
+
+// ─── Build Display Metadata ───
+
+function humanizeToolName(name) {
+  let result = name;
+  if (result.startsWith("mcp__")) result = result.slice(5);
+  result = result.replace(/__/g, " ").replace(/_/g, " ");
+  return result;
+}
+
+function stripWorktreePath(subject, worktreePath) {
+  if (!subject) return undefined;
+  if (worktreePath && subject.startsWith(worktreePath)) {
+    const stripped = subject.slice(worktreePath.length);
+    return stripped.startsWith("/") ? stripped.slice(1) : stripped;
+  }
+  return subject;
+}
+
+function canonicalToolDisplayLabel(name) {
+  const map = { read: "read", write: "write", edit: "edit", bash: "bash", grep: "grep", glob: "glob", ls: "ls", delete: "delete", webfetch: "web fetch" };
+  return map[name] ?? name;
+}
+
+function buildCursorToolDisplay(name, args, worktreePath) {
+  const str = (v) => (v != null ? String(v) : "");
+  const lowerName = name.toLowerCase();
+  switch (lowerName) {
+    case "read":
+    case "railyin_read":
+      return { label: "read", subject: stripWorktreePath(str(args.path || args.file_path), worktreePath), contentType: "file" };
+    case "write":
+    case "railyin_write":
+      return { label: "write", subject: stripWorktreePath(str(args.path || args.file_path), worktreePath), contentType: "file" };
+    case "edit":
+    case "multedit":
+    case "railyin_edit":
+      return { label: "edit", subject: stripWorktreePath(str(args.path || args.file_path), worktreePath), contentType: "file" };
+    case "shell":
+    case "bash":
+    case "railyin_shell":
+      return { label: "bash", subject: stripWorktreePath(str(args.command || args.cmd), worktreePath), contentType: "terminal" };
+    case "grep":
+    case "railyin_grep":
+      return { label: "grep", subject: str(args.pattern || args.query) };
+    case "glob":
+    case "railyin_glob":
+      return { label: "glob", subject: str(args.pattern) };
+    case "delete":
+      return { label: "delete", subject: stripWorktreePath(str(args.path || args.file_path), worktreePath), contentType: "file" };
+    case "ls":
+    case "list":
+      return { label: "ls", subject: stripWorktreePath(str(args.path), worktreePath) };
+    case "webfetch":
+    case "web_fetch":
+      return { label: "web fetch", subject: str(args.url) };
+    default:
+      return { label: humanizeToolName(name) };
+  }
+}
+
+// ─── Translate SDK Message to EngineEvents ───
+
 function translateCursorMessage(message) {
   const events = [];
   switch (message.type) {
     case "assistant": {
-      const content = message.message.content
+      const contentBlocks = message.messageObj?.content ?? message.message?.content ?? [];
+      const content = contentBlocks
         .filter((block) => block.type === "text")
         .map((block) => block.text ?? "")
         .join("");
@@ -275,28 +457,30 @@ function translateCursorMessage(message) {
       break;
     }
     case "tool_call": {
-      // Cursor wraps every custom-tool call under name "mcp" with the real
-      // tool name nested at args.toolName and real args at args.args.
-      const isMcpEnvelope = message.name === "mcp" && message.args && typeof message.args.toolName === "string";
-      const resolvedName = isMcpEnvelope ? message.args.toolName : message.name;
-      const resolvedArgs = isMcpEnvelope ? (message.args.args ?? {}) : (message.args ?? {});
+      const { name: resolvedName, args: resolvedArgs } = unwrapCursorToolName(message.name, message.args);
       if (message.status === "running") {
+        const display = buildCursorToolDisplay(resolvedName, resolvedArgs);
         events.push({
           type: "tool_start",
           name: resolvedName,
           arguments: JSON.stringify(resolvedArgs),
           callId: message.call_id,
+          display,
         });
       } else if (message.status === "completed" || message.status === "error") {
         const isError = message.status === "error";
         const text = normalizeCursorToolResult(message.result);
         const result = text.length > 0 ? text : isError ? "(tool returned an error with no message)" : "(no output)";
+        const structured = extractStructuredResult(message.result);
+        const display = buildCursorToolDisplay(resolvedName, resolvedArgs);
         events.push({
           type: "tool_result",
           name: resolvedName,
           result,
           callId: message.call_id,
           isError,
+          display,
+          ...structured,
         });
       }
       break;

@@ -239,3 +239,99 @@ test.describe("CU-4 — decision_request prompt under cursor", () => {
         await expect(page.locator(".interview__submit")).toBeEnabled();
     });
 });
+
+// ─── CU-3.1: Cursor shell tool shows command in collapsible ────────────────
+
+test.describe("CU-3.1 — cursor shell tool display", () => {
+    test("CU-3.1: shell tool shows command in collapsible header", async ({ page, api, task }) => {
+        const cursorTask: Task = { ...task, model: "cursor/claude-sonnet-4-6" };
+        api.returns("models.listEnabled", CURSOR_MODELS);
+        api.handle("tasks.list", () => [cursorTask]);
+
+        const messages: ConversationMessage[] = [
+            {
+                id: 300,
+                taskId: cursorTask.id,
+                conversationId: cursorTask.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "shell", arguments: JSON.stringify({ command: "ls -la" }) },
+                    id: "tc-shell-1",
+                    display: { label: "bash", subject: "ls -la", contentType: "terminal" },
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+            {
+                id: 301,
+                taskId: cursorTask.id,
+                conversationId: cursorTask.id,
+                type: "tool_result",
+                role: "user",
+                content: JSON.stringify({ tool_use_id: "tc-shell-1", content: "file1\nfile2\n" }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+        ];
+
+        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, cursorTask.id);
+
+        // The tool call group should render with the canonical label "bash"
+        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".tc__tool-name").first()).toContainText("bash");
+        // The command should be in the primary arg
+        await expect(page.locator(".tc__primary-arg").first()).toContainText("ls -la");
+    });
+});
+
+// ─── CU-3.2: Cursor read tool shows file path ──────────────────────────────
+
+test.describe("CU-3.2 — cursor read tool display", () => {
+    test("CU-3.2: read tool shows file path in collapsible", async ({ page, api, task }) => {
+        const cursorTask: Task = { ...task, model: "cursor/claude-sonnet-4-6" };
+        api.returns("models.listEnabled", CURSOR_MODELS);
+        api.handle("tasks.list", () => [cursorTask]);
+
+        const messages: ConversationMessage[] = [
+            {
+                id: 400,
+                taskId: cursorTask.id,
+                conversationId: cursorTask.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "read", arguments: JSON.stringify({ path: "/repo/src/foo.ts" }) },
+                    id: "tc-read-1",
+                    display: { label: "read", subject: "src/foo.ts", contentType: "file" },
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+            {
+                id: 401,
+                taskId: cursorTask.id,
+                conversationId: cursorTask.id,
+                type: "tool_result",
+                role: "user",
+                content: JSON.stringify({ tool_use_id: "tc-read-1", content: "file content" }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+        ];
+
+        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, cursorTask.id);
+
+        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".tc__tool-name").first()).toContainText("read");
+        await expect(page.locator(".tc__primary-arg").first()).toContainText("src/foo.ts");
+    });
+});

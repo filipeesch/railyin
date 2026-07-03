@@ -10,6 +10,8 @@ import {
     token,
     toolResult,
     toolStart,
+    toolStartWithDisplay,
+    toolResultWithStructuredData,
     waitForAbort,
 } from "./mocks.ts";
 import {
@@ -20,6 +22,8 @@ import {
     runSingleTurnChatScenario,
     runToolFailureScenario,
     runToolSuccessScenario,
+    runCursorShellToolScenario,
+    runCursorEditToolScenario,
 } from "@bun/test/support/shared-rpc-scenarios.ts";
 
 const runtimes: BackendRpcRuntime[] = [];
@@ -159,6 +163,34 @@ describe("Cursor backend RPC scenarios", () => {
 
         await runModelListingScenario(runtime);
         expect(adapter.trace.listModelsCalls).toBeGreaterThan(0);
+    });
+
+    it("§6.4.1 — shell tool with stdout extraction", async () => {
+        const adapter = new MockCursorSdkAdapter().queueTurn({
+            steps: [
+                toolStartWithDisplay("shell-call-1", "shell", { command: "ls -la" }, { label: "bash", subject: "ls -la", contentType: "terminal" }),
+                toolResultWithStructuredData("shell-call-1", "file1\nfile2\n", { detailedResult: "file1\nfile2\n" }),
+                token("done"),
+            ],
+        });
+        const runtime = createRuntime(adapter);
+
+        await runCursorShellToolScenario(runtime);
+    });
+
+    it("§6.4.2 — edit tool with diff parsing", async () => {
+        const adapter = new MockCursorSdkAdapter().queueTurn({
+            steps: [
+                toolStartWithDisplay("edit-call-1", "edit", { path: "/repo/src/foo.ts" }, { label: "edit", subject: "src/foo.ts", contentType: "file" }),
+                toolResultWithStructuredData("edit-call-1", "edited", {
+                    writtenFiles: [{ operation: "edit_file", path: "src/foo.ts", added: 1, removed: 1, hunks: [] }],
+                }),
+                token("done"),
+            ],
+        });
+        const runtime = createRuntime(adapter);
+
+        await runCursorEditToolScenario(runtime);
     });
 });
 
