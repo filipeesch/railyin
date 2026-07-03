@@ -28,6 +28,7 @@ export type EngineEvent = (
     isError?: boolean;
     parentCallId?: string;
     isInternal?: boolean;
+    display?: ToolCallDisplay;
     detailedResult?: string;
     contentBlocks?: Array<Record<string, unknown>>;
     writtenFiles?: Array<import("../../shared/rpc-types.ts").FileDiffPayload>;
