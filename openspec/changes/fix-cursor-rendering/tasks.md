@@ -37,3 +37,4 @@
 - [x] 6.1 Create `translate-consistency.test.ts` — Bun vs Node consistency tests (5 scenarios)
 - [x] 6.2 Add `runCursorShellToolScenario` and `runCursorEditToolScenario` to `shared-rpc-scenarios.ts`
 - [x] 6.3 Add integration test cases in `cursor/rpc-scenarios.test.ts` for shell and edit tools
+- [x] 6.4 Add Playwright tests for cursor tool rendering display (CU-3.1, CU-3.2, S-29 to S-33)
