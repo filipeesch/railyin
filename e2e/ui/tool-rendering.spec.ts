@@ -421,3 +421,206 @@ test("S-31: subagent result renders as markdown, not raw JSON", async ({ page, a
     // Raw JSON must NOT appear
     await expect(result).not.toContainText("tool_use_id");
 });
+
+// ─── S-29 to S-33: Cursor tool rendering ──────────────────────────────────
+
+test.describe("S-29 to S-33 — cursor tool rendering", () => {
+    test("S-29: Cursor shell command renders in collapsible header", async ({ page, api, task }) => {
+        api.returns("models.listEnabled", [{ id: "cursor/claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", contextWindow: 200_000, engineId: "cursor" }]);
+        api.handle("tasks.list", () => [{ ...task, model: "cursor/claude-sonnet-4-6" }]);
+
+        const messages: ConversationMessage[] = [
+            {
+                id: 500,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "shell", arguments: JSON.stringify({ command: "grep -r TODO src/" }) },
+                    id: "tc-s29",
+                    display: { label: "run", subject: "grep -r TODO src/", contentType: "terminal" },
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+        ];
+
+        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".tc__tool-name").first()).toContainText("run");
+        await expect(page.locator(".tc__primary-arg").first()).toContainText("grep -r TODO src/");
+    });
+
+    test("S-30: Cursor read file renders file path in collapsible header", async ({ page, api, task }) => {
+        api.returns("models.listEnabled", [{ id: "cursor/claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", contextWindow: 200_000, engineId: "cursor" }]);
+        api.handle("tasks.list", () => [{ ...task, model: "cursor/claude-sonnet-4-6" }]);
+
+        const messages: ConversationMessage[] = [
+            {
+                id: 600,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "read", arguments: JSON.stringify({ path: "/repo/src/main.ts" }) },
+                    id: "tc-s30",
+                    display: { label: "read", subject: "src/main.ts", contentType: "file" },
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+        ];
+
+        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".tc__tool-name").first()).toContainText("read");
+        await expect(page.locator(".tc__primary-arg").first()).toContainText("src/main.ts");
+    });
+
+    test("S-31: Cursor edit diff renders stat badges", async ({ page, api, task }) => {
+        api.returns("models.listEnabled", [{ id: "cursor/claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", contextWindow: 200_000, engineId: "cursor" }]);
+        api.handle("tasks.list", () => [{ ...task, model: "cursor/claude-sonnet-4-6" }]);
+
+        const messages: ConversationMessage[] = [
+            {
+                id: 700,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "edit", arguments: JSON.stringify({ path: "/repo/src/foo.ts" }) },
+                    id: "tc-s31",
+                    display: { label: "edit", subject: "src/foo.ts", contentType: "file" },
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+            {
+                id: 701,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_result",
+                role: "user",
+                content: JSON.stringify({
+                    tool_use_id: "tc-s31",
+                    content: "edited",
+                    writtenFiles: [{ operation: "edit_file", path: "src/foo.ts", added: 5, removed: 2, hunks: [] }],
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+        ];
+
+        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
+        // Stat badges should render for added/removed lines
+        await expect(page.locator(".tc__stat-badge")).toContainText("+5");
+        await expect(page.locator(".tc__stat-badge")).toContainText("-2");
+    });
+
+    test("S-32: Cursor write diff renders stat badges", async ({ page, api, task }) => {
+        api.returns("models.listEnabled", [{ id: "cursor/claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", contextWindow: 200_000, engineId: "cursor" }]);
+        api.handle("tasks.list", () => [{ ...task, model: "cursor/claude-sonnet-4-6" }]);
+
+        const messages: ConversationMessage[] = [
+            {
+                id: 800,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "write", arguments: JSON.stringify({ path: "/repo/src/new.ts" }) },
+                    id: "tc-s32",
+                    display: { label: "write", subject: "src/new.ts", contentType: "file" },
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+            {
+                id: 801,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_result",
+                role: "user",
+                content: JSON.stringify({
+                    tool_use_id: "tc-s32",
+                    content: "created",
+                    writtenFiles: [{ operation: "write_file", path: "src/new.ts", added: 10, removed: 0, hunks: [] }],
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+        ];
+
+        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".tc__stat-badge")).toContainText("+10");
+    });
+
+    test("S-33: Cursor delete shows '(file deleted)' when expanded", async ({ page, api, task }) => {
+        api.returns("models.listEnabled", [{ id: "cursor/claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", contextWindow: 200_000, engineId: "cursor" }]);
+        api.handle("tasks.list", () => [{ ...task, model: "cursor/claude-sonnet-4-6" }]);
+
+        const messages: ConversationMessage[] = [
+            {
+                id: 900,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_call",
+                role: "assistant",
+                content: JSON.stringify({
+                    type: "function",
+                    function: { name: "delete", arguments: JSON.stringify({ path: "/repo/src/old.ts" }) },
+                    id: "tc-s33",
+                    display: { label: "delete", subject: "src/old.ts", contentType: "file" },
+                }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+            {
+                id: 901,
+                taskId: task.id,
+                conversationId: task.id,
+                type: "tool_result",
+                role: "user",
+                content: JSON.stringify({ tool_use_id: "tc-s33", content: "(file deleted)" }),
+                metadata: null,
+                createdAt: new Date().toISOString(),
+            },
+        ];
+
+        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
+        // Expand the tool result to see the "(file deleted)" text
+        await page.locator(".tc__toggle").first().click();
+        await expect(page.locator(".tc__result")).toContainText("(file deleted)");
+    });
+});

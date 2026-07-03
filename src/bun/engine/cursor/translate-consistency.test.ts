@@ -14,7 +14,7 @@ import {
   normalizeCursorToolResult,
   unwrapCursorToolName,
 } from "./translate-events.ts";
-import { canonicalToolDisplayLabel, humanizeToolName, stripWorktreePath } from "../tool-display.ts";
+import { canonicalToolDisplayLabel } from "../tool-display.ts";
 import type { CursorSDKMessage } from "./translate-events.ts";
 
 /* ─── Helper: run worker.mjs logic in-process ───────────────────── */
@@ -139,7 +139,7 @@ describe("Bun vs Node consistency", () => {
 
     expect(bunEvents).toHaveLength(1);
     expect(workerEvents).toHaveLength(1);
-    expect(bunEvents[0].display).toEqual(workerEvents[0].display);
+    expect((bunEvents[0] as any).display).toEqual((workerEvents[0] as any).display);
   });
 
   it("tool_start for edit: display matches", () => {
@@ -156,7 +156,7 @@ describe("Bun vs Node consistency", () => {
 
     expect(bunEvents).toHaveLength(1);
     expect(workerEvents).toHaveLength(1);
-    expect(bunEvents[0].display).toEqual(workerEvents[0].display);
+    expect((bunEvents[0] as any).display).toEqual((workerEvents[0] as any).display);
   });
 
   it("tool_result for shell: detailedResult matches", () => {
@@ -174,7 +174,7 @@ describe("Bun vs Node consistency", () => {
 
     expect(bunEvents).toHaveLength(1);
     expect(workerEvents).toHaveLength(1);
-    expect(bunEvents[0].detailedResult).toBe(workerEvents[0].detailedResult);
+    expect((bunEvents[0] as any).detailedResult).toBe((workerEvents[0] as any).detailedResult);
   });
 
   it("tool_result for edit: writtenFiles structure matches", () => {
@@ -199,9 +199,9 @@ describe("Bun vs Node consistency", () => {
 
     expect(bunEvents).toHaveLength(1);
     expect(workerEvents).toHaveLength(1);
-    expect(bunEvents[0].writtenFiles).toBeDefined();
-    expect(workerEvents[0].writtenFiles).toBeDefined();
-    expect(bunEvents[0].writtenFiles![0].operation).toBe(workerEvents[0].writtenFiles![0].operation);
+    expect((bunEvents[0] as any).writtenFiles).toBeDefined();
+    expect((workerEvents[0] as any).writtenFiles).toBeDefined();
+    expect((bunEvents[0] as any).writtenFiles![0].operation).toBe((workerEvents[0] as any).writtenFiles![0].operation);
   });
 
   it("tool_result for delete: detailedResult matches", () => {
@@ -219,6 +219,6 @@ describe("Bun vs Node consistency", () => {
 
     expect(bunEvents).toHaveLength(1);
     expect(workerEvents).toHaveLength(1);
-    expect(bunEvents[0].detailedResult).toBe(workerEvents[0].detailedResult);
+    expect((bunEvents[0] as any).detailedResult).toBe((workerEvents[0] as any).detailedResult);
   });
 });
