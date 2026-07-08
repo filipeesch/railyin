@@ -42,11 +42,12 @@ function newAdapter(): SubprocessCursorAdapter {
 async function collectRun(adapter: SubprocessCursorAdapter, prompt: string, customTools: Record<string, SDKCustomTool> = {}): Promise<EngineEvent[]> {
   const events: EngineEvent[] = [];
   for await (const event of adapter.run({
-    executionId: 1,
-    taskId: 0,
-    prompt,
-    workingDirectory: process.cwd(),
-    sessionId: "cursor-test",
+      executionId: 1,
+      taskId: 0,
+      conversationId: 0,
+      prompt,
+      workingDirectory: process.cwd(),
+      sessionId: "cursor-test",
     customTools,
   })) {
     events.push(event);
@@ -95,12 +96,13 @@ describeOrSkip("SubprocessCursorAdapter — subprocess tests (§6.4)", () => {
     // First run: scripted crash. Expect a fatal error event.
     let crashError: Error | null = null;
     try {
-      for await (const _ of adapter.run({
-        executionId: 1,
-        taskId: 0,
-        prompt: "crash-mid-run",
-        workingDirectory: process.cwd(),
-        sessionId: "cursor-test-crash",
+        for await (const _ of adapter.run({
+          executionId: 1,
+          taskId: 0,
+          conversationId: 0,
+          prompt: "crash-mid-run",
+          workingDirectory: process.cwd(),
+          sessionId: "cursor-test-crash",
       })) {
         // drain
       }

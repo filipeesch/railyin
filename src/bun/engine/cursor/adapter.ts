@@ -36,6 +36,7 @@ export interface CursorSdkModelInfo {
 export interface CursorRunConfig {
   executionId: number;
   taskId: number;
+  conversationId: number;
   prompt: string;
   workingDirectory: string;
   model?: string;
