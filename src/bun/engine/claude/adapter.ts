@@ -345,6 +345,11 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           model: config.model ?? null,
         });
 
+        // Captured after sdk.query() below; used in SubagentStop hook to reconnect the MCP
+        // transport after background subagent subprocesses exit and close inherited FDs.
+        // eslint-disable-next-line prefer-const
+        let queryRef: { reconnectMcpServer?: (name: string) => Promise<void> } = {};
+
         const query = sdk.query({
           prompt,
           options: {
@@ -381,6 +386,11 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
               ...buildAllowedExternalMcpTools(config.externalMcpServers, config.enabledMcpTools),
             ],
             permissionMode: "bypassPermissions",
+            // SDK docs: allowDangerouslySkipPermissions is REQUIRED when using bypassPermissions.
+            // Without it the SDK may not fully apply the mode, leaving internal permission
+            // channels open that break when background subagent subprocesses exit.
+            // Ref: https://code.claude.com/docs/en/agent-sdk/typescript (allowDangerouslySkipPermissions)
+            allowDangerouslySkipPermissions: true,
             // SDK hooks format: Partial<Record<HookEvent, HookCallbackMatcher[]>>
             // HookEvent keys are PascalCase (e.g. 'PostToolUse', 'PreCompact'), NOT camelCase.
             // Each value must be an array of { hooks: HookCallback[] } objects.
@@ -447,6 +457,17 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
                 hooks: [async (hookInput: unknown) => {
                   const input = hookInput as { agent_id?: string };
                   const callId = input.agent_id ?? "";
+                  // SDK v2.1.198+: subagents run as background subprocesses by default.
+                  // When a subagent exits it closes its inherited FDs, which breaks the
+                  // DirectConnectTransport pipe used by the in-process railyin MCP server.
+                  // Reconnecting here re-establishes the transport before the parent agent
+                  // makes its next railyin tool call (e.g. decision_request, create_todo).
+                  // Ref: https://code.claude.com/docs/en/agent-sdk/typescript (reconnectMcpServer)
+                  try {
+                    await queryRef.reconnectMcpServer?.("railyin");
+                  } catch {
+                    // Non-fatal: if reconnect fails the next tool call will surface the error.
+                  }
                   if (callId) emit({ type: "subagent_stop", callId });
                   return {};
                 }],
@@ -475,6 +496,11 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             },
           },
         });
+
+        // Wire the query reference for reconnectMcpServer in the SubagentStop hook above.
+        queryRef.reconnectMcpServer = query.reconnectMcpServer
+          ? (name: string) => (query.reconnectMcpServer as (n: string) => Promise<void>)(name)
+          : undefined;
 
         this.trackExecutionLease(config.executionId, config.sessionId);
         this.leases.touch(config.sessionId, "running");
