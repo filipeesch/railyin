@@ -58,12 +58,13 @@ afterEach(() => {
 describe("tasks.listBranches", () => {
   it("returns empty array when no git context row exists for the task", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
-    // No registerProjectGitContext call — task has no task_git_context row
+    // ensureContext is called by the handler, which creates the context row
+    // so listBranches can find gitRootPath from project config
 
     const handlers = taskGitHandlers(db, () => {}, worktreeManager, gitRepo);
     const result = await handlers["tasks.listBranches"]({ taskId });
 
-    expect(result).toEqual({ branches: [] });
+    expect(result.branches).toContain("main");
   });
 });
 

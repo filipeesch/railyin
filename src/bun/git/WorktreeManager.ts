@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { getLoadedProjectByKey } from "../project-store.ts";
 import type { IWorkspaceRepository } from "../db/workspace-repository.ts";
 import type { IProjectResolver } from "./IProjectResolver.ts";
 import type { ITaskGitContextRepository } from "../db/repositories/ITaskGitContextRepository.ts";
@@ -42,6 +43,29 @@ export class WorktreeManager {
 
   registerContext(taskId: number, gitRootPath: string, subrepoPath?: string): void {
     this.taskGitContextRepo.upsertContext(taskId, gitRootPath, subrepoPath);
+  }
+
+  /**
+   * Ensure a git context row exists for the given task.
+   * Creates one with `worktree_status='not_created'` if missing,
+   * using the project's configured `gitRootPath`.
+   */
+  ensureContext(taskId: number): void {
+    const ctx = this.taskGitContextRepo.getContext(taskId);
+    if (ctx) return;
+
+    const taskRow = this.db
+      .query<{ project_key: string }, [number]>(
+        "SELECT project_key FROM tasks WHERE id = ?",
+      )
+      .get(taskId);
+    if (!taskRow) return;
+
+    const wsKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
+    if (project?.gitRootPath) {
+      this.registerContext(taskId, project.gitRootPath);
+    }
   }
 
   async createWorktree(
