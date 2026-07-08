@@ -57,6 +57,29 @@ describe("sendWithBusyRetry", () => {
         await expect(sendWithBusyRetry(agent, "prompt")).rejects.toThrow("still busy");
         expect(agent.send).toHaveBeenCalledTimes(2);
     });
+
+    it("retries when busy error comes as a plain Error message", async () => {
+        const agent = makeAgent({
+            firstError: new Error("Agent 13f9e45e-019e-5dfe-a9cb-04d036157036 already has active run"),
+            secondResult: { kind: "forced-from-message" },
+        });
+        const result = await sendWithBusyRetry(agent, "prompt");
+        expect(result).toEqual({ kind: "forced-from-message" });
+        expect(agent.send).toHaveBeenCalledTimes(2);
+        expect(agent.send).toHaveBeenNthCalledWith(2, "prompt", { local: { force: true } });
+    });
+
+    it("retries when busy error comes as status 409", async () => {
+        const conflictError = new Error("Conflict");
+        Object.assign(conflictError, { status: 409 });
+        const agent = makeAgent({
+            firstError: conflictError,
+            secondResult: { kind: "forced-from-status" },
+        });
+        const result = await sendWithBusyRetry(agent, "prompt");
+        expect(result).toEqual({ kind: "forced-from-status" });
+        expect(agent.send).toHaveBeenCalledTimes(2);
+    });
 });
 
 describe("sendPromptWithRecovery", () => {
@@ -133,6 +156,36 @@ describe("sendPromptWithRecovery", () => {
         expect(log).toHaveBeenCalledWith(
             "warn",
             expect.stringContaining("cursor_busy_recovery_failed"),
+        );
+    });
+
+    it("recovers when resume/create path throws a plain busy-like error before send", async () => {
+        const recreatedAgent = makeAgent([{ kind: "recovered-after-resume-failure" }]);
+        const log = vi.fn();
+        const Agent = {
+            resume: vi.fn(async () => {
+                throw new Error("resume failed");
+            }),
+            create: vi
+                .fn()
+                .mockRejectedValueOnce(new Error("Agent 13f9e45e-019e-5dfe-a9cb-04d036157036 already has active run"))
+                .mockResolvedValueOnce(recreatedAgent),
+        };
+
+        const result = await sendPromptWithRecovery(
+            Agent,
+            "agent-id-123",
+            { apiKey: "k", local: { cwd: "/tmp", customTools: {}, settingSources: ["project"] } },
+            "prompt",
+            { runId: "run-3", executionId: 33, taskId: 9, conversationId: 11, log },
+        );
+
+        expect(result.run).toEqual({ kind: "recovered-after-resume-failure" });
+        expect(result.agent).toBe(recreatedAgent);
+        expect(Agent.create).toHaveBeenCalledTimes(2);
+        expect(log).toHaveBeenCalledWith(
+            "warn",
+            expect.stringContaining("resume_or_create"),
         );
     });
 });
