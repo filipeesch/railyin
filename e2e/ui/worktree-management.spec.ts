@@ -46,14 +46,17 @@ function makeReadyTask(overrides: Partial<Task> = {}): Task {
 // ─── Suite W-A — Display states ───────────────────────────────────────────────
 
 test.describe("W-A — display states", () => {
-  test("W-A-1: worktreeStatus null → worktree section not rendered", async ({ page, api }) => {
+  test("W-A-1: worktreeStatus null → worktree section visible with create form", async ({ page, api }) => {
     const task = makeTask({ worktreeStatus: null });
     api.handle("tasks.list", () => [task]);
 
     await page.goto("/");
     await openGitTab(page, task.id);
 
-    await expect(page.locator(".task-tab-git .info-section", { hasText: "Worktree" })).not.toBeVisible();
+    // Section IS rendered (with form for tasks that have no git context)
+    await expect(page.locator(".task-tab-git .info-section", { hasText: "Worktree" })).toBeVisible();
+    // Status label shows "not configured"
+    await expect(page.locator(".task-tab-git .info-value--muted", { hasText: /not configured|not created|removed/ })).toBeVisible();
   });
 
   test("W-A-2: worktreeStatus ready → branch and path rows visible", async ({ page, api }) => {

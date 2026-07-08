@@ -57,7 +57,7 @@ test.describe("CWD-A — static working directory display", () => {
         ).not.toBeVisible();
     });
 
-    test("CWD-A-2: worktree not yet created → no worktree path shown", async ({ page, api }) => {
+    test("CWD-A-2: worktree not yet created → section visible with no path", async ({ page, api }) => {
         const task = makeTask({ worktreeStatus: null, worktreePath: null });
         api.handle("tasks.list", () => [task]);
         api.handle("workspace.get", () => makeWorkspace());
@@ -65,9 +65,13 @@ test.describe("CWD-A — static working directory display", () => {
         await page.goto("/");
         await openGitTab(page, task.id);
 
-        // No worktree section at all
+        // Section IS rendered (shows "not configured" status + create form)
         await expect(
             page.locator(".task-tab-git .info-section", { hasText: "Worktree" }),
+        ).toBeVisible();
+        // No worktree path row visible (there's no worktree yet)
+        await expect(
+            page.locator(".task-tab-git .info-value--mono", { hasText: PROJECT_PATH }),
         ).not.toBeVisible();
     });
 
@@ -99,7 +103,7 @@ test.describe("CWD-B — live path update via WebSocket", () => {
         api,
         ws,
     }) => {
-        // Task starts with no worktree (null hides the section entirely)
+        // Task starts with no worktree (null status — section visible, form shown)
         const pendingTask = makeTask({ worktreeStatus: null, worktreePath: null });
         api.handle("tasks.list", () => [pendingTask]);
         api.handle("workspace.get", () => makeWorkspace());
@@ -107,9 +111,13 @@ test.describe("CWD-B — live path update via WebSocket", () => {
         await page.goto("/");
         await openGitTab(page, pendingTask.id);
 
-        // No worktree section yet
+        // Worktree section is visible (shows create form for null status)
         await expect(
             page.locator(".task-tab-git .info-section", { hasText: "Worktree" }),
+        ).toBeVisible();
+        // No path row yet
+        await expect(
+            page.locator(".task-tab-git .info-value--mono", { hasText: WORKTREE_PATH }),
         ).not.toBeVisible();
 
         // Backend signals worktree is ready
