@@ -209,13 +209,18 @@ The system SHALL pass `settingSources: ["project"]` to the Cursor SDK's local ag
 - **AND** the SDK loads `.cursorrules` and `.cursor/rules/*.mdc` from the project working directory
 
 ### Requirement: AgentBusyError recovery after decision_request abort
-The system SHALL recover transparently from `AgentBusyError` on the subsequent turn after a `decision_request`-triggered run abort, without surfacing an error to the user.
+The system SHALL retry a busy Cursor agent once with `force:true` after a `decision_request`-triggered abort, and SHALL attempt same-id agent recreation and resend in the same turn if the forced retry still reports the agent as busy. The same deterministic `agentId` SHALL be preserved for future turns; no Cursor-specific persistence or id rotation is allowed.
 
 #### Scenario: AgentBusyError on turn following decision_request is retried automatically
 - **WHEN** `agent.send(prompt)` throws `AgentBusyError` in the worker
 - **THEN** the worker retries immediately with `agent.send(prompt, { local: { force: true } })`
-- **AND** the run proceeds normally from that point
-- **AND** no error is surfaced to the Bun parent or the user
+- **AND** if the retry succeeds, the run proceeds normally from that point
+
+#### Scenario: Persistent busy after force triggers same-id recreation and resend
+- **WHEN** `agent.send(prompt, { local: { force: true } })` still throws `AgentBusyError`
+- **THEN** the worker recreates the same agent id and resends the prompt in the same turn
+- **AND** if the recreated agent is still busy, the worker ends the current execution cleanly
+- **AND** the next turn can reuse the same deterministic `agentId`
 
 #### Scenario: Non-AgentBusyError errors are not swallowed
 - **WHEN** `agent.send(prompt)` throws an error that is not `AgentBusyError`
@@ -229,4 +234,3 @@ The system SHALL resolve the task's worktree path and project path from the data
 - **THEN** it queries `task_git_context.worktree_path` for the worktree
 - **AND** resolves the project path via `getLoadedProjectByKey`
 - **AND** delegates to `CursorDialect.listCommands(worktreePath, projectPath)`
-

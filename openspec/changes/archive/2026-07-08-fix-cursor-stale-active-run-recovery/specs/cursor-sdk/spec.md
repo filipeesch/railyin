@@ -177,17 +177,17 @@ The system SHALL accept `cursor` engine configuration via `engines.yaml` with an
 
 ### Requirement: AgentBusyError recovery after decision_request abort
 
-The system SHALL retry a busy Cursor agent once with `force:true` after a `decision_request`-triggered abort, and SHALL fail the current execution cleanly if the forced retry still reports the agent as busy. The same deterministic `agentId` SHALL be preserved for future turns; no Cursor-specific persistence or id rotation is allowed.
+The system SHALL retry a busy Cursor agent once with `force:true` after a `decision_request`-triggered abort, and SHALL attempt same-id agent recreation and resend in the same turn if the forced retry still reports the agent as busy. The same deterministic `agentId` SHALL be preserved for future turns; no Cursor-specific persistence or id rotation is allowed.
 
 #### Scenario: AgentBusyError on turn following decision_request is retried automatically
 - **WHEN** `agent.send(prompt)` throws `AgentBusyError` in the worker
 - **THEN** the worker retries immediately with `agent.send(prompt, { local: { force: true } })`
 - **AND** if the retry succeeds, the run proceeds normally from that point
 
-#### Scenario: Persistent busy after force fails the current execution cleanly
+#### Scenario: Persistent busy after force triggers same-id recreation and resend
 - **WHEN** `agent.send(prompt, { local: { force: true } })` still throws `AgentBusyError`
-- **THEN** the worker ends the current run with a fatal failure detail describing the persistent busy state
-- **AND** the worker cleans up its in-memory run state and closes the agent
+- **THEN** the worker recreates the same agent id and resends the prompt in the same turn
+- **AND** if the recreated agent is still busy, the worker ends the current execution cleanly
 - **AND** the next turn can reuse the same deterministic `agentId`
 
 #### Scenario: Non-AgentBusyError errors are not swallowed
