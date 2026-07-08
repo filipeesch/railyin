@@ -10,6 +10,9 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated, work
   return {
     // ─── tasks.listBranches ────────────────────────────────────────────────────
     "tasks.listBranches": async (params: { taskId: number }): Promise<{ branches: string[] }> => {
+      // Ensure git context exists so we can resolve gitRootPath from project config.
+      // Tasks created via board tool may have no task_git_context row yet.
+      worktreeManager.ensureContext(params.taskId);
       const branches = await worktreeManager.listBranches(params.taskId);
       return { branches };
     },
@@ -22,6 +25,11 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated, work
       branchName: string;
       sourceBranch?: string;
     }): Promise<Task> => {
+      // Ensure git context exists before creating worktree.
+      // Tasks created via board tool or when gitRootPath was missing may have no
+      // context row — register it now so createWorktree can proceed.
+      worktreeManager.ensureContext(params.taskId);
+
       await worktreeManager.createWorktree(params.taskId, {
         mode: params.mode,
         branchName: params.branchName,

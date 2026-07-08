@@ -73,7 +73,7 @@ watch(
   async (status) => {
     removeWarning.value = null;
     if (!task.value) return;
-    if (status === "not_created" || status === "removed" || status === "error") {
+    if (status == null || status === "not_created" || status === "removed" || status === "error") {
       await fetchBranches();
     }
   },
