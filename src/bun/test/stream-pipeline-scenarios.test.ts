@@ -922,3 +922,40 @@ describe("S-17 [per-token delivery]: burst of N tokens produces N individual tex
         }
     });
 });
+
+// ---------------------------------------------------------------------------
+// S-15: subagent_stop closes the subagent bubble
+// Validates that a subagent_stop event emits a done=true tool_result IPC event
+// with blockId matching the subagent_start callId, so the UI can close the bubble.
+// ---------------------------------------------------------------------------
+
+describe("S-15 [subagent]: subagent_stop closes the subagent bubble", () => {
+    it("IPC has done=true tool_result with blockId=callId after subagent_stop", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            { type: "subagent_start", callId: "sa-bubble", intent: "do work", prompt: "do some work" },
+            { type: "subagent_stop", callId: "sa-bubble" },
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+        await runtime.recorder.waitForStreamDone(executionId);
+
+        const ipc = runtime.getIpcEvents(executionId);
+
+        // subagent_start produces a tool_call block
+        const startBlock = ipc.find((e) => e.type === "tool_call" && e.blockId === "sa-bubble" && e.subagentId === "sa-bubble");
+        expect(startBlock).toBeDefined();
+
+        // subagent_stop produces a done=true tool_result block with matching blockId
+        const stopBlock = ipc.find((e) => e.type === "tool_result" && e.blockId === "sa-bubble" && e.done === true && e.subagentId === "sa-bubble");
+        expect(stopBlock).toBeDefined();
+
+        // stop must come after start
+        const startIdx = ipc.indexOf(startBlock!);
+        const stopIdx = ipc.indexOf(stopBlock!);
+        expect(stopIdx).toBeGreaterThan(startIdx);
+    });
+});

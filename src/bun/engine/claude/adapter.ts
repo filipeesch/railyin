@@ -1,12 +1,13 @@
 import { createHash } from "crypto";
-import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types.ts";
+import type { CommonToolContext, EngineEvent } from "../types.ts";
 import { buildClaudeToolServer } from "./tools.ts";
 import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
 import type { FileStateCache } from "./file-state-cache.ts";
-import { ShellApprovalRepository, getUnapprovedShellBinaries, type ShellApprovalScope } from "../../db/repositories/shell-approval-repository.ts";
+import { ShellApprovalRepository, getUnapprovedShellBinaries } from "../../db/repositories/shell-approval-repository.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
 import type { McpServerConfig } from "../../mcp/types.ts";
+import { BashPermissionGate } from "./bash-permission-gate.ts";
 
 export interface ClaudeSdkModelInfo {
   value: string;
@@ -146,14 +147,6 @@ function buildAskUserPayload(message: string, requestedSchema?: Record<string, u
   });
 }
 
-function extractShellCommand(toolName: string, input: Record<string, unknown>, title?: string): string {
-  if (toolName === "Bash" && typeof input.command === "string") {
-    return input.command;
-  }
-  if (title?.trim()) return title;
-  return `${toolName} ${JSON.stringify(input)}`;
-}
-
 function normalizeClaudeModel(model?: string): string | undefined {
   if (!model) return undefined;
   return model.startsWith("claude/") ? model.slice("claude/".length) : model;
@@ -221,38 +214,15 @@ function buildAllowedExternalMcpTools(
 
 export function buildAllowPermissionResult(
   toolInput: Record<string, unknown>,
-  suggestions?: unknown,
+  _suggestions?: unknown,
 ): Record<string, unknown> {
-  if (Array.isArray(suggestions)) {
-    return {
-      behavior: "allow",
-      updatedInput: toolInput,
-      updatedPermissions: suggestions,
-    };
-  }
-
   return {
-    behavior: "allow",
-    updatedInput: toolInput,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: toolInput,
+    },
   };
-}
-
-function permissionDecisionToResult(
-  input: EngineResumeInput,
-  toolInput: Record<string, unknown>,
-  suggestions?: unknown,
-): Record<string, unknown> {
-  if (input.type !== "shell_approval" || input.decision === "deny") {
-    return {
-      behavior: "deny",
-      message: "Denied by user",
-    };
-  }
-
-  return buildAllowPermissionResult(
-    toolInput,
-    input.decision === "approve_all" ? suggestions : undefined,
-  );
 }
 
 export { getUnapprovedShellBinaries };
@@ -288,9 +258,11 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   private readonly leaseExecutions = new Map<string, Set<number>>();
   private _modelsFetch: Promise<ClaudeSdkModelInfo[]> | null = null;
   private readonly shellApprovalRepo: ShellApprovalRepository;
+  private readonly bashGate: BashPermissionGate;
 
-  constructor(shellApprovalRepo?: ShellApprovalRepository) {
+  constructor(shellApprovalRepo?: ShellApprovalRepository, bashGate?: BashPermissionGate) {
     this.shellApprovalRepo = shellApprovalRepo ?? new ShellApprovalRepository();
+    this.bashGate = bashGate ?? new BashPermissionGate(this.shellApprovalRepo);
   }
 
   private readonly leases = new LeaseRegistry(
@@ -399,9 +371,8 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             // the base or the Claude subprocess loses ANTHROPIC_API_KEY, HOME, PATH, etc.
             env: { ...process.env, ENABLE_TOOL_SEARCH: "false" },
             // DOCS: MCP tools require explicit permission before Claude can call them.
-            // Without allowedTools, calls go through the permission flow (canUseTool callback).
-            // Our canUseTool allows all non-Bash tools, so it works, but allowedTools is the
-            // canonical approach and removes the callback overhead for MCP calls.
+            // allowedTools pre-approves every tool in our in-process server so they run
+            // without going through the PreToolUse hook permission path.
             // The wildcard "mcp__railyin__*" pre-approves every tool in our in-process server.
             // External MCP tools are also pre-approved here when enabledMcpTools is provided.
             // Ref: https://code.claude.com/docs/en/agent-sdk/mcp#allow-mcp-tools
@@ -409,6 +380,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
               "mcp__railyin__*",
               ...buildAllowedExternalMcpTools(config.externalMcpServers, config.enabledMcpTools),
             ],
+            permissionMode: "bypassPermissions",
             // SDK hooks format: Partial<Record<HookEvent, HookCallbackMatcher[]>>
             // HookEvent keys are PascalCase (e.g. 'PostToolUse', 'PreCompact'), NOT camelCase.
             // Each value must be an array of { hooks: HookCallback[] } objects.
@@ -438,6 +410,47 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
                   return {};
                 }],
               }],
+              // PreToolUse fires for both the parent agent and all subagents.
+              // It is the single gate for Bash calls — bypassPermissions mode means the SDK
+              // does not set up an internal permission channel, so this hook is authoritative.
+              PreToolUse: [{
+                hooks: [async (hookInput: unknown) => {
+                  const input = hookInput as { tool_name?: string; tool_input?: Record<string, unknown> };
+                  const toolName = input.tool_name ?? "";
+                  const toolInput = input.tool_input ?? {};
+
+                  return this.bashGate.evaluate(
+                    toolName,
+                    toolInput,
+                    config.shellScope,
+                    async (request) => {
+                      emit({ type: "shell_approval", command: request.command, executionId: config.executionId });
+                      this.leases.touch(config.sessionId, "waiting_user");
+                      const result = await config.waitForResume(request);
+                      this.leases.touch(config.sessionId, "running");
+                      return result;
+                    },
+                  );
+                }],
+              }],
+              SubagentStart: [{
+                hooks: [async (hookInput: unknown) => {
+                  const input = hookInput as { agent_id?: string; prompt?: string };
+                  const callId = input.agent_id ?? `subagent_${Date.now()}`;
+                  const prompt = typeof input.prompt === "string" ? input.prompt : "";
+                  const intent = prompt.slice(0, 120);
+                  emit({ type: "subagent_start", callId, intent, prompt });
+                  return {};
+                }],
+              }],
+              SubagentStop: [{
+                hooks: [async (hookInput: unknown) => {
+                  const input = hookInput as { agent_id?: string };
+                  const callId = input.agent_id ?? "";
+                  if (callId) emit({ type: "subagent_stop", callId });
+                  return {};
+                }],
+              }],
             },
             systemPrompt: config.systemInstructions
               ? { type: "preset", preset: "claude_code", append: config.systemInstructions }
@@ -445,39 +458,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             mcpServers: {
               railyin: toolServer,
               ...buildExternalMcpServers(config.externalMcpServers, config.enabledMcpTools),
-            },
-            canUseTool: async (
-              toolName: string,
-              input: Record<string, unknown>,
-              options: { suggestions?: unknown; title?: string },
-            ) => {
-              if (toolName !== "Bash") {
-                return buildAllowPermissionResult(input);
-              }
-              const command = extractShellCommand(toolName, input, options.title);
-              const shellState = this.shellApprovalRepo.getState(config.shellScope);
-              if (shellState.shellAutoApprove) {
-                return buildAllowPermissionResult(input);
-              }
-              const unapproved = getUnapprovedShellBinaries(command, shellState.approvedCommands);
-              if (unapproved.length === 0) {
-                return buildAllowPermissionResult(input);
-              }
-              emit({
-                type: "shell_approval",
-                command,
-                executionId: config.executionId,
-              });
-              this.leases.touch(config.sessionId, "waiting_user");
-              const resumeInput = await config.waitForResume({
-                type: "shell_approval",
-                command,
-              });
-              this.leases.touch(config.sessionId, "running");
-              if (resumeInput.type === "shell_approval" && resumeInput.decision === "approve_all") {
-                this.shellApprovalRepo.appendApprovedCommands(config.shellScope, unapproved);
-              }
-              return permissionDecisionToResult(resumeInput, input, options.suggestions);
             },
             onElicitation: async (request: { message: string; requestedSchema?: Record<string, unknown> }) => {
               const payload = buildAskUserPayload(request.message, request.requestedSchema);

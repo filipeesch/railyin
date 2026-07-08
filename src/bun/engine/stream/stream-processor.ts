@@ -259,6 +259,15 @@ export class StreamProcessor {
             break;
           }
 
+          case "subagent_stop": {
+            const subagentResultContent = JSON.stringify({ type: "tool_result", tool_use_id: event.callId, content: "" });
+            const subagentResultMeta = { tool_call_id: event.callId, parent_tool_call_id: null };
+            convBuffer.enqueue({ taskId, conversationId, type: "tool_result", role: null, content: subagentResultContent, metadata: subagentResultMeta, notify: true });
+            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: event.callId, type: "tool_result", content: subagentResultContent, metadata: JSON.stringify(subagentResultMeta), parentBlockId: null, done: true, subagentId: event.callId });
+            break;
+          }
+
           case "tool_start": {
             // Suppress truly internal events (e.g. Copilot skill-planner tools).
             // Subagent child events (isInternal + parentCallId) are persisted and nested.
