@@ -1,6 +1,5 @@
-## Purpose
-Defines the Cursor SDK engine integration: how Railyin spawns and talks to the `@cursor/sdk` runtime in a Node subprocess, how SDK events are translated to `EngineEvent`s, how per-conversation agent identity is derived and resumed, how Railyin's common tools and MCP tools are registered as Cursor `SDKCustomTool` entries, and how the engine is configured and discovered.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Cursor SDK engine support
 
 The system SHALL support `cursor` as an engine type, providing agent execution capabilities through the `@cursor/sdk` package.
@@ -176,39 +175,8 @@ The system SHALL accept `cursor` engine configuration via `engines.yaml` with an
 - **THEN** the adapter falls back to `process.env.CURSOR_API_KEY`
 - **AND** if neither is set, runs fail fast with a clear authentication error and `listModels` returns an empty list
 
-### Requirement: Slash command resolution via CursorDialect
-The system SHALL resolve slash-command references in Cursor engine prompts via `CursorDialect.resolvePrompt()` before dispatching to the SDK. Raw slash references SHALL never be sent to the Cursor SDK unresolved.
-
-#### Scenario: on_enter_prompt with slash reference is expanded
-- **WHEN** a task transitions to a column whose `on_enter_prompt` is `/gsd-execute-phase`
-- **THEN** `CursorEngine` resolves it via `CursorDialect.resolvePrompt()` to the XML-wrapped file body
-- **AND** the resolved content is sent to the Cursor SDK as the agent prompt, not the raw `/gsd-execute-phase` string
-
-#### Scenario: Plain prompt is passed through unchanged
-- **WHEN** the prompt does not start with a slash reference
-- **THEN** `CursorEngine` sends it to the SDK unchanged
-
-### Requirement: Skill content injected into system-instructions prefix
-The system SHALL inject the content of `SKILL.md` files from `CursorDialect.getSkillPaths()` into the system-instructions prefix that is prepended to every Cursor agent run, so agents have project skill context on every turn.
-
-#### Scenario: Skills prepended to prompt prefix
-- **WHEN** `.cursor/skills/<name>/SKILL.md` files exist in the paths returned by `getSkillPaths()`
-- **THEN** each `SKILL.md` content is read and prepended to the `systemBlock` in the Cursor engine's prompt prefix
-- **AND** each skill section is preceded by a header identifying the skill directory name
-
-#### Scenario: No skill directories — no change to prefix
-- **WHEN** no `.cursor/skills/` directories exist for the task's paths
-- **THEN** the prompt prefix is unchanged (no empty section is injected)
-
-### Requirement: Cursor native project rules loaded automatically
-The system SHALL pass `settingSources: ["project"]` to the Cursor SDK's local agent options so `.cursorrules` and `.cursor/rules/*.mdc` files are loaded automatically on every run.
-
-#### Scenario: settingSources injected in worker startRun
-- **WHEN** the Bun adapter sends a `startRun` message to the worker
-- **THEN** the worker includes `settingSources: ["project"]` in the `local` options passed to `Agent.create` / `Agent.resume`
-- **AND** the SDK loads `.cursorrules` and `.cursor/rules/*.mdc` from the project working directory
-
 ### Requirement: AgentBusyError recovery after decision_request abort
+
 The system SHALL retry a busy Cursor agent once with `force:true` after a `decision_request`-triggered abort, and SHALL attempt same-id agent recreation and resend in the same turn if the forced retry still reports the agent as busy. The same deterministic `agentId` SHALL be preserved for future turns; no Cursor-specific persistence or id rotation is allowed.
 
 #### Scenario: AgentBusyError on turn following decision_request is retried automatically
@@ -225,12 +193,3 @@ The system SHALL retry a busy Cursor agent once with `force:true` after a `decis
 #### Scenario: Non-AgentBusyError errors are not swallowed
 - **WHEN** `agent.send(prompt)` throws an error that is not `AgentBusyError`
 - **THEN** the worker propagates the error as a fatal `runDone` status, not as a retry
-
-### Requirement: listCommands resolves paths from DB like other engines
-The system SHALL resolve the task's worktree path and project path from the database in `CursorEngine.listCommands()`, identical to the pattern used by `CopilotEngine` and `ClaudeEngine`.
-
-#### Scenario: listCommands returns commands from worktree and project paths
-- **WHEN** `CursorEngine.listCommands(taskId)` is called for a task with a known worktree and project
-- **THEN** it queries `task_git_context.worktree_path` for the worktree
-- **AND** resolves the project path via `getLoadedProjectByKey`
-- **AND** delegates to `CursorDialect.listCommands(worktreePath, projectPath)`

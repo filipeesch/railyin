@@ -18,6 +18,7 @@ function baseRunConfig(overrides: Partial<Parameters<MockCursorSdkAdapter["run"]
   return {
     executionId: 1,
     taskId: 1,
+    conversationId: 1,
     prompt: "test",
     workingDirectory: "/tmp",
     sessionId: "cursor-1",
