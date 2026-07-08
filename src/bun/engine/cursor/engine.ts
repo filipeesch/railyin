@@ -238,6 +238,7 @@ export class CursorEngine implements ExecutionEngine {
     const runConfig = {
       executionId,
       taskId: taskId || 0,
+      conversationId: params.conversationId,
       prompt: composedPrompt,
       workingDirectory,
       model: resolvedModel,

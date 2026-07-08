@@ -36,6 +36,8 @@ export interface ListModelsRequest {
 export interface StartRunRequest {
   type: "startRun";
   runId: string;
+  executionId: number;
+  conversationId: number;
   apiKey?: string;
   workingDirectory: string;
   model?: string;
@@ -111,6 +113,8 @@ export interface RunDoneMessage {
   status: "ok" | "error";
   /** Error/result detail from SDK run.wait().result; only set when status === "error". */
   detail?: string;
+  /** Optional structured classification for worker-side fatal failures. */
+  failureKind?: "persistent_busy";
 }
 
 export interface WorkerLog {

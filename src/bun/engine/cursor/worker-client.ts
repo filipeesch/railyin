@@ -37,6 +37,10 @@ const DEFAULT_WORKER_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "wor
 
 interface ActiveRun {
   runId: string;
+  executionId: number;
+  taskId: number;
+  conversationId: number;
+  agentId?: string;
   customTools: Record<string, SDKCustomTool>;
   onRawMessage?: (message: unknown) => void;
   pushEvent: (event: EngineEvent | null) => void; // null = end of stream
@@ -162,6 +166,16 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
         const run = this.runs.get(msg.runId);
         if (!run) return;
         if (msg.status === "error") {
+          console.error(`[cursor-worker] ${JSON.stringify({
+            event: "cursor_run_failed",
+            runId: msg.runId,
+            executionId: run.executionId,
+            taskId: run.taskId,
+            conversationId: run.conversationId,
+            agentId: run.agentId ?? null,
+            failureKind: msg.failureKind ?? "generic",
+            detail: msg.detail ?? null,
+          })}`);
           run.pushEvent({
             type: "error",
             message: msg.detail ?? "Cursor agent run failed with no detail",
@@ -241,6 +255,10 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
 
     this.runs.set(runId, {
       runId,
+      executionId: config.executionId,
+      taskId: config.taskId,
+      conversationId: config.conversationId,
+      agentId: config.agentId,
       customTools: config.customTools ?? {},
       onRawMessage: config.onRawMessage,
       pushEvent,
@@ -258,6 +276,8 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
     const startMsg: StartRunRequest = {
       type: "startRun",
       runId,
+      executionId: config.executionId,
+      conversationId: config.conversationId,
       apiKey: this.resolveApiKey(),
       workingDirectory: config.workingDirectory,
       model: config.model,

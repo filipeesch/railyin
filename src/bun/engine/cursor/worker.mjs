@@ -17,8 +17,10 @@
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import { setMaxListeners } from "node:events";
-import { Agent, AgentBusyError, Cursor } from "@cursor/sdk";
-import { resumeOrCreateAgent } from "./worker-resume.mjs";
+import { Agent, Cursor } from "@cursor/sdk";
+import { PersistentBusyError, sendPromptWithRecovery } from "./worker-recovery.mjs";
+
+export { PersistentBusyError, sendPromptWithRecovery, sendWithBusyRetry } from "./worker-recovery.mjs";
 
 // The SDK assigns its own agent id when Agent.create is called without one,
 // but it also honors a caller-supplied id (AgentOptions.agentId is forwarded
@@ -77,27 +79,8 @@ export function buildBaseOptions(apiKey, model, workingDirectory, customTools) {
   };
 }
 
-/**
- * Send a prompt to the agent, retrying once with force:true on AgentBusyError.
- *
- * AgentBusyError can occur after a decision_request abort: run.cancel() is
- * fire-and-forget, so the next turn's agent.send() may arrive before
- * "cancelled" is committed to the SDK's SQLite store. force:true expires
- * the stale persisted run atomically.
- */
-export async function sendWithBusyRetry(agent, prompt) {
-  try {
-    return await agent.send(prompt);
-  } catch (err) {
-    if (err instanceof AgentBusyError) {
-      return await agent.send(prompt, { local: { force: true } });
-    }
-    throw err;
-  }
-}
-
 async function handleStartRun(msg) {
-  const { runId, apiKey, workingDirectory, model, prompt, toolSchemas, agentId } = msg;
+  const { runId, executionId, conversationId, apiKey, workingDirectory, model, prompt, toolSchemas, agentId } = msg;
   const customTools = {};
   for (const schema of toolSchemas) {
     customTools[schema.name] = makeProxyTool(runId, schema);
@@ -109,8 +92,15 @@ async function handleStartRun(msg) {
   try {
     const baseOptions = buildBaseOptions(apiKey, model, workingDirectory, customTools);
 
-    state.agent = await resumeOrCreateAgent(Agent, agentId, baseOptions);
-    state.run = await sendWithBusyRetry(state.agent, prompt);
+    const result = await sendPromptWithRecovery(Agent, agentId, baseOptions, prompt, {
+      runId,
+      executionId,
+      taskId: msg.taskId,
+      conversationId,
+      log,
+    });
+    state.agent = result.agent;
+    state.run = result.run;
 
     for await (const message of state.run.stream()) {
       if (state.aborted) break;
@@ -146,24 +136,43 @@ async function handleStartRun(msg) {
       send({ type: "runDone", runId, status: "ok" });
     }
   } catch (err) {
+    if (err instanceof PersistentBusyError) {
+      log("error", JSON.stringify({
+        event: "cursor_run_failed",
+        failureKind: err.failureKind,
+        runId,
+        executionId,
+        taskId: msg.taskId,
+        conversationId,
+        agentId: agentId ?? null,
+        detail: err.message,
+      }));
+    }
     send({
       type: "runDone",
       runId,
       status: "error",
       detail: err instanceof Error ? err.message : String(err),
+      ...(err instanceof PersistentBusyError ? { failureKind: err.failureKind } : {}),
     });
   } finally {
-    if (state.run) {
-      state.run.cancel().catch(() => {});
-    }
-    if (state.agent) {
-      try { state.agent.close(); } catch {}
-    }
+    await finalizeRunState(state);
     // Reject any tool calls still pending — Bun will not send results.
     for (const { reject } of state.pendingTools.values()) {
       reject(new Error("run terminated"));
     }
     runs.delete(runId);
+  }
+}
+
+async function finalizeRunState(state) {
+  if (state.run) {
+    await state.run.cancel().catch(() => {});
+  }
+  if (state.agent) {
+    try {
+      await state.agent.close();
+    } catch {}
   }
 }
 
