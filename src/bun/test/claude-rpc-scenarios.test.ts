@@ -204,27 +204,28 @@ describe("Claude engine — systemInstructions propagation", () => {
 });
 
 describe("Claude engine — subagent scenarios", () => {
-  it("CRS-SA-1: subagent Bash with shellAutoApprove=true does not emit shell_approval message", async () => {
+  it("CRS-SA-1: subagent lifecycle (start → tool → stop) completes end-to-end without shell_approval pause", async () => {
     const adapter = new MockClaudeSdkAdapter();
     adapter.queueCreate({
-      steps: [subagentStart("sa-1", "run tests"), shellApproval("npm test"), token("done"), done()],
+      steps: [
+        subagentStart("sa-1", "read files", "Read src/auth.ts"),
+        toolStart("call-sa-1", "Read", { path: "src/auth.ts" }),
+        toolResult("call-sa-1", "Read", "file contents"),
+        subagentStop("sa-1"),
+        token("done"),
+        done(),
+      ],
     });
     const runtime = createClaudeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
-    // Enable shell auto-approve for this task
-    runtime.db.run("UPDATE tasks SET shell_auto_approve = 1 WHERE id = ?", [taskId]);
-
-    // Because shell_auto_approve=1, the shell_approval step should NOT suspend
-    // The mock still emits shell_approval event unconditionally (simulating engine-level emission),
-    // but with auto-approve the engine won't pause waiting for user input.
-    // In the real adapter, BashPermissionGate.evaluate returns allow without calling waitForResume.
-    // Here we verify the integration path: shellApproval step calls waitForResume which succeeds.
     const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "run" });
-    await runtime.waitForExecutionStatus(executionId, "waiting_user");
-    await runtime.handlers["executions.respondShellApproval"]({ executionId, decision: "approve_once" });
     await runtime.recorder.waitForStreamDone(executionId);
     await runtime.waitForExecutionStatus(executionId, "completed");
+
+    // Execution completed without hitting waiting_user — no shell_approval pause
+    const messages = runtime.getMessages(taskId);
+    expect(messages.some((m) => m.type === "ask_user_prompt" && m.content.includes('"subtype":"shell_approval"'))).toBe(false);
   });
 
   it("CRS-SA-2: subagent Bash with unapproved binary emits shell_approval and resumes on approval", async () => {

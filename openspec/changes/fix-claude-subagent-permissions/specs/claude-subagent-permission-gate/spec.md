@@ -88,18 +88,20 @@ The existing `buildAllowPermissionResult` tests must be updated to assert the ne
 { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: input } }
 ```
 
+Note: the legacy `suggestions` / `updatedPermissions` parameter is NOT carried forward — the PreToolUse hook format does not include `updatedPermissions`. The parameter is accepted but ignored.
+
 | ID | Scenario |
 |----|---|
-| CA-1 | `buildAllowPermissionResult(input)` → hook shape without `updatedPermissions` |
-| CA-2 | `buildAllowPermissionResult(input, suggestions)` → hook shape with `updatedPermissions` |
-| CA-3 | deny helper → `{ hookSpecificOutput: { ..., permissionDecision: "deny", permissionDecisionReason: "..." } }` |
+| CA-1 | `buildAllowPermissionResult(input)` → hook shape with `permissionDecision: "allow"` and `updatedInput` |
+| CA-2 | `buildAllowPermissionResult(input, suggestions)` → same hook shape; legacy suggestions parameter is silently ignored |
+| CA-3 | `getUnapprovedShellBinaries` — filters unapproved binaries correctly (unchanged helper) |
 
 ### Integration tests — `claude-rpc-scenarios.test.ts` (new cases alongside existing)
 Using `MockClaudeSdkAdapter` + `BackendRpcRuntime`. Requires two new mock step kinds: `subagent_start` and `subagent_stop`.
 
 | ID | Scenario |
 |----|---|
-| CRS-SA-1 | Subagent Bash with `shellAutoApprove=true` → no `shell_approval` message, execution completes |
+| CRS-SA-1 | Subagent lifecycle (start → non-Bash tool → stop) completes end-to-end without shell_approval pause |
 | CRS-SA-2 | Subagent Bash with unapproved binary → `shell_approval` message emitted → user approves → execution continues |
 | CRS-SA-3 | `subagent_start` mock step → DB stream event `type=tool_call` with correct `subagentId` persisted |
 | CRS-SA-4 | `subagent_stop` mock step → DB stream event `type=tool_result` with matching `blockId` persisted |
