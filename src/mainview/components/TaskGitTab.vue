@@ -1,6 +1,6 @@
 <template>
   <div class="task-git">
-    <div v-if="task.worktreeStatus" class="info-section">
+    <div class="info-section">
       <div class="info-section__label">Worktree</div>
 
       <!-- READY state -->
@@ -85,11 +85,13 @@
         </div>
       </template>
 
-      <!-- NOT_CREATED / REMOVED state -->
-      <template v-else-if="task.worktreeStatus === 'not_created' || task.worktreeStatus === 'removed'">
+      <!-- NOT_CREATED / REMOVED / NULL status: show create form -->
+      <template v-else-if="!task.worktreeStatus || task.worktreeStatus === 'not_created' || task.worktreeStatus === 'removed'">
         <div class="info-meta-row">
           <span class="info-key">Status</span>
-          <span class="info-value info-value--muted">{{ task.worktreeStatus === 'removed' ? 'removed' : 'not created' }}</span>
+          <span class="info-value info-value--muted">
+            {{ task.worktreeStatus === 'removed' ? 'removed' : !task.worktreeStatus ? 'not configured' : 'not created' }}
+          </span>
         </div>
         <div v-if="task.executionState !== 'running'" class="worktree-create-form">
           <WorktreeCreateForm
