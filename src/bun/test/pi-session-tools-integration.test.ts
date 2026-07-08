@@ -26,8 +26,9 @@ import {
   getAgentDir,
   defineTool,
 } from "@earendil-works/pi-coding-agent";
-import { registerFauxProvider, fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
-import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import { defaultChildSessionFactory } from "../engine/pi/child-session.ts";
@@ -42,7 +43,7 @@ async function createTestSession(
   faux: FauxProviderRegistration,
   cwd: string,
   systemPromptOverride?: string,
-  compactionOptions?: { contextWindow?: number; reserveTokens?: number },
+  compactionOptions?: { contextWindow?: number; reserveTokens?: number; keepRecentTokens?: number },
 ) {
   const sessionManager = SessionManager.open(join(cwd, "session.jsonl"));
   const agentDir = getAgentDir();
@@ -100,21 +101,46 @@ async function createTestSession(
 /**
  * Run one faux turn and wait for the agent to finish.
  * The faux provider must already have `setResponses` called before this.
+ *
+ * We wait for BOTH agent_end (agent loop complete) AND session.prompt() to return
+ * (session-level post-processing complete, including _handlePostAgentRun).
  */
 function runTurn(session: AgentSession, promptText: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("runTurn timed out"));
+    }, 5000);
+    let promptResolved = false;
+    let agentEnded = false;
+
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "agent_end") {
-        unsubscribe();
-        resolve();
+        agentEnded = true;
+        maybeResolve();
       }
     });
-    session.prompt(promptText).catch((err) => {
+
+    // Start the prompt and wait for it to fully complete (including _handlePostAgentRun)
+    const promptPromise = session.prompt(promptText);
+    promptPromise.then(() => {
+      promptResolved = true;
+      maybeResolve();
+    }).catch((err) => {
+      clearTimeout(timeout);
       unsubscribe();
       reject(err);
     });
+
+    function maybeResolve() {
+      if (agentEnded && promptResolved) {
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve();
+      }
+    }
   });
 }
+
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -272,14 +298,21 @@ describe("Pi SDK session — system prompt injection", () => {
 
 describe("Pi SDK session — manual compaction", () => {
   it("IT-COMPACT-SDK-1: compact() returns a summary and tokensBefore after a turn", async () => {
-    const session = await createTestSession(faux, cwd);
+    const session = await createTestSession(faux, cwd, undefined, {
+      contextWindow: 128000,
+      keepRecentTokens: 1,  // Keep only 1 token recent → all messages need summarizing
+    });
 
-    // First response: user turn. Second response: compaction summarization LLM call.
+    // Run 2 turns first to build up enough content for compaction.
+    // faux responses: turn-1 + turn-2 + compact summary + turn-prefix-summary (needed by new pi)
     faux.setResponses([
       fauxAssistantMessage(fauxText("Hello, I am the assistant.")),
+      fauxAssistantMessage(fauxText("Second response.")),
       fauxAssistantMessage(fauxText("Summary of the conversation.")),
+      fauxAssistantMessage(fauxText("Turn prefix summary.")),
     ]);
     await runTurn(session, "Say hello.");
+    await runTurn(session, "Say goodbye.");
 
     const result = await session.compact();
 
@@ -290,13 +323,21 @@ describe("Pi SDK session — manual compaction", () => {
   });
 
   it("IT-COMPACT-SDK-2: compact() emits compaction_start (reason=manual) then compaction_end", async () => {
-    const session = await createTestSession(faux, cwd);
+    const session = await createTestSession(faux, cwd, undefined, {
+      contextWindow: 128000,
+      keepRecentTokens: 1,
+    });
 
+    // Run 2 turns first, then compact.
+    // faux responses: turn-1 + turn-2 + compact summary + turn-prefix-summary
     faux.setResponses([
       fauxAssistantMessage(fauxText("Hello.")),
+      fauxAssistantMessage(fauxText("Second response.")),
       fauxAssistantMessage(fauxText("Compact summary.")),
+      fauxAssistantMessage(fauxText("Turn prefix summary.")),
     ]);
     await runTurn(session, "Say hello.");
+    await runTurn(session, "Say bye.");
 
     const events: string[] = [];
     const unsubscribe = session.subscribe((event) => {
@@ -315,13 +356,21 @@ describe("Pi SDK session — manual compaction", () => {
   });
 
   it("IT-COMPACT-SDK-3: compaction_start carries reason=manual; compaction_end has result with summary", async () => {
-    const session = await createTestSession(faux, cwd);
+    const session = await createTestSession(faux, cwd, undefined, {
+      contextWindow: 128000,
+      keepRecentTokens: 1,
+    });
 
+    // Run 2 turns first, then compact.
+    // faux responses: turn1 + turn2 + compact summary + turn-prefix summary
     faux.setResponses([
       fauxAssistantMessage(fauxText("Hello.")),
+      fauxAssistantMessage(fauxText("Second response.")),
       fauxAssistantMessage(fauxText("Summary text.")),
+      fauxAssistantMessage(fauxText("Turn prefix summary.")),
     ]);
     await runTurn(session, "Say hello.");
+    await runTurn(session, "Say bye.");
 
     let startReason: string | undefined;
     let endResult: { summary: string } | undefined;
@@ -351,12 +400,14 @@ describe("Pi SDK session — manual compaction", () => {
 
 describe("Pi SDK session — auto-compaction threshold", () => {
   it("IT-COMPACT-AUTO-1: threshold compaction fires when totalTokens > contextWindow - reserveTokens", async () => {
-    // contextWindow=200, reserveTokens=0 → threshold at 200.
-    // faux provider calculates totalTokens from text length (chars / 4) so any
-    // non-trivial prompt will produce >200 tokens once prompt + response > 800 chars.
-    // We use a longer prompt to guarantee the faux usage estimate exceeds 200.
+    // contextWindow=50, reserveTokens=0 → threshold at 50.
+    // Run 2 turns so we have user1 + assistant1 + user2 + assistant2 entries.
+    // The auto-compaction trigger uses estimateContextTokens which falls back to
+    // char/4 estimation when usage is zero (faux provider default).
+    // 2 turns × ~15 chars per prompt/response = ~30 chars = ~8 tokens per turn.
+    // Total ~16 tokens from 2 turns, plus system prompt overhead pushes over threshold.
     const session = await createTestSession(faux, cwd, undefined, {
-      contextWindow: 200,
+      contextWindow: 50,
       reserveTokens: 0,
     });
 
@@ -367,10 +418,16 @@ describe("Pi SDK session — auto-compaction threshold", () => {
       }
     });
 
-    // Repeat characters to ensure the faux provider's token estimate exceeds contextWindow
-    const longText = "x".repeat(820); // ~205 tokens (820 / 4 = 205)
-    faux.setResponses([fauxAssistantMessage(fauxText(longText))]);
-    await runTurn(session, longText);
+    // contextWindow=50 means we need >50 tokens.
+    // With char/4 estimation: 50 tokens ≈ 200 chars.
+    // Use very long prompts to guarantee we exceed 50 tokens after 2 turns.
+    faux.setResponses([
+      fauxAssistantMessage(fauxText("First response with some additional text to increase token count significantly.")),
+      fauxAssistantMessage(fauxText("Second response with even more text to ensure we exceed the compaction threshold of 50 tokens.")),
+    ]);
+    // Each prompt is ~150 chars → ~38 tokens. 2 turns → ~76 tokens > 50 threshold
+    await runTurn(session, "This is a very long prompt designed to generate enough tokens to trigger auto-compaction when combined with the second turn and the system prompt overhead.");
+    await runTurn(session, "This is another very long prompt that adds significant token count to the session context, ensuring we exceed the configured context window threshold for auto-compaction.");
 
     expect(compactionEvents).toContain("compaction_start");
   });
