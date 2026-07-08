@@ -1,0 +1,195 @@
+## MODIFIED Requirements
+
+### Requirement: Cursor SDK engine support
+
+The system SHALL support `cursor` as an engine type, providing agent execution capabilities through the `@cursor/sdk` package.
+
+#### Scenario: Cursor engine selection
+
+- **WHEN** a user selects a `cursor/...` model in model selection
+- **THEN** Railyin instantiates a `CursorEngine`
+- **AND** the engine delegates SDK calls to a `CursorSdkAdapter` configured with the workspace's Cursor `api_key`
+- **AND** model identifiers are exposed as `cursor/${sdkModelId}` (e.g. `cursor/claude-sonnet-4-6`); the engine strips the `cursor/` prefix before passing the id to the SDK
+
+### Requirement: Subprocess-isolated SDK runtime
+
+The system SHALL run the Cursor SDK in a Node.js subprocess, not in the Bun parent process.
+
+#### Scenario: Worker spawn and IPC
+
+- **WHEN** the first call to `CursorSdkAdapter.run` or `CursorSdkAdapter.listModels` arrives
+- **THEN** Railyin spawns a Node worker (`cursor/worker.mjs`) using `node` (or the binary referenced by `RAILYIN_CURSOR_NODE`)
+- **AND** the worker signals readiness with `{ "type": "ready" }` on stdout before Railyin sends any request
+- **AND** subsequent calls reuse the same long-lived worker
+
+#### Scenario: Worker crash recovery
+
+- **WHEN** the worker process exits unexpectedly while runs are active
+- **THEN** every active run receives a fatal `EngineEvent.error` describing the worker exit
+- **AND** any pending tool-call promises are rejected
+- **AND** the next adapter call respawns the worker
+
+### Requirement: Per-conversation agent lifecycle
+
+The system SHALL use a caller-defined deterministic Cursor `agentId` per conversation and resume the same agent across turns so SDK-side chat history is preserved without any Railyin-side persistence.
+
+#### Scenario: Deterministic id derivation
+
+- **WHEN** an execution starts on a conversation
+- **THEN** the engine computes `agentId` as a UUIDv5 derived from a fixed Railyin namespace and the name `task:${taskId}` when the conversation is task-scoped, or `conversation:${conversationId}` otherwise
+- **AND** forwards it to the worker via `StartRunRequest.agentId`
+- **AND** the derivation is pure: the same `(taskId, conversationId)` always yields the same UUID, and task-scoped ids are independent of `conversationId`
+
+#### Scenario: First execution on a conversation
+
+- **WHEN** the worker receives `startRun` and `Agent.resume(agentId, ...)` throws (no agent exists yet)
+- **THEN** the worker calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` with the same caller-supplied `agentId`
+- **AND** sends the prompt via `agent.send(prompt)`
+- **AND** the agent's working directory is the task's worktree path
+- **AND** if `agent.send(prompt)` throws `AgentBusyError`, the worker retries with `{ local: { force: true } }`
+
+#### Scenario: Subsequent execution resumes the agent
+
+- **WHEN** the worker receives `startRun` with the same `agentId` and an agent already exists in the SDK's local store
+- **THEN** `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` succeeds and returns the prior agent
+- **AND** the worker does NOT call `Agent.create`
+
+#### Scenario: Resume failure of an existing agent falls back to create
+
+- **WHEN** `Agent.resume(agentId, ...)` throws for any reason
+- **THEN** the worker falls back to `Agent.create({ ...baseOptions, agentId })` with the same `agentId`
+- **AND** the new agent can be resumed on future turns
+
+#### Scenario: In-turn resume is rejected to force fresh execution
+
+- **WHEN** `CursorEngine.resume(executionId, input)` is called (suspend-loop tools)
+- **THEN** it throws an `Error`
+- **AND** the calling `HumanTurnExecutor` falls into its fallback restart branch, which starts a new execution with the user input prepended to the prompt
+
+### Requirement: IPC for agent resume
+
+The worker IPC SHALL carry the per-conversation `agent_id` from Bun to the worker.
+
+#### Scenario: StartRun carries the deterministic agentId
+
+- **WHEN** the Bun adapter sends `startRun`
+- **THEN** it includes `agentId` derived from `(taskId, conversationId)` (see Per-conversation agent lifecycle)
+
+### Requirement: Streaming event translation
+
+The system SHALL translate `@cursor/sdk` `SDKMessage` events to Railyin's `EngineEvent` stream format and SHALL relay them across the IPC boundary. Tool events MUST include display metadata, structured result data, and file diff information.
+
+#### Scenario: Token streaming
+- **WHEN** the SDK emits a `type: "assistant"` message containing text blocks
+- **THEN** the worker yields one `EngineEvent` of `type: "token"` per non-empty content concatenation
+- **AND** the Bun adapter forwards it to the caller's async iterable
+
+#### Scenario: Reasoning
+- **WHEN** the SDK emits a `type: "thinking"` message with a non-empty `text`
+- **THEN** the worker yields `EngineEvent` of `type: "reasoning"`
+
+#### Scenario: Tool call start includes display metadata
+- **WHEN** the SDK emits a `type: "tool_call"` message with `status: "running"`
+- **THEN** a `tool_start` `EngineEvent` is yielded with `name`, stringified `arguments`, `callId`, and `display` metadata (including `label`, `subject`, and `contentType`)
+- **AND** the `display.label` uses lowercase tool names matching the SDK (e.g., `"read"`, `"shell"`, `"edit"`, `"write"`, `"delete"`, `"glob"`, `"grep"`)
+- **AND** the `display.subject` extracts the primary argument (file path for read/write/edit/delete, command for shell, pattern for glob/grep)
+
+#### Scenario: Tool call completion includes structured result
+- **WHEN** the SDK emits a `type: "tool_call"` message with `status: "completed"` or `status: "error"`
+- **THEN** a `tool_result` `EngineEvent` is yielded with the same `callId`, stringified `result`, `isError` set when applicable, and `display` metadata
+- **AND** when the tool is `shell`, the `detailedResult` is set to `result.value.stdout` (with stderr appended if present)
+- **AND** when the tool is `edit` or `write` with a `diffString`, the `writtenFiles` is set to parsed `FileDiffPayload` entries with hunks
+- **AND** when the tool is `read`, the `result` contains the file content
+
+#### Scenario: Run completion
+- **WHEN** the SDK stream ends
+- **THEN** the worker awaits `run.wait()`
+- **AND** if `result.status === "error"` the adapter emits a fatal `EngineEvent.error` with the SDK's error detail (or "Cursor agent run failed with no detail" when the SDK omits it)
+- **AND** otherwise the adapter emits an `EngineEvent` of `type: "done"`
+
+### Requirement: Custom tool registration and proxying
+
+The system SHALL register Railyin's common task tools and MCP-registry tools as Cursor `SDKCustomTool` entries, with execution proxied from the worker back to the Bun parent.
+
+#### Scenario: Bun side: schema-only export
+
+- **WHEN** `CursorSdkAdapter.run` is invoked with a `customTools` map
+- **THEN** only each tool's `name`, `description`, and `inputSchema` are serialised across IPC
+- **AND** the tool's `execute` function stays in the Bun process
+
+#### Scenario: Worker side: proxy invocation
+
+- **WHEN** the SDK invokes a registered custom tool during a run
+- **THEN** the worker sends a `toolCall` IPC message with a fresh `callId`, `runId`, `toolName`, and `args`
+- **AND** the worker awaits a matching `toolResult` IPC message before returning to the SDK
+
+#### Scenario: Bun side: tool dispatch and response
+
+- **WHEN** the Bun adapter receives a `toolCall` IPC message
+- **THEN** it looks up the active run by `runId`, resolves the named tool, and invokes its `execute(args)`
+- **AND** sends back a `toolResult` IPC message with either `result` or an `error` string
+
+#### Scenario: Suspend-loop tools terminate the run
+
+- **WHEN** a common tool returns `{ type: "suspend", payload }` (e.g. `decision_request`)
+- **THEN** the engine's `onSuspend` callback records the payload and aborts the run
+- **AND** after the SDK stream cuts, the engine yields a `decision_request` `EngineEvent` with the recorded payload
+
+### Requirement: Built-in tools remain available with steering
+
+The system SHALL leave Cursor's built-in tools enabled (the SDK does not expose a disable knob) AND SHALL steer the agent toward Railyin-native bypass tools where the built-ins are unreliable.
+
+#### Scenario: Bypass tools registered
+
+- **WHEN** a run starts with a worktree path
+- **THEN** `railyin_shell`, `railyin_grep`, `railyin_glob`, and `railyin_read` are registered as `customTools` rooted at the worktree
+- **AND** the composed prompt includes a "Tool routing (IMPORTANT)" prefix instructing the agent to prefer them over the SDK's `Shell` / `Grep` / `Glob` / `Read`
+
+### Requirement: Model listing
+
+The system SHALL list Cursor models available to the configured `api_key`.
+
+#### Scenario: Models listed
+
+- **WHEN** the engine registry calls `CursorEngine.listModels`
+- **THEN** the worker calls `Cursor.models.list({ apiKey })`
+- **AND** Railyin returns each as `{ qualifiedId: 'cursor/' + id, displayName, description }`
+
+#### Scenario: Missing API key
+
+- **WHEN** neither `engines.yaml` nor `CURSOR_API_KEY` provides an API key
+- **THEN** `listModels` returns an empty array and logs a warning
+
+### Requirement: Engine configuration
+
+The system SHALL accept `cursor` engine configuration via `engines.yaml` with an optional `api_key`.
+
+#### Scenario: Config with API key
+
+- **WHEN** `engines.yaml` contains an engine entry of `type: "cursor"` with `api_key: "..."`
+- **THEN** the adapter uses that key for both `Agent.create` and `Cursor.models.list`
+
+#### Scenario: Fallback to environment variable
+
+- **WHEN** `engines.yaml` omits `api_key`
+- **THEN** the adapter falls back to `process.env.CURSOR_API_KEY`
+- **AND** if neither is set, runs fail fast with a clear authentication error and `listModels` returns an empty list
+
+### Requirement: AgentBusyError recovery after decision_request abort
+
+The system SHALL retry a busy Cursor agent once with `force:true` after a `decision_request`-triggered abort, and SHALL fail the current execution cleanly if the forced retry still reports the agent as busy. The same deterministic `agentId` SHALL be preserved for future turns; no Cursor-specific persistence or id rotation is allowed.
+
+#### Scenario: AgentBusyError on turn following decision_request is retried automatically
+- **WHEN** `agent.send(prompt)` throws `AgentBusyError` in the worker
+- **THEN** the worker retries immediately with `agent.send(prompt, { local: { force: true } })`
+- **AND** if the retry succeeds, the run proceeds normally from that point
+
+#### Scenario: Persistent busy after force fails the current execution cleanly
+- **WHEN** `agent.send(prompt, { local: { force: true } })` still throws `AgentBusyError`
+- **THEN** the worker ends the current run with a fatal failure detail describing the persistent busy state
+- **AND** the worker cleans up its in-memory run state and closes the agent
+- **AND** the next turn can reuse the same deterministic `agentId`
+
+#### Scenario: Non-AgentBusyError errors are not swallowed
+- **WHEN** `agent.send(prompt)` throws an error that is not `AgentBusyError`
+- **THEN** the worker propagates the error as a fatal `runDone` status, not as a retry
