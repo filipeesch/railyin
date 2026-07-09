@@ -795,7 +795,7 @@ export class PiEngine implements ExecutionEngine {
     }
 
     return {
-      id: modelId,
+      id: nativeId,
       name: nativeId,
       api: "openai-completions",
       provider: providerName ?? "default",
@@ -809,6 +809,16 @@ export class PiEngine implements ExecutionEngine {
       // Disabling this keeps system messages as role:"system" which all providers accept.
       compat: { supportsDeveloperRole: false },
     } as unknown as Model<"openai-completions">;
+  }
+
+  /**
+   * Returns the in-memory compaction settings used for SDK session creation.
+   * These values define the thresholds for the Pi agent's built-in context
+   * window management — reserve space for tool results and keep recent
+   * conversation history.
+   */
+  protected buildCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+    return { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 };
   }
 
   private runPromptWithCompaction(
