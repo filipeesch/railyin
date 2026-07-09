@@ -26,8 +26,8 @@ class FakeShellApprovalRepo extends ShellApprovalRepository {
 }
 
 const scope: ShellApprovalScope = { kind: "task", taskId: 1 };
-const neverCalled = vi.fn<[], Promise<EngineResumeInput>>();
-const approveOnce = vi.fn<[], Promise<EngineResumeInput>>().mockResolvedValue({ type: "shell_approval", decision: "approve_once" });
+const neverCalled = vi.fn<() => Promise<EngineResumeInput>>();
+const approveOnce = vi.fn<() => Promise<EngineResumeInput>>().mockResolvedValue({ type: "shell_approval", decision: "approve_once" });
 
 // ─── BPG-1: Non-Bash tool is auto-allowed ────────────────────────────────────
 
@@ -94,7 +94,7 @@ describe("BPG-5: Bash with unapproved binary blocks and resolves deny", () => {
   it("returns deny with a non-empty reason", async () => {
     const repo = new FakeShellApprovalRepo();
     const gate = new BashPermissionGate(repo);
-    const denyFn = vi.fn<[], Promise<EngineResumeInput>>().mockResolvedValue({ type: "shell_approval", decision: "deny" });
+    const denyFn = vi.fn<() => Promise<EngineResumeInput>>().mockResolvedValue({ type: "shell_approval", decision: "deny" });
 
     const result = await gate.evaluate("Bash", { command: "curl https://evil.com" }, scope, denyFn);
 
@@ -109,7 +109,7 @@ describe("BPG-6: approve_all persists approved binaries; next call auto-allows",
   it("appends binaries to repo and subsequent call skips waitForResume", async () => {
     const repo = new FakeShellApprovalRepo();
     const gate = new BashPermissionGate(repo);
-    const approveAll = vi.fn<[], Promise<EngineResumeInput>>().mockResolvedValue({ type: "shell_approval", decision: "approve_all" });
+    const approveAll = vi.fn<() => Promise<EngineResumeInput>>().mockResolvedValue({ type: "shell_approval", decision: "approve_all" });
 
     // First call: unapproved → waitForResume called → approve_all
     const first = await gate.evaluate("Bash", { command: "bun test" }, scope, approveAll);

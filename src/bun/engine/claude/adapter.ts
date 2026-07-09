@@ -1,9 +1,10 @@
 import { createHash } from "crypto";
-import type { CommonToolContext, EngineEvent } from "../types.ts";
+import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types.ts";
 import { buildClaudeToolServer } from "./tools.ts";
 import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
 import type { FileStateCache } from "./file-state-cache.ts";
 import { ShellApprovalRepository, getUnapprovedShellBinaries } from "../../db/repositories/shell-approval-repository.ts";
+import type { ShellApprovalScope } from "../../db/repositories/shell-approval-repository.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
 import type { McpServerConfig } from "../../mcp/types.ts";
@@ -498,8 +499,9 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         });
 
         // Wire the query reference for reconnectMcpServer in the SubagentStop hook above.
-        queryRef.reconnectMcpServer = query.reconnectMcpServer
-          ? (name: string) => (query.reconnectMcpServer as (n: string) => Promise<void>)(name)
+        const queryWithReconnect = query as unknown as { reconnectMcpServer?: (name: string) => Promise<void> };
+        queryRef.reconnectMcpServer = queryWithReconnect.reconnectMcpServer
+          ? (name: string) => queryWithReconnect.reconnectMcpServer!(name)
           : undefined;
 
         this.trackExecutionLease(config.executionId, config.sessionId);
