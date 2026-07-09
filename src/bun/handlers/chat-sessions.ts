@@ -7,6 +7,7 @@ import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { QualifiedModelId } from "../engine/qualified-model-id.ts";
+import { applyConversationModelSwitch } from "../conversation/reasoning-mode-policy.ts";
 
 function autoTitle(): string {
   const now = new Date();
@@ -24,16 +25,18 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       const rows = db.query<ChatSessionRow, [string]>(
         params.includeArchived
           ? `SELECT cs.*, c.model AS conversation_model,
-                    c.sampling_preset_override AS conversation_sampling_preset_override
-             FROM chat_sessions cs 
-             LEFT JOIN conversations c ON c.id = cs.conversation_id 
-             WHERE cs.workspace_key = ? 
-             ORDER BY cs.last_activity_at DESC`
+                    c.sampling_preset_override AS conversation_sampling_preset_override,
+                    c.reasoning_mode_override AS conversation_reasoning_mode_override
+              FROM chat_sessions cs 
+              LEFT JOIN conversations c ON c.id = cs.conversation_id 
+              WHERE cs.workspace_key = ? 
+              ORDER BY cs.last_activity_at DESC`
           : `SELECT cs.*, c.model AS conversation_model,
-                    c.sampling_preset_override AS conversation_sampling_preset_override
-             FROM chat_sessions cs 
-             LEFT JOIN conversations c ON c.id = cs.conversation_id 
-             WHERE cs.workspace_key = ? AND cs.status != 'archived' 
+                    c.sampling_preset_override AS conversation_sampling_preset_override,
+                    c.reasoning_mode_override AS conversation_reasoning_mode_override
+              FROM chat_sessions cs 
+              LEFT JOIN conversations c ON c.id = cs.conversation_id 
+              WHERE cs.workspace_key = ? AND cs.status != 'archived' 
              ORDER BY cs.last_activity_at DESC`
       ).all(wsKey);
       return rows.map(mapChatSession);
@@ -97,7 +100,8 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
     "chatSessions.get": async (params: { sessionId: number }): Promise<ChatSession> => {
       const row = db.query<ChatSessionRow, [number]>(
         `SELECT cs.*, c.model AS conversation_model,
-                c.sampling_preset_override AS conversation_sampling_preset_override
+                c.sampling_preset_override AS conversation_sampling_preset_override,
+                c.reasoning_mode_override AS conversation_reasoning_mode_override
          FROM chat_sessions cs 
          LEFT JOIN conversations c ON c.id = cs.conversation_id 
          WHERE cs.id = ?`
@@ -114,7 +118,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ messageId: number; executionId: number }> => {
       const session = db.query<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }, [number]>(
-        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
+        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override, c.reasoning_mode_override AS conversation_reasoning_mode_override FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
       ).get(params.sessionId);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
@@ -160,7 +164,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       generalNotes?: string;
     }): Promise<{ messageId: number; executionId: number }> => {
       const session = db.query<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }, [number]>(
-        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
+        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override, c.reasoning_mode_override AS conversation_reasoning_mode_override FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
       ).get(params.sessionId);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
@@ -258,7 +262,12 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       if (session.conversation_id === null) {
         throw new Error(`Chat session ${params.sessionId} has no conversation`);
       }
-      db.run("UPDATE conversations SET model = ? WHERE id = ?", [params.model, session.conversation_id]);
+      await applyConversationModelSwitch(db, {
+        conversationId: session.conversation_id,
+        model: params.model,
+        workspaceKey: session.workspace_key,
+        orchestrator,
+      });
       const updated = fetchChatSessionWithModel(db, params.sessionId);
       if (!updated) throw new Error(`Chat session ${params.sessionId} not found after update`);
       onSessionUpdated(updated);

@@ -465,6 +465,11 @@ export class CopilotEngine implements ExecutionEngine {
         displayName: m.name ?? m.id,
         contextWindow: m.capabilities?.limits?.max_context_window_tokens,
         supportsThinking: m.capabilities?.supports?.reasoningEffort ?? false,
+        supportedReasoningModes: m.capabilities?.supports?.supportedReasoningEfforts ?? [],
+        defaultReasoningMode: m.capabilities?.supports?.defaultReasoningEffort ?? null,
+        rawReasoningModeMetadata: {
+          capabilities: m.capabilities,
+        },
       })),
     ];
   }

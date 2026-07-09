@@ -74,6 +74,10 @@ export class CursorEngine implements ExecutionEngine {
       displayName: m.displayName,
       description: m.description,
       supportsThinking: m.supportsThinking,
+      rawReasoningModeMetadata: {
+        variants: m.variants ?? [],
+        parameters: m.parameters ?? [],
+      },
     }));
   }
 

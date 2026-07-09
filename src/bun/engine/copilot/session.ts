@@ -61,7 +61,11 @@ export interface CopilotSdkModelInfo {
   name?: string;
   capabilities: {
     limits: { max_context_window_tokens: number };
-    supports: { reasoningEffort?: boolean };
+    supports: {
+      reasoningEffort?: boolean;
+      supportedReasoningEfforts?: string[];
+      defaultReasoningEffort?: string;
+    };
   };
 }
 

@@ -211,6 +211,9 @@ async function handleListModels(msg) {
       value: m.id,
       displayName: m.displayName,
       description: m.description,
+      supportsThinking: Boolean(m.supportsThinking),
+      variants: Array.isArray(m.variants) ? m.variants : undefined,
+      parameters: Array.isArray(m.parameters) ? m.parameters : undefined,
     }));
     send({ type: "response", requestId: msg.requestId, result: mapped });
   } catch (err) {

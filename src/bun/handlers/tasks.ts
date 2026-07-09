@@ -25,6 +25,7 @@ import { getColumnConfig } from "../workflow/column-config.ts";
 import { PositionService } from "./position-service.ts";
 import { seedConversationModel } from "../engine/execution/model-resolver";
 import { QualifiedModelId } from "../engine/qualified-model-id.ts";
+import { applyConversationModelSwitch } from "../conversation/reasoning-mode-policy.ts";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────
 
@@ -43,6 +44,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
                   gc.worktree_status, gc.branch_name, gc.worktree_path,
                   c.model AS conversation_model,
                   c.sampling_preset_override AS conversation_sampling_preset_override,
+                  c.reasoning_mode_override AS conversation_reasoning_mode_override,
                   (SELECT COUNT(*) FROM executions WHERE task_id = t.id) AS execution_count
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
@@ -375,9 +377,15 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       if (task.conversationId === null) {
         throw new Error(`Task ${params.taskId} has no conversation`);
       }
-      db.run("UPDATE conversations SET model = ? WHERE id = ?", [params.model, task.conversationId]);
-      // Return updated task with the new model
-      return { ...task, model: params.model };
+      await applyConversationModelSwitch(db, {
+        conversationId: task.conversationId,
+        model: params.model,
+        workspaceKey: wsRepo.getTaskWorkspaceKey(params.taskId),
+        orchestrator,
+      });
+      const updated = fetchTaskWithModel(db, params.taskId);
+      if (!updated) throw new Error(`Task ${params.taskId} not found after model update`);
+      return updated;
     },
 
     // ─── tasks.contextUsage ──────────────────────────────────────────────────
@@ -493,4 +501,3 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
 
   };
 }
-

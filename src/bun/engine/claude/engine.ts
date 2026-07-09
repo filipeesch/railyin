@@ -161,6 +161,14 @@ export class ClaudeEngine implements ExecutionEngine {
       displayName: model.displayName,
       description: model.description,
       supportsThinking: model.supportsEffort || model.supportsAdaptiveThinking,
+      supportedReasoningModes: model.supportedEffortLevels ?? [],
+      defaultReasoningMode: model.defaultEffortLevel ?? null,
+      rawReasoningModeMetadata: {
+        supportsEffort: model.supportsEffort ?? false,
+        supportsAdaptiveThinking: model.supportsAdaptiveThinking ?? false,
+        supportedEffortLevels: model.supportedEffortLevels ?? [],
+        defaultEffortLevel: model.defaultEffortLevel ?? null,
+      },
     }));
   }
 

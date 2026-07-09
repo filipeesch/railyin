@@ -256,6 +256,29 @@
         </Select>
       </template>
 
+      <!-- Reasoning mode selector -->
+      <template v-if="showReasoningModeSelect">
+        <Select
+          :model-value="props.reasoningModeOverride ?? null"
+          :options="reasoningModeOptions"
+          optionLabel="label"
+          optionValue="value"
+          size="small"
+          class="input-reasoning-mode-select"
+          title="Reasoning mode for this conversation"
+          @change="(e: { value: string | null }) => emit('update:reasoningModeOverride', e.value)"
+        >
+          <template #value="{ value }">
+            <span class="reasoning-mode-select__value">{{ value ?? "Default" }}</span>
+          </template>
+          <template #option="{ option }">
+            <div class="reasoning-mode-select__option">
+              <div class="reasoning-mode-select__option-title">{{ option.label }}</div>
+            </div>
+          </template>
+        </Select>
+      </template>
+
       <!-- Context ring (when contextUsage provided) -->
       <button
         v-if="props.contextUsage"
@@ -379,6 +402,7 @@ const props = defineProps<{
   projectKey?: string | null;
   modelId?: string | null;
   samplingPresetOverride?: string | null;
+  reasoningModeOverride?: string | null;
   contextUsage?: { usedTokens: number; maxTokens: number; fraction: number } | null;
   compacting?: boolean;
   enabledMcpTools?: string[] | null;
@@ -396,6 +420,7 @@ const emit = defineEmits<{
   cancel: [];
   "update:modelId": [string | null];
   "update:samplingPresetOverride": [string | null];
+  "update:reasoningModeOverride": [string | null];
   compact: [];
   manageModels: [];
   toolsChanged: [target: Task | ChatSession];
@@ -514,6 +539,20 @@ const activeModelInfo = computed(() => {
 const availablePresets = computed(() => activeModelInfo.value?.availablePresets ?? []);
 
 const isPiEngine = computed(() => availablePresets.value.length > 0);
+
+const reasoningModeSettings = computed(() => activeModelInfo.value?.modelSettings?.reasoningMode);
+const showReasoningModeSelect = computed(() => {
+  const settings = reasoningModeSettings.value;
+  return Boolean(settings?.visible && settings.supportedValues.length > 0);
+});
+const reasoningModeOptions = computed(() => {
+  const settings = reasoningModeSettings.value;
+  if (!settings) return [];
+  return [
+    { value: null, label: "Default" },
+    ...settings.supportedValues.map((value) => ({ value, label: value })),
+  ];
+});
 
 const supportsManualCompact = computed(() => {
   // In task context (taskId is set), never fall back to the first available model —
@@ -783,6 +822,20 @@ defineExpose({ focus: () => chatEditorRef.value?.focus() });
 .input-preset-select {
   min-width: 80px;
   font-size: 0.8rem;
+}
+
+.input-reasoning-mode-select {
+  min-width: 120px;
+  font-size: 0.8rem;
+}
+
+.reasoning-mode-select__value {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.reasoning-mode-select__option-title {
+  font-size: 0.85rem;
 }
 
 .preset-select__value {

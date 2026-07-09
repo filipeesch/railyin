@@ -95,6 +95,7 @@
       :workspace-key="session.workspaceKey"
       :model-id="selectedModelId"
       :sampling-preset-override="selectedPresetOverride"
+      :reasoning-mode-override="selectedReasoningMode"
       :context-usage="conversationStore.contextUsage"
       :compacting="compacting"
       :enabled-mcp-tools="session.enabledMcpTools ?? null"
@@ -109,6 +110,7 @@
       @cancel="onCancel"
       @update:model-id="selectedModelId = $event"
       @update:sampling-preset-override="onSamplingPresetChange"
+      @update:reasoning-mode-override="onReasoningModeChange"
       @compact="compactConversation"
       @manage-models="manageModelsOpen = true"
       @tools-changed="chatStore.onChatSessionUpdated"
@@ -159,6 +161,7 @@ const selectedModelId = ref<string | null>(null);
 
 // Local sampling preset override that syncs with session.samplingPresetOverride
 const selectedPresetOverride = ref<string | null>(null);
+const selectedReasoningMode = ref<string | null>(null);
 
 // Sync selectedModelId when session changes
 watch(
@@ -174,6 +177,14 @@ watch(
   () => session.value?.samplingPresetOverride,
   (preset) => {
     selectedPresetOverride.value = preset ?? null;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => session.value?.reasoningModeOverride,
+  (reasoningMode) => {
+    selectedReasoningMode.value = reasoningMode ?? null;
   },
   { immediate: true }
 );
@@ -205,6 +216,23 @@ async function onSamplingPresetChange(presetName: string | null) {
     });
   } catch (err) {
     console.error('[SessionChatView] Failed to set sampling preset:', err);
+  }
+}
+
+async function onReasoningModeChange(reasoningMode: string | null) {
+  if (!session.value) return;
+  selectedReasoningMode.value = reasoningMode;
+  try {
+    await api("conversations.setReasoningMode", {
+      conversationId: session.value.conversationId,
+      reasoningMode,
+    });
+    chatStore.onChatSessionUpdated({
+      ...session.value,
+      reasoningModeOverride: reasoningMode,
+    });
+  } catch (err) {
+    console.error("[SessionChatView] Failed to set reasoning mode:", err);
   }
 }
 

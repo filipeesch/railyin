@@ -54,6 +54,7 @@ export interface Task {
   position: number;
   enabledMcpTools: string[] | null;
   samplingPresetOverride: string | null;
+  reasoningModeOverride?: string | null;
 }
 
 export interface ChatSession {
@@ -67,6 +68,7 @@ export interface ChatSession {
   shellAutoApprove: boolean;
   approvedCommands: string[];
   samplingPresetOverride: string | null;
+  reasoningModeOverride?: string | null;
   lastActivityAt: string;
   lastReadAt: string | null;
   archivedAt: string | null;
@@ -116,6 +118,18 @@ export interface ModelInfo {
   engineId?: string;
   /** Available sampling presets for Pi-engine models. Undefined for non-Pi engines. */
   availablePresets?: Array<{ name: string; params: SamplingPreset }>;
+  /** Normalized model settings metadata used by the chat controls. */
+  modelSettings?: ModelSettingsInfo;
+  /** Raw provider metadata used to derive modelSettings. */
+  rawModelSettings?: Record<string, unknown> | null;
+}
+
+export interface ModelSettingsInfo {
+  reasoningMode: {
+    supportedValues: string[];
+    defaultValue: string | null;
+    visible: boolean;
+  };
 }
 
 /** Sampling parameters for a named preset (Pi engine). */
@@ -739,6 +753,10 @@ export type RailynAPI = {
   };
   "conversations.setSamplingPreset": {
     params: { conversationId: number; presetName: string | null };
+    response: Record<string, never>;
+  };
+  "conversations.setReasoningMode": {
+    params: { conversationId: number; reasoningMode: string | null };
     response: Record<string, never>;
   };
 

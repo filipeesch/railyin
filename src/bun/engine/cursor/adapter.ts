@@ -31,6 +31,8 @@ export interface CursorSdkModelInfo {
   displayName: string;
   description?: string;
   supportsThinking?: boolean;
+  variants?: unknown[];
+  parameters?: unknown[];
 }
 
 export interface CursorRunConfig {

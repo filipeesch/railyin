@@ -14,6 +14,8 @@ export interface ClaudeSdkModelInfo {
   description?: string;
   supportsEffort?: boolean;
   supportsAdaptiveThinking?: boolean;
+  supportedEffortLevels?: string[];
+  defaultEffortLevel?: string;
 }
 
 export interface ClaudeResumeRequest {
@@ -634,13 +636,24 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           );
         }),
       ]);
-      return models.map((model) => ({
+      return models.map((model) => {
+        const modelRecord = model as Record<string, unknown>;
+        const supportedEffortLevelsRaw = modelRecord.supportedEffortLevels;
+        const defaultEffortLevelRaw = modelRecord.defaultEffortLevel;
+        return ({
         value: String(model.value ?? model.id ?? ""),
         displayName: String(model.displayName ?? model.value ?? model.id ?? ""),
         description: typeof model.description === "string" ? model.description : undefined,
         supportsEffort: Boolean(model.supportsEffort),
         supportsAdaptiveThinking: Boolean(model.supportsAdaptiveThinking),
-      }));
+        supportedEffortLevels: Array.isArray(supportedEffortLevelsRaw)
+          ? supportedEffortLevelsRaw.filter((entry: unknown) => typeof entry === "string")
+          : undefined,
+        defaultEffortLevel: typeof defaultEffortLevelRaw === "string"
+          ? defaultEffortLevelRaw
+          : undefined,
+      });
+      });
     } catch (err) {
       // Clear so the next call retries rather than reusing a rejected promise
       this._modelsFetch = null;

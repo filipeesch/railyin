@@ -154,6 +154,12 @@ export interface EngineModelInfo {
   contextWindowEditable?: boolean;
   /** Whether this model is currently enabled for selection by the user. */
   enabled?: boolean;
+  /** Strictly discovered reasoning-mode values for this model, when exposed by the SDK. */
+  supportedReasoningModes?: string[];
+  /** Strictly discovered default reasoning-mode value for this model, when exposed by the SDK. */
+  defaultReasoningMode?: string | null;
+  /** Raw provider metadata used to derive reasoning-mode values/defaults. */
+  rawReasoningModeMetadata?: Record<string, unknown> | null;
 }
 
 export type EngineLeaseState = "running" | "waiting_user" | "idle" | "closing";

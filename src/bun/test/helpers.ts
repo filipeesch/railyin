@@ -21,14 +21,15 @@ export function initDb(): Database {
       project_keys         TEXT NOT NULL DEFAULT '[]',
       created_at           TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    CREATE TABLE IF NOT EXISTS conversations (
-       id      INTEGER PRIMARY KEY AUTOINCREMENT,
-       task_id INTEGER,
-       model   TEXT,
-       last_engine_type TEXT NULL,
-       decisions_injected_after_compaction_id INTEGER NULL,
-       sampling_preset_override TEXT NULL
-     );
+     CREATE TABLE IF NOT EXISTS conversations (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        model   TEXT,
+        last_engine_type TEXT NULL,
+        decisions_injected_after_compaction_id INTEGER NULL,
+        sampling_preset_override TEXT NULL,
+        reasoning_mode_override TEXT NULL
+      );
     CREATE TABLE IF NOT EXISTS tasks (
       id                        INTEGER PRIMARY KEY AUTOINCREMENT,
       board_id                  INTEGER NOT NULL REFERENCES boards(id),

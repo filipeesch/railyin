@@ -283,6 +283,16 @@ export const useTaskStore = defineStore("task", () => {
     _replaceTask({ ...task, samplingPresetOverride: presetName });
   }
 
+  async function setReasoningMode(taskId: number, reasoningMode: string | null) {
+    const task = taskIndex.value[taskId];
+    if (!task) return;
+    await api("conversations.setReasoningMode", {
+      conversationId: task.conversationId,
+      reasoningMode,
+    });
+    _replaceTask({ ...task, reasoningModeOverride: reasoningMode });
+  }
+
   // ─── Cancel running execution ─────────────────────────────────────────────
 
   async function cancelTask(taskId: number) {
@@ -456,6 +466,7 @@ export const useTaskStore = defineStore("task", () => {
     compactTask,
     setModel,
     setSamplingPreset,
+    setReasoningMode,
     cancelTask,
     updateTask,
     deleteTask,

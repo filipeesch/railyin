@@ -95,5 +95,16 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       );
       return {};
     },
+
+    "conversations.setReasoningMode": async (params: {
+      conversationId: number;
+      reasoningMode: string | null;
+    }): Promise<Record<string, never>> => {
+      db.run(
+        "UPDATE conversations SET reasoning_mode_override = ? WHERE id = ?",
+        [params.reasoningMode, params.conversationId],
+      );
+      return {};
+    },
   };
 }
