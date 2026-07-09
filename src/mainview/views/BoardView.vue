@@ -40,6 +40,31 @@
         />
       </div>
       <div class="board-header__right">
+        <template v-if="!isSelectionMode">
+          <Button
+            icon="pi pi-trash"
+            severity="secondary"
+            text
+            rounded
+            aria-label="Select cards to delete"
+            @click="enterSelectionMode()"
+          />
+        </template>
+        <template v-else>
+          <Button
+            :label="`Delete ${selectedCount}`"
+            icon="pi pi-trash"
+            severity="danger"
+            :disabled="selectedCount === 0"
+            @click="batchDeleteDialogVisible = true"
+          />
+          <Button
+            label="Cancel"
+            severity="secondary"
+            text
+            @click="exitSelectionMode()"
+          />
+        </template>
         <Button
           :icon="isDark ? 'pi pi-sun' : 'pi pi-moon'"
           severity="secondary"
@@ -87,9 +112,12 @@
           :is-forbidden="forbiddenColumnIds.has(slot.column.id)"
           :drop-indicator-y="dropIndicatorY"
           :has-unread="taskStore.hasUnread"
+          :selectable="isSelectionMode"
+          :selected-ids="selectedIds"
           @create-task="openCreateOverlay"
           @card-pointerdown="onCardPointerDown"
           @card-click="onCardClick"
+          @card-select="onCardSelect"
         />
 
         <!-- Group column: stacked sub-columns, wrapper has NO data-column-id -->
@@ -105,9 +133,12 @@
             :is-forbidden="forbiddenColumnIds.has(col.id)"
             :drop-indicator-y="dropIndicatorY"
             :has-unread="taskStore.hasUnread"
+            :selectable="isSelectionMode"
+            :selected-ids="selectedIds"
             @create-task="openCreateOverlay"
             @card-pointerdown="onCardPointerDown"
             @card-click="onCardClick"
+            @card-select="onCardSelect"
           />
         </div>
       </template>
@@ -158,6 +189,23 @@
       @saved="handleOverlaySaved"
       @deleted="handleOverlayDeleted"
     />
+    <!-- Batch delete confirmation dialog -->
+    <Dialog
+      v-model:visible="batchDeleteDialogVisible"
+      header="Delete selected cards"
+      :modal="true"
+      :style="{ width: '420px' }"
+    >
+      <p>Are you sure you want to delete {{ selectedCount }} selected card{{ selectedCount === 1 ? '' : 's' }}?</p>
+      <div v-if="batchDeleteError" class="batch-delete-error">
+        <i class="pi pi-exclamation-circle" /> {{ batchDeleteError }}
+      </div>
+      <template #footer>
+        <Button label="Cancel" text @click="batchDeleteDialogVisible = false" />
+        <Button label="Delete" severity="danger" :loading="batchDeleteLoading" @click="confirmBatchDelete" />
+      </template>
+    </Dialog>
+
     <!-- Chat sidebar (right docked panel) -->
     <ChatSidebar
       v-if="chatSidebarOpen"
@@ -195,11 +243,13 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useDarkMode } from "../composables/useDarkMode";
 import { useColumnTransitions } from "../composables/useColumnTransitions";
+import { useCardSelection } from "../composables/useCardSelection";
 import { api, onWorkflowReloaded } from "../rpc";
 import Select from "primevue/select";
 import Button from "primevue/button";
 import Menu from "primevue/menu";
 import Badge from "primevue/badge";
+import Dialog from "primevue/dialog";
 import { useBoardStore } from "../stores/board";
 import { useTaskStore } from "../stores/task";
 import { useProjectStore } from "../stores/project";
@@ -247,6 +297,18 @@ const dragOverColumnId = ref<string | null>(null);
 const dropIndex = ref<number | null>(null);
 const dropIndicatorY = ref<number>(0);
 let lastDragEndTime = 0;
+
+const {
+  isSelectionMode,
+  selectedIds,
+  selectedCount,
+  enterSelectionMode,
+  exitSelectionMode,
+  toggleSelection,
+} = useCardSelection();
+const batchDeleteDialogVisible = ref(false);
+const batchDeleteLoading = ref(false);
+const batchDeleteError = ref<string | null>(null);
 
 async function onFooterClick() {
   if (terminalStore.sessions.length === 0) {
@@ -323,11 +385,20 @@ function stopAutoScroll() {
 watch(
   () => boardStore.activeBoardId,
   async (id) => {
+    exitSelectionMode();
     if (id != null) {
       await taskStore.loadTasks(id);
     }
   },
   { immediate: true },
+);
+
+// Reset selection when workspace changes
+watch(
+  () => workspaceStore.activeWorkspaceKey,
+  () => {
+    exitSelectionMode();
+  },
 );
 
 function onKeyDown(e: KeyboardEvent) {
@@ -414,11 +485,13 @@ const renderSlots = computed((): RenderSlot[] => {
 });
 
 async function onBoardChange() {
+  exitSelectionMode();
   const id = boardStore.activeBoardId;
   if (id != null) await taskStore.loadTasks(id);
 }
 
 async function onWorkspaceChange(workspaceKey: string) {
+  exitSelectionMode();
   await workspaceStore.selectWorkspace(workspaceKey);
 }
 
@@ -599,10 +672,34 @@ async function onPointerUp(event: PointerEvent) {
 }
 
 function onCardClick(taskId: number) {
+  if (isSelectionMode.value) return;
   if (Date.now() - lastDragEndTime < 200) return;
   const task = Object.values(taskStore.tasksByBoard).flat().find(t => t.id === taskId);
   taskStore.selectTask(taskId);
   if (task) drawerStore.openForTask(taskId, task.conversationId);
+}
+
+function onCardSelect(taskId: number) {
+  toggleSelection(taskId);
+}
+
+async function confirmBatchDelete() {
+  batchDeleteError.value = null;
+  batchDeleteLoading.value = true;
+  try {
+    const ids = Array.from(selectedIds.value);
+    const result = await taskStore.deleteTasks(ids);
+    if (result.error) {
+      batchDeleteError.value = result.error;
+      return;
+    }
+    batchDeleteDialogVisible.value = false;
+    exitSelectionMode();
+  } catch (err) {
+    batchDeleteError.value = err instanceof Error ? err.message : "Failed to delete cards";
+  } finally {
+    batchDeleteLoading.value = false;
+  }
 }
 
 async function onTaskCreated() {
@@ -672,6 +769,14 @@ watch(chatSidebarOpen, (isOpen) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.batch-delete-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--p-red-500, #ef4444);
+  margin-top: 12px;
 }
 
 .workspace-tabs {
