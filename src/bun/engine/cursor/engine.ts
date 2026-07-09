@@ -73,11 +73,7 @@ export class CursorEngine implements ExecutionEngine {
       qualifiedId: `cursor/${m.value}`,
       displayName: m.displayName,
       description: m.description,
-      supportsThinking: m.supportsThinking,
-      rawReasoningModeMetadata: {
-        variants: m.variants ?? [],
-        parameters: m.parameters ?? [],
-      },
+      settings: buildCursorSettings(m),
     }));
   }
 
@@ -239,6 +235,10 @@ export class CursorEngine implements ExecutionEngine {
     // failure). Mirrors the Copilot session-id pattern.
     const agentId = cursorAgentIdForConversation(taskId ?? null, params.conversationId);
 
+    // TODO: For variant axes, resolve displayName → variant params from the model metadata.
+    // For now, pass non-variant model params directly as ModelSelection.params.
+    const cursorModelParams = (params.modelParams ?? []).filter((p) => p.id !== "variant");
+
     const runConfig = {
       executionId,
       taskId: taskId || 0,
@@ -246,6 +246,7 @@ export class CursorEngine implements ExecutionEngine {
       prompt: composedPrompt,
       workingDirectory,
       model: resolvedModel,
+      modelParams: cursorModelParams.length > 0 ? cursorModelParams : undefined,
       systemInstructions,
       taskContext,
       signal: combinedAbort.signal,
@@ -328,4 +329,42 @@ function uuidv5(name: string, namespace: string): string {
   bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
   const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function buildCursorSettings(m: import("./adapter.ts").CursorSdkModelInfo): import("../../../shared/rpc-types.ts").ModelSettingAxis[] {
+  // Parameters take precedence over variants
+  if (m.parameters && (m.parameters as unknown[]).length > 0) {
+    return (m.parameters as Array<{
+      id: string;
+      displayName?: string;
+      values: Array<{ value: string; displayName?: string }>;
+    }>).map((param) => ({
+      id: param.id,
+      label: param.displayName ?? param.id,
+      options: param.values.map((v) => ({ value: v.value, label: v.displayName ?? v.value })),
+      defaultValue: null,
+      visible: true,
+    }));
+  }
+
+  // Fall back to variants
+  if (m.variants && (m.variants as unknown[]).length > 0) {
+    const variants = m.variants as Array<{ displayName: string; isDefault?: boolean }>;
+    const defaultVariant = variants.find((v) => v.isDefault);
+    return [
+      {
+        id: "variant",
+        label: "Mode",
+        options: variants.map((v) => ({ value: v.displayName, label: v.displayName })),
+        defaultValue: defaultVariant?.displayName ?? null,
+        visible: true,
+      },
+    ];
+  }
+
+  return [];
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

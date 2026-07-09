@@ -95,7 +95,7 @@
       :workspace-key="session.workspaceKey"
       :model-id="selectedModelId"
       :sampling-preset-override="selectedPresetOverride"
-      :reasoning-mode-override="selectedReasoningMode"
+      :model-params="selectedModelParams"
       :context-usage="conversationStore.contextUsage"
       :compacting="compacting"
       :enabled-mcp-tools="session.enabledMcpTools ?? null"
@@ -110,7 +110,7 @@
       @cancel="onCancel"
       @update:model-id="selectedModelId = $event"
       @update:sampling-preset-override="onSamplingPresetChange"
-      @update:reasoning-mode-override="onReasoningModeChange"
+      @update:model-params="onModelParamsChange"
       @compact="compactConversation"
       @manage-models="manageModelsOpen = true"
       @tools-changed="chatStore.onChatSessionUpdated"
@@ -141,7 +141,7 @@ import { useDrawerStore } from "../stores/drawer";
 import { useConversationStore } from "../stores/conversation";
 import { useWorkspaceStore } from "../stores/workspace";
 import { api } from "../rpc";
-import type { Attachment } from "@shared/rpc-types";
+import type { Attachment, ModelParamValue } from "@shared/rpc-types";
 import { useToast } from "primevue/usetoast";
 
 const props = defineProps<{
@@ -161,7 +161,7 @@ const selectedModelId = ref<string | null>(null);
 
 // Local sampling preset override that syncs with session.samplingPresetOverride
 const selectedPresetOverride = ref<string | null>(null);
-const selectedReasoningMode = ref<string | null>(null);
+const selectedModelParams = ref<ModelParamValue[]>([]);
 
 // Sync selectedModelId when session changes
 watch(
@@ -182,9 +182,9 @@ watch(
 );
 
 watch(
-  () => session.value?.reasoningModeOverride,
-  (reasoningMode) => {
-    selectedReasoningMode.value = reasoningMode ?? null;
+  () => session.value?.modelParams,
+  (modelParams) => {
+    selectedModelParams.value = modelParams ?? [];
   },
   { immediate: true }
 );
@@ -219,20 +219,20 @@ async function onSamplingPresetChange(presetName: string | null) {
   }
 }
 
-async function onReasoningModeChange(reasoningMode: string | null) {
+async function onModelParamsChange(modelParams: ModelParamValue[]) {
   if (!session.value) return;
-  selectedReasoningMode.value = reasoningMode;
+  selectedModelParams.value = modelParams;
   try {
-    await api("conversations.setReasoningMode", {
+    await api("conversations.setModelParams", {
       conversationId: session.value.conversationId,
-      reasoningMode,
+      modelParams,
     });
     chatStore.onChatSessionUpdated({
       ...session.value,
-      reasoningModeOverride: reasoningMode,
+      modelParams,
     });
   } catch (err) {
-    console.error("[SessionChatView] Failed to set reasoning mode:", err);
+    console.error("[SessionChatView] Failed to set model params:", err);
   }
 }
 

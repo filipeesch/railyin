@@ -183,10 +183,12 @@ export class CopilotEngine implements ExecutionEngine {
       ? { mode: "append" as const, content: systemContent }
       : undefined;
 
+    const reasoningEffortParam = params.modelParams?.find((p) => p.id === "reasoningEffort")?.value;
     const sessionConfig = {
       ...(resolvedModel ? { model: resolvedModel } : {}),
       tools,
       ...(systemMessage ? { systemMessage } : {}),
+      ...(reasoningEffortParam ? { reasoningEffort: reasoningEffortParam as import("@github/copilot-sdk").ReasoningEffort } : {}),
       onPermissionRequest: approveAll,
       workingDirectory,
       streaming: true,
@@ -456,6 +458,7 @@ export class CopilotEngine implements ExecutionEngine {
       contextWindow: undefined,
       supportsThinking: false,
       supportsManualCompact: false,
+      settings: [],
     };
 
     return [
@@ -465,11 +468,7 @@ export class CopilotEngine implements ExecutionEngine {
         displayName: m.name ?? m.id,
         contextWindow: m.capabilities?.limits?.max_context_window_tokens,
         supportsThinking: m.capabilities?.supports?.reasoningEffort ?? false,
-        supportedReasoningModes: m.capabilities?.supports?.supportedReasoningEfforts ?? [],
-        defaultReasoningMode: m.capabilities?.supports?.defaultReasoningEffort ?? null,
-        rawReasoningModeMetadata: {
-          capabilities: m.capabilities,
-        },
+        settings: buildCopilotSettings(m),
       })),
     ];
   }
@@ -553,4 +552,22 @@ export class CopilotEngine implements ExecutionEngine {
             : "The requested shell command was approved once. Continue.";
     }
   }
+}
+
+function buildCopilotSettings(m: import("@github/copilot-sdk").ModelInfo): import("../../shared/rpc-types.ts").ModelSettingAxis[] {
+  const efforts = m.supportedReasoningEfforts;
+  if (!efforts || efforts.length === 0) return [];
+  return [
+    {
+      id: "reasoningEffort",
+      label: "Reasoning Effort",
+      options: efforts.map((v) => ({ value: v, label: capitalize(v) })),
+      defaultValue: m.defaultReasoningEffort ?? null,
+      visible: true,
+    },
+  ];
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

@@ -256,17 +256,18 @@
         </Select>
       </template>
 
-      <!-- Reasoning mode selector -->
-      <template v-if="showReasoningModeSelect">
+      <!-- Model param selectors (one per axis defined in modelSettings) -->
+      <template v-for="axis in modelSettings" :key="axis.id">
         <Select
-          :model-value="props.reasoningModeOverride ?? null"
-          :options="reasoningModeOptions"
+          v-if="axis.visible && axis.options.length > 0"
+          :model-value="props.modelParams?.find(p => p.id === axis.id)?.value ?? axis.defaultValue ?? null"
+          :options="[{ value: axis.defaultValue ?? null, label: 'Default' }, ...axis.options.map(o => ({ value: o.value, label: o.label }))]"
           optionLabel="label"
           optionValue="value"
           size="small"
           class="input-reasoning-mode-select"
-          title="Reasoning mode for this conversation"
-          @change="(e: { value: string | null }) => emit('update:reasoningModeOverride', e.value)"
+          :title="axis.label"
+          @change="(e: { value: string | null }) => updateParam(axis.id, e.value)"
         >
           <template #value="{ value }">
             <span class="reasoning-mode-select__value">{{ value ?? "Default" }}</span>
@@ -389,7 +390,7 @@ import { useWorkspaceStore } from "../stores/workspace";
 import { useCodeServerStore } from "../stores/codeServer";
 import { useToast } from "primevue/usetoast";
 import { api } from "../rpc";
-import type { Attachment, ChatSession, CodeRef, McpServerStatus, Task } from "@shared/rpc-types";
+import type { Attachment, ChatSession, CodeRef, McpServerStatus, ModelParamValue, Task } from "@shared/rpc-types";
 import type { QueueState } from "../stores/queue-types";
 import { segmentChipText } from "../utils/chat-chips";
 import { useDraftStore } from "../stores/draft";
@@ -402,7 +403,7 @@ const props = defineProps<{
   projectKey?: string | null;
   modelId?: string | null;
   samplingPresetOverride?: string | null;
-  reasoningModeOverride?: string | null;
+  modelParams?: ModelParamValue[];
   contextUsage?: { usedTokens: number; maxTokens: number; fraction: number } | null;
   compacting?: boolean;
   enabledMcpTools?: string[] | null;
@@ -420,7 +421,7 @@ const emit = defineEmits<{
   cancel: [];
   "update:modelId": [string | null];
   "update:samplingPresetOverride": [string | null];
-  "update:reasoningModeOverride": [string | null];
+  "update:modelParams": [ModelParamValue[]];
   compact: [];
   manageModels: [];
   toolsChanged: [target: Task | ChatSession];
@@ -540,19 +541,20 @@ const availablePresets = computed(() => activeModelInfo.value?.availablePresets 
 
 const isPiEngine = computed(() => availablePresets.value.length > 0);
 
-const reasoningModeSettings = computed(() => activeModelInfo.value?.modelSettings?.reasoningMode);
-const showReasoningModeSelect = computed(() => {
-  const settings = reasoningModeSettings.value;
-  return Boolean(settings?.visible && settings.supportedValues.length > 0);
-});
-const reasoningModeOptions = computed(() => {
-  const settings = reasoningModeSettings.value;
-  if (!settings) return [];
-  return [
-    { value: null, label: "Default" },
-    ...settings.supportedValues.map((value) => ({ value, label: value })),
-  ];
-});
+const modelSettings = computed(() => activeModelInfo.value?.modelSettings?.settings ?? []);
+
+function updateParam(axisId: string, value: string | null) {
+  const current = [...(props.modelParams ?? [])];
+  const idx = current.findIndex(p => p.id === axisId);
+  if (value === null) {
+    if (idx >= 0) current.splice(idx, 1);
+  } else if (idx >= 0) {
+    current[idx] = { id: axisId, value };
+  } else {
+    current.push({ id: axisId, value });
+  }
+  emit("update:modelParams", current);
+}
 
 const supportsManualCompact = computed(() => {
   // In task context (taskId is set), never fall back to the first available model —

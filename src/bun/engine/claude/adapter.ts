@@ -50,6 +50,8 @@ export interface ClaudeRunConfig {
   externalMcpServers?: McpServerConfig[];
   /** Tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
   enabledMcpTools?: string[] | null;
+  /** Model parameter overrides (e.g. effort level) from the conversation's model_params. */
+  modelParams?: import("../../../shared/rpc-types.ts").ModelParamValue[];
 }
 
 export interface ClaudeSdkAdapter {
@@ -375,6 +377,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           model: config.model ?? null,
         });
 
+        const effortParam = config.modelParams?.find((p) => p.id === "effort")?.value;
         const query = sdk.query({
           prompt,
           options: {
@@ -383,6 +386,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             abortController,
             includePartialMessages: true,
             ...(normalizeClaudeModel(config.model) ? { model: normalizeClaudeModel(config.model) } : {}),
+            ...(effortParam ? { effort: effortParam } : {}),
             ...(hasExistingSession ? { resume: config.sessionId } : { sessionId: config.sessionId }),
             tools: { type: "preset", preset: "claude_code" },
             settingSources: ["project"],

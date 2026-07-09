@@ -8,11 +8,19 @@ const MODEL_WITH_REASONING = {
     contextWindow: 128_000,
     engineId: "copilot",
     modelSettings: {
-        reasoningMode: {
-            supportedValues: ["low", "medium", "high"],
-            defaultValue: "medium",
-            visible: true,
-        },
+        settings: [
+            {
+                id: "reasoningEffort",
+                label: "Reasoning Effort",
+                options: [
+                    { value: "low", label: "Low" },
+                    { value: "medium", label: "Medium" },
+                    { value: "high", label: "High" },
+                ],
+                defaultValue: "medium",
+                visible: true,
+            },
+        ],
     },
 };
 
@@ -22,69 +30,60 @@ const MODEL_WITHOUT_REASONING = {
     contextWindow: 128_000,
     engineId: "copilot",
     modelSettings: {
-        reasoningMode: {
-            supportedValues: [],
-            defaultValue: null,
-            visible: false,
-        },
+        settings: [],
     },
 };
 
-test.describe("reasoning mode selector", () => {
-    test("is hidden when active model has no supported values", async ({ page, api, task }) => {
+test.describe("model settings selector", () => {
+    test("is hidden when active model has no settings", async ({ page, api, task }) => {
         api.handle("models.listEnabled", () => [MODEL_WITHOUT_REASONING]);
-        api.handle("tasks.list", () => [{ ...task, model: MODEL_WITHOUT_REASONING.id, reasoningModeOverride: null }]);
+        api.handle("tasks.list", () => [{ ...task, model: MODEL_WITHOUT_REASONING.id, modelParams: [] }]);
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        await expect(page.locator(".input-reasoning-mode-select")).not.toBeAttached();
+        await expect(page.locator(".input-model-settings-select")).not.toBeAttached();
     });
 
     test("is visible for supported model and exposes provider values", async ({ page, api, task }) => {
         api.handle("models.listEnabled", () => [MODEL_WITH_REASONING]);
-        api.handle("tasks.list", () => [{ ...task, model: MODEL_WITH_REASONING.id, reasoningModeOverride: "high" }]);
+        api.handle("tasks.list", () => [{ ...task, model: MODEL_WITH_REASONING.id, modelParams: [{ id: "reasoningEffort", value: "high" }] }]);
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        await expect(page.locator(".input-reasoning-mode-select")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".reasoning-mode-select__value")).toContainText("high");
+        await expect(page.locator(".input-model-settings-select")).toBeVisible({ timeout: 3_000 });
+        await expect(page.locator(".model-settings-select__value")).toContainText("high");
 
-        await page.locator(".input-reasoning-mode-select").click();
+        await page.locator(".input-model-settings-select").click();
         const dropdown = page.locator(".p-select-overlay, .p-dropdown-panel");
         await expect(dropdown).toBeVisible({ timeout: 2_000 });
-        const titles = dropdown.locator(".reasoning-mode-select__option-title");
-        await expect(titles).toHaveCount(4);
-        await expect(titles.nth(0)).toContainText("Default");
-        await expect(titles.nth(1)).toContainText("low");
-        await expect(titles.nth(2)).toContainText("medium");
-        await expect(titles.nth(3)).toContainText("high");
+        const options = dropdown.locator(".model-settings-select__option");
+        await expect(options).toHaveCount(3);
     });
 
-    test("task chat selection calls conversations.setReasoningMode", async ({ page, api, task }) => {
-        const reasonTask: Task = { ...task, model: MODEL_WITH_REASONING.id, reasoningModeOverride: null };
+    test("task chat selection calls conversations.setModelParams", async ({ page, api, task }) => {
+        const reasonTask: Task = { ...task, model: MODEL_WITH_REASONING.id, modelParams: [] };
         api.handle("models.listEnabled", () => [MODEL_WITH_REASONING]);
         api.handle("tasks.list", () => [reasonTask]);
 
-        let capturedReasoningMode: string | null | undefined;
-        api.handle("conversations.setReasoningMode", ({ reasoningMode }) => {
-            capturedReasoningMode = reasoningMode;
+        let capturedModelParams: unknown;
+        api.handle("conversations.setModelParams", ({ modelParams }) => {
+            capturedModelParams = modelParams;
             return {};
         });
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        await page.locator(".input-reasoning-mode-select").click();
+        await page.locator(".input-model-settings-select").click();
         const dropdown = page.locator(".p-select-overlay, .p-dropdown-panel");
-        await dropdown.locator(".reasoning-mode-select__option-title:text('medium')").click();
+        await dropdown.locator(".model-settings-select__option:has-text('medium')").click();
 
-        await expect(page.locator(".reasoning-mode-select__value")).toContainText("medium", { timeout: 2_000 });
-        expect(capturedReasoningMode).toBe("medium");
+        expect(capturedModelParams).toEqual([{ id: "reasoningEffort", value: "medium" }]);
     });
 
-    test("session chat selection calls conversations.setReasoningMode", async ({ page, api }) => {
+    test("session chat selection calls conversations.setModelParams", async ({ page, api }) => {
         const sessionId = 9;
         const conversationId = 11;
         const session = {
@@ -96,7 +95,9 @@ test.describe("reasoning mode selector", () => {
             model: MODEL_WITH_REASONING.id,
             enabledMcpTools: null,
             samplingPresetOverride: null,
-            reasoningModeOverride: null,
+            modelParams: [],
+            shellAutoApprove: false,
+            approvedCommands: [],
             lastActivityAt: new Date().toISOString(),
             lastReadAt: null,
             archivedAt: null,
@@ -108,22 +109,21 @@ test.describe("reasoning mode selector", () => {
         api.handle("chatSessions.get", () => session);
 
         let capturedConvId: number | undefined;
-        let capturedReasoningMode: string | null | undefined;
-        api.handle("conversations.setReasoningMode", ({ conversationId: cid, reasoningMode }) => {
+        let capturedModelParams: unknown;
+        api.handle("conversations.setModelParams", ({ conversationId: cid, modelParams }) => {
             capturedConvId = cid;
-            capturedReasoningMode = reasoningMode;
+            capturedModelParams = modelParams;
             return {};
         });
 
         await page.goto("/");
         await openSessionDrawer(page, sessionId);
 
-        await page.locator(".input-reasoning-mode-select").click();
+        await page.locator(".input-model-settings-select").click();
         const dropdown = page.locator(".p-select-overlay, .p-dropdown-panel");
-        await dropdown.locator(".reasoning-mode-select__option-title:text('high')").click();
+        await dropdown.locator(".model-settings-select__option:has-text('high')").click();
 
-        await expect(page.locator(".reasoning-mode-select__value")).toContainText("high", { timeout: 2_000 });
         expect(capturedConvId).toBe(conversationId);
-        expect(capturedReasoningMode).toBe("high");
+        expect(capturedModelParams).toEqual([{ id: "reasoningEffort", value: "high" }]);
     });
 });

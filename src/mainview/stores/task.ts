@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
-import type { Task, ConversationMessage, StreamEvent, GitNumstat } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamEvent, GitNumstat, ModelParamValue } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 import { useConversationStore } from "./conversation";
 import { useWorkspaceStore } from "./workspace";
@@ -283,14 +283,14 @@ export const useTaskStore = defineStore("task", () => {
     _replaceTask({ ...task, samplingPresetOverride: presetName });
   }
 
-  async function setReasoningMode(taskId: number, reasoningMode: string | null) {
+  async function setModelParams(taskId: number, modelParams: ModelParamValue[]) {
     const task = taskIndex.value[taskId];
     if (!task) return;
-    await api("conversations.setReasoningMode", {
+    await api("conversations.setModelParams", {
       conversationId: task.conversationId,
-      reasoningMode,
+      modelParams,
     });
-    _replaceTask({ ...task, reasoningModeOverride: reasoningMode });
+    _replaceTask({ ...task, modelParams });
   }
 
   // ─── Cancel running execution ─────────────────────────────────────────────
@@ -466,7 +466,7 @@ export const useTaskStore = defineStore("task", () => {
     compactTask,
     setModel,
     setSamplingPreset,
-    setReasoningMode,
+    setModelParams,
     cancelTask,
     updateTask,
     deleteTask,

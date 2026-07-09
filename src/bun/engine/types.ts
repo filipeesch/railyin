@@ -1,5 +1,6 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
+import type { ModelParamValue, ModelSettingAxis } from "../../shared/rpc-types.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
 import type { IBoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import type { McpClientRegistry } from "../mcp/registry.ts";
@@ -108,6 +109,8 @@ export interface ExecutionParams {
    * against its own config; other engines ignore it.
    */
   samplingPresetName?: string;
+  /** Per-conversation model parameter overrides from conversations.model_params. Injected by ExecutionParamsEnricher. */
+  modelParams?: ModelParamValue[];
   /**
    * Called by the engine to signal a soft cancellation (e.g. eviction).
    * The stream-processor uses this to abort its own AbortController so the
@@ -154,12 +157,8 @@ export interface EngineModelInfo {
   contextWindowEditable?: boolean;
   /** Whether this model is currently enabled for selection by the user. */
   enabled?: boolean;
-  /** Strictly discovered reasoning-mode values for this model, when exposed by the SDK. */
-  supportedReasoningModes?: string[];
-  /** Strictly discovered default reasoning-mode value for this model, when exposed by the SDK. */
-  defaultReasoningMode?: string | null;
-  /** Raw provider metadata used to derive reasoning-mode values/defaults. */
-  rawReasoningModeMetadata?: Record<string, unknown> | null;
+  /** Generic model parameter axes exposed by this model. Empty = no configurable settings. */
+  settings: ModelSettingAxis[];
 }
 
 export type EngineLeaseState = "running" | "waiting_user" | "idle" | "closing";

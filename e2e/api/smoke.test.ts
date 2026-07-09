@@ -228,20 +228,20 @@ describe("conversations", () => {
         expect(["waiting_user", "completed"]).toContain(task.executionState);
     });
 
-    test("conversations.setReasoningMode persists override on task conversation", async () => {
-        await server.request("conversations.setReasoningMode", {
+    test("conversations.setModelParams persists override on task conversation", async () => {
+        await server.request("conversations.setModelParams", {
             conversationId,
-            reasoningMode: "high",
+            modelParams: [{ id: "effort", value: "high" }],
         });
         const updatedTask = await getTask(boardId, taskId);
-        expect(updatedTask.reasoningModeOverride).toBe("high");
+        expect(updatedTask.modelParams).toEqual([{ id: "effort", value: "high" }]);
 
-        await server.request("conversations.setReasoningMode", {
+        await server.request("conversations.setModelParams", {
             conversationId,
-            reasoningMode: null,
+            modelParams: [],
         });
         const clearedTask = await getTask(boardId, taskId);
-        expect(clearedTask.reasoningModeOverride).toBeNull();
+        expect(clearedTask.modelParams).toEqual([]);
     });
 
     test("tasks.sendMessage with slash chip engineContent delivers raw command to engine", async () => {

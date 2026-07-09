@@ -17,7 +17,7 @@ export interface ConversationRow {
   model: string | null;
   decisions_injected_after_compaction_id: number | null;
   sampling_preset_override: string | null;
-  reasoning_mode_override: string | null;
+  model_params: string | null;
 }
 
 export interface TaskRow {
@@ -47,7 +47,7 @@ export interface TaskRow {
   // Field from LEFT JOIN conversations (populated by extended queries)
   conversation_model?: string | null;
   conversation_sampling_preset_override?: string | null;
-  conversation_reasoning_mode_override?: string | null;
+  conversation_model_params?: string | null;
 }
 
 export interface TaskGitContextRow {
@@ -136,5 +136,5 @@ export interface ChatSessionRow {
   created_at: string;
   conversation_model?: string | null;
   conversation_sampling_preset_override?: string | null;
-  conversation_reasoning_mode_override?: string | null;
+  conversation_model_params?: string | null;
 }

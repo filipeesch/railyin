@@ -67,9 +67,9 @@ function makeProxyTool(runId, schema) {
  * settingSources: ["project"] ensures .cursorrules and .cursor/rules/*.mdc
  * are loaded automatically from the working directory.
  */
-export function buildBaseOptions(apiKey, model, workingDirectory, customTools) {
+export function buildBaseOptions(apiKey, model, workingDirectory, customTools, modelParams) {
   return {
-    model: model ? { id: model } : undefined,
+    model: model ? { id: model, ...(modelParams && modelParams.length > 0 ? { params: modelParams } : {}) } : undefined,
     apiKey,
     local: {
       cwd: workingDirectory,
@@ -80,7 +80,7 @@ export function buildBaseOptions(apiKey, model, workingDirectory, customTools) {
 }
 
 async function handleStartRun(msg) {
-  const { runId, executionId, conversationId, apiKey, workingDirectory, model, prompt, toolSchemas, agentId } = msg;
+  const { runId, executionId, conversationId, apiKey, workingDirectory, model, prompt, toolSchemas, agentId, modelParams } = msg;
   const customTools = {};
   for (const schema of toolSchemas) {
     customTools[schema.name] = makeProxyTool(runId, schema);
@@ -90,7 +90,7 @@ async function handleStartRun(msg) {
   runs.set(runId, state);
 
   try {
-    const baseOptions = buildBaseOptions(apiKey, model, workingDirectory, customTools);
+    const baseOptions = buildBaseOptions(apiKey, model, workingDirectory, customTools, modelParams);
 
     const result = await sendPromptWithRecovery(Agent, agentId, baseOptions, prompt, {
       runId,

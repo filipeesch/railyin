@@ -1,30 +1,35 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Database } from "bun:sqlite";
-import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { initDb, setupTestConfig } from "./helpers.ts";
-import { applyConversationModelSwitch } from "../conversation/reasoning-mode-policy.ts";
+import { applyModelParamsPolicy } from "../conversation/model-params-policy.ts";
+import type { EngineModelInfo } from "../engine/types.ts";
 
 let db: Database;
 let cleanupConfig: () => void;
 
-const mockOrchestrator = {
-  listModels: async () => [
+const engineModelWithEffort: EngineModelInfo = {
+  qualifiedId: "copilot/alpha",
+  displayName: "Alpha",
+  settings: [
     {
-      qualifiedId: "copilot/alpha",
-      displayName: "Alpha",
-      supportedReasoningModes: ["low", "medium", "high"],
-      defaultReasoningMode: "medium",
-      rawReasoningModeMetadata: { source: "copilot" },
-    },
-    {
-      qualifiedId: "copilot/basic",
-      displayName: "Basic",
-      supportedReasoningModes: [],
-      defaultReasoningMode: null,
-      rawReasoningModeMetadata: null,
+      id: "reasoningEffort",
+      label: "Reasoning Effort",
+      options: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High" },
+      ],
+      defaultValue: "medium",
+      visible: true,
     },
   ],
-} as unknown as ExecutionCoordinator;
+};
+
+const engineModelWithoutEffort: EngineModelInfo = {
+  qualifiedId: "copilot/basic",
+  displayName: "Basic",
+  settings: [],
+};
 
 beforeEach(() => {
   db = initDb();
@@ -35,61 +40,49 @@ afterEach(() => {
   cleanupConfig();
 });
 
-function createConversation(initialReasoningMode: string | null): number {
+function createConversation(initialModelParams: string | null): number {
   db.run(
-    "INSERT INTO conversations (task_id, model, reasoning_mode_override) VALUES (NULL, NULL, ?)",
-    [initialReasoningMode],
+    "INSERT INTO conversations (task_id, model, model_params) VALUES (NULL, NULL, ?)",
+    [initialModelParams],
   );
   return (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
 }
 
-describe("reasoning-mode model switch policy", () => {
-  it("keeps compatible value on model switch", async () => {
-    const conversationId = createConversation("medium");
-    await applyConversationModelSwitch(db, {
-      conversationId,
-      model: "copilot/alpha",
-      workspaceKey: "default",
-      orchestrator: mockOrchestrator,
-    });
-    const row = db
-      .query<{ model: string | null; reasoning_mode_override: string | null }, [number]>(
-        "SELECT model, reasoning_mode_override FROM conversations WHERE id = ?",
-      )
-      .get(conversationId);
-    expect(row?.model).toBe("copilot/alpha");
-    expect(row?.reasoning_mode_override).toBe("medium");
+function getModelParams(conversationId: number): string | null {
+  return db
+    .query<{ model_params: string | null }, [number]>(
+      "SELECT model_params FROM conversations WHERE id = ?",
+    )
+    .get(conversationId)?.model_params ?? null;
+}
+
+describe("model-params model switch policy", () => {
+  it("keeps compatible value on model switch", () => {
+    const initialParams = JSON.stringify([{ id: "reasoningEffort", value: "medium" }]);
+    const conversationId = createConversation(initialParams);
+    applyModelParamsPolicy(db, { conversationId, engineModel: engineModelWithEffort });
+    const result = getModelParams(conversationId);
+    expect(JSON.parse(result!)).toEqual([{ id: "reasoningEffort", value: "medium" }]);
   });
 
-  it("clears incompatible value when target model has no support", async () => {
-    const conversationId = createConversation("high");
-    await applyConversationModelSwitch(db, {
-      conversationId,
-      model: "copilot/basic",
-      workspaceKey: "default",
-      orchestrator: mockOrchestrator,
-    });
-    const row = db
-      .query<{ reasoning_mode_override: string | null }, [number]>(
-        "SELECT reasoning_mode_override FROM conversations WHERE id = ?",
-      )
-      .get(conversationId);
-    expect(row?.reasoning_mode_override).toBeNull();
+  it("clears incompatible value when target model has no support", () => {
+    const initialParams = JSON.stringify([{ id: "reasoningEffort", value: "high" }]);
+    const conversationId = createConversation(initialParams);
+    applyModelParamsPolicy(db, { conversationId, engineModel: engineModelWithoutEffort });
+    expect(getModelParams(conversationId)).toBeNull();
   });
 
-  it("persists default when no explicit override exists", async () => {
+  it("persists default when no explicit override exists", () => {
     const conversationId = createConversation(null);
-    await applyConversationModelSwitch(db, {
-      conversationId,
-      model: "copilot/alpha",
-      workspaceKey: "default",
-      orchestrator: mockOrchestrator,
-    });
-    const row = db
-      .query<{ reasoning_mode_override: string | null }, [number]>(
-        "SELECT reasoning_mode_override FROM conversations WHERE id = ?",
-      )
-      .get(conversationId);
-    expect(row?.reasoning_mode_override).toBe("medium");
+    applyModelParamsPolicy(db, { conversationId, engineModel: engineModelWithEffort });
+    const result = getModelParams(conversationId);
+    expect(JSON.parse(result!)).toEqual([{ id: "reasoningEffort", value: "medium" }]);
+  });
+
+  it("clears all params when switching to model with no settings", () => {
+    const initialParams = JSON.stringify([{ id: "reasoningEffort", value: "high" }]);
+    const conversationId = createConversation(initialParams);
+    applyModelParamsPolicy(db, { conversationId, engineModel: engineModelWithoutEffort });
+    expect(getModelParams(conversationId)).toBeNull();
   });
 });

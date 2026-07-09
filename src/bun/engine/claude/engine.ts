@@ -1,5 +1,6 @@
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
+import type { ModelSettingAxis } from "../../../shared/rpc-types.ts";
 import { claudeSessionIdForConversation, claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
 import type { ToolMetadata } from "./events.ts";
 import { DefaultFileStateCache } from "./file-state-cache.ts";
@@ -112,6 +113,7 @@ export class ClaudeEngine implements ExecutionEngine {
       fileStateCache,
       externalMcpServers,
       enabledMcpTools,
+      modelParams: params.modelParams,
     };
 
     // Wrap the adapter execution to ensure cleanup happens
@@ -161,14 +163,7 @@ export class ClaudeEngine implements ExecutionEngine {
       displayName: model.displayName,
       description: model.description,
       supportsThinking: model.supportsEffort || model.supportsAdaptiveThinking,
-      supportedReasoningModes: model.supportedEffortLevels ?? [],
-      defaultReasoningMode: model.defaultEffortLevel ?? null,
-      rawReasoningModeMetadata: {
-        supportsEffort: model.supportsEffort ?? false,
-        supportsAdaptiveThinking: model.supportsAdaptiveThinking ?? false,
-        supportedEffortLevels: model.supportedEffortLevels ?? [],
-        defaultEffortLevel: model.defaultEffortLevel ?? null,
-      },
+      settings: buildClaudeSettings(model),
     }));
   }
 
@@ -297,4 +292,23 @@ export function collectClaudeCommands(
       }
     }
   }
+}
+
+function buildClaudeSettings(model: import("./adapter.ts").ClaudeSdkModelInfo): ModelSettingAxis[] {
+  if (!model.supportsEffort) return [];
+  const levels = model.supportedEffortLevels ?? [];
+  if (levels.length === 0) return [];
+  return [
+    {
+      id: "effort",
+      label: "Effort",
+      options: levels.map((v) => ({ value: v, label: capitalize(v) })),
+      defaultValue: model.defaultEffortLevel ?? null,
+      visible: true,
+    },
+  ];
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

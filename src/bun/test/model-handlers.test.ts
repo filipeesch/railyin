@@ -14,11 +14,21 @@ const mockOrchestrator = {
       contextWindow: 128000,
       supportsThinking: false,
       supportsManualCompact: false,
-      supportedReasoningModes: ["low", "medium", "high"],
-      defaultReasoningMode: "medium",
-      rawReasoningModeMetadata: { source: "copilot-sdk" },
+      settings: [
+        {
+          id: "reasoningEffort",
+          label: "Reasoning Effort",
+          options: [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+          ],
+          defaultValue: "medium",
+          visible: true,
+        },
+      ],
     },
-    { qualifiedId: "copilot/gpt-4", displayName: "GPT-4", description: "desc2", contextWindow: 8192, supportsThinking: false, supportsManualCompact: false },
+    { qualifiedId: "copilot/gpt-4", displayName: "GPT-4", description: "desc2", contextWindow: 8192, supportsThinking: false, supportsManualCompact: false, settings: [] },
   ],
 } as unknown as ExecutionCoordinator;
 
@@ -98,10 +108,11 @@ describe("modelHandlers — model settings metadata", () => {
     await handlers["models.setEnabled"]({ qualifiedModelId: "copilot/gpt-4o", enabled: true });
     const enabled = await handlers["models.listEnabled"]();
     const model = enabled.find((entry) => entry.id === "copilot/gpt-4o");
-    expect(model?.modelSettings?.reasoningMode.supportedValues).toEqual(["low", "medium", "high"]);
-    expect(model?.modelSettings?.reasoningMode.defaultValue).toBe("medium");
-    expect(model?.modelSettings?.reasoningMode.visible).toBe(true);
-    expect(model?.rawModelSettings).toEqual({ source: "copilot-sdk" });
+    expect(model?.modelSettings?.settings).toHaveLength(1);
+    expect(model?.modelSettings?.settings[0].id).toBe("reasoningEffort");
+    expect(model?.modelSettings?.settings[0].options.map(o => o.value)).toEqual(["low", "medium", "high"]);
+    expect(model?.modelSettings?.settings[0].defaultValue).toBe("medium");
+    expect(model?.modelSettings?.settings[0].visible).toBe(true);
   });
 
   it("models.listEnabled exposes hidden state for unsupported models", async () => {
@@ -109,9 +120,8 @@ describe("modelHandlers — model settings metadata", () => {
     await handlers["models.setEnabled"]({ qualifiedModelId: "copilot/gpt-4", enabled: true });
     const enabled = await handlers["models.listEnabled"]();
     const model = enabled.find((entry) => entry.id === "copilot/gpt-4");
-    expect(model?.modelSettings?.reasoningMode.supportedValues).toEqual([]);
-    expect(model?.modelSettings?.reasoningMode.defaultValue).toBeNull();
-    expect(model?.modelSettings?.reasoningMode.visible).toBe(false);
+    expect(model?.modelSettings?.settings).toEqual([]);
+    expect(model?.modelSettings?.settings.length).toBe(0);
   });
 });
 
