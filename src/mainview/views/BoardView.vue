@@ -687,7 +687,15 @@ async function confirmBatchDelete() {
   batchDeleteError.value = null;
   batchDeleteLoading.value = true;
   try {
-    const ids = Array.from(selectedIds.value);
+    const existingIds = new Set(
+      Object.values(taskStore.tasksByBoard).flat().map((t) => t.id),
+    );
+    const ids = Array.from(selectedIds.value).filter((id) => existingIds.has(id));
+    if (ids.length === 0) {
+      batchDeleteDialogVisible.value = false;
+      exitSelectionMode();
+      return;
+    }
     const result = await taskStore.deleteTasks(ids);
     if (result.error) {
       batchDeleteError.value = result.error;
