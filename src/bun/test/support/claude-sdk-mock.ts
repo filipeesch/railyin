@@ -5,6 +5,8 @@ type MockTurnStep =
   | { kind: "emit"; event: EngineEvent }
   | { kind: "ask_user"; payload: string }
   | { kind: "shell_approval"; command: string }
+  | { kind: "subagent_start"; callId: string; intent: string; prompt: string }
+  | { kind: "subagent_stop"; callId: string }
   | { kind: "waitForAbort" };
 
 export interface MockClaudeTurnScript {
@@ -88,6 +90,16 @@ export class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
             break;
           }
 
+          case "subagent_start": {
+            yield { type: "subagent_start", callId: step.callId, intent: step.intent, prompt: step.prompt };
+            break;
+          }
+
+          case "subagent_stop": {
+            yield { type: "subagent_stop", callId: step.callId };
+            break;
+          }
+
           case "waitForAbort":
             await new Promise<void>((resolve) => {
               if (aborted) {
@@ -156,4 +168,12 @@ export function fatal(message: string): MockTurnStep {
 
 export function waitForAbort(): MockTurnStep {
   return { kind: "waitForAbort" };
+}
+
+export function subagentStart(callId: string, intent: string, prompt = ""): MockTurnStep {
+  return { kind: "subagent_start", callId, intent, prompt };
+}
+
+export function subagentStop(callId: string): MockTurnStep {
+  return { kind: "subagent_stop", callId };
 }

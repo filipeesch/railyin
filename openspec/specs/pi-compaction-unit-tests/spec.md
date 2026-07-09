@@ -45,6 +45,22 @@ The test suite SHALL add a new file `src/bun/test/pi-engine.test.ts` with a `des
 - **WHEN** `engine.compact(null, conversationId, "/wd")` is called
 - **THEN** no `compaction_summary` row is inserted into `conversation_messages`
 
+#### Scenario: PE-COMPACT-5 compact() passes stored conversation model to session creation
+- **WHEN** `compact(null, conversationId, "/wd")` is called and `conversations.model` is `"pi-local/lmstudio/llama-3.2-3b"`
+- **THEN** the session is created with model id `"lmstudio/llama-3.2-3b"` (engine prefix stripped)
+
+#### Scenario: PE-COMPACT-6 compact() resolves contextWindow from modelSettingsRepo
+- **WHEN** `compact()` resolves model `"pi-local/lmstudio/qwen3:8b"` and `mockModelSettingsRepo.getContextWindow` returns `32768`
+- **THEN** the session used for compaction has `model.contextWindow = 32768`
+
+#### Scenario: PE-COMPACT-7 compact() rejects when modelSettingsRepo returns null contextWindow
+- **WHEN** `compact()` resolves a model but `mockModelSettingsRepo.getContextWindow` returns `null`
+- **THEN** `compact()` rejects with an error indicating the context window is not configured for that model
+
+#### Scenario: PE-COMPACT-8 compact() rejects when conversations.model is null
+- **WHEN** `compact()` is called and `conversations.model` is `NULL` in the DB
+- **THEN** `compact()` rejects with an error indicating no model is stored for this conversation
+
 ### Requirement: Orchestrator compactTask broadcast tests
 The test suite SHALL add tests to `src/bun/test/orchestrator.test.ts` covering `compactTask()` post-compact broadcast behaviour. Tests use a `CompactableScriptedEngine extends ScriptedEngine` with a configurable `compact()`.
 

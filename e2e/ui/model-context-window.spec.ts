@@ -314,3 +314,117 @@ test.describe("CTX-8: checkbox not toggled when interacting with ctx edit area",
     expect(toggleCalls).toHaveLength(0);
   });
 });
+
+// ─── CTX-W-1: Warning badge visible for null-contextWindow Pi model ────────────
+
+test.describe("CTX-W-1: warning badge visible for null-contextWindow Pi model", () => {
+  test("model with contextWindow:null shows .model-ctx--warning badge", async ({ page, api }) => {
+    api.returns("models.list", MODELS_NO_CTX);
+    await goToModelsTab(page, api);
+
+    const piRow = page.locator(".model-row").filter({ hasText: "Llama 3.3 70B" });
+    await expect(piRow).toBeVisible();
+
+    // Warning badge visible
+    await expect(piRow.locator(".model-ctx--warning")).toBeVisible();
+  });
+});
+
+// ─── CTX-W-2: Warning badge has tooltip explaining chat picker exclusion ───────
+
+test.describe("CTX-W-2: warning badge tooltip mentions chat picker", () => {
+  test("hovering over warning badge shows tooltip with 'chat picker' reference", async ({ page, api }) => {
+    api.returns("models.list", MODELS_NO_CTX);
+    await goToModelsTab(page, api);
+
+    const piRow = page.locator(".model-row").filter({ hasText: "Llama 3.3 70B" });
+    const badge = piRow.locator(".model-ctx--warning");
+    await expect(badge).toBeVisible();
+
+    // Tooltip title contains reference to chat picker
+    const title = await badge.getAttribute("title");
+    expect(title).toContain("chat");
+  });
+});
+
+// ─── CTX-W-3: Warning badge absent when contextWindow is set ──────────────────
+
+test.describe("CTX-W-3: no warning badge when contextWindow is set", () => {
+  test("model with contextWindow:32768 shows no warning badge", async ({ page, api }) => {
+    const modelsWithContext = [
+      {
+        id: "pi",
+        models: [
+          {
+            id: PI_MODEL_ID,
+            displayName: "Llama 3.3 70B",
+            contextWindow: 32768,
+            contextWindowEditable: true,
+            enabled: true,
+          },
+        ],
+      },
+    ];
+    api.returns("models.list", modelsWithContext);
+    await goToModelsTab(page, api);
+
+    const piRow = page.locator(".model-row").filter({ hasText: "Llama 3.3 70B" });
+    await expect(piRow).toBeVisible();
+
+    // No warning badge — editable badge should be visible instead
+    await expect(piRow.locator(".model-ctx--warning")).not.toBeVisible();
+    await expect(piRow.locator(".model-ctx--editable")).toBeVisible();
+  });
+});
+
+// ─── CTX-W-4: Clicking warning badge activates context window edit field ──────
+
+test.describe("CTX-W-4: clicking warning badge focuses context window input", () => {
+  test("clicking the warning badge enters edit mode and focuses the input", async ({ page, api }) => {
+    api.returns("models.list", MODELS_NO_CTX);
+    await goToModelsTab(page, api);
+
+    const piRow = page.locator(".model-row").filter({ hasText: "Llama 3.3 70B" });
+    await piRow.locator(".model-ctx--warning").click();
+
+    // Input appears
+    const input = piRow.locator(".model-ctx-input");
+    await expect(input).toBeVisible({ timeout: 2_000 });
+
+    // Input is empty (no contextWindow to pre-fill)
+    await expect(input).toHaveValue("");
+
+    // Warning badge no longer visible while editing
+    await expect(piRow.locator(".model-ctx--warning")).not.toBeVisible();
+  });
+});
+
+// ─── CTX-W-5: No warning badge for non-editable models ────────────────────────
+
+test.describe("CTX-W-5: no warning badge for non-editable model with null contextWindow", () => {
+  test("copilot model with contextWindow:null and contextWindowEditable:false shows no badge", async ({ page, api }) => {
+    const models = [
+      {
+        id: "copilot",
+        models: [
+          {
+            id: COPILOT_MODEL_ID,
+            displayName: "GPT-4o",
+            contextWindow: null,
+            contextWindowEditable: false,
+            enabled: true,
+          },
+        ],
+      },
+    ];
+    api.returns("models.list", models);
+    await goToModelsTab(page, api);
+
+    const copilotRow = page.locator(".model-row").filter({ hasText: "GPT-4o" });
+    await expect(copilotRow).toBeVisible();
+
+    // No warning badge — non-editable models never show it
+    await expect(copilotRow.locator(".model-ctx--warning")).not.toBeVisible();
+    await expect(copilotRow.locator(".model-ctx--editable")).not.toBeVisible();
+  });
+});
