@@ -9,6 +9,8 @@ import {
   fatal,
   reasoning,
   shellApproval,
+  subagentStart,
+  subagentStop,
   token,
   toolResult,
   toolStart,
@@ -198,5 +200,95 @@ describe("Claude engine — systemInstructions propagation", () => {
     const call = adapter.trace.createCalls[0];
     expect(call).toBeDefined();
     expect(call.systemInstructions).toBeUndefined();
+  });
+});
+
+describe("Claude engine — subagent scenarios", () => {
+  it("CRS-SA-1: subagent lifecycle (start → tool → stop) completes end-to-end without shell_approval pause", async () => {
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.queueCreate({
+      steps: [
+        subagentStart("sa-1", "read files", "Read src/auth.ts"),
+        toolStart("call-sa-1", "Read", { path: "src/auth.ts" }),
+        toolResult("call-sa-1", "Read", "file contents"),
+        subagentStop("sa-1"),
+        token("done"),
+        done(),
+      ],
+    });
+    const runtime = createClaudeRuntime(adapter);
+    const { taskId } = await runtime.createTask();
+
+    const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "run" });
+    await runtime.recorder.waitForStreamDone(executionId);
+    await runtime.waitForExecutionStatus(executionId, "completed");
+
+    // Execution completed without hitting waiting_user — no shell_approval pause
+    const messages = runtime.getMessages(taskId);
+    expect(messages.some((m) => m.type === "ask_user_prompt" && m.content.includes('"subtype":"shell_approval"'))).toBe(false);
+  });
+
+  it("CRS-SA-2: subagent Bash with unapproved binary emits shell_approval and resumes on approval", async () => {
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.queueCreate({
+      steps: [subagentStart("sa-2", "install deps"), shellApproval("bun install"), token("installed"), done()],
+    });
+    const runtime = createClaudeRuntime(adapter);
+    const { taskId } = await runtime.createTask();
+
+    const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "install" });
+    await runtime.waitForExecutionStatus(executionId, "waiting_user");
+
+    expect(runtime.getMessages(taskId).some((m) => m.type === "ask_user_prompt" && m.content.includes('"subtype":"shell_approval"'))).toBe(true);
+
+    await runtime.handlers["executions.respondShellApproval"]({ executionId, decision: "approve_once" });
+    await runtime.recorder.waitForStreamDone(executionId);
+    await runtime.waitForExecutionStatus(executionId, "completed");
+  });
+
+  it("CRS-SA-3: subagent_start is persisted as tool_call conversation message with subagentId", async () => {
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.queueCreate({
+      steps: [subagentStart("sa-3", "read files", "Read src/auth.ts"), token("done"), done()],
+    });
+    const runtime = createClaudeRuntime(adapter);
+    const { taskId } = await runtime.createTask();
+
+    const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+    await runtime.recorder.waitForStreamDone(executionId);
+
+    // IPC should include a tool_call block with subagentId=sa-3
+    const ipc = runtime.getIpcEvents(executionId);
+    const subagentBlock = ipc.find((e) => e.type === "tool_call" && e.subagentId === "sa-3");
+    expect(subagentBlock).toBeDefined();
+    expect(subagentBlock?.blockId).toBe("sa-3");
+
+    // DB should persist a tool_call message
+    const dbEvents = runtime.getDbStreamEvents(executionId);
+    const dbBlock = dbEvents.find((e) => e.type === "tool_call" && e.subagentId === "sa-3");
+    expect(dbBlock).toBeDefined();
+  });
+
+  it("CRS-SA-4: subagent_stop is persisted as tool_result message matching the subagent callId", async () => {
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.queueCreate({
+      steps: [subagentStart("sa-4", "investigate"), subagentStop("sa-4"), token("done"), done()],
+    });
+    const runtime = createClaudeRuntime(adapter);
+    const { taskId } = await runtime.createTask();
+
+    const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+    await runtime.recorder.waitForStreamDone(executionId);
+
+    const ipc = runtime.getIpcEvents(executionId);
+    // subagent_stop should emit a done=true tool_result block with blockId=sa-4
+    const stopBlock = ipc.find((e) => e.type === "tool_result" && e.blockId === "sa-4" && e.subagentId === "sa-4");
+    expect(stopBlock).toBeDefined();
+    expect(stopBlock?.done).toBe(true);
+
+    // DB should also persist the tool_result
+    const dbEvents = runtime.getDbStreamEvents(executionId);
+    const dbStop = dbEvents.find((e) => e.type === "tool_result" && e.subagentId === "sa-4");
+    expect(dbStop).toBeDefined();
   });
 });
