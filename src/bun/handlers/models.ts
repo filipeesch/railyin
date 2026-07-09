@@ -4,6 +4,7 @@ import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { PiEngineConfig, SamplingPreset as ConfigSamplingPreset } from "../config/index.ts";
+import { normalizeModelSettings } from "../models/model-settings-normalizer.ts";
 
 function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinator {
   if (!o) throw new Error("Engine not initialized — check workspace config");
@@ -150,6 +151,7 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
             ...(m.contextWindowEditable ? { contextWindowEditable: true } : {}),
             engineId,
             ...(availablePresets ? { availablePresets } : {}),
+            ...normalizeModelSettings(m),
           };
         })
         .filter((m) => !m.contextWindowEditable || m.contextWindow != null);

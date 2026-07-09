@@ -228,6 +228,22 @@ describe("conversations", () => {
         expect(["waiting_user", "completed"]).toContain(task.executionState);
     });
 
+    test("conversations.setModelParams persists override on task conversation", async () => {
+        await server.request("conversations.setModelParams", {
+            conversationId,
+            modelParams: [{ id: "effort", value: "high" }],
+        });
+        const updatedTask = await getTask(boardId, taskId);
+        expect(updatedTask.modelParams).toEqual([{ id: "effort", value: "high" }]);
+
+        await server.request("conversations.setModelParams", {
+            conversationId,
+            modelParams: [],
+        });
+        const clearedTask = await getTask(boardId, taskId);
+        expect(clearedTask.modelParams).toEqual([]);
+    });
+
     test("tasks.sendMessage with slash chip engineContent delivers raw command to engine", async () => {
         await server.request("tasks.setModel", { taskId, model: "copilot/mock-model" });
         const baseline = await server.request("conversations.getMessages", { conversationId });

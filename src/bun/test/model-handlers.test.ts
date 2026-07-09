@@ -7,8 +7,29 @@ import type { Database } from "bun:sqlite";
 
 const mockOrchestrator = {
   listModels: async (_workspaceKey: string) => [
-    { qualifiedId: "copilot/gpt-4o", displayName: "GPT-4o", description: "desc", contextWindow: 128000, supportsThinking: false, supportsManualCompact: false },
-    { qualifiedId: "copilot/gpt-4", displayName: "GPT-4", description: "desc2", contextWindow: 8192, supportsThinking: false, supportsManualCompact: false },
+    {
+      qualifiedId: "copilot/gpt-4o",
+      displayName: "GPT-4o",
+      description: "desc",
+      contextWindow: 128000,
+      supportsThinking: false,
+      supportsManualCompact: false,
+      settings: [
+        {
+          id: "reasoningEffort",
+          label: "Reasoning Effort",
+          options: [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+          ],
+          defaultValue: "medium",
+          visible: true,
+          axisType: "select",
+        },
+      ],
+    },
+    { qualifiedId: "copilot/gpt-4", displayName: "GPT-4", description: "desc2", contextWindow: 8192, supportsThinking: false, supportsManualCompact: false, settings: [] },
   ],
 } as unknown as ExecutionCoordinator;
 
@@ -79,6 +100,29 @@ describe("modelHandlers — MH-3: models.list returns providers with enabled fie
 
     expect(gpt4o?.enabled).toBe(true);
     expect(gpt4?.enabled).toBe(false);
+  });
+});
+
+describe("modelHandlers — model settings metadata", () => {
+  it("models.listEnabled includes normalized+raw metadata for supported models", async () => {
+    const handlers = modelHandlers(db, mockOrchestrator);
+    await handlers["models.setEnabled"]({ qualifiedModelId: "copilot/gpt-4o", enabled: true });
+    const enabled = await handlers["models.listEnabled"]();
+    const model = enabled.find((entry) => entry.id === "copilot/gpt-4o");
+    expect(model?.modelSettings?.settings).toHaveLength(1);
+    expect(model?.modelSettings?.settings[0].id).toBe("reasoningEffort");
+    expect(model?.modelSettings?.settings[0].options.map(o => o.value)).toEqual(["low", "medium", "high"]);
+    expect(model?.modelSettings?.settings[0].defaultValue).toBe("medium");
+    expect(model?.modelSettings?.settings[0].visible).toBe(true);
+  });
+
+  it("models.listEnabled exposes hidden state for unsupported models", async () => {
+    const handlers = modelHandlers(db, mockOrchestrator);
+    await handlers["models.setEnabled"]({ qualifiedModelId: "copilot/gpt-4", enabled: true });
+    const enabled = await handlers["models.listEnabled"]();
+    const model = enabled.find((entry) => entry.id === "copilot/gpt-4");
+    expect(model?.modelSettings?.settings).toEqual([]);
+    expect(model?.modelSettings?.settings.length).toBe(0);
   });
 });
 

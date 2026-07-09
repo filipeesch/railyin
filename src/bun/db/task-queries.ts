@@ -10,7 +10,8 @@ export function fetchTaskWithModel(db: Database, taskId: number): Task | null {
               gc.worktree_status, gc.branch_name, gc.worktree_path,
               (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count,
               c.model AS conversation_model,
-              c.sampling_preset_override AS conversation_sampling_preset_override
+              c.sampling_preset_override AS conversation_sampling_preset_override,
+              c.model_params AS conversation_model_params
        FROM tasks t
        LEFT JOIN task_git_context gc ON gc.task_id = t.id
        LEFT JOIN conversations c ON c.id = t.conversation_id
@@ -24,7 +25,8 @@ export function fetchChatSessionWithModel(db: Database, sessionId: number): Chat
   const row = db
     .query<ChatSessionRow, [number]>(
       `SELECT cs.*, c.model AS conversation_model,
-              c.sampling_preset_override AS conversation_sampling_preset_override
+              c.sampling_preset_override AS conversation_sampling_preset_override,
+              c.model_params AS conversation_model_params
        FROM chat_sessions cs
        LEFT JOIN conversations c ON c.id = cs.conversation_id
        WHERE cs.id = ?`,

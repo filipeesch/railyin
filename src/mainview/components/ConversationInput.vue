@@ -256,6 +256,50 @@
         </Select>
       </template>
 
+      <!-- Model param selectors (one per axis defined in modelSettings) -->
+      <template v-for="axis in modelSettings" :key="axis.id">
+        <!-- Toggle: binary on/off axes (e.g. Thinking, Fast) -->
+        <div
+          v-if="axis.visible && axis.options.length > 0 && axis.axisType === 'toggle'"
+          class="model-setting-toggle"
+          :title="axis.label"
+        >
+          <span class="model-setting-toggle__label">{{ axis.label }}</span>
+          <div class="model-setting-toggle__pills">
+            <button
+              v-for="opt in axis.options"
+              :key="opt.value"
+              :class="['model-setting-toggle__pill', { 'is-active': axisCurrentValue(axis) === opt.value }]"
+              @click="updateParam(axis.id, opt.value)"
+            >{{ opt.label }}</button>
+          </div>
+        </div>
+
+        <!-- Select: enum axes (e.g. Effort, Context) -->
+        <div
+          v-else-if="axis.visible && axis.options.length > 0"
+          class="model-setting-select-wrapper"
+        >
+          <span class="model-setting-select__label">{{ axis.label }}</span>
+          <Select
+            :model-value="axisCurrentValue(axis)"
+            :options="axis.options"
+            optionLabel="label"
+            optionValue="value"
+            size="small"
+            class="input-model-settings-select"
+            @change="(e: { value: string | null }) => updateParam(axis.id, e.value)"
+          >
+            <template #value="{ value }">
+              <span class="model-settings-select__value">{{ axis.options.find(o => o.value === value)?.label ?? value }}</span>
+            </template>
+            <template #option="{ option }">
+              <div class="model-settings-select__option">{{ option.label }}</div>
+            </template>
+          </Select>
+        </div>
+      </template>
+
       <!-- Context ring (when contextUsage provided) -->
       <button
         v-if="props.contextUsage"
@@ -366,7 +410,7 @@ import { useWorkspaceStore } from "../stores/workspace";
 import { useCodeServerStore } from "../stores/codeServer";
 import { useToast } from "primevue/usetoast";
 import { api } from "../rpc";
-import type { Attachment, ChatSession, CodeRef, McpServerStatus, Task } from "@shared/rpc-types";
+import type { Attachment, ChatSession, CodeRef, McpServerStatus, ModelParamValue, Task } from "@shared/rpc-types";
 import type { QueueState } from "../stores/queue-types";
 import { segmentChipText } from "../utils/chat-chips";
 import { useDraftStore } from "../stores/draft";
@@ -379,6 +423,7 @@ const props = defineProps<{
   projectKey?: string | null;
   modelId?: string | null;
   samplingPresetOverride?: string | null;
+  modelParams?: ModelParamValue[];
   contextUsage?: { usedTokens: number; maxTokens: number; fraction: number } | null;
   compacting?: boolean;
   enabledMcpTools?: string[] | null;
@@ -396,6 +441,7 @@ const emit = defineEmits<{
   cancel: [];
   "update:modelId": [string | null];
   "update:samplingPresetOverride": [string | null];
+  "update:modelParams": [ModelParamValue[]];
   compact: [];
   manageModels: [];
   toolsChanged: [target: Task | ChatSession];
@@ -514,6 +560,25 @@ const activeModelInfo = computed(() => {
 const availablePresets = computed(() => activeModelInfo.value?.availablePresets ?? []);
 
 const isPiEngine = computed(() => availablePresets.value.length > 0);
+
+const modelSettings = computed(() => activeModelInfo.value?.modelSettings?.settings ?? []);
+
+function axisCurrentValue(axis: { id: string; defaultValue: string | null }): string | null {
+  return props.modelParams?.find((p) => p.id === axis.id)?.value ?? axis.defaultValue ?? null;
+}
+
+function updateParam(axisId: string, value: string | null) {
+  const current = [...(props.modelParams ?? [])];
+  const idx = current.findIndex(p => p.id === axisId);
+  if (value === null) {
+    if (idx >= 0) current.splice(idx, 1);
+  } else if (idx >= 0) {
+    current[idx] = { id: axisId, value };
+  } else {
+    current.push({ id: axisId, value });
+  }
+  emit("update:modelParams", current);
+}
 
 const supportsManualCompact = computed(() => {
   // In task context (taskId is set), never fall back to the first available model —
@@ -783,6 +848,80 @@ defineExpose({ focus: () => chatEditorRef.value?.focus() });
 .input-preset-select {
   min-width: 80px;
   font-size: 0.8rem;
+}
+
+/* ── Model setting: select wrapper with inline label ─────────────────────── */
+.model-setting-select-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.model-setting-select__label {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.input-model-settings-select {
+  min-width: 100px;
+  font-size: 0.8rem;
+}
+
+.model-settings-select__value {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.model-settings-select__option {
+  font-size: 0.85rem;
+}
+
+/* ── Model setting: toggle (binary on/off) ───────────────────────────────── */
+.model-setting-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.model-setting-toggle__label {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.model-setting-toggle__pills {
+  display: flex;
+  border: 1px solid var(--border-color, #555);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.model-setting-toggle__pill {
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary, #aaa);
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+
+  &:not(:last-child) {
+    border-right: 1px solid var(--border-color, #555);
+  }
+
+  &.is-active {
+    background: var(--accent-color, #3a7bd5);
+    color: #fff;
+  }
+
+  &:hover:not(.is-active) {
+    background: var(--hover-bg, rgba(255,255,255,0.08));
+    color: var(--text-primary, #eee);
+  }
 }
 
 .preset-select__value {

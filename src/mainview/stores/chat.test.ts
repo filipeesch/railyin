@@ -26,6 +26,7 @@ function makeChatSession(overrides: Partial<import("@shared/rpc-types").ChatSess
     createdAt: new Date().toISOString(),
     shellAutoApprove: false,
     approvedCommands: [],
+    modelParams: [],
     ...overrides,
   };
 }
@@ -203,6 +204,24 @@ describe("chatStore — workspace filter", () => {
 
     store.onChatSessionUpdated(makeChatSession({ id: 30, workspaceKey: "any-ws" }));
     expect(store.sessions).toHaveLength(1);
+  });
+
+  it("C-MODEL-1: onChatSessionUpdated preserves non-null model", () => {
+    const store = useChatStore();
+    const wsStore = useWorkspaceStore();
+    wsStore.activeWorkspaceKey = null;
+
+    store.onChatSessionUpdated(makeChatSession({ id: 31, model: "test/model" }));
+    expect(store.sessions[0]?.model).toBe("test/model");
+  });
+
+  it("C-MODEL-2: onChatSessionUpdated preserves null model", () => {
+    const store = useChatStore();
+    const wsStore = useWorkspaceStore();
+    wsStore.activeWorkspaceKey = null;
+
+    store.onChatSessionUpdated(makeChatSession({ id: 32, model: null }));
+    expect(store.sessions[0]?.model).toBeNull();
   });
 });
 

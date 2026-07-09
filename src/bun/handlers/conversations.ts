@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { ConversationMessage } from "../../shared/rpc-types.ts";
+import type { ConversationMessage, ModelParamValue } from "../../shared/rpc-types.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 import { mapConversationMessage } from "../db/mappers.ts";
 import { getStreamEventsByConversation, type PersistedStreamEvent } from "../db/stream-events.ts";
@@ -92,6 +92,17 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       db.run(
         "UPDATE conversations SET sampling_preset_override = ? WHERE id = ?",
         [params.presetName, params.conversationId],
+      );
+      return {};
+    },
+
+    "conversations.setModelParams": async (params: {
+      conversationId: number;
+      modelParams: ModelParamValue[];
+    }): Promise<Record<string, never>> => {
+      db.run(
+        "UPDATE conversations SET model_params = ? WHERE id = ?",
+        [params.modelParams.length > 0 ? JSON.stringify(params.modelParams) : null, params.conversationId],
       );
       return {};
     },

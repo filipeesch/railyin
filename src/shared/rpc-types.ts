@@ -54,6 +54,7 @@ export interface Task {
   position: number;
   enabledMcpTools: string[] | null;
   samplingPresetOverride: string | null;
+  modelParams: ModelParamValue[];
 }
 
 export interface ChatSession {
@@ -67,6 +68,7 @@ export interface ChatSession {
   shellAutoApprove: boolean;
   approvedCommands: string[];
   samplingPresetOverride: string | null;
+  modelParams: ModelParamValue[];
   lastActivityAt: string;
   lastReadAt: string | null;
   archivedAt: string | null;
@@ -116,6 +118,29 @@ export interface ModelInfo {
   engineId?: string;
   /** Available sampling presets for Pi-engine models. Undefined for non-Pi engines. */
   availablePresets?: Array<{ name: string; params: SamplingPreset }>;
+  /** Normalized model settings metadata used by the chat controls. */
+  modelSettings?: ModelSettingsInfo;
+  /** Raw provider metadata used to derive modelSettings. */
+  rawModelSettings?: Record<string, unknown> | null;
+}
+
+export interface ModelParamValue {
+  id: string;
+  value: string;
+}
+
+export interface ModelSettingAxis {
+  id: string;
+  label: string;
+  options: Array<{ value: string; label: string }>;
+  defaultValue: string | null;
+  visible: boolean;
+  /** Rendering hint: 'toggle' for binary on/off axes, 'select' for enum axes. */
+  axisType: "toggle" | "select";
+}
+
+export interface ModelSettingsInfo {
+  settings: ModelSettingAxis[];
 }
 
 /** Sampling parameters for a named preset (Pi engine). */
@@ -739,6 +764,10 @@ export type RailynAPI = {
   };
   "conversations.setSamplingPreset": {
     params: { conversationId: number; presetName: string | null };
+    response: Record<string, never>;
+  };
+  "conversations.setModelParams": {
+    params: { conversationId: number; modelParams: ModelParamValue[] };
     response: Record<string, never>;
   };
 

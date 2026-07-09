@@ -284,6 +284,7 @@ export class SubprocessCursorAdapter implements CursorSdkAdapter {
       prompt: config.prompt,
       toolSchemas,
       ...(config.agentId ? { agentId: config.agentId } : {}),
+      ...(config.modelParams && config.modelParams.length > 0 ? { modelParams: config.modelParams } : {}),
     };
     this.send(startMsg);
 

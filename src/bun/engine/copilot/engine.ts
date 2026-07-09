@@ -10,9 +10,10 @@
  */
 
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
-import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession } from "./session";
+import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession, CopilotSdkModelInfo } from "./session";
 import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
 import { approveAll } from "@github/copilot-sdk";
+import type { ModelInfo as CopilotModelInfo } from "@github/copilot-sdk";
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
 import { CopilotDialect } from "../dialects/copilot-dialect.ts";
@@ -183,10 +184,12 @@ export class CopilotEngine implements ExecutionEngine {
       ? { mode: "append" as const, content: systemContent }
       : undefined;
 
+    const reasoningEffortParam = params.modelParams?.find((p) => p.id === "reasoningEffort")?.value;
     const sessionConfig = {
       ...(resolvedModel ? { model: resolvedModel } : {}),
       tools,
       ...(systemMessage ? { systemMessage } : {}),
+      ...(reasoningEffortParam ? { reasoningEffort: reasoningEffortParam as NonNullable<CopilotModelInfo["defaultReasoningEffort"]> } : {}),
       onPermissionRequest: approveAll,
       workingDirectory,
       streaming: true,
@@ -456,6 +459,7 @@ export class CopilotEngine implements ExecutionEngine {
       contextWindow: undefined,
       supportsThinking: false,
       supportsManualCompact: false,
+      settings: [],
     };
 
     return [
@@ -465,6 +469,7 @@ export class CopilotEngine implements ExecutionEngine {
         displayName: m.name ?? m.id,
         contextWindow: m.capabilities?.limits?.max_context_window_tokens,
         supportsThinking: m.capabilities?.supports?.reasoningEffort ?? false,
+        settings: buildCopilotSettings(m),
       })),
     ];
   }
@@ -548,4 +553,23 @@ export class CopilotEngine implements ExecutionEngine {
             : "The requested shell command was approved once. Continue.";
     }
   }
+}
+
+function buildCopilotSettings(m: CopilotSdkModelInfo): import("../../../shared/rpc-types.ts").ModelSettingAxis[] {
+  const efforts = m.supportedReasoningEfforts;
+  if (!efforts || efforts.length === 0) return [];
+  return [
+    {
+      id: "reasoningEffort",
+      label: "Reasoning Effort",
+      options: efforts.map((v) => ({ value: v, label: capitalize(v) })),
+      defaultValue: m.defaultReasoningEffort ?? null,
+      visible: true,
+      axisType: "select",
+    },
+  ];
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

@@ -16,6 +16,8 @@ export interface ClaudeSdkModelInfo {
   description?: string;
   supportsEffort?: boolean;
   supportsAdaptiveThinking?: boolean;
+  supportedEffortLevels?: string[];
+  defaultEffortLevel?: string;
 }
 
 export interface ClaudeResumeRequest {
@@ -50,6 +52,8 @@ export interface ClaudeRunConfig {
   externalMcpServers?: McpServerConfig[];
   /** Tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
   enabledMcpTools?: string[] | null;
+  /** Model parameter overrides (e.g. effort level) from the conversation's model_params. */
+  modelParams?: import("../../../shared/rpc-types.ts").ModelParamValue[];
 }
 
 export interface ClaudeSdkAdapter {
@@ -346,6 +350,8 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           model: config.model ?? null,
         });
 
+        const effortParam = config.modelParams?.find((p) => p.id === "effort")?.value;
+
         // Captured after sdk.query() below; used in SubagentStop hook to reconnect the MCP
         // transport after background subagent subprocesses exit and close inherited FDs.
         // eslint-disable-next-line prefer-const
@@ -359,6 +365,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             abortController,
             includePartialMessages: true,
             ...(normalizeClaudeModel(config.model) ? { model: normalizeClaudeModel(config.model) } : {}),
+            ...(effortParam ? { effort: effortParam } : {}),
             ...(hasExistingSession ? { resume: config.sessionId } : { sessionId: config.sessionId }),
             tools: { type: "preset", preset: "claude_code" },
             settingSources: ["project"],
@@ -642,13 +649,24 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           );
         }),
       ]);
-      return models.map((model) => ({
+      return models.map((model) => {
+        const modelRecord = model as Record<string, unknown>;
+        const supportedEffortLevelsRaw = modelRecord.supportedEffortLevels;
+        const defaultEffortLevelRaw = modelRecord.defaultEffortLevel;
+        return ({
         value: String(model.value ?? model.id ?? ""),
         displayName: String(model.displayName ?? model.value ?? model.id ?? ""),
         description: typeof model.description === "string" ? model.description : undefined,
         supportsEffort: Boolean(model.supportsEffort),
         supportsAdaptiveThinking: Boolean(model.supportsAdaptiveThinking),
-      }));
+        supportedEffortLevels: Array.isArray(supportedEffortLevelsRaw)
+          ? supportedEffortLevelsRaw.filter((entry: unknown) => typeof entry === "string")
+          : undefined,
+        defaultEffortLevel: typeof defaultEffortLevelRaw === "string"
+          ? defaultEffortLevelRaw
+          : undefined,
+      });
+      });
     } catch (err) {
       // Clear so the next call retries rather than reusing a rejected promise
       this._modelsFetch = null;
