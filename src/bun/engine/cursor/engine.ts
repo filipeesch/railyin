@@ -332,24 +332,43 @@ function uuidv5(name: string, namespace: string): string {
 }
 
 function buildCursorSettings(m: import("./adapter.ts").CursorSdkModelInfo): import("../../../shared/rpc-types.ts").ModelSettingAxis[] {
+  type ParamDef = { id: string; displayName?: string; values: Array<{ value: string; displayName?: string }> };
+  type Variant = { params: Array<{ id: string; value: string }>; displayName: string; isDefault?: boolean };
+
   // Parameters take precedence over variants
   if (m.parameters && (m.parameters as unknown[]).length > 0) {
-    return (m.parameters as Array<{
-      id: string;
-      displayName?: string;
-      values: Array<{ value: string; displayName?: string }>;
-    }>).map((param) => ({
-      id: param.id,
-      label: param.displayName ?? param.id,
-      options: param.values.map((v) => ({ value: v.value, label: v.displayName ?? v.value })),
-      defaultValue: null,
-      visible: true,
-    }));
+    const params = m.parameters as ParamDef[];
+
+    // Extract per-axis defaults from the isDefault variant's params
+    const defaultVariant = (m.variants as Variant[] | undefined)?.find((v) => v.isDefault);
+    const defaultsMap = new Map(defaultVariant?.params.map((p) => [p.id, p.value]) ?? []);
+
+    return params.map((param) => {
+      const isBooleanAxis =
+        param.values.length === 2 &&
+        param.values.every((v) => v.value === "false" || v.value === "true");
+
+      const options = param.values.map((v) => ({
+        value: v.value,
+        label:
+          v.displayName ??
+          (isBooleanAxis ? (v.value === "true" ? "On" : "Off") : v.value),
+      }));
+
+      return {
+        id: param.id,
+        label: param.displayName ?? param.id,
+        options,
+        defaultValue: defaultsMap.get(param.id) ?? param.values[0]?.value ?? null,
+        visible: true,
+        axisType: (isBooleanAxis ? "toggle" : "select") as "toggle" | "select",
+      };
+    });
   }
 
-  // Fall back to variants
+  // Fall back to variants (e.g. legacy models with only variant presets)
   if (m.variants && (m.variants as unknown[]).length > 0) {
-    const variants = m.variants as Array<{ displayName: string; isDefault?: boolean }>;
+    const variants = m.variants as Variant[];
     const defaultVariant = variants.find((v) => v.isDefault);
     return [
       {
@@ -358,6 +377,7 @@ function buildCursorSettings(m: import("./adapter.ts").CursorSdkModelInfo): impo
         options: variants.map((v) => ({ value: v.displayName, label: v.displayName })),
         defaultValue: defaultVariant?.displayName ?? null,
         visible: true,
+        axisType: "select" as const,
       },
     ];
   }

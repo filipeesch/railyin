@@ -564,6 +564,7 @@ function buildCopilotSettings(m: import("@github/copilot-sdk").ModelInfo): impor
       options: efforts.map((v) => ({ value: v, label: capitalize(v) })),
       defaultValue: m.defaultReasoningEffort ?? null,
       visible: true,
+      axisType: "select",
     },
   ];
 }

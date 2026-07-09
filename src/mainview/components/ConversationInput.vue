@@ -258,26 +258,48 @@
 
       <!-- Model param selectors (one per axis defined in modelSettings) -->
       <template v-for="axis in modelSettings" :key="axis.id">
-        <Select
-          v-if="axis.visible && axis.options.length > 0"
-          :model-value="props.modelParams?.find(p => p.id === axis.id)?.value ?? axis.defaultValue ?? null"
-          :options="[{ value: axis.defaultValue ?? null, label: 'Default' }, ...axis.options.map(o => ({ value: o.value, label: o.label }))]"
-          optionLabel="label"
-          optionValue="value"
-          size="small"
-          class="input-reasoning-mode-select"
+        <!-- Toggle: binary on/off axes (e.g. Thinking, Fast) -->
+        <div
+          v-if="axis.visible && axis.options.length > 0 && axis.axisType === 'toggle'"
+          class="model-setting-toggle"
           :title="axis.label"
-          @change="(e: { value: string | null }) => updateParam(axis.id, e.value)"
         >
-          <template #value="{ value }">
-            <span class="reasoning-mode-select__value">{{ value ?? "Default" }}</span>
-          </template>
-          <template #option="{ option }">
-            <div class="reasoning-mode-select__option">
-              <div class="reasoning-mode-select__option-title">{{ option.label }}</div>
-            </div>
-          </template>
-        </Select>
+          <span class="model-setting-toggle__label">{{ axis.label }}</span>
+          <div class="model-setting-toggle__pills">
+            <button
+              v-for="opt in axis.options"
+              :key="opt.value"
+              :class="['model-setting-toggle__pill', { 'is-active': axisCurrentValue(axis) === opt.value }]"
+              @click="updateParam(axis.id, opt.value)"
+            >{{ opt.label }}</button>
+          </div>
+        </div>
+
+        <!-- Select: enum axes (e.g. Effort, Context) -->
+        <div
+          v-else-if="axis.visible && axis.options.length > 0"
+          class="model-setting-select-wrapper"
+        >
+          <span class="model-setting-select__label">{{ axis.label }}</span>
+          <Select
+            :model-value="axisCurrentValue(axis)"
+            :options="axis.options"
+            optionLabel="label"
+            optionValue="value"
+            size="small"
+            class="input-reasoning-mode-select"
+            @change="(e: { value: string | null }) => updateParam(axis.id, e.value)"
+          >
+            <template #value="{ value }">
+              <span class="reasoning-mode-select__value">{{ axis.options.find(o => o.value === value)?.label ?? value }}</span>
+            </template>
+            <template #option="{ option }">
+              <div class="reasoning-mode-select__option">
+                <div class="reasoning-mode-select__option-title">{{ option.label }}</div>
+              </div>
+            </template>
+          </Select>
+        </div>
       </template>
 
       <!-- Context ring (when contextUsage provided) -->
@@ -542,6 +564,10 @@ const availablePresets = computed(() => activeModelInfo.value?.availablePresets 
 const isPiEngine = computed(() => availablePresets.value.length > 0);
 
 const modelSettings = computed(() => activeModelInfo.value?.modelSettings?.settings ?? []);
+
+function axisCurrentValue(axis: { id: string; defaultValue: string | null }): string | null {
+  return props.modelParams?.find((p) => p.id === axis.id)?.value ?? axis.defaultValue ?? null;
+}
 
 function updateParam(axisId: string, value: string | null) {
   const current = [...(props.modelParams ?? [])];
@@ -826,8 +852,22 @@ defineExpose({ focus: () => chatEditorRef.value?.focus() });
   font-size: 0.8rem;
 }
 
+/* ── Model setting: select wrapper with inline label ─────────────────────── */
+.model-setting-select-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.model-setting-select__label {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+  user-select: none;
+}
+
 .input-reasoning-mode-select {
-  min-width: 120px;
+  min-width: 100px;
   font-size: 0.8rem;
 }
 
@@ -838,6 +878,52 @@ defineExpose({ focus: () => chatEditorRef.value?.focus() });
 
 .reasoning-mode-select__option-title {
   font-size: 0.85rem;
+}
+
+/* ── Model setting: toggle (binary on/off) ───────────────────────────────── */
+.model-setting-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.model-setting-toggle__label {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.model-setting-toggle__pills {
+  display: flex;
+  border: 1px solid var(--border-color, #555);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.model-setting-toggle__pill {
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary, #aaa);
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+
+  &:not(:last-child) {
+    border-right: 1px solid var(--border-color, #555);
+  }
+
+  &.is-active {
+    background: var(--accent-color, #3a7bd5);
+    color: #fff;
+  }
+
+  &:hover:not(.is-active) {
+    background: var(--hover-bg, rgba(255,255,255,0.08));
+    color: var(--text-primary, #eee);
+  }
 }
 
 .preset-select__value {

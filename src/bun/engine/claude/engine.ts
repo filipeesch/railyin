@@ -305,6 +305,7 @@ function buildClaudeSettings(model: import("./adapter.ts").ClaudeSdkModelInfo): 
       options: levels.map((v) => ({ value: v, label: capitalize(v) })),
       defaultValue: model.defaultEffortLevel ?? null,
       visible: true,
+      axisType: "select",
     },
   ];
 }

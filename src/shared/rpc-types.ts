@@ -135,6 +135,8 @@ export interface ModelSettingAxis {
   options: Array<{ value: string; label: string }>;
   defaultValue: string | null;
   visible: boolean;
+  /** Rendering hint: 'toggle' for binary on/off axes, 'select' for enum axes. */
+  axisType: "toggle" | "select";
 }
 
 export interface ModelSettingsInfo {

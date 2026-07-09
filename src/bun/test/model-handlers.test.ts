@@ -25,6 +25,7 @@ const mockOrchestrator = {
           ],
           defaultValue: "medium",
           visible: true,
+          axisType: "select",
         },
       ],
     },
