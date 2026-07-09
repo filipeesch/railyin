@@ -230,6 +230,39 @@ describe("note tools", () => {
     expect(COMMON_TOOL_NAMES.has("list_notes")).toBe(true);
     expect(COMMON_TOOL_NAMES.has("update_note")).toBe(true);
   });
+
+  it("CTR-N5: create_note, list_notes, update_note are registered via buildCopilotTools()", () => {
+    const tools = buildCopilotTools(baseContext);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("create_note");
+    expect(names).toContain("list_notes");
+    expect(names).toContain("update_note");
+  });
+
+  it("CTR-N6: create_note, list_notes, update_note are registered via buildClaudeToolServer()", () => {
+    const registeredNames: string[] = [];
+    const sdk = {
+      tool: (name: string, _desc: string, _schema: unknown, _handler: unknown) => {
+        registeredNames.push(name);
+        return { name };
+      },
+      createSdkMcpServer: (options: unknown) => options,
+    };
+    const scalar = () => ({ optional: () => ({}) });
+    const z = {
+      string: scalar,
+      number: scalar,
+      boolean: scalar,
+      any: scalar,
+      array: (_item: unknown) => ({ optional: () => ({}) }),
+      object: (_shape: unknown) => ({ optional: () => ({}) }),
+      enum: (_values: [string, ...string[]]) => ({ optional: () => ({}) }),
+    };
+    buildClaudeToolServer(sdk as any, z as any, baseContext);
+    expect(registeredNames).toContain("create_note");
+    expect(registeredNames).toContain("list_notes");
+    expect(registeredNames).toContain("update_note");
+  });
 });
 describe("workspace tool registration", () => {
   it("CTR-WK-1: list_projects is present in COMMON_TOOL_DEFINITIONS with no required params", () => {

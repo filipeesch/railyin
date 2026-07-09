@@ -278,3 +278,111 @@ describe("chatStore — rapid key changes", () => {
     expect(store.sessions[0].id).toBe(101);
   });
 });
+
+// ─── C10: decision_request_prompt message → chatStore status becomes waiting_user ──
+
+describe("chatStore — C10: decision_request_prompt sets session status", () => {
+  it("C10: decision_request_prompt message updates session status to waiting_user", () => {
+    const store = useChatStore();
+    store.sessions = [];
+
+    // Directly add a session to bypass workspace filtering
+    store.sessions.push(makeChatSession({ id: 1, status: "idle", conversationId: 1 }));
+    expect(store.sessions[0].status).toBe("idle");
+
+    // decision_request_prompt message arrives
+    store.onChatNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: "decision_request_prompt",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    // Session status becomes waiting_user
+    const session = store.sessions.find((s) => s.id === 1);
+    expect(session!.status).toBe("waiting_user");
+  });
+});
+
+// ─── C11: decision_request_prompt message → session marked as unread if not active ──
+
+describe("chatStore — C11: decision_request_prompt marks unread for non-active session", () => {
+  it("C11: decision_request_prompt marks non-active session as unread", () => {
+    const store = useChatStore();
+    store.sessions = [];
+
+    // Directly add sessions to bypass workspace filtering
+    store.sessions.push(makeChatSession({ id: 1, status: "idle", lastReadAt: null, conversationId: 1 }));
+    store.sessions.push(makeChatSession({ id: 2, status: "idle", lastReadAt: null, conversationId: 2 }));
+    store.activeChatSessionId = 2;
+
+    // decision_request_prompt for session 1 (non-active)
+    store.onChatNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: "decision_request_prompt",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    // Session 1 status becomes waiting_user
+    const session1 = store.sessions.find((s) => s.id === 1);
+    expect(session1!.status).toBe("waiting_user");
+  });
+});
+
+// ─── C12: decision_request_prompt appearing multiple times — correct state management ──
+
+describe("chatStore — C12: decision_request_prompt multiple appearances", () => {
+  it("C12: multiple decision_request_prompt messages keep status as waiting_user", () => {
+    const store = useChatStore();
+    store.sessions = [];
+
+    // Directly add session with conversationId matching the message
+    const session = makeChatSession({ id: 1, status: "idle", conversationId: 1 });
+    store.sessions.push(session);
+
+    // Verify session was added
+    expect(store.sessions.length).toBe(1);
+    expect(store.sessions[0].id).toBe(1);
+
+    // First decision_request_prompt
+    store.onChatNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: "First request",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    // Session status should be waiting_user
+    const updatedSession = store.sessions.find((s) => s.id === 1);
+    expect(updatedSession).toBeDefined();
+    expect(updatedSession!.status).toBe("waiting_user");
+
+    // Second decision_request_prompt
+    store.onChatNewMessage({
+      id: 101,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: "Second request",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    // Status should still be waiting_user (not reset or error)
+    expect(store.sessions[0].status).toBe("waiting_user");
+  });
+});

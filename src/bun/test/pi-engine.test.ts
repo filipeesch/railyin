@@ -104,6 +104,151 @@ afterEach(() => {
   configCleanup();
 });
 
+// ─── TestPiEngine — subclass exposing protected methods for testing ────────────
+
+class TestPiEngine extends PiEngine {
+  constructor(
+    engineId: string,
+    config: PiEngineConfig,
+    onTaskUpdated: () => void,
+    _onNewMessage: () => void,
+    dialect: any,
+    modelSettingsRepo: { getContextWindow: (workspaceKey: string, qualifiedModelId: string) => Promise<number | null> | number | null },
+    sessionFactory: any = async () => ({} as any),
+    registry?: any,
+  ) {
+    super(engineId, config, onTaskUpdated, _onNewMessage, dialect, modelSettingsRepo as any, sessionFactory, registry);
+  }
+
+  exposeCompactionSettings() {
+    return this.buildCompactionSettings();
+  }
+}
+
+// ─── buildCompactionSettings tests ─────────────────────────────────────────────
+
+describe("PiEngine.buildCompactionSettings()", () => {
+  it("PE-SETTINGS-1: returns { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }", () => {
+    const mockRepo = { getContextWindow: () => 128_000 } as any;
+    const engine = new TestPiEngine(
+      "test-pi",
+      { type: "pi" },
+      () => {},
+      () => {},
+      undefined,
+      mockRepo,
+    );
+
+    const settings = engine.exposeCompactionSettings();
+    expect(settings).toEqual({ enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 });
+  });
+});
+
+// ─── compact() model resolution tests ─────────────────────────────────────────
+
+describe("PiEngine.compact() — model resolution", () => {
+  beforeEach(() => {
+    const cfg = setupTestConfig();
+    db = initDb();
+    const seed = seedProjectAndTask(db, "/test-git");
+    conversationId = seed.conversationId;
+  });
+
+  afterEach(() => {
+    // no cleanup needed per spec
+  });
+
+  it("PE-COMPACT-5: compact() passes stored model to session creation (strips engine prefix)", async () => {
+    // Seed conversation model
+    db.run("UPDATE conversations SET model = ? WHERE id = ?", ["pi-local/lmstudio/llama-3.2-3b", conversationId]);
+
+    let capturedModel: any = null;
+    const session = new MockAgentSession();
+    const mockRepo = { getContextWindow: () => 32768 } as any;
+
+    const engine = new PiEngine(
+      "test-pi",
+      { type: "pi" },
+      () => {},
+      () => {},
+      undefined,
+      mockRepo,
+      async (opts: any) => {
+        capturedModel = opts.model;
+        return session as any;
+      },
+    );
+
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
+
+    expect(capturedModel.id).toBe("lmstudio/llama-3.2-3b");
+  });
+
+  it("PE-COMPACT-6: compact() resolves contextWindow from modelSettingsRepo", async () => {
+    db.run("UPDATE conversations SET model = ? WHERE id = ?", ["pi-local/lmstudio/qwen3:8b", conversationId]);
+
+    let capturedContextWindow: number | undefined;
+    const session = new MockAgentSession();
+    const mockRepo = { getContextWindow: () => 32768 } as any;
+
+    const engine = new PiEngine(
+      "test-pi",
+      { type: "pi" },
+      () => {},
+      () => {},
+      undefined,
+      mockRepo,
+      async (opts: any) => {
+        capturedContextWindow = opts.model.contextWindow;
+        return session as any;
+      },
+    );
+
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
+
+    expect(capturedContextWindow).toBe(32768);
+  });
+
+  it("PE-COMPACT-7: compact() rejects when modelSettingsRepo returns null contextWindow", async () => {
+    db.run("UPDATE conversations SET model = ? WHERE id = ?", ["pi-local/lmstudio/qwen3:8b", conversationId]);
+
+    const mockRepo = { getContextWindow: () => null } as any;
+
+    const engine = new PiEngine(
+      "test-pi",
+      { type: "pi" },
+      () => {},
+      () => {},
+      undefined,
+      mockRepo,
+      async () => ({} as any),
+    );
+
+    await expect(engine.compact(null, conversationId, "/test-working-dir", "test-workspace")).rejects.toThrow(
+      'no context window configured for model "pi-local/lmstudio/qwen3:8b"',
+    );
+  });
+
+  it("PE-COMPACT-8: compact() rejects when conversations.model is NULL", async () => {
+    // Don't set model — leave it null
+    const mockRepo = { getContextWindow: () => 32768 } as any;
+
+    const engine = new PiEngine(
+      "test-pi",
+      { type: "pi" },
+      () => {},
+      () => {},
+      undefined,
+      mockRepo,
+      async () => ({} as any),
+    );
+
+    await expect(engine.compact(null, conversationId, "/test-working-dir", "test-workspace")).rejects.toThrow(
+      `Cannot compact conversation ${conversationId}: no model stored for conversation`,
+    );
+  });
+});
+
 describe("PiEngine.compact()", () => {
   it("PE-COMPACT-1: no live session → factory called, session.compact() invoked", async () => {
     let factoryCallCount = 0;

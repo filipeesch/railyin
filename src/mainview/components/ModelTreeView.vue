@@ -104,7 +104,7 @@
                 @click.prevent.stop="startCtxEdit(model.id, model.contextWindow ?? null)"
               >
                 <span v-if="model.contextWindow">{{ formatCtx(model.contextWindow) }}</span>
-                <span v-else class="model-ctx--warning" title="Context window required — set it to use this model in chat">
+                <span v-else class="model-ctx--warning" title="Context window required — set it to use this model in chat" @click.prevent.stop="startCtxEdit(model.id, model.contextWindow ?? null)">
                   <i class="pi pi-exclamation-triangle" />
                 </span>
                 <i class="pi pi-pencil model-ctx__pencil" />
