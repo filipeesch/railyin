@@ -53,7 +53,7 @@ test.describe("model settings selector", () => {
         await openTaskDrawer(page, task.id);
 
         await expect(page.locator(".input-model-settings-select")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".model-settings-select__value")).toContainText("high");
+        await expect(page.locator(".model-settings-select__value")).toContainText("High");
 
         await page.locator(".input-model-settings-select").click();
         const dropdown = page.locator(".p-select-overlay, .p-dropdown-panel");

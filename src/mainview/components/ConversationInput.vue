@@ -287,16 +287,14 @@
             optionLabel="label"
             optionValue="value"
             size="small"
-            class="input-reasoning-mode-select"
+            class="input-model-settings-select"
             @change="(e: { value: string | null }) => updateParam(axis.id, e.value)"
           >
             <template #value="{ value }">
-              <span class="reasoning-mode-select__value">{{ axis.options.find(o => o.value === value)?.label ?? value }}</span>
+              <span class="model-settings-select__value">{{ axis.options.find(o => o.value === value)?.label ?? value }}</span>
             </template>
             <template #option="{ option }">
-              <div class="reasoning-mode-select__option">
-                <div class="reasoning-mode-select__option-title">{{ option.label }}</div>
-              </div>
+              <div class="model-settings-select__option">{{ option.label }}</div>
             </template>
           </Select>
         </div>
@@ -866,17 +864,17 @@ defineExpose({ focus: () => chatEditorRef.value?.focus() });
   user-select: none;
 }
 
-.input-reasoning-mode-select {
+.input-model-settings-select {
   min-width: 100px;
   font-size: 0.8rem;
 }
 
-.reasoning-mode-select__value {
+.model-settings-select__value {
   font-size: 0.8rem;
   white-space: nowrap;
 }
 
-.reasoning-mode-select__option-title {
+.model-settings-select__option {
   font-size: 0.85rem;
 }
 
