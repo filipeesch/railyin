@@ -21,6 +21,7 @@ const engineModelWithEffort: EngineModelInfo = {
       ],
       defaultValue: "medium",
       visible: true,
+      axisType: "select",
     },
   ],
 };

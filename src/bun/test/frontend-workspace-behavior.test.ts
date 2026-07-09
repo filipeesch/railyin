@@ -32,6 +32,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     position: 0,
     enabledMcpTools: null,
     samplingPresetOverride: null,
+    modelParams: [],
     ...overrides,
   };
 }

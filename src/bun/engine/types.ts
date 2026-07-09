@@ -158,8 +158,8 @@ export interface EngineModelInfo {
   contextWindowEditable?: boolean;
   /** Whether this model is currently enabled for selection by the user. */
   enabled?: boolean;
-  /** Generic model parameter axes exposed by this model. Empty = no configurable settings. */
-  settings: ModelSettingAxis[];
+  /** Generic model parameter axes exposed by this model. Empty/undefined = no configurable settings. */
+  settings?: ModelSettingAxis[];
 }
 
 export type EngineLeaseState = "running" | "waiting_user" | "idle" | "closing";

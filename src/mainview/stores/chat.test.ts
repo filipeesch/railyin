@@ -26,6 +26,7 @@ function makeChatSession(overrides: Partial<import("@shared/rpc-types").ChatSess
     createdAt: new Date().toISOString(),
     shellAutoApprove: false,
     approvedCommands: [],
+    modelParams: [],
     ...overrides,
   };
 }

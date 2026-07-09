@@ -10,9 +10,10 @@
  */
 
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
-import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession } from "./session";
+import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession, CopilotSdkModelInfo } from "./session";
 import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
 import { approveAll } from "@github/copilot-sdk";
+import type { ModelInfo as CopilotModelInfo } from "@github/copilot-sdk";
 import { translateCopilotStream } from "./events";
 import { buildCopilotTools } from "./tools";
 import { CopilotDialect } from "../dialects/copilot-dialect.ts";
@@ -188,7 +189,7 @@ export class CopilotEngine implements ExecutionEngine {
       ...(resolvedModel ? { model: resolvedModel } : {}),
       tools,
       ...(systemMessage ? { systemMessage } : {}),
-      ...(reasoningEffortParam ? { reasoningEffort: reasoningEffortParam as import("@github/copilot-sdk").ReasoningEffort } : {}),
+      ...(reasoningEffortParam ? { reasoningEffort: reasoningEffortParam as NonNullable<CopilotModelInfo["defaultReasoningEffort"]> } : {}),
       onPermissionRequest: approveAll,
       workingDirectory,
       streaming: true,
@@ -554,7 +555,7 @@ export class CopilotEngine implements ExecutionEngine {
   }
 }
 
-function buildCopilotSettings(m: import("@github/copilot-sdk").ModelInfo): import("../../shared/rpc-types.ts").ModelSettingAxis[] {
+function buildCopilotSettings(m: CopilotSdkModelInfo): import("../../../shared/rpc-types.ts").ModelSettingAxis[] {
   const efforts = m.supportedReasoningEfforts;
   if (!efforts || efforts.length === 0) return [];
   return [
