@@ -22,7 +22,7 @@ import { mcpHandlers } from "../handlers/mcp.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { mapTask } from "../db/mappers.ts";
 import type { Database } from "bun:sqlite";
-import type { Attachment, Task } from "../../shared/rpc-types.ts";
+import type { Attachment, ChatSession, Task } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 
@@ -727,6 +727,65 @@ describe("chat session parity handlers", () => {
     ).get(session.conversationId!);
     // setupTestConfig sets default_model: copilot/mock-model
     expect(conv?.model).toBe("copilot/mock-model");
+  });
+
+  it("CS-SET-1/CS-SET-2: chatSessions.setModel updates callback and response model", async () => {
+    const sessionUpdates: ChatSession[] = [];
+    db.run("INSERT INTO conversations (task_id, model) VALUES (NULL, NULL)");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
+      [conversationId],
+    );
+    const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    const handlers = chatSessionHandlers(db, (session) => sessionUpdates.push(session), null as unknown as ExecutionCoordinator);
+
+    const updated = await handlers["chatSessions.setModel"]({ sessionId, model: "test/model" });
+
+    expect(updated.model).toBe("test/model");
+    expect(sessionUpdates.at(-1)?.model).toBe("test/model");
+  });
+
+  it("CS-CREATE-1: chatSessions.create callback preserves created model", async () => {
+    const sessionUpdates: ChatSession[] = [];
+    const handlers = chatSessionHandlers(db, (session) => sessionUpdates.push(session), null as unknown as ExecutionCoordinator);
+
+    const created = await handlers["chatSessions.create"]({ workspaceKey: "default" });
+
+    expect(created.model).toBe("copilot/mock-model");
+    expect(sessionUpdates.at(-1)?.model).toBe("copilot/mock-model");
+  });
+
+  it("CS-RENAME-1: chatSessions.rename callback preserves model", async () => {
+    const sessionUpdates: ChatSession[] = [];
+    db.run("INSERT INTO conversations (task_id, model) VALUES (NULL, 'fake/fake')");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Old title', 'idle', ?)",
+      [conversationId],
+    );
+    const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    const handlers = chatSessionHandlers(db, (session) => sessionUpdates.push(session), null as unknown as ExecutionCoordinator);
+
+    await handlers["chatSessions.rename"]({ sessionId, title: "New title" });
+
+    expect(sessionUpdates.at(-1)?.model).toBe("fake/fake");
+  });
+
+  it("CS-ARCHIVE-1: chatSessions.archive callback preserves model", async () => {
+    const sessionUpdates: ChatSession[] = [];
+    db.run("INSERT INTO conversations (task_id, model) VALUES (NULL, 'fake/fake')");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
+      [conversationId],
+    );
+    const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    const handlers = chatSessionHandlers(db, (session) => sessionUpdates.push(session), null as unknown as ExecutionCoordinator);
+
+    await handlers["chatSessions.archive"]({ sessionId });
+
+    expect(sessionUpdates.at(-1)?.model).toBe("fake/fake");
   });
 
   // ─── CS-2: sendMessage derives engine from conversation model prefix ───────────

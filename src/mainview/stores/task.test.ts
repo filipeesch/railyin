@@ -117,6 +117,26 @@ describe("taskStore", () => {
     expect(store.taskIndex[5].title).toBe("Updated");
   });
 
+  it("T-MODEL-1: onTaskUpdated preserves non-null model", async () => {
+    const store = useTaskStore();
+    const task = makeTask({ id: 55, boardId: 1, model: null });
+    apiMock.mockResolvedValueOnce([task]);
+    await store.loadTasks(1);
+
+    store.onTaskUpdated(makeTask({ id: 55, boardId: 1, model: "test/model" }));
+    expect(store.taskIndex[55].model).toBe("test/model");
+  });
+
+  it("T-MODEL-2: onTaskUpdated preserves null model", async () => {
+    const store = useTaskStore();
+    const task = makeTask({ id: 56, boardId: 1, model: "test/model" });
+    apiMock.mockResolvedValueOnce([task]);
+    await store.loadTasks(1);
+
+    store.onTaskUpdated(makeTask({ id: 56, boardId: 1, model: null }));
+    expect(store.taskIndex[56].model).toBeNull();
+  });
+
   // REGRESSION SENTINEL: If _replaceTask did an O(n) linear scan across all boards
   // and the boardId lookup was wrong, this test would fail.
   it("T5: _replaceTask regression — loadTasks then onTaskUpdated updates both tasksByBoard and taskIndex", async () => {

@@ -293,3 +293,63 @@ test.describe("Task Chat Model Persistence", () => {
     await expect(page.locator(".task-chat-view .model-select__value")).toContainText(secondModelText);
   });
 });
+
+test.describe("Model Persistence — WebSocket push behavior", () => {
+  test("MP-E1: session WS push with same model does not reset dropdown", async ({ page, api, ws }) => {
+    const session = createSessionWithModel(7001, "copilot/o1");
+    stubModelsList(api);
+    api.returns("chatSessions.list", [session]);
+    api.handle("chatSessions.get", () => session);
+    api.handle("chatSessions.getMessages", () => ({ messages: [], hasMore: false }));
+
+    await page.goto("/");
+    await openSessionDrawer(page, session.id);
+    await expect(page.locator(".session-chat-view .model-select__value")).toContainText("o1");
+
+    ws.push({ type: "chatSession.updated", payload: { ...session, model: "copilot/o1" } });
+    await expect(page.locator(".session-chat-view .model-select__value")).toContainText("o1");
+  });
+
+  test("MP-E2: session WS push with different model updates dropdown", async ({ page, api, ws }) => {
+    const session = createSessionWithModel(7002, "copilot/gpt-4o");
+    stubModelsList(api);
+    api.returns("chatSessions.list", [session]);
+    api.handle("chatSessions.get", () => session);
+    api.handle("chatSessions.getMessages", () => ({ messages: [], hasMore: false }));
+
+    await page.goto("/");
+    await openSessionDrawer(page, session.id);
+    await expect(page.locator(".session-chat-view .model-select__value")).toContainText("GPT-4o");
+
+    ws.push({ type: "chatSession.updated", payload: { ...session, model: "claude/sonnet-4" } });
+    await expect(page.locator(".session-chat-view .model-select__value")).toContainText("Claude Sonnet 4");
+  });
+
+  test("MP-F1: task WS push with same model does not reset dropdown", async ({ page, api, ws }) => {
+    const task = createTaskWithModel(3001, 7003, "copilot/o1");
+    stubModelsList(api);
+    api.handle("tasks.list", () => [task]);
+    api.handle("tasks.getMessages", () => ({ messages: [], hasMore: false }));
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+    await expect(page.locator(".task-chat-view .model-select__value")).toContainText("o1");
+
+    ws.push({ type: "task.updated", payload: { ...task, model: "copilot/o1" } });
+    await expect(page.locator(".task-chat-view .model-select__value")).toContainText("o1");
+  });
+
+  test("MP-F2: task WS push with different model updates dropdown", async ({ page, api, ws }) => {
+    const task = createTaskWithModel(3002, 7004, "copilot/gpt-4o");
+    stubModelsList(api);
+    api.handle("tasks.list", () => [task]);
+    api.handle("tasks.getMessages", () => ({ messages: [], hasMore: false }));
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+    await expect(page.locator(".task-chat-view .model-select__value")).toContainText("GPT-4o");
+
+    ws.push({ type: "task.updated", payload: { ...task, model: "claude/sonnet-4" } });
+    await expect(page.locator(".task-chat-view .model-select__value")).toContainText("Claude Sonnet 4");
+  });
+});

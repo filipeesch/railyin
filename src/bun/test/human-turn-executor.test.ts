@@ -6,85 +6,24 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { resetConfig } from "../config/index.ts";
 import { HumanTurnExecutor } from "../engine/execution/human-turn-executor.ts";
-import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
-import { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
-import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage, OnTaskUpdated } from "../engine/types.ts";
+import type { OnTaskUpdated } from "../engine/types.ts";
 import type { EngineRegistry } from "../engine/engine-registry.ts";
 import type { Task } from "../../shared/rpc-types.ts";
-import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";
 import { appendMessage } from "../conversation/messages.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
+import { CapturingParamsBuilder, StubStreamProcessor, StubWorkdirResolver, TestEngine } from "./executor-test-helpers.ts";
 
 let db: Database;
 let gitDir: string;
 let configCleanup: () => void;
 let wsRepo: WorkspaceRepository;
 let boardTools: BoardToolExecutor;
-
-class TestEngine implements ExecutionEngine {
-  constructor(private readonly throwOnResume = false) {}
-
-  async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
-    yield { type: "done" };
-  }
-
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {
-    if (this.throwOnResume) throw new Error("Engine session lost");
-  }
-
-  cancel(_executionId: number): void {}
-  async listModels() { return []; }
-  async listCommands(_taskId: number) { return []; }
-}
-
-class CapturingParamsBuilder extends ExecutionParamsBuilder {
-  lastBuilt: ExecutionParams | null = null;
-
-  override build(
-    task: TaskRow, conversationId: number, executionId: number, prompt: string, systemInstructions: string | undefined, workingDirectory: string, signal: AbortSignal, onRawModelMessage: (raw: RawModelMessage) => void, attachments?: import("../../shared/rpc-types.ts").Attachment[],
-    model?: string, projectPath?: string, workspaceKey?: string,
-  ) {
-    const params = super.build(
-      task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments, model, projectPath, workspaceKey,
-    );
-    this.lastBuilt = params;
-    return params;
-  }
-}
-
-class StubWorkdirResolver implements IWorkingDirectoryResolver {
-  constructor(private readonly dir: string) {}
-  resolve(): string { return this.dir; }
-}
-
-class StubStreamProcessor extends StreamProcessor {
-  lastRun: { taskId: number | null; params: ExecutionParams } | null = null;
-
-  constructor() {
-    const _db = initDb();
-    const _rawBuf = { enqueue() {}, flush: async () => {} } as unknown as import("../pipeline/write-buffer.ts").WriteBuffer<import("../engine/stream/raw-message-buffer.ts").RawMessageItem>;
-    super(_db, _rawBuf, () => {}, () => {}, () => {}, () => {});
-  }
-
-  override createSignal(executionId: number): AbortSignal {
-    return new AbortController().signal;
-  }
-
-  override makePersistCallback(_taskId: number | null, _conversationId: number, _executionId: number): (raw: RawModelMessage) => void {
-    return (_raw) => {};
-  }
-
-  override runNonNative(taskId: number | null, _conversationId: number, _executionId: number, _engine: ExecutionEngine, params: ExecutionParams): void {
-    this.lastRun = { taskId, params };
-  }
-}
 
 beforeEach(() => {
   db = initDb();
