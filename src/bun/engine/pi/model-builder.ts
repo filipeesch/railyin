@@ -40,7 +40,6 @@ export class PiModelBuilder {
     const slash = nativeId.indexOf("/");
     const providerName = slash !== -1 ? nativeId.slice(0, slash) : undefined;
     const modelId = slash !== -1 ? nativeId.slice(slash + 1) : nativeId;
-    void modelId;
 
     const providerConfig = providerName ? this.config.providers?.[providerName] : undefined;
     const baseUrl = providerConfig?.base_url ?? "http://localhost:1234/v1";
@@ -53,7 +52,7 @@ export class PiModelBuilder {
     }
 
     return {
-      id: nativeId,
+      id: modelId,
       name: nativeId,
       api: "openai-completions",
       provider: providerName ?? "default",

@@ -140,7 +140,8 @@ describe("PiEngine.compact() — model resolution", () => {
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
-    expect(capturedModel.id).toBe("lmstudio/llama-3.2-3b");
+    expect(capturedModel.id).toBe("llama-3.2-3b");
+    expect(capturedModel.name).toBe("lmstudio/llama-3.2-3b");
   });
 
   it("PE-COMPACT-6: compact() resolves contextWindow from modelSettingsRepo", async () => {

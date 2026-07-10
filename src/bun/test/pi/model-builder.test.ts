@@ -14,7 +14,8 @@ describe("PiModelBuilder", () => {
     const builder = new PiModelBuilder(config);
     const model = builder.build("pi/lmstudio/my-model", 128_000);
 
-    expect(model.id).toBe("lmstudio/my-model");
+    expect(model.id).toBe("my-model");
+    expect(model.name).toBe("lmstudio/my-model");
     expect(model.provider).toBe("lmstudio");
     expect(model.baseUrl).toBe("http://localhost:1234/v1");
     expect(model.contextWindow).toBe(128_000);
@@ -33,7 +34,8 @@ describe("PiModelBuilder", () => {
     const builder = new PiModelBuilder(config);
     const model = builder.build(undefined, 32_768);
 
-    expect(model.id).toBe("ollama/llama3");
+    expect(model.id).toBe("llama3");
+    expect(model.name).toBe("ollama/llama3");
     expect(model.provider).toBe("ollama");
   });
 
@@ -64,7 +66,7 @@ describe("PiModelBuilder", () => {
     const builder = new PiModelBuilder(config);
     const model = builder.build("pi/lmstudio/qwen", 128_000);
 
-    expect(model.id).toBe("lmstudio/qwen");
+    expect(model.id).toBe("qwen");
     expect(model.name).toBe("lmstudio/qwen");
   });
 
