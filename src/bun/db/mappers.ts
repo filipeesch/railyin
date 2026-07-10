@@ -5,6 +5,7 @@ import type {
   ConversationMessage,
   ExecutionState,
   MessageType,
+  ModelParamValue,
 } from "../../shared/rpc-types.ts";
 import type {
   TaskRow,
@@ -37,6 +38,7 @@ export function mapTask(row: TaskRow): Task {
     position: row.position ?? 0,
     enabledMcpTools: (() => { try { return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : []; } catch { return []; } })(),
     samplingPresetOverride: (row as any).conversation_sampling_preset_override ?? null,
+    modelParams: parseModelParams((row as any).conversation_model_params),
   };
 }
 
@@ -102,9 +104,24 @@ export function mapChatSession(row: ChatSessionRow): ChatSession {
       }
     })(),
     samplingPresetOverride: row.conversation_sampling_preset_override ?? null,
+    modelParams: parseModelParams(row.conversation_model_params),
     lastActivityAt: row.last_activity_at,
     lastReadAt: row.last_read_at,
     archivedAt: row.archived_at,
     createdAt: row.created_at,
   };
+}
+
+function parseModelParams(raw: string | null | undefined): ModelParamValue[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (p): p is ModelParamValue =>
+        typeof p === "object" && p !== null && typeof p.id === "string" && typeof p.value === "string",
+    );
+  } catch {
+    return [];
+  }
 }

@@ -49,6 +49,8 @@ export interface StartRunRequest {
    * same id so subsequent turns always resume the same SDK agent.
    */
   agentId?: string;
+  /** Model parameter overrides passed as ModelSelection.params to the Cursor SDK. */
+  modelParams?: Array<{ id: string; value: string }>;
 }
 
 export interface CancelRunRequest {

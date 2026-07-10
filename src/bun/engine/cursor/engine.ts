@@ -73,7 +73,7 @@ export class CursorEngine implements ExecutionEngine {
       qualifiedId: `cursor/${m.value}`,
       displayName: m.displayName,
       description: m.description,
-      supportsThinking: m.supportsThinking,
+      settings: buildCursorSettings(m),
     }));
   }
 
@@ -235,6 +235,10 @@ export class CursorEngine implements ExecutionEngine {
     // failure). Mirrors the Copilot session-id pattern.
     const agentId = cursorAgentIdForConversation(taskId ?? null, params.conversationId);
 
+    // TODO: For variant axes, resolve displayName → variant params from the model metadata.
+    // For now, pass non-variant model params directly as ModelSelection.params.
+    const cursorModelParams = (params.modelParams ?? []).filter((p) => p.id !== "variant");
+
     const runConfig = {
       executionId,
       taskId: taskId || 0,
@@ -242,6 +246,7 @@ export class CursorEngine implements ExecutionEngine {
       prompt: composedPrompt,
       workingDirectory,
       model: resolvedModel,
+      modelParams: cursorModelParams.length > 0 ? cursorModelParams : undefined,
       systemInstructions,
       taskContext,
       signal: combinedAbort.signal,
@@ -324,4 +329,62 @@ function uuidv5(name: string, namespace: string): string {
   bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
   const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function buildCursorSettings(m: import("./adapter.ts").CursorSdkModelInfo): import("../../../shared/rpc-types.ts").ModelSettingAxis[] {
+  type ParamDef = { id: string; displayName?: string; values: Array<{ value: string; displayName?: string }> };
+  type Variant = { params: Array<{ id: string; value: string }>; displayName: string; isDefault?: boolean };
+
+  // Parameters take precedence over variants
+  if (m.parameters && (m.parameters as unknown[]).length > 0) {
+    const params = m.parameters as ParamDef[];
+
+    // Extract per-axis defaults from the isDefault variant's params
+    const defaultVariant = (m.variants as Variant[] | undefined)?.find((v) => v.isDefault);
+    const defaultsMap = new Map(defaultVariant?.params.map((p) => [p.id, p.value]) ?? []);
+
+    return params.map((param) => {
+      const isBooleanAxis =
+        param.values.length === 2 &&
+        param.values.every((v) => v.value === "false" || v.value === "true");
+
+      const options = param.values.map((v) => ({
+        value: v.value,
+        label:
+          v.displayName ??
+          (isBooleanAxis ? (v.value === "true" ? "On" : "Off") : v.value),
+      }));
+
+      return {
+        id: param.id,
+        label: param.displayName ?? param.id,
+        options,
+        defaultValue: defaultsMap.get(param.id) ?? param.values[0]?.value ?? null,
+        visible: true,
+        axisType: (isBooleanAxis ? "toggle" : "select") as "toggle" | "select",
+      };
+    });
+  }
+
+  // Fall back to variants (e.g. legacy models with only variant presets)
+  if (m.variants && (m.variants as unknown[]).length > 0) {
+    const variants = m.variants as Variant[];
+    const defaultVariant = variants.find((v) => v.isDefault);
+    return [
+      {
+        id: "variant",
+        label: "Mode",
+        options: variants.map((v) => ({ value: v.displayName, label: v.displayName })),
+        defaultValue: defaultVariant?.displayName ?? null,
+        visible: true,
+        axisType: "select" as const,
+      },
+    ];
+  }
+
+  return [];
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

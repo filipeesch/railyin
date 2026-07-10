@@ -206,6 +206,30 @@ describe("TransitionExecutor", () => {
     expect(result.task.worktreePath).toBe("/wt/1");
   });
 
+  it("TE-MODEL-1: returned task preserves model from conversations join", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      new CapturingParamsBuilder(),
+      new StubWorkdirResolver(gitDir),
+      new StubStreamProcessor(),
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new CustomPromptInjector(),
+    );
+
+    const result = await executor.execute(taskId, "done");
+    expect(result.task.model).toBe("fake/fake");
+  });
+
   it("stores enriched transition metadata and resolves slash prompts for copilot execution", async () => {
     mkdirSync(join(gitDir, ".github", "prompts"), { recursive: true });
     writeFileSync(

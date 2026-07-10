@@ -61,8 +61,14 @@ export interface CopilotSdkModelInfo {
   name?: string;
   capabilities: {
     limits: { max_context_window_tokens: number };
-    supports: { reasoningEffort?: boolean };
+    supports: {
+      reasoningEffort?: boolean;
+    };
   };
+  /** Supported reasoning effort levels (only present if model supports reasoning effort). */
+  supportedReasoningEfforts?: string[];
+  /** Default reasoning effort level (only present if model supports reasoning effort). */
+  defaultReasoningEffort?: string;
 }
 
 export type CopilotSdkAttachment =

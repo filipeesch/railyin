@@ -7,8 +7,29 @@ import type { Database } from "bun:sqlite";
 
 const mockOrchestrator = {
   listModels: async (_workspaceKey: string) => [
-    { qualifiedId: "copilot/gpt-4o", displayName: "GPT-4o", description: "desc", contextWindow: 128000, supportsThinking: false, supportsManualCompact: false },
-    { qualifiedId: "copilot/gpt-4", displayName: "GPT-4", description: "desc2", contextWindow: 8192, supportsThinking: false, supportsManualCompact: false },
+    {
+      qualifiedId: "copilot/gpt-4o",
+      displayName: "GPT-4o",
+      description: "desc",
+      contextWindow: 128000,
+      supportsThinking: false,
+      supportsManualCompact: false,
+      settings: [
+        {
+          id: "reasoningEffort",
+          label: "Reasoning Effort",
+          options: [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+          ],
+          defaultValue: "medium",
+          visible: true,
+          axisType: "select",
+        },
+      ],
+    },
+    { qualifiedId: "copilot/gpt-4", displayName: "GPT-4", description: "desc2", contextWindow: 8192, supportsThinking: false, supportsManualCompact: false, settings: [] },
   ],
 } as unknown as ExecutionCoordinator;
 
@@ -79,6 +100,29 @@ describe("modelHandlers — MH-3: models.list returns providers with enabled fie
 
     expect(gpt4o?.enabled).toBe(true);
     expect(gpt4?.enabled).toBe(false);
+  });
+});
+
+describe("modelHandlers — model settings metadata", () => {
+  it("models.listEnabled includes normalized+raw metadata for supported models", async () => {
+    const handlers = modelHandlers(db, mockOrchestrator);
+    await handlers["models.setEnabled"]({ qualifiedModelId: "copilot/gpt-4o", enabled: true });
+    const enabled = await handlers["models.listEnabled"]();
+    const model = enabled.find((entry) => entry.id === "copilot/gpt-4o");
+    expect(model?.modelSettings?.settings).toHaveLength(1);
+    expect(model?.modelSettings?.settings[0].id).toBe("reasoningEffort");
+    expect(model?.modelSettings?.settings[0].options.map(o => o.value)).toEqual(["low", "medium", "high"]);
+    expect(model?.modelSettings?.settings[0].defaultValue).toBe("medium");
+    expect(model?.modelSettings?.settings[0].visible).toBe(true);
+  });
+
+  it("models.listEnabled exposes hidden state for unsupported models", async () => {
+    const handlers = modelHandlers(db, mockOrchestrator);
+    await handlers["models.setEnabled"]({ qualifiedModelId: "copilot/gpt-4", enabled: true });
+    const enabled = await handlers["models.listEnabled"]();
+    const model = enabled.find((entry) => entry.id === "copilot/gpt-4");
+    expect(model?.modelSettings?.settings).toEqual([]);
+    expect(model?.modelSettings?.settings.length).toBe(0);
   });
 });
 
@@ -171,6 +215,94 @@ describe("modelHandlers — MH-CTX-6: models.list passes through contextWindowEd
     const copilotModel = copilotProvider?.models.find((m) => m.id === "copilot/gpt-4o");
     // contextWindowEditable omitted for non-editable models (undefined / falsy)
     expect(copilotModel?.contextWindowEditable).toBeFalsy();
+  });
+});
+
+// ─── listEnabled filter tests ──────────────────────────────────────────────────
+
+/** Orchestrator that exposes Pi and Copilot models with various contextWindow values. */
+const mockOrchestratorListEnabled = {
+  listModels: async (_workspaceKey: string) => [
+    // Pi model with null contextWindow (no DB override)
+    { qualifiedId: "pi/llama-3.3-70b", displayName: "Llama 3.3 70B", description: "Pi model", contextWindow: null, contextWindowEditable: true, supportsThinking: false, supportsManualCompact: true },
+    // Copilot model with contextWindow
+    { qualifiedId: "copilot/gpt-4o", displayName: "GPT-4o", description: "desc", contextWindow: 131072, contextWindowEditable: false, supportsThinking: false, supportsManualCompact: false },
+  ],
+} as unknown as ExecutionCoordinator;
+
+describe("modelHandlers — MH-L-1: Pi model with null contextWindow absent from listEnabled", () => {
+  it("Pi model with contextWindow:null is filtered out", async () => {
+    const repo = new SqliteModelSettingsRepository(db);
+    // No DB override for the Pi model — it stays null
+    const handlers = modelHandlers(db, mockOrchestratorListEnabled, repo);
+
+    // Enable both models in DB
+    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "pi/llama-3.3-70b"]);
+    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "copilot/gpt-4o"]);
+
+    const enabled = await handlers["models.listEnabled"]();
+    const ids = enabled.map((m) => m.id);
+
+    expect(ids).not.toContain("pi/llama-3.3-70b"); // filtered out — null contextWindow
+    expect(ids).toContain("copilot/gpt-4o");
+  });
+});
+
+describe("modelHandlers — MH-L-2: Pi model with DB override present in listEnabled", () => {
+  it("Pi model with null engine ctx + DB override 32768 is present", async () => {
+    const repo = new SqliteModelSettingsRepository(db);
+    repo.setContextWindow("default", "pi/llama-3.3-70b", 32768);
+
+    const handlers = modelHandlers(db, mockOrchestratorListEnabled, repo);
+
+    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "pi/llama-3.3-70b"]);
+    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "copilot/gpt-4o"]);
+
+    const enabled = await handlers["models.listEnabled"]();
+    const ids = enabled.map((m) => m.id);
+
+    expect(ids).toContain("pi/llama-3.3-70b");
+    const piModel = enabled.find((m) => m.id === "pi/llama-3.3-70b");
+    expect(piModel!.contextWindow).toBe(32768);
+  });
+});
+
+describe("modelHandlers — MH-L-3: Pi model with non-null engine ctx + DB override", () => {
+  it("Pi model with engine ctx 131072 + DB override 65536 → uses DB override", async () => {
+    // Update orchestrator mock to return engine-reported 131072 for Pi model
+    const orchestratorWithPiCtx = {
+      listModels: async (_workspaceKey: string) => [
+        { qualifiedId: "pi/llama-3.3-70b", displayName: "Llama 3.3 70B", description: "Pi model", contextWindow: 131072, contextWindowEditable: true, supportsThinking: false, supportsManualCompact: true },
+        { qualifiedId: "copilot/gpt-4o", displayName: "GPT-4o", description: "desc", contextWindow: 131072, contextWindowEditable: false, supportsThinking: false, supportsManualCompact: false },
+      ],
+    } as unknown as ExecutionCoordinator;
+
+    const repo = new SqliteModelSettingsRepository(db);
+    repo.setContextWindow("default", "pi/llama-3.3-70b", 65536);
+
+    const handlers = modelHandlers(db, orchestratorWithPiCtx, repo);
+
+    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "pi/llama-3.3-70b"]);
+
+    const enabled = await handlers["models.listEnabled"]();
+    const piModel = enabled.find((m) => m.id === "pi/llama-3.3-70b");
+    expect(piModel).toBeDefined();
+    expect(piModel!.contextWindow).toBe(65536); // DB override wins
+  });
+});
+
+describe("modelHandlers — MH-L-4: Non-Pi model unaffected by filter", () => {
+  it("Copilot model with contextWindow:131072 is present regardless of model_settings", async () => {
+    const repo = new SqliteModelSettingsRepository(db);
+    // No DB entry for copilot
+    const handlers = modelHandlers(db, mockOrchestratorListEnabled, repo);
+
+    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "copilot/gpt-4o"]);
+
+    const enabled = await handlers["models.listEnabled"]();
+    const copilotModel = enabled.find((m) => m.id === "copilot/gpt-4o");
+    expect(copilotModel).toBeDefined();
+    expect(copilotModel!.contextWindow).toBe(131072);
   });
 });
 

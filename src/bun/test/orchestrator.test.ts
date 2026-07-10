@@ -300,6 +300,40 @@ describe("Orchestrator.executeChatTurn", () => {
 });
 
 describe("Orchestrator.respondShellApprovalByExecution", () => {
+  it("OSA-MODEL-1: shell approval push preserves task model", async () => {
+    class ApproveEngine implements ExecutionEngine {
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        yield { type: "done" };
+      }
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      cancel(_executionId: number): void {}
+      async listModels() { return []; }
+      async listCommands() { return []; }
+    }
+
+    const approvalOrchestrator = new Orchestrator(
+      db,
+      makeTestRegistry(new ApproveEngine()),
+      noop,
+      (task) => taskUpdates.push(task),
+      (msg) => newMessages.push(msg),
+      new WorkspaceRepository(db),
+    );
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    db.run(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'waiting_user', 1)",
+      [taskId],
+    );
+    const executionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    db.run("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?", [executionId, taskId]);
+
+    await approvalOrchestrator.respondShellApprovalByExecution(executionId, "approve_once");
+
+    expect(taskUpdates.at(-1)?.model).toBe("fake/fake");
+  });
+
   it("keeps waiting_user state when resume fails", async () => {
     let seededExecutionId = 0;
     class RejectingResumeEngine implements ExecutionEngine {
@@ -399,7 +433,7 @@ describe("Orchestrator.cancel", () => {
     expect(() => orchestrator.cancel(99999)).not.toThrow();
   });
 
-  it("marks non-native executions cancelled immediately", () => {
+  it("OC-MODEL-1: marks non-native executions cancelled immediately and preserves model on push", () => {
     class CancelStubEngine implements ExecutionEngine {
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
@@ -420,6 +454,7 @@ describe("Orchestrator.cancel", () => {
     );
 
     const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
     db.run(
       "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'running', 1)",
       [taskId],
@@ -446,6 +481,7 @@ describe("Orchestrator.cancel", () => {
       )
       .get(taskId);
     expect(taskRow).toEqual({ execution_state: "waiting_user", current_execution_id: executionId });
+    expect(taskUpdates.at(-1)?.model).toBe("fake/fake");
   });
 });
 
@@ -684,4 +720,3 @@ describe("ChatExecutor — custom prompt injection", () => {
     expect(true).toBe(true);
   });
 });
-

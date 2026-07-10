@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { ExecutionParams } from "../types.ts";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
+import type { ModelParamValue } from "../../../shared/rpc-types.ts";
 
 interface EnrichmentContext {
   workspaceKey: string;
@@ -26,6 +27,7 @@ export class ExecutionParamsEnricher {
   enrich(base: ExecutionParams, ctx: EnrichmentContext): ExecutionParams {
     const conversationOverride = this.loadConversationPreset(ctx.conversationId);
     const samplingPresetName = conversationOverride ?? ctx.columnPreset ?? undefined;
+    const modelParams = this.loadModelParams(ctx.conversationId);
 
     const contextWindowOverride =
       this.modelSettingsRepo?.getContextWindow(ctx.workspaceKey, ctx.model) ?? undefined;
@@ -34,12 +36,32 @@ export class ExecutionParamsEnricher {
       ...base,
       ...(contextWindowOverride != null ? { contextWindowOverride } : {}),
       ...(samplingPresetName !== undefined ? { samplingPresetName } : {}),
+      ...(modelParams.length > 0 ? { modelParams } : {}),
     };
   }
 
   /** Returns whether a context window is configured for the given model. Used for pre-flight checks. */
   hasContextWindow(workspaceKey: string, model: string): boolean {
     return this.modelSettingsRepo?.getContextWindow(workspaceKey, model) != null;
+  }
+
+  private loadModelParams(conversationId: number): ModelParamValue[] {
+    const row = this.db
+      .query<{ model_params: string | null }, [number]>(
+        "SELECT model_params FROM conversations WHERE id = ?",
+      )
+      .get(conversationId);
+    if (!row?.model_params) return [];
+    try {
+      const parsed = JSON.parse(row.model_params);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (p): p is ModelParamValue =>
+          typeof p === "object" && p !== null && typeof p.id === "string" && typeof p.value === "string",
+      );
+    } catch {
+      return [];
+    }
   }
 
   private loadConversationPreset(conversationId: number): string | null {

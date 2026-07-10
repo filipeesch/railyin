@@ -31,6 +31,8 @@ export interface CursorSdkModelInfo {
   displayName: string;
   description?: string;
   supportsThinking?: boolean;
+  variants?: unknown[];
+  parameters?: unknown[];
 }
 
 export interface CursorRunConfig {
@@ -65,6 +67,8 @@ export interface CursorRunConfig {
    */
   agentId?: string;
   workspaceKey?: string;
+  /** Model parameter overrides (e.g. effort, variant) to pass as ModelSelection.params. */
+  modelParams?: Array<{ id: string; value: string }>;
 }
 
 export interface CursorAdapterOptions {

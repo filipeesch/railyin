@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
-import type { Task, ConversationMessage, StreamEvent, GitNumstat } from "@shared/rpc-types";
+import type { Task, ConversationMessage, StreamEvent, GitNumstat, ModelParamValue } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 import { useConversationStore } from "./conversation";
 import { useWorkspaceStore } from "./workspace";
@@ -283,6 +283,16 @@ export const useTaskStore = defineStore("task", () => {
     _replaceTask({ ...task, samplingPresetOverride: presetName });
   }
 
+  async function setModelParams(taskId: number, modelParams: ModelParamValue[]) {
+    const task = taskIndex.value[taskId];
+    if (!task) return;
+    await api("conversations.setModelParams", {
+      conversationId: task.conversationId,
+      modelParams,
+    });
+    _replaceTask({ ...task, modelParams });
+  }
+
   // ─── Cancel running execution ─────────────────────────────────────────────
 
   async function cancelTask(taskId: number) {
@@ -456,6 +466,7 @@ export const useTaskStore = defineStore("task", () => {
     compactTask,
     setModel,
     setSamplingPreset,
+    setModelParams,
     cancelTask,
     updateTask,
     deleteTask,
