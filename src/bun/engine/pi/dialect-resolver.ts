@@ -56,31 +56,4 @@ export class PiDialectResolver {
     return undefined;
   }
 
-  /**
-   * Look up the project path for a task/board pair, using a board→workspace lookup
-   * pattern matching the listCommands() use case.
-   */
-  async lookupProjectPathForTask(
-    taskId: number,
-    boardId: number,
-    projectKey: string,
-    worktreePath: string,
-  ): Promise<string | undefined> {
-    const { getDb } = await import("../../db/index.ts");
-    const { getDefaultWorkspaceKey } = await import("../../workspace-context.ts");
-    const { getLoadedProjectByKey } = await import("../../project-store.ts");
-
-    const db = getDb();
-    const wsKey =
-      db.query<{ workspace_key: string }, [number]>(
-        "SELECT workspace_key FROM boards WHERE id = ?",
-      ).get(boardId)?.workspace_key ?? getDefaultWorkspaceKey();
-    void taskId;
-
-    const project = getLoadedProjectByKey(wsKey, projectKey);
-    if (project?.projectPath && project.projectPath !== worktreePath) {
-      return project.projectPath;
-    }
-    return undefined;
-  }
 }

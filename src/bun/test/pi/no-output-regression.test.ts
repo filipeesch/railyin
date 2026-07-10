@@ -26,7 +26,6 @@ import {
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
-import { z } from "zod";
 import { PiEngine } from "../../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import { NullModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
