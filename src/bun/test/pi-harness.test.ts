@@ -312,8 +312,8 @@ describe("PiEngine abort & cancel", () => {
     const session1 = makeFakeSession();
     const session2 = makeFakeSession();
 
-    eng.sessions.set(1, session1);
-    eng.sessions.set(2, session2);
+    eng.sessionManager.sessions.set(1, session1);
+    eng.sessionManager.sessions.set(2, session2);
     eng.executionToConversation.set(99, 1); // executionId 99 → conversationId 1
 
     engine.cancel(99);
@@ -327,7 +327,7 @@ describe("PiEngine abort & cancel", () => {
     const eng = engine as any;
 
     const session = makeFakeSession();
-    eng.sessions.set(1, session);
+    eng.sessionManager.sessions.set(1, session);
     // no entry in executionToConversation
 
     engine.cancel(404);
@@ -340,7 +340,7 @@ describe("PiEngine abort & cancel", () => {
     const eng = engine as any;
 
     const session = makeFakeSession();
-    eng.sessions.set(1, session);
+    eng.sessionManager.sessions.set(1, session);
     eng.executionToConversation.set(77, 1);
 
     const rejectFn = vi.fn();
@@ -387,29 +387,26 @@ describe("HarnessContext.loopDetector", () => {
   it("HLC-1: getOrCreateHarnessContext initializes loopDetector as ToolLoopDetector instance", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
     const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
-    const eng = engine as any;
 
-    const ctx = eng.getOrCreateHarnessContext(1, "/test-cwd");
+    const ctx = engine.toolFactory.getOrCreateHarnessContext(1, "/test-cwd");
     expect(ctx.loopDetector).toBeInstanceOf(ToolLoopDetector);
   });
 
   it("HLC-2: same conversationId returns the same loopDetector instance", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
     const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
-    const eng = engine as any;
 
-    const ctx1 = eng.getOrCreateHarnessContext(5, "/test-cwd");
-    const ctx2 = eng.getOrCreateHarnessContext(5, "/test-cwd");
+    const ctx1 = engine.toolFactory.getOrCreateHarnessContext(5, "/test-cwd");
+    const ctx2 = engine.toolFactory.getOrCreateHarnessContext(5, "/test-cwd");
     expect(ctx1.loopDetector).toBe(ctx2.loopDetector);
   });
 
   it("HLC-3: different conversationIds get different loopDetector instances", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
     const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
-    const eng = engine as any;
 
-    const ctx1 = eng.getOrCreateHarnessContext(10, "/test-cwd");
-    const ctx2 = eng.getOrCreateHarnessContext(11, "/test-cwd");
+    const ctx1 = engine.toolFactory.getOrCreateHarnessContext(10, "/test-cwd");
+    const ctx2 = engine.toolFactory.getOrCreateHarnessContext(11, "/test-cwd");
     expect(ctx1.loopDetector).not.toBe(ctx2.loopDetector);
   });
 });
