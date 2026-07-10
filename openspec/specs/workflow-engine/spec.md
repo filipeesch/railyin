@@ -201,10 +201,6 @@ The orchestrator SHALL maintain an in-memory `Map<executionId, AbortController>`
 - **WHEN** the orchestrator receives a cancel request
 - **THEN** it calls `engine.cancel(executionId)` and aborts the AbortController
 
-#### Scenario: Stale running state reset on startup
-- **WHEN** the Bun process restarts with tasks in `execution_state = 'running'`
-- **THEN** those tasks are reset to `execution_state = 'failed'` (existing restart-recovery behaviour, unchanged)
-
 ### Requirement: Tool set offered to model is determined per column (native engine)
 For the native engine, the system SHALL filter tool definitions to only include tools named in the current column's `tools` configuration before building the AI request. When no `tools` key is present, the default set SHALL be used. For the Copilot engine, the SDK manages its own built-in tools; only common tools are always registered.
 
