@@ -24,9 +24,12 @@
         v-for="task in tasks"
         :key="task.id"
         :task="task"
-        v-memo="[task, hasUnread(task.id)]"
+        :selectable="selectable"
+        :selected="selectedIds.has(task.id)"
+        v-memo="[task, hasUnread(task.id), selectable, selectedIds.has(task.id)]"
         @pointerdown="$emit('card-pointerdown', $event, task.id)"
         @click="$emit('card-click', task.id)"
+        @select="$emit('card-select', $event)"
       />
       <div
         v-if="isDragOver"
@@ -52,12 +55,15 @@ defineProps<{
   isForbidden: boolean;
   dropIndicatorY: number;
   hasUnread: (taskId: number) => boolean;
+  selectable?: boolean;
+  selectedIds?: Set<number>;
 }>();
 
 defineEmits<{
   "create-task": [];
   "card-pointerdown": [event: PointerEvent, taskId: number];
   "card-click": [taskId: number];
+  "card-select": [taskId: number, selected: boolean];
 }>();
 </script>
 
