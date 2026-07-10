@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { ConvMessageBuffer } from "../conversation/conv-message-buffer.ts";
+import { LegacySqliteConversationMessageStore } from "../conversation/legacy-sqlite-message-store.ts";
 
 let db: Database;
 let conversationId: number;
@@ -21,12 +22,16 @@ afterEach(() => {
   cleanup();
 });
 
+function makeBuffer(): ConvMessageBuffer {
+  return new ConvMessageBuffer(new LegacySqliteConversationMessageStore(db, conversationId));
+}
+
 // ─── CMB-1: enqueue does not write to DB ─────────────────────────────────────
 
 describe("ConvMessageBuffer — CMB-1: enqueue is lazy", () => {
   it("enqueue does not INSERT until flush()", () => {
-    const buf = new ConvMessageBuffer(db);
-    buf.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: "hello", notify: false });
+    const buf = makeBuffer();
+    buf.enqueue({ taskId, type: "assistant", role: "assistant", content: "hello", notify: false });
 
     const count = db
       .query<{ n: number }, [number]>(
@@ -37,15 +42,15 @@ describe("ConvMessageBuffer — CMB-1: enqueue is lazy", () => {
   });
 });
 
-// ─── CMB-2: flush inserts all rows in one transaction with real IDs ───────────
+// ─── CMB-2: flush inserts all rows in one batch, using the injected store ────
 
-describe("ConvMessageBuffer — CMB-2: flush inserts in transaction", () => {
-  it("flush() inserts all messages and returns notify=true ones with real IDs", () => {
-    const buf = new ConvMessageBuffer(db);
-    buf.enqueue({ taskId, conversationId, type: "user", role: "user", content: "question", notify: false });
-    buf.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: "answer", notify: true });
+describe("ConvMessageBuffer — CMB-2: flush inserts via store.appendBatch", () => {
+  it("flush() inserts all messages and returns notify=true ones with real IDs", async () => {
+    const buf = makeBuffer();
+    buf.enqueue({ taskId, type: "user", role: "user", content: "question", notify: false });
+    buf.enqueue({ taskId, type: "assistant", role: "assistant", content: "answer", notify: true });
 
-    const notified = buf.flush();
+    const notified = await buf.flush();
 
     // Two rows in DB
     const count = db
@@ -62,11 +67,11 @@ describe("ConvMessageBuffer — CMB-2: flush inserts in transaction", () => {
     expect(notified[0].id).toBeGreaterThan(0);
   });
 
-  it("flush() content and role are preserved round-trip", () => {
-    const buf = new ConvMessageBuffer(db);
-    buf.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: '{"name":"bash"}', notify: true });
+  it("flush() content and role are preserved round-trip", async () => {
+    const buf = makeBuffer();
+    buf.enqueue({ taskId, type: "tool_call", role: null, content: '{"name":"bash"}', notify: true });
 
-    const notified = buf.flush();
+    const notified = await buf.flush();
     expect(notified[0].content).toBe('{"name":"bash"}');
     expect(notified[0].role).toBeNull();
   });
@@ -75,10 +80,10 @@ describe("ConvMessageBuffer — CMB-2: flush inserts in transaction", () => {
 // ─── CMB-3: empty flush is a no-op ───────────────────────────────────────────
 
 describe("ConvMessageBuffer — CMB-3: empty flush", () => {
-  it("flush() on empty buffer returns [] and does not write to DB", () => {
-    const buf = new ConvMessageBuffer(db);
+  it("flush() on empty buffer returns [] and does not write to DB", async () => {
+    const buf = makeBuffer();
 
-    const result = buf.flush();
+    const result = await buf.flush();
     expect(result).toEqual([]);
 
     const count = db

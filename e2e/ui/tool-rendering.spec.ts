@@ -8,8 +8,7 @@
  *   S-27: stale orphaned tool call shows unknown state instead of spinning
  *   S-28: lsp_rename result renders diff card with added/removed stat badges
  *
- * Tool messages are pre-seeded via the conversations.getMessages mock
- * and conversations.getStreamEvents mock (persisted stream events).
+ * Tool messages are pre-seeded via the conversations.getMessages mock.
  */
 
 import { test, expect } from "./fixtures";

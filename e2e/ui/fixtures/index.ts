@@ -52,7 +52,6 @@ export const test = base.extend<Fixtures>({
             // Default single task — tests override this for multi-task scenarios
             .handle("tasks.list", () => [task])
             .returns("conversations.getMessages", { messages: [], hasMore: false })
-            .returns("conversations.getStreamEvents", [])
             .returns("conversations.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 })
             .returns("tasks.contextUsage", { usedTokens: 0, maxTokens: 8192, fraction: 0 })
             .returns("todos.list", [])

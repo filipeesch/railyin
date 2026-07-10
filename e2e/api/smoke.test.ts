@@ -290,6 +290,42 @@ describe("conversations", () => {
         const lastAssistant = assistantMessages[assistantMessages.length - 1];
         expect(lastAssistant?.content).toBe("Mock response: /opsx:propose my feature");
     });
+
+    test("conversations.getMessages cursor pagination (file-backed store) preserves order and reports hasMore", async () => {
+        await server.request("tasks.setModel", { taskId, model: "copilot/mock-model" });
+
+        // Send a few more messages so this conversation has enough rows to page through
+        // (each sendMessage adds a user message + at least one assistant message).
+        for (let i = 0; i < 3; i++) {
+            await server.request("tasks.sendMessage", { taskId, content: `pagination message ${i}` });
+            await waitFor(
+                () => getTask(boardId, taskId),
+                (t) => t.executionState !== "running",
+            );
+        }
+
+        const full = await server.request("conversations.getMessages", { conversationId, limit: 1000 });
+        expect(full.hasMore).toBe(false);
+        expect(full.messages.length).toBeGreaterThanOrEqual(4);
+
+        // Page backwards from the newest message, 2 at a time, and reassemble — should
+        // reproduce the exact same ordering as the unpaginated read.
+        const pageSize = 2;
+        const collected: typeof full.messages = [];
+        let cursor: number | undefined;
+        for (let guard = 0; guard < 50; guard++) {
+            const page = await server.request("conversations.getMessages", {
+                conversationId,
+                beforeMessageId: cursor,
+                limit: pageSize,
+            });
+            collected.unshift(...page.messages);
+            if (!page.hasMore || page.messages.length === 0) break;
+            cursor = page.messages[0].id;
+        }
+
+        expect(collected.map((m) => m.id)).toEqual(full.messages.map((m) => m.id));
+    });
 });
 
 describe("chatSessions", () => {

@@ -1,7 +1,10 @@
 import type { Database } from "bun:sqlite";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
-import type { TaskRow, ConversationMessageRow } from "../../db/row-types.ts";
+import type { TaskRow } from "../../db/row-types.ts";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
+import type { ConversationFileDeleter } from "../../conversation/conversation-file-deleter.ts";
+import { FsConversationFileDeleter } from "../../conversation/conversation-file-deleter.ts";
 import type { WorktreeManager } from "../../git/WorktreeManager.ts";
 import { getProjectByKey, getLoadedProjectByKey } from "../../project-store.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
@@ -40,6 +43,7 @@ export class BoardToolExecutor implements IBoardToolExecutor {
     private readonly db: Database,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly worktreeManager?: WorktreeManager,
+    private readonly conversationFileDeleter: ConversationFileDeleter = new FsConversationFileDeleter(),
   ) {
     this.positionService = new PositionService(db);
   }
@@ -51,14 +55,10 @@ export class BoardToolExecutor implements IBoardToolExecutor {
     if (!row) return `Error: task ${taskId} not found`;
     const task = mapTask(row);
     const includeN = args.include_messages != null ? Number(args.include_messages) : 0;
-    if (includeN > 0) {
-      const msgs = this.db
-        .query<ConversationMessageRow, [number, number]>(
-          `SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id DESC LIMIT ?`,
-        )
-        .all(taskId, includeN)
-        .reverse()
-        .map(mapConversationMessage);
+    if (includeN > 0 && row.conversation_id != null) {
+      const store = resolveConversationMessageStore(this.db, row.conversation_id);
+      const { rows } = await store.getPage({ limit: includeN });
+      const msgs = rows.map(mapConversationMessage);
       return JSON.stringify({ task, messages: msgs });
     }
     return JSON.stringify(task);
@@ -204,6 +204,9 @@ export class BoardToolExecutor implements IBoardToolExecutor {
       this.db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
     }
     taskLspRegistry.releaseTask(taskId).catch(() => {});
+    if (row.conversation_id) {
+      await this.conversationFileDeleter.deleteConversationFiles(row.conversation_id).catch(() => {});
+    }
     return JSON.stringify({ success: true, deleted_task_id: taskId });
   }
 

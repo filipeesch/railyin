@@ -6,8 +6,8 @@
  *   - openspec/specs/task-detail/spec.md  (reasoning + tool call sections)
  *
  * Two channels under test:
- *   IPC = runtime.getIpcEvents(executionId)   — ALL events, delivered immediately
- *   DB  = runtime.getDbStreamEvents(execId)   — persisted types only, after batcher flush
+ *   IPC = runtime.getIpcEvents(executionId)        — ALL events, delivered immediately
+ *   Durable = runtime.getDurableMessages(execId)   — persisted conversation messages, after flush
  *
  * Checkpoint protocol: engine pauses at named checkpoints so we can observe
  * transient state (IPC has data, DB does not yet).
@@ -141,11 +141,11 @@ describe("S-2 [model-reasoning]: reasoning_chunk precedes tool_call on IPC (time
 // Spec: "WHEN a model round produces reasoning tokens followed by tool calls
 //        THEN a reasoning message is inserted before the first tool_call
 //        message of that round in the timeline"
-// Pipeline assertion: DB ordering — reasoning row precedes tool_call row.
+// Pipeline assertion: durable message ordering — reasoning row precedes tool_call row.
 // ---------------------------------------------------------------------------
 
-describe("S-3 [model-reasoning]: reasoning persisted to DB before tool_call row", () => {
-    it("DB event order: reasoning → tool_call → tool_result", async () => {
+describe("S-3 [model-reasoning]: reasoning persisted before tool_call message", () => {
+    it("durable message order: reasoning → tool_call → tool_result", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptReasoning("I should read the file first"),
@@ -161,14 +161,14 @@ describe("S-3 [model-reasoning]: reasoning persisted to DB before tool_call row"
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const dbTypes = db.map((e) => e.type);
+        const messages = await runtime.getDurableMessages(executionId);
+        const types = messages.map((m) => m.type);
 
-        expect(db.every((event) => event.conversationId === conversationId)).toBe(true);
-        expect(dbTypes).toContain("reasoning");
-        expect(dbTypes).toContain("tool_call");
+        expect(messages.every((message) => message.conversationId === conversationId)).toBe(true);
+        expect(types).toContain("reasoning");
+        expect(types).toContain("tool_call");
 
-        expect(dbTypes.indexOf("reasoning")).toBeLessThan(dbTypes.indexOf("tool_call"));
+        expect(types.indexOf("reasoning")).toBeLessThan(types.indexOf("tool_call"));
     });
 });
 
@@ -177,11 +177,11 @@ describe("S-3 [model-reasoning]: reasoning persisted to DB before tool_call row"
 // Spec: "WHEN a model round produces reasoning tokens followed by the final
 //        text response (no tool calls)
 //        THEN a reasoning message is inserted before the assistant message"
-// Pipeline assertion: DB ordering — reasoning row precedes assistant row.
+// Pipeline assertion: durable message ordering — reasoning row precedes assistant row.
 // ---------------------------------------------------------------------------
 
-describe("S-4 [model-reasoning]: reasoning persisted to DB before assistant row (no tools)", () => {
-    it("DB event order: reasoning → assistant (no tool calls in this round)", async () => {
+describe("S-4 [model-reasoning]: reasoning persisted before assistant message (no tools)", () => {
+    it("durable message order: reasoning → assistant (no tool calls in this round)", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptReasoning("Let me think about the answer"),
@@ -195,13 +195,13 @@ describe("S-4 [model-reasoning]: reasoning persisted to DB before assistant row 
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const dbTypes = db.map((e) => e.type);
+        const messages = await runtime.getDurableMessages(executionId);
+        const types = messages.map((m) => m.type);
 
-        expect(dbTypes).toContain("reasoning");
-        expect(dbTypes).toContain("assistant");
+        expect(types).toContain("reasoning");
+        expect(types).toContain("assistant");
 
-        expect(dbTypes.indexOf("reasoning")).toBeLessThan(dbTypes.indexOf("assistant"));
+        expect(types.indexOf("reasoning")).toBeLessThan(types.indexOf("assistant"));
     });
 });
 
@@ -211,12 +211,12 @@ describe("S-4 [model-reasoning]: reasoning persisted to DB before assistant row 
 //        the final response in round 3
 //        THEN two independent ReasoningBubble components appear at the
 //        correct positions in the timeline"
-// Pipeline assertion: two separate reasoning rows in DB, each at the correct
+// Pipeline assertion: two separate reasoning messages, each at the correct
 // position relative to what follows them.
 // ---------------------------------------------------------------------------
 
-describe("S-5 [model-reasoning]: two independent reasoning rounds produce two DB reasoning rows", () => {
-    it("DB has two reasoning rows, each before the event that follows them", async () => {
+describe("S-5 [model-reasoning]: two independent reasoning rounds produce two reasoning messages", () => {
+    it("two reasoning messages persisted, each before the message that follows them", async () => {
         const engine = new ScriptedEngine();
         // Single stream: reasoning → tool → reasoning → final (two model rounds)
         engine.queueTurn([
@@ -234,23 +234,23 @@ describe("S-5 [model-reasoning]: two independent reasoning rounds produce two DB
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const reasoningEvents = db.filter((e) => e.type === "reasoning");
+        const messages = await runtime.getDurableMessages(executionId);
+        const reasoningMessages = messages.filter((m) => m.type === "reasoning");
 
-        // Two independent reasoning rows
-        expect(reasoningEvents.length).toBe(2);
+        // Two independent reasoning messages
+        expect(reasoningMessages.length).toBe(2);
 
         // Round 1 reasoning content
-        expect(reasoningEvents[0].content).toContain("round 1");
+        expect(reasoningMessages[0]!.content).toContain("round 1");
         // Round 2 reasoning content
-        expect(reasoningEvents[1].content).toContain("round 2");
+        expect(reasoningMessages[1]!.content).toContain("round 2");
 
-        // DB ordering: reasoning[0] before tool_call, reasoning[1] before assistant
-        const dbTypes = db.map((e) => e.type);
-        const r1Idx = dbTypes.indexOf("reasoning");
-        const r2Idx = dbTypes.lastIndexOf("reasoning");
-        const tcIdx = dbTypes.indexOf("tool_call");
-        const asIdx = dbTypes.indexOf("assistant");
+        // Ordering: reasoning[0] before tool_call, reasoning[1] before assistant
+        const types = messages.map((m) => m.type);
+        const r1Idx = types.indexOf("reasoning");
+        const r2Idx = types.lastIndexOf("reasoning");
+        const tcIdx = types.indexOf("tool_call");
+        const asIdx = types.indexOf("assistant");
 
         expect(r1Idx).toBeLessThan(tcIdx);
         expect(r2Idx).toBeLessThan(asIdx);
@@ -261,11 +261,11 @@ describe("S-5 [model-reasoning]: two independent reasoning rounds produce two DB
 // S-6: [model-reasoning] No reasoning message saved when no reasoning occurred
 // Spec: "WHEN the model completes a round with no delta.reasoning_content tokens
 //        THEN no reasoning message is appended to the conversation"
-// Pipeline assertion: DB has no reasoning row.
+// Pipeline assertion: no persisted reasoning message.
 // ---------------------------------------------------------------------------
 
-describe("S-6 [model-reasoning]: no reasoning row in DB when engine emits no reasoning events", () => {
-    it("DB has zero reasoning rows for a pure tool+text round", async () => {
+describe("S-6 [model-reasoning]: no reasoning message persisted when engine emits no reasoning events", () => {
+    it("zero reasoning messages persisted for a pure tool+text round", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptToolStart("c1", "read_file"),
@@ -280,8 +280,8 @@ describe("S-6 [model-reasoning]: no reasoning row in DB when engine emits no rea
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        expect(db.filter((e) => e.type === "reasoning").length).toBe(0);
+        const messages = await runtime.getDurableMessages(executionId);
+        expect(messages.filter((m) => m.type === "reasoning").length).toBe(0);
     });
 });
 
@@ -291,12 +291,12 @@ describe("S-6 [model-reasoning]: no reasoning row in DB when engine emits no rea
 //        the reasoning phase
 //        THEN the active ReasoningBubble header updates to 'Thought for Xs ✓'
 //        and the body collapses"
-// Pipeline assertion: after done on IPC, full reasoning content is in DB
+// Pipeline assertion: after done on IPC, full reasoning content is persisted
 // (accumulated correctly, not truncated), and no more reasoning_chunks arrive.
 // ---------------------------------------------------------------------------
 
-describe("S-7 [model-reasoning]: after IPC done, full reasoning content is in DB (round ended)", () => {
-    it("DB reasoning content equals the full accumulated reasoning text", async () => {
+describe("S-7 [model-reasoning]: after IPC done, full reasoning content is persisted (round ended)", () => {
+    it("persisted reasoning content equals the full accumulated reasoning text", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptReasoning("part one "),
@@ -312,10 +312,10 @@ describe("S-7 [model-reasoning]: after IPC done, full reasoning content is in DB
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const reasoning = db.find((e) => e.type === "reasoning");
+        const messages = await runtime.getDurableMessages(executionId);
+        const reasoning = messages.find((m) => m.type === "reasoning");
 
-        // Full accumulated content in DB
+        // Full accumulated content persisted
         expect(reasoning?.content).toBe("part one part two part three");
 
         // IPC has done event — bubble can now collapse
@@ -330,14 +330,14 @@ describe("S-7 [model-reasoning]: after IPC done, full reasoning content is in DB
 });
 
 // ---------------------------------------------------------------------------
-// S-8: [model-reasoning] Cancel mid-stream — reasoning flushed to DB
+// S-8: [model-reasoning] Cancel mid-stream — reasoning flushed to durable store
 // Spec: (cancel-execution + model-reasoning) "reasoning message saved" even
 // when execution is cancelled mid-stream
-// Pipeline assertion: after cancel, reasoning is in DB; done is on IPC.
+// Pipeline assertion: after cancel, reasoning is persisted; done is on IPC.
 // ---------------------------------------------------------------------------
 
-describe("S-8 [model-reasoning]: cancel mid-reasoning flushes accumulated reasoning to DB", () => {
-    it("after cancel: reasoning in DB with full content; done on IPC; no chunks in DB", async () => {
+describe("S-8 [model-reasoning]: cancel mid-reasoning flushes accumulated reasoning to durable store", () => {
+    it("after cancel: reasoning persisted with full content; done on IPC; no chunks persisted", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptReasoning("step 1 "),
@@ -363,27 +363,29 @@ describe("S-8 [model-reasoning]: cancel mid-reasoning flushes accumulated reason
         const ipc = runtime.getIpcEvents(executionId);
         expect(ipc.some((e) => e.type === "done")).toBe(true);
 
-        // DB: reasoning persisted, not truncated
-        const db = runtime.getDbStreamEvents(executionId);
-        const reasoning = db.find((e) => e.type === "reasoning");
+        // Durable store: reasoning persisted, not truncated
+        const messages = await runtime.getDurableMessages(executionId);
+        const reasoning = messages.find((m) => m.type === "reasoning");
         expect(reasoning).toBeDefined();
         expect(reasoning?.content).toContain("step 1");
         expect(reasoning?.content).toContain("step 2");
 
-        // DB: no raw chunks — only persisted reasoning
-        expect(db.some((e) => e.type === "reasoning_chunk")).toBe(false);
+        // Durable store: no raw chunks — only persisted reasoning (chunk types are never
+        // written to the message store, only broadcast on IPC)
+        expect(messages.some((m) => (m.type as string) === "reasoning_chunk")).toBe(false);
     });
 });
 
 // ---------------------------------------------------------------------------
-// S-9: [task-detail] Chunks are IPC-only; persisted events go to both channels
+// S-9: [task-detail] Chunks are IPC-only; persisted messages go to both channels
 // Spec: (task-detail) "Messages loaded from DB SHALL render collapsed" —
-// implies DB has reasoning+assistant but NOT ephemeral chunks.
-// Pipeline assertion: text_chunk/reasoning_chunk/status_chunk absent from DB.
+// implies the durable store has reasoning+assistant but NOT ephemeral chunks.
+// Pipeline assertion: text_chunk/reasoning_chunk/status_chunk absent from the
+// durable message store.
 // ---------------------------------------------------------------------------
 
-describe("S-9 [task-detail]: ephemeral chunks on IPC only; persisted events in both IPC and DB", () => {
-    it("status_chunk/text_chunk/reasoning_chunk absent from DB; reasoning/assistant present", async () => {
+describe("S-9 [task-detail]: ephemeral chunks on IPC only; persisted messages in both IPC and durable store", () => {
+    it("status_chunk/text_chunk/reasoning_chunk absent from durable store; reasoning/assistant present", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptStatus("Starting..."),
@@ -399,7 +401,7 @@ describe("S-9 [task-detail]: ephemeral chunks on IPC only; persisted events in b
         await runtime.recorder.waitForStreamDone(executionId);
 
         const ipc = runtime.getIpcEvents(executionId);
-        const db = runtime.getDbStreamEvents(executionId);
+        const messages = await runtime.getDurableMessages(executionId);
 
         // IPC receives all event types (live rendering)
         expect(ipc.some((e) => e.type === "status_chunk")).toBe(true);
@@ -408,12 +410,12 @@ describe("S-9 [task-detail]: ephemeral chunks on IPC only; persisted events in b
         expect(ipc.some((e) => e.type === "reasoning")).toBe(true);
         expect(ipc.some((e) => e.type === "assistant")).toBe(true);
 
-        // DB receives only persisted types (for page reload / history)
-        expect(db.some((e) => e.type === "status_chunk")).toBe(false);
-        expect(db.some((e) => e.type === "reasoning_chunk")).toBe(false);
-        expect(db.some((e) => e.type === "text_chunk")).toBe(false);
-        expect(db.some((e) => e.type === "reasoning")).toBe(true);
-        expect(db.some((e) => e.type === "assistant")).toBe(true);
+        // Durable store receives only persisted types (for page reload / history)
+        expect(messages.some((m) => (m.type as string) === "status_chunk")).toBe(false);
+        expect(messages.some((m) => (m.type as string) === "reasoning_chunk")).toBe(false);
+        expect(messages.some((m) => (m.type as string) === "text_chunk")).toBe(false);
+        expect(messages.some((m) => m.type === "reasoning")).toBe(true);
+        expect(messages.some((m) => m.type === "assistant")).toBe(true);
     });
 });
 
@@ -452,8 +454,8 @@ describe("S-10 [file-diff]: file_diff emission is structured-only", () => {
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const fileDiffs = db.filter((e) => e.type === "file_diff");
+        const messages = await runtime.getDurableMessages(executionId);
+        const fileDiffs = messages.filter((m) => m.type === "file_diff");
 
         expect(fileDiffs).toHaveLength(1);
 
@@ -524,12 +526,19 @@ describe("S-11 [file-diff]: cancel/retry preserves nested file_diff parent assoc
         expect(firstIpcPayload?.path).toBe("src/child-a.ts");
         expect(secondIpcPayload?.path).toBe("src/child-b.ts");
 
-        const firstDbDiffs = runtime.getDbStreamEvents(first.executionId).filter((e) => e.type === "file_diff");
-        const secondDbDiffs = runtime.getDbStreamEvents(second.executionId).filter((e) => e.type === "file_diff");
+        // Durable store: file_diff messages carry `tool_call_id` in metadata (the raw callId
+        // of the tool that produced them) — the live/namespaced `parentBlockId` used above is
+        // an IPC-only enrichment concept and has no durable equivalent. Conversation messages
+        // are conversation-scoped, not execution-scoped (no execution_id column), so both calls
+        // below return the full conversation history; select each run's diff by its distinct
+        // tool_call_id instead of by execution.
+        const allDurableDiffs = (await runtime.getDurableMessages(second.executionId)).filter((m) => m.type === "file_diff");
+        const firstDurableDiff = allDurableDiffs.find((m) => (m.metadata as { tool_call_id?: string } | null)?.tool_call_id === "child-call");
+        const secondDurableDiff = allDurableDiffs.find((m) => (m.metadata as { tool_call_id?: string } | null)?.tool_call_id === "child-call-2");
 
-        expect(firstDbDiffs.at(0)?.parentBlockId).toBe("child-call");
-        if (secondDbDiffs.length > 0) {
-            expect(secondDbDiffs.every((event) => event.parentBlockId === "child-call-2")).toBe(true);
+        expect(firstDurableDiff).toBeDefined();
+        if (secondDurableDiff) {
+            expect((secondDurableDiff.metadata as { tool_call_id?: string } | null)?.tool_call_id).toBe("child-call-2");
         }
     });
 });

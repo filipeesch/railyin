@@ -2,14 +2,14 @@ import type { ConversationMessage } from "../../../shared/rpc-types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
 import { mapConversationMessage } from "../../db/mappers";
-import { appendMessage } from "../../conversation/messages";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../../workspace-context";
 import { getEffectiveWorkspacePath } from "../../config/path-utils";
 import type { EngineRegistry } from "../engine-registry";
 import type { ExecutionParamsBuilder } from "./execution-params-builder";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
 import type { StreamProcessor } from "../stream/stream-processor";
-import type { ConversationMessageRow, TaskRow } from "../../db/row-types";
+import type { TaskRow } from "../../db/row-types";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
@@ -43,8 +43,10 @@ export class ChatExecutor {
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = this.db;
     const config = getWorkspaceConfig(workspaceKey);
+    const messageStore = resolveConversationMessageStore(db, conversationId);
 
-    const msgId = appendMessage(db, null, conversationId, "user", "user", content);
+    const userMsgRow = await messageStore.append({ taskId: null, type: "user", role: "user", content });
+    const msgId = userMsgRow.id;
 
     const conversationRow = db
       .prepare(`
@@ -99,17 +101,11 @@ export class ChatExecutor {
     // Pre-flight: Pi requires a configured context window — fail fast with a visible error
     if (engineId === "pi" && !contextWindowOverride) {
       const errorContent = `Pi engine requires a context window to be configured for model '${effectiveModel}'. Go to Model Settings to configure it.`;
-      const errorMsgId = appendMessage(db, null, conversationId, "system", null, errorContent);
+      const errorMsgRow = await messageStore.append({ taskId: null, type: "system", role: null, content: errorContent });
       db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
       if (this.onNewMessage) {
-        const errorMsgRow = db
-          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-          .get(errorMsgId)!;
         this.onNewMessage(mapConversationMessage(errorMsgRow));
       }
-      const userMsgRow = db
-        .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-        .get(msgId)!;
       return { message: mapConversationMessage(userMsgRow), executionId: -1 };
     }
 
@@ -174,9 +170,6 @@ export class ChatExecutor {
     this.streamProcessor.runNonNative(null, conversationId, executionId, engine, execParams);
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [engineId, conversationId]);
 
-    const msgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(msgId)!;
-    return { message: mapConversationMessage(msgRow), executionId };
+    return { message: mapConversationMessage(userMsgRow), executionId };
   }
 }

@@ -1,31 +1,13 @@
-import type { Database } from "bun:sqlite";
 import type { IBroadcastChannel } from "./broadcast-channel.ts";
 import { StreamEventEnricher } from "../pipeline/stream-event-enricher.ts";
-import { WriteBuffer } from "../pipeline/write-buffer.ts";
-import { appendStreamEventBatch, type PersistedStreamEvent } from "../db/stream-events.ts";
 import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { StreamEvent, StreamEventType } from "../../shared/rpc-types.ts";
 
 export class StreamEventProcessor {
   private readonly enrichers = new Map<number, StreamEventEnricher>();
-  private readonly streamEventBuffer: WriteBuffer<PersistedStreamEvent>;
   private markClaudeExecutionFn: ((id: number) => void) | null = null;
 
-  private static readonly PERSISTED_STREAM_TYPES = new Set<StreamEventType>([
-    "user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system",
-  ]);
-
-  constructor(private readonly channel: IBroadcastChannel, db: Database) {
-    this.streamEventBuffer = new WriteBuffer<PersistedStreamEvent>({
-      maxBatch: 100,
-      intervalMs: 500,
-      flushFn: (events) => appendStreamEventBatch(db, events),
-    });
-  }
-
-  start(): void {
-    this.streamEventBuffer.start();
-  }
+  constructor(private readonly channel: IBroadcastChannel) {}
 
   onStreamEvent(event: StreamEvent): void {
     let enricher = this.enrichers.get(event.executionId);
@@ -38,22 +20,7 @@ export class StreamEventProcessor {
 
     this.channel.broadcast({ type: "stream.event", payload: enrichedEvent });
 
-    if (StreamEventProcessor.PERSISTED_STREAM_TYPES.has(event.type)) {
-      this.streamEventBuffer.enqueue({
-        conversationId: enrichedEvent.conversationId,
-        executionId: enrichedEvent.executionId,
-        seq: enrichedEvent.seq,
-        blockId: enrichedEvent.blockId,
-        type: enrichedEvent.type,
-        content: enrichedEvent.content,
-        metadata: typeof enrichedEvent.metadata === "string" ? enrichedEvent.metadata : (enrichedEvent.metadata ? JSON.stringify(enrichedEvent.metadata) : null),
-        parentBlockId: enrichedEvent.parentBlockId ?? null,
-        subagentId: enrichedEvent.subagentId ?? null,
-      });
-    }
-
     if (event.done) {
-      this.streamEventBuffer.flush();
       this.enrichers.delete(event.executionId);
     }
   }

@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { DecisionRepository } from "../db/repositories/decision-repository.ts";
+import { resolveConversationMessageStore } from "./message-store-resolver.ts";
 
 export interface DecisionPrepareResult {
   decisionsBlock: string | undefined;
@@ -12,14 +13,11 @@ export class DecisionContextInjector {
     this.decisionRepo = new DecisionRepository(db);
   }
 
-  prepare(conversationId: number): DecisionPrepareResult {
+  async prepare(conversationId: number): Promise<DecisionPrepareResult> {
     const lastInjected = this.decisionRepo.getLastInjectedCompactionId(conversationId);
 
-    const lastCompaction = this.db
-      .query<{ id: number }, [number]>(
-        "SELECT id FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-      )
-      .get(conversationId);
+    const store = resolveConversationMessageStore(this.db, conversationId);
+    const lastCompaction = await store.getLastByType("compaction_summary");
 
     const currentCompactionId = lastCompaction?.id ?? 0;
 

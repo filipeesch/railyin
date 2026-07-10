@@ -58,7 +58,7 @@ import { buildAllTools } from "./tools/index.ts";
 import { FileSystemSkillResolver } from "./skill-resolver.ts";
 import { translateEvent } from "./event-translator.ts";
 import { getDb } from "../../db/index.ts";
-import { appendMessage } from "../../conversation/messages.ts";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
 import { AsyncQueue } from "./async-queue.ts";
 import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
 import { runWithLimiter } from "./provider-transport.ts";
@@ -373,7 +373,9 @@ export class PiEngine implements ExecutionEngine {
                 try {
                   const result = await session.compact();
                   if (result?.summary) {
-                    appendMessage(getDb(), null, conversationId, "compaction_summary", null, result.summary);
+                    await resolveConversationMessageStore(getDb(), conversationId).append({
+                      taskId: null, type: "compaction_summary", role: null, content: result.summary,
+                    });
                   }
                 } catch (err) {
                   console.error("[pi] background compaction failed:", err);
@@ -593,7 +595,9 @@ export class PiEngine implements ExecutionEngine {
       const result = await session.compact();
       if (result?.summary) {
         const db = getDb();
-        appendMessage(db, null, conversationId, "compaction_summary", null, result.summary);
+        await resolveConversationMessageStore(db, conversationId).append({
+          taskId: null, type: "compaction_summary", role: null, content: result.summary,
+        });
       }
     } catch (err) {
       console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);

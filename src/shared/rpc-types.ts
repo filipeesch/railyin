@@ -754,10 +754,6 @@ export type RailynAPI = {
     params: { conversationId?: number; taskId?: number; beforeMessageId?: number; limit?: number };
     response: { messages: ConversationMessage[]; hasMore: boolean };
   };
-  "conversations.getStreamEvents": {
-    params: { conversationId: number; afterSeq?: number };
-    response: import("../bun/db/stream-events").PersistedStreamEvent[];
-  };
   "conversations.contextUsage": {
     params: { conversationId: number };
     response: { usedTokens: number; maxTokens: number; fraction: number };

@@ -2,7 +2,8 @@ import type { ConversationMessage, ManualEdit, CodeReviewPayload, CodeReviewHunk
 import type { Database } from "bun:sqlite";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
+import { ensureTaskConversation } from "../../conversation/messages.ts";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
 import { getWorkspaceConfig } from "../../workspace-context.ts";
 import { getColumnConfig } from "../../workflow/column-config.ts";
 import { formatReviewMessageForLLM } from "../../workflow/review.ts";
@@ -12,7 +13,7 @@ import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
 import type { OnTaskUpdated, OnNewMessage } from "../types.ts";
-import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../../db/row-types.ts";
+import type { TaskRow, TaskGitContextRow } from "../../db/row-types.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
@@ -142,9 +143,10 @@ export class CodeReviewExecutor {
     db.run(`UPDATE task_line_comments SET sent = 1 WHERE task_id = ? AND sent = 0`, [taskId]);
 
     const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
+    const messageStore = resolveConversationMessageStore(db, conversationId);
 
-    const reviewMsgId = appendMessage(db, taskId, conversationId, "code_review", "user", JSON.stringify(payload));
-    appendMessage(db, taskId, conversationId, "user", "user", reviewText);
+    const reviewMsgRow = await messageStore.append({ taskId, type: "code_review", role: "user", content: JSON.stringify(payload) });
+    await messageStore.append({ taskId, type: "user", role: "user", content: reviewText });
 
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
     const execResult = db.run(
@@ -159,9 +161,6 @@ export class CodeReviewExecutor {
     );
     this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
 
-    const reviewMsgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(reviewMsgId)!;
     this.onNewMessage(mapConversationMessage(reviewMsgRow));
 
     const signal = this.streamProcessor.createSignal(executionId);

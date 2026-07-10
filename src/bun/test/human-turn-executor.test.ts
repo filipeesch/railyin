@@ -11,8 +11,7 @@ import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
 import type { EngineRegistry } from "../engine/engine-registry.ts";
 import type { Task } from "../../shared/rpc-types.ts";
-import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";
-import { appendMessage } from "../conversation/messages.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith, seedMessage } from "./helpers.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
@@ -271,7 +270,7 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
     configCleanup = cfg.cleanup;
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
+    seedMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
@@ -289,7 +288,7 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
     configCleanup = cfg.cleanup;
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot prior response");
+    seedMessage(db, taskId, conversationId, "assistant", null, "Copilot prior response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
@@ -310,7 +309,7 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     // last_engine_type = null means no prior engine, so no cross-engine injection
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Some prior assistant response");
+    seedMessage(db, taskId, conversationId, "assistant", null, "Some prior assistant response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));

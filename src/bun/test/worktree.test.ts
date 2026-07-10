@@ -99,7 +99,7 @@ describe("triggerWorktreeIfNeeded", () => {
   it("does nothing when no task_git_context row exists", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     const statuses: string[] = [];
-    await manager.triggerWorktreeIfNeeded(taskId, (msg) => statuses.push(msg));
+    await manager.triggerWorktreeIfNeeded(taskId, (msg) => { statuses.push(msg); });
     expect(statuses).toHaveLength(0);
   });
 
@@ -109,7 +109,7 @@ describe("triggerWorktreeIfNeeded", () => {
     db.run("UPDATE task_git_context SET worktree_status = 'ready' WHERE task_id = ?", [taskId]);
 
     const statuses: string[] = [];
-    await manager.triggerWorktreeIfNeeded(taskId, (msg) => statuses.push(msg));
+    await manager.triggerWorktreeIfNeeded(taskId, (msg) => { statuses.push(msg); });
     expect(statuses).toHaveLength(0);
   });
 
@@ -118,7 +118,7 @@ describe("triggerWorktreeIfNeeded", () => {
     manager.registerContext(taskId, gitDir);
 
     const statuses: string[] = [];
-    await manager.triggerWorktreeIfNeeded(taskId, (msg) => statuses.push(msg));
+    await manager.triggerWorktreeIfNeeded(taskId, (msg) => { statuses.push(msg); });
 
     const row = db
       .query<{ worktree_status: string }, [number]>(
@@ -154,7 +154,7 @@ describe("triggerWorktreeIfNeeded", () => {
     db.run("UPDATE task_git_context SET worktree_status = 'error' WHERE task_id = ?", [taskId]);
 
     const statuses: string[] = [];
-    await manager.triggerWorktreeIfNeeded(taskId, (msg) => statuses.push(msg));
+    await manager.triggerWorktreeIfNeeded(taskId, (msg) => { statuses.push(msg); });
 
     const row = db
       .query<{ worktree_status: string }, [number]>(

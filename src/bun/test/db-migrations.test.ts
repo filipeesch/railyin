@@ -163,146 +163,10 @@ describe("runMigrations", () => {
     expect(tables).toEqual([]);
   });
 
-  it("repairs stream event conversation ids via executions first, then tasks, and prunes unrecoverable rows", async () => {
-    const rawDb = new Database(dbPath, { create: true });
-    rawDb.exec(`
-      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
-      INSERT INTO schema_migrations (id) VALUES
-        ('001_initial'),
-        ('002_task_ux_improvements'),
-        ('003_logs'),
-        ('004_hunk_decisions'),
-        ('005_enabled_models'),
-        ('006_pending_messages'),
-        ('007_shell_command_approval'),
-        ('007_line_comments'),
-        ('008_hunk_decisions_sent'),
-        ('008_task_todos'),
-        ('009_execution_cost'),
-        ('010_drop_todo_context'),
-        ('011_execution_input_tokens'),
-        ('012_execution_output_tokens'),
-        ('013_execution_cache_creation_tokens'),
-        ('014_execution_cache_read_tokens'),
-        ('015_workspace_config_key'),
-        ('016_execution_checkpoints'),
-        ('016_task_position'),
-        ('017_task_position_backfill'),
-        ('018_git_base_sha'),
-        ('018_stream_events'),
-        ('019_add_parent_block_id'),
-        ('020_line_comment_columns'),
-        ('021_model_raw_messages'),
-        ('022_drop_workspace_project_fks'),
-        ('023_text_keys'),
-        ('024_todo_v2'),
-        ('025_todo_phase'),
-        ('026_chat_sessions'),
-        ('027_nullable_executions'),
-        ('028_chat_session_mcp_tools');
-      CREATE TABLE conversations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id INTEGER,
-        board_id INTEGER,
-        workflow_state TEXT
-      );
-      CREATE TABLE executions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        conversation_id INTEGER,
-        status TEXT NOT NULL DEFAULT 'running',
-        input_tokens INTEGER
-      );
-      CREATE TABLE stream_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER NOT NULL,
-        execution_id INTEGER NOT NULL,
-        seq INTEGER NOT NULL,
-        block_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        metadata TEXT,
-        parent_block_id TEXT,
-        subagent_id TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE (task_id, seq)
-      );
-      INSERT INTO conversations (id, task_id) VALUES (101, 1), (102, 2);
-      INSERT INTO tasks (id, conversation_id) VALUES (1, 101), (2, NULL), (3, NULL);
-      INSERT INTO executions (id, task_id, conversation_id) VALUES
-        (11, 1, 101),
-        (12, 2, NULL),
-        (13, 3, NULL);
-      CREATE TABLE boards (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workspace_key TEXT NOT NULL DEFAULT 'default',
-        name TEXT NOT NULL,
-        workflow_template_id TEXT NOT NULL,
-        project_keys TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE TABLE enabled_models (
-        workspace_key TEXT NOT NULL,
-        qualified_model_id TEXT NOT NULL,
-        PRIMARY KEY (workspace_key, qualified_model_id)
-      );
-      CREATE TABLE IF NOT EXISTS chat_sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workspace_key TEXT NOT NULL,
-        conversation_id INTEGER NOT NULL,
-        title TEXT NOT NULL DEFAULT 'New Chat',
-        status TEXT NOT NULL DEFAULT 'idle',
-        model TEXT,
-        enabled_mcp_tools TEXT,
-        last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
-        last_read_at TEXT,
-        archived_at TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      INSERT INTO stream_events (id, task_id, execution_id, seq, block_id, type, content) VALUES
-        (201, 1, 11, 0, 'exec-first', 'assistant', 'alpha'),
-        (202, 2, 12, 0, 'task-fallback', 'assistant', 'beta'),
-        (203, 3, 13, 0, 'unrecoverable', 'assistant', 'gamma');
-    `);
-    rawDb.close();
-
-    await runMigrations();
-
-    const db = getDb();
-    const taskRow = db.query<{ conversation_id: number | null }, [number]>(
-      "SELECT conversation_id FROM tasks WHERE id = ?",
-    ).get(2);
-    expect(taskRow?.conversation_id).toBe(102);
-
-    const executionRow = db.query<{ conversation_id: number | null }, [number]>(
-      "SELECT conversation_id FROM executions WHERE id = ?",
-    ).get(12);
-    expect(executionRow?.conversation_id).toBe(102);
-
-    const streamRows = db.query<{ id: number; conversation_id: number | null }, []>(
-      "SELECT id, conversation_id FROM stream_events ORDER BY id ASC",
-    ).all();
-    expect(streamRows).toEqual([
-      { id: 201, conversation_id: 101 },
-      { id: 202, conversation_id: 102 },
-    ]);
-
-    const taskIdColumn = db
-      .query<{ name: string; notnull: number }, []>("PRAGMA table_info(stream_events)")
-      .all()
-      .find((column) => column.name === "task_id");
-    expect(taskIdColumn).toBeUndefined();
-
-    const conversationIdColumn = db
-      .query<{ name: string; notnull: number }, []>("PRAGMA table_info(stream_events)")
-      .all()
-      .find((column) => column.name === "conversation_id");
-    expect(conversationIdColumn?.notnull).toBe(1);
-  });
+  // The "repairs stream event conversation ids" test (covering migration 029's
+  // stream_events.conversation_id backfill) has been removed: migration 054 drops the
+  // stream_events table entirely, so it no longer exists after a full runMigrations()
+  // pass and this repair path can no longer be observed/asserted on.
 
   it("previousChecksums: does not throw when a migration file was amended after being applied", async () => {
     // Simulate a DB where migration 037 was applied with the OLD (buggy) checksum.
@@ -390,6 +254,117 @@ describe("runMigrations", () => {
   });
 });
 
+describe("Migrations 053/054 — drop dead tables (model_raw_messages, stream_events)", () => {
+  it("053_drop_model_raw_messages: drops the table without error even when existing rows are present", async () => {
+    const rawDb = new Database(dbPath, { create: true });
+    // Mark every migration through 052 as already applied, so the runner only runs 053+.
+    rawDb.exec(`
+      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')), checksum TEXT);
+      INSERT INTO schema_migrations (id) VALUES
+        ('001_initial'),('002_task_ux_improvements'),('003_logs'),('004_hunk_decisions'),
+        ('005_enabled_models'),('006_pending_messages'),('007_shell_command_approval'),
+        ('007_line_comments'),('008_hunk_decisions_sent'),('008_task_todos'),
+        ('009_execution_cost'),('010_drop_todo_context'),('011_execution_input_tokens'),
+        ('012_execution_output_tokens'),('013_execution_cache_creation_tokens'),
+        ('014_execution_cache_read_tokens'),('015_workspace_config_key'),
+        ('016_execution_checkpoints'),('016_task_position'),('017_task_position_backfill'),
+        ('018_git_base_sha'),('018_stream_events'),('019_add_parent_block_id'),
+        ('020_line_comment_columns'),('021_model_raw_messages'),
+        ('022_drop_workspace_project_fks'),('023_text_keys'),('024_todo_v2'),
+        ('025_todo_phase'),('026_chat_sessions'),('027_nullable_executions'),
+        ('028_chat_session_mcp_tools'),('029_conversation_stream_cleanup'),
+        ('030_stream_events_cleanup'),('031_conversation_pagination_index'),
+        ('032_perf_indices'),('033_stream_events_exec_index'),
+        ('034_needs_column_prompt'),('035_add_model_to_conversations'),
+        ('036_migrate_model_to_conversations'),('037_remove_model_from_tasks'),
+        ('038_seed_copilot_auto_model'),('039_restore_tasks_created_at_default'),
+        ('040_decision_records'),('041_last_engine_type'),
+        ('042_decisions_injection_tracking'),('043_model_settings'),
+        ('044_mcp_disabled_by_default'),('045_task_notes'),('046_drop_notes_title'),
+        ('047_conversation_sampling_preset'),('048_chat_cascade'),
+        ('049_chat_session_shell_approval'),('050_conversation_reasoning_mode'),
+        ('051_conversation_model_params'),('052_conversation_storage_medium');
+
+      CREATE TABLE model_raw_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        execution_id INTEGER,
+        seq INTEGER,
+        engine TEXT,
+        event_type TEXT,
+        payload TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO model_raw_messages (task_id, execution_id, seq, engine, event_type, payload) VALUES
+        (1, 11, 0, 'claude', 'text', '{"raw":"data"}');
+    `);
+    rawDb.close();
+
+    await expect(runMigrations()).resolves.toBeUndefined();
+
+    const db = getDb();
+    const tables = db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name = 'model_raw_messages'")
+      .all();
+    expect(tables).toEqual([]);
+  });
+
+  it("054_drop_stream_events: drops the table without error even when existing rows are present", async () => {
+    const rawDb = new Database(dbPath, { create: true });
+    // Mark every migration through 053 as already applied, so the runner only runs 054+.
+    rawDb.exec(`
+      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')), checksum TEXT);
+      INSERT INTO schema_migrations (id) VALUES
+        ('001_initial'),('002_task_ux_improvements'),('003_logs'),('004_hunk_decisions'),
+        ('005_enabled_models'),('006_pending_messages'),('007_shell_command_approval'),
+        ('007_line_comments'),('008_hunk_decisions_sent'),('008_task_todos'),
+        ('009_execution_cost'),('010_drop_todo_context'),('011_execution_input_tokens'),
+        ('012_execution_output_tokens'),('013_execution_cache_creation_tokens'),
+        ('014_execution_cache_read_tokens'),('015_workspace_config_key'),
+        ('016_execution_checkpoints'),('016_task_position'),('017_task_position_backfill'),
+        ('018_git_base_sha'),('018_stream_events'),('019_add_parent_block_id'),
+        ('020_line_comment_columns'),('021_model_raw_messages'),
+        ('022_drop_workspace_project_fks'),('023_text_keys'),('024_todo_v2'),
+        ('025_todo_phase'),('026_chat_sessions'),('027_nullable_executions'),
+        ('028_chat_session_mcp_tools'),('029_conversation_stream_cleanup'),
+        ('030_stream_events_cleanup'),('031_conversation_pagination_index'),
+        ('032_perf_indices'),('033_stream_events_exec_index'),
+        ('034_needs_column_prompt'),('035_add_model_to_conversations'),
+        ('036_migrate_model_to_conversations'),('037_remove_model_from_tasks'),
+        ('038_seed_copilot_auto_model'),('039_restore_tasks_created_at_default'),
+        ('040_decision_records'),('041_last_engine_type'),
+        ('042_decisions_injection_tracking'),('043_model_settings'),
+        ('044_mcp_disabled_by_default'),('045_task_notes'),('046_drop_notes_title'),
+        ('047_conversation_sampling_preset'),('048_chat_cascade'),
+        ('049_chat_session_shell_approval'),('050_conversation_reasoning_mode'),
+        ('051_conversation_model_params'),('052_conversation_storage_medium'),
+        ('053_drop_model_raw_messages');
+
+      CREATE TABLE stream_events (
+        id INTEGER PRIMARY KEY,
+        task_id INTEGER NOT NULL,
+        execution_id INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        block_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO stream_events (id, task_id, execution_id, seq, block_id, type, content) VALUES
+        (1, 1, 11, 0, 'blk', 'assistant', 'hello');
+    `);
+    rawDb.close();
+
+    await expect(runMigrations()).resolves.toBeUndefined();
+
+    const db = getDb();
+    const tables = db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name = 'stream_events'")
+      .all();
+    expect(tables).toEqual([]);
+  });
+});
+
 describe("Migration 048 — chat cascade", () => {
   it("M-048a: full migration stack completes without error", async () => {
     await expect(runMigrations()).resolves.toBeUndefined();
@@ -415,24 +390,7 @@ describe("Migration 048 — chat cascade", () => {
     expect(after).toBe(0);
   });
 
-  it("M-048c: deleting a conversation cascades to stream_events", async () => {
-    await runMigrations();
-    const db = getDb();
-
-    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
-    const { id: convId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
-
-    db.run(
-      `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content)
-       VALUES (?, 0, 1, 'blk', 'text_chunk', 'data')`,
-      [convId],
-    );
-    const before = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
-    expect(before).toBe(1);
-
-    db.run("DELETE FROM conversations WHERE id = ?", [convId]);
-
-    const after = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
-    expect(after).toBe(0);
-  });
+  // M-048c ("deleting a conversation cascades to stream_events") removed: migration 054
+  // drops the stream_events table entirely, so it no longer exists after a full
+  // runMigrations() pass and this cascade can no longer be exercised.
 });

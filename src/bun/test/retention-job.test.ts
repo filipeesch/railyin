@@ -1,13 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync, writeFileSync, utimesSync, existsSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { initDb, seedProjectAndTask, seedChatSession, setupTestConfig } from "./helpers.ts";
 import { RetentionJob } from "../jobs/retention-job.ts";
+import type { ConversationFileDeleter } from "../conversation/conversation-file-deleter.ts";
 import { createMockWait } from "./support/mock-wait.ts";
 
 let db: Database;
 let cleanup: () => void;
 let executionId: number;
 let conversationId: number;
+let debugLogDir: string;
 
 function insertExecution(db: Database): { executionId: number; conversationId: number } {
   const seed = seedProjectAndTask(db, "/test");
@@ -19,20 +24,13 @@ function insertExecution(db: Database): { executionId: number; conversationId: n
   return { executionId: eid, conversationId: seed.conversationId };
 }
 
-function countRaw(db: Database): number {
-  return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM model_raw_messages").get()!.n;
-}
-
-function countStreamEvents(db: Database): number {
-  return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
-}
-
-function seedRawMsg(db: Database, eid: number, createdAt: string): void {
-  db.run(
-    `INSERT INTO model_raw_messages (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json, created_at)
-     VALUES (NULL, ?, 'test', NULL, 0, 'in', 'token', NULL, '{}', ?)`,
-    [eid, createdAt],
-  );
+/** Writes a debug-log file with a given mtime, mirroring `<conversationId>.debug.<executionId>.jsonl`. */
+function seedDebugLogFile(convId: number, execId: number, ageMs: number): string {
+  const path = join(debugLogDir, `${convId}.debug.${execId}.jsonl`);
+  writeFileSync(path, `${JSON.stringify({ eventType: "token" })}\n`, "utf-8");
+  const mtime = new Date(Date.now() - ageMs);
+  utimesSync(path, mtime, mtime);
+  return path;
 }
 
 beforeEach(() => {
@@ -40,74 +38,51 @@ beforeEach(() => {
   cleanup = cfg.cleanup;
   db = initDb();
   ({ executionId, conversationId } = insertExecution(db));
+  debugLogDir = mkdtempSync(join(tmpdir(), "railyn-debug-logs-"));
 });
 
 afterEach(() => {
   cleanup();
+  rmSync(debugLogDir, { recursive: true, force: true });
 });
 
-// ─── RJ-1: raw messages older than 1 day deleted ─────────────────────────────
+// ─── RJ-1: debug-log files older than 1 day deleted ──────────────────────────
 
-describe("RetentionJob — RJ-1: raw message pruning", () => {
-  it("deletes rows older than 1 day; keeps rows within 1 day", () => {
-    seedRawMsg(db, executionId, "2000-01-01 00:00:00"); // old
-    // Insert a genuinely recent row
-    db.run(
-      `INSERT INTO model_raw_messages (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json)
-       VALUES (NULL, ?, 'test', NULL, 1, 'in', 'token', NULL, '{}')`,
-      [executionId],
-    );
+describe("RetentionJob — RJ-1: raw-message debug-log pruning", () => {
+  it("deletes debug-log files older than 1 day; keeps files within 1 day", async () => {
+    const oldPath = seedDebugLogFile(conversationId, executionId, 25 * 60 * 60_000);
+    const recentPath = seedDebugLogFile(conversationId, executionId + 1, 1000);
 
-    const job = new RetentionJob(db);
-    job.runNow();
+    const job = new RetentionJob(db, undefined, debugLogDir);
+    await job.runNow();
 
-    // The old row is deleted; recent row survives
-    const remaining = db
-      .query<{ created_at: string }, []>("SELECT created_at FROM model_raw_messages ORDER BY id ASC")
-      .all();
-    expect(remaining.every((r) => r.created_at !== "2000-01-01 00:00:00")).toBe(true);
+    expect(existsSync(oldPath)).toBe(false);
+    expect(existsSync(recentPath)).toBe(true);
   });
 
-  it("row with created_at 25 hours ago is deleted", () => {
-    db.run(
-      `INSERT INTO model_raw_messages (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json, created_at)
-       VALUES (NULL, ?, 'test', NULL, 0, 'in', 'token', NULL, '{}', datetime('now', '-25 hours'))`,
-      [executionId],
-    );
-    expect(countRaw(db)).toBe(1);
+  it("file with mtime 25 hours ago is deleted", async () => {
+    const path = seedDebugLogFile(conversationId, executionId, 25 * 60 * 60_000);
+    expect(existsSync(path)).toBe(true);
 
-    const job = new RetentionJob(db);
-    job.runNow();
+    const job = new RetentionJob(db, undefined, debugLogDir);
+    await job.runNow();
 
-    expect(countRaw(db)).toBe(0);
+    expect(existsSync(path)).toBe(false);
   });
-});
 
-// ─── RJ-2: stream events older than 4 hours deleted ──────────────────────────
+  it("non-debug-log files in the same directory are left untouched", async () => {
+    const unrelatedPath = join(debugLogDir, `${conversationId}.jsonl`);
+    writeFileSync(unrelatedPath, "{}\n", "utf-8");
+    const mtime = new Date(Date.now() - 25 * 60 * 60_000);
+    utimesSync(unrelatedPath, mtime, mtime);
 
-describe("RetentionJob — RJ-2: stream_events pruning", () => {
-  it("deletes stream events older than 4h; keeps recent events", () => {
-    db.run(
-      `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id, created_at)
-       VALUES (?, ?, 0, 'blk', 'text_chunk', 'old', NULL, NULL, NULL, datetime('now', '-5 hours'))`,
-      [conversationId, executionId],
-    );
-    db.run(
-      `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
-       VALUES (?, ?, 1, 'blk', 'text_chunk', 'recent', NULL, NULL, NULL)`,
-      [conversationId, executionId],
-    );
+    const job = new RetentionJob(db, undefined, debugLogDir);
+    await job.runNow();
 
-    expect(countStreamEvents(db)).toBe(2);
-
-    const job = new RetentionJob(db);
-    job.runNow();
-
-    expect(countStreamEvents(db)).toBe(1);
-    const row = db.query<{ content: string }, []>("SELECT content FROM stream_events").get()!;
-    expect(row.content).toBe("recent");
+    expect(existsSync(unrelatedPath)).toBe(true);
   });
 });
+
 
 // ─── RJ-3: start() triggers immediate runNow + periodic runs on tick ─────────
 
@@ -115,7 +90,6 @@ describe("RetentionJob — RJ-3: start/tick cycle", () => {
   it("start() runs immediately; each tick() triggers another runNow()", async () => {
     const { waitFn, tick } = createMockWait();
 
-    let runCount = 0;
     // Wrap db.run to count DELETE calls
     const originalRun = db.run.bind(db);
     let deleteCount = 0;
@@ -125,16 +99,17 @@ describe("RetentionJob — RJ-3: start/tick cycle", () => {
       return originalRun(...args);
     };
 
-    const job = new RetentionJob(db, waitFn);
+    const job = new RetentionJob(db, waitFn, debugLogDir);
     job.start();
-    // runNow() called immediately on start — 3 DELETEs (raw + stream_events + chat_sessions)
-    // Conversations DELETE is conditional (only runs when stale sessions exist)
-    expect(deleteCount).toBe(3);
+    // runNow() is async (debug-log pruning awaits fs I/O first) — flush a macrotask so its
+    // SQL DELETE (chat_sessions; conversations DELETE is conditional) lands.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deleteCount).toBe(1);
 
     tick();
     await new Promise((r) => setTimeout(r, 0));
     // Another runNow() after tick
-    expect(deleteCount).toBe(6);
+    expect(deleteCount).toBe(2);
 
     job.stop();
     db.run = originalRun;
@@ -155,15 +130,16 @@ describe("RetentionJob — RJ-4: stop halts loop", () => {
       return originalRun(...args);
     };
 
-    const job = new RetentionJob(db, waitFn);
-    job.start(); // 3 DELETEs from immediate runNow (conditional conversations DELETE not triggered)
+    const job = new RetentionJob(db, waitFn, debugLogDir);
+    job.start(); // 1 DELETE from immediate runNow (conditional conversations DELETE not triggered)
+    await new Promise((r) => setTimeout(r, 0));
     job.stop();
 
     tick();
     await new Promise((r) => setTimeout(r, 0));
 
     // No extra DELETEs because loop was stopped
-    expect(deleteCount).toBe(3);
+    expect(deleteCount).toBe(1);
 
     db.run = originalRun;
   });
@@ -180,7 +156,7 @@ function countConversationMessages(db: Database): number {
 }
 
 describe("RetentionJob — RJ-5: archived chat session hard-delete", () => {
-  it("RJ-5a: hard-deletes archived session with archived_at > 7 days ago", () => {
+  it("RJ-5a: hard-deletes archived session with archived_at > 7 days ago", async () => {
     const { sessionId } = seedChatSession(db);
     db.run(
       "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
@@ -188,36 +164,36 @@ describe("RetentionJob — RJ-5: archived chat session hard-delete", () => {
     );
     expect(countChatSessions(db)).toBe(1);
 
-    const job = new RetentionJob(db);
-    job.runNow();
+    const job = new RetentionJob(db, undefined, debugLogDir);
+    await job.runNow();
 
     expect(countChatSessions(db)).toBe(0);
   });
 
-  it("RJ-5b: preserves archived session archived only 3 days ago", () => {
+  it("RJ-5b: preserves archived session archived only 3 days ago", async () => {
     const { sessionId } = seedChatSession(db);
     db.run(
       "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-3 days') WHERE id = ?",
       [sessionId],
     );
 
-    const job = new RetentionJob(db);
-    job.runNow();
+    const job = new RetentionJob(db, undefined, debugLogDir);
+    await job.runNow();
 
     expect(countChatSessions(db)).toBe(1);
   });
 
-  it("RJ-5c: never deletes an idle (non-archived) session", () => {
+  it("RJ-5c: never deletes an idle (non-archived) session", async () => {
     seedChatSession(db);
     // status defaults to 'idle'
 
-    const job = new RetentionJob(db);
-    job.runNow();
+    const job = new RetentionJob(db, undefined, debugLogDir);
+    await job.runNow();
 
     expect(countChatSessions(db)).toBe(1);
   });
 
-  it("RJ-5d: cascade-deletes conversation_messages when session is hard-deleted", () => {
+  it("RJ-5d: cascade-deletes conversation_messages when session is hard-deleted", async () => {
     const { sessionId, conversationId } = seedChatSession(db);
     db.run(
       "INSERT INTO conversation_messages (conversation_id, type, content) VALUES (?, 'user', 'hello')",
@@ -229,33 +205,14 @@ describe("RetentionJob — RJ-5: archived chat session hard-delete", () => {
     );
     expect(countConversationMessages(db)).toBe(1);
 
-    const job = new RetentionJob(db);
-    job.runNow();
+    const job = new RetentionJob(db, undefined, debugLogDir);
+    await job.runNow();
 
     expect(countChatSessions(db)).toBe(0);
     expect(countConversationMessages(db)).toBe(0);
   });
 
-  it("RJ-5e: cascade-deletes stream_events when session is hard-deleted", () => {
-    const { sessionId, conversationId } = seedChatSession(db);
-    db.run(
-      `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content)
-       VALUES (?, 0, 1, 'blk', 'text_chunk', 'data')`,
-      [conversationId],
-    );
-    db.run(
-      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
-      [sessionId],
-    );
-
-    const job = new RetentionJob(db);
-    job.runNow();
-
-    expect(countChatSessions(db)).toBe(0);
-    expect(countStreamEvents(db)).toBe(0);
-  });
-
-  it("RJ-5f: explicitly deletes executions linked to hard-deleted sessions", () => {
+  it("RJ-5f: explicitly deletes executions linked to hard-deleted sessions", async () => {
     const { sessionId, conversationId } = seedChatSession(db);
     db.run(
       "INSERT INTO executions (conversation_id, from_state, to_state, status, attempt) VALUES (?, 'idle', 'idle', 'completed', 1)",
@@ -268,11 +225,50 @@ describe("RetentionJob — RJ-5: archived chat session hard-delete", () => {
     const execCount = () => db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM executions").get()!.n;
     expect(execCount()).toBe(2); // 1 from beforeEach + 1 for chat session
 
-    const job = new RetentionJob(db);
-    job.runNow();
+    const job = new RetentionJob(db, undefined, debugLogDir);
+    await job.runNow();
 
     expect(countChatSessions(db)).toBe(0);
     // The chat execution is removed; the task execution from beforeEach remains
     expect(execCount()).toBe(1);
+  });
+
+  it("RJ-5g: calls the injected ConversationFileDeleter for each hard-deleted session's conversation, after the SQL cascade commits", async () => {
+    const { sessionId, conversationId } = seedChatSession(db);
+    db.run(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+      [sessionId],
+    );
+
+    const deletedIds: number[] = [];
+    const fakeDeleter: ConversationFileDeleter = {
+      deleteConversationFiles: async (id) => {
+        // The SQL cascade must already be committed by the time this is called.
+        expect(countChatSessions(db)).toBe(0);
+        deletedIds.push(id);
+      },
+    };
+
+    const job = new RetentionJob(db, undefined, debugLogDir, fakeDeleter);
+    await job.runNow();
+
+    expect(deletedIds).toEqual([conversationId]);
+  });
+
+  it("RJ-5h: does not call the ConversationFileDeleter when no session is stale", async () => {
+    seedChatSession(db);
+    // status defaults to 'idle' — nothing stale to sweep.
+
+    const deletedIds: number[] = [];
+    const fakeDeleter: ConversationFileDeleter = {
+      deleteConversationFiles: async (id) => {
+        deletedIds.push(id);
+      },
+    };
+
+    const job = new RetentionJob(db, undefined, debugLogDir, fakeDeleter);
+    await job.runNow();
+
+    expect(deletedIds).toEqual([]);
   });
 });

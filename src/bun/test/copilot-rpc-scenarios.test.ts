@@ -567,9 +567,9 @@ describe("Copilot backend RPC scenarios", () => {
             "patch_file:src/new-file.ts",
         ]);
 
-        const fileDiffs = runtime.getDbStreamEvents(result.executionId)
-            .filter((event) => event.type === "file_diff")
-            .map((event) => JSON.parse(event.content) as { operation: string; path: string; added?: number; removed?: number });
+        const fileDiffs = (await runtime.getDurableMessages(result.executionId))
+            .filter((message) => message.type === "file_diff")
+            .map((message) => JSON.parse(message.content) as { operation: string; path: string; added?: number; removed?: number });
 
         expect(fileDiffs.map((diff) => `${diff.operation}:${diff.path}`)).toEqual([
             "write_file:src/new-file.ts",

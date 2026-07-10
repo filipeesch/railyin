@@ -1,12 +1,10 @@
-import type { Database } from "bun:sqlite";
 import type { MessageType } from "../../shared/rpc-types.ts";
-import type { ConversationMessageRow } from "../db/row-types.ts";
-import { mapConversationMessage } from "../db/mappers.ts";
 import type { ConversationMessage } from "../../shared/rpc-types.ts";
+import type { ConversationMessageStore } from "./message-store.ts";
+import { mapConversationMessage } from "../db/mappers.ts";
 
 export interface PendingConvMsg {
   taskId: number | null;
-  conversationId: number;
   type: MessageType;
   role: string | null;
   content: string;
@@ -15,47 +13,45 @@ export interface PendingConvMsg {
   notify: boolean;
 }
 
+/**
+ * Buffers pending message writes for a single conversation and flushes them as one batch via
+ * the conversation's resolved `ConversationMessageStore`. Bound to one store instance (and
+ * therefore one conversationId) at construction time — callers no longer pass `conversationId`
+ * per message.
+ */
 export class ConvMessageBuffer {
   private pending: PendingConvMsg[] = [];
 
-  constructor(private readonly db: Database) {}
+  constructor(private readonly store: ConversationMessageStore) {}
 
   enqueue(msg: PendingConvMsg): void {
     this.pending.push(msg);
   }
 
   /**
-   * Flush all pending messages in a single transaction.
-   * Returns only the messages marked with notify=true, with their real DB IDs.
+   * Flush all pending messages as a single batch. Returns only the messages marked with
+   * notify=true, with their real ids assigned by the store.
    */
-  flush(): ConversationMessage[] {
+  async flush(): Promise<ConversationMessage[]> {
     if (this.pending.length === 0) return [];
     const items = this.pending.splice(0);
-    const notifyRows: ConversationMessage[] = [];
 
-    this.db.transaction(() => {
-      for (const msg of items) {
-        const row = this.db
-          .query<
-            ConversationMessageRow,
-            [number | null, number, string, string | null, string, string | null]
-          >(
-            `INSERT INTO conversation_messages (task_id, conversation_id, type, role, content, metadata)
-             VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
-          )
-          .get(
-            msg.taskId,
-            msg.conversationId,
-            msg.type,
-            msg.role,
-            msg.content,
-            msg.metadata ? JSON.stringify(msg.metadata) : null,
-          );
-        if (row && msg.notify) {
-          notifyRows.push(mapConversationMessage(row));
-        }
-      }
-    })();
+    const rows = await this.store.appendBatch(
+      items.map((msg) => ({
+        taskId: msg.taskId,
+        type: msg.type,
+        role: msg.role,
+        content: msg.content,
+        metadata: msg.metadata ?? null,
+      })),
+    );
+
+    const notifyRows: ConversationMessage[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (!items[i].notify) continue;
+      const row = rows[i];
+      if (row) notifyRows.push(mapConversationMessage(row));
+    }
 
     return notifyRows;
   }

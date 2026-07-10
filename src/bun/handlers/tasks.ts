@@ -7,7 +7,7 @@ import {
   estimateContextWarning,
   estimateContextUsage,
 } from "../conversation/context.ts";
-import { appendMessage } from "../conversation/messages.ts";
+import { resolveConversationMessageStore } from "../conversation/message-store-resolver.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
 import { runWithConfig } from "../config/index.ts";
 import type { WorktreeManager } from "../git/WorktreeManager.ts";
@@ -26,6 +26,8 @@ import { PositionService } from "./position-service.ts";
 import { seedConversationModel } from "../engine/execution/model-resolver";
 import { QualifiedModelId } from "../engine/qualified-model-id.ts";
 import { applyModelParamsPolicy } from "../conversation/model-params-policy.ts";
+import { FsConversationFileDeleter } from "../conversation/conversation-file-deleter.ts";
+import type { ConversationFileDeleter } from "../conversation/conversation-file-deleter.ts";
 
 // ─── Helper: assert orchestrator is initialised ──────────────────────────────
 
@@ -34,7 +36,7 @@ function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinat
   return o;
 }
 
-export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, modelSettingsRepo?: ModelSettingsRepository) {
+export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, modelSettingsRepo?: ModelSettingsRepository, conversationFileDeleter: ConversationFileDeleter = new FsConversationFileDeleter()) {
   const positionService = new PositionService(db);
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
@@ -128,13 +130,12 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       }
 
       // Seed conversation with task description as first system message
-      appendMessage(db, 
+      await resolveConversationMessageStore(db, conversationId).append({
         taskId,
-        conversationId,
-        "system",
-        null,
-        `Task: ${params.title}\n\n${params.description}`,
-      );
+        type: "system",
+        role: null,
+        content: `Task: ${params.title}\n\n${params.description}`,
+      });
 
       const row = fetchTaskWithModel(db, taskId);
       if (!row) throw new Error(`Task ${taskId} not found after creation`);
@@ -199,10 +200,13 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
 
         const convId = runningCheck.conversation_id;
         if (convId != null) {
-          appendMessage(db, params.taskId, convId, "transition_event", null, "", {
-            from: fromState,
-            to: params.toState,
-          } as unknown as Record<string, unknown>);
+          await resolveConversationMessageStore(db, convId).append({
+            taskId: params.taskId,
+            type: "transition_event",
+            role: null,
+            content: "",
+            metadata: { from: fromState, to: params.toState } as unknown as Record<string, unknown>,
+          });
         }
 
         const deferredRow = fetchTaskWithModel(db, params.taskId);
@@ -233,14 +237,16 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
-        const postStatus = (msg: string) => {
+        const postStatus = async (msg: string) => {
           // Do NOT call onTaskUpdated here: the DB row still carries the old
           // workflow_state while the worktree is being created (executeTransition
           // hasn't run yet). Broadcasting the stale row causes the UI card to
           // bounce back to the source column and then re-animate to the target.
           // The authoritative state update is pushed at the end of the RPC via
           // orchestrator.executeTransition → onTaskUpdated.
-          appendMessage(db, params.taskId, convId!, "system", null, msg);
+          await resolveConversationMessageStore(db, convId!).append({
+            taskId: params.taskId, type: "system", role: null, content: msg,
+          });
         };
 
         try {
@@ -249,13 +255,12 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           // Worktree is required — fail the task so the user sees the error in the UI
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(db, 
-            params.taskId,
-            convId!,
-            "system",
-            null,
-            `Worktree setup failed: ${errMsg}`,
-          );
+          await resolveConversationMessageStore(db, convId!).append({
+            taskId: params.taskId,
+            type: "system",
+            role: null,
+            content: `Worktree setup failed: ${errMsg}`,
+          });
           const failedRow = fetchTaskWithModel(db, params.taskId);
           if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
           onTaskUpdated(failedRow);
@@ -290,7 +295,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const resolvedCtxWindow = taskRow2?.conversation_model
         ? await resolveContextWindow(taskRow2.conversation_model, taskWorkspaceKey, orchestrator, modelSettingsRepo)
         : 128_000;
-      const warning = estimateContextWarning(db, params.taskId, resolvedCtxWindow);
+      const warning = await estimateContextWarning(db, params.taskId, resolvedCtxWindow);
       if (warning) {
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
@@ -347,8 +352,10 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
-        const postStatus = (msg: string) => {
-          appendMessage(db, params.taskId, retryConvId!, "system", null, msg);
+        const postStatus = async (msg: string) => {
+          await resolveConversationMessageStore(db, retryConvId!).append({
+            taskId: params.taskId, type: "system", role: null, content: msg,
+          });
           const updated = fetchTaskWithModel(db, params.taskId);
           if (updated) onTaskUpdated(updated);
         };
@@ -358,7 +365,9 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(db, params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
+          await resolveConversationMessageStore(db, retryConvId!).append({
+            taskId: params.taskId, type: "system", role: null, content: `Worktree setup failed: ${errMsg}`,
+          });
           const failedRow = fetchTaskWithModel(db, params.taskId);
           if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
           onTaskUpdated(failedRow);
@@ -404,7 +413,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           ? resolveContextWindow(taskModel, workspaceKey, orchestrator, modelSettingsRepo)
           : Promise.resolve(128_000)
       ));
-      return estimateContextUsage(db, params.taskId, maxTokens);
+      return await estimateContextUsage(db, params.taskId, maxTokens);
     },
 
     // ─── tasks.compact ───────────────────────────────────────────────────────
@@ -479,6 +488,9 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         }
       })();
       taskLspRegistry.releaseTask(params.taskId).catch(() => { });
+      if (row?.conversation_id) {
+        await conversationFileDeleter.deleteConversationFiles(row.conversation_id).catch(() => { });
+      }
 
       return { success: true, ...(warning ? { warning } : {}) };
     },

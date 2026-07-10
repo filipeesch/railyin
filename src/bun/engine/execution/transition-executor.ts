@@ -1,7 +1,7 @@
 import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { appendMessage } from "../../conversation/messages";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry";
@@ -71,7 +71,9 @@ export class TransitionExecutor {
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
     if (!column?.on_enter_prompt) {
-      appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
+      await resolveConversationMessageStore(db, conversationId).append({
+        taskId, type: "transition_event", role: null, content: "", metadata: { from: fromState, to: toState },
+      });
       db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
       return { task: fetchTaskWithModel(db, taskId)!, executionId: null };
     }
@@ -92,7 +94,9 @@ export class TransitionExecutor {
       resolvedPrompt,
       workingDirectory,
     );
-    appendMessage(db, taskId, conversationId, "transition_event", null, "", transitionMetadata as unknown as Record<string, unknown>);
+    await resolveConversationMessageStore(db, conversationId).append({
+      taskId, type: "transition_event", role: null, content: "", metadata: transitionMetadata as unknown as Record<string, unknown>,
+    });
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -116,8 +120,8 @@ export class TransitionExecutor {
       workingDirectory,
       workspaceKey,
     );
-    const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
-    
+    const { decisionsBlock } = await this.decisionInjector.prepare(conversationId);
+
     // Build system instructions with custom prompt injection
     const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, toState);
     const promptFilter: PromptFilterContext = {

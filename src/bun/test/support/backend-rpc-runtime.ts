@@ -15,8 +15,8 @@ import { Orchestrator } from "../../engine/orchestrator.ts";
 import { EngineRegistry } from "../../engine/engine-registry.ts";
 import type { ExecutionEngine } from "../../engine/types.ts";
 import { StreamEventEnricher } from "../../pipeline/stream-event-enricher.ts";
-import { WriteBuffer } from "../../pipeline/write-buffer.ts";
-import { appendStreamEventBatch, type PersistedStreamEvent } from "../../db/stream-events.ts";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
+import { mapConversationMessage } from "../../db/mappers.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { CallbackRecorder } from "./callback-recorder.ts";
 import { WorktreeManager } from "../../git/WorktreeManager.ts";
@@ -57,10 +57,10 @@ export interface BackendRpcRuntime {
     waitForTaskState: (taskId: number, state: string, timeoutMs?: number) => Promise<void>;
     /** All StreamEvents delivered to IPC immediately (all types). */
     getIpcEvents: (executionId: number) => StreamEvent[];
-    /** StreamEvents written to DB (persisted types only, after WriteBuffer flush). */
-    getDbStreamEvents: (executionId: number) => PersistedStreamEvent[];
-    /** Wait until a persisted event of `type` appears in DB for this execution. */
-    waitForDbStreamEvent: (executionId: number, type: string, timeoutMs?: number) => Promise<PersistedStreamEvent>;
+    /** Durable conversation messages persisted for this execution's conversation, ascending id order. */
+    getDurableMessages: (executionId: number) => Promise<ConversationMessage[]>;
+    /** Wait until a durable message of `type` appears for this execution's conversation. */
+    waitForDurableMessage: (executionId: number, type: string, timeoutMs?: number) => Promise<ConversationMessage>;
     /** Poll until predicate returns true (useful for asserting async side-effects after cancellation). */
     waitFor: (predicate: () => boolean, description?: string, timeoutMs?: number) => Promise<void>;
 }
@@ -89,18 +89,11 @@ export function createBackendRpcRuntime(options: {
 
     const recorder = new CallbackRecorder();
 
-    // ── Two-channel IPC simulation ──────────────────────────────────────────
+    // ── Two-channel simulation ──────────────────────────────────────────────
     // ipcEvents: every event delivered immediately (mirrors what frontend receives in real-time)
-    // DB:        persisted events written by stream event buffer
+    // Durable messages: persisted via the ConversationMessageStore (see stream-processor.ts)
     const ipcEvents: StreamEvent[] = [];
     const enrichers = new Map<number, StreamEventEnricher>();
-    const PERSISTED_TYPES = new Set(["user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system"]);
-    const streamEventBuffer = new WriteBuffer<PersistedStreamEvent>({
-        maxBatch: 100,
-        intervalMs: 500,
-        flushFn: (events) => appendStreamEventBatch(db, events),
-    });
-    streamEventBuffer.start();
 
     const engine = options.createEngine({
         onTaskUpdated: recorder.recordTaskUpdate,
@@ -129,21 +122,7 @@ export function createBackendRpcRuntime(options: {
         const { seq, blockId } = enricher.enrich(event.type, event.blockId || undefined);
         const enrichedEvent = { ...event, seq, blockId };
         ipcEvents.push(enrichedEvent);
-        if (PERSISTED_TYPES.has(event.type)) {
-            streamEventBuffer.enqueue({
-                conversationId: enrichedEvent.conversationId,
-                executionId: enrichedEvent.executionId,
-                seq: enrichedEvent.seq,
-                blockId: enrichedEvent.blockId,
-                type: enrichedEvent.type,
-                content: enrichedEvent.content,
-                metadata: typeof enrichedEvent.metadata === "string" ? enrichedEvent.metadata : (enrichedEvent.metadata ? JSON.stringify(enrichedEvent.metadata) : null),
-                parentBlockId: enrichedEvent.parentBlockId ?? null,
-                subagentId: enrichedEvent.subagentId ?? null,
-            });
-        }
         if (event.done) {
-            streamEventBuffer.flush();
             enrichers.delete(event.executionId);
         }
     });
@@ -172,7 +151,6 @@ export function createBackendRpcRuntime(options: {
         recorder,
         gitDir,
         cleanup: () => {
-            streamEventBuffer.stop();
             enrichers.clear();
             rmSync(gitDir, { recursive: true, force: true });
             cfg.cleanup();
@@ -220,56 +198,36 @@ export function createBackendRpcRuntime(options: {
         },
         getIpcEvents: (executionId: number) =>
             ipcEvents.filter((e) => e.executionId === executionId),
-        getDbStreamEvents: (executionId: number) =>
-            db.query<{
-                id: number; task_id: number | null; conversation_id: number; execution_id: number; seq: number;
-                block_id: string; type: string; content: string;
-                metadata: string | null; parent_block_id: string | null; subagent_id: string | null; created_at: string;
-            }, [number]>(
-                "SELECT * FROM stream_events WHERE execution_id = ? ORDER BY seq ASC",
-            ).all(executionId).map((r) => ({
-                id: r.id,
-                taskId: r.task_id,
-                conversationId: r.conversation_id,
-                executionId: r.execution_id,
-                seq: r.seq,
-                blockId: r.block_id,
-                type: r.type,
-                content: r.content,
-                metadata: r.metadata,
-                parentBlockId: r.parent_block_id,
-                subagentId: r.subagent_id,
-                createdAt: r.created_at,
-            })),
-        waitForDbStreamEvent: async (executionId: number, type: string, timeoutMs = 5_000) => {
-            await waitUntil(
-                () => db.query<{ type: string }, [number, string]>(
-                    "SELECT type FROM stream_events WHERE execution_id = ? AND type = ? LIMIT 1",
-                ).get(executionId, type) !== null,
-                `DB stream_event type="${type}" for execution ${executionId}`,
-                timeoutMs,
-            );
-            const row = db.query<{
-                id: number; task_id: number; execution_id: number; seq: number;
-                block_id: string; type: string; content: string;
-                metadata: string | null; subagent_id: string | null; created_at: string;
-                conversation_id: number; parent_block_id: string | null;
-            }, [number, string]>(
-                "SELECT * FROM stream_events WHERE execution_id = ? AND type = ? ORDER BY seq ASC LIMIT 1",
-            ).get(executionId, type)!;
-            return {
-                id: row.id,
-                conversationId: row.conversation_id,
-                executionId: row.execution_id,
-                seq: row.seq,
-                blockId: row.block_id,
-                type: row.type,
-                content: row.content,
-                metadata: row.metadata,
-                parentBlockId: row.parent_block_id,
-                subagentId: row.subagent_id,
-                createdAt: row.created_at,
-            };
+        getDurableMessages: async (executionId: number) => {
+            const conversationId = db
+                .query<{ conversation_id: number }, [number]>("SELECT conversation_id FROM executions WHERE id = ?")
+                .get(executionId)?.conversation_id;
+            if (conversationId == null) return [];
+            const store = resolveConversationMessageStore(db, conversationId);
+            const rows = await store.getAll();
+            return rows.map(mapConversationMessage);
+        },
+        waitForDurableMessage: async (executionId: number, type: string, timeoutMs = 5_000) => {
+            const conversationId = db
+                .query<{ conversation_id: number }, [number]>("SELECT conversation_id FROM executions WHERE id = ?")
+                .get(executionId)?.conversation_id;
+            if (conversationId == null) throw new Error(`No conversation found for execution ${executionId}`);
+            const store = resolveConversationMessageStore(db, conversationId);
+
+            const deadline = Date.now() + timeoutMs;
+            let found: ConversationMessage | undefined;
+            while (Date.now() < deadline) {
+                const rows = await store.getAll({ types: [type as ConversationMessage["type"]] });
+                if (rows.length > 0) {
+                    found = mapConversationMessage(rows[0]!);
+                    break;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            if (!found) {
+                throw new Error(`Timed out waiting for durable message type="${type}" for execution ${executionId}`);
+            }
+            return found;
         },
         waitFor: async (predicate: () => boolean, description = "condition", timeoutMs = 5_000) => {
             await waitUntil(predicate, description, timeoutMs);

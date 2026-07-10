@@ -97,20 +97,6 @@ export interface PendingMessageRow {
   created_at: string;
 }
 
-export interface ModelRawMessageRow {
-  id: number;
-  task_id: number | null;
-  execution_id: number;
-  engine: "claude" | "copilot";
-  session_id: string | null;
-  stream_seq: number;
-  direction: "inbound" | "outbound" | "control";
-  event_type: string;
-  event_subtype: string | null;
-  payload_json: string;
-  created_at: string;
-}
-
 export interface TaskTodoRow {
   id: number;
   task_id: number;
