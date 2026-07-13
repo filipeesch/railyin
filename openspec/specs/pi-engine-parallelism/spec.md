@@ -10,6 +10,8 @@ Specifies how the Pi engine leverages parallel request capacity on local LLM ser
 
 The Pi engine SHALL maintain one bounded concurrency limiter per provider name (as keyed in `PiEngineConfig.providers`). Every LLM HTTP request originating from any `AgentSession` created by the Pi engine — including parent sessions, child sessions spawned via the `delegate` tool, and background compaction calls — SHALL acquire a slot from the matching limiter before issuing the request and SHALL release the slot when the response stream terminates (success, error, or abort). The limiter SHALL implement a FIFO wait queue with abort-aware acquisition.
 
+The limiter SHALL be owned by a dedicated `ConcurrencyLimiter` service, not by `PiEngine` directly. The `RunDriver` and `CompactionCoordinator` SHALL receive the limiter service via constructor injection.
+
 #### Scenario: Default `max_inflight` is 8
 - **WHEN** a Pi provider entry is configured without an explicit `max_inflight`
 - **THEN** the limiter for that provider is created with `max_inflight = 8`
@@ -42,6 +44,8 @@ The Pi engine SHALL maintain one shared `undici.Agent` (or equivalent HTTP keep-
 
 `defaultSessionFactory` SHALL install a custom `Transport` (via `AgentOptions.transport`) on every `AgentSession` it creates. The transport SHALL resolve the provider name from the model's `provider` field, await `limiter.acquire(provider, signal)` before invoking the underlying HTTP stream, and release the slot when the stream terminates.
 
+The transport factory SHALL be owned by the `ConcurrencyLimiter` service and passed to `SessionManager`.
+
 #### Scenario: Transport installed on every session
 - **WHEN** any `AgentSession` is created by the Pi engine (parent, child, or otherwise)
 - **THEN** its `transport` is the limiter-wrapped transport, not the SDK default
@@ -60,6 +64,8 @@ The Pi engine SHALL expose a tool named `delegate` whose parameters are `{ tasks
 4. Use `Promise.allSettled` so per-child errors do not abort the batch.
 5. Return a single markdown digest as the tool result with one `### {id}` section per task (final assistant text or formatted error), plus `details: { jobs: Array<{ id: string; status: "ok"|"error"; durationMs: number; tokens?: number }> }`.
 6. Dispose every child session in a `finally` block, including deletion of any temporary session files.
+
+The delegate tool implementation SHALL live in `ToolFactory` and receive a `childSessionFactory` injected by `SessionManager`.
 
 #### Scenario: N independent prompts run concurrently
 - **WHEN** the parent emits `delegate` with three tasks and `provider.max_inflight ≥ 3`
@@ -156,6 +162,10 @@ When `session.compact()` fires, it internally calls `session.abort()`, which res
 
 The `AsyncQueue` SHALL remain open throughout this pause-and-resume cycle. The subscriber is never torn down during compaction, so `compaction_start` and `compaction_done` events continue flowing to the UI.
 
+The background compaction logic SHALL be owned by a dedicated `CompactionCoordinator` service. `PiExecutionController` SHALL only call `coordinator.observe(event, session)` and `await coordinator.awaitCompaction(conversationId)`; it SHALL NOT contain compaction threshold math or the `bgCompactions` map directly.
+
+`PiCompactionCoordinator` SHALL receive a `MessageAppender` interface for persisting compaction summaries, and a `ConcurrencyLimiter` service for acquiring non-blocking compaction slots. It SHALL NOT call `appendMessage(getDb(), ...)` directly.
+
 #### Scenario: Fires when slot is free
 - **WHEN** context usage crosses the soft threshold at `turn_end` and the limiter has at least one free slot
 - **THEN** `session.compact()` is invoked asynchronously and the next assistant turn can begin without waiting for it
@@ -174,7 +184,24 @@ The `AsyncQueue` SHALL remain open throughout this pause-and-resume cycle. The s
 
 #### Scenario: Summary persisted on success
 - **WHEN** a background compaction completes successfully with a non-empty `summary`
-- **THEN** the summary is appended to the conversation as a `compaction_summary` message via `appendMessage`
+- **THEN** the summary is appended to the conversation as a `compaction_summary` message via the injected `MessageAppender`
+
+### Requirement: CompactionCoordinator unit-testable via MessageAppender
+`PiCompactionCoordinator` SHALL receive a `MessageAppender` interface (`append(compaction_summary, conversationId, content)`) instead of calling `appendMessage(getDb(), ...)` directly. Production wiring SHALL implement this interface with `appendMessage(getDb(), null, conversationId, "compaction_summary", null, content)`. Unit tests SHALL inject a spy/fake `MessageAppender` to verify persistence behavior without a database.
+
+#### Scenario: Coordinator appends summary through injected MessageAppender
+- **GIVEN** a fake `MessageAppender` and a fake session whose `compact()` returns `{ summary: "summary text" }`
+- **WHEN** the coordinator observes a `turn_end` above threshold and the compaction settles
+- **THEN** the fake appender receives `content: "summary text"` for the correct `conversationId`
+
+#### Scenario: Coordinator skips append when summary is empty
+- **GIVEN** a fake `MessageAppender` and a fake session whose `compact()` returns `{ summary: "" }`
+- **WHEN** the compaction settles
+- **THEN** the appender is not called
+
+#### Scenario: Coordinator unit tests avoid DB
+- **WHEN** running `PiCompactionCoordinator` unit tests
+- **THEN** no SQLite database is required and no `getDb()` call is made
 
 #### Scenario: Queue stays open during background compaction
 - **WHEN** background compaction fires mid-execution and `session.abort()` resolves `session.prompt()` early
