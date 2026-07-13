@@ -36,7 +36,7 @@ import { ClaudeEngine } from "./engine/claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
 import { createDefaultOpenCodeSdkAdapter } from "./engine/opencode/adapter.ts";
-import { PiEngine } from "./engine/pi/engine.ts";
+import { createPiEngine } from "./engine/pi/pi-engine-factory.ts";
 import { CursorEngine, createDefaultCursorSdkAdapter } from "./engine/cursor/engine.ts";
 import type { PiEngineConfig } from "./config/index.ts";
 import { createDefaultDialectRegistry } from "./engine/dialects/registry.ts";
@@ -142,7 +142,7 @@ const engineFactories: Record<string, EngineFactory> = {
   pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
     const piCfg = cfg as PiEngineConfig;
     const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
-    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo);
+    return createPiEngine({ engineId, config: piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo });
   },
   scripted: () => new MockExecutionEngine(),
 };

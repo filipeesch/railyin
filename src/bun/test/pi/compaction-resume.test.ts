@@ -68,6 +68,7 @@ class MockResumingSession {
       if (this.continueError) throw this.continueError;
       this.emit({ type: "agent_end" });
     },
+    waitForIdle: async (): Promise<void> => {},
   };
 
   subscribe(cb: (event: any) => void): () => void {

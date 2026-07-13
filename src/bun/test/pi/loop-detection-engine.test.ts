@@ -38,6 +38,7 @@ class MockLoopSession {
     };
     onPayload: any;
     beforeToolCall: ((ctx: any) => Promise<any>) | undefined;
+    waitForIdle: () => Promise<void>;
   } = {
     state: {
       model: null as any,
@@ -47,6 +48,7 @@ class MockLoopSession {
     },
     onPayload: undefined as any,
     beforeToolCall: undefined as any,
+    waitForIdle: async (): Promise<void> => {},
   };
 
   subscribe(cb: (event: any) => void): () => void {
