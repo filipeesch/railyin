@@ -1004,6 +1004,60 @@ describe("tasks.list — ESP-1: executionCount JOIN", () => {
   });
 });
 
+// ─── ESP-3: tasks.list — multi-project taskKey ────────────────────────────────
+
+describe("tasks.list — ESP-3: projectKey returned correctly", () => {
+  it("returns tasks with correct projectKey for each task", async () => {
+    // Seed board
+    db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'multi-proj-board', 'delivery')");
+    const boardId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+    // Seed two conversations
+    db.run("INSERT INTO conversations (task_id) VALUES (0)");
+    const convA = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run("INSERT INTO conversations (task_id) VALUES (0)");
+    const convB = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+    // Seed tasks with DIFFERENT projectKeys
+    db.run(
+      "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, 'alpha', 'Alpha Task', '', 'backlog', 'idle', ?, 'fake/fake')",
+      [boardId, convA],
+    );
+    db.run(
+      "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, 'beta', 'Beta Task', '', 'backlog', 'idle', ?, 'fake/fake')",
+      [boardId, convB],
+    );
+
+    const { handlers } = makeHandlers();
+    const tasks = await handlers["tasks.list"]({ boardId });
+
+    expect(tasks).toHaveLength(2);
+    const alphaTask = tasks.find((t) => t.projectKey === "alpha");
+    const betaTask = tasks.find((t) => t.projectKey === "beta");
+    expect(alphaTask).toBeDefined();
+    expect(betaTask).toBeDefined();
+    expect(alphaTask!.title).toBe("Alpha Task");
+    expect(betaTask!.title).toBe("Beta Task");
+  });
+
+  it("projectKey is preserved across task lifecycle (transition, update)", async () => {
+    const { projectKey, boardId, taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'copilot/mock-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    const originalKey = "test-project"; // seedProjectAndTask uses this
+
+    const { handlers } = makeHandlers();
+
+    // Transition the task
+    const result = await handlers["tasks.transition"]({ taskId, toState: "plan" });
+    expect(result.task.projectKey).toBe(originalKey);
+
+    // List should still show correct projectKey after transition
+    const tasks = await handlers["tasks.list"]({ boardId });
+    const task = tasks.find((t) => t.id === taskId);
+    expect(task!.projectKey).toBe(originalKey);
+  });
+});
+
 // ─── ESP-2: tasks.delete — cascade atomicity ─────────────────────────────────
 
 describe("tasks.delete — ESP-2: cascade atomicity", () => {

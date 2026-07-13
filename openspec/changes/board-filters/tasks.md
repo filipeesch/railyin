@@ -26,14 +26,14 @@
 - [ ] 4.3 Verify switching board resets filter to "all" (correct — different board may have different projectKeys)
 - [ ] 4.4 Verify workspace switch correctly updates project filter options## 5. Tests — Playwright E2E (`e2e/ui/board-project-filter.spec.ts`)
 
-- [ ] 5.1 Create `board-project-filter.spec.ts` with PF suite: Select visible in header, placeholder text
-- [ ] 5.2 PO suite: filter options list workspace projects; respects board.projectKeys; falls back to all when empty
-- [ ] 5.3 FT suite: selecting project hides non-matching tasks; shows matching; empty columns when no match
-- [ ] 5.4 FR suite: deselecting filter (null) shows all tasks again
-- [ ] 5.5 FS suite: switching board resets filter to "all"; switching workspace updates options
-- [ ] 5.6 FU suite: new matching task appears; non-matching stays hidden; drag-drop preserves filter state
+- [x] 5.1 Create `board-project-filter.spec.ts` with PF suite: Select visible in header, placeholder text
+- [x] 5.2 PO suite: filter options list workspace projects; respects board.projectKeys; falls back to all when empty
+- [x] 5.3 FT suite: selecting project hides non-matching tasks; shows matching; empty columns when no match
+- [x] 5.4 FR suite: deselecting filter (null) shows all tasks again
+- [x] 5.5 FS suite: switching board resets filter to "all"; switching workspace updates options
+- [x] 5.6 FU suite: new matching task appears; non-matching stays hidden; drag-drop preserves filter state
 
 ## 6. Tests — Backend Handler Gap (`src/bun/test/handlers.test.ts`)
 
-- [ ] 6.1 Seed two tasks with different projectKeys in same board; verify tasks.list returns both with correct projectKey
-- [ ] 6.2 Verify projectKey is preserved across task lifecycle (transition, update)
+- [x] 6.1 Seed two tasks with different projectKeys in same board; verify tasks.list returns both with correct projectKey
+- [x] 6.2 Verify projectKey is preserved across task lifecycle (transition, update)

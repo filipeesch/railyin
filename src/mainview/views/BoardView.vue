@@ -40,6 +40,15 @@
         />
       </div>
       <div class="board-header__right">
+        <Select
+          v-model="selectedProjectKey"
+          :options="projectFilterOptions"
+          option-label="label"
+          option-value="value"
+          placeholder="All projects"
+          class="project-filter-select"
+          clearable
+        />
         <Button
           :icon="isDark ? 'pi pi-sun' : 'pi pi-moon'"
           severity="secondary"
@@ -248,6 +257,32 @@ const dropIndex = ref<number | null>(null);
 const dropIndicatorY = ref<number>(0);
 let lastDragEndTime = 0;
 
+// ── Project filter state (tasks 1.1-1.4) ─────────────────────────────────────
+const selectedProjectKey = ref<string | null>(null);
+
+const projectFilterOptions = computed(() => {
+  const workspaceKey = workspaceStore.activeWorkspaceKey;
+  if (!workspaceKey) return [];
+
+  // All projects in the current workspace
+  let projectKeys = projectStore.projects
+    .filter((p) => p.workspaceKey === workspaceKey)
+    .map((p) => p.key);
+
+  // Narrow to board's declared projects if set (task 1.3)
+  const board = boardStore.activeBoard;
+  if (board?.projectKeys?.length > 0) {
+    projectKeys = projectKeys.filter((k) => board!.projectKeys!.includes(k));
+  }
+
+  // Map to { label, value } format (task 1.2)
+  return projectKeys.map((key) => {
+    const project = projectStore.projects.find((p) => p.key === key);
+    return { label: project?.name ?? key, value: key };
+  });
+});
+
+
 async function onFooterClick() {
   if (terminalStore.sessions.length === 0) {
     // No sessions yet — create one in the workspace root
@@ -319,11 +354,12 @@ function stopAutoScroll() {
   scrollTarget = null;
 }
 
-// Load tasks when active board changes
+// Load tasks when active board changes; reset filter on board switch (FS-1)
 watch(
   () => boardStore.activeBoardId,
   async (id) => {
     if (id != null) {
+      selectedProjectKey.value = null; // reset filter on board switch
       await taskStore.loadTasks(id);
     }
   },
@@ -355,7 +391,13 @@ onUnmounted(() => {
 const columnTasksMap = computed<Record<string, Task[]>>(() => {
   const boardId = boardStore.activeBoardId;
   if (!boardId) return {};
-  const tasks = taskStore.tasksByBoard[boardId] ?? [];
+  let tasks = taskStore.tasksByBoard[boardId] ?? [];
+
+  // Apply project filter (tasks 3.1-3.2)
+  if (selectedProjectKey.value != null) {
+    tasks = tasks.filter((t) => t.projectKey === selectedProjectKey.value);
+  }
+
   const template = boardStore.activeBoard?.template;
   const result: Record<string, Task[]> = {};
   for (const col of template?.columns ?? []) {
@@ -708,6 +750,10 @@ watch(chatSidebarOpen, (isOpen) => {
 
 .board-selector {
   min-width: 200px;
+}
+
+.project-filter-select {
+  min-width: 180px;
 }
 
 .board-columns {
