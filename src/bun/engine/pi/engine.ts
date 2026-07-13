@@ -269,6 +269,7 @@ export class PiEngine implements ExecutionEngine {
       workspaceKey,
       skillResolver,
       suspendRef,
+      signal,
     );
 
     const piModel = this.modelBuilder.build(modelOverride, contextWindowOverride);
@@ -278,7 +279,7 @@ export class PiEngine implements ExecutionEngine {
 
     this._applyPresetToSession(session, samplingPresetName);
 
-    const harnessCtx = this.toolFactory.getOrCreateHarnessContext(conversationId, cwd);
+    const harnessCtx = this.toolFactory.getOrCreateHarnessContext(conversationId, cwd, signal);
     harnessCtx.loopDetector.reset();
     session.agent.beforeToolCall = async (ctx) => {
       const looping = harnessCtx.loopDetector.record(ctx.toolCall.name, ctx.args as unknown);
@@ -542,11 +543,6 @@ export class PiEngine implements ExecutionEngine {
   private get commonCtxRefs() { return this.toolFactory.commonCtxRefs; }
   /** @deprecated Access via engine.compactionCoordinator.bgCompactions */
   private get bgCompactions() { return this.compactionCoordinator.bgCompactions; }
-
-  /** @deprecated Use engine.toolFactory.getOrCreateHarnessContext() */
-  private getOrCreateHarnessContext(conversationId: number, worktreePath: string) {
-    return this.toolFactory.getOrCreateHarnessContext(conversationId, worktreePath);
-  }
 
   /** @deprecated Use engine.sessionManager.getOrCreate() */
   private getOrCreateSession(
