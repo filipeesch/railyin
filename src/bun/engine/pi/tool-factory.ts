@@ -32,17 +32,23 @@ export class PiToolFactory {
     private readonly onCancel: (executionId: number) => void,
   ) {}
 
-  getOrCreateHarnessContext(conversationId: number, worktreePath: string): HarnessContext {
+  getOrCreateHarnessContext(
+    conversationId: number,
+    worktreePath: string,
+    signal: AbortSignal = new AbortController().signal,
+  ): HarnessContext {
     let ctx = this.harnessContexts.get(conversationId);
     if (!ctx) {
       ctx = {
         undoStack: new UndoStack(this.config.harness?.undo_stack_size),
         worktreePath,
         loopDetector: new ToolLoopDetector(),
+        signal,
       };
       this.harnessContexts.set(conversationId, ctx);
     } else {
       ctx.worktreePath = worktreePath;
+      ctx.signal = signal;
     }
     return ctx;
   }
@@ -103,8 +109,9 @@ export class PiToolFactory {
     workspaceKey: string | undefined,
     skillResolver: SkillResolver,
     suspendRef: SuspendRef,
+    signal?: AbortSignal,
   ): ReturnType<typeof buildAllTools> {
-    const harnessCtx = this.getOrCreateHarnessContext(conversationId, worktreePath);
+    const harnessCtx = this.getOrCreateHarnessContext(conversationId, worktreePath, signal);
     const commonCtx = this.getOrCreateCommonContext(
       conversationId,
       workingDirectory,

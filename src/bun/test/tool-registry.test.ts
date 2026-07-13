@@ -18,6 +18,7 @@ describe("Test Plan: Validate search_text removal and SDK search tool replacemen
       undoStack: {} as any,
       worktreePath: "/tmp/test",
       loopDetector: {} as any,
+      signal: new AbortController().signal,
     };
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
@@ -57,6 +58,7 @@ describe("run_command tool description", () => {
       undoStack: {} as any,
       worktreePath: "/tmp/test",
       loopDetector: {} as any,
+      signal: new AbortController().signal,
     };
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },
@@ -82,6 +84,7 @@ describe("run_command tool description", () => {
       undoStack: {} as any,
       worktreePath: "/tmp/test",
       loopDetector: {} as any,
+      signal: new AbortController().signal,
     };
     const mockCommonCtx = {
       runtime: { worktreePath: "/tmp/test" },

@@ -31,6 +31,7 @@ function makeHarness(dir: string): HarnessContext {
     undoStack: new UndoStack(),
     worktreePath: dir,
     loopDetector: {} as any,
+    signal: new AbortController().signal,
   };
 }
 
