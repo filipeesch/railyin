@@ -41,7 +41,7 @@ On timeout expiry or `AbortSignal` abort, send SIGTERM to the process group, wai
 Add `signal` alongside `worktreePath` in `HarnessContext`, both set in `getOrCreateHarnessContext(conversationId, worktreePath, signal)`. The execution's `AbortSignal` (already flowing through `ExecutionParams.signal` → `engine.ts` → `execution-controller.ts`) is passed one level further into the tool factory call site in `engine.ts`. This keeps `HarnessContext` a plain per-conversation state bag (per its existing single-responsibility role) rather than introducing a new global registry or singleton — consistent with SOLID/DI principles already used in this file (constructor-injected `config`, `onTaskUpdated`, `onCancel`).
 
 ### 6. Output truncation: head (2KB) + tail (6KB), independent per stream
-Replace the current head-only truncation with a head+tail strategy per stream (stdout gets its own 2KB head / 6KB tail budget, stderr the same, sized proportionally to their existing 8KB/2KB totals — exact split TBD at implementation time but stdout gets the larger overall budget matching today's ratio). A middle-omission marker is inserted between the two kept sections. This is implemented as a small pure `truncateHeadTail(text, headBytes, tailBytes)` helper — independently testable, no dependency on the process-spawning logic.
+Replace the current head-only truncation with a head+tail strategy per stream: both stdout and stderr independently retain a flat 2KB head / 6KB tail budget (8KB total per stream) when truncation is needed — resolved during implementation as a flat per-stream budget rather than proportional to the old 8KB/2KB total split, matching the literal wording of the spec requirement ("each stream SHALL independently retain its first ~2KB and its last ~6KB"). A middle-omission marker is inserted between the two kept sections. This is implemented as a small pure `truncateHeadTail(text, headBytes, tailBytes)` helper — independently testable, no dependency on the process-spawning logic.
 
 ### 7. Composition over one big rewritten function
 Rather than growing `shell.ts` into one large function that handles spawning, timeout, kill-escalation, and truncation inline, the implementation should factor out:
@@ -74,5 +74,4 @@ The one exception is the Stryker/Vitest mutation-testing path, which runs throug
 
 ## Open Questions
 
-- Exact head/tail byte split for stdout vs stderr (proportional to today's 8KB/2KB ratio, or a flat 2KB/6KB per stream regardless of stream type) — left to implementation, does not affect the overall approach.
-- Exact grace period between SIGTERM and SIGKILL (2s vs 5s) — left to implementation as a tunable constant.
+- Exact grace period between SIGTERM and SIGKILL (2s vs 5s) — resolved as a 3s default in `shell-runner.ts` (`DEFAULT_GRACE_PERIOD_MS`), configurable per-call so tests can use much shorter values.
