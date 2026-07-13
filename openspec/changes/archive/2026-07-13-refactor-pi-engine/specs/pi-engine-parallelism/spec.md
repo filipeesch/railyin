@@ -1,13 +1,6 @@
-# Pi Engine Parallelism
-
-## Purpose
-
-Specifies how the Pi engine leverages parallel request capacity on local LLM servers (vLLM, Ollama, LM Studio) through provider concurrency limiting, connection pooling, a `delegate` tool for fan-out sub-conversations, and opportunistic background compaction.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Per-provider concurrency limiter
-
 The Pi engine SHALL maintain one bounded concurrency limiter per provider name (as keyed in `PiEngineConfig.providers`). Every LLM HTTP request originating from any `AgentSession` created by the Pi engine — including parent sessions, child sessions spawned via the `delegate` tool, and background compaction calls — SHALL acquire a slot from the matching limiter before issuing the request and SHALL release the slot when the response stream terminates (success, error, or abort). The limiter SHALL implement a FIFO wait queue with abort-aware acquisition.
 
 The limiter SHALL be owned by a dedicated `ConcurrencyLimiter` service, not by `PiEngine` directly. The `RunDriver` and `CompactionCoordinator` SHALL receive the limiter service via constructor injection.
@@ -32,16 +25,7 @@ The limiter SHALL be owned by a dedicated `ConcurrencyLimiter` service, not by `
 - **WHEN** the engine starts and any provider has `max_inflight > 2` with a `base_url` whose host is `localhost` or `127.0.0.1` and port is `1234`
 - **THEN** a single warning is logged identifying the provider and recommending `max_inflight: 2`
 
-### Requirement: Shared HTTP connection pool per `base_url`
-
-The Pi engine SHALL maintain one shared `undici.Agent` (or equivalent HTTP keep-alive pool) per distinct provider `base_url`. All LLM requests to the same `base_url` SHALL reuse this pool. The pool SHALL be configured with `keepAlive: true`.
-
-#### Scenario: Sockets reused across sessions
-- **WHEN** five sequential LLM requests are issued from different `AgentSession` instances to the same provider `base_url`
-- **THEN** the requests share underlying TCP sockets via the keep-alive pool rather than opening a new connection per request
-
 ### Requirement: Transport wrapper routes all Pi LLM calls through the limiter
-
 `defaultSessionFactory` SHALL install a custom `Transport` (via `AgentOptions.transport`) on every `AgentSession` it creates. The transport SHALL resolve the provider name from the model's `provider` field, await `limiter.acquire(provider, signal)` before invoking the underlying HTTP stream, and release the slot when the stream terminates.
 
 The transport factory SHALL be owned by the `ConcurrencyLimiter` service and passed to `SessionManager`.
@@ -55,7 +39,6 @@ The transport factory SHALL be owned by the `ConcurrencyLimiter` service and pas
 - **THEN** the limiter slot is released exactly once
 
 ### Requirement: `delegate` tool for parallel sub-conversations
-
 The Pi engine SHALL expose a tool named `delegate` whose parameters are `{ tasks: Array<{ id: string; prompt: string; tools?: ("read"|"write"|"shell"|"web")[] }>, max_concurrency?: number }`. When the parent agent invokes `delegate`, the engine SHALL:
 
 1. Validate that `tasks.length` is between 1 and `harness.delegate.max_per_call` (default 5), all `id` values are non-empty and unique within the call, and every `tools` entry is contained in `harness.delegate.allow_tools` (default `["read","write","shell"]`).
@@ -104,7 +87,6 @@ The delegate tool implementation SHALL live in `ToolFactory` and receive a `chil
 - **THEN** no `delegate-${parentConversationId}/` files remain under `~/.railyin/pi-sessions/`
 
 ### Requirement: Live per-child progress via parentCallId nesting
-
 While children are running, each child's `tool_start` and `tool_result` events SHALL be emitted on the parent execution stream with `parentCallId` set to the `delegate` tool call's `callId` and `isInternal: true`. These events SHALL be visible to the UI only — they SHALL NOT be appended to the parent agent's context.
 
 The UI renders them as collapsible nested cards under the `delegate` tool call using the existing `parentCallId` rendering (S-26 pattern). No new `EngineEvent` types or UI components are required.
@@ -128,7 +110,6 @@ Because child tool `callId`s are only unique within a child session, they can co
 - **THEN** the parent's context contains exactly one tool result for `delegate` (the digest) and none of the intermediate child tool events
 
 ### Requirement: Child raw-model events forwarded with parent linkage
-
 When `onRawModelMessage` is provided to a Pi execution that invokes `delegate`, every raw inbound model event from any child session SHALL be forwarded through the same callback with `parentToolCallId` set to the `delegate` tool call id and `sessionId` set to `"${parentConversationId}/${jobId}"`.
 
 #### Scenario: Child events tagged for raw-events panel
@@ -136,7 +117,6 @@ When `onRawModelMessage` is provided to a Pi execution that invokes `delegate`, 
 - **THEN** every child's inbound events arrive at the callback with the parent's `delegate` tool call id as `parentToolCallId`
 
 ### Requirement: Opportunistic background compaction
-
 After each `turn_end` event on a parent Pi `AgentSession`, the engine SHALL check whether to trigger background compaction using the following rule:
 
 ```
@@ -216,7 +196,6 @@ The background compaction logic SHALL be owned by a dedicated `CompactionCoordin
 - **THEN** after the compaction promise resolves, the execution loop exits normally without calling `session.agent.continue()`
 
 ### Requirement: Shutdown cancels in-flight background compactions
-
 `PiEngine.shutdown()` SHALL invoke `session.cancelCompaction()` on every session that has a background compaction in flight before disposing the session.
 
 #### Scenario: Background compaction aborted on shutdown
@@ -224,7 +203,6 @@ The background compaction logic SHALL be owned by a dedicated `CompactionCoordin
 - **THEN** that session's `cancelCompaction()` is called prior to disposal and `shutdown()` resolves without hanging
 
 ### Requirement: Configuration surface
-
 `PiEngineConfig` SHALL accept the following additional fields:
 
 ```
@@ -265,9 +243,8 @@ Loaded configuration values SHALL be validated at engine construction time; inva
 - **THEN** the waiter's acquire promise rejects with a clear timeout error and the queue entry is removed
 
 ### Requirement: Provider metrics surfaced via helper
-
 The Pi engine SHALL expose a `getPiProviderStatus()` helper returning, for each configured provider: `inFlight: number`, `queueDepth: number`, `p50LatencyMs: number | null`, `recentRejectCount: number`. The helper SHALL be safe to call from any thread and SHALL NOT modify limiter state.
 
 #### Scenario: Snapshot includes every configured provider
-- **WHEN** `getPiProviderStatus()` is called and two providers are configured
+- **WHEN** `getgetPiProviderStatus()` is called and two providers are configured
 - **THEN** the returned snapshot contains one entry per provider name with the four fields populated

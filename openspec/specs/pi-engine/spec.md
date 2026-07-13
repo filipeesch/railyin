@@ -1,3 +1,5 @@
+# Pi Engine
+
 ## Purpose
 Documents the Pi engine's capabilities, contracts, and behavior in the Railyin system.
 
@@ -32,6 +34,10 @@ PiEngine must fully implement the `ExecutionEngine` interface from `src/bun/engi
 #### Scenario: ModelSettingsRepository and workspaceKey injected at construction
 - **WHEN** the engine factory creates a `PiEngine` in `index.ts`
 - **THEN** the `ModelSettingsRepository` instance and current `workspaceKey` are passed as constructor arguments
+
+#### Scenario: execute() waits for SDK run to settle before emitting done
+- **WHEN** `engine.execute(params)` is called and the Pi SDK emits `agent_end`
+- **THEN** the `{ type: "done" }` EngineEvent is emitted only after the SDK run has fully settled (i.e., after `session.agent.waitForIdle()` resolves)
 
 ### Requirement: listModels() from config
 The Pi engine's `listModels()` SHALL query `GET {base_url}/v1/models` (not `/models`) on each configured provider. Each returned `EngineModelInfo` SHALL include `contextWindowEditable: true`. The `contextWindow` value SHALL be: server-reported `context_length` from `/v1/models` response if present, otherwise `null` (the caller resolves the final effective value using `model_settings` overrides and the engine default).
@@ -88,7 +94,7 @@ On session reuse, the engine SHALL call `session.setActiveToolsByName(names)` to
 
 #### Scenario: compact() restores session from disk when not in memory
 - **WHEN** `compact()` is called for a conversationId not in the session map
-- **THEN** `getOrCreateSession()` is called to restore from `~/.railyin/pi-sessions/<hash>.jsonl`, the session is stored in the map, and compaction proceeds
+- **THEN** `getOrCreateSession()` is called to restore from the path resolved by the injected `SessionPathResolver`, the session is stored in the map, and compaction proceeds
 
 #### Scenario: compact() throws when already compacting
 - **WHEN** `compact()` is called and `session.isCompacting` returns true
@@ -139,7 +145,7 @@ A `buildToolAllowlist(tools: AgentTool<any>[]): string[]` function SHALL exist i
 - **THEN** the Pi SDK resolves the skill by name from the loaded skill list
 
 ### Requirement: Event translation
-Pi SDK `AgentSessionEvent` events (a superset of `AgentEvent`) are translated to `EngineEvent` types compatible with Railyin's stream processor. The translator imports from `AgentSessionEvent` (not `AgentEvent`) to handle session-specific events including compaction lifecycle events.
+Pi SDK `AgentSessionEvent` events (a superset of `AgentEvent`) SHALL be translated to `EngineEvent` types compatible with Railyin's stream processor. The translator imports from `AgentSessionEvent` (not `AgentEvent`) to handle session-specific events including compaction lifecycle events.
 
 #### Scenario: Streaming text
 - **WHEN** Pi emits `message_update` with `assistantMessageEvent.type === "text_delta"`
@@ -157,6 +163,16 @@ Pi SDK `AgentSessionEvent` events (a superset of `AgentEvent`) are translated to
 #### Scenario: Agent completion
 - **WHEN** Pi emits `agent_end`
 - **THEN** a `{ type: "done" }` EngineEvent is emitted and the stream closes
+
+### Requirement: Faux-provider no-output regression test
+A new integration test SHALL use `registerFauxProvider` to script an assistant response where final text deltas and `agent_end` arrive after `session.prompt()` resolves. The test SHALL drive `PiEngine.execute()` end-to-end and verify that at least one non-empty `token` event is emitted before the `{ type: "done" }` event. This test directly validates that the engine waits for `session.agent.waitForIdle()` before closing the stream.
+
+#### Scenario: Faux provider emits final deltas after prompt resolves
+- **GIVEN** a faux provider scripted with an assistant message whose text deltas are deferred until after `session.prompt()` resolves
+- **WHEN** `engine.execute(params)` is consumed to completion
+- **THEN** the stream emits one or more `token` events containing the assistant text
+- **AND** the stream emits `{ type: "done" }` after all token events
+- **AND** no "Agent completed with no output" warning is produced
 
 #### Scenario: Compaction started
 - **WHEN** Pi SDK emits `compaction_start` (reason: threshold, overflow, or manual)
@@ -181,7 +197,7 @@ Pi SDK `AgentSessionEvent` events (a superset of `AgentEvent`) are translated to
 
 #### Scenario: Manual compact restores session from disk when not in memory
 - **WHEN** `engine.compact()` is called for a `conversationId` with no active Pi session in memory
-- **THEN** `getOrCreateSession()` is called to restore from `~/.railyin/pi-sessions/<hash>.jsonl` and compaction proceeds normally
+- **THEN** `getOrCreateSession()` is called to restore from the path resolved by the injected `SessionPathResolver` and compaction proceeds normally
 
 ### Requirement: listModels reports manual compaction support
 Pi models listed by `listModels()` SHALL include `supportsManualCompact: true` to indicate that manual compaction is available via the compact button in the UI.
@@ -236,6 +252,18 @@ At the beginning of each `createManagedExecution()` invocation, the Pi engine SH
 - **GIVEN** a delegate child session is active
 - **WHEN** `beforeToolCall` fires for the same fingerprint for the 3rd time within the child session's execution
 - **THEN** the call is blocked and the child model receives a descriptive error tool result
+
+### Requirement: SessionPathResolver dependency
+`PiSessionManager` SHALL receive a `SessionPathResolver` interface (`pathForConversation(conversationId): string`) via constructor injection. Production wiring SHALL use a SHA1-based resolver under `~/.railyin/pi-sessions/`. Unit and integration tests SHALL inject a temp-path resolver so disk-restore tests are isolated and do not pollute the production sessions directory.
+
+#### Scenario: Production resolver uses ~/.railyin/pi-sessions
+- **WHEN** the production `createPiEngine()` factory wires the session manager
+- **THEN** the resolver returns paths under `~/.railyin/pi-sessions/<hash>.jsonl`
+
+#### Scenario: Test resolver uses temp directory
+- **GIVEN** a test injecting a temp-directory `SessionPathResolver`
+- **WHEN** `PiSessionManager` creates and restores sessions
+- **THEN** all session files are written under the temp directory and cleaned up by the test
 
 ### Requirement: PiEngine loop guard wiring is covered by integration tests
 `src/bun/test/pi/loop-detection-engine.test.ts` SHALL contain the following test cases (pattern: `MockBgSession` + `makePiEngine` + `runExecution`, same as `background-compaction.test.ts`):
