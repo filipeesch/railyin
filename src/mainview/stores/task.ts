@@ -331,6 +331,29 @@ export const useTaskStore = defineStore("task", () => {
     return { warning: result.warning };
   }
 
+  // ─── Batch delete tasks ───────────────────────────────────────────────────
+
+  async function deleteTasks(
+    taskIds: number[],
+    options?: { onProgress?: (taskId: number) => void },
+  ): Promise<{ deleted: number; warnings: string[]; error?: string }> {
+    const warnings: string[] = [];
+    for (const taskId of taskIds) {
+      try {
+        const { warning } = await deleteTask(taskId);
+        if (warning) warnings.push(warning);
+        options?.onProgress?.(taskId);
+      } catch (err) {
+        return {
+          deleted: taskIds.indexOf(taskId),
+          warnings,
+          error: err instanceof Error ? err.message : "Failed to delete tasks",
+        };
+      }
+    }
+    return { deleted: taskIds.length, warnings };
+  }
+
   // ─── Compact conversation ─────────────────────────────────────────────────
 
   async function compactTask(taskId: number) {
@@ -470,6 +493,7 @@ export const useTaskStore = defineStore("task", () => {
     cancelTask,
     updateTask,
     deleteTask,
+    deleteTasks,
     getGitStat,
     hasUnread,
     workspaceHasUnread,
