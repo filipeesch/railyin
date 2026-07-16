@@ -28,9 +28,10 @@ export interface CursorSDKMessage {
   status?: string;
   args?: Record<string, unknown>;
   result?: unknown;
+  // For `type: "assistant"` this is `SDKAssistantMessage["message"]` (an object with
+  // `content` blocks); for `type: "status"` it's a plain string status message.
   message?: unknown;
   text?: string;
-  messageObj?: { role?: string; content?: Array<{ type?: string; text?: string }> };
 }
 
 /* ─── Structured Result Extraction ─── */
@@ -313,8 +314,10 @@ export function translateCursorMessage(message: CursorSDKMessage): EngineEvent[]
 
   switch (message.type) {
     case "assistant": {
-      // Extract text from content blocks
-      const contentBlocks = (message.messageObj?.content ?? []) as Array<{ type?: string; text?: string }>;
+      // The real @cursor/sdk field is `message.content` (SDKAssistantMessage["message"]),
+      // an object like { role: "assistant", content: [{ type: "text", text }] }.
+      const messageObj = message.message as { content?: Array<{ type?: string; text?: string }> } | undefined;
+      const contentBlocks = messageObj?.content ?? [];
       const content = contentBlocks
         .filter((block) => block.type === "text")
         .map((block) => block.text ?? "")

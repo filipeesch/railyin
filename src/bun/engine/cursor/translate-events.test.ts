@@ -176,6 +176,22 @@ describe("extractStructuredResult", () => {
 /* ─── translateCursorMessage — end-to-end event shapes ───────────── */
 
 describe("translateCursorMessage", () => {
+  it("assistant message with text content → token event (regression: real SDK field is message.content, not messageObj.content)", () => {
+    const events = translateCursorMessage({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "Hello there" }] },
+    } as CursorSDKMessage);
+    expect(events).toEqual([{ type: "token", content: "Hello there" }]);
+  });
+
+  it("assistant message with only tool_use blocks (no text) → no token event", () => {
+    const events = translateCursorMessage({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "1", name: "shell", input: {} } as unknown as { type?: string; text?: string }] },
+    } as CursorSDKMessage);
+    expect(events).toEqual([]);
+  });
+
   it("tool_call running → tool_start WITH display", () => {
     const events = translateCursorMessage({
       type: "tool_call",

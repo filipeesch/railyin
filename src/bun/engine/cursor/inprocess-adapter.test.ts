@@ -93,7 +93,7 @@ function makeSdkClient(
 describe("InProcessCursorAdapter.run", () => {
   it("translates SDK stream messages into EngineEvents in order via translate-events.ts", async () => {
     const messages: CursorSDKMessage[] = [
-      { type: "assistant", messageObj: { content: [{ type: "text", text: "Hello" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Hello" }] } },
       { type: "status", message: "thinking" },
     ];
     const run = makeFakeRun({ messages });
@@ -144,9 +144,9 @@ describe("InProcessCursorAdapter.run", () => {
     let releaseHook: () => void = () => {};
     const hook = new Promise<void>((resolve) => { releaseHook = resolve; });
     async function* stream(): AsyncGenerator<CursorSDKMessage> {
-      yield { type: "assistant", messageObj: { content: [{ type: "text", text: "first" }] } };
+      yield { type: "assistant", message: { content: [{ type: "text", text: "first" }] } };
       await hook;
-      yield { type: "assistant", messageObj: { content: [{ type: "text", text: "late" }] } };
+      yield { type: "assistant", message: { content: [{ type: "text", text: "late" }] } };
     }
     const run = makeFakeRun({ stream });
     const agent = makeFakeAgent(run);
@@ -182,7 +182,7 @@ describe("InProcessCursorAdapter.run", () => {
 
   it("also finalizes (cancel + close) when the run stream throws mid-iteration", async () => {
     async function* stream(): AsyncGenerator<CursorSDKMessage> {
-      yield { type: "assistant", messageObj: { content: [{ type: "text", text: "partial" }] } };
+      yield { type: "assistant", message: { content: [{ type: "text", text: "partial" }] } };
       throw new Error("stream exploded");
     }
     const run = makeFakeRun({ stream });
