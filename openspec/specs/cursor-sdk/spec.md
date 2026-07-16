@@ -1,5 +1,5 @@
 ## Purpose
-Defines the Cursor SDK engine integration: how Railyin spawns and talks to the `@cursor/sdk` runtime in a Node subprocess, how SDK events are translated to `EngineEvent`s, how per-conversation agent identity is derived and resumed, how Railyin's common tools and MCP tools are registered as Cursor `SDKCustomTool` entries, and how the engine is configured and discovered.
+Defines the Cursor SDK engine integration: how Railyin runs the `@cursor/sdk` runtime in-process in the Bun server, how SDK events are translated to `EngineEvent`s, how per-conversation agent identity is derived and resumed, how Railyin's common tools and MCP tools are registered as Cursor `SDKCustomTool` entries, and how the engine is configured and discovered.
 ## Requirements
 ### Requirement: Cursor SDK engine support
 
@@ -12,23 +12,27 @@ The system SHALL support `cursor` as an engine type, providing agent execution c
 - **AND** the engine delegates SDK calls to a `CursorSdkAdapter` configured with the workspace's Cursor `api_key`
 - **AND** model identifiers are exposed as `cursor/${sdkModelId}` (e.g. `cursor/claude-sonnet-4-6`); the engine strips the `cursor/` prefix before passing the id to the SDK
 
-### Requirement: Subprocess-isolated SDK runtime
+### Requirement: In-process SDK runtime
 
-The system SHALL run the Cursor SDK in a Node.js subprocess, not in the Bun parent process.
+The system SHALL run the `@cursor/sdk` directly in the Bun main process. No subprocess, IPC protocol, or external `node` binary dependency SHALL be required for the Cursor engine to function.
 
-#### Scenario: Worker spawn and IPC
+#### Scenario: First call constructs the SDK client in-process
 
 - **WHEN** the first call to `CursorSdkAdapter.run` or `CursorSdkAdapter.listModels` arrives
-- **THEN** Railyin spawns a Node worker (`cursor/worker.mjs`) using `node` (or the binary referenced by `RAILYIN_CURSOR_NODE`)
-- **AND** the worker signals readiness with `{ "type": "ready" }` on stdout before Railyin sends any request
-- **AND** subsequent calls reuse the same long-lived worker
+- **THEN** the adapter calls `@cursor/sdk`'s `Agent`/`Cursor` APIs directly, in the same process and event loop as the rest of the Bun server
+- **AND** no child process is spawned
 
-#### Scenario: Worker crash recovery
+#### Scenario: SDK-side errors surface without a worker-crash path
 
-- **WHEN** the worker process exits unexpectedly while runs are active
-- **THEN** every active run receives a fatal `EngineEvent.error` describing the worker exit
-- **AND** any pending tool-call promises are rejected
-- **AND** the next adapter call respawns the worker
+- **WHEN** an SDK call throws or an in-flight run errors
+- **THEN** the adapter surfaces the failure as a fatal `EngineEvent.error` directly from the `catch` block of the call site
+- **AND** there is no separate "worker exit" recovery path, because there is no worker process to exit independently of the Bun server itself
+
+#### Scenario: Abort-listener suppression is scoped to the Bun process
+
+- **WHEN** the adapter module is loaded
+- **THEN** it calls `setMaxListeners(0)` to suppress Node's `MaxListenersExceededWarning` for the SDK's internal abort-listener accumulation across repeated `Agent.create`/`Agent.resume` calls
+- **AND** this suppression applies process-wide (accepted trade-off; the Bun server has no other high-volume `AbortSignal` listener source that this would need to mask)
 
 ### Requirement: Per-conversation agent lifecycle
 
@@ -38,27 +42,27 @@ The system SHALL use a caller-defined deterministic Cursor `agentId` per convers
 
 - **WHEN** an execution starts on a conversation
 - **THEN** the engine computes `agentId` as a UUIDv5 derived from a fixed Railyin namespace and the name `task:${taskId}` when the conversation is task-scoped, or `conversation:${conversationId}` otherwise
-- **AND** forwards it to the worker via `StartRunRequest.agentId`
+- **AND** passes it directly to the in-process adapter's `run()` call as part of `CursorRunConfig`
 - **AND** the derivation is pure: the same `(taskId, conversationId)` always yields the same UUID, and task-scoped ids are independent of `conversationId`
 
 #### Scenario: First execution on a conversation
 
-- **WHEN** the worker receives `startRun` and `Agent.resume(agentId, ...)` throws (no agent exists yet)
-- **THEN** the worker calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` with the same caller-supplied `agentId`
+- **WHEN** the adapter starts a run and `Agent.resume(agentId, ...)` throws (no agent exists yet)
+- **THEN** the adapter calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` with the same caller-supplied `agentId`
 - **AND** sends the prompt via `agent.send(prompt)`
 - **AND** the agent's working directory is the task's worktree path
-- **AND** if `agent.send(prompt)` throws `AgentBusyError`, the worker retries with `{ local: { force: true } }`
+- **AND** if `agent.send(prompt)` throws `AgentBusyError`, the adapter retries with `{ local: { force: true } }`
 
 #### Scenario: Subsequent execution resumes the agent
 
-- **WHEN** the worker receives `startRun` with the same `agentId` and an agent already exists in the SDK's local store
+- **WHEN** the adapter starts a run with the same `agentId` and an agent already exists in the SDK's local store
 - **THEN** `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` succeeds and returns the prior agent
-- **AND** the worker does NOT call `Agent.create`
+- **AND** the adapter does NOT call `Agent.create`
 
 #### Scenario: Resume failure of an existing agent falls back to create
 
 - **WHEN** `Agent.resume(agentId, ...)` throws for any reason
-- **THEN** the worker falls back to `Agent.create({ ...baseOptions, agentId })` with the same `agentId`
+- **THEN** the adapter falls back to `Agent.create({ ...baseOptions, agentId })` with the same `agentId`
 - **AND** the new agent can be resumed on future turns
 
 #### Scenario: In-turn resume is rejected to force fresh execution
@@ -67,27 +71,17 @@ The system SHALL use a caller-defined deterministic Cursor `agentId` per convers
 - **THEN** it throws an `Error`
 - **AND** the calling `HumanTurnExecutor` falls into its fallback restart branch, which starts a new execution with the user input prepended to the prompt
 
-### Requirement: IPC for agent resume
-
-The worker IPC SHALL carry the per-conversation `agent_id` from Bun to the worker.
-
-#### Scenario: StartRun carries the deterministic agentId
-
-- **WHEN** the Bun adapter sends `startRun`
-- **THEN** it includes `agentId` derived from `(taskId, conversationId)` (see Per-conversation agent lifecycle)
-
 ### Requirement: Streaming event translation
 
-The system SHALL translate `@cursor/sdk` `SDKMessage` events to Railyin's `EngineEvent` stream format and SHALL relay them across the IPC boundary. Tool events MUST include display metadata, structured result data, and file diff information.
+The system SHALL translate `@cursor/sdk` `SDKMessage` events to Railyin's `EngineEvent` stream format directly in-process. Tool events MUST include display metadata, structured result data, and file diff information.
 
 #### Scenario: Token streaming
 - **WHEN** the SDK emits a `type: "assistant"` message containing text blocks
-- **THEN** the worker yields one `EngineEvent` of `type: "token"` per non-empty content concatenation
-- **AND** the Bun adapter forwards it to the caller's async iterable
+- **THEN** the adapter yields one `EngineEvent` of `type: "token"` per non-empty content concatenation to the caller's async iterable
 
 #### Scenario: Reasoning
 - **WHEN** the SDK emits a `type: "thinking"` message with a non-empty `text`
-- **THEN** the worker yields `EngineEvent` of `type: "reasoning"`
+- **THEN** the adapter yields an `EngineEvent` of `type: "reasoning"`
 
 #### Scenario: Tool call start includes display metadata
 - **WHEN** the SDK emits a `type: "tool_call"` message with `status: "running"`
@@ -104,31 +98,24 @@ The system SHALL translate `@cursor/sdk` `SDKMessage` events to Railyin's `Engin
 
 #### Scenario: Run completion
 - **WHEN** the SDK stream ends
-- **THEN** the worker awaits `run.wait()`
+- **THEN** the adapter awaits `run.wait()`
 - **AND** if `result.status === "error"` the adapter emits a fatal `EngineEvent.error` with the SDK's error detail (or "Cursor agent run failed with no detail" when the SDK omits it)
 - **AND** otherwise the adapter emits an `EngineEvent` of `type: "done"`
 
-### Requirement: Custom tool registration and proxying
+### Requirement: Custom tool registration and direct execution
 
-The system SHALL register Railyin's common task tools and MCP-registry tools as Cursor `SDKCustomTool` entries, with execution proxied from the worker back to the Bun parent.
+The system SHALL register Railyin's common task tools and MCP-registry tools as Cursor `SDKCustomTool` entries, with `execute` invoked directly in-process — no serialization boundary or proxy round-trip.
 
-#### Scenario: Bun side: schema-only export
+#### Scenario: Tool schema and execute registered together
 
 - **WHEN** `CursorSdkAdapter.run` is invoked with a `customTools` map
-- **THEN** only each tool's `name`, `description`, and `inputSchema` are serialised across IPC
-- **AND** the tool's `execute` function stays in the Bun process
+- **THEN** each tool's `name`, `description`, `inputSchema`, and `execute` function are passed directly to the SDK's `Agent.create`/`Agent.resume` `local.customTools` option
+- **AND** no cross-process serialization of tool schemas or arguments occurs
 
-#### Scenario: Worker side: proxy invocation
+#### Scenario: Direct tool invocation
 
 - **WHEN** the SDK invokes a registered custom tool during a run
-- **THEN** the worker sends a `toolCall` IPC message with a fresh `callId`, `runId`, `toolName`, and `args`
-- **AND** the worker awaits a matching `toolResult` IPC message before returning to the SDK
-
-#### Scenario: Bun side: tool dispatch and response
-
-- **WHEN** the Bun adapter receives a `toolCall` IPC message
-- **THEN** it looks up the active run by `runId`, resolves the named tool, and invokes its `execute(args)`
-- **AND** sends back a `toolResult` IPC message with either `result` or an `error` string
+- **THEN** the tool's `execute(args)` function runs synchronously in the same process as the SDK call, returning its result (or throwing) directly to the SDK without any intermediate message passing
 
 #### Scenario: Suspend-loop tools terminate the run
 
@@ -153,7 +140,7 @@ The system SHALL list Cursor models available to the configured `api_key`.
 #### Scenario: Models listed
 
 - **WHEN** the engine registry calls `CursorEngine.listModels`
-- **THEN** the worker calls `Cursor.models.list({ apiKey })`
+- **THEN** the adapter calls `Cursor.models.list({ apiKey })` directly in-process
 - **AND** Railyin returns each as `{ qualifiedId: 'cursor/' + id, displayName, description }`
 
 #### Scenario: Missing API key
@@ -203,28 +190,28 @@ The system SHALL inject the content of `SKILL.md` files from `CursorDialect.getS
 ### Requirement: Cursor native project rules loaded automatically
 The system SHALL pass `settingSources: ["project"]` to the Cursor SDK's local agent options so `.cursorrules` and `.cursor/rules/*.mdc` files are loaded automatically on every run.
 
-#### Scenario: settingSources injected in worker startRun
-- **WHEN** the Bun adapter sends a `startRun` message to the worker
-- **THEN** the worker includes `settingSources: ["project"]` in the `local` options passed to `Agent.create` / `Agent.resume`
+#### Scenario: settingSources included in agent options
+- **WHEN** the adapter calls `Agent.create` or `Agent.resume`
+- **THEN** it includes `settingSources: ["project"]` in the `local` options
 - **AND** the SDK loads `.cursorrules` and `.cursor/rules/*.mdc` from the project working directory
 
 ### Requirement: AgentBusyError recovery after decision_request abort
 The system SHALL retry a busy Cursor agent once with `force:true` after a `decision_request`-triggered abort, and SHALL attempt same-id agent recreation and resend in the same turn if the forced retry still reports the agent as busy. The same deterministic `agentId` SHALL be preserved for future turns; no Cursor-specific persistence or id rotation is allowed.
 
 #### Scenario: AgentBusyError on turn following decision_request is retried automatically
-- **WHEN** `agent.send(prompt)` throws `AgentBusyError` in the worker
-- **THEN** the worker retries immediately with `agent.send(prompt, { local: { force: true } })`
+- **WHEN** `agent.send(prompt)` throws `AgentBusyError` in the adapter
+- **THEN** the adapter retries immediately with `agent.send(prompt, { local: { force: true } })`
 - **AND** if the retry succeeds, the run proceeds normally from that point
 
 #### Scenario: Persistent busy after force triggers same-id recreation and resend
 - **WHEN** `agent.send(prompt, { local: { force: true } })` still throws `AgentBusyError`
-- **THEN** the worker recreates the same agent id and resends the prompt in the same turn
-- **AND** if the recreated agent is still busy, the worker ends the current execution cleanly
+- **THEN** the adapter recreates the same agent id and resends the prompt in the same turn
+- **AND** if the recreated agent is still busy, the adapter ends the current execution cleanly
 - **AND** the next turn can reuse the same deterministic `agentId`
 
 #### Scenario: Non-AgentBusyError errors are not swallowed
 - **WHEN** `agent.send(prompt)` throws an error that is not `AgentBusyError`
-- **THEN** the worker propagates the error as a fatal `runDone` status, not as a retry
+- **THEN** the adapter propagates the error as a fatal error event, not as a retry
 
 ### Requirement: listCommands resolves paths from DB like other engines
 The system SHALL resolve the task's worktree path and project path from the database in `CursorEngine.listCommands()`, identical to the pattern used by `CopilotEngine` and `ClaudeEngine`.
