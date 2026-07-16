@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-// @ts-expect-error — .mjs sibling module imported as an opaque namespace
-import { resumeOrCreateAgent } from "../../engine/cursor/worker-resume.mjs";
+import { resumeOrCreateAgent } from "../../engine/cursor/resume.ts";
 
 interface StubAgent {
     resume: ReturnType<typeof vi.fn>;

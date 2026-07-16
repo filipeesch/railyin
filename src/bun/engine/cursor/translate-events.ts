@@ -9,11 +9,8 @@
  *   - buildCursorToolDisplay() — tool name + args → ToolCallDisplay
  *
  * This module is imported by:
- *   - src/bun/engine/cursor/events.ts (Bun side)
- *   - src/bun/engine/cursor/worker.mjs (Node side — inline copy)
- *
- * The worker.mjs copy is kept in sync manually. See worker.mjs for the
- * inline copy and a cross-reference comment.
+ *   - src/bun/engine/cursor/events.ts
+ *   - src/bun/engine/cursor/inprocess-adapter.ts
  */
 
 import type { EngineEvent } from "../types.ts";
@@ -22,7 +19,7 @@ import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { canonicalToolDisplayLabel, humanizeToolName, stripWorktreePath } from "../tool-display.ts";
 import { parseUnifiedDiff } from "../diff-utils.ts";export { parseUnifiedDiff } from "../diff-utils.ts";
 
-/* ─── SDK Message Type (minimal, for worker.mjs compatibility) ─── */
+/* ─── SDK Message Type (minimal) ─── */
 
 export interface CursorSDKMessage {
   type: string;
