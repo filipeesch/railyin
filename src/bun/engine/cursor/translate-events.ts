@@ -9,11 +9,8 @@
  *   - buildCursorToolDisplay() — tool name + args → ToolCallDisplay
  *
  * This module is imported by:
- *   - src/bun/engine/cursor/events.ts (Bun side)
- *   - src/bun/engine/cursor/worker.mjs (Node side — inline copy)
- *
- * The worker.mjs copy is kept in sync manually. See worker.mjs for the
- * inline copy and a cross-reference comment.
+ *   - src/bun/engine/cursor/events.ts
+ *   - src/bun/engine/cursor/inprocess-adapter.ts
  */
 
 import type { EngineEvent } from "../types.ts";
@@ -22,7 +19,7 @@ import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { canonicalToolDisplayLabel, humanizeToolName, stripWorktreePath } from "../tool-display.ts";
 import { parseUnifiedDiff } from "../diff-utils.ts";export { parseUnifiedDiff } from "../diff-utils.ts";
 
-/* ─── SDK Message Type (minimal, for worker.mjs compatibility) ─── */
+/* ─── SDK Message Type (minimal) ─── */
 
 export interface CursorSDKMessage {
   type: string;
@@ -31,9 +28,10 @@ export interface CursorSDKMessage {
   status?: string;
   args?: Record<string, unknown>;
   result?: unknown;
+  // For `type: "assistant"` this is `SDKAssistantMessage["message"]` (an object with
+  // `content` blocks); for `type: "status"` it's a plain string status message.
   message?: unknown;
   text?: string;
-  messageObj?: { role?: string; content?: Array<{ type?: string; text?: string }> };
 }
 
 /* ─── Structured Result Extraction ─── */
@@ -316,8 +314,10 @@ export function translateCursorMessage(message: CursorSDKMessage): EngineEvent[]
 
   switch (message.type) {
     case "assistant": {
-      // Extract text from content blocks
-      const contentBlocks = (message.messageObj?.content ?? []) as Array<{ type?: string; text?: string }>;
+      // The real @cursor/sdk field is `message.content` (SDKAssistantMessage["message"]),
+      // an object like { role: "assistant", content: [{ type: "text", text }] }.
+      const messageObj = message.message as { content?: Array<{ type?: string; text?: string }> } | undefined;
+      const contentBlocks = messageObj?.content ?? [];
       const content = contentBlocks
         .filter((block) => block.type === "text")
         .map((block) => block.text ?? "")

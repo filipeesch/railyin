@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-// @ts-expect-error — .mjs sibling module imported as an opaque namespace
-import { buildBaseOptions } from "../../engine/cursor/worker.mjs";
+import { buildBaseOptions } from "../../engine/cursor/options.ts";
 
 describe("buildBaseOptions", () => {
     it("always includes settingSources: ['project'] in local", () => {
@@ -29,7 +28,7 @@ describe("buildBaseOptions", () => {
     });
 
     it("forwards customTools into local.customTools", () => {
-        const tools = { my_tool: { execute: () => {} } };
+        const tools = { my_tool: { execute: () => "" } };
         const opts = buildBaseOptions("key", "model", "/cwd", tools);
         expect(opts.local.customTools).toBe(tools);
     });

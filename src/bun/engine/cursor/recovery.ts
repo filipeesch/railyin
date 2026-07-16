@@ -1,16 +1,47 @@
-import { AgentBusyError } from "@cursor/sdk";
-import { resumeOrCreateAgent } from "./worker-resume.mjs";
+/**
+ * Busy-agent recovery for the in-process Cursor adapter.
+ *
+ * Ported verbatim from the former `worker-recovery.mjs` (Node subprocess
+ * worker). `Agent` is passed as a parameter (not hard-imported) so this
+ * module stays unit-testable with a stub agent namespace.
+ */
+
+import { AgentBusyError, type AgentOptions } from "@cursor/sdk";
+import { resumeOrCreateAgent, type AgentNamespace } from "./resume.ts";
+
+/** An agent that can send a prompt and optionally be closed. Minimal shape
+ * so recovery logic stays unit-testable with lightweight stubs. */
+export interface SendableAgent<TRun = unknown> {
+  send(prompt: string, options?: { local?: { force?: boolean } }): Promise<TRun>;
+  close?(): unknown;
+}
+
+export interface RecoveryContext {
+  runId?: string | null;
+  executionId?: number | null;
+  taskId?: number | null;
+  conversationId?: number | null;
+  agentId?: string | null;
+}
+
+export type RecoveryLog = (level: "info" | "warn" | "error", message: string) => void;
+
+export interface SendPromptContext extends RecoveryContext {
+  log?: RecoveryLog;
+}
 
 export class PersistentBusyError extends Error {
-  constructor(message, context = {}) {
+  readonly failureKind = "persistent_busy" as const;
+  readonly context: RecoveryContext;
+
+  constructor(message: string, context: RecoveryContext = {}) {
     super(message);
     this.name = "PersistentBusyError";
-    this.failureKind = "persistent_busy";
     this.context = context;
   }
 }
 
-async function safeCloseAgent(agent) {
+async function safeCloseAgent(agent: SendableAgent | undefined | null): Promise<void> {
   if (!agent || typeof agent.close !== "function") return;
   try {
     await agent.close();
@@ -19,21 +50,26 @@ async function safeCloseAgent(agent) {
   }
 }
 
-function buildAgentOptions(agentId, baseOptions) {
+function buildAgentOptions(agentId: string | undefined, baseOptions: AgentOptions): AgentOptions {
   return agentId ? { ...baseOptions, agentId } : baseOptions;
 }
 
-function logRecoveryEvent(log, event, context) {
+function logRecoveryEvent(
+  log: RecoveryLog | undefined,
+  event: string,
+  context: Record<string, unknown>,
+): void {
   if (typeof log !== "function") return;
   log("warn", JSON.stringify({ event, ...context }));
 }
 
-export function isBusyLikeError(err) {
+export function isBusyLikeError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   if (err instanceof AgentBusyError) return true;
-  const status = typeof err.status === "number" ? err.status : Number.NaN;
-  const code = String(err.code ?? "").toLowerCase();
-  const message = String(err.message ?? "").toLowerCase();
+  const e = err as { status?: unknown; code?: unknown; message?: unknown };
+  const status = typeof e.status === "number" ? e.status : Number.NaN;
+  const code = String(e.code ?? "").toLowerCase();
+  const message = String(e.message ?? "").toLowerCase();
   return (
     status === 409
     || code.includes("busy")
@@ -42,7 +78,7 @@ export function isBusyLikeError(err) {
   );
 }
 
-export async function sendWithBusyRetry(agent, prompt) {
+export async function sendWithBusyRetry<TRun>(agent: SendableAgent<TRun>, prompt: string): Promise<TRun> {
   try {
     return await agent.send(prompt);
   } catch (err) {
@@ -53,7 +89,14 @@ export async function sendWithBusyRetry(agent, prompt) {
   }
 }
 
-async function recreateAndSend(Agent, agentId, baseOptions, prompt, recoveryContext, log) {
+async function recreateAndSend<TAgent extends SendableAgent<TRun>, TRun>(
+  Agent: AgentNamespace<TAgent>,
+  agentId: string | undefined,
+  baseOptions: AgentOptions,
+  prompt: string,
+  recoveryContext: RecoveryContext,
+  log: RecoveryLog | undefined,
+): Promise<{ agent: TAgent; run: TRun }> {
   const recreatedAgent = await Agent.create(buildAgentOptions(agentId, baseOptions));
   try {
     const run = await sendWithBusyRetry(recreatedAgent, prompt);
@@ -75,8 +118,14 @@ async function recreateAndSend(Agent, agentId, baseOptions, prompt, recoveryCont
   }
 }
 
-export async function sendPromptWithRecovery(Agent, agentId, baseOptions, prompt, context = {}) {
-  const recoveryContext = {
+export async function sendPromptWithRecovery<TAgent extends SendableAgent<TRun>, TRun>(
+  Agent: AgentNamespace<TAgent>,
+  agentId: string | undefined,
+  baseOptions: AgentOptions,
+  prompt: string,
+  context: SendPromptContext = {},
+): Promise<{ agent: TAgent; run: TRun }> {
+  const recoveryContext: RecoveryContext = {
     runId: context.runId ?? null,
     executionId: context.executionId ?? null,
     taskId: context.taskId ?? null,
@@ -84,7 +133,7 @@ export async function sendPromptWithRecovery(Agent, agentId, baseOptions, prompt
     agentId: agentId ?? null,
   };
 
-  let initialAgent;
+  let initialAgent: TAgent;
   try {
     initialAgent = await resumeOrCreateAgent(Agent, agentId, baseOptions);
   } catch (resumeErr) {

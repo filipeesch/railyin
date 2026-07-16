@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-// @ts-ignore — .mjs sibling module imported as an opaque namespace
-import { PersistentBusyError, sendPromptWithRecovery, sendWithBusyRetry } from "../../engine/cursor/worker.mjs";
+import { PersistentBusyError, sendPromptWithRecovery, sendWithBusyRetry } from "../../engine/cursor/recovery.ts";
 import { AgentBusyError } from "@cursor/sdk";
 
 function makeAgent(overrides: {

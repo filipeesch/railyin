@@ -1,38 +1,18 @@
-## Purpose
-Defines the Cursor SDK engine integration: how Railyin runs the `@cursor/sdk` runtime in-process in the Bun server, how SDK events are translated to `EngineEvent`s, how per-conversation agent identity is derived and resumed, how Railyin's common tools and MCP tools are registered as Cursor `SDKCustomTool` entries, and how the engine is configured and discovered.
-## Requirements
-### Requirement: Cursor SDK engine support
+## REMOVED Requirements
 
-The system SHALL support `cursor` as an engine type, providing agent execution capabilities through the `@cursor/sdk` package.
+### Requirement: Subprocess-isolated SDK runtime
 
-#### Scenario: Cursor engine selection
+**Reason**: The Bun HTTP/2 incompatibility that required isolating `@cursor/sdk` in a Node.js subprocess is fixed upstream as of `@cursor/sdk@1.0.23` (verified via live repro against the real Cursor API on Bun 1.4.0: `1.0.18` fails 3/3 runs with `ERR_HTTP2_SESSION_ERROR`, `1.0.23` succeeds 8/8 runs with zero HTTP/2 errors). Running the SDK in-process removes the subprocess lifecycle, the `node` binary dependency, and the IPC boundary entirely.
 
-- **WHEN** a user selects a `cursor/...` model in model selection
-- **THEN** Railyin instantiates a `CursorEngine`
-- **AND** the engine delegates SDK calls to a `CursorSdkAdapter` configured with the workspace's Cursor `api_key`
-- **AND** model identifiers are exposed as `cursor/${sdkModelId}` (e.g. `cursor/claude-sonnet-4-6`); the engine strips the `cursor/` prefix before passing the id to the SDK
+**Migration**: See the new "In-process SDK runtime" requirement. No Railyin-side data migration is needed — the subprocess boundary was an internal implementation detail with no persisted state of its own. Deployments relying on `RAILYIN_CURSOR_NODE` to point at a specific `node` binary no longer need to set it; the variable is no longer read.
 
-### Requirement: In-process SDK runtime
+### Requirement: IPC for agent resume
 
-The system SHALL run the `@cursor/sdk` directly in the Bun main process. No subprocess, IPC protocol, or external `node` binary dependency SHALL be required for the Cursor engine to function.
+**Reason**: This requirement existed solely to carry `agentId` across the Bun↔worker IPC boundary. With the SDK running in-process, `agentId` is passed directly as a JS object field to `Agent.create`/`Agent.resume` — no serialization or IPC message is involved.
 
-#### Scenario: First call constructs the SDK client in-process
+**Migration**: See "Per-conversation agent lifecycle" (unchanged behavior, updated wording) in the modified requirements below.
 
-- **WHEN** the first call to `CursorSdkAdapter.run` or `CursorSdkAdapter.listModels` arrives
-- **THEN** the adapter calls `@cursor/sdk`'s `Agent`/`Cursor` APIs directly, in the same process and event loop as the rest of the Bun server
-- **AND** no child process is spawned
-
-#### Scenario: SDK-side errors surface without a worker-crash path
-
-- **WHEN** an SDK call throws or an in-flight run errors
-- **THEN** the adapter surfaces the failure as a fatal `EngineEvent.error` directly from the `catch` block of the call site
-- **AND** there is no separate "worker exit" recovery path, because there is no worker process to exit independently of the Bun server itself
-
-#### Scenario: Abort-listener suppression is scoped to the Bun process
-
-- **WHEN** the adapter module is loaded
-- **THEN** it calls `setMaxListeners(0)` to suppress Node's `MaxListenersExceededWarning` for the SDK's internal abort-listener accumulation across repeated `Agent.create`/`Agent.resume` calls
-- **AND** this suppression applies process-wide (accepted trade-off; the Bun server has no other high-volume `AbortSignal` listener source that this would need to mask)
+## MODIFIED Requirements
 
 ### Requirement: Per-conversation agent lifecycle
 
@@ -123,16 +103,6 @@ The system SHALL register Railyin's common task tools and MCP-registry tools as 
 - **THEN** the engine's `onSuspend` callback records the payload and aborts the run
 - **AND** after the SDK stream cuts, the engine yields a `decision_request` `EngineEvent` with the recorded payload
 
-### Requirement: Built-in tools remain available with steering
-
-The system SHALL leave Cursor's built-in tools enabled (the SDK does not expose a disable knob) AND SHALL steer the agent toward Railyin-native bypass tools where the built-ins are unreliable.
-
-#### Scenario: Bypass tools registered
-
-- **WHEN** a run starts with a worktree path
-- **THEN** `railyin_shell`, `railyin_grep`, `railyin_glob`, and `railyin_read` are registered as `customTools` rooted at the worktree
-- **AND** the composed prompt includes a "Tool routing (IMPORTANT)" prefix instructing the agent to prefer them over the SDK's `Shell` / `Grep` / `Glob` / `Read`
-
 ### Requirement: Model listing
 
 The system SHALL list Cursor models available to the configured `api_key`.
@@ -148,54 +118,18 @@ The system SHALL list Cursor models available to the configured `api_key`.
 - **WHEN** neither `engines.yaml` nor `CURSOR_API_KEY` provides an API key
 - **THEN** `listModels` returns an empty array and logs a warning
 
-### Requirement: Engine configuration
-
-The system SHALL accept `cursor` engine configuration via `engines.yaml` with an optional `api_key`.
-
-#### Scenario: Config with API key
-
-- **WHEN** `engines.yaml` contains an engine entry of `type: "cursor"` with `api_key: "..."`
-- **THEN** the adapter uses that key for both `Agent.create` and `Cursor.models.list`
-
-#### Scenario: Fallback to environment variable
-
-- **WHEN** `engines.yaml` omits `api_key`
-- **THEN** the adapter falls back to `process.env.CURSOR_API_KEY`
-- **AND** if neither is set, runs fail fast with a clear authentication error and `listModels` returns an empty list
-
-### Requirement: Slash command resolution via CursorDialect
-The system SHALL resolve slash-command references in Cursor engine prompts via `CursorDialect.resolvePrompt()` before dispatching to the SDK. Raw slash references SHALL never be sent to the Cursor SDK unresolved.
-
-#### Scenario: on_enter_prompt with slash reference is expanded
-- **WHEN** a task transitions to a column whose `on_enter_prompt` is `/gsd-execute-phase`
-- **THEN** `CursorEngine` resolves it via `CursorDialect.resolvePrompt()` to the XML-wrapped file body
-- **AND** the resolved content is sent to the Cursor SDK as the agent prompt, not the raw `/gsd-execute-phase` string
-
-#### Scenario: Plain prompt is passed through unchanged
-- **WHEN** the prompt does not start with a slash reference
-- **THEN** `CursorEngine` sends it to the SDK unchanged
-
-### Requirement: Skill content injected into system-instructions prefix
-The system SHALL inject the content of `SKILL.md` files from `CursorDialect.getSkillPaths()` into the system-instructions prefix that is prepended to every Cursor agent run, so agents have project skill context on every turn.
-
-#### Scenario: Skills prepended to prompt prefix
-- **WHEN** `.cursor/skills/<name>/SKILL.md` files exist in the paths returned by `getSkillPaths()`
-- **THEN** each `SKILL.md` content is read and prepended to the `systemBlock` in the Cursor engine's prompt prefix
-- **AND** each skill section is preceded by a header identifying the skill directory name
-
-#### Scenario: No skill directories — no change to prefix
-- **WHEN** no `.cursor/skills/` directories exist for the task's paths
-- **THEN** the prompt prefix is unchanged (no empty section is injected)
-
 ### Requirement: Cursor native project rules loaded automatically
+
 The system SHALL pass `settingSources: ["project"]` to the Cursor SDK's local agent options so `.cursorrules` and `.cursor/rules/*.mdc` files are loaded automatically on every run.
 
 #### Scenario: settingSources included in agent options
+
 - **WHEN** the adapter calls `Agent.create` or `Agent.resume`
 - **THEN** it includes `settingSources: ["project"]` in the `local` options
 - **AND** the SDK loads `.cursorrules` and `.cursor/rules/*.mdc` from the project working directory
 
 ### Requirement: AgentBusyError recovery after decision_request abort
+
 The system SHALL retry a busy Cursor agent once with `force:true` after a `decision_request`-triggered abort, and SHALL attempt same-id agent recreation and resend in the same turn if the forced retry still reports the agent as busy. The same deterministic `agentId` SHALL be preserved for future turns; no Cursor-specific persistence or id rotation is allowed.
 
 #### Scenario: AgentBusyError on turn following decision_request is retried automatically
@@ -213,11 +147,26 @@ The system SHALL retry a busy Cursor agent once with `force:true` after a `decis
 - **WHEN** `agent.send(prompt)` throws an error that is not `AgentBusyError`
 - **THEN** the adapter propagates the error as a fatal error event, not as a retry
 
-### Requirement: listCommands resolves paths from DB like other engines
-The system SHALL resolve the task's worktree path and project path from the database in `CursorEngine.listCommands()`, identical to the pattern used by `CopilotEngine` and `ClaudeEngine`.
+## ADDED Requirements
 
-#### Scenario: listCommands returns commands from worktree and project paths
-- **WHEN** `CursorEngine.listCommands(taskId)` is called for a task with a known worktree and project
-- **THEN** it queries `task_git_context.worktree_path` for the worktree
-- **AND** resolves the project path via `getLoadedProjectByKey`
-- **AND** delegates to `CursorDialect.listCommands(worktreePath, projectPath)`
+### Requirement: In-process SDK runtime
+
+The system SHALL run the `@cursor/sdk` directly in the Bun main process. No subprocess, IPC protocol, or external `node` binary dependency SHALL be required for the Cursor engine to function.
+
+#### Scenario: First call constructs the SDK client in-process
+
+- **WHEN** the first call to `CursorSdkAdapter.run` or `CursorSdkAdapter.listModels` arrives
+- **THEN** the adapter calls `@cursor/sdk`'s `Agent`/`Cursor` APIs directly, in the same process and event loop as the rest of the Bun server
+- **AND** no child process is spawned
+
+#### Scenario: SDK-side errors surface without a worker-crash path
+
+- **WHEN** an SDK call throws or an in-flight run errors
+- **THEN** the adapter surfaces the failure as a fatal `EngineEvent.error` directly from the `catch` block of the call site
+- **AND** there is no separate "worker exit" recovery path, because there is no worker process to exit independently of the Bun server itself
+
+#### Scenario: Abort-listener suppression is scoped to the Bun process
+
+- **WHEN** the adapter module is loaded
+- **THEN** it calls `setMaxListeners(0)` to suppress Node's `MaxListenersExceededWarning` for the SDK's internal abort-listener accumulation across repeated `Agent.create`/`Agent.resume` calls
+- **AND** this suppression applies process-wide (accepted trade-off; the Bun server has no other high-volume `AbortSignal` listener source that this would need to mask)
