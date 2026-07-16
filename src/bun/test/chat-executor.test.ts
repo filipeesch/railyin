@@ -13,8 +13,7 @@ import type { ModelSettingsRepository } from "../db/repositories/model-settings-
 import type { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, RawModelMessage } from "../engine/types.ts";
 import type { ConversationMessage } from "../../shared/rpc-types.ts";
-import { initDb, setupTestConfig, makeTestRegistry, makeTestRegistryWith, seedChatSession } from "./helpers.ts";
-import { appendMessage } from "../conversation/messages.ts";
+import { initDb, setupTestConfig, makeTestRegistry, makeTestRegistryWith, seedChatSession, seedMessage } from "./helpers.ts";
 import { resetConfig } from "../config/index.ts";
 
 let db: Database;
@@ -440,7 +439,7 @@ describe("CE-15..17: cross-engine context injection", () => {
       model: "claude/opus",
       lastEngineType: "pi",
     });
-    appendMessage(db, null, conversationId, "assistant", null, "Pi assistant response");
+    seedMessage(db, null, conversationId, "assistant", null, "Pi assistant response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["pi", new PassThroughEngine()],
@@ -459,8 +458,8 @@ describe("CE-15..17: cross-engine context injection", () => {
       model: "claude/opus",
       lastEngineType: "pi",
     });
-    appendMessage(db, null, conversationId, "compaction_summary", null, "Pi compaction summary");
-    appendMessage(db, null, conversationId, "assistant", null, "Pi post-compaction response");
+    seedMessage(db, null, conversationId, "compaction_summary", null, "Pi compaction summary");
+    seedMessage(db, null, conversationId, "assistant", null, "Pi post-compaction response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["pi", new PassThroughEngine()],
@@ -480,7 +479,7 @@ describe("CE-15..17: cross-engine context injection", () => {
       model: "claude/opus",
       lastEngineType: "copilot",
     });
-    appendMessage(db, null, conversationId, "assistant", null, "Copilot prior response");
+    seedMessage(db, null, conversationId, "assistant", null, "Copilot prior response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["copilot", new PassThroughEngine()],

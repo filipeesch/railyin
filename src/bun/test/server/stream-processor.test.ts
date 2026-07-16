@@ -1,8 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { StreamEventProcessor } from "../../server/stream-processor.ts";
 import type { IBroadcastChannel } from "../../server/broadcast-channel.ts";
-import { initDb } from "../helpers.ts";
-import type { Database } from "bun:sqlite";
 import type { StreamEvent, StreamEventType } from "../../../shared/rpc-types.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -93,51 +91,35 @@ function makeCopilotMessageDelta(deltaContent: string, executionId = 1) {
   };
 }
 
-function getStreamEvents(db: Database) {
-  return db.query<{
-    execution_id: number;
-    seq: number;
-    type: string;
-    content: string;
-  }, []>("SELECT execution_id, seq, type, content FROM stream_events ORDER BY seq ASC").all();
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("StreamEventProcessor", () => {
-  let db: Database;
   let channel: IBroadcastChannel;
   let calls: object[];
   let proc: StreamEventProcessor;
 
   beforeEach(() => {
-    db = initDb();
-    // Seed conversations so stream_events FK (conversation_id → conversations.id) is satisfied.
-    // makeStreamEvent uses conversationId: 1 by default; SP-4 also uses conversationId: 2.
-    db.run("INSERT INTO conversations (task_id) VALUES (NULL)"); // id = 1
-    db.run("INSERT INTO conversations (task_id) VALUES (NULL)"); // id = 2
     const ch = makeChannel();
     channel = ch.channel;
     calls = ch.calls;
-    proc = new StreamEventProcessor(channel, db);
+    proc = new StreamEventProcessor(channel);
   });
 
-  // SP-1 — Non-persisted event type only broadcasts
-  test("SP-1: text_chunk broadcasts but does not persist", () => {
+  // SP-1 — Every event is broadcast (persistence is out of scope; that's the durable
+  // conversation message store's job, not StreamEventProcessor's).
+  test("SP-1: text_chunk broadcasts", () => {
     proc.onStreamEvent(makeStreamEvent({ type: "text_chunk" as any, done: false }));
     expect(calls).toHaveLength(1);
-    const rows = getStreamEvents(db);
-    expect(rows).toHaveLength(0);
   });
 
-  // SP-2 — Persisted event type broadcasts and enqueues (flush via done=true)
-  test("SP-2: assistant event broadcasts and persists on done=true flush", () => {
+  // SP-2 — done=true still broadcasts (flush semantics moved to the message store; the
+  // processor's only remaining responsibility is enrichment + broadcast).
+  test("SP-2: assistant event broadcasts on done=true", () => {
     proc.onStreamEvent(makeStreamEvent({ type: "assistant", content: "world", done: true }));
     expect(calls).toHaveLength(1);
-    const rows = getStreamEvents(db);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].type).toBe("assistant");
-    expect(rows[0].content).toBe("world");
+    const msg = calls[0] as { type: string; payload: { type: string; content: string } };
+    expect(msg.payload.type).toBe("assistant");
+    expect(msg.payload.content).toBe("world");
   });
 
   // SP-3 — Seq numbers are monotonically increasing per execution
@@ -152,24 +134,16 @@ describe("StreamEventProcessor", () => {
     expect(seqs).toEqual([0, 1, 2]);
   });
 
-  // SP-4 — done=true flushes buffer and removes enricher so next event resets seq
-  test("SP-4: done=true flushes and next event for same execution starts seq at 0", () => {
+  // SP-4 — done=true removes the enricher so the next event for the same execution resets seq
+  test("SP-4: done=true removes enricher and next event for same execution starts seq at 0", () => {
     proc.onStreamEvent(makeStreamEvent({ type: "assistant", content: "first", done: true }));
-
-    const rowsAfterFirst = getStreamEvents(db);
-    expect(rowsAfterFirst).toHaveLength(1);
 
     calls.length = 0;
 
-    // Use a different conversationId to avoid the UNIQUE(conversation_id, seq) constraint
-    // on the stream_events table; seq resets to 0 after the enricher is removed.
     proc.onStreamEvent(makeStreamEvent({ conversationId: 2, type: "assistant", content: "second", done: true }));
 
     const secondBroadcast = calls[0] as { type: string; payload: { seq: number } };
     expect(secondBroadcast.payload.seq).toBe(0);
-
-    const rowsAfterSecond = getStreamEvents(db);
-    expect(rowsAfterSecond).toHaveLength(2);
   });
 
   // SP-5 — Two parallel executions have independent seq counters

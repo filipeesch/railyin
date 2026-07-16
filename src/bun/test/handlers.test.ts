@@ -25,6 +25,7 @@ import type { Database } from "bun:sqlite";
 import type { Attachment, ChatSession, Task } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
+import type { ConversationFileDeleter } from "../conversation/conversation-file-deleter.ts";
 
 let db: Database;
 let wsRepo: WorkspaceRepository;
@@ -67,11 +68,11 @@ afterEach(() => {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeHandlers() {
+function makeHandlers(conversationFileDeleter?: ConversationFileDeleter) {
   const updates: Task[] = [];
 
   const handlers = {
-    ...taskHandlers(db, wsRepo, null, (task) => updates.push(task), worktreeManager),
+    ...taskHandlers(db, wsRepo, null, (task) => updates.push(task), worktreeManager, undefined, conversationFileDeleter),
     ...taskGitHandlers(db, (task) => updates.push(task), worktreeManager, gitRepo),
     ...codeReviewHandlers(db),
     ...todoHandlers(db),
@@ -506,6 +507,57 @@ describe("tasks.delete", () => {
     expect(afterConv).toBeNull();
   });
 
+  it("calls the injected ConversationFileDeleter with the task's conversationId after the SQL transaction commits", async () => {
+    const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
+
+    const deletedIds: number[] = [];
+    const fakeDeleter: ConversationFileDeleter = {
+      deleteConversationFiles: async (id) => {
+        // The task/conversation rows must already be gone by the time this runs.
+        const stillThere = db.query<{ id: number }, [number]>("SELECT id FROM conversations WHERE id = ?").get(id);
+        expect(stillThere).toBeNull();
+        deletedIds.push(id);
+      },
+    };
+    const { handlers } = makeHandlers(fakeDeleter);
+
+    const task = await handlers["tasks.create"]({
+      boardId,
+      projectKey,
+      title: "To be deleted",
+      description: "Temporary task",
+    });
+
+    const result = await handlers["tasks.delete"]({ taskId: task.id });
+
+    expect(result.success).toBe(true);
+    expect(deletedIds).toEqual([task.conversationId]);
+  });
+
+  it("does not call the ConversationFileDeleter when the task has no conversation_id", async () => {
+    const { boardId, projectKey } = seedProjectAndTask(db, gitDir);
+
+    // Insert a bare task with no conversation row at all.
+    db.run(
+      "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state, conversation_id) VALUES (?, ?, 'Bare', 'backlog', 'idle', NULL)",
+      [boardId, projectKey],
+    );
+    const bareTaskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+
+    const deletedIds: number[] = [];
+    const fakeDeleter: ConversationFileDeleter = {
+      deleteConversationFiles: async (id) => {
+        deletedIds.push(id);
+      },
+    };
+    const { handlers } = makeHandlers(fakeDeleter);
+
+    const result = await handlers["tasks.delete"]({ taskId: bareTaskId });
+
+    expect(result.success).toBe(true);
+    expect(deletedIds).toEqual([]);
+  });
+
   it("returns success even when task has no git context row", async () => {
     const { boardId, projectKey } = seedProjectAndTask(db, gitDir);
     const { handlers } = makeHandlers();
@@ -575,24 +627,6 @@ describe("conversations handlers", () => {
 
     expect(result.messages.map((message) => message.content)).toEqual(["hello", "hi there"]);
     expect(result.messages.every((message) => message.conversationId === conversationId)).toBe(true);
-  });
-
-  it("loads stream events by conversationId", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run(
-      "INSERT INTO executions (id, task_id, conversation_id, from_state, to_state, status, attempt) VALUES (?, ?, ?, 'plan', 'plan', 'running', 1)",
-      [10, taskId, conversationId],
-    );
-    db.run(
-      "INSERT INTO stream_events (id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL), (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
-      [1, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, conversationId, 10, 1, "root-2", "assistant", "beta"],
-    );
-
-    const handlers = conversationHandlers(db, null);
-    const canonical = await handlers["conversations.getStreamEvents"]({ conversationId, afterSeq: 0 });
-
-    expect(canonical).toHaveLength(1);
-    expect(canonical[0]?.content).toBe("beta");
   });
 
   it("computes context usage for session conversations without a task", async () => {

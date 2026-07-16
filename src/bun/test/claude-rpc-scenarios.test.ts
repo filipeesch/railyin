@@ -263,10 +263,10 @@ describe("Claude engine — subagent scenarios", () => {
     expect(subagentBlock).toBeDefined();
     expect(subagentBlock?.blockId).toBe("sa-3");
 
-    // DB should persist a tool_call message
-    const dbEvents = runtime.getDbStreamEvents(executionId);
-    const dbBlock = dbEvents.find((e) => e.type === "tool_call" && e.subagentId === "sa-3");
-    expect(dbBlock).toBeDefined();
+    // Durable store should also persist a tool_call message for this subagent call
+    const durableMessages = await runtime.getDurableMessages(executionId);
+    const durableBlock = durableMessages.find((m) => m.type === "tool_call" && m.content.includes("sa-3"));
+    expect(durableBlock).toBeDefined();
   });
 
   it("CRS-SA-4: subagent_stop is persisted as tool_result message matching the subagent callId", async () => {
@@ -286,9 +286,9 @@ describe("Claude engine — subagent scenarios", () => {
     expect(stopBlock).toBeDefined();
     expect(stopBlock?.done).toBe(true);
 
-    // DB should also persist the tool_result
-    const dbEvents = runtime.getDbStreamEvents(executionId);
-    const dbStop = dbEvents.find((e) => e.type === "tool_result" && e.subagentId === "sa-4");
-    expect(dbStop).toBeDefined();
+    // Durable store should also persist the tool_result for this subagent call
+    const durableMessages = await runtime.getDurableMessages(executionId);
+    const durableStop = durableMessages.find((m) => m.type === "tool_result" && m.content.includes("sa-4"));
+    expect(durableStop).toBeDefined();
   });
 });

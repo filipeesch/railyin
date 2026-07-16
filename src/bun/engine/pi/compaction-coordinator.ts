@@ -14,17 +14,22 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { PiEngineConfig } from "../../config/index.ts";
 import type { ProviderLimiterRegistry } from "./provider-limiter.ts";
 import { getDb } from "../../db/index.ts";
-import { appendMessage } from "../../conversation/messages.ts";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
 
 /** Narrow interface so the coordinator does not import getDb() directly. */
 export interface MessageAppender {
-  appendCompactionSummary(conversationId: number, summary: string): void;
+  appendCompactionSummary(conversationId: number, summary: string): Promise<void>;
 }
 
-/** Production implementation wrapping the real appendMessage helper. */
+/** Production implementation wrapping the real ConversationMessageStore. */
 export class DefaultMessageAppender implements MessageAppender {
-  appendCompactionSummary(conversationId: number, summary: string): void {
-    appendMessage(getDb(), null, conversationId, "compaction_summary", null, summary);
+  async appendCompactionSummary(conversationId: number, summary: string): Promise<void> {
+    await resolveConversationMessageStore(getDb(), conversationId).append({
+      taskId: null,
+      type: "compaction_summary",
+      role: null,
+      content: summary,
+    });
   }
 }
 
@@ -74,7 +79,7 @@ export class PiCompactionCoordinator {
     try {
       const result = await session.compact();
       if (result?.summary) {
-        this.appender.appendCompactionSummary(conversationId, result.summary);
+        await this.appender.appendCompactionSummary(conversationId, result.summary);
       }
     } catch (err) {
       console.error("[pi] background compaction failed:", err);

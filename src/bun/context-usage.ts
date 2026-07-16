@@ -33,10 +33,10 @@ export async function resolveContextWindow(
   }
 }
 
-export function estimateConversationContextUsage(
+export async function estimateConversationContextUsage(
   db: Database,
   conversationId: number,
   maxTokens: number,
-): { usedTokens: number; maxTokens: number; fraction: number } {
+): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> {
   return new ContextEstimator(db).estimate(conversationId, maxTokens);
 }

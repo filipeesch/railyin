@@ -4,7 +4,7 @@ The conversation is the canonical history of task and standalone session chat. I
 ## Requirements
 
 ### Requirement: Conversation is an append-only message timeline
-Each task's conversation SHALL be an ordered, append-only sequence of messages. Messages are never deleted or reordered. The conversation serves as the canonical history of everything that happened to the task. The canonical chronology SHALL follow append order, and conversation reads SHALL preserve that order even when multiple messages share the same timestamp.
+Each task's conversation SHALL be an ordered, append-only sequence of messages. Messages are never deleted or reordered. The conversation serves as the canonical history of everything that happened to the task. The canonical chronology SHALL follow append order, and conversation reads SHALL preserve that order even when multiple messages share the same timestamp. The append-only guarantee SHALL hold regardless of whether the underlying storage medium for a given conversation is a per-conversation JSONL file or the legacy `conversation_messages` SQLite table.
 
 #### Scenario: Messages accumulate across executions
 - **WHEN** multiple executions run for the same task
@@ -21,6 +21,10 @@ Each task's conversation SHALL be an ordered, append-only sequence of messages. 
 #### Scenario: Timeline assembly does not reorder neighboring message types
 - **WHEN** the frontend groups tool rows or renders live chat items
 - **THEN** the visible conversation preserves the same relative order as the underlying append-only message sequence
+
+#### Scenario: Append-only ordering holds for file-backed conversations
+- **WHEN** a conversation created after this change ships is stored as a JSONL file
+- **THEN** its messages are still read back in strict append order, with ids equal to line number
 
 ### Requirement: Conversation supports distinct message types
 The system SHALL support the following message types in a conversation: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `transition_event`, `file_diff`, `ask_user_prompt`, `reasoning`, `compaction_summary`, `code_review`. Each message stores its type, content, and creation timestamp.
@@ -163,55 +167,12 @@ The system SHALL store `parent_conversation_id` and `forked_at_message_id` colum
 - **WHEN** a new conversation is created (task or session)
 - **THEN** `parent_conversation_id` and `forked_at_message_id` are NULL
 
-### Requirement: stream_events schema uses conversation_id as primary routing key
-The `stream_events` table SHALL use `conversation_id` as the primary routing key with a NOT NULL constraint. The `task_id` column SHALL NOT exist in this table. All stream event writes SHALL supply `conversation_id`. Rows with NULL `conversation_id` from pre-migration installs are considered legacy data and SHALL be dropped during the cleanup migration.
-
-The table schema SHALL be:
-```
-stream_events (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-  execution_id    INTEGER NOT NULL,
-  seq             INTEGER NOT NULL,
-  block_id        TEXT NOT NULL,
-  type            TEXT NOT NULL,
-  content         TEXT NOT NULL DEFAULT '',
-  metadata        TEXT,
-  parent_block_id TEXT,
-  subagent_id     TEXT,
-  created_at      TEXT DEFAULT (datetime('now')),
-  UNIQUE(conversation_id, seq)
-)
-```
-
-Indexes:
-- `idx_stream_events_conversation (conversation_id, seq)`
-- `idx_stream_events_execution (execution_id, seq)`
-
-The `idx_stream_events_task` index SHALL be removed.
-
-#### Scenario: Stream event write requires conversation_id
-- **WHEN** code attempts to insert a stream event without a `conversation_id`
-- **THEN** the insert fails with a NOT NULL constraint violation
-
-#### Scenario: Stream events queryable by conversation
-- **WHEN** `getStreamEventsByConversation(conversationId)` is called
-- **THEN** only rows where `conversation_id = conversationId` are returned, ordered by `seq`
-
-#### Scenario: No task_id column exists
-- **WHEN** the migration has run on a fresh or upgraded install
-- **THEN** `PRAGMA table_info(stream_events)` shows no `task_id` column
-
 ### Requirement: Conversation read APIs use conversationId as the canonical identifier
-The system SHALL treat `conversationId` as the primary identifier for conversation reads and stream-event reads across both task and standalone session conversations.
+The system SHALL treat `conversationId` as the primary identifier for conversation message reads across both task and standalone session conversations, regardless of whether the conversation's messages live in a file or in the legacy `conversation_messages` table.
 
 #### Scenario: Messages read by conversationId
 - **WHEN** a caller requests conversation messages with a `conversationId`
-- **THEN** the system returns the ordered messages for that conversation regardless of whether it belongs to a task or a standalone session
-
-#### Scenario: Stream events read by conversationId
-- **WHEN** a caller requests persisted stream events with a `conversationId`
-- **THEN** the system returns the events for that conversation regardless of whether it belongs to a task or a standalone session
+- **THEN** the system returns the ordered messages for that conversation regardless of whether it belongs to a task or a standalone session, and regardless of storage medium
 
 ### Requirement: Legacy taskId callers remain compatible during migration
 The system SHALL preserve compatibility for task-backed conversation reads during migration by accepting task-based identifiers where required and resolving them to the canonical conversation ID internally.
@@ -244,49 +205,17 @@ The system SHALL expose `conversations.getMessages` as a paginated endpoint. The
 - **THEN** `messages` are ordered from oldest to newest (ascending `id`)
 
 ### Requirement: Conversation read APIs require conversationId
-The system SHALL require `conversationId` for conversation-scoped read APIs. Message reads, persisted stream-event reads, and context-usage reads SHALL use `conversationId` directly and SHALL NOT depend on task-based aliases.
+The system SHALL require `conversationId` for conversation-scoped read APIs. Message reads and context-usage reads SHALL use `conversationId` directly and SHALL NOT depend on task-based aliases.
 
 #### Scenario: Messages read with conversationId
 - **WHEN** a caller requests conversation messages
 - **THEN** the request includes `conversationId`
 - **AND** the system returns messages for that conversation in append order
 
-#### Scenario: Persisted stream events read with conversationId
-- **WHEN** a caller requests persisted stream events for replay
-- **THEN** the request includes `conversationId`
-- **AND** the system returns the events for that conversation ordered by `seq`
-
 #### Scenario: Context usage read with conversationId
 - **WHEN** a caller requests context usage for a conversation
 - **THEN** the request includes `conversationId`
 - **AND** the system computes usage for that conversation without requiring a task identifier
-
-### Requirement: All new stream-event writes populate conversation_id
-The `stream_events` table SHALL treat `conversation_id` as the canonical conversation lookup key. All new persisted stream-event writes SHALL populate `conversation_id`, including rows emitted for standalone chat sessions where `task_id` is null.
-
-#### Scenario: Task execution persists stream events with conversation_id
-- **WHEN** a task execution persists stream events
-- **THEN** each persisted row includes the task's `conversation_id`
-
-#### Scenario: Standalone session execution persists stream events with conversation_id
-- **WHEN** a standalone chat session persists stream events
-- **THEN** each persisted row includes the session's `conversation_id`
-- **AND** replay by `conversation_id` can return those rows even when `task_id` is null
-
-### Requirement: Historical stream events are repaired by execution first, task second
-When historical `stream_events` rows are missing `conversation_id`, the system SHALL repair them by resolving `execution_id -> executions.conversation_id` first and `task_id -> tasks.conversation_id` second. Rows that remain unrecoverable after both passes MAY be pruned.
-
-#### Scenario: Chat-session rows repaired through executions
-- **WHEN** a historical stream-event row belongs to a standalone chat session and lacks `conversation_id`
-- **THEN** the repair process resolves the row using `executions.conversation_id`
-
-#### Scenario: Task-backed rows repaired through tasks when execution conversation is absent
-- **WHEN** a historical stream-event row belongs to a task and its execution row lacks `conversation_id`
-- **THEN** the repair process falls back to the task's `conversation_id`
-
-#### Scenario: Unrecoverable rows may be removed
-- **WHEN** a historical stream-event row has no recoverable conversation through either execution or task linkage
-- **THEN** the cleanup process may delete that row rather than keep unusable replay state
 
 ### Requirement: Task executions persist conversation identity
 All new execution rows SHALL persist `conversation_id` for the conversation they belong to, including task-backed executions and standalone session executions.

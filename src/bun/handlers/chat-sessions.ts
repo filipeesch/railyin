@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { ChatSession, ConversationMessage } from "../../shared/rpc-types.ts";
-import type { ChatSessionRow, ConversationMessageRow } from "../db/row-types.ts";
+import type { ChatSessionRow } from "../db/row-types.ts";
 import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
 import { fetchChatSessionWithModel } from "../db/task-queries.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
@@ -8,6 +8,7 @@ import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { prepareMessageForEngine } from "../utils/attachment-routing.ts";
 import { QualifiedModelId } from "../engine/qualified-model-id.ts";
 import { applyModelParamsPolicy } from "../conversation/model-params-policy.ts";
+import { resolveConversationMessageStore } from "../conversation/message-store-resolver.ts";
 
 function autoTitle(): string {
   const now = new Date();
@@ -214,18 +215,9 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       if (!session) return { messages: [], hasMore: false };
 
       const limit = params.limit ?? 50;
-      let rows: ConversationMessageRow[];
-      if (params.beforeMessageId != null) {
-        rows = db.query<ConversationMessageRow, [number, number, number]>(
-          "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?"
-        ).all(session.conversation_id, params.beforeMessageId, limit + 1);
-      } else {
-        rows = db.query<ConversationMessageRow, [number, number]>(
-          "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?"
-        ).all(session.conversation_id, limit + 1);
-      }
-      const hasMore = rows.length > limit;
-      const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);
+      const store = resolveConversationMessageStore(db, session.conversation_id);
+      const { rows, hasMore } = await store.getPage({ beforeMessageId: params.beforeMessageId, limit });
+      const messages = rows.map(mapConversationMessage);
       return { messages, hasMore };
     },
 

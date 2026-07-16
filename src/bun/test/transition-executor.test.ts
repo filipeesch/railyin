@@ -19,8 +19,7 @@ import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
-import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";
-import { appendMessage } from "../conversation/messages.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith, seedMessage } from "./helpers.ts";
 import type { EngineRegistry } from "../engine/engine-registry.ts";
 import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 
@@ -610,7 +609,7 @@ describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
+    seedMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
@@ -629,7 +628,7 @@ describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Some prior response");
+    seedMessage(db, taskId, conversationId, "assistant", null, "Some prior response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));

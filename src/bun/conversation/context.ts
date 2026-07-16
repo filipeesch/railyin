@@ -1,13 +1,9 @@
 import type { Database } from "bun:sqlite";
-import { getConfig } from "../config/index.ts";
 import { noopLogger, type Logger } from "../logger.ts";
-import { resolveProvider, retryTurn } from "../ai/index.ts";
 import type { AIMessage } from "../ai/types.ts";
-import type { ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
-import type { ConversationMessageRow, TaskRow } from "../db/row-types.ts";
-import { mapConversationMessage } from "../db/mappers.ts";
-import { appendMessage } from "./messages.ts";
+import type { ConversationMessageRow } from "../db/row-types.ts";
 import { extractChips } from "../../mainview/utils/chat-chips.ts";
+import { resolveConversationMessageStore } from "./message-store-resolver.ts";
 
 const TOOL_RESULT_MAX_CHARS = 8_000;
 export const TOOL_RESULT_LIMITS = new Map<string, number>([
@@ -30,71 +26,6 @@ export const TOOL_RESULT_LIMITS = new Map<string, number>([
 ]);
 const CONTEXT_WARN_FRACTION = 0.8;
 const SYSTEM_MESSAGE_OVERHEAD_TOKENS = 400;
-const COMPACTION_SYSTEM_PROMPT = `Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
-This summary should be thorough in capturing technical details, code patterns, and decisions that would be essential for continuing development work without losing context.
-
-CRITICAL: Respond with TEXT ONLY. Do NOT call any tools. Your entire response must be an <analysis> block followed by a <summary> block.
-
-Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts:
-
-1. Chronologically analyze each message and section of the conversation. For each section identify:
-   - The user's explicit requests and intents
-   - Your approach to addressing them
-   - Key decisions, technical concepts, and code patterns
-   - Specific details: file names, full code snippets, function signatures, file edits
-   - Errors you ran into and how you fixed them
-   - Specific user feedback, especially if the user told you to do something differently
-2. Double-check for technical accuracy and completeness.
-
-Your <summary> must include the following sections:
-
-1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail
-2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed
-3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Include full code snippets where applicable and explain why each is important.
-4. Errors and Fixes: List all errors encountered and how they were fixed. Include any specific user feedback received.
-5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
-6. All User Messages: List ALL user messages verbatim (not paraphrased). These are critical for understanding user feedback and intent.
-7. Pending Tasks: If an "## Active Todos" system block was injected into this conversation, do NOT re-enumerate those items here — they are persisted separately and will be re-injected fresh on the next call. Simply write: "Managed via todo system (see Active Todos block)." Only record pending items in prose here if no todo system block was present.
-8. Current Work: Describe in detail precisely what was being worked on immediately before this summary, paying special attention to the most recent messages. Include file names and code snippets.
-9. Optional Next Step: List the next step directly in line with the most recent work. IMPORTANT: only list a next step if it is explicitly in line with the user's most recent request. Include direct quotes from the most recent conversation showing exactly what task was being worked on.
-
-Format your response exactly as:
-
-<analysis>
-[Your reasoning and analysis here]
-</analysis>
-
-<summary>
-1. Primary Request and Intent:
-   [Detail]
-
-2. Key Technical Concepts:
-   - [Concept]
-
-3. Files and Code Sections:
-   - [File name]
-     - [Why important]
-     - [Code snippet if applicable]
-
-4. Errors and Fixes:
-   - [Error description and fix]
-
-5. Problem Solving:
-   [Description]
-
-6. All User Messages:
-   - [Verbatim user message]
-
-7. Pending Tasks:
-   - [Task]
-
-8. Current Work:
-   [Detailed description with file names and snippets]
-
-9. Optional Next Step:
-   [Next step with direct quote if applicable]
-</summary>`;
-
 export const MICRO_COMPACT_TURN_WINDOW = 8;
 export const MICRO_COMPACT_SENTINEL = "[tool result cleared — content no longer in active context]";
 export const MICRO_COMPACT_CLEARABLE_TOOLS = new Set([
@@ -239,11 +170,11 @@ export function compactMessages(messages: ConversationMessageRow[], opts?: { log
   return collapsed;
 }
 
-export function estimateContextUsage(
+export async function estimateContextUsage(
   db: Database,
   taskId: number,
   maxTokens: number,
-): { usedTokens: number; maxTokens: number; fraction: number } {
+): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> {
   const recentExecution = db
     .query<{ input_tokens: number | null }, [number]>(
       "SELECT input_tokens FROM executions WHERE task_id = ? AND status = 'completed' AND input_tokens IS NOT NULL ORDER BY id DESC LIMIT 1",
@@ -256,11 +187,15 @@ export function estimateContextUsage(
     return { usedTokens, maxTokens, fraction };
   }
 
-  const messages = db
-    .query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
-    )
-    .all(taskId);
+  const taskRow = db
+    .query<{ conversation_id: number | null }, [number]>("SELECT conversation_id FROM tasks WHERE id = ?")
+    .get(taskId);
+  if (taskRow?.conversation_id == null) {
+    return { usedTokens: SYSTEM_MESSAGE_OVERHEAD_TOKENS, maxTokens, fraction: 0 };
+  }
+
+  const store = resolveConversationMessageStore(db, taskRow.conversation_id);
+  const messages = await store.getAll();
 
   const compacted = compactMessages(messages, { logger: noopLogger });
   const totalChars = compacted.reduce((sum, message) => {
@@ -272,10 +207,10 @@ export function estimateContextUsage(
   return { usedTokens, maxTokens, fraction };
 }
 
-export function estimateContextWarning(db: Database, taskId: number, contextWindowOverride?: number): string | null {
+export async function estimateContextWarning(db: Database, taskId: number, contextWindowOverride?: number): Promise<string | null> {
   const contextWindowTokens = contextWindowOverride ?? 128_000;
   const warnAt = Math.floor(contextWindowTokens * CONTEXT_WARN_FRACTION);
-  const { usedTokens } = estimateContextUsage(db, taskId, contextWindowTokens);
+  const { usedTokens } = await estimateContextUsage(db, taskId, contextWindowTokens);
   if (usedTokens >= warnAt) {
     return `Context is ~${usedTokens.toLocaleString()} tokens (${Math.round((usedTokens / contextWindowTokens) * 100)}% of model limit). Consider archiving this task's conversation.`;
   }
@@ -284,52 +219,4 @@ export function estimateContextWarning(db: Database, taskId: number, contextWind
 
 export async function resolveModelContextWindow(_qualifiedModel: string): Promise<number> {
   return 128_000;
-}
-
-export function extractSummaryBlock(raw: string): string {
-  const match = raw.match(/<summary>([\s\S]*?)<\/summary>/i);
-  return match?.[1]?.trim() ?? raw.trim();
-}
-
-export async function compactConversation(db: Database, taskId: number): Promise<ConversationMessage> {
-  const task = db.query<TaskRow, [number]>(
-    `SELECT t.*, c.model AS conversation_model 
-     FROM tasks t 
-     LEFT JOIN conversations c ON c.id = t.conversation_id 
-     WHERE t.id = ?`
-  ).get(taskId);
-  if (!task?.conversation_id) throw new Error(`Task ${taskId} not found`);
-
-  const config = getConfig();
-  const resolvedModel = (task as any).conversation_model ?? config.workspace.default_model ?? "";
-  if (!resolvedModel) throw new Error(`Task ${taskId} has no model configured for compaction`);
-
-  const { provider } = resolveProvider(resolvedModel, config.providers);
-  const messages = db
-    .query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
-    )
-    .all(taskId);
-
-  const compacted = compactMessages(messages, { logger: noopLogger });
-  const historyText = compacted
-    .map((message) => {
-      const role = message.role ?? "unknown";
-      const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "");
-      return `${role.toUpperCase()}: ${content}`;
-    })
-    .join("\n\n");
-
-  const result = await retryTurn(provider, [
-    { role: "system", content: COMPACTION_SYSTEM_PROMPT },
-    { role: "user", content: `<conversation>\n${historyText}</conversation>\n\nPlease summarize the conversation above.` },
-  ], {}, 10, {}, "background");
-
-  const rawSummary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
-  const summary = extractSummaryBlock(rawSummary);
-  const messageId = appendMessage(db, taskId, task.conversation_id, "compaction_summary" as MessageType, null, summary);
-  const messageRow = db
-    .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-    .get(messageId)!;
-  return mapConversationMessage(messageRow);
 }

@@ -3,7 +3,10 @@
  *
  * Each test injects events via ScriptedEngine, waits for the execution to
  * finish, then:
- *   1. Reads persisted events from DB via `runtime.getDbStreamEvents()`
+ *   1. Reads the enriched live event stream via `runtime.getIpcEvents()` — this carries the
+ *      full blockId/parentBlockId tree shape (e.g. "{execId}-t1"); durable conversation
+ *      messages never carry these synthesized live blockIds, only the raw tool callId in
+ *      metadata, so tree-shape assertions must read the IPC channel, not the message store.
  *   2. Passes them to `buildStreamTree()` to get the block hierarchy
  *   3. Asserts on `tree.roots[]` order and `block.children[]` for nesting
  *
@@ -70,8 +73,8 @@ describe("S-14 [stream-tree]: simple text produces single root assistant block",
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const tree = buildStreamTree(db);
+        const events = runtime.getIpcEvents(executionId);
+        const tree = buildStreamTree(events);
 
         const expectedBlockId = `${executionId}-t1`;
 
@@ -107,8 +110,8 @@ describe("S-15 [stream-tree]: reasoning + text produces two ordered roots", () =
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const tree = buildStreamTree(db);
+        const events = runtime.getIpcEvents(executionId);
+        const tree = buildStreamTree(events);
 
         const r1 = `${executionId}-r1`;
         const t1 = `${executionId}-t1`;
@@ -159,8 +162,8 @@ describe("S-16 [stream-tree]: text → tool → text produces three ordered root
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const tree = buildStreamTree(db);
+        const events = runtime.getIpcEvents(executionId);
+        const tree = buildStreamTree(events);
 
         const t1 = `${executionId}-t1`;
         const t2 = `${executionId}-t2`;
@@ -205,8 +208,8 @@ describe("S-17 [stream-tree]: cancel mid-text flushes assistant block into tree"
         await runtime.handlers["tasks.cancel"]({ taskId });
         await runtime.recorder.waitForStreamDone(executionId, 5_000);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const tree = buildStreamTree(db);
+        const events = runtime.getIpcEvents(executionId);
+        const tree = buildStreamTree(events);
 
         const t1 = `${executionId}-t1`;
 
@@ -259,8 +262,8 @@ describe("S-18 [stream-tree]: tool call appears as sibling of reasoning bubble, 
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const tree = buildStreamTree(db);
+        const events = runtime.getIpcEvents(executionId);
+        const tree = buildStreamTree(events);
 
         const preR1 = `${executionId}-pre-r1`;
         const r2 = `${executionId}-r2`;
@@ -334,8 +337,8 @@ describe("S-19 [stream-tree]: nested tool calls produce parent–child hierarchy
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
-        const tree = buildStreamTree(db);
+        const events = runtime.getIpcEvents(executionId);
+        const tree = buildStreamTree(events);
 
         const t1 = `${executionId}-t1`;
 

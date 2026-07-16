@@ -2,7 +2,8 @@ import type { Task } from "../../../shared/rpc-types.ts";
 import { QualifiedModelId } from "../qualified-model-id";
 import type { Database } from "bun:sqlite";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
+import { ensureTaskConversation } from "../../conversation/messages";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry.ts";
@@ -62,7 +63,9 @@ export class RetryExecutor {
       "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
       [executionId, taskId],
     );
-    appendMessage(db, taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
+    await resolveConversationMessageStore(db, conversationId).append({
+      taskId, type: "system", role: null, content: `Retry attempt ${attempt}`,
+    });
 
     const updatedRow = db.query<TaskRow & { conversation_model: string | null }, [number]>(
       `SELECT t.*, c.model AS conversation_model 

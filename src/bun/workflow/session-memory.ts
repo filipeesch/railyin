@@ -1,11 +1,13 @@
 import { join } from "path";
-import { homedir } from "os";
 import { mkdirSync, readFileSync, renameSync, existsSync, writeFileSync } from "fs";
-import { getDb } from "../db/index.ts";
+import type { Database } from "bun:sqlite";
 import { resolveProvider } from "../ai/index.ts";
 import { getConfig } from "../config/index.ts";
 import { realLogger, type Logger } from "../logger.ts";
-import type { ConversationMessageRow } from "../db/row-types.ts";
+import type { ConversationMessageStore } from "../conversation/message-store.ts";
+import { resolveConversationMessageStore } from "../conversation/message-store-resolver.ts";
+import type { MessageType } from "../../shared/rpc-types.ts";
+import { getDataDir } from "../utils/platform.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -20,7 +22,7 @@ export const SESSION_MEMORY_MAX_CHARS = 8_000;
 
 export function getSessionMemoryPath(taskId: number): string {
   const baseDir =
-    process.env.RAILYN_SESSION_MEMORY_DIR ?? join(homedir(), ".config", "railyn", "tasks");
+    process.env.RAILYN_SESSION_MEMORY_DIR ?? join(getDataDir(), "tasks");
   return join(baseDir, String(taskId), "session-notes.md");
 }
 
@@ -81,22 +83,56 @@ Keep each section concise. Prune stale information from previous notes. This is 
 
 // ─── Background extraction ────────────────────────────────────────────────────
 
+/** Message types considered relevant context for session-notes extraction. */
+const DIGEST_MESSAGE_TYPES: MessageType[] = ["user", "assistant", "tool_call", "tool_result"];
+
+/** Bounded number of recent messages fed into the extraction prompt. */
+const DIGEST_MESSAGE_LIMIT = 40;
+
+/**
+ * Build a plain-text digest of the most recent relevant messages read from `store`.
+ * Pure function over an injected `ConversationMessageStore` — no `Database`/global state —
+ * so it can be unit tested with a fake store.
+ */
+export async function buildRecentMessagesDigest(
+  store: ConversationMessageStore,
+  limit: number = DIGEST_MESSAGE_LIMIT,
+): Promise<string> {
+  const allMatching = await store.getAll({ types: DIGEST_MESSAGE_TYPES });
+  const messages = allMatching.slice(-limit);
+
+  return messages
+    .map((m) => {
+      if (m.type === "user") return `User: ${m.content}`;
+      if (m.type === "assistant") return `Assistant: ${m.content}`;
+      if (m.type === "tool_call") {
+        try {
+          const c = JSON.parse(m.content) as { name: string };
+          return `Tool call: ${c.name}`;
+        } catch { return "Tool call"; }
+      }
+      if (m.type === "tool_result") return `Tool result: ${m.content.slice(0, 200)}`;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 /** Fire-and-forget: extract session notes from the conversation and write to disk.
  *  Called after every SESSION_MEMORY_EXTRACTION_INTERVAL completed AI turns.
  *  Does not block the main execution loop. */
-export function extractSessionMemory(taskId: number, logger: Logger = realLogger): void {
-  void _doExtract(taskId, logger);
+export function extractSessionMemory(taskId: number, db: Database, logger: Logger = realLogger): void {
+  void _doExtract(taskId, db, logger);
 }
 
-async function _doExtract(taskId: number, logger: Logger): Promise<void> {
+async function _doExtract(taskId: number, db: Database, logger: Logger): Promise<void> {
   try {
-    const db = getDb();
     const task = db
       .query<{ model: string | null; conversation_id: number | null }, [number]>(
         "SELECT model, conversation_id FROM tasks WHERE id = ?",
       )
       .get(taskId);
-    if (!task?.model) return;
+    if (!task?.model || task.conversation_id == null) return;
 
     const config = getConfig();
     let provider;
@@ -107,33 +143,10 @@ async function _doExtract(taskId: number, logger: Logger): Promise<void> {
     }
 
     // Fetch the last ~40 messages for context (enough for extraction, bounded cost)
-    const messages = db
-      .query<ConversationMessageRow, [number]>(
-        `SELECT * FROM conversation_messages
-         WHERE task_id = ? AND type IN ('user', 'assistant', 'tool_call', 'tool_result')
-         ORDER BY id DESC LIMIT 40`,
-      )
-      .all(taskId)
-      .reverse();
+    const store = resolveConversationMessageStore(db, task.conversation_id);
+    const digest = await buildRecentMessagesDigest(store);
 
-    if (messages.length === 0) return;
-
-    // Build a plain-text digest of recent messages for extraction
-    const digest = messages
-      .map((m) => {
-        if (m.type === "user") return `User: ${m.content}`;
-        if (m.type === "assistant") return `Assistant: ${m.content}`;
-        if (m.type === "tool_call") {
-          try {
-            const c = JSON.parse(m.content) as { name: string };
-            return `Tool call: ${c.name}`;
-          } catch { return "Tool call"; }
-        }
-        if (m.type === "tool_result") return `Tool result: ${m.content.slice(0, 200)}`;
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n\n");
+    if (!digest) return;
 
     // Read existing notes to pass as context
     const existingNotes = readSessionMemory(taskId);

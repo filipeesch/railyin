@@ -17,6 +17,7 @@ import { codeReviewHandlers } from "./handlers/code-review.ts";
 import { todoHandlers } from "./handlers/todos.ts";
 import { modelHandlers } from "./handlers/models.ts";
 import { SqliteModelSettingsRepository } from "./db/repositories/model-settings-repository.ts";
+import { FsConversationFileDeleter } from "./conversation/conversation-file-deleter.ts";
 import { engineHandlers } from "./handlers/engine.ts";
 import { conversationHandlers } from "./handlers/conversations.ts";
 import { workflowHandlers } from "./handlers/workflow.ts";
@@ -89,6 +90,7 @@ seedDefaultWorkspace();
 const db = getDb();
 const modelSettingsRepo = new SqliteModelSettingsRepository(db);
 const wsRepo = new WorkspaceRepository(db);
+const conversationFileDeleter = new FsConversationFileDeleter();
 
 const projectResolver = new ProjectResolver();
 const taskGitContextRepo = new TaskGitContextRepository(db);
@@ -118,7 +120,7 @@ registryPool.getGlobalRegistry().startAll().catch((err: unknown) => {
 
 const channel = new BroadcastChannel();
 const notifier = new NotificationService(channel);
-const streamProc = new StreamEventProcessor(channel, db);
+const streamProc = new StreamEventProcessor(channel);
 
 // ─── Engine factory map (composition root) ───────────────────────────────────
 
@@ -211,7 +213,7 @@ if (injectedEngine) {
 }
 
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo, registryPool)
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo, registryPool, undefined, conversationFileDeleter)
   : null;
 
 if (orchestrator) {
@@ -220,11 +222,9 @@ if (orchestrator) {
   streamProc.setMarkClaudeExecution((id) => orchestrator.markClaudeExecution(id));
 }
 
-streamProc.start();
-
 // ─── Start retention job ──────────────────────────────────────────────────────
 const { RetentionJob } = await import("./jobs/retention-job.ts");
-const retentionJob = new RetentionJob(db);
+const retentionJob = new RetentionJob(db, undefined, undefined, conversationFileDeleter);
 retentionJob.start();
 
 // ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
@@ -238,7 +238,7 @@ const allHandlers = {
   ...workspaceHandlers(db),
   ...boardHandlers(db),
   ...projectHandlers(),
-  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier), worktreeManager, modelSettingsRepo),
+  ...taskHandlers(db, wsRepo, orchestrator, notifier.notifyTaskUpdated.bind(notifier), worktreeManager, modelSettingsRepo, conversationFileDeleter),
   ...taskGitHandlers(db, notifier.notifyTaskUpdated.bind(notifier), worktreeManager, gitRepo),
   ...codeReviewHandlers(db),
   ...todoHandlers(db),

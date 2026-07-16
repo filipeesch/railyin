@@ -21,7 +21,7 @@ class FakeAgentSession {
 class FakeMessageAppender implements MessageAppender {
   summaries: Array<{ conversationId: number; summary: string }> = [];
 
-  appendCompactionSummary(conversationId: number, summary: string): void {
+  async appendCompactionSummary(conversationId: number, summary: string): Promise<void> {
     this.summaries.push({ conversationId, summary });
   }
 }

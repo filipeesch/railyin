@@ -162,7 +162,7 @@ export class WorktreeManager {
 
   async triggerWorktreeIfNeeded(
     taskId: number,
-    onStatus?: (msg: string) => void,
+    onStatus?: (msg: string) => void | Promise<void>,
   ): Promise<void> {
     const ctx = this.taskGitContextRepo.getContext(taskId);
 
@@ -172,9 +172,9 @@ export class WorktreeManager {
         ctx.worktreeStatus === "error" ||
         ctx.worktreeStatus === "removed")
     ) {
-      onStatus?.("Creating worktree for this task…");
+      await onStatus?.("Creating worktree for this task…");
       const result = await this.createWorktree(taskId);
-      onStatus?.(`Worktree ready at \`${result.branch}\``);
+      await onStatus?.(`Worktree ready at \`${result.branch}\``);
     }
   }
 

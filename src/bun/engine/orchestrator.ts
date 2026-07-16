@@ -20,9 +20,10 @@ import type {
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
+import { resolveConversationMessageStore } from "../conversation/message-store-resolver.ts";
 import { fetchTaskWithModel } from "../db/task-queries.ts";
 import type { Database } from "bun:sqlite";
-import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
+import type { TaskRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
@@ -41,6 +42,9 @@ import { CodeReviewExecutor } from "./execution/code-review-executor.ts";
 import { ChatExecutor } from "./execution/chat-executor.ts";
 import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
 import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
+import { FileRawMessageDebugLogWriter } from "../conversation/raw-message-debug-log.ts";
+import type { ConversationFileDeleter } from "../conversation/conversation-file-deleter.ts";
+import type { RawMessageDebugLogWriter } from "../conversation/raw-message-debug-log.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
@@ -79,6 +83,8 @@ export class Orchestrator implements ExecutionCoordinator {
     worktreeManager?: WorktreeManager,
     modelSettingsRepo?: ModelSettingsRepository,
     registryPool?: McpRegistryPool,
+    rawMessageDebugLogWriter?: RawMessageDebugLogWriter,
+    conversationFileDeleter?: ConversationFileDeleter,
   ) {
     this.db = db;
     this.registry = registry;
@@ -86,10 +92,10 @@ export class Orchestrator implements ExecutionCoordinator {
     this.onNewMessage = onNewMessage;
     this.wsRepo = wsRepo;
 
-    const rawBuffer = createRawMessageBuffer(db, { onEnqueue: onRawMessageEnqueued });
+    const rawBuffer = createRawMessageBuffer(rawMessageDebugLogWriter ?? new FileRawMessageDebugLogWriter(), { onEnqueue: onRawMessageEnqueued });
     rawBuffer.start();
 
-    const boardTools = new BoardToolExecutor(db, wsRepo, worktreeManager);
+    const boardTools = new BoardToolExecutor(db, wsRepo, worktreeManager, conversationFileDeleter);
 
     this.streamProcessor = new StreamProcessor(
       db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage,
@@ -320,9 +326,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const workingDirectory = this.workdirResolver.resolve(task);
     const conversationId = task.conversation_id ?? 0;
     await engine.compact(taskId, conversationId, workingDirectory, workspaceKey);
-    const lastMsg = db.query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
+    const lastMsg = await resolveConversationMessageStore(db, conversationId).getLastByType("compaction_summary");
     if (lastMsg) {
       this.onNewMessage(mapConversationMessage(lastMsg));
     }
@@ -337,9 +341,7 @@ export class Orchestrator implements ExecutionCoordinator {
     }
     const workingDirectory = getEffectiveWorkspacePath(config);
     await engine.compact(null, conversationId, workingDirectory, workspaceKey);
-    const lastMsg = this.db.query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
+    const lastMsg = await resolveConversationMessageStore(this.db, conversationId).getLastByType("compaction_summary");
     if (lastMsg) {
       this.onNewMessage(mapConversationMessage(lastMsg));
     }

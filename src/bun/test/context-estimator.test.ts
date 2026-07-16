@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Database } from "bun:sqlite";
-import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import { initDb, seedProjectAndTask, setupTestConfig, markConversationFileBacked, useFileBackedDataDir, seedMessageViaStore } from "./helpers.ts";
 import { ContextEstimator } from "../conversation/context-estimator.ts";
 
 const MAX = 100_000;
@@ -41,19 +41,19 @@ afterEach(() => {
 // ─── CE-1: fast path — completed execution input_tokens ──────────────────────
 
 describe("ContextEstimator — CE-1: fast path", () => {
-  it("returns input_tokens from the most recent completed execution", () => {
+  it("returns input_tokens from the most recent completed execution", async () => {
     insertExecution(db, conversationId, 50_000);
     const est = new ContextEstimator(db);
-    const result = est.estimate(conversationId, MAX);
+    const result = await est.estimate(conversationId, MAX);
     expect(result.usedTokens).toBe(50_000);
     expect(result.maxTokens).toBe(MAX);
     expect(result.fraction).toBeCloseTo(0.5);
   });
 
-  it("ignores running executions (uses completed only)", () => {
+  it("ignores running executions (uses completed only)", async () => {
     insertExecution(db, conversationId, 80_000, "running");
     const est = new ContextEstimator(db);
-    const result = est.estimate(conversationId, MAX);
+    const result = await est.estimate(conversationId, MAX);
     // No completed execution → slow path, conversation is empty → overhead constant only
     expect(result.usedTokens).toBeLessThan(80_000);
   });
@@ -62,7 +62,7 @@ describe("ContextEstimator — CE-1: fast path", () => {
 // ─── CE-2: slow path — compaction anchor ─────────────────────────────────────
 
 describe("ContextEstimator — CE-2: slow path with anchor", () => {
-  it("counts messages after the last compaction_summary anchor", () => {
+  it("counts messages after the last compaction_summary anchor", async () => {
     insertMsg(db, conversationId, "assistant", "A".repeat(400)); // before anchor
     db.run(
       "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (1, ?, 'compaction_summary', 'system', 'summary')",
@@ -71,13 +71,13 @@ describe("ContextEstimator — CE-2: slow path with anchor", () => {
     insertMsg(db, conversationId, "assistant", "B".repeat(400)); // after anchor — 100 tokens @ 4char/token
 
     const est = new ContextEstimator(db);
-    const result = est.estimate(conversationId, MAX);
+    const result = await est.estimate(conversationId, MAX);
 
     // 400 chars / 4 = 100 tokens + 400 overhead
     expect(result.usedTokens).toBe(100 + 400);
   });
 
-  it("caps at LIMIT 200: 210 messages after anchor drops 10", () => {
+  it("caps at LIMIT 200: 210 messages after anchor drops 10", async () => {
     db.run(
       "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (1, ?, 'compaction_summary', 'system', 'anchor')",
       [conversationId],
@@ -88,7 +88,7 @@ describe("ContextEstimator — CE-2: slow path with anchor", () => {
     }
 
     const est = new ContextEstimator(db);
-    const result = est.estimate(conversationId, MAX);
+    const result = await est.estimate(conversationId, MAX);
 
     // Only 200 messages counted: 200 * 10 = 2000 tokens + 400 overhead = 2400
     expect(result.usedTokens).toBe(2000 + 400);
@@ -98,10 +98,10 @@ describe("ContextEstimator — CE-2: slow path with anchor", () => {
 // ─── CE-3: maxTokens cap ─────────────────────────────────────────────────────
 
 describe("ContextEstimator — CE-3: maxTokens cap", () => {
-  it("usedTokens never exceeds maxTokens", () => {
+  it("usedTokens never exceeds maxTokens", async () => {
     insertExecution(db, conversationId, 200_000); // exceeds MAX
     const est = new ContextEstimator(db);
-    const result = est.estimate(conversationId, MAX);
+    const result = await est.estimate(conversationId, MAX);
     expect(result.usedTokens).toBeLessThanOrEqual(MAX);
     expect(result.fraction).toBeLessThanOrEqual(1);
   });
@@ -110,9 +110,45 @@ describe("ContextEstimator — CE-3: maxTokens cap", () => {
 // ─── CE-4: empty conversation ─────────────────────────────────────────────────
 
 describe("ContextEstimator — CE-4: empty conversation", () => {
-  it("returns only the system overhead constant", () => {
+  it("returns only the system overhead constant", async () => {
     const est = new ContextEstimator(db);
-    const result = est.estimate(conversationId, MAX);
+    const result = await est.estimate(conversationId, MAX);
     expect(result.usedTokens).toBe(400); // SYSTEM_MESSAGE_OVERHEAD_TOKENS
+  });
+});
+
+// ─── CE-5: file-backed conversation (task 7.10 — both storage media) ─────────
+// The slow-path anchor logic (CE-2) reads via `resolveConversationMessageStore`, so it must
+// behave identically whether the conversation is legacy-SQLite-backed or file-backed.
+
+describe("ContextEstimator — CE-5: slow path with anchor, file-backed conversation", () => {
+  let fileDataDirCleanup: () => void;
+
+  beforeEach(() => {
+    const fixture = useFileBackedDataDir();
+    fileDataDirCleanup = fixture.cleanup;
+    markConversationFileBacked(db, conversationId);
+  });
+
+  afterEach(() => {
+    fileDataDirCleanup();
+  });
+
+  it("counts messages after the last compaction_summary anchor (file store)", async () => {
+    await seedMessageViaStore(db, taskId, conversationId, "assistant", "user", "A".repeat(400)); // before anchor
+    await seedMessageViaStore(db, taskId, conversationId, "compaction_summary", null, "summary");
+    await seedMessageViaStore(db, taskId, conversationId, "assistant", "user", "B".repeat(400)); // after anchor
+
+    const est = new ContextEstimator(db);
+    const result = await est.estimate(conversationId, MAX);
+
+    // Same expected result as CE-2's legacy-SQL equivalent: 400 chars / 4 = 100 tokens + 400 overhead
+    expect(result.usedTokens).toBe(100 + 400);
+  });
+
+  it("returns only the system overhead constant for an empty file-backed conversation", async () => {
+    const est = new ContextEstimator(db);
+    const result = await est.estimate(conversationId, MAX);
+    expect(result.usedTokens).toBe(400);
   });
 });

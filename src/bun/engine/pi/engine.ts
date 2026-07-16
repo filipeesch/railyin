@@ -26,7 +26,7 @@ import type { ModelSettingsRepository } from "../../db/repositories/model-settin
 import type { Model } from "@earendil-works/pi-ai";
 import { buildAllTools } from "./tools/index.ts";
 import { getDb } from "../../db/index.ts";
-import { appendMessage } from "../../conversation/messages.ts";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
 import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
 import { formatPiError } from "./pi-error.ts";
 import { validatePiEngineConfig } from "./pi-config-validation.ts";
@@ -491,7 +491,9 @@ export class PiEngine implements ExecutionEngine {
       const result = await session.compact();
       if (result?.summary) {
         const db = getDb();
-        appendMessage(db, null, conversationId, "compaction_summary", null, result.summary);
+        await resolveConversationMessageStore(db, conversationId).append({
+          taskId: null, type: "compaction_summary", role: null, content: result.summary,
+        });
       }
     } catch (err) {
       console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);

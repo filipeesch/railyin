@@ -31,26 +31,23 @@ The system SHALL provide a generic `WriteBuffer<T>` class that buffers items in 
 - **THEN** the buffer only flushes on explicit `flush()` or `stop()` calls
 
 ### Requirement: WriteBuffer used for conversation_messages writes
-The system SHALL provide a `ConvMessageBuffer` that uses `WriteBuffer<PendingConvMsg>` to batch `conversation_messages` INSERTs using `db.transaction()` with `RETURNING id`.
+The system SHALL provide a `ConvMessageBuffer` that uses `WriteBuffer<PendingConvMsg>` to batch message appends, flushing via an injected `ConversationMessageStore.appendBatch()` call (file-backed store for new conversations, legacy SQL `db.transaction()` with `RETURNING id` for pre-existing conversations) rather than issuing SQL directly itself.
 
 #### Scenario: Real IDs returned after flush
 - **WHEN** `ConvMessageBuffer.flush()` is called with pending messages
-- **THEN** all messages are inserted in a single `db.transaction()`, real row IDs are returned, and `onNewMessage` is called once per inserted message with its real ID
+- **THEN** all messages are appended via the resolved `ConversationMessageStore` in a single batch operation, real ids are returned, and `onNewMessage` is called once per inserted message with its real id
+
+#### Scenario: ConvMessageBuffer does not branch on storage medium
+- **WHEN** `ConvMessageBuffer` flushes messages for any conversation
+- **THEN** it calls the injected `ConversationMessageStore`'s `appendBatch()` method and does not itself check whether the conversation is file-backed or legacy SQLite-backed
 
 ### Requirement: WriteBuffer used for model_raw_messages writes
-The system SHALL provide a `RawMessageBuffer` that uses `WriteBuffer<RawModelMessage>` to batch `model_raw_messages` INSERTs using `db.transaction()`.
+The system SHALL provide a `RawMessageBuffer` that uses `WriteBuffer<RawModelMessage>` to batch raw message writes, flushing via an injected append function that writes to the per-execution debug log file instead of the `model_raw_messages` table.
 
-#### Scenario: Batch insert at count threshold
+#### Scenario: Batch flush at count threshold
 - **WHEN** 50 raw messages have been enqueued
-- **THEN** all 50 are inserted in a single `db.transaction()`
+- **THEN** all 50 are appended to the execution's debug log file in a single flush operation
 
 #### Scenario: Flush on execution end
 - **WHEN** the execution completes (done/error/cancel) and messages remain in the buffer
-- **THEN** all remaining messages are flushed in a single `db.transaction()`
-
-### Requirement: WriteBuffer used for stream_events writes
-The system SHALL replace the DB-write side of `StreamBatcher` with `WriteBuffer<PersistedStreamEvent>`, injecting `appendStreamEventBatch` as `flushFn`.
-
-#### Scenario: stream_events flushed at tool boundaries
-- **WHEN** a `tool_call` or `tool_result` event is processed
-- **THEN** `WriteBuffer.flush()` is called and all buffered stream events are persisted before the tool boundary completes
+- **THEN** all remaining messages are flushed to the debug log file in a single operation

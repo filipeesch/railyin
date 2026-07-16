@@ -2,7 +2,8 @@ import type { ConversationMessage } from "../../../shared/rpc-types";
 import type { Attachment } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
 import { mapConversationMessage } from "../../db/mappers";
-import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
+import { ensureTaskConversation } from "../../conversation/messages";
+import { resolveConversationMessageStore } from "../../conversation/message-store-resolver.ts";
 import { fetchTaskWithModel } from "../../db/task-queries";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
@@ -11,7 +12,7 @@ import type { ExecutionParamsBuilder } from "./execution-params-builder";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
 import type { StreamProcessor } from "../stream/stream-processor";
 import type { OnTaskUpdated } from "../types";
-import type { TaskRow, ConversationMessageRow } from "../../db/row-types";
+import type { TaskRow } from "../../db/row-types";
 import type { IWorkspaceRepository } from "../../db/workspace-repository";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor";
 import { resolveModel } from "./model-resolver";
@@ -60,9 +61,10 @@ export class HumanTurnExecutor {
     const config = getWorkspaceConfig(workspaceKey);
 
     const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
+    const messageStore = resolveConversationMessageStore(db, conversationId);
 
     if (task.execution_state === "waiting_user" && task.current_execution_id != null) {
-      const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);
+      const userMsgRow = await messageStore.append({ taskId, type: "user", role: "user", content });
       db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
       db.run(
         "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
@@ -72,10 +74,7 @@ export class HumanTurnExecutor {
       const resumeEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
       try {
         await resumeEngine.resume(task.current_execution_id, { type: "ask_user", content: engineContent ?? content });
-        const msgRow = db
-          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-          .get(msgId)!;
-        return { message: mapConversationMessage(msgRow), executionId: task.current_execution_id };
+        return { message: mapConversationMessage(userMsgRow), executionId: task.current_execution_id };
       } catch {
         // Roll back optimistic state writes — engine session lost; restart as new execution
         db.run(
@@ -151,10 +150,7 @@ export class HumanTurnExecutor {
           : fallbackBase;
         this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel), execParams);
 
-        const msgRow = db
-          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-          .get(msgId)!;
-        return { message: mapConversationMessage(msgRow), executionId: newExecutionId };
+        return { message: mapConversationMessage(userMsgRow), executionId: newExecutionId };
       }
     }
 
@@ -179,7 +175,8 @@ export class HumanTurnExecutor {
     this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
 
     const resolvedPrompt = engineContent ?? content;
-    const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);
+    const userMsgRow = await messageStore.append({ taskId, type: "user", role: "user", content });
+    const msgId = userMsgRow.id;
 
     const signal = this.streamProcessor.createSignal(executionId);
     const workingDirectory = this.workdirResolver.resolve(taskForExecution);
@@ -194,7 +191,7 @@ export class HumanTurnExecutor {
       workspaceKey,
       msgId,
     );
-    const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
+    const { decisionsBlock } = await this.decisionInjector.prepare(conversationId);
 
     // Build system instructions with custom prompt injection
     const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
@@ -241,9 +238,6 @@ export class HumanTurnExecutor {
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
 
-    const msgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(msgId)!;
-    return { message: mapConversationMessage(msgRow), executionId };
+    return { message: mapConversationMessage(userMsgRow), executionId };
   }
 }

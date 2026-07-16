@@ -1,22 +1,4 @@
 import type { Database } from "bun:sqlite";
-import type { MessageType } from "../../shared/rpc-types.ts";
-
-export function appendMessage(
-  db: Database,
-  taskId: number | null,
-  conversationId: number,
-  type: MessageType,
-  role: string | null,
-  content: string,
-  metadata?: Record<string, unknown>,
-): number {
-  const result = db.run(
-    `INSERT INTO conversation_messages (task_id, conversation_id, type, role, content, metadata)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [taskId, conversationId, type, role, content, metadata ? JSON.stringify(metadata) : null],
-  );
-  return result.lastInsertRowid as number;
-}
 
 export function ensureTaskConversation(db: Database, taskId: number, conversationId: number | null): number {
   if (conversationId != null) {

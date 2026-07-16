@@ -4,6 +4,8 @@ import { join, dirname, basename } from "path";
 import { tmpdir } from "os";
 import { getDb, _softResetForTests as resetDbSingleton } from "../db/index.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
+import { resolveConversationMessageStore } from "../conversation/message-store-resolver.ts";
+import type { MessageType } from "../../shared/rpc-types.ts";
 
 // ─── In-memory DB ─────────────────────────────────────────────────────────────
 
@@ -28,7 +30,8 @@ export function initDb(): Database {
         last_engine_type TEXT NULL,
         decisions_injected_after_compaction_id INTEGER NULL,
         sampling_preset_override TEXT NULL,
-        model_params TEXT NULL
+        model_params TEXT NULL,
+        storage_medium TEXT NOT NULL DEFAULT 'sqlite'
       );
     CREATE TABLE IF NOT EXISTS tasks (
       id                        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,22 +159,6 @@ export function initDb(): Database {
       updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
-    CREATE TABLE IF NOT EXISTS stream_events (
-       id              INTEGER PRIMARY KEY AUTOINCREMENT,
-       conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-       execution_id    INTEGER NOT NULL,
-       seq             INTEGER NOT NULL,
-       block_id        TEXT NOT NULL,
-       type            TEXT NOT NULL,
-       content         TEXT NOT NULL DEFAULT '',
-       metadata        TEXT,
-       parent_block_id TEXT,
-       subagent_id     TEXT,
-       created_at      TEXT DEFAULT (datetime('now')),
-       UNIQUE (conversation_id, seq)
-    );
-    CREATE INDEX IF NOT EXISTS idx_stream_events_conversation ON stream_events (conversation_id, seq);
-    CREATE INDEX IF NOT EXISTS idx_stream_events_execution ON stream_events (execution_id, seq);
     CREATE TABLE IF NOT EXISTS task_execution_checkpoints (
       execution_id INTEGER PRIMARY KEY REFERENCES executions(id),
       stash_ref    TEXT,
@@ -191,22 +178,6 @@ export function initDb(): Database {
       archived_at      TEXT,
       last_read_at     TEXT
     );
-    CREATE TABLE IF NOT EXISTS model_raw_messages (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id         INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
-      execution_id    INTEGER NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
-      engine          TEXT    NOT NULL,
-      session_id      TEXT,
-      stream_seq      INTEGER NOT NULL,
-      direction       TEXT    NOT NULL,
-      event_type      TEXT    NOT NULL,
-      event_subtype   TEXT,
-      payload_json    TEXT    NOT NULL,
-      created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_execution_seq ON model_raw_messages (execution_id, stream_seq);
-    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_task_created ON model_raw_messages (task_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_engine_type ON model_raw_messages (engine, event_type);
     CREATE TABLE IF NOT EXISTS decision_batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -258,6 +229,73 @@ export function initDb(): Database {
 export function makeTempDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "railyn-test-"));
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+// ─── Seed a raw conversation_messages row (legacy SQL, test-only) ────────────
+// Mirrors the shape of the removed production `appendMessage` helper. Tests seed
+// data directly against the legacy table (default storage_medium is 'sqlite' in
+// `initDb()`) rather than going through the async `ConversationMessageStore`,
+// since most of these seeds are synchronous scaffolding for unrelated assertions.
+
+export function seedMessage(
+  db: Database,
+  taskId: number | null,
+  conversationId: number,
+  type: string,
+  role: string | null,
+  content: string,
+  metadata?: Record<string, unknown>,
+): number {
+  const result = db.run(
+    `INSERT INTO conversation_messages (task_id, conversation_id, type, role, content, metadata)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [taskId, conversationId, type, role, content, metadata ? JSON.stringify(metadata) : null],
+  );
+  return result.lastInsertRowid as number;
+}
+
+// ─── File-backed conversation fixtures ────────────────────────────────────────
+// Companion helpers for exercising the same call sites against
+// `FileConversationMessageStore` instead of the legacy SQL table, so tests can prove
+// the medium-agnostic production code (`resolveConversationMessageStore` call sites)
+// behaves identically for both storage media.
+
+/** Flips a conversation's discriminant so `resolveConversationMessageStore` resolves it to
+ *  `FileConversationMessageStore` rather than the legacy SQLite-backed implementation. */
+export function markConversationFileBacked(db: Database, conversationId: number): void {
+  db.run("UPDATE conversations SET storage_medium = 'file' WHERE id = ?", [conversationId]);
+}
+
+/** Redirects `getDataDir()` (and therefore the file store's default conversations directory)
+ *  to a fresh temp dir for the duration of a test, restoring the previous value on cleanup. */
+export function useFileBackedDataDir(): { dataDir: string; cleanup: () => void } {
+  const dataDir = mkdtempSync(join(tmpdir(), "railyn-file-conv-"));
+  const previous = process.env.RAILYN_DATA_DIR;
+  process.env.RAILYN_DATA_DIR = dataDir;
+  return {
+    dataDir,
+    cleanup: () => {
+      if (previous === undefined) delete process.env.RAILYN_DATA_DIR;
+      else process.env.RAILYN_DATA_DIR = previous;
+      rmSync(dataDir, { recursive: true, force: true });
+    },
+  };
+}
+
+/** Seeds a message through `resolveConversationMessageStore` instead of raw SQL — the
+ *  medium-aware equivalent of `seedMessage`, for use once a conversation has been marked
+ *  file-backed via `markConversationFileBacked`. */
+export async function seedMessageViaStore(
+  db: Database,
+  taskId: number | null,
+  conversationId: number,
+  type: MessageType,
+  role: string | null,
+  content: string,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  const store = resolveConversationMessageStore(db, conversationId);
+  await store.append({ taskId, type, role, content, metadata: metadata ?? null });
 }
 
 // ─── Seed a project + board + task ───────────────────────────────────────────

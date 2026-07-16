@@ -5,7 +5,7 @@ const defaultWaitFn: WaitFn = (ms) => new Promise((r) => setTimeout(r, ms));
 export interface WriteBufferOptions<T> {
   maxBatch?: number;
   intervalMs?: number;
-  flushFn: (items: T[]) => void;
+  flushFn: (items: T[]) => void | Promise<void>;
   waitFn?: WaitFn;
   /** Fires synchronously on each enqueue, before the item is added to the
    *  pending batch. Use this for side-effects (e.g. WS broadcast) that must
@@ -18,7 +18,7 @@ export class WriteBuffer<T> {
   private running = false;
   private readonly maxBatch: number;
   private readonly intervalMs: number;
-  private readonly flushFn: (items: T[]) => void;
+  private readonly flushFn: (items: T[]) => void | Promise<void>;
   private readonly waitFn: WaitFn;
   private readonly onEnqueue?: (item: T) => void;
   private tickResolve: (() => void) | null = null;
@@ -51,7 +51,11 @@ export class WriteBuffer<T> {
   flush(): T[] {
     if (this.pending.length === 0) return [];
     const items = this.pending.splice(0);
-    this.flushFn(items);
+    // flushFn may be async (e.g. file-based writers) — never awaited here since flush() is
+    // synchronous by contract, but guard against unhandled rejections crashing the process.
+    void Promise.resolve(this.flushFn(items)).catch((err: unknown) => {
+      console.error("WriteBuffer flushFn failed:", err instanceof Error ? err.message : err);
+    });
     return items;
   }
 

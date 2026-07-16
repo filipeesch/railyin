@@ -11,7 +11,7 @@ describe("WriteBuffer — WB-1: wakeup loop on maxBatch (no sync flush)", () => 
     const flushed: number[][] = [];
     const buf = new WriteBuffer<number>({
       maxBatch: 3,
-      flushFn: (items) => flushed.push([...items]),
+      flushFn: (items) => { flushed.push([...items]); },
     });
 
     buf.enqueue(1);
@@ -25,7 +25,7 @@ describe("WriteBuffer — WB-1: wakeup loop on maxBatch (no sync flush)", () => 
     const { waitFn, tick } = createMockWait();
     const buf = new WriteBuffer<number>({
       maxBatch: 3,
-      flushFn: (items) => flushed.push([...items]),
+      flushFn: (items) => { flushed.push([...items]); },
       waitFn,
     });
 
@@ -52,7 +52,7 @@ describe("WriteBuffer — WB-2: tick-based interval flush", () => {
     const { waitFn, tick } = createMockWait();
     const buf = new WriteBuffer<string>({
       maxBatch: 100,
-      flushFn: (items) => flushed.push([...items]),
+      flushFn: (items) => { flushed.push([...items]); },
       waitFn,
     });
 
@@ -77,7 +77,7 @@ describe("WriteBuffer — WB-2: tick-based interval flush", () => {
     const { waitFn, tick } = createMockWait();
     const buf = new WriteBuffer<number>({
       maxBatch: 100,
-      flushFn: (items) => flushCalls.push(items.length),
+      flushFn: (items) => { flushCalls.push(items.length); },
       waitFn,
     });
 
@@ -99,7 +99,7 @@ describe("WriteBuffer — WB-3: manual flush", () => {
     const flushed: number[][] = [];
     const buf = new WriteBuffer<number>({
       maxBatch: 100,
-      flushFn: (items) => flushed.push([...items]),
+      flushFn: (items) => { flushed.push([...items]); },
     });
 
     buf.enqueue(10);
@@ -115,7 +115,7 @@ describe("WriteBuffer — WB-3: manual flush", () => {
     const flushCalls: number[] = [];
     const buf = new WriteBuffer<number>({
       maxBatch: 100,
-      flushFn: (items) => flushCalls.push(items.length),
+      flushFn: (items) => { flushCalls.push(items.length); },
     });
 
     const result = buf.flush();
@@ -132,7 +132,7 @@ describe("WriteBuffer — WB-4: stop flushes remaining items", () => {
     const { waitFn, tick: _tick } = createMockWait();
     const buf = new WriteBuffer<string>({
       maxBatch: 100,
-      flushFn: (items) => flushed.push([...items]),
+      flushFn: (items) => { flushed.push([...items]); },
       waitFn,
     });
 

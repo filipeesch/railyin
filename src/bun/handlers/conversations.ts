@@ -1,13 +1,12 @@
 import type { Database } from "bun:sqlite";
 import type { ConversationMessage, ModelParamValue } from "../../shared/rpc-types.ts";
-import type { ConversationMessageRow } from "../db/row-types.ts";
 import { mapConversationMessage } from "../db/mappers.ts";
-import { getStreamEventsByConversation, type PersistedStreamEvent } from "../db/stream-events.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import { runWithConfig } from "../config/index.ts";
 import { resolveContextWindow } from "../context-usage.ts";
 import { ContextEstimator } from "../conversation/context-estimator.ts";
+import { resolveConversationMessageStore } from "../conversation/message-store-resolver.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 
 export function conversationHandlers(db: Database, orchestrator: ExecutionCoordinator | null, modelSettingsRepo?: ModelSettingsRepository) {
@@ -28,30 +27,10 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       }
       if (conversationId == null) throw new Error("conversationId or taskId is required");
       const limit = params.limit ?? 50;
-      let rows: ConversationMessageRow[];
-      if (params.beforeMessageId != null) {
-        rows = db
-          .query<ConversationMessageRow, [number, number, number]>(
-            "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
-          )
-          .all(conversationId, params.beforeMessageId, limit + 1);
-      } else {
-        rows = db
-          .query<ConversationMessageRow, [number, number]>(
-            "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
-          )
-          .all(conversationId, limit + 1);
-      }
-      const hasMore = rows.length > limit;
-      const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);
+      const store = resolveConversationMessageStore(db, conversationId);
+      const { rows, hasMore } = await store.getPage({ beforeMessageId: params.beforeMessageId, limit });
+      const messages = rows.map(mapConversationMessage);
       return { messages, hasMore };
-    },
-
-    "conversations.getStreamEvents": async (params: {
-      conversationId: number;
-      afterSeq?: number;
-    }): Promise<PersistedStreamEvent[]> => {
-      return getStreamEventsByConversation(db, params.conversationId, params.afterSeq);
     },
 
     "conversations.contextUsage": async (params: {
@@ -82,7 +61,7 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
         ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator, modelSettingsRepo)) 
         : 128_000;
       
-      return new ContextEstimator(db).estimate(params.conversationId, maxTokens);
+      return await new ContextEstimator(db).estimate(params.conversationId, maxTokens);
     },
 
     "conversations.setSamplingPreset": async (params: {

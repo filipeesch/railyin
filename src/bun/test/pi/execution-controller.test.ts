@@ -80,7 +80,7 @@ class MockRunDriver implements RunDriver {
 }
 
 class FakeMessageAppender implements MessageAppender {
-  appendCompactionSummary(): void {}
+  async appendCompactionSummary(): Promise<void> {}
 }
 
 function makeOptions(overrides?: Partial<ExecutionControllerOptions>): ExecutionControllerOptions {
