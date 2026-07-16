@@ -4,7 +4,7 @@ Allows users and the system to compact a task's conversation history into a summ
 ## Requirements
 
 ### Requirement: Conversation can be compacted into a summary
-The system SHALL support compacting a task's conversation history by sending accumulated messages to the AI model and replacing them, for future LLM calls, with a single summary message of type `compaction_summary`. The full history SHALL remain in the database. The AI call SHALL use the structured multi-section compaction prompt (see `compaction-prompt` spec) and the stored summary SHALL contain only the `<summary>` block output, with any `<analysis>` scratchpad block stripped prior to storage. Context token estimation for auto-compact threshold checking SHALL reflect the micro-compact decay — i.e., it SHALL estimate tokens for the assembled payload (after inline clearing), not for the raw stored messages. The compaction prompt SHALL explicitly inform the model that a `Session Notes` file exists and is injected separately — allowing the compaction summary to defer persistent facts to the notes layer rather than duplicating them.
+The system SHALL support compacting a task's conversation history by sending accumulated messages to the AI model and replacing them, for future LLM calls, with a single summary message of type `compaction_summary`. The full history SHALL remain in the conversation's message store (the file-backed `ConversationMessageStore` for new conversations, or the legacy `conversation_messages` table for pre-existing ones). The AI call SHALL use the structured multi-section compaction prompt (see `compaction-prompt` spec) and the stored summary SHALL contain only the `<summary>` block output, with any `<analysis>` scratchpad block stripped prior to storage. Context token estimation for auto-compact threshold checking SHALL reflect the micro-compact decay — i.e., it SHALL estimate tokens for the assembled payload (after inline clearing), not for the raw stored messages. The compaction prompt SHALL explicitly inform the model that a `Session Notes` file exists and is injected separately — allowing the compaction summary to defer persistent facts to the notes layer rather than duplicating them. The compaction-anchor lookup (finding the most recent `compaction_summary` message) SHALL be served by the `ConversationMessageStore`, using the sidecar's `lastCompactionSummaryId`/`lastCompactionSummaryByteOffset` for file-backed conversations rather than scanning the file.
 
 #### Scenario: Compaction appends a summary message
 - **WHEN** compaction is triggered (manually or automatically)
@@ -18,9 +18,9 @@ The system SHALL support compacting a task's conversation history by sending acc
 - **WHEN** an LLM call is assembled after a compaction_summary exists in history
 - **THEN** the assembled context contains: the system prompt (with session notes block if present), the compaction_summary as a system message, and only messages that occurred after it
 
-#### Scenario: Pre-compaction messages remain in database
+#### Scenario: Pre-compaction messages remain retrievable from the message store
 - **WHEN** compaction completes
-- **THEN** all messages before the compaction_summary are still retrievable from the database
+- **THEN** all messages before the compaction_summary are still retrievable via the conversation's `ConversationMessageStore`, whether file-backed or legacy SQLite
 
 #### Scenario: Compaction uses the task's own model
 - **WHEN** compaction runs
@@ -41,6 +41,10 @@ The system SHALL support compacting a task's conversation history by sending acc
 #### Scenario: Auto-compact threshold checks assembled token count
 - **WHEN** the system checks whether to auto-compact before a send
 - **THEN** the token estimate used is based on the assembled payload (after micro-compact clearing), not the raw stored message content
+
+#### Scenario: Compaction-anchor lookup uses sidecar for file-backed conversations
+- **WHEN** the system needs to find the most recent `compaction_summary` message for a file-backed conversation
+- **THEN** the `ConversationMessageStore` returns it using the sidecar's `lastCompactionSummaryId` rather than scanning the JSONL file
 
 ### Requirement: User can manually trigger compaction at any time
 The system SHALL expose a `tasks.compact` RPC and a "Compact" button in the task detail drawer that allows the user to trigger compaction at any time regardless of current context usage. If no live Pi session exists for the conversation, the engine SHALL restore it from the persisted `.jsonl` session file before compacting. If compaction is already in progress, the system SHALL throw a user-friendly error. After successful compaction, a `message.new` WebSocket event SHALL be broadcast with the new `compaction_summary` message.

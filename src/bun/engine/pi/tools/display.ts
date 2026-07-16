@@ -85,9 +85,6 @@ export function buildPiToolDisplay(name: string, args: Record<string, unknown>, 
     case "undo_write":
       return { label: "undo write", subject: rel(str(args.path), worktreePath) || undefined };
 
-    // case "delegate":
-    //   return { label: "", subject: str(args.intent) || undefined };
-
     default:
       return buildCommonToolDisplay(name, args);
   }

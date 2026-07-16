@@ -70,6 +70,7 @@ class MockBgSession {
       this.agent.state.messages.push({ role: "assistant", stopReason: "stop", usage: { input: 100, output: 50, cacheRead: 0 }, content: [] });
       this.callback?.({ type: "agent_end" });
     },
+    waitForIdle: async (): Promise<void> => {},
   };
 
   setActiveToolsCallCount = 0;

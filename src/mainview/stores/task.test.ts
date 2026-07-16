@@ -216,6 +216,68 @@ describe("taskStore", () => {
     expect(store.taskIndex[7]).toBeUndefined();
   });
 
+  it("T9-BATCH-1: deleteTasks removes all tasks and reports progress", async () => {
+    const store = useTaskStore();
+    const task1 = makeTask({ id: 10, boardId: 3 });
+    const task2 = makeTask({ id: 11, boardId: 3 });
+    apiMock.mockResolvedValueOnce([task1, task2]);
+    await store.loadTasks(3);
+
+    apiMock.mockImplementation(async () => ({}));
+    const progress: number[] = [];
+    const result = await store.deleteTasks([10, 11], { onProgress: (id) => progress.push(id) });
+
+    expect(result.deleted).toBe(2);
+    expect(result.warnings).toEqual([]);
+    expect(progress).toEqual([10, 11]);
+    expect(store.tasksByBoard[3]).toHaveLength(0);
+    expect(store.taskIndex[10]).toBeUndefined();
+    expect(store.taskIndex[11]).toBeUndefined();
+  });
+
+  it("T9-BATCH-2: deleteTasks aggregates warnings", async () => {
+    const store = useTaskStore();
+    const task1 = makeTask({ id: 20, boardId: 4 });
+    const task2 = makeTask({ id: 21, boardId: 4 });
+    apiMock.mockResolvedValueOnce([task1, task2]);
+    await store.loadTasks(4);
+
+    let callIndex = 0;
+    apiMock.mockImplementation(async () => {
+      callIndex++;
+      return callIndex === 1 ? { warning: "worktree not removed" } : {};
+    });
+
+    const result = await store.deleteTasks([20, 21]);
+
+    expect(result.deleted).toBe(2);
+    expect(result.warnings).toEqual(["worktree not removed"]);
+  });
+
+  it("T9-BATCH-3: deleteTasks stops on first error", async () => {
+    const store = useTaskStore();
+    const task1 = makeTask({ id: 30, boardId: 5 });
+    const task2 = makeTask({ id: 31, boardId: 5 });
+    const task3 = makeTask({ id: 32, boardId: 5 });
+    apiMock.mockResolvedValueOnce([task1, task2, task3]);
+    await store.loadTasks(5);
+
+    let callIndex = 0;
+    apiMock.mockImplementation(async () => {
+      callIndex++;
+      if (callIndex === 2) throw new Error("network error");
+      return {};
+    });
+
+    const result = await store.deleteTasks([30, 31, 32]);
+
+    expect(result.deleted).toBe(1);
+    expect(result.error).toBe("network error");
+    expect(store.taskIndex[30]).toBeUndefined();
+    expect(store.taskIndex[31]).toBeDefined();
+    expect(store.taskIndex[32]).toBeDefined();
+  });
+
   it("reloads active task messages after a transition so new transition cards appear immediately", async () => {
     const task = makeTask();
     const updatedTask = makeTask({ workflowState: "plan", executionState: "running" });

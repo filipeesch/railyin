@@ -71,6 +71,10 @@ The system SHALL allow the user to delete a task. Deletion SHALL cascade to remo
 - **WHEN** deletion completes
 - **THEN** the task disappears from the board view and the task detail drawer closes
 
+#### Scenario: Batch delete reuses single delete RPC
+- **WHEN** the user deletes multiple selected cards from the board
+- **THEN** the frontend SHALL call the existing `tasks.delete` RPC once per selected card
+
 ### Requirement: Handler keys are grouped into domain-scoped modules
 The backend handler layer SHALL organize handler keys into domain-scoped modules so that each file has a single responsibility. The modules SHALL be: `tasks.ts` (CRUD + lifecycle), `task-git.ts` (worktree + git ops), `code-review.ts` (hunk decisions + line comments), `todos.ts` (todo CRUD), `models.ts` (model management), `engine.ts` (engine commands).
 

@@ -107,12 +107,13 @@ class CryptoHasher {
   digest(encoding: "hex" | "base64"): string { return this._hash.digest(encoding); }
 }
 
-function spawn(args: string[], options?: { cwd?: string; stdout?: string; stderr?: string; stdin?: Uint8Array | "pipe" | "inherit" | "ignore"; env?: Record<string, string> }) {
+function spawn(args: string[], options?: { cwd?: string; stdout?: string; stderr?: string; stdin?: Uint8Array | "pipe" | "inherit" | "ignore"; env?: Record<string, string>; detached?: boolean }) {
   const stdinArg = options?.stdin;
   const stdinMode = stdinArg instanceof Uint8Array ? "pipe" : (stdinArg ?? "ignore");
   const proc = nodeSpawn(args[0], args.slice(1), {
     cwd: options?.cwd,
     env: options?.env ? { ...process.env, ...options.env } : process.env,
+    detached: options?.detached,
     stdio: [
       stdinMode,
       options?.stdout === "pipe" ? "pipe" : "inherit",
@@ -162,6 +163,8 @@ function spawn(args: string[], options?: { cwd?: string; stdout?: string; stderr
   return {
     get exited() { return exitedPromise; },
     get exitCode() { return _exitCode; },
+    get pid() { return proc.pid; },
+    kill(signal?: string) { proc.kill(signal as NodeJS.Signals | undefined); },
     get stdout() { return options?.stdout === "pipe" ? bufToReadableStream(stdoutBuf) : null; },
     get stderr() { return options?.stderr === "pipe" ? bufToReadableStream(stderrBuf) : null; },
   };

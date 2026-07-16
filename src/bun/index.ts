@@ -37,7 +37,7 @@ import { ClaudeEngine } from "./engine/claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
 import { createDefaultOpenCodeSdkAdapter } from "./engine/opencode/adapter.ts";
-import { PiEngine } from "./engine/pi/engine.ts";
+import { createPiEngine } from "./engine/pi/pi-engine-factory.ts";
 import { CursorEngine, createDefaultCursorSdkAdapter } from "./engine/cursor/engine.ts";
 import type { PiEngineConfig } from "./config/index.ts";
 import { createDefaultDialectRegistry } from "./engine/dialects/registry.ts";
@@ -116,24 +116,8 @@ registryPool.getGlobalRegistry().startAll().catch((err: unknown) => {
   console.error("[mcp] Failed to start MCP servers at startup:", err);
 });
 
-// 3. Reset any tasks/executions stuck in 'running'/'waiting_user' from last session
-function resetStuckTasks(): void {
-  const stuckCount = db
-    .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tasks WHERE execution_state IN ('running', 'waiting_user')")
-    .get()?.n ?? 0;
-  if (stuckCount > 0) {
-    console.warn(`[db] Resetting ${stuckCount} task(s) stuck in 'running'/'waiting_user' state from previous session`);
-    db.run("UPDATE tasks SET execution_state = 'failed' WHERE execution_state IN ('running', 'waiting_user')");
-    db.run(
-      `UPDATE executions SET status = 'failed', finished_at = datetime('now'),
-       details = 'Process restarted while execution was running'
-       WHERE status IN ('running', 'waiting_user')`,
-    );
-  }
-}
-resetStuckTasks();
-
 // ─── Notification modules ─────────────────────────────────────────────────────
+
 const channel = new BroadcastChannel();
 const notifier = new NotificationService(channel);
 const streamProc = new StreamEventProcessor(channel);
@@ -160,7 +144,7 @@ const engineFactories: Record<string, EngineFactory> = {
   pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
     const piCfg = cfg as PiEngineConfig;
     const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
-    return new PiEngine(engineId, piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo);
+    return createPiEngine({ engineId, config: piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo });
   },
   scripted: () => new MockExecutionEngine(),
 };

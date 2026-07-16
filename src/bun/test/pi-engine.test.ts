@@ -80,8 +80,7 @@ function makePiEngine(session: MockAgentSession): PiEngine {
  * accesses the private method via bracket notation.
  */
 async function simulateGetOrCreate(engine: PiEngine, conversationId: number, tools: any[], cwd: string): Promise<any> {
-  // @ts-expect-error — accessing private method for testing
-  return engine.getOrCreateSession(conversationId, {} as any, tools, undefined, cwd);
+  return (engine as any).sessionManager.getOrCreate(conversationId, {} as any, tools, undefined, cwd);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -102,46 +101,6 @@ beforeEach(() => {
 
 afterEach(() => {
   configCleanup();
-});
-
-// ─── TestPiEngine — subclass exposing protected methods for testing ────────────
-
-class TestPiEngine extends PiEngine {
-  constructor(
-    engineId: string,
-    config: PiEngineConfig,
-    onTaskUpdated: () => void,
-    _onNewMessage: () => void,
-    dialect: any,
-    modelSettingsRepo: { getContextWindow: (workspaceKey: string, qualifiedModelId: string) => Promise<number | null> | number | null },
-    sessionFactory: any = async () => ({} as any),
-    registry?: any,
-  ) {
-    super(engineId, config, onTaskUpdated, _onNewMessage, dialect, modelSettingsRepo as any, sessionFactory, registry);
-  }
-
-  exposeCompactionSettings() {
-    return this.buildCompactionSettings();
-  }
-}
-
-// ─── buildCompactionSettings tests ─────────────────────────────────────────────
-
-describe("PiEngine.buildCompactionSettings()", () => {
-  it("PE-SETTINGS-1: returns { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }", () => {
-    const mockRepo = { getContextWindow: () => 128_000 } as any;
-    const engine = new TestPiEngine(
-      "test-pi",
-      { type: "pi" },
-      () => {},
-      () => {},
-      undefined,
-      mockRepo,
-    );
-
-    const settings = engine.exposeCompactionSettings();
-    expect(settings).toEqual({ enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 });
-  });
 });
 
 // ─── compact() model resolution tests ─────────────────────────────────────────
@@ -181,7 +140,8 @@ describe("PiEngine.compact() — model resolution", () => {
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
-    expect(capturedModel.id).toBe("lmstudio/llama-3.2-3b");
+    expect(capturedModel.id).toBe("llama-3.2-3b");
+    expect(capturedModel.name).toBe("lmstudio/llama-3.2-3b");
   });
 
   it("PE-COMPACT-6: compact() resolves contextWindow from modelSettingsRepo", async () => {

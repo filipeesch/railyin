@@ -1,7 +1,19 @@
 <template>
-  <div class="task-card" :class="[`exec-${task.executionState}`]" :data-task-id="task.id" @click="emit('click')">
-    <!-- Title -->
+  <div
+    class="task-card"
+    :class="[`exec-${task.executionState}`, { 'is-selected': selected }]"
+    :data-task-id="task.id"
+    @click="onCardClick"
+  >
+    <!-- Title row -->
     <div class="task-card__title-row">
+      <Checkbox
+        v-if="selectable"
+        :model-value="selected"
+        :binary="true"
+        class="task-card__checkbox"
+        @click.stop
+      />
       <div class="task-card__title">{{ task.title }}</div>
       <span v-if="isUnread" class="task-card__unread-dot" aria-label="Unread activity" />
     </div>
@@ -22,12 +34,20 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Tag from "primevue/tag";
+import Checkbox from "primevue/checkbox";
 import type { Task } from "@shared/rpc-types";
 import { useTaskStore } from "../stores/task";
 import { useProjectStore } from "../stores/project";
 
-const props = defineProps<{ task: Task }>();
-const emit = defineEmits<{ click: [] }>();
+const props = defineProps<{
+  task: Task;
+  selectable?: boolean;
+  selected?: boolean;
+}>();
+const emit = defineEmits<{
+  click: [];
+  select: [taskId: number, selected: boolean];
+}>();
 const taskStore = useTaskStore();
 const projectStore = useProjectStore();
 const projectName = computed(() => projectStore.projects.find(p => p.key === props.task.projectKey)?.name ?? props.task.projectKey);
@@ -58,6 +78,14 @@ const execSeverity = computed(() => {
   };
   return map[props.task.executionState] ?? "secondary";
 });
+
+function onCardClick() {
+  if (props.selectable) {
+    emit("select", props.task.id, !props.selected);
+    return;
+  }
+  emit("click");
+}
 </script>
 
 <style scoped>
@@ -95,6 +123,16 @@ const execSeverity = computed(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+}
+
+.task-card__checkbox {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.task-card.is-selected {
+  outline: 2px solid var(--p-primary-color, #6366f1);
+  outline-offset: -2px;
 }
 
 .task-card__unread-dot {

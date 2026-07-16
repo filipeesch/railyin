@@ -312,8 +312,8 @@ describe("PiEngine abort & cancel", () => {
     const session1 = makeFakeSession();
     const session2 = makeFakeSession();
 
-    eng.sessions.set(1, session1);
-    eng.sessions.set(2, session2);
+    eng.sessionManager.sessions.set(1, session1);
+    eng.sessionManager.sessions.set(2, session2);
     eng.executionToConversation.set(99, 1); // executionId 99 → conversationId 1
 
     engine.cancel(99);
@@ -327,7 +327,7 @@ describe("PiEngine abort & cancel", () => {
     const eng = engine as any;
 
     const session = makeFakeSession();
-    eng.sessions.set(1, session);
+    eng.sessionManager.sessions.set(1, session);
     // no entry in executionToConversation
 
     engine.cancel(404);
@@ -340,7 +340,7 @@ describe("PiEngine abort & cancel", () => {
     const eng = engine as any;
 
     const session = makeFakeSession();
-    eng.sessions.set(1, session);
+    eng.sessionManager.sessions.set(1, session);
     eng.executionToConversation.set(77, 1);
 
     const rejectFn = vi.fn();
@@ -377,6 +377,49 @@ describe("PiEngine abort & cancel", () => {
     // The mapping should have been removed in the finally block (though for pre-abort it never gets set)
     expect(eng.executionToConversation.has(42)).toBe(false);
   });
+
+  it("ABORT-6: HarnessContext.signal reflects the same AbortSignal supplied to buildTools/getOrCreateHarnessContext", () => {
+    const engine = makePiEngine();
+
+    const controller = new AbortController();
+    const ctx = engine.toolFactory.getOrCreateHarnessContext(1, "/test-cwd", controller.signal);
+    expect(ctx.signal.aborted).toBe(false);
+
+    // Aborting the execution's signal (as engine.cancel()/execution-controller would trigger)
+    // is immediately visible to in-flight shell commands reading harnessCtx.signal.
+    controller.abort();
+    expect(ctx.signal.aborted).toBe(true);
+  });
+
+  it("ABORT-7: other conversations' HarnessContext.signal remain unaffected when one execution is cancelled", () => {
+    const engine = makePiEngine();
+
+    const controllerA = new AbortController();
+    const controllerB = new AbortController();
+    const ctxA = engine.toolFactory.getOrCreateHarnessContext(1, "/test-cwd", controllerA.signal);
+    const ctxB = engine.toolFactory.getOrCreateHarnessContext(2, "/test-cwd", controllerB.signal);
+
+    controllerA.abort();
+
+    expect(ctxA.signal.aborted).toBe(true);
+    expect(ctxB.signal.aborted).toBe(false);
+  });
+
+  it("ABORT-8: a new execution on the same conversation refreshes HarnessContext.signal to a non-aborted signal", () => {
+    const engine = makePiEngine();
+
+    const controller1 = new AbortController();
+    controller1.abort();
+    const ctx1 = engine.toolFactory.getOrCreateHarnessContext(1, "/test-cwd", controller1.signal);
+    expect(ctx1.signal.aborted).toBe(true);
+
+    // A new execution on the same conversation supplies a fresh, non-aborted signal.
+    const controller2 = new AbortController();
+    const ctx2 = engine.toolFactory.getOrCreateHarnessContext(1, "/test-cwd", controller2.signal);
+
+    expect(ctx2).toBe(ctx1); // same HarnessContext instance, refreshed in place
+    expect(ctx2.signal.aborted).toBe(false);
+  });
 });
 
 // ─── HarnessContext.loopDetector ─────────────────────────────────────────────
@@ -387,29 +430,26 @@ describe("HarnessContext.loopDetector", () => {
   it("HLC-1: getOrCreateHarnessContext initializes loopDetector as ToolLoopDetector instance", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
     const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
-    const eng = engine as any;
 
-    const ctx = eng.getOrCreateHarnessContext(1, "/test-cwd");
+    const ctx = engine.toolFactory.getOrCreateHarnessContext(1, "/test-cwd");
     expect(ctx.loopDetector).toBeInstanceOf(ToolLoopDetector);
   });
 
   it("HLC-2: same conversationId returns the same loopDetector instance", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
     const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
-    const eng = engine as any;
 
-    const ctx1 = eng.getOrCreateHarnessContext(5, "/test-cwd");
-    const ctx2 = eng.getOrCreateHarnessContext(5, "/test-cwd");
+    const ctx1 = engine.toolFactory.getOrCreateHarnessContext(5, "/test-cwd");
+    const ctx2 = engine.toolFactory.getOrCreateHarnessContext(5, "/test-cwd");
     expect(ctx1.loopDetector).toBe(ctx2.loopDetector);
   });
 
   it("HLC-3: different conversationIds get different loopDetector instances", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
     const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
-    const eng = engine as any;
 
-    const ctx1 = eng.getOrCreateHarnessContext(10, "/test-cwd");
-    const ctx2 = eng.getOrCreateHarnessContext(11, "/test-cwd");
+    const ctx1 = engine.toolFactory.getOrCreateHarnessContext(10, "/test-cwd");
+    const ctx2 = engine.toolFactory.getOrCreateHarnessContext(11, "/test-cwd");
     expect(ctx1.loopDetector).not.toBe(ctx2.loopDetector);
   });
 });
