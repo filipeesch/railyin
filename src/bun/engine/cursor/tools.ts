@@ -14,7 +14,7 @@
 
 import type { SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
 import type { CommonToolContext } from "../types.ts";
-import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../common-tools.ts";
+import { COMMON_TOOL_DEFINITIONS, TODO_TOOL_NAMES, executeCommonTool } from "../common-tools.ts";
 import type { McpClientRegistry } from "../../mcp/registry.ts";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -204,7 +204,12 @@ export function buildCursorTools(
 ): Record<string, SDKCustomTool> {
   const tools: Record<string, SDKCustomTool> = {};
 
-  for (const def of COMMON_TOOL_DEFINITIONS) {
+  // Filter out task-scoped tools (todos) when taskId is null (chat session context)
+  const activeDefs = context.task?.id == null
+    ? COMMON_TOOL_DEFINITIONS.filter((def) => !TODO_TOOL_NAMES.has(def.name))
+    : COMMON_TOOL_DEFINITIONS;
+
+  for (const def of activeDefs) {
     tools[def.name] = {
       description: def.description,
       inputSchema: def.parameters as Record<string, SDKJsonValue>,

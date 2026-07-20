@@ -7,7 +7,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { AIToolDefinition } from "../../../ai/types.ts";
 import type { CommonToolContext, EngineEvent } from "../../types.ts";
 import type { HarnessContext } from "../harness/context.ts";
-import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, executeCommonTool } from "../../common-tools.ts";
+import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, TODO_TOOL_NAMES, executeCommonTool } from "../../common-tools.ts";
 import { normalizeToolArguments } from "../../normalize-args.ts";
 
 export interface SuspendRef {
@@ -38,7 +38,12 @@ export function buildCommonTools(
   toolDefs: AIToolDefinition[] = COMMON_TOOL_DEFINITIONS,
   executor: CommonToolExecutor = executeCommonTool
 ): AgentTool<any>[] {
-  return toolDefs.map((def) => {
+  // Filter out task-scoped tools (todos) when taskId is null (chat session context)
+  const activeDefs = ctx.task?.id == null
+    ? toolDefs.filter((def) => !TODO_TOOL_NAMES.has(def.name))
+    : toolDefs;
+
+  return activeDefs.map((def) => {
     const tool: AgentTool<any> = {
       name: def.name,
       label: def.name.replace(/_/g, " "),

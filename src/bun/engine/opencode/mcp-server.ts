@@ -10,7 +10,7 @@
  */
 
 import type { CommonToolContext } from "../types.ts";
-import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../common-tools.ts";
+import { COMMON_TOOL_DEFINITIONS, TODO_TOOL_NAMES, executeCommonTool } from "../common-tools.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 
@@ -114,14 +114,23 @@ async function handleRequest(req: Request, contextMap: ContextMap): Promise<Resp
       case "ping":
         return jsonRpcOk(id, {});
 
-      case "tools/list":
+      case "tools/list": {
+        // Filter out task-scoped tools (todos) when active context has taskId null (chat session context)
+        // If no active context exists, return all tools (conservative default)
+        const activeEntry = contextMap.values().next().value;
+        const isChatSession = activeEntry?.commonToolContext.task.id == null;
+        const activeDefs = isChatSession
+          ? MCP_TOOL_DEFINITIONS.filter((t) => !TODO_TOOL_NAMES.has(t.name))
+          : MCP_TOOL_DEFINITIONS;
+
         return jsonRpcOk(id, {
-          tools: MCP_TOOL_DEFINITIONS.map((t) => ({
+          tools: activeDefs.map((t) => ({
             name: t.name,
             description: t.description,
             inputSchema: t.parameters,
           })),
         });
+      }
 
       case "tools/call": {
         const params = body.params as { name: string; arguments?: Record<string, unknown> } | undefined;

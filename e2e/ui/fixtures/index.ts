@@ -21,13 +21,14 @@
 import { test as base, expect } from "@playwright/test";
 import { ApiMock } from "./mock-api";
 import { WsMock } from "./mock-ws";
-import { makeBoard, makeTask, makeWorkspace } from "./mock-data";
-import type { Task } from "@shared/rpc-types";
+import { makeBoard, makeTask, makeWorkspace, makeChatSession } from "./mock-data";
+import type { Task, ChatSession } from "@shared/rpc-types";
 
 type Fixtures = {
     api: ApiMock;
     ws: WsMock;
     task: Task;
+    session: ChatSession;
 };
 
 export const test = base.extend<Fixtures>({
@@ -104,6 +105,8 @@ export const test = base.extend<Fixtures>({
             // Decision records — tests override as needed
             .returns("decisions.list", [])
             .returns("decisions.getRevisions", [])
+            // Notes — tests override as needed
+            .returns("notes.list", [])
             // Workflow setup — tests override as needed
             .returns("workflow.list", []);
 
@@ -115,7 +118,12 @@ export const test = base.extend<Fixtures>({
     task: async ({ }, use) => {
         await use(makeTask({ id: 1 }));
     },
+
+    // ── Default session ───────────────────────────────────────────────────────
+    session: async ({ }, use) => {
+        await use(makeChatSession({ id: 500 }));
+    },
 });
 
 export { expect };
-export { openTaskDrawer, sendMessage, openSidebar, openSessionDrawer, typeInSessionEditor } from "./helpers";
+export { openTaskDrawer, sendMessage, openSidebar, openSessionDrawer, typeInSessionEditor, openSessionNotesTab } from "./helpers";
