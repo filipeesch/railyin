@@ -52,3 +52,9 @@ export async function typeInSessionEditor(
     await editor.pressSequentially(text);
     await page.keyboard.press(submitKey);
 }
+
+/** Open the Notes tab in the session chat view and wait for it to be visible. */
+export async function openSessionNotesTab(page: Page): Promise<void> {
+    await page.locator(".scv-tab-btn", { hasText: "Notes" }).click();
+    await expect(page.locator(".notes-panel")).toBeVisible({ timeout: 3_000 });
+}

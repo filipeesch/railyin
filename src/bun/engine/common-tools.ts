@@ -269,7 +269,9 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   ...WORKSPACE_TOOL_DEFINITIONS,
 ];
 
-export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request", "list_decisions", "record_decision", "update_decision", "delete_decision", "create_note", "list_notes", "update_note", "create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status", ...LSP_TOOL_DEFINITIONS.map((t) => t.name), ...WORKSPACE_TOOL_NAMES]);
+export const TODO_TOOL_NAMES = new Set(["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"]);
+
+export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request", "list_decisions", "record_decision", "update_decision", "delete_decision", "create_note", "list_notes", "update_note", ...TODO_TOOL_NAMES, ...LSP_TOOL_DEFINITIONS.map((t) => t.name), ...WORKSPACE_TOOL_NAMES]);
 
 // ─── Display builder ──────────────────────────────────────────────────────────
 

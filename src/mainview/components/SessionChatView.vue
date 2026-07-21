@@ -66,6 +66,9 @@
       <button :class="['scv-tab-btn', { 'scv-tab-btn--active': activeTab === 'decisions' }]" @click="activeTab = 'decisions'">
         <i class="pi pi-list-check" /> Decisions
       </button>
+      <button :class="['scv-tab-btn', { 'scv-tab-btn--active': activeTab === 'notes' }]" @click="activeTab = 'notes'">
+        <i class="pi pi-file-edit" /> Notes
+      </button>
     </div>
 
     <!-- Body: conversation -->
@@ -85,6 +88,13 @@
     <DecisionsPanel
       v-if="session && !conversationStore.messagesLoading && activeTab === 'decisions' && session.conversationId"
       :conversation-id="session.conversationId"
+    />
+
+    <!-- Notes panel -->
+    <NotesPanel
+      v-if="session && !conversationStore.messagesLoading && activeTab === 'notes' && session.conversationId"
+      :conversation-id="session.conversationId"
+      :refresh-trigger="notesRefreshTrigger"
     />
 
     <!-- Input bar -->
@@ -136,6 +146,7 @@ import ConversationBody from "./ConversationBody.vue";
 import ConversationInput from "./ConversationInput.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
 import DecisionsPanel from "./DecisionsPanel.vue";
+import NotesPanel from "./NotesPanel.vue";
 import { useChatStore } from "../stores/chat";
 import { useDrawerStore } from "../stores/drawer";
 import { useConversationStore } from "../stores/conversation";
@@ -247,7 +258,18 @@ async function onShellAutoApproveChange(enabled: boolean) {
 
 const manageModelsOpen = ref(false);
 const compacting = ref(false);
-const activeTab = ref<"chat" | "decisions">("chat");
+const activeTab = ref<"chat" | "decisions" | "notes">("chat");
+const notesRefreshTrigger = ref(0);
+
+// Refresh notes when session status changes from running to non-running
+watch(
+  () => session.value?.status,
+  (status, prevStatus) => {
+    if (prevStatus === "running" && status !== "running") {
+      notesRefreshTrigger.value++;
+    }
+  },
+);
 
 // ─── Title editing ────────────────────────────────────────────────────────────
 
