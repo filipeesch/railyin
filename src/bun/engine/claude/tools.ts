@@ -1,4 +1,4 @@
-import { COMMON_TOOL_DEFINITIONS, executeCommonTool } from "../common-tools.ts";
+import { COMMON_TOOL_DEFINITIONS, TODO_TOOL_NAMES, executeCommonTool } from "../common-tools.ts";
 import type { CommonToolContext } from "../types.ts";
 import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 
@@ -87,7 +87,12 @@ export function buildClaudeToolServer(
   // the hook reads and clears it — no tool-name awareness needed.
   let pendingSuspendPayload: string | undefined;
 
-  const tools = COMMON_TOOL_DEFINITIONS.map((def) => sdk.tool(
+  // Filter out task-scoped tools (todos) when taskId is null (chat session context)
+  const activeDefs = context.task?.id == null
+    ? COMMON_TOOL_DEFINITIONS.filter((def) => !TODO_TOOL_NAMES.has(def.name))
+    : COMMON_TOOL_DEFINITIONS;
+
+  const tools = activeDefs.map((def) => sdk.tool(
     def.name,
     def.description,
     jsonSchemaToZodShape(z, def.parameters as Record<string, unknown>),
