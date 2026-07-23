@@ -50,7 +50,7 @@ The system SHALL configure the Cursor SDK, once at adapter module load, to use H
 
 ### Requirement: Per-run stall watchdog
 
-The system SHALL detect when an active Cursor run's SDK message stream stops emitting for longer than a fixed inactivity threshold while the run is expected to still be actively streaming, and SHALL terminate that run with a fatal `EngineEvent.error` rather than allowing it to hang indefinitely.
+The system SHALL detect when an active Cursor run's SDK message stream stops emitting for longer than an inactivity threshold appropriate to whether the run is idly waiting on the assistant/SDK or is legitimately busy executing a tool call, and SHALL terminate that run with a fatal `EngineEvent.error` rather than allowing it to hang indefinitely.
 
 #### Scenario: Stream inactivity triggers a fatal error
 - **WHEN** no SDK message is received from `run.stream()` for longer than the configured stall threshold, and the run has not been aborted (cancelled by the caller, superseded by decision_request, etc.)
@@ -70,12 +70,18 @@ The system SHALL detect when an active Cursor run's SDK message stream stops emi
 - **THEN** no stall watchdog applies; this mechanism lives entirely inside `CursorEngine`/`InProcessCursorAdapter` and is not part of the shared `ExecutionEngine`/`StreamProcessor` contract
 
 #### Scenario: Stall threshold is configurable per adapter instance
-- **WHEN** `InProcessCursorAdapter` is constructed with an explicit `stallTimeoutMs` value
-- **THEN** the watchdog uses that value instead of the real-world default, enabling deterministic, fast tests without waiting out the production threshold
+- **WHEN** `InProcessCursorAdapter` is constructed with an explicit `stallTimeoutMs` and/or `toolExecutionStallTimeoutMs` value
+- **THEN** the watchdog uses those values instead of the real-world defaults, enabling deterministic, fast tests without waiting out the production thresholds
 
 #### Scenario: A new execution can start after a stall-triggered failure
 - **WHEN** a run has been terminated by the stall watchdog (task/execution left in a terminal `failed` state) and the user sends a follow-up message on the same task
 - **THEN** the system starts a new execution normally, the same way it would after any other fatal-error failure, with no RPC-level guard blocking the send and no special-casing required beyond the existing failed-execution handling
+
+#### Scenario: An in-flight tool call is judged against a relaxed threshold, not the idle threshold
+- **WHEN** a `tool_call` message with `status: "running"` has been received and no matching `"completed"`/`"error"` message for the same `call_id` has been received yet
+- **THEN** the watchdog uses the relaxed `toolExecutionStallTimeoutMs` threshold (default 30 minutes) instead of the strict idle `stallTimeoutMs` threshold (default 5 minutes) for determining a stall
+- **AND** once the matching `"completed"` or `"error"` message is received for that `call_id`, the run reverts to being judged against the strict idle threshold
+- **AND** a tool call that itself produces no further SDK message for longer than the relaxed threshold is still treated as a stall, following the same fatal-error/cancel/log behavior as the idle-threshold case
 
 ### Requirement: Structured stall and transport-error logging
 

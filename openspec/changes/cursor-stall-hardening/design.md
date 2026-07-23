@@ -54,6 +54,24 @@ Tool calls (shell commands, long edits) can legitimately run for minutes; 5 minu
 
 **Alternative considered**: making the threshold configurable via `engines.yaml`/environment variable now. Rejected for this change — no evidence yet of what the "right" default is, and adding *end-user-facing* config before we have a value to justify defaults would be premature. This is distinct from (and does not conflict with) the constructor-injection decision above, which is purely an internal testability seam, not a new user-facing capability.
 
+### 3a. Two-tier stall threshold: idle vs. tool-execution in flight (revised)
+
+The single `stallTimeoutMs` threshold from Decision 3 applied uniformly to every gap between SDK messages, including gaps caused entirely by a legitimately slow tool call (a long shell command, a large edit, repo indexing) executing with no intermediate SDK message. That conflated two very different situations under one threshold:
+- Idly waiting on the assistant/SDK to respond between turns — the actual failure mode this feature exists to catch (a silently-dead HTTP/2 session).
+- The run legitimately busy executing a tool call (SDK built-in or custom) — client-side work with no obligation to emit intermediate SDK messages.
+
+`InProcessCursorAdapter` now tracks in-flight tool calls per run in `RunState.inFlightToolCalls` (a `Set<call_id>`), populated when a `tool_call` message with `status: "running"` is observed and cleared on `"completed"`/`"error"` for that `call_id`. Before each `nextWithStallTimeout()` race, the adapter selects the active threshold based on whether the set is non-empty:
+- Empty (idle, waiting on the assistant/SDK): use `stallTimeoutMs` (unchanged, 5-minute default) — the strict threshold.
+- Non-empty (a tool call is in flight): use a new `toolExecutionStallTimeoutMs` constructor parameter, defaulting to 30 minutes — a much more generous threshold that still bounds a genuinely hung tool call.
+
+Both thresholds are independently constructor-injectable, following the same DI precedent as Decision 3.
+
+**Alternative considered**: raise the single threshold to a value generous enough to cover slow tools (e.g. 30-60 min) for all cases. Rejected — this would directly weaken detection of the actual reported bug, letting a silent idle-wait session death go undetected for up to an hour instead of 5 minutes.
+
+**Alternative considered**: fully suspend the watchdog while any tool call is in flight (no timeout at all during tool execution). Rejected — reintroduces the exact silent-hang risk this feature exists to prevent, just scoped to "during tool execution": if the HTTP/2 session dies while a tool result is in flight, the run could hang forever with zero backstop.
+
+
+
 ### 4. Structured stall logging correlated to `execution_id`
 
 Both the stall watchdog's fatal yield and (where feasible) the raw `ConnectError: Session closed with error code 6` rejection path get a structured `console.error` line (matching the existing `[cursor] ${JSON.stringify(...)}` pattern already used for `PersistentBusyError` in `inprocess-adapter.ts`), tagged with `executionId`/`taskId`/`conversationId`/`agentId` so future occurrences are traceable in `bun.log` instead of anonymous "Unhandled rejection" lines.
@@ -78,6 +96,7 @@ Explored during this change's design (via `openspec-explore`, no production code
 - Watchdog does not fire (no duplicate/conflicting error event) when the run's `AbortSignal` is triggered before the threshold elapses — reuses the existing hook-promise pattern from the "stops emitting events after abort" test.
 - `run.cancel()` is best-effort called on stall, and cancel-rejecting does not prevent the fatal error yield (mirrors the existing "always cancels... even when cancel() rejects" test).
 - `Cursor.configure` is called with `{ local: { useHttp1ForAgent: true } }` exactly once at module load — verified via the injected fake SDK client's `Cursor` surface (may require adding a `configure` mock to `CursorSdkClient`'s test fakes if not already present).
+- **Two-tier threshold (Decision 3a)**: a `tool_call` `status: "running"` message keeps the run alive past the strict idle threshold, as long as the gap stays under the relaxed tool-execution threshold; the strict threshold resumes applying once the matching `"completed"` message clears the in-flight set; a tool call that itself hangs past the relaxed threshold still stalls.
 
 **Unit — `src/bun/engine/cursor/translate-events.test.ts`**:
 - `case "status"` reads `message.status` (not `message.message`) for `"RUNNING"`/`"FINISHED"`/`"ERROR"`.
@@ -93,7 +112,8 @@ Explored during this change's design (via `openspec-explore`, no production code
 
 - [Risk] `useHttp1ForAgent` may not cover the exact internal call path causing the stalls (static analysis was inconclusive on this point) → Mitigation: the stall watchdog remains in the change regardless, as an unconditional backstop; if HTTP/1.1 fully resolves the root cause, the watchdog simply becomes a very-rarely-firing safety net with no downside.
 - [Risk] HTTP/1.1 + SSE may have different performance characteristics (e.g. head-of-line blocking, no multiplexing) for local-agent streaming under high tool-call volume → Mitigation: this only affects the local-agent SDK's own internal streaming to Cursor's backend (not our server's HTTP stack), and Cursor's own docs recommend it as their documented fallback for exactly this kind of compatibility issue; low risk given Cursor already defaults to it for Bun runtimes per their own docs.
-- [Risk] Stall threshold of 5 minutes could false-positive on legitimately slow tool calls (e.g. a long-running shell command or large repo indexing) → Mitigation: threshold resets on every SDK message (not just completed tool calls), so any streaming progress — including intermediate `tool_call` "running" status updates — resets the clock; a call that's silently making progress but not emitting any message for 5 minutes is arguably indistinguishable from a stall by definition.
+- [Risk] Stall threshold of 5 minutes could false-positive on legitimately slow tool calls (e.g. a long-running shell command or large repo indexing) → **Superseded by Decision 3a**: the watchdog now tracks in-flight tool calls and applies a separate, more generous `toolExecutionStallTimeoutMs` (default 30 min) whenever a tool call is running, so a single long shell command with no intermediate SDK message is no longer judged against the strict idle threshold. The strict threshold still resets on every SDK message received while idle.
+- [Risk] The relaxed 30-minute tool-execution threshold could itself let a genuinely hung tool call block a run for up to 30 minutes before recovery → Mitigation: this is an explicit, accepted trade-off (see Decision 3a) — bounding it at all (vs. no timeout during tool execution) is strictly better than the pre-existing unbounded-hang risk, and 30 minutes was chosen to comfortably exceed legitimate long-running commands.
 - [Risk] Calling `run.cancel()` on a stalled run whose underlying transport is already broken may itself hang or throw → Mitigation: wrapped in `.catch(() => {})` exactly like the existing abort path; the fatal error yield happens regardless of whether cancel succeeds.
 - [Trade-off] The watchdog only covers Cursor, per explicit decision — if another engine develops a similar SDK-internal stall bug in the future, this code isn't reusable without duplication. Accepted per decision #1091: minimal blast radius over premature generalization.
 
