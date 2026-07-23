@@ -111,18 +111,20 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
     },
   },
   {
-    name: "search_internet",
+    name: "web_search",
     description:
-      "Search the web and return ranked results with title, URL, and snippet.\n\n" +
+      "Search the internet using a browser-based research agent.\n\n" +
       "Usage:\n" +
-      "- Returns up to 10 results; follow up with fetch_url for full content\n" +
-      "- Use for finding documentation, researching APIs, looking up error messages",
+      "- The agent searches Google, navigates to relevant pages, and extracts content\n" +
+      "- Returns a concise markdown answer with a Sources section listing visited URLs\n" +
+      "- Use for comprehensive research, documentation lookup, and current information\n" +
+      "- Be specific in your query for better results",
     parameters: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "The search query.",
+          description: "The search query or research question. Be specific about what you're looking for.",
         },
       },
       required: ["query"],
@@ -291,7 +293,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
 export const TOOL_GROUPS: Map<string, string[]> = new Map([
   ["interactions", ["ask_me", "decision_request"]],
   ["agents", ["spawn_agent"]],
-  ["web", ["fetch_url", "search_internet"]],
+  ["web", ["fetch_url", "web_search"]],
   ["cards_read", ["list_boards", "get_card", "get_board_summary", "list_cards"]],
   ["cards_write", ["create_card", "edit_card", "delete_card", "move_card", "message_card"]],
   ["todos", ["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"]],
@@ -319,7 +321,7 @@ const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
   ["decision_request", "decision_request(questions, context?): ALWAYS use instead of prose for architectural decisions, technology choices, or any high-stakes direction. Each option has a rich markdown description explaining tradeoffs. Supports exclusive, non_exclusive, and freetext question types."],
   ["spawn_agent", "spawn_agent(children): run parallel sub-agents. Each child needs self-contained instructions and tools array — no access to parent conversation. Returns JSON array of results."],
   ["fetch_url", "fetch_url(url): fetch a public URL and return its text content (HTML stripped to readable text). Use for documentation, API references, web pages."],
-  ["search_internet", "search_internet(query): search the web for ranked results (title, URL, snippet). Requires search config in workspace.yaml. Follow up with fetch_url for full content."],
+  ["web_search", "web_search(query): search the internet using a browser-based agent. Returns a concise markdown answer with sources."],
   ["list_boards", "list_boards(): list all boards in the workspace (id + name). Use to discover boards before calling board tools."],
   ["get_card", "get_card(task_id, include_messages?): get card metadata (title, description, state, model, branch). Use include_messages=N for last N conversation messages."],
   ["get_board_summary", "get_board_summary(board_id?): overview of card distribution across board columns with execution_state breakdown. Uses current board if board_id omitted."],

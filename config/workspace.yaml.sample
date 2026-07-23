@@ -47,12 +47,6 @@ name: My Workspace
 # The slash reference must be at the beginning — inline use is not resolved.
 # You can also use slash commands in task chat: start your message with /opsx-sync.
 
-# ─── Web search ───────────────────────────────────────────────────────────────
-# Used by the search_internet tool. Tavily is the only supported engine in v1.
-# search:
-#   engine: tavily
-#   api_key: ""     # get a free key at https://tavily.com
-
 # ─── Anthropic-specific settings ──────────────────────────────────────────────
 # Applied when using engines backed by the Anthropic provider.
 # anthropic:
