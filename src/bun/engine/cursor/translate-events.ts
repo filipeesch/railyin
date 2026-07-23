@@ -25,11 +25,15 @@ export interface CursorSDKMessage {
   type: string;
   call_id?: string;
   name?: string;
+  // For `type: "tool_call"` this is "running"/"completed"/"error"; for
+  // `type: "status"` this is the real SDKStatusMessage status value
+  // ("CREATING"/"RUNNING"/"FINISHED"/"ERROR"/"CANCELLED"/"EXPIRED").
   status?: string;
   args?: Record<string, unknown>;
   result?: unknown;
   // For `type: "assistant"` this is `SDKAssistantMessage["message"]` (an object with
-  // `content` blocks); for `type: "status"` it's a plain string status message.
+  // `content` blocks). NOT used for `type: "status"` — that message type has no
+  // `message` field; its status value lives in `status` above.
   message?: unknown;
   text?: string;
 }
@@ -375,7 +379,7 @@ export function translateCursorMessage(message: CursorSDKMessage): EngineEvent[]
     case "status": {
       events.push({
         type: "status",
-        message: typeof message.message === "string" ? message.message : String(message.message ?? ""),
+        message: typeof message.status === "string" ? message.status : String(message.status ?? ""),
       });
       break;
     }
