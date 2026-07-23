@@ -129,6 +129,41 @@ describe("InProcessCursorAdapter.run", () => {
     ]);
   });
 
+  it("prefers the SDK's structured error.message/code over the plain string result", async () => {
+    const run = makeFakeRun({
+      waitResult: {
+        id: "run-1",
+        status: "error",
+        result: "boom",
+        error: { message: "Agent session expired", code: "session_expired" },
+      },
+    });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
+
+    expect(await collect(adapter)).toEqual([
+      { type: "error", message: "Agent session expired (session_expired)", fatal: true },
+      { type: "done" },
+    ]);
+  });
+
+  it("uses only error.message when the SDK error has no code", async () => {
+    const run = makeFakeRun({
+      waitResult: {
+        id: "run-1",
+        status: "error",
+        error: { message: "Agent session expired" },
+      },
+    });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
+
+    expect(await collect(adapter)).toEqual([
+      { type: "error", message: "Agent session expired", fatal: true },
+      { type: "done" },
+    ]);
+  });
+
   it("maps run.wait() throwing to a fatal error with a 'wait() threw' prefix", async () => {
     const run = makeFakeRun({ waitError: new Error("network down") });
     const agent = makeFakeAgent(run);

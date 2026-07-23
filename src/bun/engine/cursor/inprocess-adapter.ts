@@ -246,9 +246,28 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
         try {
           const result = await run.wait();
           if (result.status === "error") {
+            // `RunResult.error` carries the SDK's structured terminal-failure
+            // detail (message/code) — prefer it over the plain `result`
+            // string, which the SDK doesn't always populate on error.
+            const detail =
+              result.error?.message ?? (typeof result.result === "string" ? result.result : undefined);
+            console.error(`[cursor] ${JSON.stringify({
+              event: "cursor_run_wait_error",
+              runId,
+              executionId: config.executionId,
+              taskId: config.taskId,
+              conversationId: config.conversationId,
+              agentId: config.agentId ?? null,
+              errorCode: result.error?.code ?? null,
+              detail: detail ?? null,
+            })}`);
             yield {
               type: "error",
-              message: typeof result.result === "string" ? result.result : "Cursor agent run failed with no detail",
+              message: detail
+                ? result.error?.code
+                  ? `${detail} (${result.error.code})`
+                  : detail
+                : "Cursor agent run failed with no detail",
               fatal: true,
             };
           }
