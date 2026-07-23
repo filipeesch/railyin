@@ -94,7 +94,7 @@ describe("InProcessCursorAdapter.run", () => {
   it("translates SDK stream messages into EngineEvents in order via translate-events.ts", async () => {
     const messages: CursorSDKMessage[] = [
       { type: "assistant", message: { content: [{ type: "text", text: "Hello" }] } },
-      { type: "status", message: "thinking" },
+      { type: "status", status: "RUNNING" },
     ];
     const run = makeFakeRun({ messages });
     const agent = makeFakeAgent(run);
@@ -102,7 +102,7 @@ describe("InProcessCursorAdapter.run", () => {
 
     expect(await collect(adapter)).toEqual([
       { type: "token", content: "Hello" },
-      { type: "status", message: "thinking" },
+      { type: "status", message: "RUNNING" },
       { type: "done" },
     ]);
   });
@@ -247,6 +247,203 @@ describe("InProcessCursorAdapter.run", () => {
       local: { customTools: Record<string, SDKCustomTool> };
     };
     expect(passedOptions.local.customTools.echo_tool!.execute).toBe(tool.execute);
+  });
+});
+
+describe("InProcessCursorAdapter stall watchdog", () => {
+  it("does not affect a healthy run that completes well before the (shortened) stall threshold", async () => {
+    const messages: CursorSDKMessage[] = [
+      { type: "assistant", message: { content: [{ type: "text", text: "Hello" }] } },
+      { type: "status", status: "RUNNING" },
+    ];
+    const run = makeFakeRun({ messages });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent), 500);
+
+    expect(await collect(adapter)).toEqual([
+      { type: "token", content: "Hello" },
+      { type: "status", message: "RUNNING" },
+      { type: "done" },
+    ]);
+  });
+
+  it("yields a single fatal stall error and omits the terminal done when the stream hangs past the threshold", async () => {
+    let releaseHook: () => void = () => {};
+    const hook = new Promise<void>((resolve) => { releaseHook = resolve; });
+    async function* stream(): AsyncGenerator<CursorSDKMessage> {
+      yield { type: "assistant", message: { content: [{ type: "text", text: "first" }] } };
+      await hook; // never released in this test — the stream truly never advances
+      yield { type: "assistant", message: { content: [{ type: "text", text: "late" }] } };
+    }
+    const run = makeFakeRun({ stream });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent), 25);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const events = await collect(adapter);
+
+      expect(events).toEqual([
+        { type: "token", content: "first" },
+        { type: "error", message: expect.stringContaining("stalled"), fatal: true },
+      ]);
+      expect(run.cancel).toHaveBeenCalled();
+    } finally {
+      releaseHook();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("resets the stall timer on every SDK message, so cumulative stream duration can exceed the threshold", async () => {
+    async function* stream(): AsyncGenerator<CursorSDKMessage> {
+      for (let i = 0; i < 5; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        yield { type: "assistant", message: { content: [{ type: "text", text: `chunk-${i}` }] } };
+      }
+    }
+    const run = makeFakeRun({ stream });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent), 100);
+
+    const events = await collect(adapter);
+
+    expect(events).toEqual([
+      { type: "token", content: "chunk-0" },
+      { type: "token", content: "chunk-1" },
+      { type: "token", content: "chunk-2" },
+      { type: "token", content: "chunk-3" },
+      { type: "token", content: "chunk-4" },
+      { type: "done" },
+    ]);
+  });
+
+  it("does not yield a stalled error when abort wins a near-simultaneous race against the stall timeout", async () => {
+    let releaseHook: () => void = () => {};
+    const hook = new Promise<void>((resolve) => { releaseHook = resolve; });
+    async function* stream(): AsyncGenerator<CursorSDKMessage> {
+      yield { type: "assistant", message: { content: [{ type: "text", text: "first" }] } };
+      await hook;
+      yield { type: "assistant", message: { content: [{ type: "text", text: "late" }] } };
+    }
+    const run = makeFakeRun({ stream });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent), 20);
+
+    const abort = new AbortController();
+    const events: EngineEvent[] = [];
+    const iterate = (async () => {
+      for await (const event of adapter.run(baseConfig({ signal: abort.signal }))) {
+        events.push(event);
+      }
+    })();
+
+    // Abort right around when the 20ms stall threshold would elapse.
+    await new Promise((r) => setTimeout(r, 15));
+    abort.abort();
+    releaseHook();
+    await iterate;
+
+    expect(events).toEqual([{ type: "token", content: "first" }]);
+    expect(events.some((e) => e.type === "error" && e.message.includes("stalled"))).toBe(false);
+    expect(events).not.toContainEqual({ type: "done" });
+    expect(run.cancel).toHaveBeenCalled();
+  });
+
+  it("still yields the fatal stall error even when run.cancel() rejects during the stall", async () => {
+    let releaseHook: () => void = () => {};
+    const hook = new Promise<void>((resolve) => { releaseHook = resolve; });
+    async function* stream(): AsyncGenerator<CursorSDKMessage> {
+      yield { type: "assistant", message: { content: [{ type: "text", text: "first" }] } };
+      await hook; // never released — simulates a hung stream
+    }
+    const run = makeFakeRun({ stream, cancel: async () => { throw new Error("cancel failed"); } });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent), 25);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const events = await collect(adapter);
+
+      expect(events).toEqual([
+        { type: "token", content: "first" },
+        { type: "error", message: expect.stringContaining("stalled"), fatal: true },
+      ]);
+      expect(run.cancel).toHaveBeenCalled();
+    } finally {
+      releaseHook();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does not stall while a tool call is in flight, even past the strict idle threshold", async () => {
+    async function* stream(): AsyncGenerator<CursorSDKMessage> {
+      yield { type: "tool_call", call_id: "call-1", name: "shell", status: "running", args: {} };
+      // Gap exceeds the strict idle threshold (20ms) but stays well under the
+      // relaxed tool-execution threshold (500ms) — must not be treated as a stall.
+      await new Promise((r) => setTimeout(r, 100));
+      yield { type: "tool_call", call_id: "call-1", name: "shell", status: "completed", result: "ok" };
+    }
+    const run = makeFakeRun({ stream });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent), 20, 500);
+
+    const events = await collect(adapter);
+
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events).toContainEqual({ type: "done" });
+  });
+
+  it("reverts to the strict idle threshold once the in-flight tool call completes", async () => {
+    let releaseHook: () => void = () => {};
+    const hook = new Promise<void>((resolve) => { releaseHook = resolve; });
+    async function* stream(): AsyncGenerator<CursorSDKMessage> {
+      yield { type: "tool_call", call_id: "call-1", name: "shell", status: "running", args: {} };
+      yield { type: "tool_call", call_id: "call-1", name: "shell", status: "completed", result: "ok" };
+      // No tool call in flight anymore — this gap must be judged against the
+      // strict idle threshold (25ms), not the relaxed one (500ms).
+      await hook; // never released — simulates the assistant going silent
+      yield { type: "assistant", message: { content: [{ type: "text", text: "late" }] } };
+    }
+    const run = makeFakeRun({ stream });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent), 25, 500);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const events = await collect(adapter);
+
+      expect(events.some((e) => e.type === "error" && e.message.includes("stalled"))).toBe(true);
+    } finally {
+      releaseHook();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("still stalls a tool call that hangs past the relaxed tool-execution threshold", async () => {
+    let releaseHook: () => void = () => {};
+    const hook = new Promise<void>((resolve) => { releaseHook = resolve; });
+    async function* stream(): AsyncGenerator<CursorSDKMessage> {
+      yield { type: "tool_call", call_id: "call-1", name: "shell", status: "running", args: {} };
+      await hook; // never released — simulates a tool call that never resolves
+      yield { type: "tool_call", call_id: "call-1", name: "shell", status: "completed", result: "ok" };
+    }
+    const run = makeFakeRun({ stream });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent), 20, 25);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const events = await collect(adapter);
+
+      expect(events).toEqual([
+        { type: "tool_start", name: "shell", arguments: "{}", callId: "call-1", display: expect.anything() },
+        { type: "error", message: expect.stringContaining("stalled"), fatal: true },
+      ]);
+      expect(run.cancel).toHaveBeenCalled();
+    } finally {
+      releaseHook();
+      errorSpy.mockRestore();
+    }
   });
 });
 
