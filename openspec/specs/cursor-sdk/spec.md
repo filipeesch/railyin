@@ -102,6 +102,12 @@ The system SHALL translate `@cursor/sdk` `SDKMessage` events to Railyin's `Engin
 - **AND** if `result.status === "error"` the adapter emits a fatal `EngineEvent.error` with the SDK's error detail (or "Cursor agent run failed with no detail" when the SDK omits it)
 - **AND** otherwise the adapter emits an `EngineEvent` of `type: "done"`
 
+
+#### Scenario: Status transitions carry the real status value
+- **WHEN** the SDK emits a `type: "status"` message
+- **THEN** the adapter yields an `EngineEvent` of `type: "status"` whose `message` field is derived from the SDK message's `status` field (e.g. `"RUNNING"`, `"FINISHED"`, `"ERROR"`)
+- **AND** the adapter does NOT read a non-existent `message.message` field
+- **AND** if `status` is absent for any reason, the `message` field falls back to an empty string rather than throwing
 ### Requirement: Custom tool registration and direct execution
 
 The system SHALL register Railyin's common task tools and MCP-registry tools as Cursor `SDKCustomTool` entries, with `execute` invoked directly in-process — no serialization boundary or proxy round-trip.
@@ -221,3 +227,55 @@ The system SHALL resolve the task's worktree path and project path from the data
 - **THEN** it queries `task_git_context.worktree_path` for the worktree
 - **AND** resolves the project path via `getLoadedProjectByKey`
 - **AND** delegates to `CursorDialect.listCommands(worktreePath, projectPath)`
+### Requirement: HTTP/1.1 forcing for local-agent SDK transport
+
+The system SHALL configure the Cursor SDK, once at adapter module load, to use HTTP/1.1 with SSE instead of HTTP/2 for local-agent backend streams, to avoid a known, unfixed upstream HTTP/2 session-teardown bug class in the SDK's bundled `@connectrpc/connect-node` transport.
+
+#### Scenario: SDK configured for HTTP/1.1 before first agent call
+- **WHEN** the Cursor adapter module is loaded (before any `Agent.create`/`Agent.resume` call)
+- **THEN** it calls `Cursor.configure({ local: { useHttp1ForAgent: true } })`
+- **AND** this configuration applies process-wide to all subsequent local-agent SDK calls
+
+### Requirement: Per-run stall watchdog
+
+The system SHALL detect when an active Cursor run's SDK message stream stops emitting for longer than an inactivity threshold appropriate to whether the run is idly waiting on the assistant/SDK or is legitimately busy executing a tool call, and SHALL terminate that run with a fatal `EngineEvent.error` rather than allowing it to hang indefinitely.
+
+#### Scenario: Stream inactivity triggers a fatal error
+- **WHEN** no SDK message is received from `run.stream()` for longer than the configured stall threshold, and the run has not been aborted (cancelled by the caller, superseded by decision_request, etc.)
+- **THEN** the adapter treats the run as stalled: it best-effort cancels the underlying SDK run, yields exactly one fatal `EngineEvent.error` identifying the failure as a stall timeout, and stops iterating the stream
+- **AND** the resulting fatal error flows through the same execution/error-handling path as any other fatal `EngineEvent.error`, marking the execution `failed` in the database
+
+#### Scenario: Timer resets on every SDK message
+- **WHEN** an SDK message is received from `run.stream()` (of any type, including intermediate `tool_call` "running" updates)
+- **THEN** the stall timer is reset, so any streaming progress — not just completed tool calls — postpones a stall determination
+
+#### Scenario: Watchdog does not fire during an intentional abort
+- **WHEN** the run's `AbortSignal` has already been triggered (caller cancellation, decision_request suspend, etc.) before the stall threshold elapses
+- **THEN** the watchdog does not yield a stall-timeout error; the existing abort-handling path proceeds unchanged
+
+#### Scenario: Watchdog is scoped to the Cursor engine only
+- **WHEN** any other engine (Claude, Copilot, Pi, OpenCode, etc.) executes a run
+- **THEN** no stall watchdog applies; this mechanism lives entirely inside `CursorEngine`/`InProcessCursorAdapter` and is not part of the shared `ExecutionEngine`/`StreamProcessor` contract
+
+#### Scenario: Stall threshold is configurable per adapter instance
+- **WHEN** `InProcessCursorAdapter` is constructed with an explicit `stallTimeoutMs` and/or `toolExecutionStallTimeoutMs` value
+- **THEN** the watchdog uses those values instead of the real-world defaults, enabling deterministic, fast tests without waiting out the production thresholds
+
+#### Scenario: A new execution can start after a stall-triggered failure
+- **WHEN** a run has been terminated by the stall watchdog (task/execution left in a terminal `failed` state) and the user sends a follow-up message on the same task
+- **THEN** the system starts a new execution normally, the same way it would after any other fatal-error failure, with no RPC-level guard blocking the send and no special-casing required beyond the existing failed-execution handling
+
+#### Scenario: An in-flight tool call is judged against a relaxed threshold, not the idle threshold
+- **WHEN** a `tool_call` message with `status: "running"` has been received and no matching `"completed"`/`"error"` message for the same `call_id` has been received yet
+- **THEN** the watchdog uses the relaxed `toolExecutionStallTimeoutMs` threshold (default 30 minutes) instead of the strict idle `stallTimeoutMs` threshold (default 5 minutes) for determining a stall
+- **AND** once the matching `"completed"` or `"error"` message is received for that `call_id`, the run reverts to being judged against the strict idle threshold
+- **AND** a tool call that itself produces no further SDK message for longer than the relaxed threshold is still treated as a stall, following the same fatal-error/cancel/log behavior as the idle-threshold case
+
+### Requirement: Structured stall and transport-error logging
+
+The system SHALL log stall-timeout events and observed Cursor-SDK session-closed transport errors as structured, single-line JSON log entries correlated with execution/task/conversation/agent identifiers, so future occurrences are traceable instead of anonymous unhandled-rejection log lines.
+
+#### Scenario: Stall timeout is logged with correlation ids
+- **WHEN** the stall watchdog fires for a run
+- **THEN** a `console.error` line is emitted containing `executionId`, `taskId`, `conversationId`, and `agentId` (when known), tagged with an event name identifying it as a stall timeout
+
