@@ -39,6 +39,7 @@ function makeTokenSet(overrides: Partial<OAuthTokenSet> = {}): OAuthTokenSet {
 const DCR_REG: DcrClientRegistration = {
   client_id: "client-abc",
   issuer: "https://auth.example.com",
+  redirectUri: "http://localhost:3000/api/mcp/oauth/callback",
 };
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

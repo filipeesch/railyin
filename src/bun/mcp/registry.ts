@@ -311,13 +311,23 @@ export class McpClientRegistry {
     const protectedResourceMetadata = await discoverProtectedResourceMetadata(resourceMetadataUrl);
     const issuer = protectedResourceMetadata.authorization_servers[0];
     const authServerMetadata = await discoverAuthorizationServerMetadata(issuer);
+    const redirectUri = this.getRedirectUri();
 
     let dcr = getDcrClient(this.tokensFilePath, issuer);
+    // A cached registration is only valid for the redirect_uri it was registered
+    // with. If our redirect_uri construction has changed since (e.g. an app
+    // port change, or a hostname fix like localhost vs. 127.0.0.1), the stale
+    // client_id would be rejected by the authorization server's /authorize
+    // endpoint with a redirect_uri mismatch — so discard it and re-register
+    // rather than surface that as a confusing external error.
+    if (dcr && dcr.redirectUri !== redirectUri) {
+      dcr = undefined;
+    }
     if (!dcr) {
       if (!authServerMetadata.registration_endpoint) {
         throw new OAuthDiscoveryError(`Authorization server "${issuer}" does not support Dynamic Client Registration`);
       }
-      dcr = await registerDynamicClient(authServerMetadata.registration_endpoint, issuer, this.getRedirectUri(), "Railyin");
+      dcr = await registerDynamicClient(authServerMetadata.registration_endpoint, issuer, redirectUri, "Railyin");
       setDcrClient(this.tokensFilePath, issuer, dcr);
     }
 

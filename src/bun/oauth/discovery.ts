@@ -121,5 +121,6 @@ export async function registerDynamicClient(
     client_id: json.client_id,
     client_secret: typeof json.client_secret === "string" ? json.client_secret : undefined,
     issuer,
+    redirectUri,
   };
 }

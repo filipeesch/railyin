@@ -27,6 +27,8 @@ export interface DcrClientRegistration {
   client_id: string;
   client_secret?: string;
   issuer: string;
+  /** The redirect_uri this client was registered with — used to detect staleness if our redirect_uri construction ever changes (e.g. across an app-port change) and force re-registration rather than fail with a redirect_uri mismatch at the authorization server. */
+  redirectUri: string;
 }
 
 /** Access/refresh token pair persisted per MCP server name. */

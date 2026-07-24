@@ -239,6 +239,40 @@ describe("9.6 McpClientRegistry state machine", () => {
       // DCR should be reused from the cache written during the first discovery
       expect(fakeServer.dcrCallCount).toBe(dcrAfterFirst);
     });
+
+    // Regression test for a real-world failure: a cached DCR client registered
+    // under an old redirect_uri (e.g. before an app port change, or a
+    // redirect_uri hostname fix) must not be silently reused — the
+    // authorization server would reject /authorize with a redirect_uri
+    // mismatch. The registry should detect the staleness and re-register.
+    it("re-registers DCR when the cached client's redirect_uri no longer matches the current one", async () => {
+      const wwwAuth = `Bearer resource_metadata="${fakeServer.url}/.well-known/oauth-protected-resource"`;
+      let currentRedirectUri = "http://localhost:9999/callback-old-port";
+
+      const registry = new McpClientRegistry(
+        { servers: [httpServer(`${fakeServer.url}/mcp`)] },
+        {
+          clientFactory: () => new FakeMcpClient({ initializeError: new McpOAuthChallengeError(wwwAuth) }),
+          tokensFilePath,
+          getRedirectUri: () => currentRedirectUri,
+        },
+      );
+
+      await registry.startAll();
+      expect(registry.getStatus()[0].state).toBe("auth_required");
+      expect(fakeServer.dcrCallCount).toBe(1);
+
+      // Simulate the app's redirect_uri changing (e.g. a different bound port
+      // across a restart) before the next discovery attempt.
+      currentRedirectUri = "http://localhost:9999/callback-new-port";
+
+      await registry.reload("test-server");
+
+      expect(registry.getStatus()[0].state).toBe("auth_required");
+      // The stale cached client must be discarded and a fresh registration
+      // performed against the new redirect_uri, not silently reused.
+      expect(fakeServer.dcrCallCount).toBe(2);
+    });
   });
 });
 
