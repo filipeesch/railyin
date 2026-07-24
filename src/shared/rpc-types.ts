@@ -87,7 +87,7 @@ export interface McpToolDef {
 
 export interface McpServerStatus {
   name: string;
-  state: "running" | "error" | "starting" | "idle" | "disabled";
+  state: "running" | "error" | "starting" | "idle" | "disabled" | "auth_required";
   tools: McpToolDef[];
   error?: string;
 }
@@ -1086,6 +1086,10 @@ export type RailynAPI = {
   };
   "mcp.reload": {
     params: { serverName?: string };
+    response: McpServerStatus[];
+  };
+  "mcp.authorize": {
+    params: { serverName: string };
     response: McpServerStatus[];
   };
   "mcp.getConfig": {

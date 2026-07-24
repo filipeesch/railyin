@@ -8,6 +8,8 @@
  *   V-12 to V-14 — Tool checkbox state and toggling
  *   V-15 to V-16 — Reload buttons
  *   V-17 to V-23 — File editor overlay (mcp.json editing)
+ *   V-24 to V-27 — Tree behavior
+ *   V-28 to V-32 — OAuth auth_required state and polling
  *
  * Backend is fully mocked. Monaco is controlled via window.monaco evaluate().
  */
@@ -490,5 +492,146 @@ test.describe("V — MCP tree behavior", () => {
         const viewport = page.viewportSize()!;
 
         expect(popoverBox!.y + popoverBox!.height).toBeLessThanOrEqual(viewport.height + 1); // +1 for sub-pixel rounding
+    });
+});
+
+// ─── Suite V-28 to V-32 — OAuth auth_required state and polling ───────────────
+
+test.describe("V — MCP auth_required state and OAuth polling", () => {
+    test("V-28: auth_required server shows distinct dot and Sign in button instead of reload", async ({ page, api, task }) => {
+        api.returns("mcp.getStatus", [
+            makeMcpStatus({ name: "auth-server", state: "auth_required" }),
+            makeMcpStatus({ name: "ok-server", state: "running" }),
+        ]);
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await openMcpPopover(page);
+
+        // auth-server row: orange dot + Sign in button, NO reload button
+        const authRow = page.locator(".mcp-tools-popover__server").filter({ hasText: "auth-server" });
+        await expect(authRow.locator(".mcp-tools-popover__server-dot--auth_required")).toBeVisible();
+        await expect(authRow.locator(".mcp-tools-popover__server-signin")).toBeVisible();
+        await expect(authRow.locator(".mcp-tools-popover__server-signin")).toContainText("Sign in");
+        await expect(authRow.locator(".mcp-tools-popover__server-reload")).not.toBeVisible();
+
+        // ok-server row: reload button visible, NO Sign in button
+        const okRow = page.locator(".mcp-tools-popover__server").filter({ hasText: "ok-server" });
+        await expect(okRow.locator(".mcp-tools-popover__server-reload")).toBeVisible();
+        await expect(okRow.locator(".mcp-tools-popover__server-signin")).not.toBeVisible();
+    });
+
+    test("V-29: Clicking Sign in calls mcp.authorize with correct serverName", async ({ page, api, task }) => {
+        api.returns("mcp.getStatus", [makeMcpStatus({ name: "auth-server", state: "auth_required" })]);
+        api.handle("tasks.list", () => [task]);
+        const authCalls = api.capture("mcp.authorize", [
+            makeMcpStatus({ name: "auth-server", state: "auth_required" }),
+        ]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await openMcpPopover(page);
+
+        await page.locator(".mcp-tools-popover__server-signin").click();
+
+        expect(authCalls).toHaveLength(1);
+        expect(authCalls[0]).toMatchObject({ serverName: "auth-server" });
+    });
+
+    test("V-30: Popover polls and auto-updates from auth_required to running without user action", async ({ page, api, task }) => {
+        test.setTimeout(45000);
+
+        let callCount = 0;
+        api.handle("mcp.getStatus", () => {
+            callCount++;
+            // Return auth_required for the first two calls, then transition to running
+            if (callCount <= 2) {
+                return [makeMcpStatus({ name: "auth-server", state: "auth_required" })];
+            }
+            return [makeMcpStatus({ name: "auth-server", state: "running" })];
+        });
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await openMcpPopover(page);
+
+        // Initial load should show auth_required
+        await expect(page.locator(".mcp-tools-popover__server-dot--auth_required")).toBeVisible();
+        await expect(page.locator(".mcp-tools-popover__server-signin")).toBeVisible();
+
+        // Wait for two poll ticks (3s each) + a buffer so the 3rd call returns running
+        await page.waitForTimeout(7500);
+
+        // UI should have transitioned to running without any manual interaction
+        await expect(page.locator(".mcp-tools-popover__server-dot--running")).toBeVisible();
+        await expect(page.locator(".mcp-tools-popover__server-signin")).not.toBeVisible();
+        await expect(page.locator(".mcp-tools-popover__server-reload")).toBeVisible();
+    });
+
+    test("V-31: Closing the popover while auth_required stops further polling", async ({ page, api, task }) => {
+        test.setTimeout(45000);
+
+        let callCount = 0;
+        api.handle("mcp.getStatus", () => {
+            callCount++;
+            return [makeMcpStatus({ name: "auth-server", state: "auth_required" })];
+        });
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await openMcpPopover(page);
+
+        // Wait long enough for at least one poll tick beyond the initial load
+        await page.waitForTimeout(3500);
+        expect(callCount).toBeGreaterThanOrEqual(2);
+
+        // Close the popover by clicking outside
+        await page.locator(".task-detail").click({ position: { x: 10, y: 10 } });
+        await expect(page.locator(".mcp-tools-popover")).not.toBeVisible();
+
+        const countAtClose = callCount;
+
+        // Wait another full interval — polling should have stopped, count must not increase
+        await page.waitForTimeout(3500);
+        expect(callCount).toBe(countAtClose);
+    });
+
+    test("V-32: Reopening popover after close starts exactly one poll loop, not a duplicate", async ({ page, api, task }) => {
+        test.setTimeout(45000);
+
+        let callCount = 0;
+        api.handle("mcp.getStatus", () => {
+            callCount++;
+            return [makeMcpStatus({ name: "auth-server", state: "auth_required" })];
+        });
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await openMcpPopover(page);
+
+        // Wait for at least one poll tick to confirm interval is running
+        await page.waitForTimeout(3500);
+
+        // Close the popover — stopPolling() is called via onHide()
+        await page.locator(".task-detail").click({ position: { x: 10, y: 10 } });
+        await expect(page.locator(".mcp-tools-popover")).not.toBeVisible();
+
+        // Reopen and wait for the immediate loadStatus() call to complete
+        const reopenLoad = page.waitForResponse(r => r.url().includes("/api/mcp.getStatus"));
+        await openMcpPopover(page);
+        await reopenLoad;
+
+        // Record baseline after the immediate loadStatus() on reopen
+        const countAfterReopenLoad = callCount;
+
+        // Wait exactly one interval window — a single interval fires once; a leaked
+        // duplicate interval would fire twice, incrementing count by 2 instead of 1
+        await page.waitForTimeout(3500);
+        const additionalCalls = callCount - countAfterReopenLoad;
+        expect(additionalCalls).toBe(1);
     });
 });

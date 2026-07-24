@@ -5,22 +5,43 @@ import { McpClientRegistry } from "./registry.ts";
 import { loadMcpConfigFile } from "./config-loader.ts";
 import { getDataDir } from "../config/index.ts";
 
-export type McpRegistryFactory = (config: McpConfig) => McpClientRegistry;
+/**
+ * Constructs a registry for a config + the directory that config lives in
+ * (`~/.railyn` for global, `<project>/.railyn` for project scope). The scope
+ * directory is what the default factory uses to resolve this scope's
+ * `mcp-tokens.json` path — kept as a second parameter (rather than baked into
+ * `McpClientRegistry` itself) so the pool remains the single place that knows
+ * about global vs. project scoping.
+ */
+export type McpRegistryFactory = (config: McpConfig, scopeDir: string) => McpClientRegistry;
+
+export interface McpRegistryPoolOptions {
+  /** Resolves the OAuth redirect URI at authorize()-time; forwarded to every constructed registry. */
+  getRedirectUri?: () => string;
+}
 
 export class McpRegistryPool {
   private readonly factory: McpRegistryFactory;
   private globalRegistry: McpClientRegistry | null = null;
   private readonly projectRegistries = new Map<string, McpClientRegistry>();
 
-  constructor(factory: McpRegistryFactory = (config) => new McpClientRegistry(config)) {
-    this.factory = factory;
+  constructor(factory?: McpRegistryFactory, options: McpRegistryPoolOptions = {}) {
+    const { getRedirectUri } = options;
+    this.factory =
+      factory ??
+      ((config, scopeDir) =>
+        new McpClientRegistry(config, {
+          tokensFilePath: join(scopeDir, "mcp-tokens.json"),
+          getRedirectUri,
+        }));
   }
 
   getGlobalRegistry(): McpClientRegistry {
     if (!this.globalRegistry) {
-      const globalConfigPath = join(getDataDir(), "mcp.json");
+      const dataDir = getDataDir();
+      const globalConfigPath = join(dataDir, "mcp.json");
       const config = loadMcpConfigFile(globalConfigPath);
-      this.globalRegistry = this.factory(config);
+      this.globalRegistry = this.factory(config, dataDir);
     }
     return this.globalRegistry;
   }
@@ -29,10 +50,11 @@ export class McpRegistryPool {
     if (this.projectRegistries.has(projectPath)) {
       return this.projectRegistries.get(projectPath)!;
     }
-    const projectConfigPath = join(projectPath, ".railyn", "mcp.json");
+    const railynDir = join(projectPath, ".railyn");
+    const projectConfigPath = join(railynDir, "mcp.json");
     if (existsSync(projectConfigPath)) {
       const config = loadMcpConfigFile(projectConfigPath);
-      const registry = this.factory(config);
+      const registry = this.factory(config, railynDir);
       this.projectRegistries.set(projectPath, registry);
       return registry;
     }

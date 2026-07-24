@@ -1,4 +1,6 @@
 import type { McpServerConfig, McpServerTransport, McpToolDef } from "./types.ts";
+import { McpOAuthChallengeError } from "../oauth/errors.ts";
+import type { TokenProvider } from "../oauth/types.ts";
 
 // ─── JSON-RPC types ───────────────────────────────────────────────────────────
 
@@ -196,11 +198,22 @@ export class HttpMcpClient extends McpClient {
   private config: Extract<McpServerTransport, { type: "http" }>;
   private serverName: string;
   private _initialized = false;
+  private tokenProvider: TokenProvider | undefined;
 
-  constructor(serverName: string, config: Extract<McpServerTransport, { type: "http" }>) {
+  constructor(
+    serverName: string,
+    config: Extract<McpServerTransport, { type: "http" }>,
+    tokenProvider?: TokenProvider,
+  ) {
     super();
     this.serverName = serverName;
     this.config = config;
+    this.tokenProvider = tokenProvider;
+  }
+
+  /** Swaps in a `TokenProvider` after a successful authorization completes, without recreating the client. */
+  setTokenProvider(tokenProvider: TokenProvider | undefined): void {
+    this.tokenProvider = tokenProvider;
   }
 
   async initialize(): Promise<void> {
@@ -229,15 +242,22 @@ export class HttpMcpClient extends McpClient {
 
   private async _post(method: string, params: unknown): Promise<unknown> {
     const req = this.buildRequest(method, params);
+    const authHeader = this.tokenProvider ? await this.tokenProvider.getAuthHeader() : {};
     const resp = await fetch(this.config.url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
         ...(this.config.headers ?? {}),
+        ...authHeader,
       },
       body: JSON.stringify(req),
     });
+    if (resp.status === 401) {
+      const wwwAuthenticate = resp.headers.get("WWW-Authenticate");
+      if (wwwAuthenticate) throw new McpOAuthChallengeError(wwwAuthenticate);
+      throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    }
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
     const json = (await resp.json()) as JsonRpcResponse;
     if (json.error) throw new Error(`MCP error ${json.error.code}: ${json.error.message}`);
@@ -246,11 +266,13 @@ export class HttpMcpClient extends McpClient {
 
   private async _postNotification(method: string, params: unknown): Promise<void> {
     const notif = this.buildNotification(method, params);
+    const authHeader = this.tokenProvider ? await this.tokenProvider.getAuthHeader().catch(() => ({})) : {};
     await fetch(this.config.url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(this.config.headers ?? {}),
+        ...authHeader,
       },
       body: JSON.stringify(notif),
     }).catch(() => {
