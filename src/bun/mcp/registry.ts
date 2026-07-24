@@ -71,7 +71,7 @@ export class McpClientRegistry {
     this.clientFactory = options.clientFactory ?? defaultClientFactory;
     this.browserOpener = options.browserOpener ?? systemBrowserOpener;
     this.tokensFilePath = options.tokensFilePath ?? globalTokensPath(getDataDir());
-    this.getRedirectUri = options.getRedirectUri ?? (() => "http://127.0.0.1/api/mcp/oauth/callback");
+    this.getRedirectUri = options.getRedirectUri ?? (() => "http://localhost/api/mcp/oauth/callback");
     this.pendingAuthFlowStore = options.pendingAuthFlowStore ?? new PendingAuthFlowStore();
 
     for (const serverConfig of config.servers) {

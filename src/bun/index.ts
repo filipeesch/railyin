@@ -113,9 +113,16 @@ for (const entry of getWorkspaceRegistry()) {
 // binding — `boundPort` is mutated after `Bun.serve()` returns, and this
 // closure is what `McpClientRegistry.authorize()` calls lazily at flow-start
 // time (well after boot), so it always sees the real port.
+//
+// Uses the hostname `localhost` (not the `127.0.0.1` the server itself binds
+// to) because several real-world authorization servers (e.g. Atlassian's
+// Rovo MCP server) validate the redirect_uri's hostname against the
+// `localhost` loopback convention from RFC8252 §7.3, not its IP-literal
+// equivalent — the two are different strings even though both resolve to
+// loopback in the browser.
 let boundPort = 0;
 const registryPool = new McpRegistryPool(undefined, {
-  getRedirectUri: () => `http://127.0.0.1:${boundPort}/api/mcp/oauth/callback`,
+  getRedirectUri: () => `http://localhost:${boundPort}/api/mcp/oauth/callback`,
 });
 registryPool.getGlobalRegistry().startAll().catch((err: unknown) => {
   console.error("[mcp] Failed to start MCP servers at startup:", err);

@@ -18,7 +18,7 @@ All decisions below were confirmed via a dedicated decision-gathering session pr
 - Recover gracefully from token expiry/invalidation by returning to a clear, actionable `auth_required` state rather than a generic error.
 
 **Non-Goals:**
-- No support for non-localhost / remote-hosted deployments of the app (redirect URI assumes `http://127.0.0.1:<port>`).
+- No support for non-localhost / remote-hosted deployments of the app (redirect URI assumes `http://localhost:<port>`).
 - No UI wizard for manually entering `client_id`/`client_secret`/authorization endpoints — this design only covers the fully-automatic discovery + DCR path.
 - No sharing of access/refresh tokens across MCP servers, even when they share an authorization server issuer (each server gets independent tokens; only DCR client registration is shared by issuer).
 - No stdio-transport OAuth (per MCP spec, stdio servers should retrieve credentials from the environment, not OAuth).
@@ -31,7 +31,7 @@ All decisions below were confirmed via a dedicated decision-gathering session pr
 - *Alternative considered*: explicit `auth: {type: "oauth2", ...}` config block with manual override fields — rejected as extra schema/validation burden when the spec is designed for zero-config discovery; can be revisited later if a non-compliant server is encountered.
 
 ### 2. Callback served from the existing Bun server
-Add `GET /api/mcp/oauth/callback` to the existing `Bun.serve` fetch handler in `src/bun/index.ts`. Redirect URI is `http://127.0.0.1:<port>/api/mcp/oauth/callback`.
+Add `GET /api/mcp/oauth/callback` to the existing `Bun.serve` fetch handler in `src/bun/index.ts`. Redirect URI is `http://localhost:<port>/api/mcp/oauth/callback` (the `localhost` hostname is used rather than `127.0.0.1` because some real-world authorization servers — e.g. Atlassian's Rovo MCP server — validate the redirect_uri's hostname against the RFC8252 §7.3 `localhost` loopback convention specifically, not its IP-literal equivalent).
 - *Alternative considered*: ephemeral loopback listener per flow (the `gh auth login` pattern) — rejected as unnecessary process/port lifecycle complexity given the app already runs a persistent local server.
 
 ### 3. New `auth_required` server state; manual trigger only
@@ -73,7 +73,7 @@ Whatever owns `authorize()` (`McpClientRegistry`) accepts an injected `BrowserOp
 
 ## Risks / Trade-offs
 
-- **[Risk]** Redirect URI hardcodes `127.0.0.1:<port>`; if the app's port changes between DCR registration and token use (unlikely, but possible across restarts with `--port=`), redirect URI mismatch could break a stored client registration. → **Mitigation**: DCR registration is cached but not the redirect URI's validity guarantee; if the authorization server rejects a redirect URI mismatch, treat it like any other DCR failure and re-register on next `mcp.authorize` call.
+- **[Risk]** Redirect URI hardcodes `localhost:<port>`; if the app's port changes between DCR registration and token use (unlikely, but possible across restarts with `--port=`), redirect URI mismatch could break a stored client registration. → **Mitigation**: DCR registration is cached but not the redirect URI's validity guarantee; if the authorization server rejects a redirect URI mismatch, treat it like any other DCR failure and re-register on next `mcp.authorize` call.
 - **[Risk]** Plaintext token storage in `mcp-tokens.json` matches the existing trust model but is a real exposure if the machine/repo is shared. → **Mitigation**: explicitly out of scope per decision to mirror existing `mcp.json` secret-handling conventions; document this in the file's directory (`.railyn/` is already gitignored-by-convention for secrets).
 - **[Risk]** Some MCP OAuth servers may not support DCR (RFC7591 is a SHOULD, not MUST). → **Mitigation**: out of scope for this change (manual client registration path explicitly deferred); document as a known limitation and candidate follow-up.
 - **[Trade-off]** No cross-server token sharing means a user with N servers behind the same auth server must sign in N times. → Accepted trade-off for correctness (avoiding resource/audience mismatches) over convenience.
