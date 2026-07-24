@@ -211,11 +211,6 @@ export class HttpMcpClient extends McpClient {
     this.tokenProvider = tokenProvider;
   }
 
-  /** Swaps in a `TokenProvider` after a successful authorization completes, without recreating the client. */
-  setTokenProvider(tokenProvider: TokenProvider | undefined): void {
-    this.tokenProvider = tokenProvider;
-  }
-
   async initialize(): Promise<void> {
     await this._post("initialize", {
       protocolVersion: "2024-11-05",
