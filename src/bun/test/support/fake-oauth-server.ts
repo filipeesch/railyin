@@ -47,6 +47,8 @@ export interface FakeOAuthServerOptions {
    * the origin root), so tests can catch well-known URL construction bugs.
    */
   issuerPath?: string;
+  /** Populates `scopes_supported` on the Protected Resource Metadata document (RFC9728), simulating a resource that advertises the scopes it requires. */
+  resourceScopesSupported?: string[];
 }
 
 export interface FakeOAuthServerHandle {
@@ -98,6 +100,7 @@ export function createFakeOAuthServer(options: FakeOAuthServerOptions = {}): Fak
         const body = options.protectedResourceMetadataBody ?? {
           resource: `${base}/mcp`,
           authorization_servers: [options.issuerPath ? `${base}${options.issuerPath}` : base],
+          ...(options.resourceScopesSupported ? { scopes_supported: options.resourceScopesSupported } : {}),
         };
         return jsonResponse(body);
       }

@@ -343,6 +343,34 @@ describe("9.7 McpClientRegistry.authorize() / completeAuthorization()", () => {
     expect(/^[A-Za-z0-9_-]+$/.test(challenge)).toBe(true);
   });
 
+  it("authorize() requests the scope advertised by the resource's Protected Resource Metadata", async () => {
+    // Regression test for the real-world Atlassian failure: the resource
+    // advertises `scopes_supported` on its RFC9728 metadata, but we never
+    // forwarded it as the `scope` param on /authorize — resulting in a token
+    // missing the scopes the resource actually requires ("scope does not
+    // match" on the first authenticated call).
+    fakeServer.stop();
+    fakeServer = createFakeOAuthServer({ resourceScopesSupported: ["read:jira-work", "write:jira-work"] });
+
+    const openSpy = vi.fn().mockResolvedValue(undefined);
+    const { registry } = await setupAuthRequired(openSpy);
+
+    await registry.authorize("test-server");
+
+    const capturedUrl = new URL(openSpy.mock.calls[0][0] as string);
+    expect(capturedUrl.searchParams.get("scope")).toBe("read:jira-work write:jira-work");
+  });
+
+  it("authorize() omits the scope param when no source advertises any scope", async () => {
+    const openSpy = vi.fn().mockResolvedValue(undefined);
+    const { registry } = await setupAuthRequired(openSpy);
+
+    await registry.authorize("test-server");
+
+    const capturedUrl = new URL(openSpy.mock.calls[0][0] as string);
+    expect(capturedUrl.searchParams.has("scope")).toBe(false);
+  });
+
   it("authorize() is a no-op when the server is not in auth_required state", async () => {
     const openSpy = vi.fn().mockResolvedValue(undefined);
     const registry = new McpClientRegistry(

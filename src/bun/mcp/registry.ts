@@ -8,6 +8,7 @@ import {
   parseResourceMetadataUrl,
   registerDynamicClient,
 } from "../oauth/discovery.ts";
+import { resolveAuthorizationScope } from "../oauth/scope-resolution.ts";
 import { exchangeAuthorizationCode } from "../oauth/token-exchange.ts";
 import { generateCodeChallenge, generateCodeVerifier, generateState } from "../oauth/pkce.ts";
 import { PendingAuthFlowStore } from "../oauth/pending-flow-store.ts";
@@ -46,6 +47,8 @@ interface AuthContext {
   authServerMetadata: AuthorizationServerMetadata;
   clientId: string;
   clientSecret?: string;
+  /** Scope to request on `/authorize`, resolved during discovery. Undefined if no source advertised any scope. */
+  scope?: string;
 }
 
 interface ServerInstance {
@@ -166,7 +169,7 @@ export class McpClientRegistry {
     const instance = this.servers.get(serverName);
     if (!instance || instance.state !== "auth_required" || !instance.authContext) return;
 
-    const { authServerMetadata, clientId, clientSecret } = instance.authContext;
+    const { authServerMetadata, clientId, clientSecret, scope } = instance.authContext;
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = generateCodeChallenge(codeVerifier);
     const state = generateState();
@@ -179,6 +182,7 @@ export class McpClientRegistry {
       clientId,
       clientSecret,
       redirectUri,
+      scope,
       createdAt: Date.now(),
     });
 
@@ -189,6 +193,7 @@ export class McpClientRegistry {
     authorizationUrl.searchParams.set("code_challenge", codeChallenge);
     authorizationUrl.searchParams.set("code_challenge_method", "S256");
     authorizationUrl.searchParams.set("state", state);
+    if (scope) authorizationUrl.searchParams.set("scope", scope);
 
     await this.browserOpener.open(authorizationUrl.toString());
   }
@@ -312,6 +317,7 @@ export class McpClientRegistry {
     const issuer = protectedResourceMetadata.authorization_servers[0];
     const authServerMetadata = await discoverAuthorizationServerMetadata(issuer);
     const redirectUri = this.getRedirectUri();
+    const scope = resolveAuthorizationScope(wwwAuthenticate, protectedResourceMetadata, authServerMetadata);
 
     let dcr = getDcrClient(this.tokensFilePath, issuer);
     // A cached registration is only valid for the redirect_uri it was registered
@@ -331,6 +337,6 @@ export class McpClientRegistry {
       setDcrClient(this.tokensFilePath, issuer, dcr);
     }
 
-    return { authServerMetadata, clientId: dcr.client_id, clientSecret: dcr.client_secret };
+    return { authServerMetadata, clientId: dcr.client_id, clientSecret: dcr.client_secret, scope };
   }
 }

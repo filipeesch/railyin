@@ -8,6 +8,8 @@
 export interface ProtectedResourceMetadata {
   resource: string;
   authorization_servers: string[];
+  /** Scopes the resource itself accepts/requires — the most authoritative source for the `scope` param we should request. */
+  scopes_supported?: string[];
   [key: string]: unknown;
 }
 
