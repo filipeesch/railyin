@@ -24,7 +24,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import type { Model } from "@earendil-works/pi-ai";
-import { buildAllTools } from "./tools/index.ts";
+import { buildAllTools, type ChildSpawnOptions } from "./tools/index.ts";
 import { getDb } from "../../db/index.ts";
 import { appendMessage } from "../../conversation/messages.ts";
 import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
@@ -257,6 +257,24 @@ export class PiEngine implements ExecutionEngine {
     const skillResolver = this.dialectResolver.getSkillResolver(cwd, projectPath);
     const suspendRef = this.getOrCreateSuspendRef(conversationId);
 
+    // Create delegateEmitRef for child event forwarding (used by web_search and delegate tools)
+    const delegateEmitRef: { emit?: (event: EngineEvent) => void } = {};
+
+    // Build child-spawning dependencies
+    const childSpawn: ChildSpawnOptions = {
+      delegateEmitRef,
+      limiterRegistry: this.registry,
+      parentModel: null as any, // set after model is built
+      parentSystemPrompt: enrichedSystem,
+      parentCwd: cwd,
+      parentConversationId: conversationId,
+      engineConfig: this.config,
+      onRawModelMessage,
+    };
+
+    const piModel = this.modelBuilder.build(modelOverride, contextWindowOverride);
+    childSpawn.parentModel = piModel;
+
     const tools = this.toolFactory.buildTools(
       conversationId,
       cwd,
@@ -270,9 +288,8 @@ export class PiEngine implements ExecutionEngine {
       skillResolver,
       suspendRef,
       signal,
+      childSpawn,
     );
-
-    const piModel = this.modelBuilder.build(modelOverride, contextWindowOverride);
     const providerName = piModel.provider;
 
     const session = await this.sessionManager.getOrCreate(conversationId, piModel, tools, enrichedSystem, cwd);
@@ -319,6 +336,11 @@ export class PiEngine implements ExecutionEngine {
       runDriver: this.runDriver,
       compactionCoordinator: this.compactionCoordinator,
     });
+
+    // Wire delegateEmitRef to push child events into the execution queue
+    delegateEmitRef.emit = (event: EngineEvent) => {
+      queue.push(event);
+    };
 
     try {
       for await (const event of queue) {

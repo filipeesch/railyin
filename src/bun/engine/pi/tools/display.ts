@@ -85,6 +85,34 @@ export function buildPiToolDisplay(name: string, args: Record<string, unknown>, 
     case "undo_write":
       return { label: "undo write", subject: rel(str(args.path), worktreePath) || undefined };
 
+    // Web search tools
+    case "web_search":
+      return {
+        label: "web search",
+        subject: str(args.query) || undefined,
+        contentType: "terminal",
+      };
+
+    case "browser_search":
+      return {
+        label: "browser search",
+        subject: str(args.query) || undefined,
+        contentType: "terminal",
+      };
+
+    case "browser_navigate":
+      return {
+        label: "browser navigate",
+        subject: str(args.url) || undefined,
+        contentType: "terminal",
+      };
+
+    case "browser_extract":
+      return {
+        label: "browser extract",
+        contentType: "terminal",
+      };
+
     default:
       return buildCommonToolDisplay(name, args);
   }
