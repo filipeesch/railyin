@@ -23,7 +23,7 @@ import { workflowHandlers } from "./handlers/workflow.ts";
 import { launchHandlers } from "./handlers/launch.ts";
 import { lspHandlers } from "./handlers/lsp.ts";
 import { codeServerHandlers } from "./handlers/code-server.ts";
-import { mcpHandlers } from "./handlers/mcp.ts";
+import { mcpHandlers, handleMcpOAuthCallback } from "./handlers/mcp.ts";
 import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
 import { decisionHandlers } from "./handlers/decisions.ts";
 import { noteHandlers } from "./handlers/notes.ts";
@@ -109,7 +109,14 @@ for (const entry of getWorkspaceRegistry()) {
 }
 
 // 2b. Start global MCP registry (non-blocking)
-const registryPool = new McpRegistryPool();
+// The redirect URI's port is only known once the HTTP server below finishes
+// binding — `boundPort` is mutated after `Bun.serve()` returns, and this
+// closure is what `McpClientRegistry.authorize()` calls lazily at flow-start
+// time (well after boot), so it always sees the real port.
+let boundPort = 0;
+const registryPool = new McpRegistryPool(undefined, {
+  getRedirectUri: () => `http://127.0.0.1:${boundPort}/api/mcp/oauth/callback`,
+});
 registryPool.getGlobalRegistry().startAll().catch((err: unknown) => {
   console.error("[mcp] Failed to start MCP servers at startup:", err);
 });
@@ -285,6 +292,10 @@ const server = Bun.serve({
       return undefined as unknown as Response;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/mcp/oauth/callback") {
+      return handleMcpOAuthCallback(url, registryPool);
+    }
+
     if (req.method === "POST" && url.pathname.startsWith("/api/")) {
       const method = url.pathname.slice(5);
       const handler = allHandlers[method];
@@ -326,6 +337,7 @@ const server = Bun.serve({
 });
 
 await Bun.write(path.join(getTmpDir(), "railyn.port"), String(server.port)).catch(() => { });
+boundPort = server.port ?? serverPort;
 console.log(`Railyn server listening on http://127.0.0.1:${server.port}`);
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────

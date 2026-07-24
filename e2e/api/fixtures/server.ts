@@ -19,6 +19,18 @@ import { execSync } from "node:child_process";
 import { join } from "node:path";
 import type { RailynAPI } from "@shared/rpc-types";
 
+/** Optional configuration for `startServer()`. */
+export interface StartServerOptions {
+    /**
+     * When provided, written as `mcp.json` into a temporary data dir that is
+     * passed to the subprocess via `RAILYN_DATA_DIR`.  This keeps the test
+     * server fully isolated from the developer's real `~/.railyn` directory
+     * and makes the data dir path available on the returned `TestServer.dataDir`
+     * so tests can read `mcp-tokens.json` directly from disk.
+     */
+    mcpConfig?: object;
+}
+
 const ROOT = new URL("../../../", import.meta.url).pathname;
 const RUNTIME_ROOT = join(ROOT, ".runtime");
 
@@ -97,6 +109,13 @@ export interface TestServer {
     debugUrl: string;
     /** Absolute path to the test project directory (the main git repo, NOT a worktree) */
     projectDir: string;
+    /**
+     * Absolute path to the `RAILYN_DATA_DIR` used by this server instance.
+     * Only populated when `startServer({ mcpConfig })` was called with an MCP
+     * config; otherwise an empty string.  Use this to read `mcp-tokens.json`
+     * directly from disk to assert on persisted token / DCR-cache contents.
+     */
+    dataDir: string;
     /** Type-safe API call */
     request<M extends keyof RailynAPI>(
         method: M,
@@ -105,9 +124,20 @@ export interface TestServer {
     shutdown(): Promise<void>;
 }
 
-export async function startServer(): Promise<TestServer> {
+export async function startServer(options?: StartServerOptions): Promise<TestServer> {
     const runtimeDir = runtimePath("api-");
     const { workspacesDir, projectDir, bundledWorkflowsDir } = writeTestConfig(runtimeDir);
+
+    // When an mcpConfig is provided, create a scoped data dir so the subprocess
+    // reads our test `mcp.json` instead of the developer's real `~/.railyn`.
+    let dataDir = "";
+    const extraEnv: Record<string, string> = {};
+    if (options?.mcpConfig !== undefined) {
+        dataDir = join(runtimeDir, "railyn-data");
+        mkdirSync(dataDir, { recursive: true });
+        writeFileSync(join(dataDir, "mcp.json"), JSON.stringify(options.mcpConfig, null, 2), "utf-8");
+        extraEnv.RAILYN_DATA_DIR = dataDir;
+    }
 
     const proc = spawn({
         cmd: [
@@ -131,6 +161,7 @@ export async function startServer(): Promise<TestServer> {
             // Point workflow seeding at the dedicated bundled-source dir (default
             // only) so seeding is a no-op and `default` is the bundled workflow.
             RAILYN_BUNDLED_WORKFLOWS_DIR: bundledWorkflowsDir,
+            ...extraEnv,
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -228,5 +259,5 @@ export async function startServer(): Promise<TestServer> {
         }
     }
 
-    return { baseUrl, debugUrl, request, shutdown, projectDir };
+    return { baseUrl, debugUrl, request, shutdown, projectDir, dataDir };
 }
