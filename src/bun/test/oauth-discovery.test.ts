@@ -148,6 +148,29 @@ describe("9.3 discovery.ts against fake OAuth server", () => {
         discoverAuthorizationServerMetadata(fakeServer.url),
       ).rejects.toThrow(OAuthDiscoveryError);
     });
+
+    // Regression test for a real-world bug found against Atlassian's MCP server:
+    // a path-component issuer (e.g. a per-tenant `https://auth.example.com/<tenant-id>`)
+    // must have the well-known suffix inserted *before* its path per RFC8414 §3.1,
+    // not appended after the origin (which silently drops the tenant path and
+    // returns/404s on the wrong document — e.g. one lacking registration_endpoint).
+    it("resolves the RFC8414 well-known URL for a multi-tenant issuer with a path component", async () => {
+      fakeServer = createFakeOAuthServer({ issuerPath: "/tenant-abc123" });
+      const issuer = `${fakeServer.url}/tenant-abc123`;
+      const meta = await discoverAuthorizationServerMetadata(issuer);
+      expect(meta.authorization_endpoint).toBe(`${fakeServer.url}/authorize`);
+      expect(meta.token_endpoint).toBe(`${fakeServer.url}/token`);
+      expect(meta.registration_endpoint).toBe(`${fakeServer.url}/register`);
+    });
+
+    it("does not strip a path-component issuer's path when building the well-known URL", async () => {
+      fakeServer = createFakeOAuthServer({ issuerPath: "/tenant-abc123" });
+      const issuer = `${fakeServer.url}/tenant-abc123`;
+      // Serving auth-server metadata only at the tenant-scoped well-known path
+      // (not the origin root) means this would 404 if the well-known URL
+      // construction incorrectly discarded the issuer's path.
+      await expect(discoverAuthorizationServerMetadata(issuer)).resolves.toBeDefined();
+    });
   });
 
   // ─── registerDynamicClient ──────────────────────────────────────────────────

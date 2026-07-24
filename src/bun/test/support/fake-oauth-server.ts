@@ -39,6 +39,14 @@ export interface FakeOAuthServerOptions {
   accessTokenTtlSeconds?: number;
   /** If false, the /mcp protected-resource endpoint accepts any (or no) bearer token. Default true. */
   requireValidToken?: boolean;
+  /**
+   * Simulates a multi-tenant issuer with a path component (e.g. Atlassian's
+   * `https://auth.example.com/<tenant-id>`). When set, the authorization
+   * server's well-known metadata is only served at the RFC8414-correct
+   * `/.well-known/oauth-authorization-server<issuerPath>` location (not at
+   * the origin root), so tests can catch well-known URL construction bugs.
+   */
+  issuerPath?: string;
 }
 
 export interface FakeOAuthServerHandle {
@@ -89,17 +97,20 @@ export function createFakeOAuthServer(options: FakeOAuthServerOptions = {}): Fak
         }
         const body = options.protectedResourceMetadataBody ?? {
           resource: `${base}/mcp`,
-          authorization_servers: [base],
+          authorization_servers: [options.issuerPath ? `${base}${options.issuerPath}` : base],
         };
         return jsonResponse(body);
       }
 
-      if (req.method === "GET" && url.pathname === "/.well-known/oauth-authorization-server") {
+      const expectedWellKnownPath = options.issuerPath
+        ? `/.well-known/oauth-authorization-server${options.issuerPath}`
+        : "/.well-known/oauth-authorization-server";
+      if (req.method === "GET" && url.pathname === expectedWellKnownPath) {
         if (options.serveAuthServerMetadata === false) {
           return new Response("Not found", { status: 404 });
         }
         const body = options.authServerMetadataBody ?? {
-          issuer: base,
+          issuer: options.issuerPath ? `${base}${options.issuerPath}` : base,
           authorization_endpoint: `${base}/authorize`,
           token_endpoint: `${base}/token`,
           ...(options.supportsDcr === false ? {} : { registration_endpoint: `${base}/register` }),

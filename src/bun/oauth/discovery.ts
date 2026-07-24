@@ -54,9 +54,23 @@ export async function discoverProtectedResourceMetadata(resourceMetadataUrl: str
   return json as unknown as ProtectedResourceMetadata;
 }
 
+/**
+ * Builds the RFC8414 §3.1 well-known metadata URL for an issuer. Per the spec,
+ * a path-component issuer (e.g. a multi-tenant `https://auth.example.com/tenant1`)
+ * gets the well-known suffix *inserted before* its path — NOT appended after
+ * the origin — i.e. `https://auth.example.com/.well-known/oauth-authorization-server/tenant1`,
+ * not `https://auth.example.com/.well-known/oauth-authorization-server` (which
+ * would silently discard the tenant path and 404 or return the wrong tenant's metadata).
+ */
+function buildAuthServerMetadataUrl(issuer: string): string {
+  const issuerUrl = new URL(issuer);
+  const path = issuerUrl.pathname === "/" ? "" : issuerUrl.pathname.replace(/\/+$/, "");
+  return `${issuerUrl.origin}/.well-known/oauth-authorization-server${path}`;
+}
+
 /** RFC8414: fetches and validates the Authorization Server Metadata for a given issuer. */
 export async function discoverAuthorizationServerMetadata(issuer: string): Promise<AuthorizationServerMetadata> {
-  const wellKnownUrl = new URL("/.well-known/oauth-authorization-server", issuer).toString();
+  const wellKnownUrl = buildAuthServerMetadataUrl(issuer);
   const json = await fetchJson(wellKnownUrl, "Authorization Server Metadata");
   if (typeof json.authorization_endpoint !== "string" || typeof json.token_endpoint !== "string") {
     throw new OAuthDiscoveryError(
