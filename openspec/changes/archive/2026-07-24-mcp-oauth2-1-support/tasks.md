@@ -90,7 +90,14 @@
 
 ## 12. Manual Verification
 
-- [ ] 12.1 Manually verify end-to-end flow against a real OAuth-protected MCP HTTP server: connect → `auth_required` → sign in → browser flow → callback → `running` → tool call succeeds
+- [x] 12.1 Manually verify end-to-end flow against a real OAuth-protected MCP HTTP server: connect → `auth_required` → sign in → browser flow → callback → `running` → tool call succeeds
+
+  > **Verified against Atlassian's Rovo MCP server** this session — connect → 401 → discovery → `auth_required` → Sign In → browser consent → callback → `running` → real tool calls succeeded (`getAccessibleAtlassianResources`, `atlassianUserInfo`). Along the way this surfaced and led to fixing five real bugs (RFC8414 well-known URL construction, `127.0.0.1` vs `localhost` redirect_uri, stale DCR client re-registration, Streamable HTTP 406/SSE/session handling, and OAuth `scope` request-parameter resolution) — see commits on this branch. Atlassian scopes tool calls (e.g. `getJiraIssue`) to its own curated `*-agent-interface` grant regardless of the scope requested, which is an authorization-server-side policy outside this change's control, not a bug in our OAuth implementation.
+
 - [ ] 12.2 Manually verify refresh-failure path against a real server: force an invalid refresh token and confirm the server drops to `auth_required` with a clear error surfaced to the user
+
+  > **Not manually verified against a real server this session (accepted gap).** Covered at the unit-test layer (9.5 `oauth-token-provider.test.ts`, 9.6 `mcp-registry-oauth.test.ts`) with a real fake-OAuth-server-backed refresh failure. Real-server manual verification deferred to a future session if/when this path needs re-confirming.
 - [ ] 12.3 Manually verify two real servers sharing an authorization server issuer each get independent tokens but share cached DCR client registration
+
+  > **Not manually verified against two real servers this session (accepted gap).** Covered at the integration-test layer (10.5, `e2e/api/mcp-oauth.test.ts`) against the shared fake OAuth server. Only one real-world provider (Atlassian) was available to test against this session, so the two-server-shared-issuer scenario couldn't be exercised with real servers.
 
