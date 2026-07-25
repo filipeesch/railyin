@@ -11,6 +11,17 @@ export const SDK_BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 
 export type SdkBuiltinToolName = (typeof SDK_BUILTIN_TOOL_NAMES)[number];
 
+/** Options for building the tool allowlist. */
+export interface BuildToolAllowlistOptions {
+  /**
+   * Include SDK built-in tools (read, grep, find, ls) in the allowlist.
+   * @default true — most sessions need file-system tools.
+   * Set to false for sessions that should only use custom tools
+   * (e.g. the web search child agent which only needs browser tools).
+   */
+  includeSdkBuiltins?: boolean;
+}
+
 /**
  * Build the full SDK `tools` allowlist for a Pi agent session.
  *
@@ -21,7 +32,15 @@ export type SdkBuiltinToolName = (typeof SDK_BUILTIN_TOOL_NAMES)[number];
  *
  * Accepts any array whose elements expose a `name` string — works with
  * `AgentTool`, `ToolDefinition`, and test doubles alike.
+ *
+ * @param tools - The custom tools to include in the allowlist.
+ * @param opts - Options for customizing the allowlist.
  */
-export function buildToolAllowlist(tools: ReadonlyArray<{ name: string }>): string[] {
-  return [...SDK_BUILTIN_TOOL_NAMES, ...tools.map((t) => t.name)];
+export function buildToolAllowlist(
+  tools: ReadonlyArray<{ name: string }>,
+  opts: BuildToolAllowlistOptions = {},
+): string[] {
+  const includeSdkBuiltins = opts.includeSdkBuiltins ?? true;
+  const base = includeSdkBuiltins ? [...SDK_BUILTIN_TOOL_NAMES] : [];
+  return [...base, ...tools.map((t) => t.name)];
 }

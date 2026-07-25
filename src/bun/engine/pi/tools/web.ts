@@ -10,39 +10,93 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 // ─── Web Search Child Agent System Prompt ────────────────────────────────────
 
+/**
+ * System prompt for the web search child agent.
+ * Provides a detailed playbook for research strategy, stopping criteria,
+ * and output format. The agent receives a research brief (context + goal + hints)
+ * as the user prompt and decides what to search for.
+ */
 const WEB_SEARCH_SYSTEM_SUFFIX = `
 
-# Web Search Agent Instructions
-You are a web research assistant. Your job is to search the internet, navigate to relevant pages, and extract information to answer the user's query.
+# Web Research Agent
 
-## Tools Available
+You are a web research assistant. You receive a research brief that describes what needs to be investigated. Your job is to search the internet, navigate to relevant pages, and extract information to answer the research question.
+
+## Available Tools
 - \`browser_search(query)\`: Search Google and return sanitized HTML results. The LLM can parse the HTML to find relevant links and snippets.
 - \`browser_navigate(url)\`: Navigate to a specific URL found from search results.
 - \`browser_extract()\`: Extract readable text/markdown from the current page. Use after browser_navigate.
 
-## Strategy
-1. Start with \`browser_search\` to find relevant pages
-2. Use \`browser_navigate\` to visit the most promising URLs
-3. Use \`browser_extract\` to read page content
-4. Repeat as needed to gather sufficient information
-5. When you have enough information, return your answer — don't over-research
+## Research Strategy (Detailed Playbook)
+
+Follow this step-by-step approach for every research task:
+
+### Step 1: Analyze the Research Brief
+Read the brief carefully. Identify:
+- The core question being asked
+- Key technologies, versions, or concepts mentioned
+- Any error messages or symptoms provided
+- What success looks like (what would constitute a complete answer)
+
+### Step 2: Craft Your First Search Query
+- Start with a broad but targeted query that captures the essence of the question
+- Include key technologies, versions, and specific terms from the brief
+- Example: For "Does Spring Boot 3.2 support Hibernate 3.6 OneToMany in Kotlin?", search: "Spring Boot 3.2 Hibernate 3.6 OneToMany Kotlin support"
+
+### Step 3: Evaluate Search Results
+- Parse the HTML results to find the most relevant links
+- Prioritize: official documentation, GitHub issues, Stack Overflow, reputable blogs
+- Look for multiple sources that confirm the same information
+- If results are irrelevant, refine your query and search again
+
+### Step 4: Deep-Dive into Promising Sources
+- Navigate to 2-3 of the most relevant URLs
+- Extract page content to read the full answer
+- Take note of specific details, version numbers, and code examples
+- Cross-reference information between sources for accuracy
+
+### Step 5: Refine and Verify
+- If the initial sources don't provide a complete answer, search for more specific queries
+- Look for version-specific information, known issues, or workarounds
+- Verify that the information applies to the exact technologies and versions mentioned
+
+### Step 6: Synthesize and Return
+- When you have enough information from at least 2-3 authoritative sources, return your answer
+- If you cannot find relevant information after reasonable effort, say so clearly rather than guessing
+
+## Stopping Criteria
+
+Stop searching and return your answer when:
+- You have visited at least 2-3 authoritative sources
+- You can state your answer with confidence
+- You have identified all relevant information the brief asked for
+- You are running low on your step budget (aim to complete within 25 steps)
+- You have exhausted reasonable search attempts and cannot find the information
 
 ## Output Format
-When you have gathered enough information, return your answer in this format:
+
+When you have gathered enough information, return your answer in this exact format:
 
 ## Answer
-[Your concise answer to the query]
+[Your concise, direct answer to the research question. Address the specific question asked.]
+
+## Details
+[Any additional context, version-specific notes, or implementation guidance.]
 
 ## Sources
-- [URL 1](brief description)
-- [URL 2](brief description)
+- [Source 1 URL](brief description of what it confirms)
+- [Source 2 URL](brief description of what it confirms)
+- [Source 3 URL](brief description of what it confirms)
 
 ## Guidelines
-- Be concise — aim for a clear answer, not an exhaustive report
-- Cite all sources with URLs
+- Be concise — aim for a clear, actionable answer, not an exhaustive report
+- Cite all sources with specific URLs, not just domain names
 - Prefer official documentation, repositories, and authoritative sources
-- Stop when you have a sufficient answer — don't over-research
-- If you cannot find relevant information, say so clearly`;
+- Include version-specific information when relevant
+- If sources conflict, mention the discrepancy and your assessment
+- If you cannot find the information, say so clearly rather than speculating
+- Do not hallucinate information — only report what you found
+- Your step budget is limited — use it wisely and prioritize quality over quantity`;
 
 // ─── Web Search Parent Tool ──────────────────────────────────────────────────
 
@@ -63,14 +117,33 @@ export interface WebSearchToolOptions {
 }
 
 const webSearchParams = Type.Object({
-  query: Type.String({
-    description: "The search query or research question. Be specific about what you're looking for.",
+  prompt: Type.String({
+    description:
+      "A detailed research brief describing what needs to be investigated. " +
+      "Include context about what you are doing, the specific goal or question, " +
+      "and any hints such as error messages or symptoms. " +
+      "The child agent will read this brief and decide what to search for. " +
+      "Write a comprehensive brief (~300-500 words) with the following structure:\n\n" +
+      "1. Context: Describe the project, technologies, and current situation.\n" +
+      "2. Goal: State the specific research question or problem to solve.\n" +
+      "3. Hints: Include any error messages, stack traces, or relevant observations.\n\n" +
+      "Example:\n" +
+      "  Context: We are building a Spring Boot 3.2 application with Kotlin 1.9 and Maven. " +
+      "  We have User and Order entities with a OneToMany relationship using Hibernate 3.6.\n\n" +
+      "  Goal: Determine if Spring Boot 3.2 fully supports Hibernate 3.6 for OneToMany " +
+      "  relationships in Kotlin classes, and identify any known compatibility issues.\n\n" +
+      "  Hints: We get org.hibernate.MappingException when persisting User with List<Order>. " +
+      "  The @OneToMany annotation is on the User class.",
   }),
 });
 
 /**
  * Build the web_search tool that spawns a child agent with browser automation tools.
- * The child agent searches Google, navigates to pages, and extracts content to answer the query.
+ * The child agent receives a research brief and performs browser-based research
+ * to answer the question. It searches Google, navigates to pages, and extracts content.
+ *
+ * The parent agent composes a detailed research brief (context + goal + hints)
+ * and passes it as the prompt parameter. The child agent decides what to search for.
  */
 export function buildWebSearchTool(_harnessCtx: HarnessContext, opts: WebSearchToolOptions): AgentTool<any>[] {
   const {
@@ -96,15 +169,20 @@ export function buildWebSearchTool(_harnessCtx: HarnessContext, opts: WebSearchT
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the internet using a browser-based research agent. " +
-      "The agent will search Google, navigate to relevant pages, and extract content to answer your query. " +
-      "Returns a concise markdown answer with a Sources section listing visited URLs.\n\n" +
-      "Use this when you need current information, documentation, or references from the internet. " +
-      "Be specific in your query for better results.\n\n" +
+      "Research a topic using a browser-based web agent. " +
+      "The agent receives a research brief and performs internet research: " +
+      "searching Google, navigating to relevant pages, and extracting content. " +
+      "Returns a detailed markdown answer with sources.\n\n" +
+      "Provide a comprehensive research brief (~300-500 words) that includes:\n" +
+      "1. Context: What you are working on, technologies, current situation.\n" +
+      "2. Goal: The specific question or problem to research.\n" +
+      "3. Hints: Error messages, stack traces, or relevant observations.\n\n" +
       "EXAMPLES:\n" +
-      "  web_search('latest Rust 2024 edition release notes')\n" +
-      "  web_search('how to configure vLLM with SGLang backend')\n" +
-      "  web_search('Playwright vs Puppeteer comparison 2024')",
+      "  web_search({\n" +
+      "    prompt: 'Context: We are building a Spring Boot 3.2 app with Kotlin and Hibernate 3.6.\\n' +\n" +
+      "            'Goal: Does Spring Boot 3.2 support Hibernate 3.6 for OneToMany in Kotlin?\\n' +\n" +
+      "            'Hints: org.hibernate.MappingException when persisting User with List<Order>.'\n" +
+      "  })",
     parameters: webSearchParams,
     execute: async (toolCallId, args, signal) => {
       // Build browser tools with the injected factory
@@ -120,7 +198,7 @@ export function buildWebSearchTool(_harnessCtx: HarnessContext, opts: WebSearchT
           parentSystemPrompt: opts.parentSystemPrompt,
           systemPromptSuffix: WEB_SEARCH_SYSTEM_SUFFIX,
           cwd: parentCwd,
-          prompt: args.query,
+          prompt: args.prompt,
           signal,
           delegateEmitRef,
           onRawModelMessage,
@@ -129,24 +207,25 @@ export function buildWebSearchTool(_harnessCtx: HarnessContext, opts: WebSearchT
           parentConversationId,
           parentToolCallId: toolCallId,
           maxSteps,
+          excludeSdkBuiltins: true,
         });
 
         if (!runnerResult.ok) {
           return {
             content: [{ type: "text", text: `Error: ${runnerResult.error ?? "Web search failed"}` }],
-            details: { query: args.query },
+            details: { prompt: args.prompt },
             isError: true,
           };
         }
 
         return {
           content: [{ type: "text", text: runnerResult.text }],
-          details: { query: args.query, durationMs: runnerResult.durationMs },
+          details: { prompt: args.prompt, durationMs: runnerResult.durationMs },
         };
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }],
-          details: { query: args.query },
+          details: { prompt: args.prompt },
           isError: true,
         };
       } finally {

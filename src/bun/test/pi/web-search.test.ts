@@ -165,7 +165,7 @@ describe("web_search tool", () => {
     const tools = buildWebTools(fakeHarnessCtx, makeWebSearchOpts({ childSessionFactory: childFactory }));
     const webSearchTool = tools.find((t) => t.name === "web_search")!;
 
-    await webSearchTool.execute("call-1", { query: "test query" });
+    await webSearchTool.execute("call-1", { prompt: "test query" });
 
     const toolNames = receivedTools.map((t) => t.name);
     expect(toolNames).toContain("browser_search");
@@ -202,7 +202,7 @@ describe("web_search tool", () => {
     const tools = buildWebTools(fakeHarnessCtx, makeWebSearchOpts({ childSessionFactory: childFactory, engineConfig: config }));
     const webSearchTool = tools.find((t) => t.name === "web_search")!;
 
-    await webSearchTool.execute("call-2", { query: "test" });
+    await webSearchTool.execute("call-2", { prompt: "test" });
 
     // The step limit should have been enforced
     // (In our mock, the beforeToolCall is set by the runner, not us)
@@ -225,7 +225,7 @@ The quick brown fox jumps over the lazy dog.
     const tools = buildWebTools(fakeHarnessCtx, makeWebSearchOpts({ childSessionFactory: childFactory }));
     const webSearchTool = tools.find((t) => t.name === "web_search")!;
 
-    const result = await webSearchTool.execute("call-3", { query: "fox" });
+    const result = await webSearchTool.execute("call-3", { prompt: "fox" });
     const text = result.content.find((c) => c.type === "text")!.text as string;
 
     expect(text).toContain("## Answer");
@@ -239,7 +239,7 @@ The quick brown fox jumps over the lazy dog.
     const tools = buildWebTools(fakeHarnessCtx, makeWebSearchOpts({}, emitted));
     const webSearchTool = tools.find((t) => t.name === "web_search")!;
 
-    await webSearchTool.execute("call-4", { query: "test" });
+    await webSearchTool.execute("call-4", { prompt: "test" });
 
     // Should have subagent_start event
     const subagentStartEvents = emitted.filter((e) => (e as any).type === "subagent_start");
@@ -275,7 +275,7 @@ The quick brown fox jumps over the lazy dog.
 
     const ac = new AbortController();
     // Don't actually abort — just verify the tool runs without error
-    const result = await webSearchTool.execute("call-5", { query: "test" }, ac.signal);
+    const result = await webSearchTool.execute("call-5", { prompt: "test" }, ac.signal);
     expect(result.content.find((c) => c.type === "text")?.text).toBeTruthy();
     expect(disposed).toBe(true);
   });
@@ -289,7 +289,7 @@ The quick brown fox jumps over the lazy dog.
     const tools = buildWebTools(fakeHarnessCtx, makeWebSearchOpts({ childSessionFactory: childFactory }));
     const webSearchTool = tools.find((t) => t.name === "web_search")!;
 
-    const result = await webSearchTool.execute("call-6", { query: "test" });
+    const result = await webSearchTool.execute("call-6", { prompt: "test" });
     const text = result.content.find((c) => c.type === "text")!.text as string;
     expect(text).toContain("Error");
   });

@@ -55,6 +55,13 @@ export interface RunChildSessionOptions {
   parentToolCallId?: string;
   /** Maximum number of tool calls (steps) the child may make. */
   maxSteps?: number;
+  /**
+   * Exclude SDK built-in tools (read, grep, find, ls) from the child session.
+   * @default false — most child sessions need file-system tools.
+   * Set to true for sessions that should only use custom tools
+   * (e.g. the web search child agent which only needs browser tools).
+   */
+  excludeSdkBuiltins?: boolean;
 }
 
 // ─── Result ──────────────────────────────────────────────────────────────────
@@ -106,6 +113,7 @@ export async function runChildSession(opts: RunChildSessionOptions): Promise<Run
     parentConversationId,
     parentToolCallId,
     maxSteps,
+    excludeSdkBuiltins = false,
   } = opts;
 
   const startMs = Date.now();
@@ -132,6 +140,7 @@ export async function runChildSession(opts: RunChildSessionOptions): Promise<Run
         ? (parentSystemPrompt ?? "") + systemPromptSuffix
         : parentSystemPrompt,
       cwd,
+      excludeSdkBuiltins,
     });
 
     // Set up loop detection on the child session
