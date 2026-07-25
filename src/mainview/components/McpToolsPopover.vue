@@ -37,6 +37,17 @@
             <span class="mcp-tools-popover__server-name" @click="toggleExpand(server.name)">{{ server.name }}</span>
             <span class="mcp-tools-popover__server-count">{{ server.tools.length }}</span>
             <Button
+              v-if="server.state === 'auth_required'"
+              v-tooltip="'Sign in'"
+              label="Sign in"
+              size="small"
+              severity="warn"
+              text
+              class="mcp-tools-popover__server-signin"
+              @click="authorizeServer(server.name)"
+            />
+            <Button
+              v-else
               v-tooltip="'Reload'"
               icon="pi pi-refresh"
               size="small"
@@ -94,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from "vue";
+import { ref, watch, nextTick, onUnmounted } from "vue";
 import Popover from "primevue/popover";
 import Checkbox from "primevue/checkbox";
 import Button from "primevue/button";
@@ -119,6 +130,9 @@ const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
 const servers = ref<McpServerStatus[]>([]);
 const reloading = ref(false);
 const expanded = ref(new Set<string>());
+const isOpen = ref(false);
+const POLL_INTERVAL_MS = 3000;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Local shadow of enabledMcpTools — updated immediately on click for instant UX
 const localEnabled = ref<string[] | null>(props.enabledMcpTools);
@@ -128,6 +142,7 @@ watch(() => props.enabledMcpTools, (val) => { localEnabled.value = val; });
 
 function toggle(event: MouseEvent) {
   popoverRef.value?.toggle(event);
+  isOpen.value = true;
   loadStatus();
 }
 
@@ -145,7 +160,32 @@ async function loadStatus() {
   } catch (err) {
     console.error("[McpToolsPopover] Failed to load status", err);
   }
+  syncPolling();
 }
+
+// ─── Poll while any server needs sign-in ───────────────────────────────────────
+// Backend has no push notification for OAuth callback completion, so while the
+// popover is open and at least one server is `auth_required`, poll getStatus
+// to pick up the transition once the user finishes the out-of-band browser flow.
+
+function syncPolling() {
+  const needsPolling = isOpen.value && servers.value.some(s => s.state === "auth_required");
+  if (needsPolling && pollTimer === null) {
+    pollTimer = setInterval(loadStatus, POLL_INTERVAL_MS);
+  } else if (!needsPolling && pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+onUnmounted(stopPolling);
 
 // ─── Expand / collapse ────────────────────────────────────────────────────────
 
@@ -161,6 +201,8 @@ async function toggleExpand(name: string) {
 
 function onHide() {
   expanded.value = new Set();
+  isOpen.value = false;
+  stopPolling();
 }
 
 // ─── Server-level checkbox state ──────────────────────────────────────────────
@@ -228,6 +270,7 @@ async function reloadAll() {
   reloading.value = true;
   try {
     servers.value = await api("mcp.reload", {});
+    syncPolling();
   } finally {
     reloading.value = false;
   }
@@ -236,8 +279,18 @@ async function reloadAll() {
 async function reloadServer(name: string) {
   try {
     servers.value = await api("mcp.reload", { serverName: name });
+    syncPolling();
   } catch (err) {
     console.error("[McpToolsPopover] Failed to reload", name, err);
+  }
+}
+
+async function authorizeServer(name: string) {
+  try {
+    servers.value = await api("mcp.authorize", { serverName: name });
+    syncPolling();
+  } catch (err) {
+    console.error("[McpToolsPopover] Failed to authorize", name, err);
   }
 }
 
@@ -347,6 +400,7 @@ function saveTools(enabledTools: string[]): Promise<Task | ChatSession> {
 .mcp-tools-popover__server-dot--starting { background: var(--p-yellow-500, #eab308); }
 .mcp-tools-popover__server-dot--idle,
 .mcp-tools-popover__server-dot--disabled { background: var(--p-surface-400, #94a3b8); }
+.mcp-tools-popover__server-dot--auth_required { background: var(--p-orange-500, #f97316); }
 
 .mcp-tools-popover__server-name {
   font-size: 0.82rem;

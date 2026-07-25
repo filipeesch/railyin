@@ -23,6 +23,12 @@ export function mcpHandlers(db: Database, { registryPool, resolveProject }: {
       return registry.getStatus();
     },
 
+    "mcp.authorize": async (params: { serverName: string }): Promise<McpServerStatus[]> => {
+      const registry = registryPool.getGlobalRegistry();
+      await registry.authorize(params.serverName);
+      return registry.getStatus();
+    },
+
     "mcp.getConfig": async (_params: Record<string, never>): Promise<{ path: string; content: string }> => {
       const globalPath = join(getDataDir(), "mcp.json");
       if (existsSync(globalPath)) {
@@ -83,4 +89,36 @@ export function mcpHandlers(db: Database, { registryPool, resolveProject }: {
       return mapChatSession(row);
     },
   };
+}
+
+// ─── OAuth redirect callback (GET /api/mcp/oauth/callback) ────────────────────
+
+function oauthCallbackHtml(message: string): Response {
+  return new Response(
+    `<!doctype html><html><body><p>${message}</p><p>You can close this tab.</p></body></html>`,
+    { headers: { "content-type": "text/html" } },
+  );
+}
+
+/**
+ * Handles the OAuth authorization redirect. Not exposed as an RPC method
+ * (it's a plain `GET` hit directly by the authorization server's browser
+ * redirect, not called via `api()`), so it's wired directly into the
+ * `Bun.serve` fetch handler rather than `allHandlers`.
+ */
+export async function handleMcpOAuthCallback(url: URL, registryPool: McpRegistryPool): Promise<Response> {
+  const state = url.searchParams.get("state");
+  const code = url.searchParams.get("code");
+  const error = url.searchParams.get("error");
+
+  if (!state) return oauthCallbackHtml("Missing state parameter — this authorization attempt cannot be completed.");
+  if (error) return oauthCallbackHtml(`Authorization was not granted (${error}).`);
+  if (!code) return oauthCallbackHtml("Missing authorization code — this authorization attempt cannot be completed.");
+
+  try {
+    await registryPool.getGlobalRegistry().completeAuthorization(state, code);
+    return oauthCallbackHtml("Authorization complete.");
+  } catch (err) {
+    return oauthCallbackHtml(`Authorization failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
