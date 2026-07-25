@@ -476,6 +476,47 @@ describe("stream block state", () => {
     expect(state.blocks.get("bubble-b::call_0")!.done).toBe(true);
   });
 
+  it("SB-13: single subagent bubble appears with correct done status after tool_result", () => {
+    // REGRESSION: single web_search agent's subagent bubble doesn't appear
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // web_search tool_call
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "tc-1",
+      content: JSON.stringify({ type: "function", function: { name: "web_search", arguments: "{}" } }),
+    }));
+
+    // subagent_start → tool_call with subagentId
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "sa-1",
+      content: JSON.stringify({ type: "function", function: { name: "subagent", arguments: '{"intent":"web-search"}' } }),
+      subagentId: "sa-1",
+    }));
+
+    // subagent_stop → tool_result with done=true and subagentId
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", {
+      blockId: "sa-1",
+      content: JSON.stringify({ type: "tool_result", tool_use_id: "sa-1", content: "## Answer\nFound it." }),
+      metadata: JSON.stringify({ resultContent: "## Answer\nFound it.", isError: false }),
+      subagentId: "sa-1",
+      done: true,
+    }));
+
+    const state = store.streamStates.get(1)!;
+    const saBlock = state.blocks.get("sa-1")!;
+
+    // The subagent bubble should exist and be marked done
+    expect(saBlock).toBeDefined();
+    expect(saBlock.type).toBe("tool_call");
+    expect(saBlock.done).toBe(true);
+    expect(saBlock.metadata).toContain("resultContent");
+    expect(saBlock.children).toEqual([]);
+
+    // The subagent bubble should be in the roots (not nested under web_search)
+    expect(state.roots).toContain("sa-1");
+  });
+
   it("SB-12: single subagent bubble nests BOTH sequential child calls when raw callId is reused", () => {
     // REGRESSION (single task): a single delegate child (local models like Qwen) emits the
     // SAME raw callId ("call_0") for two SEQUENTIAL tool calls. The backend gives each
