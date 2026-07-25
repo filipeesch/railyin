@@ -160,12 +160,15 @@ export async function runChildSession(opts: RunChildSessionOptions): Promise<Run
     // Subscribe to child events BEFORE prompting
     const childSessionId = parentConversationId != null ? `${parentConversationId}/${jobId}` : jobId;
     unsubscribe = handle.session.subscribe((event: AgentSessionEvent) => {
-      // Forward tool events to parent queue as internal events
+      // Forward events to parent queue
       if (delegateEmitRef?.emit) {
         const engineEvents = translateEvent(event as any, cwd);
         for (const ev of engineEvents) {
           if (ev.type === "tool_start" || ev.type === "tool_result") {
             delegateEmitRef.emit({ ...ev, parentCallId: childBlockId, isInternal: true });
+          } else if (ev.type === "token" || ev.type === "reasoning") {
+            // Forward child's progress text nested under the subagent bubble
+            delegateEmitRef.emit({ ...ev, parentCallId: childBlockId });
           }
         }
       }

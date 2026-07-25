@@ -17,8 +17,8 @@ export interface AskUserOption {
 // ─── EngineEvent — emitted by any engine implementation ──────────────────────
 
 export type EngineEvent = (
-  | { type: "token"; content: string }
-  | { type: "reasoning"; content: string }
+  | { type: "token"; content: string; parentCallId?: string }
+  | { type: "reasoning"; content: string; parentCallId?: string }
   | { type: "tool_start"; name: string; arguments: string; callId?: string; parentCallId?: string; isInternal?: boolean; display?: ToolCallDisplay }
   | { type: "subagent_start"; callId: string; intent: string; prompt: string }
   | { type: "subagent_stop"; callId: string }

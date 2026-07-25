@@ -205,6 +205,13 @@ export class StreamProcessor {
 
         switch (event.type) {
           case "token": {
+            // If this token has a parentCallId, it's from a child agent (e.g. web_search).
+            // Emit as text_chunk nested under the subagent bubble.
+            if (event.parentCallId) {
+              hadOutput = true;
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, parentBlockId: event.parentCallId, done: false, subagentId: null });
+              break;
+            }
             if (reasoningAccum) {
               convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
               convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
@@ -224,6 +231,13 @@ export class StreamProcessor {
           }
 
           case "reasoning": {
+            // If this reasoning has a parentCallId, it's from a child agent.
+            // Emit as reasoning_chunk nested under the subagent bubble.
+            if (event.parentCallId) {
+              hadOutput = true;
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, parentBlockId: event.parentCallId, done: false, subagentId: null });
+              break;
+            }
             reasoningAccum += event.content;
             this.onToken(taskId, conversationId, executionId, event.content, false, true);
             if (!this.claudeExecutionIds.has(executionId)) {
