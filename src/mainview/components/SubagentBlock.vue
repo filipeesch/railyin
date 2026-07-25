@@ -12,11 +12,8 @@
     </button>
 
     <div v-if="open" class="sa__body">
-      <!-- Prompt shown collapsed by default -->
-      <details class="sa__prompt-details">
-        <summary class="sa__prompt-summary">Prompt</summary>
-        <div class="sa__prompt prose" v-html="renderMd(prompt)" />
-      </details>
+      <!-- Prompt — always visible when expanded, full text -->
+      <div class="sa__prompt prose" v-html="renderMd(prompt)" />
 
       <!-- Live stream children (tool calls from this subagent) -->
       <div v-if="childBlockIds && childBlockIds.length > 0 && blocks" class="sa__children">
@@ -38,7 +35,7 @@
         />
       </div>
 
-      <!-- Result summary shown when done -->
+      <!-- Result — shown when done, full text -->
       <div v-if="done && result" class="sa__result prose" v-html="renderMd(result)" />
     </div>
   </div>
@@ -142,30 +139,12 @@ const open = ref(false);
   gap: 8px;
 }
 
-.sa__prompt-details {
-  font-size: 0.75rem;
-}
-
-.sa__prompt-summary {
-  cursor: pointer;
-  color: var(--p-text-muted-color, #64748b);
-  font-size: 0.72rem;
-  user-select: none;
-}
-
-.sa__prompt-summary:hover {
-  color: var(--p-text-color, #333);
-}
-
 .sa__prompt {
-  margin-top: 6px;
   padding: 8px;
   background: var(--p-surface-50, #f9fafb);
   border-radius: 4px;
   border: 1px solid var(--p-surface-200, #e2e8f0);
   font-size: 0.75rem;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 .sa__children {
@@ -175,7 +154,7 @@ const open = ref(false);
 }
 
 .sa__result {
-  padding: 6px 8px;
+  padding: 8px;
   background: color-mix(in srgb, #16a34a 8%, transparent);
   border-radius: 4px;
   font-size: 0.75rem;
