@@ -202,7 +202,7 @@ export function makeTransitionMessage(
 
 export function makeMcpStatus(overrides?: {
     name?: string;
-    state?: "idle" | "starting" | "running" | "error" | "disabled";
+    state?: "idle" | "starting" | "running" | "error" | "disabled" | "auth_required";
     tools?: { name: string; qualifiedName: string; serverName: string; description?: string; inputSchema: { type: "object" } }[];
     error?: string;
 }) {

@@ -298,6 +298,25 @@ describe("translateCursorMessage", () => {
       display: { label: "updateTodos" },
     });
   });
+
+  it("status message reads the real SDK `status` field (regression: previously read non-existent message.message)", () => {
+    const events = translateCursorMessage({ type: "status", status: "RUNNING" } as CursorSDKMessage);
+    expect(events).toEqual([{ type: "status", message: "RUNNING" }]);
+  });
+
+  it("status message: FINISHED and ERROR values pass through unchanged", () => {
+    expect(translateCursorMessage({ type: "status", status: "FINISHED" } as CursorSDKMessage)).toEqual([
+      { type: "status", message: "FINISHED" },
+    ]);
+    expect(translateCursorMessage({ type: "status", status: "ERROR" } as CursorSDKMessage)).toEqual([
+      { type: "status", message: "ERROR" },
+    ]);
+  });
+
+  it("status message falls back to an empty string when `status` is absent, without throwing", () => {
+    const events = translateCursorMessage({ type: "status" } as CursorSDKMessage);
+    expect(events).toEqual([{ type: "status", message: "" }]);
+  });
 });
 
 /* ─── normalizeCursorToolResult ──────────────────────────────────── */

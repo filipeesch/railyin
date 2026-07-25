@@ -1,4 +1,6 @@
 import type { McpServerConfig, McpServerTransport, McpToolDef } from "./types.ts";
+import { McpOAuthChallengeError } from "../oauth/errors.ts";
+import type { TokenProvider } from "../oauth/types.ts";
 
 // ─── JSON-RPC types ───────────────────────────────────────────────────────────
 
@@ -20,6 +22,35 @@ interface JsonRpcResponse {
   id: number;
   result?: unknown;
   error?: { code: number; message: string; data?: unknown };
+}
+
+// ─── Streamable HTTP transport helpers (MCP spec 2025-06-18) ─────────────────
+// The MCP Streamable HTTP transport lets a server answer a POST either with a
+// single `application/json` body or with a `text/event-stream` (SSE) stream
+// that eventually carries the JSON-RPC response as one of its events. Clients
+// MUST advertise support for both via the Accept header and MUST be able to
+// parse either shape of response.
+const STREAMABLE_HTTP_ACCEPT = "application/json, text/event-stream";
+
+/** Extracts the JSON-RPC response object from an SSE (`text/event-stream`) response body. */
+export function parseJsonRpcSseBody(text: string): JsonRpcResponse {
+  const events = text.split(/\r?\n\r?\n/);
+  for (const event of events) {
+    const dataLines = event
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart());
+    if (dataLines.length === 0) continue;
+    try {
+      const parsed = JSON.parse(dataLines.join("\n")) as Partial<JsonRpcResponse>;
+      if (parsed && typeof parsed === "object" && parsed.jsonrpc === "2.0" && ("result" in parsed || "error" in parsed)) {
+        return parsed as JsonRpcResponse;
+      }
+    } catch {
+      // not a JSON-RPC response event (e.g. an unrelated notification/log) — keep scanning
+    }
+  }
+  throw new Error("No JSON-RPC response found in SSE stream");
 }
 
 // ─── Abstract base ────────────────────────────────────────────────────────────
@@ -196,19 +227,30 @@ export class HttpMcpClient extends McpClient {
   private config: Extract<McpServerTransport, { type: "http" }>;
   private serverName: string;
   private _initialized = false;
+  private tokenProvider: TokenProvider | undefined;
+  /** Session id assigned by the server on `initialize`, relayed on every subsequent request per the Streamable HTTP spec. */
+  private _sessionId: string | undefined;
+  /** Protocol version negotiated during `initialize`, sent on every subsequent request. */
+  private _protocolVersion: string | undefined;
 
-  constructor(serverName: string, config: Extract<McpServerTransport, { type: "http" }>) {
+  constructor(
+    serverName: string,
+    config: Extract<McpServerTransport, { type: "http" }>,
+    tokenProvider?: TokenProvider,
+  ) {
     super();
     this.serverName = serverName;
     this.config = config;
+    this.tokenProvider = tokenProvider;
   }
 
   async initialize(): Promise<void> {
-    await this._post("initialize", {
+    const result = await this._post("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: { name: "railyin", version: "1.0" },
     });
+    this._protocolVersion = (result as { protocolVersion?: string } | undefined)?.protocolVersion ?? "2024-11-05";
     await this._postNotification("initialized", {});
     this._initialized = true;
   }
@@ -225,36 +267,66 @@ export class HttpMcpClient extends McpClient {
 
   async close(): Promise<void> {
     this._initialized = false;
+    this._sessionId = undefined;
+    this._protocolVersion = undefined;
+  }
+
+  /** Builds request headers shared by requests and notifications, layering in session/protocol-version state once known. */
+  private async buildHeaders(authHeader: Record<string, string>): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: STREAMABLE_HTTP_ACCEPT,
+      ...(this.config.headers ?? {}),
+      ...authHeader,
+    };
+    if (this._sessionId) headers["Mcp-Session-Id"] = this._sessionId;
+    if (this._protocolVersion) headers["MCP-Protocol-Version"] = this._protocolVersion;
+    return headers;
+  }
+
+  /** Captures the `Mcp-Session-Id` response header (if present) so it can be relayed on subsequent requests. */
+  private captureSessionId(resp: Response): void {
+    const sessionId = resp.headers.get("Mcp-Session-Id");
+    if (sessionId) this._sessionId = sessionId;
+  }
+
+  /** Reads a JSON-RPC response body, transparently handling both `application/json` and `text/event-stream` shapes. */
+  private async readJsonRpcResponse(resp: Response): Promise<JsonRpcResponse> {
+    const contentType = resp.headers.get("Content-Type") ?? "";
+    if (contentType.includes("text/event-stream")) {
+      return parseJsonRpcSseBody(await resp.text());
+    }
+    return (await resp.json()) as JsonRpcResponse;
   }
 
   private async _post(method: string, params: unknown): Promise<unknown> {
     const req = this.buildRequest(method, params);
+    const authHeader = this.tokenProvider ? await this.tokenProvider.getAuthHeader() : {};
     const resp = await fetch(this.config.url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        ...(this.config.headers ?? {}),
-      },
+      headers: await this.buildHeaders(authHeader),
       body: JSON.stringify(req),
     });
+    if (resp.status === 401) {
+      const wwwAuthenticate = resp.headers.get("WWW-Authenticate");
+      if (wwwAuthenticate) throw new McpOAuthChallengeError(wwwAuthenticate);
+      throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    }
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
-    const json = (await resp.json()) as JsonRpcResponse;
+    this.captureSessionId(resp);
+    const json = await this.readJsonRpcResponse(resp);
     if (json.error) throw new Error(`MCP error ${json.error.code}: ${json.error.message}`);
     return json.result;
   }
 
   private async _postNotification(method: string, params: unknown): Promise<void> {
     const notif = this.buildNotification(method, params);
-    await fetch(this.config.url, {
+    const authHeader = this.tokenProvider ? await this.tokenProvider.getAuthHeader().catch(() => ({})) : {};
+    const resp = await fetch(this.config.url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(this.config.headers ?? {}),
-      },
+      headers: await this.buildHeaders(authHeader),
       body: JSON.stringify(notif),
-    }).catch(() => {
-      // ignore notification errors
-    });
+    }).catch(() => undefined);
+    if (resp) this.captureSessionId(resp);
   }
 }

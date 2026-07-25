@@ -39,7 +39,7 @@ export interface McpToolDef {
 
 // ─── Server state machine ─────────────────────────────────────────────────────
 
-export type ServerState = "idle" | "starting" | "running" | "error" | "disabled";
+export type ServerState = "idle" | "starting" | "running" | "auth_required" | "error" | "disabled";
 
 export interface McpServerStatus {
   name: string;

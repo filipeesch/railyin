@@ -157,6 +157,31 @@ describe("Cursor backend RPC scenarios", () => {
         await runtime.waitForTaskState(taskId, "failed");
     });
 
+    it("§6.3.7c — sending a follow-up message after a failed execution starts a fresh execution that completes normally", async () => {
+        const adapter = new MockCursorSdkAdapter()
+            .queueTurn({
+                steps: [token("partial"), fatalError("agent crashed mid-stream")],
+            })
+            .queueTurn({ steps: [token("Recovered after failure")] });
+        const runtime = createRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Explode mid-stream" });
+        await runtime.recorder.waitForError(first.executionId);
+        await runtime.waitForExecutionStatus(first.executionId, "failed");
+        await runtime.waitForTaskState(taskId, "failed");
+
+        const second = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Try again" });
+        // A follow-up after a failed execution starts a brand-new execution, not a resume.
+        expect(second.executionId).not.toBe(first.executionId);
+
+        await runtime.recorder.waitForStreamDone(second.executionId);
+        await runtime.waitForExecutionStatus(second.executionId, "completed");
+
+        const tail = runtime.getMessages(taskId).slice(-2).map((m) => m.type);
+        expect(tail).toEqual(["user", "assistant"]);
+    });
+
     it("§6.3.8 — model listing via shared scenario", async () => {
         const adapter = new MockCursorSdkAdapter();
         const runtime = createRuntime(adapter);
