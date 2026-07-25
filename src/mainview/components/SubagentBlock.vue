@@ -12,8 +12,11 @@
     </button>
 
     <div v-if="open" class="sa__body">
-      <!-- Prompt — always visible when expanded, full text -->
-      <div class="sa__prompt prose" v-html="renderMd(prompt)" />
+      <!-- Prompt shown collapsed by default -->
+      <details class="sa__prompt-details">
+        <summary class="sa__prompt-summary">Prompt</summary>
+        <div class="sa__prompt prose" v-html="renderMd(prompt)" />
+      </details>
 
       <!-- Live stream children (tool calls from this subagent) -->
       <div v-if="childBlockIds && childBlockIds.length > 0 && blocks" class="sa__children">
@@ -35,8 +38,11 @@
         />
       </div>
 
-      <!-- Result — shown when done, full text -->
-      <div v-if="done && result" class="sa__result prose" v-html="renderMd(result)" />
+      <!-- Result shown when done, collapsed by default -->
+      <details v-if="done && result" class="sa__result-details">
+        <summary class="sa__result-summary">Answer</summary>
+        <div class="sa__result prose" v-html="renderMd(result)" />
+      </details>
     </div>
   </div>
 </template>
@@ -145,6 +151,8 @@ const open = ref(false);
   border-radius: 4px;
   border: 1px solid var(--p-surface-200, #e2e8f0);
   font-size: 0.75rem;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .sa__children {
@@ -159,6 +167,8 @@ const open = ref(false);
   border-radius: 4px;
   font-size: 0.75rem;
   border-left: 3px solid #16a34a;
+  max-height: 400px;
+  overflow-y: auto;
 }
 </style>
 
