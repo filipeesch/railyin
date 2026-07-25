@@ -209,13 +209,11 @@ export async function runChildSession(opts: RunChildSessionOptions): Promise<Run
     const usage = handle.session.getContextUsage?.();
     const durationMs = Date.now() - startMs;
 
-    // Emit subagent stop as a tool_result (succeeded)
+    // Emit subagent_stop to close the subagent bubble
     delegateEmitRef?.emit?.({
-      type: "tool_result",
-      name: "subagent",
+      type: "subagent_stop",
       callId: childBlockId,
       result: text,
-      isInternal: false,
     });
 
     return {
@@ -228,14 +226,12 @@ export async function runChildSession(opts: RunChildSessionOptions): Promise<Run
     const isAbort = err instanceof DOMException && err.name === "AbortError";
     const errorMessage = isAbort ? "Aborted" : formatPiError(err instanceof Error ? err : new Error(String(err)));
 
-    // Emit subagent stop as a tool_result (errored)
+    // Emit subagent_stop to close the subagent bubble (errored)
     delegateEmitRef?.emit?.({
-      type: "tool_result",
-      name: "subagent",
+      type: "subagent_stop",
       callId: childBlockId,
       result: errorMessage,
       isError: true,
-      isInternal: false,
     });
 
     return {

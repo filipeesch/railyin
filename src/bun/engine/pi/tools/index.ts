@@ -32,7 +32,7 @@ export const PI_TOOL_GROUPS = {
 } as const;
 
 /** Default tool groups when a column has no explicit `tools:` config. */
-export const DEFAULT_PI_TOOL_GROUPS: (keyof typeof PI_TOOL_GROUPS)[] = ["read", "write", "shell"];
+export const DEFAULT_PI_TOOL_GROUPS: (keyof typeof PI_TOOL_GROUPS)[] = ["read", "write", "shell", "web"];
 
 export type PiToolGroupName = keyof typeof PI_TOOL_GROUPS;
 

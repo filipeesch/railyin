@@ -253,9 +253,9 @@ The quick brown fox jumps over the lazy dog.
       expect((ev as any).parentCallId).toBe(childBlockId);
     }
 
-    // Should have subagent stop (tool_result with name "subagent")
+    // Should have subagent_stop event
     const subagentStopEvents = emitted.filter(
-      (e) => (e as any).type === "tool_result" && (e as any).name === "subagent",
+      (e) => (e as any).type === "subagent_stop",
     );
     expect(subagentStopEvents.length).toBe(1);
   });

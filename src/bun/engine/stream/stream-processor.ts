@@ -274,8 +274,18 @@ export class StreamProcessor {
           }
 
           case "subagent_stop": {
-            const subagentResultContent = JSON.stringify({ type: "tool_result", tool_use_id: event.callId, content: "" });
-            const subagentResultMeta = { tool_call_id: event.callId, parent_tool_call_id: null };
+            // Include the result content from the child agent in the subagent bubble
+            const subagentResultContent = JSON.stringify({
+              type: "tool_result",
+              tool_use_id: event.callId,
+              content: event.result ?? "",
+            });
+            const subagentResultMeta = {
+              tool_call_id: event.callId,
+              parent_tool_call_id: null,
+              resultContent: event.result ?? null,
+              isError: event.isError ?? false,
+            };
             convBuffer.enqueue({ taskId, conversationId, type: "tool_result", role: null, content: subagentResultContent, metadata: subagentResultMeta, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: event.callId, type: "tool_result", content: subagentResultContent, metadata: JSON.stringify(subagentResultMeta), parentBlockId: null, done: true, subagentId: event.callId });

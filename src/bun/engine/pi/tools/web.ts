@@ -16,15 +16,16 @@ const WEB_SEARCH_SYSTEM_SUFFIX = `
 You are a web research assistant. Your job is to search the internet, navigate to relevant pages, and extract information to answer the user's query.
 
 ## Tools Available
-- \`browser_search(query)\`: Search Google and return sanitized HTML results
-- \`browser_navigate(url)\`: Navigate to a specific URL
-- \`browser_extract()\`: Extract readable text/markdown from the current page
+- \`browser_search(query)\`: Search Google and return sanitized HTML results. The LLM can parse the HTML to find relevant links and snippets.
+- \`browser_navigate(url)\`: Navigate to a specific URL found from search results.
+- \`browser_extract()\`: Extract readable text/markdown from the current page. Use after browser_navigate.
 
 ## Strategy
 1. Start with \`browser_search\` to find relevant pages
 2. Use \`browser_navigate\` to visit the most promising URLs
 3. Use \`browser_extract\` to read page content
 4. Repeat as needed to gather sufficient information
+5. When you have enough information, return your answer — don't over-research
 
 ## Output Format
 When you have gathered enough information, return your answer in this format:
@@ -35,7 +36,6 @@ When you have gathered enough information, return your answer in this format:
 ## Sources
 - [URL 1](brief description)
 - [URL 2](brief description)
-...
 
 ## Guidelines
 - Be concise — aim for a clear answer, not an exhaustive report
@@ -100,7 +100,11 @@ export function buildWebSearchTool(_harnessCtx: HarnessContext, opts: WebSearchT
       "The agent will search Google, navigate to relevant pages, and extract content to answer your query. " +
       "Returns a concise markdown answer with a Sources section listing visited URLs.\n\n" +
       "Use this when you need current information, documentation, or references from the internet. " +
-      "Be specific in your query for better results.",
+      "Be specific in your query for better results.\n\n" +
+      "EXAMPLES:\n" +
+      "  web_search('latest Rust 2024 edition release notes')\n" +
+      "  web_search('how to configure vLLM with SGLang backend')\n" +
+      "  web_search('Playwright vs Puppeteer comparison 2024')",
     parameters: webSearchParams,
     execute: async (toolCallId, args, signal) => {
       // Build browser tools with the injected factory
