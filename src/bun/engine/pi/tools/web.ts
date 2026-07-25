@@ -170,18 +170,30 @@ export function buildWebSearchTool(_harnessCtx: HarnessContext, opts: WebSearchT
     label: "Web Search",
     description:
       "Research a topic using a browser-based web agent. " +
-      "The agent receives a research brief and performs internet research: " +
+      "The agent receives a detailed research brief and performs internet research: " +
       "searching Google, navigating to relevant pages, and extracting content. " +
       "Returns a detailed markdown answer with sources.\n\n" +
-      "Provide a comprehensive research brief (~300-500 words) that includes:\n" +
-      "1. Context: What you are working on, technologies, current situation.\n" +
-      "2. Goal: The specific question or problem to research.\n" +
-      "3. Hints: Error messages, stack traces, or relevant observations.\n\n" +
-      "EXAMPLES:\n" +
+      "IMPORTANT: Write a comprehensive research brief (~300-500 words) that includes:\n" +
+      "1. **Context**: Describe the project, technologies, versions, and current situation in detail.\n" +
+      "2. **Goal**: State the specific question or problem you need researched.\n" +
+      "3. **Hints**: Include any error messages, stack traces, configuration details, or relevant observations.\n\n" +
+      "The child agent will read your brief and decide what to search for. " +
+      "A better brief leads to better results.\n\n" +
+      "EXAMPLE:\n" +
       "  web_search({\n" +
-      "    prompt: 'Context: We are building a Spring Boot 3.2 app with Kotlin and Hibernate 3.6.\\n' +\n" +
-      "            'Goal: Does Spring Boot 3.2 support Hibernate 3.6 for OneToMany in Kotlin?\\n' +\n" +
-      "            'Hints: org.hibernate.MappingException when persisting User with List<Order>.'\n" +
+      "    prompt: `## Context\n" +
+      "We are building a Spring Boot 3.2 application using Kotlin 1.9 and Maven. " +
+      "Our domain model has User and Order entities with a OneToMany relationship. " +
+      "We are using Hibernate 3.6 as our ORM layer. The User entity has a List<Order> field.\n\n" +
+      "## Goal\n" +
+      "Determine if Spring Boot 3.2 fully supports Hibernate 3.6 for handling OneToMany " +
+      "relationships in Kotlin classes. Identify any known compatibility issues or required annotations.\n\n" +
+      "## Hints\n" +
+      "We get the following error when persisting a User:\n" +
+      "  org.hibernate.MappingException: Could not determine type for: java.util.List\n" +
+      "  at table: orders, for columns: [org.hibernate.mapping.Column(user_id)]\n\n" +
+      "The @OneToMany annotation is on the User class. The application works fine " +
+      "with Java entities but fails with Kotlin data classes.`\n" +
       "  })",
     parameters: webSearchParams,
     execute: async (toolCallId, args, signal) => {
