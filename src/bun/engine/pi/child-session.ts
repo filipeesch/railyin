@@ -48,6 +48,13 @@ export interface ChildSessionOptions {
   parentSystemPrompt: string | undefined;
   /** Working directory (parent's worktree path). */
   cwd: string;
+  /**
+   * Exclude SDK built-in tools (read, grep, find, ls) from the child session.
+   * @default false — most child sessions need file-system tools.
+   * Set to true for sessions that should only use custom tools
+   * (e.g. the web search child agent which only needs browser tools).
+   */
+  excludeSdkBuiltins?: boolean;
 }
 
 /** A live child session that must be disposed after use. */
@@ -68,7 +75,7 @@ export type ChildSessionFactory = (opts: ChildSessionOptions) => Promise<ChildSe
  * Uses SessionManager.inMemory() — no disk writes, no cleanup needed.
  */
 export const defaultChildSessionFactory: ChildSessionFactory = async (opts) => {
-  const { tools, model, config, parentSystemPrompt, cwd } = opts;
+  const { tools, model, config, parentSystemPrompt, cwd, excludeSdkBuiltins } = opts;
 
   const systemPrompt = parentSystemPrompt
     ? parentSystemPrompt + SUBAGENT_SYSTEM_SUFFIX
@@ -112,7 +119,8 @@ export const defaultChildSessionFactory: ChildSessionFactory = async (opts) => {
     // Include SDK built-in tools in the allowlist so the child model can call
     // read/grep/find/ls. Without these names, the SDK silently drops built-in
     // tool calls and the model loops or stalls trying to read files.
-    tools: buildToolAllowlist(tools),
+    // For browser-only sessions (web search), excludeSdkBuiltins is true.
+    tools: buildToolAllowlist(tools, { includeSdkBuiltins: !excludeSdkBuiltins }),
     sessionManager,
     resourceLoader,
     authStorage,

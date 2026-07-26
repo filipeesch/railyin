@@ -10,8 +10,6 @@
 import { join, isAbsolute, resolve } from "node:path";
 import { statSync } from "node:fs";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { ToolLoopDetector, LOOP_MAX_REPEAT, LOOP_WINDOW_SIZE } from "../harness/tool-loop-detector.ts";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { HarnessContext } from "../harness/context.ts";
 import type { EngineEvent, RawModelMessage } from "../../types.ts";
 import type { ChildSessionFactory } from "../child-session.ts";
@@ -19,8 +17,7 @@ import type { ProviderLimiterRegistry } from "../provider-limiter.ts";
 import type { PiEngineConfig } from "../../../config/index.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { defaultChildSessionFactory } from "../child-session.ts";
-import { runWithLimiter } from "../provider-transport.ts";
-import { translateEvent } from "../event-translator.ts";
+import { runChildSession } from "./child-runner.ts";
 import { formatPiError } from "../pi-error.ts";
 
 export interface DelegateToolOptions {
@@ -238,114 +235,44 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
         }
 
         const childCwd = task.workingDirectory ? join(cwd, task.workingDirectory) : cwd;
-        const childBlockId = `child-${task.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const childGroups = (task.tools ?? delegateConfig?.allow_tools ?? ["read", "write", "shell"]).filter((g) => g !== "delegate");
         const childTools = buildChildTools(childGroups);
 
-        // Emit a subagent_start event to give each child its own root-level bubble.
-        delegateEmitRef?.emit?.({
-          type: "subagent_start",
-          callId: childBlockId,
-          intent: task.intent ?? task.id,
+        const runnerResult = await runChildSession({
+          jobId: task.id,
+          tools: childTools,
+          model,
+          config,
+          parentSystemPrompt: opts.parentSystemPrompt,
+          cwd: childCwd,
           prompt: task.prompt,
+          signal,
+          delegateEmitRef,
+          onRawModelMessage,
+          childSessionFactory,
+          limiterRegistry: registry,
+          parentConversationId: opts.parentConversationId,
+          parentToolCallId: toolCallId,
         });
 
-        let handle: Awaited<ReturnType<ChildSessionFactory>> | null = null;
-        let unsubscribe: (() => void) | null = null;
-
-        try {
-          handle = await childSessionFactory({
-            jobId: task.id,
-            tools: childTools,
-            model,
-            config,
-            parentSystemPrompt: opts.parentSystemPrompt,
-            cwd: childCwd,
-          });
-
-          const childLoopDetector = new ToolLoopDetector();
-          handle.session.agent.beforeToolCall = async (ctx) => {
-            const looping = childLoopDetector.record(ctx.toolCall.name, ctx.args as unknown);
-            if (looping) {
-              return {
-                block: true,
-                reason: `Tool loop detected: '${ctx.toolCall.name}' (or a group including it) has been called with the same arguments ${LOOP_MAX_REPEAT} times in the last ${LOOP_WINDOW_SIZE} calls. Try a different approach or summarize your findings.`,
-              };
-            }
-            return undefined;
+        if (runnerResult.ok) {
+          results[idx] = { status: "fulfilled", value: { id: task.id, text: runnerResult.text } };
+          jobSummaries[idx] = {
+            id: task.id,
+            status: "ok",
+            durationMs: runnerResult.durationMs,
+            tokens: runnerResult.tokens,
           };
-
-          // Subscribe BEFORE prompting to capture all child events.
-          // - UI path: route tool_start/tool_result under childBlockId so they nest in the per-child bubble.
-          // - Observability path: forward raw inbound events via onRawModelMessage tagged with the delegate callId.
-          const childSessionId = parentConversationId != null ? `${parentConversationId}/${task.id}` : task.id;
-          unsubscribe = handle.session.subscribe((event: AgentSessionEvent) => {
-            if (delegateEmitRef?.emit) {
-              const engineEvents = translateEvent(event as any, cwd);
-              for (const ev of engineEvents) {
-                if (ev.type === "tool_start" || ev.type === "tool_result") {
-                  delegateEmitRef.emit({ ...ev, parentCallId: childBlockId, isInternal: true });
-                }
-              }
-            }
-
-            if (onRawModelMessage) {
-              onRawModelMessage({
-                engine: "pi",
-                sessionId: childSessionId,
-                parentToolCallId: toolCallId,
-                direction: "inbound",
-                eventType: event.type,
-                payload: event as unknown as Record<string, unknown>,
-              });
-            }
-          });
-
-          await runWithLimiter(registry, providerName, signal, () => handle!.session.prompt(task.prompt));
-
-          const messages = handle.session.agent.state.messages as Array<{
-            role: string;
-            content?: Array<{ type: string; text?: string }>;
-          }>;
-          const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-          const text =
-            lastAssistant?.content
-              ?.filter((c) => c.type === "text")
-              .map((c) => c.text ?? "")
-              .join("") ?? "(no result)";
-
-          results[idx] = { status: "fulfilled", value: { id: task.id, text } };
-          const usage = handle.session.getContextUsage?.();
-          jobSummaries[idx] = { id: task.id, status: "ok", durationMs: Date.now() - startMs, tokens: usage?.tokens ?? undefined };
-
-          // Close the subagent bubble as succeeded (no parentCallId → root level).
-          delegateEmitRef?.emit?.({
-            type: "tool_result",
-            name: "subagent",
-            callId: childBlockId,
-            result: text,
-            isInternal: false,
-          });
-        } catch (err) {
-          const isAbort = err instanceof DOMException && err.name === "AbortError";
+        } else {
           results[idx] = {
             status: "rejected",
-            reason: err instanceof Error ? err : new Error(String(err)),
+            reason: new Error(runnerResult.error ?? "Unknown error"),
           };
-          jobSummaries[idx] = { id: task.id, status: "error", durationMs: Date.now() - startMs };
-
-          // Close the subagent bubble as errored (no parentCallId → root level).
-          delegateEmitRef?.emit?.({
-            type: "tool_result",
-            name: "subagent",
-            callId: childBlockId,
-            result: isAbort ? "Aborted" : formatPiError(err instanceof Error ? err : new Error(String(err))),
-            isError: true,
-            isInternal: false,
-          });
-        } finally {
-          unsubscribe?.();
-          handle?.dispose();
+          jobSummaries[idx] = {
+            id: task.id,
+            status: "error",
+            durationMs: runnerResult.durationMs,
+          };
         }
       }
 

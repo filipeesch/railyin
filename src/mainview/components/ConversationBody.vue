@@ -196,7 +196,8 @@ function subagentEntryProps(entry: ToolEntry) {
 
 const hasStructuredTail = computed(() => {
   const state = props.streamState;
-  return Boolean(state && !state.isDone && (state.roots.length > 0 || state.statusMessage));
+  const result = Boolean(state && !state.isDone && (state.roots.length > 0 || state.statusMessage));
+  return result;
 });
 
 const hasLiveContent = computed(() => {

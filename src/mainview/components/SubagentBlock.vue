@@ -38,8 +38,11 @@
         />
       </div>
 
-      <!-- Result summary shown when done -->
-      <div v-if="done && result" class="sa__result prose" v-html="renderMd(result)" />
+      <!-- Result shown when done, collapsed by default -->
+      <details v-if="done && result" class="sa__result-details">
+        <summary class="sa__result-summary">Answer</summary>
+        <div class="sa__result prose" v-html="renderMd(result)" />
+      </details>
     </div>
   </div>
 </template>
@@ -142,29 +145,13 @@ const open = ref(false);
   gap: 8px;
 }
 
-.sa__prompt-details {
-  font-size: 0.75rem;
-}
-
-.sa__prompt-summary {
-  cursor: pointer;
-  color: var(--p-text-muted-color, #64748b);
-  font-size: 0.72rem;
-  user-select: none;
-}
-
-.sa__prompt-summary:hover {
-  color: var(--p-text-color, #333);
-}
-
 .sa__prompt {
-  margin-top: 6px;
   padding: 8px;
   background: var(--p-surface-50, #f9fafb);
   border-radius: 4px;
   border: 1px solid var(--p-surface-200, #e2e8f0);
   font-size: 0.75rem;
-  max-height: 300px;
+  max-height: 400px;
   overflow-y: auto;
 }
 
@@ -175,11 +162,13 @@ const open = ref(false);
 }
 
 .sa__result {
-  padding: 6px 8px;
+  padding: 8px;
   background: color-mix(in srgb, #16a34a 8%, transparent);
   border-radius: 4px;
   font-size: 0.75rem;
   border-left: 3px solid #16a34a;
+  max-height: 400px;
+  overflow-y: auto;
 }
 </style>
 

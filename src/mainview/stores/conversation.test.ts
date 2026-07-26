@@ -476,6 +476,47 @@ describe("stream block state", () => {
     expect(state.blocks.get("bubble-b::call_0")!.done).toBe(true);
   });
 
+  it("SB-13: single subagent bubble appears with correct done status after tool_result", () => {
+    // REGRESSION: single web_search agent's subagent bubble doesn't appear
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // web_search tool_call
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "tc-1",
+      content: JSON.stringify({ type: "function", function: { name: "web_search", arguments: "{}" } }),
+    }));
+
+    // subagent_start → tool_call with subagentId
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "sa-1",
+      content: JSON.stringify({ type: "function", function: { name: "subagent", arguments: '{"intent":"web-search"}' } }),
+      subagentId: "sa-1",
+    }));
+
+    // subagent_stop → tool_result with done=true and subagentId
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", {
+      blockId: "sa-1",
+      content: JSON.stringify({ type: "tool_result", tool_use_id: "sa-1", content: "## Answer\nFound it." }),
+      metadata: JSON.stringify({ resultContent: "## Answer\nFound it.", isError: false }),
+      subagentId: "sa-1",
+      done: true,
+    }));
+
+    const state = store.streamStates.get(1)!;
+    const saBlock = state.blocks.get("sa-1")!;
+
+    // The subagent bubble should exist and be marked done
+    expect(saBlock).toBeDefined();
+    expect(saBlock.type).toBe("tool_call");
+    expect(saBlock.done).toBe(true);
+    expect(saBlock.metadata).toContain("resultContent");
+    expect(saBlock.children).toEqual([]);
+
+    // The subagent bubble should be in the roots (not nested under web_search)
+    expect(state.roots).toContain("sa-1");
+  });
+
   it("SB-12: single subagent bubble nests BOTH sequential child calls when raw callId is reused", () => {
     // REGRESSION (single task): a single delegate child (local models like Qwen) emits the
     // SAME raw callId ("call_0") for two SEQUENTIAL tool calls. The backend gives each
@@ -553,6 +594,217 @@ describe("stream block state", () => {
 
     const contextUsageCalls = apiMock.mock.calls.filter(([method]) => method === "conversations.contextUsage");
     expect(contextUsageCalls).toHaveLength(0);
+  });
+
+  it("SB-TRACE-1: trace store state at each step of single subagent event flow", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // Simulate the exact IPC event flow from the debug test:
+    // [0] tool_call tc-1 (web_search)
+    // [1] tool_call sa-1 (subagent)
+    // [2] tool_result sa-1 (subagent result)
+    // [3] tool_result tc-1 (web_search result)
+    // [4] done
+
+    // Step 0: web_search tool_call
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "tc-1",
+      content: JSON.stringify({ type: "function", function: { name: "web_search", arguments: '{"prompt":"test"}' } }),
+    }));
+    {
+      const state = store.streamStates.get(1)!;
+      const tc1 = state.blocks.get("tc-1");
+      console.log("[TRACE 0] web_search tool_call:", {
+        roots: state.roots,
+        blockType: tc1?.type,
+        blockDone: tc1?.done,
+        blocksCount: state.blocks.size,
+      });
+      expect(state.roots).toContain("tc-1");
+      expect(tc1?.type).toBe("tool_call");
+      expect(tc1?.done).toBe(false);
+    }
+
+    // Step 1: subagent_start → tool_call sa-1
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "sa-1",
+      content: JSON.stringify({ type: "function", function: { name: "subagent", arguments: '{"intent":"web-search","prompt":"test"}' } }),
+      subagentId: "sa-1",
+    }));
+    {
+      const state = store.streamStates.get(1)!;
+      const sa1 = state.blocks.get("sa-1");
+      console.log("[TRACE 1] subagent tool_call:", {
+        roots: state.roots,
+        blockType: sa1?.type,
+        blockDone: sa1?.done,
+        blocksCount: state.blocks.size,
+        contentPreview: sa1?.content?.slice(0, 80),
+      });
+      expect(state.roots).toContain("sa-1");
+      expect(sa1?.type).toBe("tool_call");
+      expect(sa1?.done).toBe(false);
+    }
+
+    // Step 2: subagent_stop → tool_result sa-1
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", {
+      blockId: "sa-1",
+      content: JSON.stringify({ type: "tool_result", tool_use_id: "sa-1", content: "## Answer\nFound it." }),
+      metadata: JSON.stringify({ resultContent: "## Answer\nFound it.", isError: false }),
+      subagentId: "sa-1",
+      done: true,
+    }));
+    {
+      const state = store.streamStates.get(1)!;
+      const sa1 = state.blocks.get("sa-1");
+      console.log("[TRACE 2] subagent tool_result:", {
+        roots: state.roots,
+        blockType: sa1?.type,
+        blockDone: sa1?.done,
+        metadata: sa1?.metadata?.slice(0, 80),
+        blocksCount: state.blocks.size,
+      });
+      expect(state.roots).toContain("sa-1");
+      expect(sa1?.type).toBe("tool_call");
+      expect(sa1?.done).toBe(true);
+      expect(sa1?.metadata).toContain("resultContent");
+    }
+
+    // Step 3: web_search result → tool_result tc-1
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", {
+      blockId: "tc-1",
+      content: JSON.stringify({ type: "tool_result", tool_use_id: "tc-1", content: "## Answer\nFound it." }),
+      metadata: JSON.stringify({ tool_call_id: "tc-1" }),
+      done: false,
+    }));
+    {
+      const state = store.streamStates.get(1)!;
+      const sa1 = state.blocks.get("sa-1");
+      const tc1 = state.blocks.get("tc-1");
+      console.log("[TRACE 3] web_search tool_result:", {
+        roots: state.roots,
+        sa1Type: sa1?.type,
+        sa1Done: sa1?.done,
+        sa1Metadata: sa1?.metadata?.slice(0, 80),
+        tc1Type: tc1?.type,
+        tc1Done: tc1?.done,
+        blocksCount: state.blocks.size,
+      });
+      // CRITICAL: subagent block must still be in roots and have correct type/done
+      expect(state.roots).toContain("sa-1");
+      expect(sa1?.type).toBe("tool_call");
+      expect(sa1?.done).toBe(true);
+      expect(sa1?.metadata).toContain("resultContent");
+    }
+
+    // Step 4: done
+    store.onStreamEvent(makeStreamEvent(1, "done", {
+      blockId: "1-done",
+      content: "",
+      done: true,
+    }));
+    {
+      const state = store.streamStates.get(1)!;
+      const sa1 = state.blocks.get("sa-1");
+      console.log("[TRACE 4] done:", {
+        roots: state.roots,
+        isDone: state.isDone,
+        sa1Type: sa1?.type,
+        sa1Done: sa1?.done,
+        sa1Metadata: sa1?.metadata?.slice(0, 80),
+        blocksCount: state.blocks.size,
+      });
+      // CRITICAL: subagent block must still exist after done
+      expect(state.roots).toContain("sa-1");
+      expect(sa1?.type).toBe("tool_call");
+      expect(sa1?.done).toBe(true);
+      expect(sa1?.metadata).toContain("resultContent");
+    }
+  });
+
+  it("SB-TRACE-2: trace store state for multiple subagents event flow", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // Simulate multiple subagent event flow
+    // [0] tool_call tc-1
+    // [1] tool_call tc-2
+    // [2] tool_call sa-1
+    // [3] tool_call sa-2
+    // [4] tool_result sa-1
+    // [5] tool_result sa-2
+    // [6] tool_result tc-1
+    // [7] tool_result tc-2
+    // [8] done
+
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "tc-1",
+      content: JSON.stringify({ type: "function", function: { name: "web_search", arguments: '{"prompt":"A"}' } }),
+    }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "tc-2",
+      content: JSON.stringify({ type: "function", function: { name: "web_search", arguments: '{"prompt":"B"}' } }),
+    }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "sa-1",
+      content: JSON.stringify({ type: "function", function: { name: "subagent", arguments: '{"intent":"search-A","prompt":"A"}' } }),
+      subagentId: "sa-1",
+    }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_call", {
+      blockId: "sa-2",
+      content: JSON.stringify({ type: "function", function: { name: "subagent", arguments: '{"intent":"search-B","prompt":"B"}' } }),
+      subagentId: "sa-2",
+    }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", {
+      blockId: "sa-1",
+      content: JSON.stringify({ type: "tool_result", tool_use_id: "sa-1", content: "Result A." }),
+      metadata: JSON.stringify({ resultContent: "Result A.", isError: false }),
+      subagentId: "sa-1",
+      done: true,
+    }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", {
+      blockId: "sa-2",
+      content: JSON.stringify({ type: "tool_result", tool_use_id: "sa-2", content: "Result B." }),
+      metadata: JSON.stringify({ resultContent: "Result B.", isError: false }),
+      subagentId: "sa-2",
+      done: true,
+    }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", {
+      blockId: "tc-1",
+      content: JSON.stringify({ type: "tool_result", tool_use_id: "tc-1", content: "Result A." }),
+      metadata: JSON.stringify({ tool_call_id: "tc-1" }),
+      done: false,
+    }));
+    store.onStreamEvent(makeStreamEvent(1, "tool_result", {
+      blockId: "tc-2",
+      content: JSON.stringify({ type: "tool_result", tool_use_id: "tc-2", content: "Result B." }),
+      metadata: JSON.stringify({ tool_call_id: "tc-2" }),
+      done: false,
+    }));
+    store.onStreamEvent(makeStreamEvent(1, "done", {
+      blockId: "1-done",
+      content: "",
+      done: true,
+    }));
+
+    const state = store.streamStates.get(1)!;
+    console.log("[TRACE MULTI] final state:", {
+      roots: state.roots,
+      isDone: state.isDone,
+      blocksCount: state.blocks.size,
+    });
+    for (const [id, block] of state.blocks) {
+      console.log(`  block ${id}: type=${block.type}, done=${block.done}, metadata=${block.metadata?.slice(0, 50)}`);
+    }
+
+    // Both subagent blocks should be in roots
+    expect(state.roots).toContain("sa-1");
+    expect(state.roots).toContain("sa-2");
+    expect(state.blocks.get("sa-1")?.type).toBe("tool_call");
+    expect(state.blocks.get("sa-2")?.type).toBe("tool_call");
+    expect(state.blocks.get("sa-1")?.done).toBe(true);
+    expect(state.blocks.get("sa-2")?.done).toBe(true);
   });
 
   it("SB-NEW-3: streamStates Map does not retain entries for non-active conversations after done", () => {

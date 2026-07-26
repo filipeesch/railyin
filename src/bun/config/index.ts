@@ -30,12 +30,6 @@ export interface AnthropicConfig {
   context_edit_strategy?: { enabled?: boolean };
 }
 
-/** Config block for web search. */
-export interface SearchConfig {
-  engine: string;
-  api_key: string;
-}
-
 /** Config block for LSP servers. */
 export interface LspConfig {
   servers?: Array<{ name: string; command: string; args: string[]; extensions: string[] }>;
@@ -121,7 +115,17 @@ export interface PiProviderConfig {
   queue_timeout_ms?: number;
 }
 
-/** Harness-level config for the delegate fan-out tool. */
+/** Harness-level config for the web_search tool. */
+export interface PiWebSearchConfig {
+  /**
+   * Maximum number of tool calls (steps) the web search child agent may make.
+   * When exceeded, the agent is asked to summarize its findings.
+   * Must be between 1 and 100. Default: 30.
+   */
+  max_steps?: number;
+}
+
+/** Harness-level config for the delegate fan-out tool./** Harness-level config for the delegate fan-out tool. */
 export interface PiDelegateConfig {
   /** When false, the delegate tool is not registered. Default: true. */
   enabled?: boolean;
@@ -181,6 +185,8 @@ export interface PiEngineConfig {
     delegate?: PiDelegateConfig;
     /** Opportunistic background compaction settings. */
     background_compaction?: PiBackgroundCompactionConfig;
+    /** Browser-based web search tool settings. */
+    web_search?: PiWebSearchConfig;
   };
   /**
    * Slash-command dialect to use for command discovery and resolution.
@@ -244,8 +250,6 @@ export interface WorkspaceYaml {
   shell_env_timeout_ms?: number; // timeout for shell environment resolution in milliseconds (default: 10000)
   /** Workspace default model in `<engineId>/<modelId>` format (e.g. `copilot/gpt-4.1`). Used to seed new conversation models. */
   default_model?: string;
-  /** @deprecated Legacy native-engine config. No longer supported. */
-  search?: SearchConfig;
   /** @deprecated Legacy native-engine config. No longer supported. */
   anthropic?: AnthropicConfig;
   /** LSP language server configuration for this workspace. */
@@ -480,9 +484,6 @@ function mergeWorkspaceDefaults(
   if (defaults.anthropic || workspace.anthropic) {
     merged.anthropic = { ...(defaults.anthropic ?? {}), ...(workspace.anthropic ?? {}) };
   }
-  if (defaults.search || workspace.search) {
-    merged.search = { ...(defaults.search ?? {} as SearchConfig), ...(workspace.search ?? {} as SearchConfig) };
-  }
   if (defaults.lsp || workspace.lsp) {
     merged.lsp = { ...(defaults.lsp ?? {}), ...(workspace.lsp ?? {}) };
   }
@@ -553,11 +554,6 @@ name: My Workspace
 projects: []
 
 # default_model: copilot/gpt-4.1   # workspace default model (<engineId>/<modelId>)
-
-# Web search (used by the search_internet tool)
-# search:
-#   engine: tavily   # "tavily" is the only supported engine in v1
-#   api_key: ""      # get a free key at https://tavily.com
 `.trimStart();
 
 /**
@@ -707,8 +703,8 @@ export function loadConfig(workspaceKey?: string): { config: LoadedConfig | null
     return { config: null, error: _configError };
   }
 
-  if (workspace.providers?.length || workspace.ai || workspace.search) {
-    _configError = `${workspaceFileName}: legacy native-engine config was removed. Replace providers/ai/search with a supported engine in engines.yaml.`;
+  if (workspace.providers?.length || workspace.ai) {
+    _configError = `${workspaceFileName}: legacy native-engine config was removed. Replace providers/ai with a supported engine in engines.yaml.`;
     return { config: null, error: _configError };
   }
 

@@ -18,4 +18,11 @@ export function validatePiEngineConfig(config: PiEngineConfig): void {
       `Pi engine config: harness.background_compaction.early_margin_tokens must be >= 1024, got: ${earlyMargin}`,
     );
   }
+
+  const maxSteps = config.harness?.web_search?.max_steps;
+  if (maxSteps != null && (maxSteps < 1 || maxSteps > 100)) {
+    throw new Error(
+      `Pi engine config: harness.web_search.max_steps must be between 1 and 100, got: ${maxSteps}`,
+    );
+  }
 }

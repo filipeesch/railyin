@@ -42,11 +42,11 @@ describe("resolveToolsForColumn", () => {
     expect(names).not.toContain("read_file");
   });
 
-  it("expands web group to fetch_url and search_internet", () => {
+  it("expands web group to fetch_url and web_search", () => {
     const result = resolveToolsForColumn(["web"]);
     const names = result.map((t) => t.name);
     expect(names).toContain("fetch_url");
-    expect(names).toContain("search_internet");
+    expect(names).toContain("web_search");
   });
 });
 

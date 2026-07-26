@@ -11,7 +11,7 @@ import type { OnTaskUpdated, EngineEvent, ExecutionParams, CommonToolContext } f
 import type { HarnessContext } from "./harness/context.ts";
 import { UndoStack } from "./harness/undo-stack.ts";
 import { ToolLoopDetector } from "./harness/tool-loop-detector.ts";
-import { buildAllTools } from "./tools/index.ts";
+import { buildAllTools, type AllToolsOptions, type ChildSpawnOptions } from "./tools/index.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
@@ -110,6 +110,8 @@ export class PiToolFactory {
     skillResolver: SkillResolver,
     suspendRef: SuspendRef,
     signal?: AbortSignal,
+    /** Child-spawning dependencies for delegate and web_search tools. */
+    childSpawn?: ChildSpawnOptions,
   ): ReturnType<typeof buildAllTools> {
     const harnessCtx = this.getOrCreateHarnessContext(conversationId, worktreePath, signal);
     const commonCtx = this.getOrCreateCommonContext(
@@ -128,6 +130,7 @@ export class PiToolFactory {
       commonCtx,
       skillResolver,
       suspendRef,
+      childSpawn,
     });
   }
 

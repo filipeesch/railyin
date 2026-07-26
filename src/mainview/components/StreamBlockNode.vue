@@ -236,8 +236,13 @@ function parseToolCallArguments(content: string): Record<string, unknown> | null
 
 const subagentContent = computed(() => {
   const b = block.value;
-  if (!b || b.type !== "tool_call") return null;
-  if (parseToolCallFunctionName(b.content) !== "subagent") return null;
+  if (!b || b.type !== "tool_call") {
+    return null;
+  }
+  const fnName = parseToolCallFunctionName(b.content);
+  if (fnName !== "subagent") {
+    return null;
+  }
   const args = parseToolCallArguments(b.content);
   const meta = b.metadata ? tryParseJson(b.metadata) : null;
   const resultContent = (meta?.resultContent as string) ?? undefined;

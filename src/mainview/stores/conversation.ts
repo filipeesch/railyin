@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
 import { api } from "../rpc";
 import type { ConversationMessage, StreamError, StreamEvent, StreamEventType } from "@shared/rpc-types";

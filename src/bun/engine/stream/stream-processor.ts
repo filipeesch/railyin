@@ -205,6 +205,13 @@ export class StreamProcessor {
 
         switch (event.type) {
           case "token": {
+            // If this token has a parentCallId, it's from a child agent (e.g. web_search).
+            // Emit as text_chunk nested under the subagent bubble.
+            if (event.parentCallId) {
+              hadOutput = true;
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "text_chunk", content: event.content, metadata: null, parentBlockId: event.parentCallId, done: false, subagentId: null });
+              break;
+            }
             if (reasoningAccum) {
               convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
               convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
@@ -224,6 +231,13 @@ export class StreamProcessor {
           }
 
           case "reasoning": {
+            // If this reasoning has a parentCallId, it's from a child agent.
+            // Emit as reasoning_chunk nested under the subagent bubble.
+            if (event.parentCallId) {
+              hadOutput = true;
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning_chunk", content: event.content, metadata: null, parentBlockId: event.parentCallId, done: false, subagentId: null });
+              break;
+            }
             reasoningAccum += event.content;
             this.onToken(taskId, conversationId, executionId, event.content, false, true);
             if (!this.claudeExecutionIds.has(executionId)) {
@@ -260,8 +274,18 @@ export class StreamProcessor {
           }
 
           case "subagent_stop": {
-            const subagentResultContent = JSON.stringify({ type: "tool_result", tool_use_id: event.callId, content: "" });
-            const subagentResultMeta = { tool_call_id: event.callId, parent_tool_call_id: null };
+            // Include the result content from the child agent in the subagent bubble
+            const subagentResultContent = JSON.stringify({
+              type: "tool_result",
+              tool_use_id: event.callId,
+              content: event.result ?? "",
+            });
+            const subagentResultMeta = {
+              tool_call_id: event.callId,
+              parent_tool_call_id: null,
+              resultContent: event.result ?? null,
+              isError: event.isError ?? false,
+            };
             convBuffer.enqueue({ taskId, conversationId, type: "tool_result", role: null, content: subagentResultContent, metadata: subagentResultMeta, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: event.callId, type: "tool_result", content: subagentResultContent, metadata: JSON.stringify(subagentResultMeta), parentBlockId: null, done: true, subagentId: event.callId });

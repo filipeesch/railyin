@@ -1,42 +1,256 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { HarnessContext } from "../harness/context.ts";
 import { Type } from "@earendil-works/pi-ai";
-import { getConfig } from "../../../config/index.ts";
+import { sanitizeHtml, htmlToMarkdown } from "./html-sanitizer.ts";
+import { buildBrowserTools, type BrowserToolsOptions } from "./browser.ts";
+import { runChildSession, type RunChildSessionOptions } from "./child-runner.ts";
 
 const FETCH_LIMIT = 20 * 1024;
 const FETCH_TIMEOUT_MS = 15_000;
 
-// ---------------------------------------------------------------------------
-// HTML → plain text
-// ---------------------------------------------------------------------------
+// ─── Web Search Child Agent System Prompt ────────────────────────────────────
 
-function stripHtml(html: string): string {
-  // Remove script and style blocks
-  let text = html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
-  // Replace block-level tags with newlines
-  text = text.replace(/<\/(p|div|h[1-6]|li|tr|blockquote|pre|br)[^>]*>/gi, "\n");
-  text = text.replace(/<br\s*\/?>/gi, "\n");
-  // Strip remaining tags
-  text = text.replace(/<[^>]+>/g, "");
-  // Decode common HTML entities
-  text = text
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
-  // Collapse whitespace
-  text = text.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ");
-  text = text.replace(/\n{3,}/g, "\n\n").trim();
-  return text;
+/**
+ * System prompt for the web search child agent.
+ * Provides a detailed playbook for research strategy, stopping criteria,
+ * and output format. The agent receives a research brief (context + goal + hints)
+ * as the user prompt and decides what to search for.
+ */
+const WEB_SEARCH_SYSTEM_SUFFIX = `
+
+# Web Research Agent
+
+You are a web research assistant. You receive a research brief that describes what needs to be investigated. Your job is to search the internet, navigate to relevant pages, and extract information to answer the research question.
+
+## Available Tools
+- \`browser_search(query)\`: Search DuckDuckGo and return sanitized HTML results. The LLM can parse the HTML to find relevant links and snippets.
+- \`browser_navigate(url)\`: Navigate to a specific URL found from search results.
+- \`browser_extract()\`: Extract readable text/markdown from the current page. Use after browser_navigate.
+
+## Research Strategy (Detailed Playbook)
+
+Follow this step-by-step approach for every research task:
+
+### Step 1: Analyze the Research Brief
+Read the brief carefully. Identify:
+- The core question being asked
+- Key technologies, versions, or concepts mentioned
+- Any error messages or symptoms provided
+- What success looks like (what would constitute a complete answer)
+
+### Step 2: Craft Your First Search Query
+- Start with a broad but targeted query that captures the essence of the question
+- Include key technologies, versions, and specific terms from the brief
+- Example: For "Does Spring Boot 3.2 support Hibernate 3.6 OneToMany in Kotlin?", search: "Spring Boot 3.2 Hibernate 3.6 OneToMany Kotlin support"
+
+### Step 3: Evaluate Search Results
+- Parse the HTML results to find the most relevant links
+- Prioritize: official documentation, GitHub issues, Stack Overflow, reputable blogs
+- Look for multiple sources that confirm the same information
+- If results are irrelevant, refine your query and search again
+
+### Step 4: Deep-Dive into Promising Sources
+- Navigate to 2-3 of the most relevant URLs
+- Extract page content to read the full answer
+- Take note of specific details, version numbers, and code examples
+- Cross-reference information between sources for accuracy
+
+### Step 5: Refine and Verify
+- If the initial sources don't provide a complete answer, search for more specific queries
+- Look for version-specific information, known issues, or workarounds
+- Verify that the information applies to the exact technologies and versions mentioned
+
+### Step 6: Synthesize and Return
+- When you have enough information from at least 2-3 authoritative sources, return your answer
+- If you cannot find relevant information after reasonable effort, say so clearly rather than guessing
+
+## Stopping Criteria
+
+Stop searching and return your answer when:
+- You have visited at least 2-3 authoritative sources
+- You can state your answer with confidence
+- You have identified all relevant information the brief asked for
+- You are running low on your step budget (aim to complete within 25 steps)
+- You have exhausted reasonable search attempts and cannot find the information
+
+## Output Format
+
+When you have gathered enough information, return your answer in this exact format:
+
+## Answer
+[Your concise, direct answer to the research question. Address the specific question asked.]
+
+## Details
+[Any additional context, version-specific notes, or implementation guidance.]
+
+## Sources
+- [Source 1 URL](brief description of what it confirms)
+- [Source 2 URL](brief description of what it confirms)
+- [Source 3 URL](brief description of what it confirms)
+
+## Guidelines
+- Be concise — aim for a clear, actionable answer, not an exhaustive report
+- Cite all sources with specific URLs, not just domain names
+- Prefer official documentation, repositories, and authoritative sources
+- Include version-specific information when relevant
+- If sources conflict, mention the discrepancy and your assessment
+- If you cannot find the information, say so clearly rather than speculating
+- Do not hallucinate information — only report what you found
+- Your step budget is limited — use it wisely and prioritize quality over quantity`;
+
+// ─── Web Search Parent Tool ──────────────────────────────────────────────────
+
+/** Options for building the web_search tool. */
+export interface WebSearchToolOptions {
+  /** Child-spawning dependencies shared with delegate. */
+  delegateEmitRef?: { emit?: (event: import("../../types.ts").EngineEvent) => void };
+  childSessionFactory?: import("../child-session.ts").ChildSessionFactory;
+  limiterRegistry?: import("../provider-limiter.ts").ProviderLimiterRegistry;
+  parentModel?: import("@earendil-works/pi-ai").Model<"openai-completions">;
+  parentSystemPrompt?: string;
+  parentCwd?: string;
+  parentConversationId?: number;
+  engineConfig?: import("../../../config/index.ts").PiEngineConfig;
+  onRawModelMessage?: (message: import("../../types.ts").RawModelMessage) => void;
+  /** Factory for creating browser sessions (injected for testability). */
+  browserFactory?: import("./browser.ts").BrowserSessionFactory;
 }
 
-// ---------------------------------------------------------------------------
-// fetch_url
-// ---------------------------------------------------------------------------
+const webSearchParams = Type.Object({
+  prompt: Type.String({
+    description:
+      "A detailed research brief describing what needs to be investigated. " +
+      "Include context about what you are doing, the specific goal or question, " +
+      "and any hints such as error messages or symptoms. " +
+      "The child agent will read this brief and decide what to search for. " +
+      "Write a comprehensive brief (~300-500 words) with the following structure:\n\n" +
+      "1. Context: Describe the project, technologies, and current situation.\n" +
+      "2. Goal: State the specific research question or problem to solve.\n" +
+      "3. Hints: Include any error messages, stack traces, or relevant observations.\n\n" +
+      "Example:\n" +
+      "  Context: We are building a Spring Boot 3.2 application with Kotlin 1.9 and Maven. " +
+      "  We have User and Order entities with a OneToMany relationship using Hibernate 3.6.\n\n" +
+      "  Goal: Determine if Spring Boot 3.2 fully supports Hibernate 3.6 for OneToMany " +
+      "  relationships in Kotlin classes, and identify any known compatibility issues.\n\n" +
+      "  Hints: We get org.hibernate.MappingException when persisting User with List<Order>. " +
+      "  The @OneToMany annotation is on the User class.",
+  }),
+});
+
+/**
+ * Build the web_search tool that spawns a child agent with browser automation tools.
+ * The child agent receives a research brief and performs browser-based research
+ * to answer the question. It searches Google, navigates to pages, and extracts content.
+ *
+ * The parent agent composes a detailed research brief (context + goal + hints)
+ * and passes it as the prompt parameter. The child agent decides what to search for.
+ */
+export function buildWebSearchTool(_harnessCtx: HarnessContext, opts: WebSearchToolOptions): AgentTool<any>[] {
+  const {
+    limiterRegistry,
+    parentModel,
+    parentCwd,
+    parentConversationId,
+    engineConfig,
+    delegateEmitRef,
+    onRawModelMessage,
+    childSessionFactory,
+    browserFactory,
+  } = opts;
+
+  // Require core dependencies — return empty array if not available
+  if (!limiterRegistry || !parentModel || !parentCwd || !engineConfig) {
+    return [];
+  }
+
+  const maxSteps = engineConfig.harness?.web_search?.max_steps ?? 30;
+
+  const tool: AgentTool<typeof webSearchParams> = {
+    name: "web_search",
+    label: "Web Search",
+    description:
+      "Research a topic using a browser-based web agent. " +
+      "The agent receives a detailed research brief and performs internet research: " +
+      "searching Google, navigating to relevant pages, and extracting content. " +
+      "Returns a detailed markdown answer with sources.\n\n" +
+      "IMPORTANT: Write a comprehensive research brief (~300-500 words) that includes:\n" +
+      "1. **Context**: Describe the project, technologies, versions, and current situation in detail.\n" +
+      "2. **Goal**: State the specific question or problem you need researched.\n" +
+      "3. **Hints**: Include any error messages, stack traces, configuration details, or relevant observations.\n\n" +
+      "The child agent will read your brief and decide what to search for. " +
+      "A better brief leads to better results.\n\n" +
+      "EXAMPLE:\n" +
+      "  web_search({\n" +
+      "    prompt: `## Context\n" +
+      "We are building a Spring Boot 3.2 application using Kotlin 1.9 and Maven. " +
+      "Our domain model has User and Order entities with a OneToMany relationship. " +
+      "We are using Hibernate 3.6 as our ORM layer. The User entity has a List<Order> field.\n\n" +
+      "## Goal\n" +
+      "Determine if Spring Boot 3.2 fully supports Hibernate 3.6 for handling OneToMany " +
+      "relationships in Kotlin classes. Identify any known compatibility issues or required annotations.\n\n" +
+      "## Hints\n" +
+      "We get the following error when persisting a User:\n" +
+      "  org.hibernate.MappingException: Could not determine type for: java.util.List\n" +
+      "  at table: orders, for columns: [org.hibernate.mapping.Column(user_id)]\n\n" +
+      "The @OneToMany annotation is on the User class. The application works fine " +
+      "with Java entities but fails with Kotlin data classes.`\n" +
+      "  })",
+    parameters: webSearchParams,
+    execute: async (toolCallId, args, signal) => {
+      // Build browser tools with the injected factory
+      const browserResult = buildBrowserTools({ browserFactory });
+      const browserTools = browserResult.tools;
+
+      try {
+        const runnerResult = await runChildSession({
+          jobId: `web-search-${Date.now()}`,
+          tools: browserTools,
+          model: parentModel,
+          config: engineConfig,
+          parentSystemPrompt: opts.parentSystemPrompt,
+          systemPromptSuffix: WEB_SEARCH_SYSTEM_SUFFIX,
+          cwd: parentCwd,
+          prompt: args.prompt,
+          signal,
+          delegateEmitRef,
+          onRawModelMessage,
+          childSessionFactory,
+          limiterRegistry,
+          parentConversationId,
+          parentToolCallId: toolCallId,
+          maxSteps,
+          excludeSdkBuiltins: true,
+        });
+
+        if (!runnerResult.ok) {
+          return {
+            content: [{ type: "text", text: `Error: ${runnerResult.error ?? "Web search failed"}` }],
+            details: { prompt: args.prompt },
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{ type: "text", text: runnerResult.text }],
+          details: { prompt: args.prompt, durationMs: runnerResult.durationMs },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }],
+          details: { prompt: args.prompt },
+          isError: true,
+        };
+      } finally {
+        // Clean up the browser session
+        await browserResult.dispose();
+      }
+    },
+  };
+
+  return [tool];
+}
+
+// ─── fetch_url (kept as a fast fallback) ─────────────────────────────────────
 
 const fetchUrlParams = Type.Object({
   url: Type.String({
@@ -57,7 +271,7 @@ function fetchUrlTool(_harnessCtx: HarnessContext): AgentTool<typeof fetchUrlPar
 NEVER use fetch_url for URLs requiring authentication — only publicly accessible URLs work.
 HTML pages are stripped to readable text automatically.
 Large responses are truncated to 20KB — prefer specific documentation pages over tables of contents.
-Use search_internet first to find relevant URLs, then fetch_url for the full content.`,
+For comprehensive research, use web_search instead.`,
     parameters: fetchUrlParams,
     execute: async (_id, args) => {
       const timeoutMs = args.timeout_ms ?? FETCH_TIMEOUT_MS;
@@ -97,7 +311,7 @@ Use search_internet first to find relevant URLs, then fetch_url for the full con
       const raw = await response.text();
       const isHtml = contentType.includes("text/html") || raw.trimStart().startsWith("<!") || raw.trimStart().startsWith("<html");
 
-      let text = isHtml ? stripHtml(raw) : raw;
+      let text = isHtml ? sanitizeHtml(raw) : raw;
 
       if (text.length > FETCH_LIMIT) {
         text = text.slice(0, FETCH_LIMIT) + "\n[content truncated]";
@@ -111,114 +325,25 @@ Use search_internet first to find relevant URLs, then fetch_url for the full con
   };
 }
 
-// ---------------------------------------------------------------------------
-// search_internet
-// ---------------------------------------------------------------------------
+// ─── Exports ─────────────────────────────────────────────────────────────────
 
-const searchInternetParams = Type.Object({
-  query: Type.String({
-    description: "The search query.",
-  }),
-  num_results: Type.Optional(Type.Integer({
-    default: 10,
-    description: "Number of results to return (max 10).",
-  })),
-});
+/**
+ * Build web tools for the Pi agent.
+ * Now includes web_search (browser-based) and fetch_url (fast fallback).
+ * search_internet (Tavily) has been removed.
+ */
+export function buildWebTools(
+  harnessCtx: HarnessContext,
+  webSearchOpts: WebSearchToolOptions = {},
+): AgentTool<any>[] {
+  const tools: AgentTool<any>[] = [];
 
-function searchInternetTool(_harnessCtx: HarnessContext): AgentTool<typeof searchInternetParams> {
-  return {
-    name: "search_internet",
-    label: "Search Internet",
-    description: `Search the web and return ranked results with title, URL, and snippet.
+  // Add web_search if dependencies are available
+  const wsTools = buildWebSearchTool(harnessCtx, webSearchOpts);
+  tools.push(...wsTools);
 
-ALWAYS use search_internet before fetch_url when you need to find documentation or references.
-Returns up to 10 results — follow up with fetch_url for full content.
-Requires search configuration (engine + api_key) in workspace.yaml.`,
-    parameters: searchInternetParams,
-    execute: async (_id, args) => {
-      let searchConfig: { engine: string; api_key: string } | undefined;
-      try {
-        searchConfig = getConfig().workspace.search;
-      } catch {
-        // config unavailable
-      }
+  // Always include fetch_url as a fast fallback
+  tools.push(fetchUrlTool(harnessCtx));
 
-      if (!searchConfig?.engine || !searchConfig?.api_key) {
-        return {
-          content: [{ type: "text", text: "Error: search not configured — add search.engine and search.api_key to workspace.yaml" }],
-          details: { query: args.query },
-          isError: true,
-        };
-      }
-
-      const numResults = Math.min(args.num_results ?? 10, 10);
-
-      if (searchConfig.engine === "tavily") {
-        let response: Response;
-        try {
-          response = await fetch("https://api.tavily.com/search", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${searchConfig.api_key}`,
-            },
-            body: JSON.stringify({
-              query: args.query,
-              max_results: numResults,
-              search_depth: "basic",
-            }),
-          });
-        } catch (err: any) {
-          return {
-            content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }],
-            details: { query: args.query },
-            isError: true,
-          };
-        }
-
-        if (!response.ok) {
-          const body = await response.text().catch(() => "");
-          return {
-            content: [{ type: "text", text: `Error: Tavily HTTP ${response.status} — ${body.slice(0, 200)}` }],
-            details: { query: args.query, status: response.status },
-            isError: true,
-          };
-        }
-
-        const data = await response.json() as { results?: Array<{ title?: string; url?: string; content?: string }> };
-        const results = data.results ?? [];
-
-        if (results.length === 0) {
-          return {
-            content: [{ type: "text", text: `[No results for: ${args.query}]` }],
-            details: { query: args.query, count: 0 },
-          };
-        }
-
-        const lines = results.map((r, i) =>
-          `${i + 1}. ${r.title ?? "(no title)"}\n   URL: ${r.url ?? ""}\n   ${(r.content ?? "").slice(0, 300)}`,
-        );
-        const text = lines.join("\n\n");
-
-        return {
-          content: [{ type: "text", text }],
-          details: { query: args.query, count: results.length },
-        };
-      }
-
-      return {
-        content: [{ type: "text", text: `Error: unsupported search engine "${searchConfig.engine}" — only "tavily" is supported` }],
-        details: { query: args.query },
-        isError: true,
-      };
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Exports
-// ---------------------------------------------------------------------------
-
-export function buildWebTools(harnessCtx: HarnessContext): AgentTool<any>[] {
-  return [fetchUrlTool(harnessCtx), searchInternetTool(harnessCtx)];
+  return tools;
 }
