@@ -20,8 +20,8 @@ class MockBrowserSession implements BrowserSession {
   currentUrl: string = "";
   closed = false;
 
-  async searchGoogle(query: string): Promise<string> {
-    this.currentUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+  async search(query: string): Promise<string> {
+    this.currentUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     return `<html><body>
       <div><a href="https://example.com/result">Search Result</a></div>
       <p>Search snippet for ${query}</p>

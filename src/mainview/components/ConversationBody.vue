@@ -97,8 +97,6 @@
 </template>
 
 <script setup lang="ts">
-// DEBUG
-const DEBUG_SUBAGENT = true;
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useVirtualizer } from "@tanstack/vue-virtual";
 import { useMarkdown } from "../composables/useMarkdown";
@@ -199,7 +197,6 @@ function subagentEntryProps(entry: ToolEntry) {
 const hasStructuredTail = computed(() => {
   const state = props.streamState;
   const result = Boolean(state && !state.isDone && (state.roots.length > 0 || state.statusMessage));
-  if (DEBUG_SUBAGENT) console.debug("[ConversationBody] hasStructuredTail=", result, "roots=", state?.roots.length, "isDone=", state?.isDone);
   return result;
 });
 

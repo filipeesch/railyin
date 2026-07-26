@@ -38,12 +38,12 @@ class FakeBrowserSession implements BrowserSession {
     this.shouldFailNext = action;
   }
 
-  async searchGoogle(query: string): Promise<string> {
+  async search(query: string): Promise<string> {
     if (this.shouldFailNext === "search") {
       this.shouldFailNext = null;
       throw new Error("Search failed");
     }
-    this.currentUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    this.currentUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     return this.searchResults.get(query) ?? `<html><body><p>No results for: ${query}</p></body></html>`;
   }
 
@@ -134,7 +134,7 @@ describe("buildBrowserTools", () => {
     let closed = false;
     const session: BrowserSession = {
       currentUrl: "",
-      async searchGoogle() { throw new Error("boom"); },
+      async search() { throw new Error("boom"); },
       async navigate() { return ""; },
       async extractContent() { return ""; },
       async close() { closed = true; },

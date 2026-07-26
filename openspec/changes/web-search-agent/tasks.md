@@ -19,11 +19,14 @@
 
 ## 4. Browser automation tools
 
-- [x] 4.1 Define a `BrowserSession` interface in `src/bun/engine/pi/tools/browser.ts` with `searchGoogle(query)`, `navigate(url)`, and `extractContent()`.
+- [x] 4.1 Define a `BrowserSession` interface in `src/bun/engine/pi/tools/browser.ts` with `search(query)`, `navigate(url)`, and `extractContent()`.
 - [x] 4.2 Implement a Playwright-backed `PlaywrightBrowserSession` and a production factory.
 - [x] 4.3 Implement `browser_search` tool that calls the injected browser session and returns sanitized HTML.
 - [x] 4.4 Implement `browser_navigate` tool that calls the injected browser session and returns the final URL.
 - [x] 4.5 Implement `browser_extract` tool that calls the injected browser session and returns markdown/text.
+- [x] 4.6 Improve content extraction: use in-page content extraction (article/main/.content selectors) to avoid navigation/sidebar noise, with htmlToMarkdown fallback.
+- [x] 4.7 Improve page loading: use `waitUntil: ["networkidle", "domcontentloaded"]` for more reliable page load detection.
+- [x] 4.8 Switch search engine from Google to DuckDuckGo (html.duckduckgo.com) for better automated request reliability.
 
 ## 5. Web search parent tool
 

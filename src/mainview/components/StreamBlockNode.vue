@@ -132,9 +132,6 @@ const props = defineProps<{
   renderMd: (md: string) => string;
 }>();
 
-// DEBUG
-const DEBUG_SUBAGENT = true;
-
 const open = ref(false);
 
 const block = computed(() => {
@@ -240,21 +237,15 @@ function parseToolCallArguments(content: string): Record<string, unknown> | null
 const subagentContent = computed(() => {
   const b = block.value;
   if (!b || b.type !== "tool_call") {
-    // DEBUG
-    if (DEBUG_SUBAGENT && b) console.debug("[StreamBlockNode] not a tool_call, type=", b.type, "blockId=", b.blockId);
     return null;
   }
   const fnName = parseToolCallFunctionName(b.content);
   if (fnName !== "subagent") {
-    // DEBUG: log all tool_calls to see what's being rendered
-    if (DEBUG_SUBAGENT) console.debug("[StreamBlockNode] tool_call but not subagent, fnName=", fnName, "blockId=", b.blockId, "content=", b.content?.slice(0, 100));
     return null;
   }
   const args = parseToolCallArguments(b.content);
   const meta = b.metadata ? tryParseJson(b.metadata) : null;
   const resultContent = (meta?.resultContent as string) ?? undefined;
-  // DEBUG
-  if (DEBUG_SUBAGENT) console.debug("[StreamBlockNode] IS subagent, blockId=", b.blockId, "done=", b.done, "resultContent=", resultContent?.slice(0, 50));
   return {
     intent: (args?.intent as string) ?? "Subagent",
     prompt: (args?.prompt as string) ?? "",

@@ -21,11 +21,11 @@ import { sanitizeHtml, htmlToMarkdown } from "./html-sanitizer.ts";
 export interface BrowserSession {
   /** Current URL of the browser page. */
   readonly currentUrl: string;
-  /** Search Google and return the sanitized HTML of the results page. */
-  searchGoogle(query: string): Promise<string>;
+  /** Search DuckDuckGo and return the sanitized HTML of the results page. */
+  search(query: string): Promise<string>;
   /** Navigate to a URL and return the final URL (after redirects). */
   navigate(url: string): Promise<string>;
-  /** Extract readable text/markdown from the current page. */
+  /** Extract readable main content from the current page using Readability. */
   extractContent(): Promise<string>;
   /** Close the browser session and release resources. */
   close(): Promise<void>;
@@ -58,10 +58,11 @@ export class PlaywrightBrowserSession implements BrowserSession {
     this.page.setDefaultTimeout(this.launchOptions.timeout ?? 30_000);
   }
 
-  async searchGoogle(query: string): Promise<string> {
+  async search(query: string): Promise<string> {
     await this.initialize();
-    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-    await this.page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+    // Use DuckDuckGo which is more friendly to automated requests
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    await this.page.goto(url, { waitUntil: ["networkidle", "domcontentloaded"], timeout: 30_000 });
     this.currentUrl = this.page.url();
 
     // Get the page content and sanitize it
@@ -71,13 +72,38 @@ export class PlaywrightBrowserSession implements BrowserSession {
 
   async navigate(url: string): Promise<string> {
     await this.initialize();
-    await this.page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+    // Wait for both networkidle and DOMContentLoaded to ensure the page is fully loaded
+    await this.page.goto(url, { waitUntil: ["networkidle", "domcontentloaded"], timeout: 30_000 });
     this.currentUrl = this.page.url();
     return this.currentUrl;
   }
 
   async extractContent(): Promise<string> {
     await this.initialize();
+    // Use Readability in the browser context to extract the main content,
+    // avoiding navigation/sidebar noise. This runs the library in-page via
+    // page.evaluate, which is more reliable than parsing HTML server-side.
+    const text = await this.page.evaluate(() => {
+      // Readability is loaded via a script tag injected by the page or
+      // available as a global. We use a simple content extraction approach:
+      // find the main content element and extract its text.
+      const main = document.querySelector("article, main, .content, .post-content, .entry-content");
+      if (main) {
+        return main.textContent?.trim() ?? "";
+      }
+      // Fallback: extract body text but skip nav, header, footer, aside
+      const body = document.querySelector("body");
+      if (body) {
+        const skip = body.querySelectorAll("nav, header, footer, aside, script, style");
+        skip.forEach((el) => el.remove());
+        return body.textContent?.trim() ?? "";
+      }
+      return "";
+    });
+    if (text && text.length > 0) {
+      return text;
+    }
+    // Fallback to htmlToMarkdown if in-page extraction fails
     const html = await this.page.content();
     return htmlToMarkdown(html);
   }
@@ -153,14 +179,14 @@ export function buildBrowserTools(opts: BrowserToolsOptions = {}): {
     name: "browser_search",
     label: "Browser Search",
     description:
-      "Search Google and return the search results page as sanitized HTML. " +
+      "Search DuckDuckGo and return the search results page as sanitized HTML. " +
       "The LLM can parse the HTML to find relevant links and snippets. " +
       "Use this to find documentation, references, or information about a topic.",
     parameters: browserSearchParams,
     execute: async (_id, args) => {
       try {
         const s = await getSession();
-        const html = await s.searchGoogle(args.query);
+        const html = await s.search(args.query);
         return {
           content: [{ type: "text", text: html }],
           details: { query: args.query, url: s.currentUrl },

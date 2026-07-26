@@ -41,6 +41,15 @@ No file-system, delegate, or board tools are provided.
 ### 4. HTML sanitization
 `browser_search` and `browser_extract` return cleaned HTML/text with scripts, styles, head, metadata, and comments removed. Content tags and links are preserved so the child LLM can parse results.
 
+### 4.1 Improved content extraction
+`browser_extract` uses in-page content extraction to avoid navigation/sidebar noise. It looks for `article`, `main`, `.content`, `.post-content`, or `.entry-content` elements and extracts their text content. If no main content element is found, it falls back to extracting body text (skipping `nav`, `header`, `footer`, `aside`, `script`, `style`). If in-page extraction fails, it falls back to `htmlToMarkdown()` on the full page HTML.
+
+### 4.2 Improved page loading
+`browser_navigate` and `browser_search` use `waitUntil: ["networkidle", "domcontentloaded"]` to ensure both the DOM is ready and network activity has settled before returning. This is more reliable than just `networkidle` for SPAs and pages with lazy-loaded content.
+
+### 4.3 DuckDuckGo as search engine
+Search uses DuckDuckGo (`html.duckduckgo.com/html/`) instead of Google. DuckDuckGo is more friendly to automated requests and doesn't have anti-bot measures like Google's consent pages. The HTML version of DuckDuckGo is used for easier parsing.
+
 ### 5. Step limit
 `harness.web_search.max_steps` configures a hard limit (default 30). The child prompt instructs the agent to aim for ~20 steps and summarize. When the hard limit is reached, the runner returns a result asking the agent to summarize findings.
 

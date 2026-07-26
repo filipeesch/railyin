@@ -36,6 +36,7 @@
     "@github/copilot-sdk": "^0.3.0",
     "@iconify/vue": "^5.0.0",
     "@monaco-editor/loader": "^1.4.0",
+    "@mozilla/readability": "^0.6.0",
     "@opencode-ai/sdk": "^1.14.33",
     "@tanstack/vue-virtual": "^3.13.23",
     "@types/picomatch": "^4.0.3",
@@ -47,8 +48,8 @@
     "mermaid": "^11.14.0",
     "minimatch": "^10.2.5",
     "monaco-editor": "^0.55.1",
-    "playwright": "^1.59.1",
     "open": "^11.0.0",
+    "playwright": "^1.59.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {

@@ -126,10 +126,10 @@ describe("Subagent bubble rendering", () => {
         // All three subagent bubbles should appear
         for (const id of ["sa-1", "sa-2", "sa-3"]) {
             const subagentCall = ipc.find((e) => e.type === "tool_call" && e.blockId === id && e.subagentId === id);
-            expect(subagentCall).toBeDefined(`subagent bubble ${id} should appear`);
+            expect(subagentCall).toBeDefined();
 
             const subagentResult = ipc.find((e) => e.type === "tool_result" && e.blockId === id && e.done === true && e.subagentId === id);
-            expect(subagentResult).toBeDefined(`subagent result ${id} should appear`);
+            expect(subagentResult).toBeDefined();
         }
     });
 
@@ -152,12 +152,12 @@ describe("Subagent bubble rendering", () => {
 
         // subagent_start should be persisted as tool_call with subagentId
         const subagentCallDb = dbEvents.find((e) => e.type === "tool_call" && e.subagentId === "sa-1");
-        expect(subagentCallDb).toBeDefined("subagent bubble should be persisted to DB");
+        expect(subagentCallDb).toBeDefined();
 
         // subagent_stop produces a tool_result IPC event (not a separate DB row — the conversation store
         // updates the existing tool_call block's done status and metadata)
         const ipc = runtime.recorder.streamEventsForExecution(executionId);
         const subagentResultIpc = ipc.find((e) => e.type === "tool_result" && e.subagentId === "sa-1" && e.done === true);
-        expect(subagentResultIpc).toBeDefined("subagent result should appear in IPC");
+        expect(subagentResultIpc).toBeDefined();
     });
 });

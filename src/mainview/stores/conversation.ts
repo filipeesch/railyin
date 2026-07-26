@@ -3,12 +3,6 @@ import { defineStore } from "pinia";
 import { api } from "../rpc";
 import type { ConversationMessage, StreamError, StreamEvent, StreamEventType } from "@shared/rpc-types";
 
-// Debug logging for subagent bubble rendering
-const DEBUG_SUBAGENT = true;
-function debugLog(...args: unknown[]) {
-  if (DEBUG_SUBAGENT) console.debug("[conversation]", ...args);
-}
-
 function tryParseJson(s: string): Record<string, unknown> | null {
   try { return JSON.parse(s); } catch { return null; }
 }
@@ -359,9 +353,6 @@ export const useConversationStore = defineStore("conversation", () => {
     const eventScope = event.parentBlockId ?? null;
     let insertIdx = -1;
 
-    // DEBUG: log ALL events to trace the full flow
-    debugLog(`[STORE] event type=${event.type}, blockId=${blockId}, subagentId=${event.subagentId}, parentBlockId=${event.parentBlockId}, done=${event.done}`);
-
     if (event.type === "tool_call") {
       insertIdx = removeScopedLiveBlocks(state, "reasoning_chunk", eventScope);
     }
@@ -373,10 +364,6 @@ export const useConversationStore = defineStore("conversation", () => {
     }
 
     if (!state.blocks.has(blockId)) {
-      // DEBUG: log new block creation
-      if (event.subagentId || event.type === "tool_result") {
-        debugLog(`[STORE] NEW block ${blockId} for event type=${event.type}, subagentId=${event.subagentId}`);
-      }
       const newBlock: StreamBlock = {
         blockId,
         type: event.type,
@@ -387,11 +374,6 @@ export const useConversationStore = defineStore("conversation", () => {
         children: [],
       };
       state.blocks.set(blockId, newBlock);
-
-      // DEBUG: log block creation for subagent events
-      if (event.subagentId) {
-        debugLog(`[SUBAGENT] CREATED block ${blockId}, roots now: [${state.roots.join(", ")}]`);
-      }
 
       if (event.parentBlockId) {
         const parentBlock = state.blocks.get(event.parentBlockId);
@@ -412,11 +394,6 @@ export const useConversationStore = defineStore("conversation", () => {
         state.roots.push(blockId);
       }
     } else if (event.type === "tool_result") {
-      // DEBUG: log tool_result for subagent events
-      if (event.subagentId) {
-        const existing = state.blocks.get(blockId);
-        debugLog(`[SUBAGENT] tool_result for block ${blockId}, existing block exists: ${!!existing}, existing.type=${existing?.type}, existing.done=${existing?.done}`);
-      }
       const existing = state.blocks.get(blockId)!;
       existing.done = true;
       const resultMeta = {
@@ -426,10 +403,6 @@ export const useConversationStore = defineStore("conversation", () => {
         resultMetadata: event.metadata,
       };
       existing.metadata = JSON.stringify(resultMeta);
-      // DEBUG: log block state after update
-      if (event.subagentId) {
-        debugLog(`[SUBAGENT] block updated: blockId=${blockId}, done=${existing.done}, metadata=${existing.metadata?.slice(0, 80)}`);
-      }
     }
 
   }
