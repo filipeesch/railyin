@@ -60,9 +60,11 @@ export class PlaywrightBrowserSession implements BrowserSession {
 
   async search(query: string): Promise<string> {
     await this.initialize();
-    // Use DuckDuckGo which is more friendly to automated requests
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    await this.page.goto(url, { waitUntil: ["networkidle", "domcontentloaded"], timeout: 30_000 });
+    // Use DuckDuckGo lite which is more friendly to automated requests
+    const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
+    // Wait for networkidle (no more than 500ms between requests) to ensure
+    // the page is fully loaded before extracting content
+    await this.page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
     this.currentUrl = this.page.url();
 
     // Get the page content and sanitize it
@@ -72,8 +74,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
 
   async navigate(url: string): Promise<string> {
     await this.initialize();
-    // Wait for both networkidle and DOMContentLoaded to ensure the page is fully loaded
-    await this.page.goto(url, { waitUntil: ["networkidle", "domcontentloaded"], timeout: 30_000 });
+    // Wait for networkidle to ensure the page is fully loaded.
+    // This waits until there are no more than 500ms between network requests,
+    // which is more reliable than domcontentloaded for pages with lazy-loaded content.
+    await this.page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
     this.currentUrl = this.page.url();
     return this.currentUrl;
   }

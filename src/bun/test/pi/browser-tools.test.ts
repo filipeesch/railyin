@@ -43,7 +43,7 @@ class FakeBrowserSession implements BrowserSession {
       this.shouldFailNext = null;
       throw new Error("Search failed");
     }
-    this.currentUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    this.currentUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
     return this.searchResults.get(query) ?? `<html><body><p>No results for: ${query}</p></body></html>`;
   }
 

@@ -23,7 +23,7 @@ const WEB_SEARCH_SYSTEM_SUFFIX = `
 You are a web research assistant. You receive a research brief that describes what needs to be investigated. Your job is to search the internet, navigate to relevant pages, and extract information to answer the research question.
 
 ## Available Tools
-- \`browser_search(query)\`: Search Google and return sanitized HTML results. The LLM can parse the HTML to find relevant links and snippets.
+- \`browser_search(query)\`: Search DuckDuckGo and return sanitized HTML results. The LLM can parse the HTML to find relevant links and snippets.
 - \`browser_navigate(url)\`: Navigate to a specific URL found from search results.
 - \`browser_extract()\`: Extract readable text/markdown from the current page. Use after browser_navigate.
 
