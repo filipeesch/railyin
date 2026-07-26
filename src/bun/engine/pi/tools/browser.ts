@@ -53,7 +53,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
       headless: this.launchOptions.headless ?? true,
     });
     this.page = await this.browser.newPage({
-      userAgent: "Mozilla/5.0 (compatible; Railyin/1.0; +https://railyin.com)",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
     this.page.setDefaultTimeout(this.launchOptions.timeout ?? 30_000);
   }
@@ -62,9 +62,15 @@ export class PlaywrightBrowserSession implements BrowserSession {
     await this.initialize();
     // Use DuckDuckGo lite which is more friendly to automated requests
     const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
-    // Wait for networkidle (no more than 500ms between requests) to ensure
-    // the page is fully loaded before extracting content
-    await this.page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+    try {
+      // Wait for networkidle (no more than 500ms between requests) to ensure
+      // the page is fully loaded before extracting content
+      await this.page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+    } catch (err: any) {
+      // If navigation fails, try once more with a shorter timeout
+      // This handles transient network errors and DNS issues
+      await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    }
     this.currentUrl = this.page.url();
 
     // Get the page content and sanitize it

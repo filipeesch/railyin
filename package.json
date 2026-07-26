@@ -36,7 +36,6 @@
     "@github/copilot-sdk": "^0.3.0",
     "@iconify/vue": "^5.0.0",
     "@monaco-editor/loader": "^1.4.0",
-    "@mozilla/readability": "^0.6.0",
     "@opencode-ai/sdk": "^1.14.33",
     "@tanstack/vue-virtual": "^3.13.23",
     "@types/picomatch": "^4.0.3",
