@@ -55,29 +55,67 @@ export async function discoverProtectedResourceMetadata(resourceMetadataUrl: str
 }
 
 /**
- * Builds the RFC8414 §3.1 well-known metadata URL for an issuer. Per the spec,
- * a path-component issuer (e.g. a multi-tenant `https://auth.example.com/tenant1`)
- * gets the well-known suffix *inserted before* its path — NOT appended after
- * the origin — i.e. `https://auth.example.com/.well-known/oauth-authorization-server/tenant1`,
- * not `https://auth.example.com/.well-known/oauth-authorization-server` (which
- * would silently discard the tenant path and 404 or return the wrong tenant's metadata).
+ * Builds the ordered list of well-known metadata URLs to try for an issuer,
+ * mirroring the official MCP SDK's `buildDiscoveryUrls` fallback chain. Not
+ * every authorization server implements RFC8414's `oauth-authorization-server`
+ * well-known endpoint — many real-world identity providers (e.g. Keycloak)
+ * only expose OpenID Connect Discovery 1.0's `openid-configuration` instead,
+ * and some do so at the origin root with the tenant/realm path *appended
+ * after* the well-known segment rather than inserted before it.
+ *
+ * Per RFC8414 §3.1 / OIDC Discovery 1.0, a path-component issuer (e.g. a
+ * multi-tenant `https://auth.example.com/tenant1` or a Keycloak realm
+ * `https://auth.example.com/realms/prod`) is tried in this order:
+ *   1. `https://auth.example.com/.well-known/oauth-authorization-server/tenant1` (RFC8414-style)
+ *   2. `https://auth.example.com/.well-known/openid-configuration/tenant1` (OIDC, RFC8414-style path insertion)
+ *   3. `https://auth.example.com/tenant1/.well-known/openid-configuration` (OIDC Discovery 1.0, path appended)
+ * A root-path issuer only tries (1) then (2) at the origin root.
  */
-function buildAuthServerMetadataUrl(issuer: string): string {
+function buildAuthServerMetadataUrls(issuer: string): string[] {
   const issuerUrl = new URL(issuer);
-  const path = issuerUrl.pathname === "/" ? "" : issuerUrl.pathname.replace(/\/+$/, "");
-  return `${issuerUrl.origin}/.well-known/oauth-authorization-server${path}`;
+  const hasPath = issuerUrl.pathname !== "/";
+  if (!hasPath) {
+    return [
+      `${issuerUrl.origin}/.well-known/oauth-authorization-server`,
+      `${issuerUrl.origin}/.well-known/openid-configuration`,
+    ];
+  }
+  const path = issuerUrl.pathname.replace(/\/+$/, "");
+  return [
+    `${issuerUrl.origin}/.well-known/oauth-authorization-server${path}`,
+    `${issuerUrl.origin}/.well-known/openid-configuration${path}`,
+    `${issuerUrl.origin}${path}/.well-known/openid-configuration`,
+  ];
 }
 
-/** RFC8414: fetches and validates the Authorization Server Metadata for a given issuer. */
+/**
+ * RFC8414 / OpenID Connect Discovery 1.0: fetches and validates the
+ * Authorization Server Metadata for a given issuer, trying each well-known
+ * URL candidate in turn (see `buildAuthServerMetadataUrls`) and only failing
+ * once every candidate has come back 404/unreachable.
+ */
 export async function discoverAuthorizationServerMetadata(issuer: string): Promise<AuthorizationServerMetadata> {
-  const wellKnownUrl = buildAuthServerMetadataUrl(issuer);
-  const json = await fetchJson(wellKnownUrl, "Authorization Server Metadata");
-  if (typeof json.authorization_endpoint !== "string" || typeof json.token_endpoint !== "string") {
-    throw new OAuthDiscoveryError(
-      `Authorization Server Metadata for issuer ${issuer} is missing authorization_endpoint or token_endpoint`,
-    );
+  const candidates = buildAuthServerMetadataUrls(issuer);
+  const attemptErrors: string[] = [];
+
+  for (const wellKnownUrl of candidates) {
+    let json: Record<string, unknown>;
+    try {
+      json = await fetchJson(wellKnownUrl, "Authorization Server Metadata");
+    } catch (err) {
+      attemptErrors.push(err instanceof Error ? err.message : String(err));
+      continue;
+    }
+    if (typeof json.authorization_endpoint !== "string" || typeof json.token_endpoint !== "string") {
+      attemptErrors.push(`${wellKnownUrl} is missing authorization_endpoint or token_endpoint`);
+      continue;
+    }
+    return json as unknown as AuthorizationServerMetadata;
   }
-  return json as unknown as AuthorizationServerMetadata;
+
+  throw new OAuthDiscoveryError(
+    `Authorization Server Metadata for issuer ${issuer} could not be discovered at any well-known endpoint (tried ${candidates.length}): ${attemptErrors.join("; ")}`,
+  );
 }
 
 /** RFC7591: registers a public (PKCE) client with the authorization server. */
