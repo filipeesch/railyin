@@ -171,6 +171,35 @@ describe("9.3 discovery.ts against fake OAuth server", () => {
       // construction incorrectly discarded the issuer's path.
       await expect(discoverAuthorizationServerMetadata(issuer)).resolves.toBeDefined();
     });
+
+    // Regression tests for a real-world bug found against a Keycloak-backed
+    // MCP server: Keycloak realm issuers (e.g. `https://idp.example.com/auth/realms/prod`)
+    // don't implement RFC8414's `oauth-authorization-server` well-known endpoint
+    // at all — only OpenID Connect Discovery 1.0's `openid-configuration`, and
+    // they serve it with the realm path *appended after* the well-known segment
+    // (`/auth/realms/prod/.well-known/openid-configuration`), not inserted
+    // before it. Discovery must fall back through both OIDC well-known styles
+    // before giving up.
+    it("falls back to OIDC openid-configuration appended after the path (Keycloak-style) when oauth-authorization-server 404s", async () => {
+      fakeServer = createFakeOAuthServer({ issuerPath: "/auth/realms/prod", wellKnownStyle: "oidc-append" });
+      const issuer = `${fakeServer.url}/auth/realms/prod`;
+      const meta = await discoverAuthorizationServerMetadata(issuer);
+      expect(meta.authorization_endpoint).toBe(`${fakeServer.url}/authorize`);
+      expect(meta.token_endpoint).toBe(`${fakeServer.url}/token`);
+    });
+
+    it("falls back to OIDC openid-configuration inserted before the path when oauth-authorization-server 404s", async () => {
+      fakeServer = createFakeOAuthServer({ issuerPath: "/tenant-abc123", wellKnownStyle: "oidc-prepend" });
+      const issuer = `${fakeServer.url}/tenant-abc123`;
+      const meta = await discoverAuthorizationServerMetadata(issuer);
+      expect(meta.authorization_endpoint).toBe(`${fakeServer.url}/authorize`);
+      expect(meta.token_endpoint).toBe(`${fakeServer.url}/token`);
+    });
+
+    it("throws OAuthDiscoveryError only after exhausting every well-known candidate", async () => {
+      fakeServer = createFakeOAuthServer({ serveAuthServerMetadata: false });
+      await expect(discoverAuthorizationServerMetadata(fakeServer.url)).rejects.toThrow(OAuthDiscoveryError);
+    });
   });
 
   // ─── registerDynamicClient ──────────────────────────────────────────────────
