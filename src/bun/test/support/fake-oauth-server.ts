@@ -49,6 +49,17 @@ export interface FakeOAuthServerOptions {
   issuerPath?: string;
   /** Populates `scopes_supported` on the Protected Resource Metadata document (RFC9728), simulating a resource that advertises the scopes it requires. */
   resourceScopesSupported?: string[];
+  /**
+   * Controls which well-known metadata endpoint style the fake authorization
+   * server serves, so tests can simulate real-world servers that don't
+   * implement RFC8414's `oauth-authorization-server` well-known endpoint at
+   * all — only OpenID Connect Discovery 1.0's `openid-configuration` (e.g.
+   * Keycloak realms). Default `"oauth"`.
+   *   - `"oauth"`: RFC8414-style `/.well-known/oauth-authorization-server<issuerPath>`
+   *   - `"oidc-prepend"`: `/.well-known/openid-configuration<issuerPath>`
+   *   - `"oidc-append"`: `<issuerPath>/.well-known/openid-configuration` (Keycloak's actual layout)
+   */
+  wellKnownStyle?: "oauth" | "oidc-prepend" | "oidc-append";
 }
 
 export interface FakeOAuthServerHandle {
@@ -105,9 +116,13 @@ export function createFakeOAuthServer(options: FakeOAuthServerOptions = {}): Fak
         return jsonResponse(body);
       }
 
-      const expectedWellKnownPath = options.issuerPath
-        ? `/.well-known/oauth-authorization-server${options.issuerPath}`
-        : "/.well-known/oauth-authorization-server";
+      const wellKnownStyle = options.wellKnownStyle ?? "oauth";
+      const expectedWellKnownPath =
+        wellKnownStyle === "oidc-append"
+          ? `${options.issuerPath ?? ""}/.well-known/openid-configuration`
+          : wellKnownStyle === "oidc-prepend"
+            ? `/.well-known/openid-configuration${options.issuerPath ?? ""}`
+            : `/.well-known/oauth-authorization-server${options.issuerPath ?? ""}`;
       if (req.method === "GET" && url.pathname === expectedWellKnownPath) {
         if (options.serveAuthServerMetadata === false) {
           return new Response("Not found", { status: 404 });

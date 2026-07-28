@@ -39,6 +39,17 @@ The system SHALL attempt OAuth 2.0 Dynamic Client Registration (RFC7591) against
 - **WHEN** the discovered authorization server's Dynamic Client Registration endpoint returns an error or is not advertised
 - **THEN** the server transitions to `auth_required` with an error indicating registration failed, rather than crashing the connection attempt
 
+### Requirement: Static client_id override bypasses Dynamic Client Registration
+An HTTP-transport MCP server's `mcp.json` entry MAY include an `auth: { client_id, client_secret? }` field, for authorization servers that reject anonymous Dynamic Client Registration (e.g. a Keycloak realm requiring an Initial Access Token, where a realm admin pre-registers a client for the app out-of-band). When present, the system SHALL use this `client_id`/`client_secret` directly for `/authorize` and `/token`, SHALL NOT attempt Dynamic Client Registration for that server, and SHALL NOT read or write the per-issuer DCR client cache for that server's issuer.
+
+#### Scenario: Static client_id skips DCR entirely
+- **WHEN** a server's `mcp.json` entry has `auth.client_id` set
+- **THEN** OAuth discovery resolves the authorization server metadata as usual, but the system uses the configured `client_id`/`client_secret` directly instead of calling Dynamic Client Registration or reading/writing the DCR client cache
+
+#### Scenario: Dynamic Client Registration rejected without a static override
+- **WHEN** a server has no `auth.client_id` configured and the authorization server's Dynamic Client Registration endpoint returns `403 Forbidden`
+- **THEN** the server transitions to `auth_required` with an error indicating registration was rejected, since automatic discovery has no way to obtain a client_id on its own
+
 ### Requirement: Manual authorization trigger
 The system SHALL NOT open a browser automatically when a server requires authorization. Authorization SHALL only begin when explicitly triggered via the `mcp.authorize(serverName)` RPC.
 

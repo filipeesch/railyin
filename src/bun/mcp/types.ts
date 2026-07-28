@@ -2,7 +2,20 @@
 
 export type McpServerTransport =
   | { type: "stdio"; command: string; args?: string[]; env?: Record<string, string> }
-  | { type: "http"; url: string; headers?: Record<string, string> };
+  | { type: "http"; url: string; headers?: Record<string, string>; auth?: McpOAuthStaticClientConfig };
+
+/**
+ * Static OAuth client registration, for authorization servers that reject
+ * anonymous Dynamic Client Registration (e.g. Keycloak realms configured to
+ * require an Initial Access Token for DCR). When present, the registry skips
+ * DCR entirely and uses this client_id/client_secret directly for
+ * `/authorize` and `/token` — a realm admin must pre-register this client
+ * out-of-band and share its client_id with the user.
+ */
+export interface McpOAuthStaticClientConfig {
+  client_id: string;
+  client_secret?: string;
+}
 
 export interface McpServerConfig {
   name: string; // human-readable label
