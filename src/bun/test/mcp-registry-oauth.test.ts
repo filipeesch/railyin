@@ -17,7 +17,7 @@ import { createFakeOAuthServer, type FakeOAuthServerHandle } from "./support/fak
 import { McpClientRegistry } from "../mcp/registry.ts";
 import { McpClient } from "../mcp/client.ts";
 import { McpOAuthChallengeError, McpAuthRequiredError } from "../oauth/errors.ts";
-import { getServerTokens } from "../oauth/token-store.ts";
+import { getServerTokens, getDcrClient } from "../oauth/token-store.ts";
 import type { McpToolDef, McpServerConfig } from "../mcp/types.ts";
 import type { TokenProvider } from "../oauth/types.ts";
 
@@ -273,6 +273,62 @@ describe("9.6 McpClientRegistry state machine", () => {
       // performed against the new redirect_uri, not silently reused.
       expect(fakeServer.dcrCallCount).toBe(2);
     });
+
+    // Regression tests for a real-world failure: Keycloak (and similar
+    // authorization servers configured to require an Initial Access Token)
+    // reject anonymous DCR with 403. A static `auth.client_id` config
+    // override lets the registry skip DCR entirely for that server.
+    it("uses a statically-configured client_id and never attempts DCR", async () => {
+      const wwwAuth = `Bearer resource_metadata="${fakeServer.url}/.well-known/oauth-protected-resource"`;
+      const config: McpServerConfig = {
+        name: "test-server",
+        transport: { type: "http", url: `${fakeServer.url}/mcp`, auth: { client_id: "preregistered-client" } },
+      };
+      const registry = new McpClientRegistry(
+        { servers: [config] },
+        {
+          clientFactory: () => new FakeMcpClient({ initializeError: new McpOAuthChallengeError(wwwAuth) }),
+          tokensFilePath,
+          getRedirectUri: () => "http://localhost:9999/callback",
+        },
+      );
+
+      await registry.startAll();
+
+      expect(registry.getStatus()[0].state).toBe("auth_required");
+      expect(fakeServer.dcrCallCount).toBe(0);
+      expect(getDcrClient(tokensFilePath, fakeServer.url)).toBeUndefined();
+    });
+
+    it("statically-configured client_id succeeds even when the authorization server's DCR endpoint rejects registration (403)", async () => {
+      fakeServer.stop();
+      fakeServer = createFakeOAuthServer({ dcrStatus: 403 });
+      const wwwAuth = `Bearer resource_metadata="${fakeServer.url}/.well-known/oauth-protected-resource"`;
+      const config: McpServerConfig = {
+        name: "test-server",
+        transport: {
+          type: "http",
+          url: `${fakeServer.url}/mcp`,
+          auth: { client_id: "preregistered-client", client_secret: "preregistered-secret" },
+        },
+      };
+      const registry = new McpClientRegistry(
+        { servers: [config] },
+        {
+          clientFactory: () => new FakeMcpClient({ initializeError: new McpOAuthChallengeError(wwwAuth) }),
+          tokensFilePath,
+          getRedirectUri: () => "http://localhost:9999/callback",
+        },
+      );
+
+      await registry.startAll();
+
+      // Discovery succeeds (no OAuthDiscoveryError from a rejected DCR call)
+      // because DCR is never attempted for a statically-configured server.
+      expect(registry.getStatus()[0].state).toBe("auth_required");
+      expect(registry.getStatus()[0].error).toBeUndefined();
+      expect(fakeServer.dcrCallCount).toBe(0);
+    });
   });
 });
 
@@ -322,6 +378,34 @@ describe("9.7 McpClientRegistry.authorize() / completeAuthorization()", () => {
     expect(registry.getStatus()[0].state).toBe("auth_required");
     return { registry, factoryCallCount: () => factoryCallCount };
   }
+
+  it("authorize() uses the statically-configured client_id verbatim, bypassing DCR", async () => {
+    const wwwAuth = makeWwwAuth();
+    const openSpy = vi.fn().mockResolvedValue(undefined);
+    const config: McpServerConfig = {
+      name: "test-server",
+      transport: { type: "http", url: `${fakeServer.url}/mcp`, auth: { client_id: "preregistered-client" } },
+    };
+    const registry = new McpClientRegistry(
+      { servers: [config] },
+      {
+        clientFactory: () => new FakeMcpClient({ initializeError: new McpOAuthChallengeError(wwwAuth) }),
+        tokensFilePath,
+        getRedirectUri: () => "http://localhost:9999/callback",
+        browserOpener: { open: openSpy },
+      },
+    );
+    await registry.startAll();
+    expect(registry.getStatus()[0].state).toBe("auth_required");
+    expect(fakeServer.dcrCallCount).toBe(0);
+
+    await registry.authorize("test-server");
+
+    expect(openSpy).toHaveBeenCalledOnce();
+    const capturedUrl = new URL(openSpy.mock.calls[0][0] as string);
+    expect(capturedUrl.searchParams.get("client_id")).toBe("preregistered-client");
+    expect(fakeServer.dcrCallCount).toBe(0);
+  });
 
   it("authorize() opens the browser with correct OAuth 2.1 PKCE parameters", async () => {
     const openSpy = vi.fn().mockResolvedValue(undefined);

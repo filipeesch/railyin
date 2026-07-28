@@ -68,6 +68,37 @@ describe("normalizeToMcpConfig", () => {
     }
   });
 
+  // Regression test for a real-world gap: a statically-configured OAuth
+  // client_id (for authorization servers like Keycloak that reject anonymous
+  // Dynamic Client Registration) was previously silently dropped by the
+  // config loader since `auth` wasn't part of the http transport shape.
+  it("passes through the auth.client_id override on an http entry", () => {
+    const input = {
+      servers: {
+        langfuse: {
+          url: "https://observability-mcp.example.com/mcp",
+          auth: { client_id: "observability-mcp", client_secret: "shh" },
+        },
+      },
+    };
+    const result = normalizeToMcpConfig(input);
+    const server = result.servers[0];
+    expect(server.transport.type).toBe("http");
+    if (server.transport.type === "http") {
+      expect(server.transport.auth).toEqual({ client_id: "observability-mcp", client_secret: "shh" });
+    }
+  });
+
+  it("leaves auth undefined when not configured on an http entry", () => {
+    const input = { servers: { remoteApi: { url: "https://api.example.com/mcp" } } };
+    const result = normalizeToMcpConfig(input);
+    const server = result.servers[0];
+    expect(server.transport.type).toBe("http");
+    if (server.transport.type === "http") {
+      expect(server.transport.auth).toBeUndefined();
+    }
+  });
+
   it("converts multiple servers from VS Code object-map", () => {
     const input = {
       servers: {

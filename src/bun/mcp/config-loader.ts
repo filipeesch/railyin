@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "fs";
-import type { McpConfig, McpServerConfig } from "./types.ts";
+import type { McpConfig, McpServerConfig, McpOAuthStaticClientConfig } from "./types.ts";
 
 export function normalizeToMcpConfig(parsed: unknown): McpConfig {
   const p = parsed as Record<string, unknown>;
@@ -10,7 +10,12 @@ export function normalizeToMcpConfig(parsed: unknown): McpConfig {
     ([name, entry]) => {
       const e = entry as Record<string, unknown>;
       const transport = e.url
-        ? { type: "http" as const, url: e.url as string, headers: e.headers as Record<string, string> | undefined }
+        ? {
+            type: "http" as const,
+            url: e.url as string,
+            headers: e.headers as Record<string, string> | undefined,
+            auth: e.auth as McpOAuthStaticClientConfig | undefined,
+          }
         : { type: "stdio" as const, command: e.command as string, args: e.args as string[] | undefined, env: e.env as Record<string, string> | undefined };
       return { name, transport };
     }

@@ -286,7 +286,7 @@ export class McpClientRegistry {
     try {
       const wwwAuthenticate =
         triggerError instanceof McpOAuthChallengeError ? triggerError.wwwAuthenticate : await this._probeChallenge(instance);
-      instance.authContext = await this._discover(wwwAuthenticate);
+      instance.authContext = await this._discover(wwwAuthenticate, instance.config);
       instance.state = "auth_required";
       instance.error = undefined;
     } catch (discoveryErr) {
@@ -311,13 +311,23 @@ export class McpClientRegistry {
     }
   }
 
-  private async _discover(wwwAuthenticate: string): Promise<AuthContext> {
+  private async _discover(wwwAuthenticate: string, config: McpServerConfig): Promise<AuthContext> {
     const resourceMetadataUrl = parseResourceMetadataUrl(wwwAuthenticate);
     const protectedResourceMetadata = await discoverProtectedResourceMetadata(resourceMetadataUrl);
     const issuer = protectedResourceMetadata.authorization_servers[0];
     const authServerMetadata = await discoverAuthorizationServerMetadata(issuer);
     const redirectUri = this.getRedirectUri();
     const scope = resolveAuthorizationScope(wwwAuthenticate, protectedResourceMetadata, authServerMetadata);
+
+    // Static client_id override: some authorization servers (e.g. Keycloak
+    // realms configured to require an Initial Access Token) reject anonymous
+    // DCR with a 403. When a realm admin has pre-registered a client for us
+    // out-of-band, config.transport.auth.client_id lets us skip DCR — and its
+    // cache — entirely for this server.
+    const staticAuth = config.transport.type === "http" ? config.transport.auth : undefined;
+    if (staticAuth?.client_id) {
+      return { authServerMetadata, clientId: staticAuth.client_id, clientSecret: staticAuth.client_secret, scope };
+    }
 
     let dcr = getDcrClient(this.tokensFilePath, issuer);
     // A cached registration is only valid for the redirect_uri it was registered
