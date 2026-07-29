@@ -1,0 +1,103 @@
+## MODIFIED Requirements
+
+### Requirement: Notes are persisted per conversation in SQLite
+The system SHALL maintain a `task_notes` table scoped to `conversation_id` so that both task-backed and standalone chat conversations can store notes without requiring a `task_id`.
+
+`task_notes` SHALL have columns: `id` (INTEGER PK AUTOINCREMENT), `conversation_id` (INTEGER NOT NULL, FK to `conversations(id)` ON DELETE CASCADE), `content` (TEXT NOT NULL), `is_source_ai` (INTEGER NOT NULL DEFAULT 0), `tags` (TEXT NULL — JSON-serialized string array), `created_at` (TEXT NOT NULL DEFAULT datetime('now')), `updated_at` (TEXT NOT NULL DEFAULT datetime('now')).
+
+Delete operations SHALL be hard deletes (physical row removal). The `ON DELETE CASCADE` on `conversation_id` SHALL ensure all notes are automatically removed when their parent conversation is deleted. No soft-delete column SHALL exist.
+
+A DB migration SHALL create the `task_notes` table with the correct schema and an index on `conversation_id` for efficient lookup. Migration `052_note_tags` SHALL add the `tags` column to existing databases.
+
+#### Scenario: Note persisted for task conversation with tags
+- **WHEN** a note is created with tags for a task-backed conversation
+- **THEN** the row is stored with the conversation's `conversation_id`, content, and JSON-serialized tags
+
+#### Scenario: Notes cascade-deleted when conversation is removed
+- **WHEN** a conversation (and its parent task) is deleted from the database
+- **THEN** all `task_notes` rows with that `conversation_id` are automatically removed by the DB cascade
+
+#### Scenario: Hard delete removes the row
+- **WHEN** `NoteRepository.deleteNote(id)` is called
+- **THEN** the row is physically removed from `task_notes` and is no longer returned by any query
+
+#### Scenario: Migration runs cleanly on a fresh database
+- **WHEN** the migration runner executes on a fresh SQLite database
+- **THEN** `task_notes` is created with correct columns including `tags`, FK constraint, and index
+
+#### Scenario: Existing notes have null tags after migration
+- **WHEN** migration `052_note_tags` is applied to a database with existing notes
+- **THEN** existing note rows have `tags = NULL`
+
+### Requirement: NoteRepository encapsulates all note persistence logic
+The system SHALL provide a `NoteRepository` class at `src/bun/db/repositories/note-repository.ts` that exposes:
+- `createNote(conversationId, input: { content: string; isSourceAi?: boolean; tags?: string[] }): TaskNote`
+- `updateNote(id, input: { content?: string; tags?: string[] }): TaskNote | null`
+- `deleteNote(id): void` — hard delete
+- `listByConversation(conversationId, options?: { tagFilter?: string[] }): TaskNote[]` — ordered by `created_at ASC`, optionally filtered by tags (OR matching)
+
+The repository SHALL be constructed with a `Database` instance injected via constructor (same pattern as `DecisionRepository`). No method SHALL access global state. Tags SHALL be normalized (trim, lowercase, deduplicate, limit to 4, truncate to 15 chars) before storage.
+
+#### Scenario: createNote persists a new note with tags
+- **WHEN** `createNote(conversationId, { content: "## Plan\n...", tags: ["design"] })` is called
+- **THEN** a row is inserted into `task_notes` with `is_source_ai = 0`, `tags = '["design"]'`, and the note is returned with its generated `id`
+
+#### Scenario: createNote with isSourceAi sets the flag
+- **WHEN** `createNote(conversationId, { content: "...", isSourceAi: true })` is called
+- **THEN** the row has `is_source_ai = 1`
+
+#### Scenario: updateNote patches content and tags
+- **WHEN** `updateNote(id, { content: "Updated content", tags: ["new-tag"] })` is called
+- **THEN** `content`, `tags`, and `updated_at` are changed
+
+#### Scenario: updateNote patches only content when tags omitted
+- **WHEN** `updateNote(id, { content: "Updated" })` is called on a note with existing tags
+- **THEN** only `content` and `updated_at` are changed; tags are preserved
+
+#### Scenario: listByConversation returns notes in creation order
+- **WHEN** three notes are created for a conversation at different times
+- **THEN** `listByConversation` returns them ordered oldest-first
+
+#### Scenario: listByConversation with tag filter returns matching notes
+- **WHEN** `listByConversation(conversationId, { tagFilter: ["design"] })` is called and notes exist with tags `["design"]` and `["architecture"]`
+- **THEN** only notes with `"design"` tag are returned
+
+### Requirement: RPC handlers expose note operations
+The system SHALL provide RPC handlers at `src/bun/handlers/notes.ts` exposing four methods registered in `src/bun/index.ts`:
+- `"notes.list"` — params: `{ conversationId: number; tags?: string[] }`, response: `TaskNote[]`
+- `"notes.create"` — params: `{ conversationId: number; content: string; tags?: string[] }`, response: `TaskNote`
+- `"notes.update"` — params: `{ id: number; content?: string; tags?: string[] }`, response: `TaskNote`
+- `"notes.delete"` — params: `{ id: number }`, response: `void`
+
+Shared types SHALL be declared in `src/shared/rpc-types.ts` as `TaskNote` (with `tags: string[] | null` field) and registered in the `RailynAPI` map.
+
+#### Scenario: notes.list returns notes for conversation with tags
+- **WHEN** `notes.list` is called with a valid `conversationId`
+- **THEN** all notes for that conversation are returned in creation order with their tags
+
+#### Scenario: notes.list with tags filter returns matching notes
+- **WHEN** `notes.list` is called with `conversationId` and `tags: ["design"]`
+- **THEN** only notes with `"design"` tag are returned
+
+#### Scenario: notes.create returns the created note with tags
+- **WHEN** `notes.create` is called with `conversationId`, `content`, and `tags`
+- **THEN** a new `TaskNote` is returned with the provided values, normalized tags, and a generated `id`
+
+#### Scenario: notes.update returns the updated note with tags
+- **WHEN** `notes.update` is called with `id` and `tags`
+- **THEN** the note is returned with updated tags
+
+#### Scenario: notes.delete removes the note
+- **WHEN** `notes.delete` is called with a valid `noteId`
+- **THEN** the note is hard-deleted and subsequent `notes.list` does not include it
+
+### Requirement: initDb test helper includes task_notes table with tags column
+`initDb()` in `src/bun/test/helpers.ts` MUST create a `task_notes` table so that all in-memory test databases include the complete schema for note-related tests. This is a maintenance addition following the same pattern as `task_todos`, `decision_records`, and `stream_events`. The table MUST include the `tags` column.
+
+#### Scenario: initDb creates task_notes table with tags column
+- **WHEN** `initDb()` is called
+- **THEN** the returned database has a `task_notes` table with columns `id`, `conversation_id`, `content`, `is_source_ai`, `tags`, `created_at`, `updated_at`
+
+#### Scenario: NoteRepository operates correctly on initDb database
+- **WHEN** `new NoteRepository(initDb())` is constructed
+- **THEN** `createNote` and `listByConversation` execute without errors including tag operations
