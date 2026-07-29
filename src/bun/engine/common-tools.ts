@@ -101,27 +101,43 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
       type: "object",
       properties: {
         content: { type: "string", description: "Markdown body of the note (required)" },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tags to categorize the note (max 4, each max 15 chars). Tags are normalized (trimmed, lowercased).",
+        },
       },
       required: ["content"],
     },
   },
   {
     name: "list_notes",
-    description: "List all notes for this task/conversation in chronological order.",
+    description: "List all notes for this task/conversation in chronological order. Optionally filter by tags (OR matching).",
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tag filter — return notes that have ANY of the specified tags (OR matching).",
+        },
+      },
       required: [],
     },
   },
   {
     name: "update_note",
-    description: "Update an existing note's content. Call list_notes first to get the note ID.",
+    description: "Update an existing note's content and/or tags. Call list_notes first to get the note ID.",
     parameters: {
       type: "object",
       properties: {
         id: { type: "number", description: "Note ID (get from list_notes)" },
         content: { type: "string", description: "New markdown content" },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tags to replace existing tags (max 4, each max 15 chars). Omit to preserve existing tags.",
+        },
       },
       required: ["id", "content"],
     },
@@ -297,7 +313,7 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
     case "delete_decision":
       return { label: "delete decision", subject: args.id != null ? `#${args.id}` : undefined };
     case "create_note":
-      return { label: "create note", subject: args.title != null ? String(args.title) : undefined };
+      return { label: "create note" };
     case "list_notes":
       return { label: "list notes" };
     case "update_note":
@@ -499,15 +515,20 @@ async function executeCommonToolText(
     case "create_note": {
       const content = args.content != null ? (args.content as string).trim() : "";
       if (!content) return "Error: content is required";
+      const tags = args.tags != null ? (args.tags as string[]) : undefined;
       const note = ctx.repos.notes.createNote(ctx.task.conversationId, {
         content,
         isSourceAi: true,
+        tags,
       });
       return `Note #${note.id} created.`;
     }
 
     case "list_notes": {
-      const notes = ctx.repos.notes.listByConversation(ctx.task.conversationId);
+      const tags = args.tags != null ? (args.tags as string[]) : undefined;
+      const notes = ctx.repos.notes.listByConversation(ctx.task.conversationId, {
+        tagFilter: tags,
+      });
       if (notes.length === 0) return "No notes found for this conversation.";
       const lines = notes.map((n) => `#${n.id}: ${n.content.slice(0, 120)}${n.content.length > 120 ? "…" : ""}`);
       return JSON.stringify({ detailedContent: `${notes.length} note${notes.length !== 1 ? "s" : ""}:\n${lines.join("\n")}`, data: notes });
@@ -518,7 +539,8 @@ async function executeCommonToolText(
       if (!id || isNaN(id)) return "Error: id is required";
       const content = args.content != null ? (args.content as string).trim() : "";
       if (!content) return "Error: content is required";
-      const note = ctx.repos.notes.updateNote(id, { content });
+      const tags = args.tags != null ? (args.tags as string[]) : undefined;
+      const note = ctx.repos.notes.updateNote(id, { content, tags });
       if (!note) return `Error: Note #${id} not found.`;
       return `Note #${id} updated.`;
     }

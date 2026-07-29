@@ -264,6 +264,33 @@ describe("note tools", () => {
     expect(registeredNames).toContain("update_note");
   });
 });
+
+describe("note tools tags", () => {
+  it("CTR-N7: create_note has tags property (array, optional)", () => {
+    const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "create_note");
+    expect(def).toBeDefined();
+    const props = def!.parameters.properties as Record<string, { type: string }>;
+    expect(props["tags"].type).toBe("array");
+    expect(def!.parameters.required).not.toContain("tags");
+  });
+
+  it("CTR-N8: list_notes has tags property (array, optional)", () => {
+    const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "list_notes");
+    expect(def).toBeDefined();
+    const props = def!.parameters.properties as Record<string, { type: string }>;
+    expect(props["tags"].type).toBe("array");
+    expect(def!.parameters.required ?? []).not.toContain("tags");
+  });
+
+  it("CTR-N9: update_note has tags property (array, optional)", () => {
+    const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "update_note");
+    expect(def).toBeDefined();
+    const props = def!.parameters.properties as Record<string, { type: string }>;
+    expect(props["tags"].type).toBe("array");
+    expect(def!.parameters.required).not.toContain("tags");
+  });
+});
+
 describe("workspace tool registration", () => {
   it("CTR-WK-1: list_projects is present in COMMON_TOOL_DEFINITIONS with no required params", () => {
     const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "list_projects");

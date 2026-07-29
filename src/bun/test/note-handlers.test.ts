@@ -141,3 +141,79 @@ describe("notes.delete", () => {
     // Should not throw
   });
 });
+
+// ─── notes.list with tags ─────────────────────────────────────────────────────
+
+describe("notes.list with tags", () => {
+  it("NL-4: notes.list with tags filter passes to repository", () => {
+    const handlers = noteHandlers(db);
+
+    handlers["notes.create"]({ conversationId, content: "Note 1", tags: ["design"] });
+    handlers["notes.create"]({ conversationId, content: "Note 2", tags: ["architecture"] });
+
+    const result = handlers["notes.list"]({ conversationId, tags: ["design"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe("Note 1");
+  });
+
+  it("NL-5: notes.list without tags returns all notes", () => {
+    const handlers = noteHandlers(db);
+
+    handlers["notes.create"]({ conversationId, content: "Note 1", tags: ["design"] });
+    handlers["notes.create"]({ conversationId, content: "Note 2", tags: ["architecture"] });
+
+    const result = handlers["notes.list"]({ conversationId });
+    expect(result).toHaveLength(2);
+  });
+});
+
+// ─── notes.create with tags ───────────────────────────────────────────────────
+
+describe("notes.create with tags", () => {
+  it("NC-3: notes.create with tags persists normalized tags", () => {
+    const handlers = noteHandlers(db);
+
+    const result = handlers["notes.create"]({
+      conversationId,
+      content: "New note",
+      tags: [" Design ", "TODO"],
+    });
+
+    expect(result.tags).toEqual(["design", "todo"]);
+  });
+
+  it("NC-4: notes.create without tags has null tags", () => {
+    const handlers = noteHandlers(db);
+
+    const result = handlers["notes.create"]({
+      conversationId,
+      content: "New note",
+    });
+
+    expect(result.tags).toBeNull();
+  });
+});
+
+// ─── notes.update with tags ───────────────────────────────────────────────────
+
+describe("notes.update with tags", () => {
+  it("NU-3: notes.update with tags replaces existing", () => {
+    const handlers = noteHandlers(db);
+    const created = handlers["notes.create"]({ conversationId, content: "Original", tags: ["old"] });
+
+    handlers["notes.update"]({ id: created.id, tags: ["new"] });
+
+    const updated = handlers["notes.list"]({ conversationId }).find((n) => n.id === created.id);
+    expect(updated!.tags).toEqual(["new"]);
+  });
+
+  it("NU-4: notes.update without tags preserves existing", () => {
+    const handlers = noteHandlers(db);
+    const created = handlers["notes.create"]({ conversationId, content: "Original", tags: ["existing"] });
+
+    handlers["notes.update"]({ id: created.id, content: "Updated" });
+
+    const updated = handlers["notes.list"]({ conversationId }).find((n) => n.id === created.id);
+    expect(updated!.tags).toEqual(["existing"]);
+  });
+});

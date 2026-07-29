@@ -290,6 +290,7 @@ export interface TaskNote {
   conversationId: number;
   content: string;
   isSourceAi: boolean;
+  tags: string[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1137,15 +1138,15 @@ export type RailynAPI = {
     response: DecisionRevision[];
   };
   "notes.list": {
-    params: { conversationId: number };
+    params: { conversationId: number; tags?: string[] };
     response: TaskNote[];
   };
   "notes.create": {
-    params: { conversationId: number; content: string };
+    params: { conversationId: number; content: string; tags?: string[] };
     response: TaskNote;
   };
   "notes.update": {
-    params: { id: number; content?: string };
+    params: { id: number; content?: string; tags?: string[] };
     response: TaskNote;
   };
   "notes.delete": {
