@@ -1,19 +1,4 @@
-## Purpose
-
-Defines the persistence model, repository interface, RPC contract, and frontend UI for free-form markdown notes scoped to a conversation.
-
-## Requirements
-
-### Requirement: initDb test helper includes task_notes table with tags column
-`initDb()` in `src/bun/test/helpers.ts` MUST create a `task_notes` table so that all in-memory test databases include the complete schema for note-related tests. This is a maintenance addition following the same pattern as `task_todos`, `decision_records`, and `stream_events`. The table MUST include the `tags` column.
-
-#### Scenario: initDb creates task_notes table with tags column
-- **WHEN** `initDb()` is called
-- **THEN** the returned database has a `task_notes` table with columns `id`, `conversation_id`, `content`, `is_source_ai`, `tags`, `created_at`, `updated_at`
-
-#### Scenario: NoteRepository operates correctly on initDb database
-- **WHEN** `new NoteRepository(initDb())` is constructed
-- **THEN** `createNote` and `listByConversation` execute without errors including tag operations
+## MODIFIED Requirements
 
 ### Requirement: Notes are persisted per conversation in SQLite
 The system SHALL maintain a `task_notes` table scoped to `conversation_id` so that both task-backed and standalone chat conversations can store notes without requiring a `task_id`.
@@ -106,35 +91,13 @@ Shared types SHALL be declared in `src/shared/rpc-types.ts` as `TaskNote` (with 
 - **WHEN** `notes.delete` is called with a valid `noteId`
 - **THEN** the note is hard-deleted and subsequent `notes.list` does not include it
 
-### Requirement: Notes tab and CRUD UI in TaskChatView
-The system SHALL add a **Notes** tab to `TaskChatView.vue` after the Decisions tab. The tab SHALL render a `NotesPanel.vue` component when active.
+### Requirement: initDb test helper includes task_notes table with tags column
+`initDb()` in `src/bun/test/helpers.ts` MUST create a `task_notes` table so that all in-memory test databases include the complete schema for note-related tests. This is a maintenance addition following the same pattern as `task_todos`, `decision_records`, and `stream_events`. The table MUST include the `tags` column.
 
-`NotesPanel.vue` SHALL display all notes for the current `conversationId`, each rendering its `content` as markdown. A **"+ New"** button SHALL open `NoteDetailOverlay.vue` for creating a new note. Clicking an existing note SHALL open the overlay in edit mode.
+#### Scenario: initDb creates task_notes table with tags column
+- **WHEN** `initDb()` is called
+- **THEN** the returned database has a `task_notes` table with columns `id`, `conversation_id`, `content`, `is_source_ai`, `tags`, `created_at`, `updated_at`
 
-`NoteDetailOverlay.vue` SHALL provide a markdown textarea (required). It SHALL expose **Save** and **Cancel** actions; in edit mode it SHALL also expose a **Delete** action that prompts for confirmation before hard-deleting the note via `notes.delete`.
-
-The Notes panel SHALL re-fetch notes when a `task.updated` WebSocket event is received, ensuring the panel reflects notes created by the LLM during the last execution.
-
-#### Scenario: Notes tab visible in TaskChatView
-- **WHEN** a task chat view is open
-- **THEN** a "Notes" tab button is visible after "Decisions" in the tab bar
-
-#### Scenario: Notes panel lists existing notes
-- **WHEN** the Notes tab is selected and notes exist for the conversation
-- **THEN** each note's content is rendered as markdown in the panel
-
-#### Scenario: User creates a note via overlay
-- **WHEN** the user clicks "+ New", fills in content, and clicks Save
-- **THEN** `notes.create` is called and the new note appears in the panel
-
-#### Scenario: User edits a note via overlay
-- **WHEN** the user clicks an existing note, edits its content, and clicks Save
-- **THEN** `notes.update` is called and the updated note is reflected in the panel
-
-#### Scenario: User deletes a note
-- **WHEN** the user clicks the delete button on a note item
-- **THEN** `notes.delete` is called and the note is removed from the panel
-
-#### Scenario: Panel refreshes after LLM execution
-- **WHEN** a `task.updated` WebSocket event is received while the Notes tab is active
-- **THEN** the panel re-fetches notes and displays any notes created or updated during the execution
+#### Scenario: NoteRepository operates correctly on initDb database
+- **WHEN** `new NoteRepository(initDb())` is constructed
+- **THEN** `createNote` and `listByConversation` execute without errors including tag operations

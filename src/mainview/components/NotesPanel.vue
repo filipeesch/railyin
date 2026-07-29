@@ -10,16 +10,42 @@
       />
     </div>
 
+    <!-- Tag bar -->
+    <div v-if="!loading && notes.length > 0" class="notes-panel__tag-bar">
+      <button
+        class="tag-chip"
+        :class="{ 'tag-chip--active': selectedTag == null }"
+        @click="selectedTag = null"
+      >
+        All
+      </button>
+      <button
+        v-for="tag in uniqueTags"
+        :key="tag"
+        class="tag-chip"
+        :class="{ 'tag-chip--active': selectedTag === tag }"
+        @click="toggleTag(tag)"
+      >
+        {{ tag }}
+      </button>
+    </div>
+
     <div v-if="loading" class="notes-empty">Loading notes…</div>
-    <div v-else-if="!notes.length" class="notes-empty">No notes yet. Create one to get started.</div>
+    <div v-else-if="!filteredNotes.length" class="notes-empty">
+      <span v-if="notes.length === 0">No notes yet. Create one to get started.</span>
+      <span v-else>No notes match the selected tag.</span>
+    </div>
     <div v-else class="notes-list">
       <div
-        v-for="note in notes"
+        v-for="note in filteredNotes"
         :key="note.id"
         class="note-item"
         @click="openEdit(note)"
       >
         <span v-if="note.isSourceAi" class="note-item__ai-badge">AI</span>
+        <div v-if="note.tags && note.tags.length > 0" class="note-item__tags">
+          <span v-for="tag in note.tags" :key="tag" class="note-item__tag-chip">{{ tag }}</span>
+        </div>
         <div class="note-item__content markdown-content" v-html="renderMd(note.content)" />
       </div>
     </div>
@@ -37,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import type { TaskNote } from "@shared/rpc-types";
 import { listNotes } from "@/rpc";
 import { useMarkdown } from "@/composables/useMarkdown";
@@ -54,8 +80,35 @@ const loading = ref(false);
 const overlayVisible = ref(false);
 const editingNoteId = ref<number | null>(null);
 const editingNote = ref<TaskNote | null>(null);
+const selectedTag = ref<string | null>(null);
 
 const { renderMd } = useMarkdown();
+
+// Compute unique tags from all notes, sorted alphabetically
+const uniqueTags = computed(() => {
+  const tagSet = new Set<string>();
+  for (const note of notes.value) {
+    if (note.tags) {
+      for (const tag of note.tags) {
+        tagSet.add(tag);
+      }
+    }
+  }
+  return Array.from(tagSet).sort();
+});
+
+// Filter notes by selected tag (client-side)
+const filteredNotes = computed(() => {
+  if (selectedTag.value == null) return notes.value;
+  return notes.value.filter((note) => {
+    if (!note.tags) return false;
+    return note.tags.includes(selectedTag.value!);
+  });
+});
+
+function toggleTag(tag: string) {
+  selectedTag.value = selectedTag.value === tag ? null : tag;
+}
 
 async function fetchNotes() {
   loading.value = true;
@@ -102,6 +155,35 @@ watch(() => props.refreshTrigger, fetchNotes);
   flex-shrink: 0;
 }
 
+.notes-panel__tag-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--p-content-border-color);
+  flex-shrink: 0;
+}
+
+.tag-chip {
+  background: var(--p-content-border-color, #e2e8f0);
+  color: var(--p-text-color, #1e293b);
+  border: none;
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tag-chip:hover {
+  background: var(--p-content-hover-background, #f1f5f9);
+}
+
+.tag-chip--active {
+  background: var(--accent-color, #3b82f6);
+  color: white;
+}
+
 .notes-empty {
   color: var(--text-secondary, #64748b);
   font-size: 13px;
@@ -139,6 +221,21 @@ watch(() => props.refreshTrigger, fetchNotes);
   padding: 1px 5px;
   border-radius: 3px;
   font-weight: 600;
+}
+
+.note-item__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.note-item__tag-chip {
+  background: var(--p-content-border-color, #e2e8f0);
+  color: var(--p-text-muted-color, #64748b);
+  border-radius: 8px;
+  padding: 1px 8px;
+  font-size: 10px;
 }
 
 .note-item__content {

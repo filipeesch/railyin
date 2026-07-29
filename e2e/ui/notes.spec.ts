@@ -294,3 +294,160 @@ test.describe("T-N10: task.updated WS push triggers notes re-fetch", () => {
     expect(listCallCount).toBeGreaterThanOrEqual(initialCount);
   });
 });
+
+// ─── T-N11: Notes with tags display chips on note cards ──────────────────────
+
+test.describe("T-N11: Notes with tags display chips on note cards", () => {
+  test("note items with tags show tag chips", async ({ page, api, task }) => {
+    api.returns("notes.list", [
+      { id: 1, conversationId: NOTE_CONVERSATION_ID, content: "Design note", isSourceAi: false, tags: ["design", "architecture"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    ]);
+    api.returns("tasks.list", [task]);
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await page.locator(".tab-btn", { hasText: "Notes" }).click();
+
+    // Tag chips visible on note card
+    const tagChips = page.locator(".note-item__tag-chip");
+    await expect(tagChips).toHaveCount(2);
+    await expect(tagChips.nth(0)).toContainText("design");
+    await expect(tagChips.nth(1)).toContainText("architecture");
+  });
+});
+
+// ─── T-N12: Tag bar shows unique tags alphabetically ─────────────────────────
+
+test.describe("T-N12: Tag bar shows unique tags alphabetically", () => {
+  test("tag bar displays unique tags in alphabetical order", async ({ page, api, task }) => {
+    api.returns("notes.list", [
+      { id: 1, conversationId: NOTE_CONVERSATION_ID, content: "Note 1", isSourceAi: false, tags: ["zoo"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: 2, conversationId: NOTE_CONVERSATION_ID, content: "Note 2", isSourceAi: false, tags: ["apple"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: 3, conversationId: NOTE_CONVERSATION_ID, content: "Note 3", isSourceAi: false, tags: ["design"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    ]);
+    api.returns("tasks.list", [task]);
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await page.locator(".tab-btn", { hasText: "Notes" }).click();
+
+    // Tag bar visible
+    const tagBar = page.locator(".notes-panel__tag-bar");
+    await expect(tagBar).toBeVisible();
+
+    // "All" chip and unique tags in alphabetical order
+    const tagChips = page.locator(".tag-chip");
+    await expect(tagChips).toHaveCount(4); // All + apple + design + zoo
+    await expect(tagChips.nth(0)).toContainText("All");
+    await expect(tagChips.nth(1)).toContainText("apple");
+    await expect(tagChips.nth(2)).toContainText("design");
+    await expect(tagChips.nth(3)).toContainText("zoo");
+  });
+});
+
+// ─── T-N13: Clicking tag chip filters notes client-side ──────────────────────
+
+test.describe("T-N13: Clicking tag chip filters notes client-side", () => {
+  test("clicking tag chip shows only matching notes", async ({ page, api, task }) => {
+    api.returns("notes.list", [
+      { id: 1, conversationId: NOTE_CONVERSATION_ID, content: "Design note", isSourceAi: false, tags: ["design"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: 2, conversationId: NOTE_CONVERSATION_ID, content: "Architecture note", isSourceAi: false, tags: ["architecture"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    ]);
+    api.returns("tasks.list", [task]);
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await page.locator(".tab-btn", { hasText: "Notes" }).click();
+
+    // Initially show all notes
+    let noteItems = page.locator(".note-item");
+    await expect(noteItems).toHaveCount(2);
+
+    // Click "design" tag chip
+    await page.locator(".tag-chip", { hasText: "design" }).click();
+
+    // Only design note visible
+    noteItems = page.locator(".note-item");
+    await expect(noteItems).toHaveCount(1);
+    await expect(noteItems).toContainText("Design note");
+  });
+});
+
+// ─── T-N14: Clicking active tag clears filter ────────────────────────────────
+
+test.describe("T-N14: Clicking active tag clears filter", () => {
+  test("clicking active tag chip clears the filter", async ({ page, api, task }) => {
+    api.returns("notes.list", [
+      { id: 1, conversationId: NOTE_CONVERSATION_ID, content: "Design note", isSourceAi: false, tags: ["design"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: 2, conversationId: NOTE_CONVERSATION_ID, content: "Architecture note", isSourceAi: false, tags: ["architecture"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    ]);
+    api.returns("tasks.list", [task]);
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await page.locator(".tab-btn", { hasText: "Notes" }).click();
+
+    // Click "design" tag to filter
+    await page.locator(".tag-chip", { hasText: "design" }).click();
+    let noteItems = page.locator(".note-item");
+    await expect(noteItems).toHaveCount(1);
+
+    // Click "design" tag again to clear filter
+    await page.locator(".tag-chip", { hasText: "design" }).click();
+
+    // All notes visible again
+    noteItems = page.locator(".note-item");
+    await expect(noteItems).toHaveCount(2);
+  });
+});
+
+// ─── T-N15: Note without tags shows no chips ─────────────────────────────────
+
+test.describe("T-N15: Note without tags shows no chips", () => {
+  test("note without tags does not show tag chips", async ({ page, api, task }) => {
+    api.returns("notes.list", [
+      { id: 1, conversationId: NOTE_CONVERSATION_ID, content: "Note without tags", isSourceAi: false, tags: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    ]);
+    api.returns("tasks.list", [task]);
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await page.locator(".tab-btn", { hasText: "Notes" }).click();
+
+    // No tag chips on note card
+    const tagChips = page.locator(".note-item__tag-chip");
+    await expect(tagChips).toHaveCount(0);
+  });
+});
+
+// ─── T-N16: Tag bar wraps with many tags ─────────────────────────────────────
+
+test.describe("T-N16: Tag bar wraps with many tags", () => {
+  test("tag bar wraps to multiple lines with many tags", async ({ page, api, task }) => {
+    const tags = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"];
+    api.returns("notes.list", tags.map((tag, i) => ({
+      id: i + 1,
+      conversationId: NOTE_CONVERSATION_ID,
+      content: `Note ${i + 1}`,
+      isSourceAi: false,
+      tags: [tag],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })));
+    api.returns("tasks.list", [task]);
+
+    await page.goto("/");
+    await openTaskDrawer(page, task.id);
+
+    await page.locator(".tab-btn", { hasText: "Notes" }).click();
+
+    // Tag bar visible with all tags
+    const tagChips = page.locator(".tag-chip");
+    await expect(tagChips).toHaveCount(tags.length + 1); // +1 for "All"
+  });
+});

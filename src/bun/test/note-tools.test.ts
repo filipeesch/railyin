@@ -162,3 +162,120 @@ describe("update_note", () => {
     }
   });
 });
+
+// ─── create_note with tags ────────────────────────────────────────────────────
+
+describe("create_note with tags", () => {
+  it("CNT-5: create_note with tags creates note with normalized tags", async () => {
+    const result = await executeCommonTool("create_note", { content: "Test", tags: [" Design ", "TODO"] }, ctx);
+    expect(result.type).toBe("result");
+    const notes = ctx.repos.notes.listByConversation(1);
+    expect(notes[0].tags).toEqual(["design", "todo"]);
+  });
+
+  it("CNT-6: create_note without tags has null tags", async () => {
+    await executeCommonTool("create_note", { content: "Test" }, ctx);
+    const notes = ctx.repos.notes.listByConversation(1);
+    expect(notes[0].tags).toBeNull();
+  });
+
+  it("CNT-7: create_note with empty tags array has null tags", async () => {
+    await executeCommonTool("create_note", { content: "Test", tags: [] }, ctx);
+    const notes = ctx.repos.notes.listByConversation(1);
+    expect(notes[0].tags).toBeNull();
+  });
+
+  it("CNT-8: create_note with > 4 tags limits to 4", async () => {
+    await executeCommonTool("create_note", { content: "Test", tags: ["a", "b", "c", "d", "e"] }, ctx);
+    const notes = ctx.repos.notes.listByConversation(1);
+    expect(notes[0].tags).toHaveLength(4);
+  });
+});
+
+// ─── list_notes with tags ─────────────────────────────────────────────────────
+
+describe("list_notes with tags", () => {
+  it("LNT-5: list_notes with tags filter returns matching notes", async () => {
+    ctx.repos.notes.createNote(1, { content: "Note A", tags: ["design"], isSourceAi: true });
+    ctx.repos.notes.createNote(1, { content: "Note B", tags: ["architecture"], isSourceAi: true });
+
+    const result = await executeCommonTool("list_notes", { tags: ["design"] }, ctx);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      expect(parsed.data).toHaveLength(1);
+      expect(parsed.data[0].content).toBe("Note A");
+    }
+  });
+
+  it("LNT-6: list_notes with multiple tags uses OR matching", async () => {
+    ctx.repos.notes.createNote(1, { content: "Note A", tags: ["design"], isSourceAi: true });
+    ctx.repos.notes.createNote(1, { content: "Note B", tags: ["architecture"], isSourceAi: true });
+    ctx.repos.notes.createNote(1, { content: "Note C", tags: ["todo"], isSourceAi: true });
+
+    const result = await executeCommonTool("list_notes", { tags: ["design", "architecture"] }, ctx);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      expect(parsed.data).toHaveLength(2);
+    }
+  });
+
+  it("LNT-7: list_notes without tags returns all notes", async () => {
+    ctx.repos.notes.createNote(1, { content: "Note A", tags: ["design"], isSourceAi: true });
+    ctx.repos.notes.createNote(1, { content: "Note B", tags: ["architecture"], isSourceAi: true });
+
+    const result = await executeCommonTool("list_notes", {}, ctx);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      const parsed = JSON.parse(result.text);
+      expect(parsed.data).toHaveLength(2);
+    }
+  });
+});
+
+// ─── update_note with tags ────────────────────────────────────────────────────
+
+describe("update_note with tags", () => {
+  it("UNT-5: update_note with tags replaces existing tags", async () => {
+    const note = ctx.repos.notes.createNote(1, { content: "Original", tags: ["old"], isSourceAi: true });
+    const result = await executeCommonTool("update_note", { id: note.id, content: "Updated", tags: ["new"] }, ctx);
+    expect(result.type).toBe("result");
+    const updated = ctx.repos.notes.listByConversation(1).find((n) => n.id === note.id);
+    expect(updated?.tags).toEqual(["new"]);
+  });
+
+  it("UNT-6: update_note without tags preserves existing tags", async () => {
+    const note = ctx.repos.notes.createNote(1, { content: "Original", tags: ["existing"], isSourceAi: true });
+    const result = await executeCommonTool("update_note", { id: note.id, content: "Updated" }, ctx);
+    expect(result.type).toBe("result");
+    const updated = ctx.repos.notes.listByConversation(1).find((n) => n.id === note.id);
+    expect(updated?.tags).toEqual(["existing"]);
+  });
+
+  it("UNT-7: update_note with empty tags array preserves existing", async () => {
+    const note = ctx.repos.notes.createNote(1, { content: "Original", tags: ["existing"], isSourceAi: true });
+    const result = await executeCommonTool("update_note", { id: note.id, content: "Updated", tags: [] }, ctx);
+    expect(result.type).toBe("result");
+    const updated = ctx.repos.notes.listByConversation(1).find((n) => n.id === note.id);
+    expect(updated?.tags).toEqual(["existing"]);
+  });
+
+  it("UNT-8: update_note with tags only (no content) updates tags and preserves content", async () => {
+    const note = ctx.repos.notes.createNote(1, { content: "Original content", tags: ["old"], isSourceAi: true });
+    const result = await executeCommonTool("update_note", { id: note.id, tags: ["new"] }, ctx);
+    expect(result.type).toBe("result");
+    const updated = ctx.repos.notes.listByConversation(1).find((n) => n.id === note.id);
+    expect(updated?.tags).toEqual(["new"]);
+    expect(updated?.content).toBe("Original content");
+  });
+
+  it("UNT-9: update_note with empty string content returns error", async () => {
+    const note = ctx.repos.notes.createNote(1, { content: "Original", isSourceAi: true });
+    const result = await executeCommonTool("update_note", { id: note.id, content: "" }, ctx);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      expect(result.text).toBe("Error: content is required");
+    }
+  });
+});
