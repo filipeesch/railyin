@@ -240,6 +240,7 @@ export function initDb(): Database {
       conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       content         TEXT    NOT NULL,
       is_source_ai    INTEGER NOT NULL DEFAULT 0,
+      tags            TEXT    NULL,
       created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
       updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
     );
