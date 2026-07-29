@@ -215,14 +215,15 @@ describe("note tools", () => {
     expect(def!.parameters.required ?? []).toHaveLength(0);
   });
 
-  it("CTR-N3: update_note is present in COMMON_TOOL_DEFINITIONS with id (number) and content (string) required", () => {
+  it("CTR-N3: update_note is present in COMMON_TOOL_DEFINITIONS with id (number) required, content and tags optional", () => {
     const def = COMMON_TOOL_DEFINITIONS.find((t) => t.name === "update_note");
     expect(def).toBeDefined();
     const props = def!.parameters.properties as Record<string, { type: string }>;
     expect(props["id"].type).toBe("number");
     expect(props["content"].type).toBe("string");
     expect(def!.parameters.required).toContain("id");
-    expect(def!.parameters.required).toContain("content");
+    expect(def!.parameters.required).not.toContain("content");
+    expect(def!.parameters.required).not.toContain("tags");
   });
 
   it("CTR-N4: all three note tool names are in COMMON_TOOL_NAMES", () => {

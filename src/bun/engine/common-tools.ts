@@ -132,14 +132,14 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
       type: "object",
       properties: {
         id: { type: "number", description: "Note ID (get from list_notes)" },
-        content: { type: "string", description: "New markdown content" },
+        content: { type: "string", description: "New markdown content (omit to preserve existing)" },
         tags: {
           type: "array",
           items: { type: "string" },
           description: "Optional tags to replace existing tags (max 4, each max 15 chars). Omit to preserve existing tags.",
         },
       },
-      required: ["id", "content"],
+      required: ["id"],
     },
   },
   // ── todo tools ───────────────────────────────────────────────────────────────
@@ -537,8 +537,9 @@ async function executeCommonToolText(
     case "update_note": {
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const content = args.content != null ? (args.content as string).trim() : "";
-      if (!content) return "Error: content is required";
+      const rawContent = args.content;
+      const content = rawContent != null ? (rawContent as string).trim() : undefined;
+      if (content !== undefined && !content) return "Error: content is required";
       const tags = args.tags != null ? (args.tags as string[]) : undefined;
       const note = ctx.repos.notes.updateNote(id, { content, tags });
       if (!note) return `Error: Note #${id} not found.`;

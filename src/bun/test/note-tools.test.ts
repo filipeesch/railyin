@@ -260,4 +260,22 @@ describe("update_note with tags", () => {
     const updated = ctx.repos.notes.listByConversation(1).find((n) => n.id === note.id);
     expect(updated?.tags).toEqual(["existing"]);
   });
+
+  it("UNT-8: update_note with tags only (no content) updates tags and preserves content", async () => {
+    const note = ctx.repos.notes.createNote(1, { content: "Original content", tags: ["old"], isSourceAi: true });
+    const result = await executeCommonTool("update_note", { id: note.id, tags: ["new"] }, ctx);
+    expect(result.type).toBe("result");
+    const updated = ctx.repos.notes.listByConversation(1).find((n) => n.id === note.id);
+    expect(updated?.tags).toEqual(["new"]);
+    expect(updated?.content).toBe("Original content");
+  });
+
+  it("UNT-9: update_note with empty string content returns error", async () => {
+    const note = ctx.repos.notes.createNote(1, { content: "Original", isSourceAi: true });
+    const result = await executeCommonTool("update_note", { id: note.id, content: "" }, ctx);
+    expect(result.type).toBe("result");
+    if (result.type === "result") {
+      expect(result.text).toBe("Error: content is required");
+    }
+  });
 });
