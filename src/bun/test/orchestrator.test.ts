@@ -620,7 +620,7 @@ columns:
     innerCleanup = null;
   });
 
-  it("transition into column with both fields → merged systemInstructions", async () => {
+  it("transition into column with both fields → systemInstructions has workflow only, stage in prompt", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
     innerCleanup = cleanup;
     db = initDb();
@@ -631,7 +631,8 @@ columns:
     await orc.executeTransition(taskId, "col-both");
 
     expect(capturedParams).toHaveLength(1);
-    expect(capturedParams[0].systemInstructions).toBe("Workflow context.\n\nStage context.");
+    expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
+    expect(capturedParams[0].prompt).toContain("Stage context.");
   });
 
   it("transition into column with only workflow_instructions → workflow string only", async () => {
@@ -648,7 +649,7 @@ columns:
     expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
   });
 
-  it("transition into column with only stage_instructions → stage string only (regression)", async () => {
+  it("transition into column with only stage_instructions → systemInstructions undefined, stage in prompt (regression)", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_NONE]);
     innerCleanup = cleanup;
     db = initDb();
@@ -659,7 +660,8 @@ columns:
     await orc.executeTransition(taskId, "col-with-stage");
 
     expect(capturedParams).toHaveLength(1);
-    expect(capturedParams[0].systemInstructions).toBe("Stage only.");
+    expect(capturedParams[0].systemInstructions).toBeUndefined();
+    expect(capturedParams[0].prompt).toContain("Stage only.");
   });
 
   it("transition into column with neither field → systemInstructions is undefined", async () => {
@@ -676,7 +678,7 @@ columns:
     expect(capturedParams[0].systemInstructions).toBeUndefined();
   });
 
-  it("human-turn in column with both fields → merged systemInstructions", async () => {
+  it("human-turn in column with both fields → systemInstructions has workflow only, stage in prompt", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
     innerCleanup = cleanup;
     db = initDb();
@@ -687,7 +689,8 @@ columns:
     await orc.executeHumanTurn(taskId, "hello");
 
     expect(capturedParams.length).toBeGreaterThan(0);
-    expect(capturedParams[0].systemInstructions).toBe("Workflow context.\n\nStage context.");
+    expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
+    expect(capturedParams[0].prompt).toContain("Stage context.");
   });
 
   it("multi-board isolation: only board with workflow_instructions receives it", async () => {

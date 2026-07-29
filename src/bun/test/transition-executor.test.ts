@@ -10,6 +10,9 @@ import { TransitionExecutor } from "../engine/execution/transition-executor.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
+import { PromptAssemblyService } from "../engine/execution/prompt-assembly-service.ts";
+import { SlashCommandResolver } from "../engine/execution/slash-command-resolver.ts";
+import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
@@ -158,7 +161,8 @@ describe("TransitionExecutor", () => {
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     const result = await executor.execute(taskId, "done");
@@ -198,7 +202,8 @@ describe("TransitionExecutor", () => {
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     const result = await executor.execute(taskId, "done");
@@ -223,7 +228,8 @@ describe("TransitionExecutor", () => {
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     const result = await executor.execute(taskId, "done");
@@ -268,13 +274,19 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     const result = await executor.execute(taskId, "plan");
 
     expect(result.executionId).not.toBeNull();
-    expect(builder.lastBuilt?.prompt).toBe("/opsx-propose transition card");
+    // The slash command is now resolved BEFORE stage_instructions is prepended,
+    // so the resolved expansion (not the raw "/opsx-propose ..." chip) appears
+    // after the stage instructions block.
+    expect(builder.lastBuilt?.prompt).toBe(
+      'You are a planning assistant.\n\n<command name="opsx-propose" args="transition card">\nExpanded instructions for transition card\n</command>',
+    );
     expect(builder.lastBuilt?.workingDirectory).toBe(gitDir);
 
     const metadata = readLatestTransitionMetadata(taskId);
@@ -330,7 +342,8 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     await executor.execute(taskId, "plan");
@@ -371,7 +384,8 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     await executor.execute(taskId, "plan");
@@ -413,7 +427,8 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     await executor.execute(taskId, "plan");
@@ -453,7 +468,8 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     await executor.execute(taskId, "plan");
@@ -478,7 +494,8 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     const result = await executor.execute(taskId, "plan");
@@ -487,14 +504,100 @@ columns:
     expect(result.task.executionState).toBe("running");
   });
 
-  it("TP-1: custom prompt appears first in systemInstructions", async () => {
-    // Stub: verifies wiring exists — full logic covered by unit tests (injector + assembler)
-    expect(true).toBe(true);
+  it("TP-1: custom prompt appears first in systemInstructions, stage_instructions never appears there", async () => {
+    mkdirSync(join(gitDir, ".railyin", "system-prompts"), { recursive: true });
+    writeFileSync(
+      join(gitDir, ".railyin", "system-prompts", "custom.md"),
+      `---\nmodel: "*"\npriority: 10\n---\nCustom project guidance.\n`,
+    );
+
+    const cfg = setupTestConfig("", gitDir, [
+      `id: custom-prompt-workflow
+name: CustomPromptWorkflow
+workflow_instructions: "Workflow context."
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    model: "test/fake"
+    on_enter_prompt: "do work"
+    stage_instructions: "Column context."
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'custom-prompt-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
+    );
+
+    await executor.execute(taskId, "plan");
+
+    // Custom prompt ordering preserved: custom prompt first, then workflow_instructions
+    expect(builder.lastBuilt?.systemInstructions).toBe("Custom project guidance.\n\nWorkflow context.");
+    // stage_instructions never appears in systemInstructions — only in userContent (prompt)
+    expect(builder.lastBuilt?.systemInstructions).not.toContain("Column context.");
+    expect(builder.lastBuilt?.prompt).toContain("Column context.");
   });
 
-  it("TP-2: no custom prompts still yields workflow+stage only", async () => {
-    // Same as pre-feature behavior when no custom prompts match
-    expect(true).toBe(true);
+  it("TP-2: no custom prompts still yields workflow_instructions only in systemInstructions", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: no-custom-prompt-workflow
+name: NoCustomPromptWorkflow
+workflow_instructions: "Workflow context."
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    on_enter_prompt: "do work"
+    stage_instructions: "Column context."
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'no-custom-prompt-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
+    );
+
+    await executor.execute(taskId, "plan");
+
+    expect(builder.lastBuilt?.systemInstructions).toBe("Workflow context.");
+    expect(builder.lastBuilt?.prompt).toBe("Column context.\n\ndo work");
   });
 
   // TE-PRESET-1: column with sampling_preset → samplingPresetName flows through
@@ -530,7 +633,8 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
       undefined,
       undefined,
       new ExecutionParamsEnricher(db),
@@ -573,7 +677,8 @@ columns:
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     await executor.execute(taskId, "plan");
@@ -598,7 +703,8 @@ function makeTransitionExecutorWith(engine: TestEngine, registry?: EngineRegistr
     wsRepo,
     new CrossEngineContextInjector(db, usedRegistry),
     new DecisionContextInjector(db),
-    new CustomPromptInjector(),
+    new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
   );
   return { builder, streamProcessor, executor };
 }
@@ -664,7 +770,8 @@ describe("TE-WK-1..2: workspaceKey propagation through transition", () => {
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     await executor.execute(taskId, "plan");
@@ -691,11 +798,76 @@ describe("TE-WK-1..2: workspaceKey propagation through transition", () => {
       wsRepo,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
     );
 
     await executor.execute(taskId, "plan");
 
     expect(streamProcessor.lastRun?.params.workspaceKey).toBe("test-workspace");
+  });
+});
+
+// ─── TE-BYTEID-1: systemInstructions byte-identity across column transitions ─
+
+describe("TE-BYTEID-1: systemInstructions byte-identity across column transitions", () => {
+  it("TE-BYTEID-1: systemInstructions is byte-identical across two transitions on the same conversation/model with differing stage_instructions", async () => {
+    const cfg = setupTestConfig("", gitDir, [
+      `id: byteid-workflow
+name: ByteIdWorkflow
+workflow_instructions: "Workflow context."
+columns:
+  - id: backlog
+    label: Backlog
+    is_backlog: true
+  - id: plan
+    label: Plan
+    model: "test/fake"
+    on_enter_prompt: "do plan work"
+    stage_instructions: "Plan-specific guardrails."
+  - id: review
+    label: Review
+    model: "test/fake"
+    on_enter_prompt: "do review work"
+    stage_instructions: "Review-specific guardrails."
+`,
+    ]);
+    configCleanup = cfg.cleanup;
+
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    db.run("UPDATE boards SET workflow_template_id = 'byteid-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+
+    const builder = new CapturingParamsBuilder();
+    const streamProcessor = new StubStreamProcessor();
+    const executor = new TransitionExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      streamProcessor,
+      boardTools,
+      wsRepo,
+      new CrossEngineContextInjector(db),
+      new DecisionContextInjector(db),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
+    );
+
+    await executor.execute(taskId, "plan");
+    const systemInstructionsAfterPlan = builder.lastBuilt?.systemInstructions;
+    expect(systemInstructionsAfterPlan).toBe("Workflow context.");
+    expect(builder.lastBuilt?.prompt).toContain("Plan-specific guardrails.");
+
+    await executor.execute(taskId, "review");
+    const systemInstructionsAfterReview = builder.lastBuilt?.systemInstructions;
+
+    // The core regression this fix targets: systemInstructions must be byte-identical
+    // across column transitions (required for vLLM/SGLang prefix-cache / Anthropic
+    // prompt-cache stability), even though the two columns define different stage_instructions.
+    expect(systemInstructionsAfterReview).toBe(systemInstructionsAfterPlan);
+    expect(builder.lastBuilt?.prompt).toContain("Review-specific guardrails.");
+    expect(builder.lastBuilt?.systemInstructions).not.toContain("Plan-specific guardrails.");
+    expect(builder.lastBuilt?.systemInstructions).not.toContain("Review-specific guardrails.");
   });
 });

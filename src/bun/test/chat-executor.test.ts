@@ -8,6 +8,7 @@ import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
+import { SlashCommandResolver } from "../engine/execution/slash-command-resolver.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
@@ -86,6 +87,7 @@ function makeExecutor(opts: {
     new StubWorkdirResolver(),
     new CustomPromptInjector(),
     opts.crossEngineInjector ?? new CrossEngineContextInjector(db, makeTestRegistry(new PassThroughEngine())),
+    new SlashCommandResolver(),
     paramsEnricher,
     opts.boardTools,
     opts.onNewMessage,

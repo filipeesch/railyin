@@ -275,7 +275,7 @@ export class PiEngine implements ExecutionEngine {
     const piModel = this.modelBuilder.build(modelOverride, contextWindowOverride);
     const providerName = piModel.provider;
 
-    const session = await this.sessionManager.getOrCreate(conversationId, piModel, tools, enrichedSystem, cwd);
+    const session = await this.sessionManager.getOrCreate(conversationId, piModel, tools, enrichedSystem, cwd, modelOverride);
 
     this._applyPresetToSession(session, samplingPresetName);
 
@@ -294,16 +294,11 @@ export class PiEngine implements ExecutionEngine {
 
     this.executionToConversation.set(executionId, conversationId);
 
-    // Resolve the prompt via the dialect (slash command expansion, file inclusions, etc.)
-    let resolvedPrompt: string;
-    try {
-      const resolved = await this.dialectResolver.resolvePrompt(prompt, cwd, projectPath);
-      resolvedPrompt = resolved.content;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      yield { type: "error", message: msg, fatal: true };
-      return;
-    }
+    // Slash-command references are resolved upstream by the executor layer's
+    // SlashCommandResolver, BEFORE historyBlock/decisionsBlock/stageInstructionsBlock
+    // are joined into `prompt` — resolving here (on the full composed string) would
+    // fail to match the dialect's leading "/command" pattern.
+    const resolvedPrompt = prompt;
 
     // Start the execution loop. Events are pushed to `queue` by the event subscriber.
     const { queue, state, cleanup } = startExecution({
@@ -480,6 +475,7 @@ export class PiEngine implements ExecutionEngine {
         [],
         undefined,
         workingDirectory,
+        conversationModel,
       );
     }
 
@@ -551,7 +547,8 @@ export class PiEngine implements ExecutionEngine {
     tools: ReturnType<typeof buildAllTools>,
     systemPrompt: string | undefined,
     cwd: string,
+    qualifiedModelId: string,
   ) {
-    return this.sessionManager.getOrCreate(conversationId, model, tools, systemPrompt, cwd);
+    return this.sessionManager.getOrCreate(conversationId, model, tools, systemPrompt, cwd, qualifiedModelId);
   }
 }

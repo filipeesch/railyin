@@ -15,6 +15,9 @@ import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, 
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
+import { PromptAssemblyService } from "../engine/execution/prompt-assembly-service.ts";
+import { SlashCommandResolver } from "../engine/execution/slash-command-resolver.ts";
+import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
 
 let db: Database;
 let gitDir: string;
@@ -102,7 +105,8 @@ function makeExecutor() {
     streamProcessor,
     wsRepo,
     boardTools,
-    new CustomPromptInjector(),
+    new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
   );
   return { builder, streamProcessor, executor };
 }
@@ -187,3 +191,33 @@ describe("RE-WK-1: workspaceKey propagation through retry", () => {
     expect(builder.lastBuilt?.workspaceKey).toBe("ws-other");
   });
 });
+
+// ─── RE-SI-1: stage_instructions prepended to retry prompt ──────────────
+
+describe("RetryExecutor — stage instructions injection", () => {
+  it("RE-SI-1: stage_instructions block is prepended to the retry prompt when due", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir); // seeded task is in 'plan' column, which has stage_instructions
+
+    const { builder, executor } = makeExecutor();
+    await executor.execute(taskId);
+
+    expect(builder.lastBuilt?.prompt).toBe("You are a planning assistant.\n\nPlan the task.");
+    expect(builder.lastBuilt?.systemInstructions ?? "").not.toContain("You are a planning assistant.");
+  });
+
+  it("RE-SI-2: stage_instructions is NOT re-injected on a second retry (no compaction since last injection)", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+
+    const { builder, executor } = makeExecutor();
+    await executor.execute(taskId);
+    expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
+
+    await executor.execute(taskId);
+    expect(builder.lastBuilt?.prompt).not.toContain("You are a planning assistant.");
+  });
+});
+

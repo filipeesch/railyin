@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { getDb } from "../index.ts";
+import { ConversationInjectionStateRepository } from "./conversation-injection-state-repository.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -89,9 +90,11 @@ function mapRevisionRow(row: DecisionRevisionRow): DecisionRevision {
 
 export class DecisionRepository {
   private readonly db: Database;
+  private readonly injectionStateRepo: ConversationInjectionStateRepository;
 
   constructor(db?: Database) {
     this.db = db ?? getDb();
+    this.injectionStateRepo = new ConversationInjectionStateRepository(this.db);
   }
 
   createRecord(
@@ -223,18 +226,10 @@ export class DecisionRepository {
   }
 
   markDecisionsInjected(conversationId: number, compactionSummaryId: number): void {
-    this.db.run(
-      "UPDATE conversations SET decisions_injected_after_compaction_id = ? WHERE id = ?",
-      [compactionSummaryId, conversationId],
-    );
+    this.injectionStateRepo.markInjected(conversationId, "decisions", compactionSummaryId);
   }
 
   getLastInjectedCompactionId(conversationId: number): number | null {
-    const row = this.db
-      .query<{ decisions_injected_after_compaction_id: number | null }, [number]>(
-        "SELECT decisions_injected_after_compaction_id FROM conversations WHERE id = ?",
-      )
-      .get(conversationId);
-    return row?.decisions_injected_after_compaction_id ?? null;
+    return this.injectionStateRepo.getLastInjected(conversationId, "decisions");
   }
 }

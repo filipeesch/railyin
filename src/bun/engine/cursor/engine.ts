@@ -203,9 +203,11 @@ export class CursorEngine implements ExecutionEngine {
       "- Read (fallback) → `railyin_read`",
       "Use the built-in `Read` only for single, known files; otherwise use the Railyn tools.",
     ].join("\n");
-    // Resolve slash-command references (e.g. /create-or-update-pr → XML-wrapped body)
-    const resolvedPrompt = await this.dialect.resolvePrompt(prompt, workingDirectory);
-    const effectivePrompt = resolvedPrompt.content;
+    // Slash-command references (e.g. /create-or-update-pr) are resolved upstream by the
+    // executor layer's SlashCommandResolver, BEFORE historyBlock/decisionsBlock/
+    // stageInstructionsBlock are joined into `prompt` — resolving here (on the full
+    // composed string) would fail to match the dialect's leading "/command" pattern.
+    const effectivePrompt = prompt;
 
     // Read skill SKILL.md files and prepend to system instructions
     const skillPaths = this.dialect.getSkillPaths(workingDirectory);

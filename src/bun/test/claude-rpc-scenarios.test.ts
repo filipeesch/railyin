@@ -168,7 +168,7 @@ describe("Claude backend RPC scenarios", () => {
 });
 
 describe("Claude engine — systemInstructions propagation", () => {
-  it("passes systemInstructions to ClaudeRunConfig", async () => {
+  it("passes systemInstructions to ClaudeRunConfig, stage_instructions goes to prompt content", async () => {
     const adapter = new MockClaudeSdkAdapter();
     adapter.queueCreate({ steps: [token("Done."), done()] });
 
@@ -176,12 +176,15 @@ describe("Claude engine — systemInstructions propagation", () => {
     const { taskId } = await runtime.createTask();
 
     // task is in 'plan' state which has stage_instructions "You are a planning assistant."
+    // Per the cache-invalidation fix, stage_instructions is no longer part of systemInstructions —
+    // it is prepended to the prompt/userContent instead (systemInstructions stays stable across transitions).
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello" });
     await runtime.waitForExecutionStatus(result.executionId, "completed");
 
     const call = adapter.trace.createCalls[0];
     expect(call).toBeDefined();
-    expect(call.systemInstructions).toBe("You are a planning assistant.");
+    expect(call.systemInstructions).toBeUndefined();
+    expect(call.prompt).toContain("You are a planning assistant.");
   });
 
   it("passes undefined systemInstructions when no instructions are configured", async () => {

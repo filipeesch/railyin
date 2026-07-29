@@ -13,9 +13,10 @@ import type { TaskRow } from "../../db/row-types.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import { resolveModel } from "./model-resolver";
-import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
-import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
+import { PromptAssemblyService } from "./prompt-assembly-service.ts";
+import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
+import { SlashCommandResolver } from "./slash-command-resolver.ts";
 
 
 export class RetryExecutor {
@@ -27,7 +28,8 @@ export class RetryExecutor {
     private readonly streamProcessor: StreamProcessor,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
-    private readonly customPromptInjector: CustomPromptInjector,
+    private readonly promptAssemblyService: PromptAssemblyService,
+    private readonly slashCommandResolver: SlashCommandResolver,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
   ) {}
 
@@ -74,23 +76,41 @@ export class RetryExecutor {
 
     const signal = this.streamProcessor.createSignal(executionId);
 
-    // Build system instructions with custom prompt injection
-    const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
+    // Build system instructions + stageInstructionsBlock via the shared collaborator
     const promptFilter: PromptFilterContext = {
       modelId: effectiveModel ?? "",
       engineId: QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot",
       executionType: "task",
       projectPath: this.workdirResolver.resolve(updatedRow),
     };
-    assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
-    const systemInstructions = assembler.assemble();
+    const { systemInstructions, stageInstructionsBlock } = this.promptAssemblyService.assemble({
+      config,
+      boardId: task.board_id,
+      columnId: task.workflow_state,
+      conversationId,
+      promptFilter,
+      isTransition: false,
+    });
+
+    // Resolve slash-command references in the raw retry prompt (on_enter_prompt) BEFORE
+    // joining with stageInstructionsBlock — SlashCommandDialect only matches a leading
+    // "/command" anchored at the start of the string.
+    const resolvedRetryPrompt = await this.slashCommandResolver.resolve(
+      config,
+      promptFilter.engineId,
+      retryPrompt,
+      promptFilter.projectPath ?? this.workdirResolver.resolve(updatedRow),
+      config.projects.find((p) => p.key === updatedRow.project_key)?.projectPath,
+    );
+
+    const retryContent = [stageInstructionsBlock, resolvedRetryPrompt].filter(Boolean).join("\n\n");
 
     const retryBase = {
       ...this.paramsBuilder.build(
         updatedRow,
         conversationId,
         executionId,
-        retryPrompt,
+        retryContent,
         systemInstructions,
         this.workdirResolver.resolve(updatedRow),
         signal,
