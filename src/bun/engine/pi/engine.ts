@@ -456,6 +456,16 @@ export class PiEngine implements ExecutionEngine {
 
   async compact(_taskId: number | null, conversationId: number, workingDirectory: string, workspaceKey: string): Promise<void> {
     let session = this.sessionManager.get(conversationId);
+    // Track whether we had to spin up a session just for this compaction call
+    // (no live session was in memory). Such a session is built with an empty
+    // `tools` list — the SDK's AgentSession registers custom tool implementations
+    // once, at construction, from that list. Reusing this session later would
+    // permanently limit it to SDK built-ins (read/grep/find/ls) even though a
+    // full `tools` array is passed on every subsequent turn, because
+    // `setActiveToolsByName()` can only activate tools already in the registry.
+    // We therefore dispose it once compaction finishes so the next real
+    // execution builds a fresh session with the full tool set.
+    const isShadowSession = !session;
     if (!session) {
       const db = getDb();
       const row = db
@@ -492,6 +502,10 @@ export class PiEngine implements ExecutionEngine {
     } catch (err) {
       console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);
       throw err;
+    } finally {
+      if (isShadowSession) {
+        this.sessionManager.dispose(conversationId);
+      }
     }
   }
 
