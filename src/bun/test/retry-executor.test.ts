@@ -203,7 +203,13 @@ describe("RetryExecutor — stage instructions injection", () => {
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
 
-    expect(builder.lastBuilt?.prompt).toBe("You are a planning assistant.\n\nPlan the task.");
+    expect(builder.lastBuilt?.prompt).toBe(
+      "<active_directive>\n" +
+        "You are a planning assistant.\n\n" +
+        "This directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n" +
+        "</active_directive>\n\n" +
+        "Plan the task.",
+    );
     expect(builder.lastBuilt?.systemInstructions ?? "").not.toContain("You are a planning assistant.");
   });
 

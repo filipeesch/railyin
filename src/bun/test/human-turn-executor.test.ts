@@ -240,7 +240,7 @@ describe("HumanTurnExecutor — stage instructions injection", () => {
     expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
   });
 
-  it("HT-SI-4: stage_instructions absent for the column yields no stageInstructionsBlock", async () => {
+  it("HT-SI-4: stage_instructions absent for the column yields the explicit cancellation active_directive", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
@@ -249,7 +249,9 @@ describe("HumanTurnExecutor — stage instructions injection", () => {
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "user prompt");
 
-    expect(builder.lastBuilt?.prompt).toBe("user prompt");
+    expect(builder.lastBuilt?.prompt).toBe(
+      "<active_directive>\nNone. Any previously active directive is no longer in force. Follow only the user's current instructions and general guidance until a new active_directive is issued.\n</active_directive>\n\nuser prompt",
+    );
   });
 
   // HT-SI-FB-1: the "Engine session lost" recovery/fallback branch uses the same

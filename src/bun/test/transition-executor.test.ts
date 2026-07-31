@@ -285,7 +285,7 @@ columns:
     // so the resolved expansion (not the raw "/opsx-propose ..." chip) appears
     // after the stage instructions block.
     expect(builder.lastBuilt?.prompt).toBe(
-      'You are a planning assistant.\n\n<command name="opsx-propose" args="transition card">\nExpanded instructions for transition card\n</command>',
+      '<active_directive>\nYou are a planning assistant.\n\nThis directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n</active_directive>\n\n<command name="opsx-propose" args="transition card">\nExpanded instructions for transition card\n</command>',
     );
     expect(builder.lastBuilt?.workingDirectory).toBe(gitDir);
 
@@ -597,7 +597,9 @@ columns:
     await executor.execute(taskId, "plan");
 
     expect(builder.lastBuilt?.systemInstructions).toBe("Workflow context.");
-    expect(builder.lastBuilt?.prompt).toBe("Column context.\n\ndo work");
+    expect(builder.lastBuilt?.prompt).toBe(
+      "<active_directive>\nColumn context.\n\nThis directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n</active_directive>\n\ndo work",
+    );
   });
 
   // TE-PRESET-1: column with sampling_preset → samplingPresetName flows through

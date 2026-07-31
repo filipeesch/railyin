@@ -236,7 +236,9 @@ describe("Copilot backend RPC scenarios", () => {
 
         // Task starts in 'plan' workflow_state (stage_instructions: "You are a planning assistant."),
         // prepended to userContent on the first human turn (never-injected-yet policy).
-        expect(session.prompts).toEqual(['You are a planning assistant.\n\n<command name="opsx-propose" args="add-dark-mode">\nResolved body: add-dark-mode\n</command>']);
+        expect(session.prompts).toEqual([
+          '<active_directive>\nYou are a planning assistant.\n\nThis directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n</active_directive>\n\n<command name="opsx-propose" args="add-dark-mode">\nResolved body: add-dark-mode\n</command>',
+        ]);
         const persisted = runtime.db
             .query<{ content: string; role: string | null; metadata: string | null }, [number]>(
                 "SELECT content, role, metadata FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
@@ -305,7 +307,9 @@ describe("Copilot backend RPC scenarios", () => {
 
         // Task starts in 'plan' workflow_state (stage_instructions: "You are a planning assistant."),
         // prepended to userContent on the first human turn (never-injected-yet policy).
-        expect(session.prompts).toEqual(["You are a planning assistant.\n\n.gitignore explain this"]);
+        expect(session.prompts).toEqual([
+          "<active_directive>\nYou are a planning assistant.\n\nThis directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n</active_directive>\n\n.gitignore explain this",
+        ]);
         expect(session.sentMessages[0]?.attachments).toEqual([{
             type: "selection",
             filePath,

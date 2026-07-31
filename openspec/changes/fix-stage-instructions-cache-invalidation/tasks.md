@@ -48,3 +48,12 @@
 - [x] 6.2 Manually trace one column-transition scenario end-to-end (e.g. via existing config fixtures) to confirm `systemInstructions` is byte-identical across the transition and `stageInstructionsBlock` appears correctly in `userContent`.
 - [x] 6.3 Run `openspec validate fix-stage-instructions-cache-invalidation --strict` once more before archiving.
 
+
+## 7. Refinement: explicit active_directive framing + cancellation
+
+- [x] 7.1 Wrap `stage_instructions` content in `StageInstructionsInjector` with the fixed `<active_directive>` template (instruction text + invariant "in force" sentence), replacing the previous unframed raw text.
+- [x] 7.2 Replace the silent `undefined` early-return for a column with no `stage_instructions` with an explicit fixed cancellation `<active_directive>` block, sent at every injection-due point (transition or first turn after compaction) via the same re-injection state machine used by the real directive.
+- [x] 7.3 Update `stage-instructions-injector.test.ts` (SI-1/SI-1b/SI-2/SI-6/SI-6b/SI-6c) to assert the new wrapped/cancellation content and that tracking state is touched for the cancellation case too.
+- [x] 7.4 Update `transition-executor.test.ts`, `retry-executor.test.ts`, `human-turn-executor.test.ts`, and `copilot-rpc-scenarios.test.ts` assertions that previously expected raw unframed `stageInstructionsBlock` text to expect the new `<active_directive>`-wrapped/cancellation format.
+- [x] 7.5 Update `design.md`, `proposal.md`, and `specs/stage-instructions-injection/spec.md` with the new active_directive/cancellation requirements and scenarios.
+- [x] 7.6 Run full backend suite (`bun test src/bun/test --timeout 20000`), typecheck (`tsc --noEmit -p tsconfig.backend.test.json`), and `bun test e2e/api --timeout 30000` — all green.

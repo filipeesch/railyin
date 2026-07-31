@@ -52,6 +52,35 @@ The decisions-injection and stage-instructions-injection re-injection state mach
 ### 6b. `PiSessionManager` session-reuse policy: qualified model id equality
 `PiSessionManager.getOrCreate()` gains a new `qualifiedModelId: string` parameter (the same value the caller, `PiEngine.execute()`, already has locally as `modelOverride` before calling `modelBuilder.build()`). `sessions` changes from `Map<number, AgentSession>` to `Map<number, { session: AgentSession; qualifiedModelId: string }>`. On reuse, `systemPrompt` is only recomputed/overwritten when the incoming qualified id differs from the stored one; pure column transitions (same model) never touch it. Rejected: comparing resolved `Model<"openai-completions">` object fields (`provider`, `id`) — riskier, since `Model` objects also carry `contextWindow`/`maxTokens`/sampling-adjacent fields that could differ without representing a "real" model change; the qualified id string is already the single source of truth used elsewhere in the codebase (`QualifiedModelId`, `resolveModel()`). Rejected: a DB read from `conversations.model` inside `PiSessionManager` — would add a new DB dependency to a class that currently has none, and a DB round-trip on every turn, when the caller already has the value in hand.
 
+### 7. stage_instructions gets an explicit, authoritative `<active_directive>` framing
+Follow-up refinement after the initial fix shipped: `stageInstructionsBlock` was previously unframed raw text (unlike `historyBlock`'s `<message_history>` XML tag or `decisionsBlock`'s markdown header). This under-signals that the content is a binding, standing rule the model must keep following — not a one-time nudge or optional context. `StageInstructionsInjector` now wraps the column's `stage_instructions` text in a fixed template:
+
+```
+<active_directive>
+(stage instruction from the column)
+
+This directive is currently in force. Follow it in every response until it is
+replaced by a new active_directive or the user explicitly asks you to override it.
+</active_directive>
+```
+
+The tag name `active_directive` was deliberately chosen over reusing `systemInstructions` (name-collides with the real `ExecutionParams.systemInstructions`/`messages[0]` field, and overclaims which channel the content is on — it's still a `userContent` tail message, not the system role) and over a "column"-based name (models have no notion of workflow columns as a concept; the tag must be self-explanatory without that context). The trailing sentence is a fixed, invariant string appended after the actual instruction text — not reworded per column.
+
+### 8. Explicit cancellation when a column defines no stage_instructions
+The `active_directive` wording makes an explicit promise ("...until replaced..."). Silence (the original design's `stageInstructionsBlock: undefined` when a column has no `stage_instructions`) breaks that promise: a prior column's directive could keep being obeyed by the model even after transitioning into a column where it no longer applies (e.g. "Don't implement anything" from a `plan` column bleeding into a `build` column with no `stage_instructions`, where implementation is now the actual task). `StageInstructionsInjector` therefore never returns a silent `undefined`-turned-nothing outcome at an injection-due point (transition or first turn after compaction) — when the column has no `stage_instructions`, it returns an explicit cancellation block instead:
+
+```
+<active_directive>
+None. Any previously active directive is no longer in force. Follow only the
+user's current instructions and general guidance until a new active_directive
+is issued.
+</active_directive>
+```
+
+This is sent unconditionally at every injection-due point for a no-`stage_instructions` column (not only when the immediately preceding column actually had one) — simpler and safer than tracking "was there a previously-active directive for this conversation" as new state, at the cost of occasionally sending a small, fixed cancellation string where nothing needed cancelling. Symmetric with the real-directive case: it is resent on every subsequent injection-due point (transition into another no-instructions column, or the first turn after each compaction) rather than only once, since compaction summaries risk resurfacing stale directive text from deep history and the model should always get a fresh, current answer to "what directive applies right now."
+
+Both the real directive and the cancellation route through the same `PromptAssemblyService`/re-injection-due check used by all 5 executor call sites (`TransitionExecutor`, `HumanTurnExecutor` normal + fallback, `RetryExecutor`, `CodeReviewExecutor`) — none of them special-case "no stage_instructions" as silence anymore.
+
 ## Risks / Trade-offs
 
 - **[Risk] Guardrail drift in very long, uncompacted single-column conversations** — if a task sits in one column for many turns without ever triggering a compaction, `stage_instructions` is only in context from the original transition-time injection, which could scroll out of the model's effective attention window over a very long conversation. → **Mitigation**: not addressed in this change (accepted trade-off per decision on re-injection policy); can add a periodic refresher later if real drift is observed in practice.
