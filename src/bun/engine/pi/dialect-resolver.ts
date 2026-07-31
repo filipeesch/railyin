@@ -1,4 +1,3 @@
-import { existsSync, readdirSync } from "fs";
 import { join } from "path";
 import type { SlashCommandDialect, ResolvedPrompt } from "../dialects/slash-command-dialect.ts";
 import type { CommandInfo } from "../types.ts";
@@ -9,11 +8,6 @@ import {
   logInstructionsLoaded,
 } from "../dialects/instruction-scanner.ts";
 import { FileSystemSkillResolver } from "./skill-resolver.ts";
-
-/**
- * Known dialect names that support instruction scanning.
- */
-const INSTRUCTION_DIALECTS = new Set(["copilot", "cursor"]);
 
 export class PiDialectResolver {
   private readonly dialectName: string;
