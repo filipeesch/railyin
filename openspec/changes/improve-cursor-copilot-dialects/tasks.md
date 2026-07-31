@@ -90,94 +90,94 @@
 
 ## 7. Unit Tests: PiDialectResolver.getInstructions()
 
-**File:** `src/bun/test/pi-dialect-resolver.test.ts` (~12 tests)
+**File:** `src/bun/test/pi-dialect-resolver.test.ts` (14 tests)
 **Pattern:** Inject `CopilotDialect`/`CursorDialect`/`NullDialect` via DI (mirrors `pi-harness.test.ts` `SpyDialect`)
 
-- [ ] 7.1 Copilot dialect scans .github/instructions/ — returns instruction from cwd
-- [ ] 7.2 Cursor dialect scans .cursor/rules/ — returns instruction from cwd
-- [ ] 7.3 NullDialect returns empty array — returns `[]`
-- [ ] 7.4 ProjectPath (cwd) files have priority — cwd version wins over worktree
-- [ ] 7.5 Worktree files included when different — returns both (different names)
-- [ ] 7.6 Worktree path same as cwd — no duplication, single scan
-- [ ] 7.7 No instruction directory exists — returns `[]`
-- [ ] 7.8 Files without frontmatter skipped — excluded from results
-- [ ] 7.9 autoApply includes full content — `content` field populated
-- [ ] 7.10 Logging emitted — console log with JSON structure
-- [ ] 7.11 Multiple files from both paths — correct order (cwd first, then worktree)
-- [ ] 7.12 Deduplication across paths — same name in both paths, only cwd version
+- [x] 7.1 Copilot dialect scans .github/instructions/ — returns instruction from cwd
+- [x] 7.2 Cursor dialect scans .cursor/rules/ — returns instruction from cwd
+- [x] 7.3 NullDialect returns empty array — returns `[]`
+- [x] 7.4 ProjectPath (cwd) files have priority — cwd version wins over worktree
+- [x] 7.5 Worktree files included when different — returns both (different names)
+- [x] 7.6 Worktree path same as cwd — no duplication, single scan
+- [x] 7.7 No instruction directory exists — returns `[]`
+- [x] 7.8 Files without frontmatter skipped — excluded from results
+- [x] 7.9 autoApply includes full content — `content` field populated
+- [x] 7.10 Logging emitted — console log with JSON structure
+- [x] 7.11 Multiple files from both paths — correct order (cwd first, then worktree)
+- [x] 7.12 Deduplication across paths — same name in both paths, only cwd version
 
 ## 8. Unit Tests: PiEngine Instruction Injection
 
-**File:** `src/bun/test/pi-engine.test.ts` (extend existing)
-**Pattern:** Inject `MockAgentSession` via `sessionFactory` parameter (mirrors existing tests)
+**File:** `src/bun/test/pi-instruction-injection.test.ts` (10 tests)
+**Pattern:** Test `formatInstructionBlocks()` and system prompt construction
 
-- [ ] 8.1 Instructions injected into system prompt — `enrichedSystem` contains formatted blocks
-- [ ] 8.2 No instructions found — `enrichedSystem` constructed without instructions
-- [ ] 8.3 Instruction formatting — name and description — `### name\n\n**description**` format
-- [ ] 8.4 Instruction formatting — with content (autoApply) — `### name\n\n**description**\n\ncontent`
-- [ ] 8.5 Instruction formatting — without content — `### name\n\n**description**` (no content)
-- [ ] 8.6 Multiple instructions joined — blocks joined with `\n\n`
-- [ ] 8.7 Instructions between taskBlock and systemInstructions — correct ordering
+- [x] 8.1 Instructions injected into system prompt — `enrichedSystem` contains formatted blocks
+- [x] 8.2 No instructions found — `enrichedSystem` constructed without instructions
+- [x] 8.3 Instruction formatting — name and description — `### name\n\n**description**` format
+- [x] 8.4 Instruction formatting — with content (autoApply) — `### name\n\n**description**\n\ncontent`
+- [x] 8.5 Instruction formatting — without content — `### name\n\n**description**` (no content)
+- [x] 8.6 Multiple instructions joined — blocks joined with `\n\n`
+- [x] 8.7 Instructions between taskBlock and systemInstructions — correct ordering
 
 ## 9. Unit Tests: CopilotEngine Instruction Scanning
 
-**File:** `src/bun/test/copilot-engine.test.ts` (new)
+**File:** `src/bun/test/copilot-instruction-scanning.test.ts` (12 tests)
 **Pattern:** Mock SDK adapter + temp directories (mirrors `cursor/engine.test.ts`)
 
-- [ ] 9.1 ProjectPath resolved from DB — `projectPath` used for scanning
-- [ ] 9.2 Instructions scanned at project root — file included in instruction blocks
-- [ ] 9.3 Instructions scanned at worktree root — file included in instruction blocks
-- [ ] 9.4 Deduplication by name — projectPath version wins
-- [ ] 9.5 No instructions found — system message without instruction content
-- [ ] 9.6 Instructions appended to systemMessage — `systemMessage: { mode: "append", content: "..." }`
-- [ ] 9.7 Files without frontmatter skipped — excluded from results
-- [ ] 9.8 Logging emitted — JSON log with `engine: "copilot"`
+- [x] 9.1 ProjectPath resolved from DB — `projectPath` used for scanning
+- [x] 9.2 Instructions scanned at project root — file included in instruction blocks
+- [x] 9.3 Instructions scanned at worktree root — file included in instruction blocks
+- [x] 9.4 Deduplication by name — projectPath version wins
+- [x] 9.5 No instructions found — system message without instruction content
+- [x] 9.6 Instructions appended to systemMessage — `systemMessage: { mode: "append", content: "..." }`
+- [x] 9.7 Files without frontmatter skipped — excluded from results
+- [x] 9.8 Logging emitted — JSON log with `engine: "copilot"`
 
 ## 10. Unit Tests: CursorEngine getSkillPaths Bug Fix
 
 **File:** `src/bun/test/cursor/engine.test.ts` (extend existing)
 **Pattern:** Inject `SpyDialect` via DI (mirrors existing `cursor/engine.test.ts`)
 
-- [ ] 10.1 projectPath passed to getSkillPaths — `getSkillPaths(workingDirectory, projectPath)` called
-- [ ] 10.2 projectPath equals worktreePath — no duplication in skill paths
-- [ ] 10.3 No projectPath available — `getSkillPaths(workingDirectory)` called
+- [x] 10.1 projectPath passed to getSkillPaths — `getSkillPaths(workingDirectory, projectPath)` called
+- [x] 10.2 projectPath equals worktreePath — no duplication in skill paths
+- [x] 10.3 No projectPath available — `getSkillPaths(workingDirectory)` called
 
 ## 11. Integration Tests (In-Memory DB)
 
 **Pattern:** `initDb()` + `seedProjectAndTask()` + real engines with mocked adapters
 
-### 11.1 Pi Engine Integration (~5 tests)
+### 11.1 Pi Engine Integration (5 tests)
 
-**File:** `src/bun/test/integration/pi-instructions.test.ts` (new)
+**File:** `src/bun/test/integration/instruction-loading.test.ts` (new)
 
-- [ ] 11.1.1 Full execution with instructions — session created with instruction blocks
-- [ ] 11.1.2 Monorepo projectPath resolution — instructions scanned at both paths
-- [ ] 11.1.3 Dialect config = copilot — scans `.github/instructions/`
-- [ ] 11.1.4 Dialect config = cursor — scans `.cursor/rules/`
-- [ ] 11.1.5 Dialect config = none — no instruction scanning
+- [x] 11.1.1 Full execution with instructions — session created with instruction blocks
+- [x] 11.1.2 Monorepo projectPath resolution — instructions scanned at both paths
+- [x] 11.1.3 Dialect config = copilot — scans `.github/instructions/`
+- [x] 11.1.4 Dialect config = cursor — scans `.cursor/rules/`
+- [x] 11.1.5 Dialect config = none — no instruction scanning
 
-### 11.2 Copilot Engine Integration (~3 tests)
+### 11.2 Copilot Engine Integration (3 tests)
 
-**File:** `src/bun/test/integration/copilot-instructions.test.ts` (new)
+**File:** `src/bun/test/integration/instruction-loading.test.ts` (new)
 
-- [ ] 11.2.1 Full execution with instructions — instructions in systemMessage content
-- [ ] 11.2.2 Monorepo projectPath resolution — both paths scanned
-- [ ] 11.2.3 No instructions directory — system message without instruction content
+- [x] 11.2.1 Full execution with instructions — instructions in systemMessage content
+- [x] 11.2.2 Monorepo projectPath resolution — both paths scanned
+- [x] 11.2.3 No instructions directory — system message without instruction content
 
-### 11.3 Cursor Engine Integration (~2 tests)
+### 11.3 Cursor Engine Integration (2 tests)
 
-**File:** `src/bun/test/integration/cursor-skills.test.ts` (new)
+**File:** `src/bun/test/integration/instruction-loading.test.ts` (new)
 
-- [ ] 11.3.1 Skills loaded from projectPath — skills from both paths loaded
-- [ ] 11.3.2 Skills deduplicated by path — no duplication when projectPath = worktreePath
+- [x] 11.3.1 Skills loaded from projectPath — skills from both paths loaded
+- [x] 11.3.2 Skills deduplicated by path — no duplication when projectPath = worktreePath
 
 ## 12. Verification
 
-- [ ] 12.1 Verify no TypeScript compilation errors
-- [ ] 12.2 Verify existing tests still pass
-- [ ] 12.3 Verify all new tests pass (`bun test src/bun`)
-- [ ] 12.4 Verify instruction files are loaded when present
-- [ ] 12.5 Verify files without frontmatter are silently skipped
-- [ ] 12.6 Verify autoApply files include full content, non-autoApply include only frontmatter
-- [ ] 12.7 Verify structured JSON logs are emitted when instructions are loaded
-- [ ] 12.8 Verify no Playwright test changes needed (feature is server-side)
+- [x] 12.1 Verify no TypeScript compilation errors
+- [x] 12.2 Verify existing tests still pass
+- [x] 12.3 Verify all new tests pass (`bun test src/bun`)
+- [x] 12.4 Verify instruction files are loaded when present
+- [x] 12.5 Verify files without frontmatter are silently skipped
+- [x] 12.6 Verify autoApply files include full content, non-autoApply include only frontmatter
+- [x] 12.7 Verify structured JSON logs are emitted when instructions are loaded
+- [x] 12.8 Verify no Playwright test changes needed (feature is server-side)
