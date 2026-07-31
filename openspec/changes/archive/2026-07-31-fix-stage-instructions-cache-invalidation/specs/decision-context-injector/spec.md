@@ -1,26 +1,4 @@
-## Purpose
-Defines the `DecisionContextInjector` service responsible for prepending a `<decisions>` XML block to the user-prompt layer after each compaction cycle, preserving provider system-prompt cache stability.
-
-## Requirements
-
-### Requirement: DecisionContextInjector prepends a decisions block to the user prompt once per compaction cycle
-The system SHALL provide a `DecisionContextInjector` class at `src/bun/conversation/decision-context-injector.ts`. Its constructor SHALL accept a `Database` instance. Its `prepare(conversationId: number)` method SHALL return `{ decisionsBlock: string | undefined }`. When a block should be injected, it SHALL call `DecisionRepository.buildContextBlock(conversationId)` and, if the result is non-empty, return it wrapped as a `<decisions>` XML block. If the block is empty (no records exist), it SHALL return `{ decisionsBlock: undefined }` and SHALL NOT update the tracking column.
-
-#### Scenario: First turn before any compaction injects block
-- **WHEN** `prepare(conversationId)` is called and `conversations.decisions_injected_after_compaction_id` is `NULL` and no `compaction_summary` message exists
-- **THEN** it returns a non-undefined `decisionsBlock` and writes sentinel `0` to `decisions_injected_after_compaction_id`
-
-#### Scenario: Already injected for current compaction returns undefined
-- **WHEN** `prepare(conversationId)` is called and `decisions_injected_after_compaction_id` equals the id of the latest `compaction_summary` message
-- **THEN** it returns `{ decisionsBlock: undefined }` and does not modify the column
-
-#### Scenario: New compaction since last injection triggers re-injection
-- **WHEN** a new `compaction_summary` message has been written after the last tracked injection
-- **THEN** `prepare(conversationId)` returns a non-undefined `decisionsBlock` and updates `decisions_injected_after_compaction_id` to the new compaction_summary id
-
-#### Scenario: No decision records returns undefined even if injection is due
-- **WHEN** injection is due (NULL or stale compaction id) but `buildContextBlock` returns empty string
-- **THEN** `prepare(conversationId)` returns `{ decisionsBlock: undefined }` and does not update the column
+## MODIFIED Requirements
 
 ### Requirement: conversations table tracks last decisions injection per conversation
 The system SHALL track the last decisions-injection point per conversation via the shared `conversation_injection_state` table (keyed by `(conversation_id, injection_type)`, introduced by the `stage-instructions-injection` capability), using `injection_type = 'decisions'`, rather than a dedicated `conversations.decisions_injected_after_compaction_id` column. `NULL`/absent row means decisions have never been injected. `0` is the sentinel for "injected before any compaction". A positive integer is the `id` of the `compaction_summary` conversation message after which decisions were last injected. The pre-existing `conversations.decisions_injected_after_compaction_id` column is retained (unused) for migration safety but is no longer read or written by `DecisionRepository`.
@@ -47,18 +25,3 @@ Both `HumanTurnExecutor` and `TransitionExecutor` SHALL construct a `DecisionCon
 #### Scenario: Decisions and stage-instructions injection are independent
 - **WHEN** a turn executes where `decisionsBlock` is due for re-injection but `stageInstructionsBlock` is not (or vice versa)
 - **THEN** only the due block is present in `userContent`; the other is omitted
-
-### Requirement: StubDecisionContextInjector for executor DI tests
-`HumanTurnExecutor` and `TransitionExecutor` tests SHALL use a `StubDecisionContextInjector extends DecisionContextInjector` that overrides `prepare()` with a configurable return value and a call-count tracker. The stub SHALL be instantiated in the executor factory functions (`makeExecutor()`) alongside the existing stubs.
-
-#### Scenario: HTE-D-1 — stub returns block, block prepended to engineContent
-- **WHEN** `StubDecisionContextInjector.prepare()` is configured to return `"<decisions>…</decisions>"`
-- **THEN** the `ExecutionParams` built by `HumanTurnExecutor` has `engineContent` prefixed with the decisions block
-
-#### Scenario: HTE-D-2 — stub returns undefined, no prepend
-- **WHEN** `StubDecisionContextInjector.prepare()` is configured to return `undefined`
-- **THEN** the `ExecutionParams` built does NOT contain a decisions prefix
-
-#### Scenario: HTE-D-3 — prepare() is called (not skipped)
-- **WHEN** `HumanTurnExecutor.execute()` runs
-- **THEN** the stub's `prepare()` call count is `1`

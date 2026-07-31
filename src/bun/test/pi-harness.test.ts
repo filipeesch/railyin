@@ -312,8 +312,8 @@ describe("PiEngine abort & cancel", () => {
     const session1 = makeFakeSession();
     const session2 = makeFakeSession();
 
-    eng.sessionManager.sessions.set(1, session1);
-    eng.sessionManager.sessions.set(2, session2);
+    eng.sessionManager.sessions.set(1, { session: session1, qualifiedModelId: "test/model" });
+    eng.sessionManager.sessions.set(2, { session: session2, qualifiedModelId: "test/model" });
     eng.executionToConversation.set(99, 1); // executionId 99 → conversationId 1
 
     engine.cancel(99);
@@ -327,7 +327,7 @@ describe("PiEngine abort & cancel", () => {
     const eng = engine as any;
 
     const session = makeFakeSession();
-    eng.sessionManager.sessions.set(1, session);
+    eng.sessionManager.sessions.set(1, { session, qualifiedModelId: "test/model" });
     // no entry in executionToConversation
 
     engine.cancel(404);
@@ -340,7 +340,7 @@ describe("PiEngine abort & cancel", () => {
     const eng = engine as any;
 
     const session = makeFakeSession();
-    eng.sessionManager.sessions.set(1, session);
+    eng.sessionManager.sessions.set(1, { session, qualifiedModelId: "test/model" });
     eng.executionToConversation.set(77, 1);
 
     const rejectFn = vi.fn();

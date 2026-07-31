@@ -127,21 +127,22 @@ describe("CursorEngine dialect injection", () => {
     });
     for await (const _ of gen) { /* drain */ }
 
-    // resolvePrompt IS called even for aborted — it happens before the stream.
-    // The abort check is after resolvePrompt, not before.
-    // So this test verifies the adapter run was NOT called, not resolvePrompt.
+    // The engine no longer calls dialect.resolvePrompt itself (resolution happens
+    // upstream via SlashCommandResolver). This test verifies the adapter run was
+    // never invoked for a pre-aborted execution.
     expect(adapter.trace.runCalls).toBe(0);
   });
 
-  it("slash prompt is resolved via dialect before being sent to adapter", async () => {
+  it("slash-looking prompt is forwarded unchanged (resolution now happens upstream via SlashCommandResolver)", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cursor-engine-test-"));
     try {
       const cmdDir = join(tmpDir, ".cursor", "commands");
       mkdirSync(cmdDir, { recursive: true });
       writeFileSync(join(cmdDir, "my-cmd.md"), "Resolved body for $input", "utf-8");
 
+      const spy = new SpyDialect();
       const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
-      const engine = new CursorEngine(() => {}, () => {}, adapter);
+      const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
 
       const gen = engine.execute({
         executionId: 1,
@@ -157,16 +158,19 @@ describe("CursorEngine dialect injection", () => {
       const events: string[] = [];
       for await (const e of gen) events.push(e.type);
 
+      // CursorEngine no longer resolves slash commands itself — the executor layer's
+      // SlashCommandResolver does this before `prompt` reaches the engine. The engine
+      // must forward whatever it receives unchanged.
+      expect(spy.resolvePromptCalls).toHaveLength(0);
       const sentPrompt = adapter.trace.runConfigs[0]!.prompt;
-      expect(sentPrompt).toContain('<command name="my-cmd"');
-      expect(sentPrompt).toContain('Resolved body for my-arg');
-      expect(sentPrompt).not.toContain('/my-cmd');
+      expect(sentPrompt).toContain("/my-cmd my-arg");
+      expect(sentPrompt).not.toContain("Resolved body for my-arg");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("plain prompt is forwarded unchanged via dialect", async () => {
+  it("plain prompt is forwarded unchanged (dialect no longer consulted internally)", async () => {
     const spy = new SpyDialect();
     const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
     const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
@@ -184,8 +188,7 @@ describe("CursorEngine dialect injection", () => {
     });
     for await (const _ of gen) {}
 
-    expect(spy.resolvePromptCalls).toHaveLength(1);
-    expect(spy.resolvePromptCalls[0]!.value).toBe("plain text prompt");
+    expect(spy.resolvePromptCalls).toHaveLength(0);
     const sentPrompt = adapter.trace.runConfigs[0]!.prompt;
     expect(sentPrompt).toContain("plain text prompt");
   });

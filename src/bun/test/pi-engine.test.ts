@@ -80,7 +80,7 @@ function makePiEngine(session: MockAgentSession): PiEngine {
  * accesses the private method via bracket notation.
  */
 async function simulateGetOrCreate(engine: PiEngine, conversationId: number, tools: any[], cwd: string): Promise<any> {
-  return (engine as any).sessionManager.getOrCreate(conversationId, {} as any, tools, undefined, cwd);
+  return (engine as any).sessionManager.getOrCreate(conversationId, {} as any, tools, undefined, cwd, "test-pi/lmstudio/test-model");
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

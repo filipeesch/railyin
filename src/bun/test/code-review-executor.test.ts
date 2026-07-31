@@ -9,6 +9,8 @@ import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { CodeReviewExecutor } from "../engine/execution/code-review-executor.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
+import { PromptAssemblyService } from "../engine/execution/prompt-assembly-service.ts";
+import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
 import { initDb, makeTestRegistry, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { CapturingParamsBuilder, StubStreamProcessor, StubWorkdirResolver, TestEngine } from "./executor-test-helpers.ts";
 
@@ -57,10 +59,66 @@ describe("CodeReviewExecutor", () => {
       () => {},
       wsRepo,
       boardTools,
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
     );
 
     await executor.execute(taskId);
     expect(updates.at(-1)?.model).toBe("fake/fake");
+  });
+});
+
+describe("CodeReviewExecutor — stage instructions injection", () => {
+  function makeExecutor(builder: CapturingParamsBuilder) {
+    return new CodeReviewExecutor(
+      db,
+      makeTestRegistry(new TestEngine()),
+      builder,
+      new StubWorkdirResolver(gitDir),
+      new StubStreamProcessor(),
+      () => {},
+      () => {},
+      wsRepo,
+      boardTools,
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+    );
+  }
+
+  it("CR-SI-1: stage_instructions block is prepended to the review prompt when due", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir); // seeded task is in 'plan' column, which has stage_instructions
+    db.run(
+      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES (?, 'h1', 'index.ts', 'user', 'approved', 1, 1, 1, 1)",
+      [taskId],
+    );
+
+    const builder = new CapturingParamsBuilder();
+    const executor = makeExecutor(builder);
+    await executor.execute(taskId);
+
+    expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
+    expect(builder.lastBuilt?.systemInstructions ?? "").not.toContain("You are a planning assistant.");
+  });
+
+  it("CR-SI-2: stage_instructions is NOT re-injected on a second review (no compaction since last injection)", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run(
+      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES (?, 'h1', 'index.ts', 'user', 'approved', 1, 1, 1, 1)",
+      [taskId],
+    );
+
+    const builder = new CapturingParamsBuilder();
+    const executor = makeExecutor(builder);
+    await executor.execute(taskId);
+    expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
+
+    db.run(
+      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES (?, 'h2', 'index.ts', 'user', 'approved', 2, 2, 2, 2)",
+      [taskId],
+    );
+    await executor.execute(taskId);
+    expect(builder.lastBuilt?.prompt).not.toContain("You are a planning assistant.");
   });
 });

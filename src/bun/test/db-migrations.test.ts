@@ -390,6 +390,67 @@ describe("runMigrations", () => {
   });
 });
 
+describe("Migration 053 — conversation_injection_state backfill", () => {
+  it("migration 053: backfills conversation_injection_state from decisions_injected_after_compaction_id, non-null rows only", async () => {
+    const rawDb = new Database(dbPath, { create: true });
+    // Mark all prior migrations as already applied so the runner only runs 053.
+    rawDb.exec(`
+      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')), checksum TEXT);
+      INSERT INTO schema_migrations (id) VALUES
+        ('001_initial'),('002_task_ux_improvements'),('003_logs'),('004_hunk_decisions'),
+        ('005_enabled_models'),('006_pending_messages'),('007_shell_command_approval'),
+        ('007_line_comments'),('008_hunk_decisions_sent'),('008_task_todos'),
+        ('009_execution_cost'),('010_drop_todo_context'),('011_execution_input_tokens'),
+        ('012_execution_output_tokens'),('013_execution_cache_creation_tokens'),
+        ('014_execution_cache_read_tokens'),('015_workspace_config_key'),
+        ('016_execution_checkpoints'),('016_task_position'),('017_task_position_backfill'),
+        ('018_git_base_sha'),('018_stream_events'),('019_add_parent_block_id'),
+        ('020_line_comment_columns'),('021_model_raw_messages'),
+        ('022_drop_workspace_project_fks'),('023_text_keys'),('024_todo_v2'),
+        ('025_todo_phase'),('026_chat_sessions'),('027_nullable_executions'),
+        ('028_chat_session_mcp_tools'),('029_conversation_stream_cleanup'),
+        ('030_stream_events_cleanup'),('031_conversation_pagination_index'),
+        ('032_perf_indices'),('033_stream_events_exec_index'),
+        ('034_needs_column_prompt'),('035_add_model_to_conversations'),
+        ('036_migrate_model_to_conversations'),('037_remove_model_from_tasks'),
+        ('038_seed_copilot_auto_model'),('039_restore_tasks_created_at_default'),
+        ('040_decision_records'),('041_last_engine_type'),
+        ('042_decisions_injection_tracking'),('043_model_settings'),
+        ('044_mcp_disabled_by_default'),('045_task_notes'),('046_drop_notes_title'),
+        ('047_conversation_sampling_preset'),('048_chat_cascade'),
+        ('049_chat_session_shell_approval'),('050_conversation_reasoning_mode'),
+        ('051_conversation_model_params'),('052_note_tags');
+
+      CREATE TABLE conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        model TEXT,
+        decisions_injected_after_compaction_id INTEGER NULL
+      );
+    `);
+
+    rawDb.run("INSERT INTO conversations (id, decisions_injected_after_compaction_id) VALUES (1, 42)");
+    rawDb.run("INSERT INTO conversations (id, decisions_injected_after_compaction_id) VALUES (2, 0)");
+    rawDb.run("INSERT INTO conversations (id, decisions_injected_after_compaction_id) VALUES (3, NULL)");
+    rawDb.close();
+
+    await runMigrations();
+
+    const db = getDb();
+    const rows = db
+      .query<{ conversation_id: number; injection_type: string; last_injected_after_compaction_id: number | null }, []>(
+        "SELECT conversation_id, injection_type, last_injected_after_compaction_id FROM conversation_injection_state ORDER BY conversation_id",
+      )
+      .all();
+
+    // Only the two non-null rows are backfilled, both under injection_type = 'decisions'
+    expect(rows).toEqual([
+      { conversation_id: 1, injection_type: "decisions", last_injected_after_compaction_id: 42 },
+      { conversation_id: 2, injection_type: "decisions", last_injected_after_compaction_id: 0 },
+    ]);
+  });
+});
+
 describe("Migration 048 — chat cascade", () => {
   it("M-048a: full migration stack completes without error", async () => {
     await expect(runMigrations()).resolves.toBeUndefined();

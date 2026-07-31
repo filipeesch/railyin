@@ -15,6 +15,7 @@ import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
+import { SlashCommandResolver } from "./slash-command-resolver.ts";
 
 
 export class ChatExecutor {
@@ -26,6 +27,7 @@ export class ChatExecutor {
     private readonly workdirResolver: IWorkingDirectoryResolver,
     private readonly customPromptInjector: CustomPromptInjector,
     private readonly crossEngineInjector: CrossEngineContextInjector,
+    private readonly slashCommandResolver: SlashCommandResolver,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
     private readonly boardTools?: IBoardToolExecutor,
     private readonly onNewMessage?: (msg: ConversationMessage) => void,
@@ -123,7 +125,14 @@ export class ChatExecutor {
       msgId,
     );
 
-    const enginePrompt = [historyBlock, engineContent ?? content].filter(Boolean).join("\n\n");
+    const resolvedChatTail = await this.slashCommandResolver.resolve(
+      config,
+      engineId,
+      engineContent ?? content,
+      workingDirectory,
+      conversationRow?.project_key ? config.projects.find((p) => p.key === conversationRow.project_key)?.projectPath : undefined,
+    );
+    const enginePrompt = [historyBlock, resolvedChatTail].filter(Boolean).join("\n\n");
 
     const promptFilter: PromptFilterContext = {
       modelId: effectiveModel,

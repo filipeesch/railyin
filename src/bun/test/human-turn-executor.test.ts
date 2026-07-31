@@ -17,6 +17,9 @@ import { CrossEngineContextInjector } from "../conversation/cross-engine-context
 import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
+import { PromptAssemblyService } from "../engine/execution/prompt-assembly-service.ts";
+import { SlashCommandResolver } from "../engine/execution/slash-command-resolver.ts";
+import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
 import { CapturingParamsBuilder, StubStreamProcessor, StubWorkdirResolver, TestEngine } from "./executor-test-helpers.ts";
 
 let db: Database;
@@ -57,7 +60,8 @@ function makeExecutor(engine: TestEngine, onTaskUpdated?: OnTaskUpdated, registr
     boardTools,
     new CrossEngineContextInjector(db, usedRegistry),
     new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
   );
   return { builder, streamProcessor, executor };
 }
@@ -189,6 +193,91 @@ describe("HumanTurnExecutor — decision context injection", () => {
 
     await executor.execute(taskId, "second message");
     expect(builder.lastBuilt?.prompt).not.toContain("## Decision Records");
+  });
+});
+
+describe("HumanTurnExecutor — stage instructions injection", () => {
+  it("HT-SI-1: stage_instructions block is prepended to prompt on first turn in a column that defines it", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir); // seeded task starts in 'plan' column, which has stage_instructions
+
+    const { builder, executor } = makeExecutor(new TestEngine());
+    await executor.execute(taskId, "user prompt");
+
+    expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
+    expect(builder.lastBuilt?.systemInstructions ?? "").not.toContain("You are a planning assistant.");
+  });
+
+  it("HT-SI-2: stage_instructions is NOT re-injected on second turn (no compaction since last injection)", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+
+    const { builder, executor } = makeExecutor(new TestEngine());
+    await executor.execute(taskId, "first message");
+    expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
+
+    await executor.execute(taskId, "second message");
+    expect(builder.lastBuilt?.prompt).not.toContain("You are a planning assistant.");
+  });
+
+  it("HT-SI-3: stage_instructions is re-injected after a compaction occurs", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+
+    const { builder, executor } = makeExecutor(new TestEngine());
+    await executor.execute(taskId, "first message");
+    expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
+
+    db.run(
+      "INSERT INTO conversation_messages (conversation_id, role, content, type) VALUES (?, 'assistant', 'summary', 'compaction_summary')",
+      [conversationId],
+    );
+
+    await executor.execute(taskId, "third message");
+    expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
+  });
+
+  it("HT-SI-4: stage_instructions absent for the column yields the explicit cancellation active_directive", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE tasks SET workflow_state = 'done' WHERE id = ?", [taskId]); // 'done' column has no stage_instructions
+
+    const { builder, executor } = makeExecutor(new TestEngine());
+    await executor.execute(taskId, "user prompt");
+
+    expect(builder.lastBuilt?.prompt).toBe(
+      "<active_directive>\nNone. Any previously active directive is no longer in force. Follow only the user's current instructions and general guidance until a new active_directive is issued.\n</active_directive>\n\nuser prompt",
+    );
+  });
+
+  // HT-SI-FB-1: the "Engine session lost" recovery/fallback branch uses the same
+  // shared PromptAssemblyService collaborator as the normal path, so stage_instructions
+  // receives identical treatment there too (task 4.3/4.8). historyBlock/decisionsBlock
+  // are not part of the fallback branch (unchanged pre-existing behavior).
+  it("HT-SI-FB-1: fallback branch after engine-session-lost receives the same stage_instructions treatment as the normal path", async () => {
+    const cfg = setupTestConfig("", gitDir);
+    configCleanup = cfg.cleanup;
+    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+
+    // Seed a 'waiting_user' execution so HumanTurnExecutor takes the resume path,
+    // then TestEngine(true) throws on resume() to trigger the fallback branch.
+    db.run(
+      `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
+       VALUES (?, ?, 'plan', 'plan', 'human-turn', 'running', 1)`,
+      [taskId, conversationId],
+    );
+    const execId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?", [execId, taskId]);
+
+    const { builder, executor } = makeExecutor(new TestEngine(true));
+    await executor.execute(taskId, "continue please");
+
+    expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
+    expect(builder.lastBuilt?.systemInstructions ?? "").not.toContain("You are a planning assistant.");
   });
 });
 
@@ -346,7 +435,8 @@ describe("HT-WK-1: workspaceKey propagation through human turn", () => {
       boardTools,
       new CrossEngineContextInjector(db),
       new DecisionContextInjector(db),
-      new CustomPromptInjector(),
+      new PromptAssemblyService(new CustomPromptInjector(), new StageInstructionsInjector(db)),
+      new SlashCommandResolver(),
       undefined,
       undefined,
       new ExecutionParamsEnricher(db),

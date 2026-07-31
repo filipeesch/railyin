@@ -48,7 +48,7 @@ describe("PiSessionManager", () => {
     const resolver = new FakeSessionPathResolver("/tmp/pi-sessions");
     const manager = new PiSessionManager(factory, config, resolver);
 
-    const session = await manager.getOrCreate(1, model, tools, undefined, "/cwd");
+    const session = await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-a");
 
     expect(created).toBe(true);
     expect(manager.get(1)).toBe(session);
@@ -60,9 +60,10 @@ describe("PiSessionManager", () => {
     const resolver = new FakeSessionPathResolver("/tmp/pi-sessions");
     const manager = new PiSessionManager(factory, config, resolver);
 
-    await manager.getOrCreate(1, model, tools, undefined, "/cwd");
+    await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-a");
     fake.agent.state.systemPrompt = "system-prompt";
-    const reused = await manager.getOrCreate(1, model, tools, "updated-prompt", "/cwd");
+    // Different qualified model id — systemPrompt should be recomputed.
+    const reused = await manager.getOrCreate(1, model, tools, "updated-prompt", "/cwd", "provider/model-b");
 
     expect(reused).toBe(fake as unknown as AgentSession);
     expect(fake.agent.state.systemPrompt).toBe("updated-prompt");
@@ -77,9 +78,9 @@ describe("PiSessionManager", () => {
     const resolver = new FakeSessionPathResolver("/tmp/pi-sessions");
     const manager = new PiSessionManager(factory, config, resolver);
 
-    await manager.getOrCreate(1, model, tools, undefined, "/cwd");
+    await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-a");
     fake.agent.state.systemPrompt = "keep-me";
-    await manager.getOrCreate(1, model, tools, undefined, "/cwd");
+    await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-a");
 
     expect(fake.agent.state.systemPrompt).toBe("keep-me");
   });
@@ -90,7 +91,7 @@ describe("PiSessionManager", () => {
     const resolver = new FakeSessionPathResolver("/tmp/pi-sessions");
     const manager = new PiSessionManager(factory, config, resolver);
 
-    await manager.getOrCreate(1, model, tools, undefined, "/cwd");
+    await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-a");
     manager.dispose(1);
 
     expect(fake.disposeCalled).toBe(true);
@@ -108,13 +109,43 @@ describe("PiSessionManager", () => {
     const resolver = new FakeSessionPathResolver("/tmp/pi-sessions");
     const manager = new PiSessionManager(factory, config, resolver);
 
-    await manager.getOrCreate(1, model, tools, undefined, "/cwd");
-    await manager.getOrCreate(2, model, tools, undefined, "/cwd");
+    await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-a");
+    await manager.getOrCreate(2, model, tools, undefined, "/cwd", "provider/model-a");
     manager.disposeAll();
 
     expect(fake1.disposeCalled).toBe(true);
     expect(fake2.disposeCalled).toBe(true);
     expect(manager.get(1)).toBeUndefined();
     expect(manager.get(2)).toBeUndefined();
+  });
+
+  test("SM-6: same qualified model id on reuse does NOT overwrite systemPrompt even when a new non-undefined systemPrompt value is passed", async () => {
+    const fake = new FakeAgentSession();
+    const factory = async () => fake as unknown as AgentSession;
+    const resolver = new FakeSessionPathResolver("/tmp/pi-sessions");
+    const manager = new PiSessionManager(factory, config, resolver);
+
+    await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-a");
+    fake.agent.state.systemPrompt = "keep-me";
+    await manager.getOrCreate(1, model, tools, "new-prompt-value", "/cwd", "provider/model-a");
+
+    expect(fake.agent.state.systemPrompt).toBe("keep-me");
+  });
+
+  test("SM-7: different qualified model id on reuse overwrites systemPrompt and updates the stored id for subsequent comparisons", async () => {
+    const fake = new FakeAgentSession();
+    const factory = async () => fake as unknown as AgentSession;
+    const resolver = new FakeSessionPathResolver("/tmp/pi-sessions");
+    const manager = new PiSessionManager(factory, config, resolver);
+
+    await manager.getOrCreate(1, model, tools, "prompt-a", "/cwd", "provider/model-a");
+    await manager.getOrCreate(1, model, tools, "prompt-b", "/cwd", "provider/model-b");
+
+    expect(fake.agent.state.systemPrompt).toBe("prompt-b");
+
+    // Same id as previous call — systemPrompt should remain untouched.
+    await manager.getOrCreate(1, model, tools, "prompt-c", "/cwd", "provider/model-b");
+
+    expect(fake.agent.state.systemPrompt).toBe("prompt-b");
   });
 });

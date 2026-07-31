@@ -42,11 +42,11 @@ describe("DecisionContextInjector", () => {
 
     // Sentinel 0 must be recorded so second call is suppressed
     const row = db
-      .query<{ decisions_injected_after_compaction_id: number | null }, [number]>(
-        "SELECT decisions_injected_after_compaction_id FROM conversations WHERE id = ?",
+      .query<{ last_injected_after_compaction_id: number | null }, [number]>(
+        "SELECT last_injected_after_compaction_id FROM conversation_injection_state WHERE conversation_id = ? AND injection_type = 'decisions'",
       )
       .get(conversationId);
-    expect(row?.decisions_injected_after_compaction_id).toBe(0);
+    expect(row?.last_injected_after_compaction_id).toBe(0);
   });
 
   it("DCI-2: returns decisionsBlock on first call when decisions exist", () => {

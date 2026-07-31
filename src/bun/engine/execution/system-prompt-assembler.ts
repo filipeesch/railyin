@@ -33,23 +33,32 @@ export class SystemPromptAssembler {
   }
 
   /**
-   * Load workflow_instructions (order 100) and stage_instructions (order 200)
-   * from config into this assembler.
+   * Load workflow_instructions (order 100) from config into this assembler.
+   * NOTE: column-specific stage_instructions is intentionally NOT added here —
+   * it is delivered separately via userContent (see StageInstructionsInjector /
+   * PromptAssemblyService) so systemInstructions stays byte-stable across
+   * column transitions (vLLM/SGLang prefix-cache / Anthropic prompt-cache safety).
    */
   static fromConfig(config: LoadedConfig, boardId: number, columnId: string): SystemPromptAssembler {
     const template = getWorkflowTemplate(config, boardId);
-    const column = template?.columns.find((c) => c.id === columnId);
     const assembler = new SystemPromptAssembler();
 
     if (template?.workflow_instructions) {
       assembler.addPart(template.workflow_instructions, 100, "workflow");
     }
 
-    if (column?.stage_instructions) {
-      assembler.addPart(column.stage_instructions, 200, "stage");
-    }
-
     return assembler;
+  }
+
+  /**
+   * Returns the raw stage_instructions text configured for a column, or undefined
+   * if the column has none. Used by StageInstructionsInjector to build the
+   * userContent-layer stageInstructionsBlock.
+   */
+  static getStageInstructions(config: LoadedConfig, boardId: number, columnId: string): string | undefined {
+    const template = getWorkflowTemplate(config, boardId);
+    const column = template?.columns.find((c) => c.id === columnId);
+    return column?.stage_instructions || undefined;
   }
 
   /**

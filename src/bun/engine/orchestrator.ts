@@ -43,8 +43,11 @@ import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
 import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
+import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { CustomPromptInjector } from "./execution/custom-prompt-injector.ts";
+import { PromptAssemblyService } from "./execution/prompt-assembly-service.ts";
+import { SlashCommandResolver } from "./execution/slash-command-resolver.ts";
 import { ExecutionParamsEnricher } from "./execution/execution-params-enricher.ts";
 import type { McpRegistryPool } from "../mcp/registry-pool.ts";
 
@@ -99,6 +102,8 @@ export class Orchestrator implements ExecutionCoordinator {
     this.paramsBuilder = new ExecutionParamsBuilder(registryPool ?? null);
     this.workdirResolver = new WorkingDirectoryResolver(db, wsRepo);
     const customPromptInjector = new CustomPromptInjector();
+    const promptAssemblyService = new PromptAssemblyService(customPromptInjector, new StageInstructionsInjector(db));
+    const slashCommandResolver = new SlashCommandResolver();
     const paramsEnricher = new ExecutionParamsEnricher(db, modelSettingsRepo);
     const crossEngineInjector = new CrossEngineContextInjector(db, registry);
 
@@ -106,7 +111,8 @@ export class Orchestrator implements ExecutionCoordinator {
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, boardTools, wsRepo,
       crossEngineInjector,
       new DecisionContextInjector(db),
-      customPromptInjector,
+      promptAssemblyService,
+      slashCommandResolver,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
       paramsEnricher,
@@ -115,14 +121,15 @@ export class Orchestrator implements ExecutionCoordinator {
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
       crossEngineInjector,
       new DecisionContextInjector(db),
-      customPromptInjector,
+      promptAssemblyService,
+      slashCommandResolver,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
       paramsEnricher,
     );
-    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, customPromptInjector, paramsEnricher);
-    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, customPromptInjector);
-    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, crossEngineInjector, paramsEnricher, boardTools, onNewMessage);
+    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, promptAssemblyService, slashCommandResolver, paramsEnricher);
+    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, promptAssemblyService);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, crossEngineInjector, slashCommandResolver, paramsEnricher, boardTools, onNewMessage);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────
