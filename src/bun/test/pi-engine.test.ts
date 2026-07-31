@@ -25,7 +25,10 @@ class MockAgentSession {
     return { tokens: 0, contextWindow: 128_000, maxTokens: 128_000, fraction: 0, percent: 0 };
   }
 
-  dispose() {}
+  disposeCallCount = 0;
+  dispose() {
+    this.disposeCallCount++;
+  }
 
   setActiveToolsCallCount = 0;
   lastSetNames: string[] = [];
@@ -263,7 +266,40 @@ describe("PiEngine.compact()", () => {
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);
+
     expect(row).toBeNull();
+  });
+
+  it("PE-COMPACT-9: no live session → shadow session (built with empty tools) is disposed after compact() succeeds, so the next execute() rebuilds a fresh session with the full tool set instead of reusing the tool-crippled one", async () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngine(session);
+
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
+
+    expect(session.disposeCallCount).toBe(1);
+    expect((engine as any).sessionManager.get(conversationId)).toBeUndefined();
+  });
+
+  it("PE-COMPACT-10: no live session → session.compact() throws → shadow session is still disposed (not left cached with an empty tool registry)", async () => {
+    const session = new MockAgentSession();
+    session.compactError = new Error("boom");
+    const engine = makePiEngine(session);
+
+    await expect(engine.compact(null, conversationId, "/test-working-dir", "test-workspace")).rejects.toThrow("boom");
+
+    expect(session.disposeCallCount).toBe(1);
+    expect((engine as any).sessionManager.get(conversationId)).toBeUndefined();
+  });
+
+  it("PE-COMPACT-11: live session already present → compact() must NOT dispose it (only sessions created solely for this compact() call are torn down)", async () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngine(session);
+    await simulateGetOrCreate(engine, conversationId, [{ name: "write_file" }], "/test-working-dir");
+
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
+
+    expect(session.disposeCallCount).toBe(0);
+    expect((engine as any).sessionManager.get(conversationId)).toBeDefined();
   });
 });
 
