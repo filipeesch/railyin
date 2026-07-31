@@ -1,84 +1,92 @@
 ## 1. Instruction Scanner Utility
 
-- [ ] 1.1 Create `src/bun/engine/dialects/instruction-scanner.ts` with `Instruction` interface and `ParsedFrontmatter` interface
-- [ ] 1.2 Implement `parseFrontmatter()` function to extract YAML frontmatter, return `ParsedFrontmatter | null`
-- [ ] 1.3 Implement `scanInstructionsFromDir()` function to scan directories for matching files, parse frontmatter, return `Instruction[]`
-- [ ] 1.4 Implement `getInstructionConvention()` function to map dialect names to convention objects
-- [ ] 1.5 Add structured JSON logging when instruction files are loaded
+- [x] 1.1 Create `src/bun/engine/dialects/instruction-scanner.ts` with `Instruction` interface and `ParsedFrontmatter` interface
+- [x] 1.2 Implement `parseFrontmatter()` function to extract YAML frontmatter, return `ParsedFrontmatter | null`
+- [x] 1.3 Implement `scanInstructionsFromDir()` function to scan directories for matching files, parse frontmatter, return `Instruction[]`
+- [x] 1.4 Implement `getInstructionConvention()` function to map dialect names to convention objects
+- [x] 1.5 Add structured JSON logging when instruction files are loaded
 
 ## 2. PiDialectResolver Extension
 
-- [ ] 2.1 Add `getInstructions(cwd: string, gitWorktreeRootPath: string): Instruction[]` method to `PiDialectResolver`
-- [ ] 2.2 Import instruction-scanner utilities into dialect-resolver.ts
-- [ ] 2.3 Implement convention resolution based on dialect type (copilot → .github/instructions/, cursor → .cursor/rules/)
-- [ ] 2.4 Scan both project root (cwd) and worktree root (gitWorktreeRootPath) with deduplication by instruction name
-- [ ] 2.5 Add structured JSON logging when instructions are loaded
+- [x] 2.1 Add `getInstructions(cwd: string, gitWorktreeRootPath: string): Instruction[]` method to `PiDialectResolver`
+- [x] 2.2 Import instruction-scanner utilities into dialect-resolver.ts
+- [x] 2.3 Implement convention resolution based on dialect type (copilot → .github/instructions/, cursor → .cursor/rules/)
+- [x] 2.4 Scan both project root (cwd) and worktree root (gitWorktreeRootPath) with deduplication by instruction name
+- [x] 2.5 Add structured JSON logging when instructions are loaded
 
 ## 3. Pi Engine Instruction Injection
 
-- [ ] 3.1 Call `this.dialectResolver.getInstructions(cwd, workingDirectory)` in `PiEngine.createManagedExecution()`
-- [ ] 3.2 Format `Instruction[]` as markdown blocks (name, description, content if autoApply)
-- [ ] 3.3 Append instruction blocks to `enrichedSystem` between taskBlock and systemInstructions
-- [ ] 3.4 Pass enriched system prompt to session manager
+- [x] 3.1 Call `this.dialectResolver.getInstructions(cwd, workingDirectory)` in `PiEngine.createManagedExecution()`
+- [x] 3.2 Format `Instruction[]` as markdown blocks (name, description, content if autoApply)
+- [x] 3.3 Append instruction blocks to `enrichedSystem` between taskBlock and systemInstructions
+- [x] 3.4 Pass enriched system prompt to session manager
 
 ## 4. Copilot Engine Instruction Scanning
 
-- [ ] 4.1 Add projectPath resolution from DB in `CopilotEngine._run()` (same pattern as listCommands)
-- [ ] 4.2 Import instruction-scanner utilities into copilot/engine.ts
-- [ ] 4.3 Scan `.github/instructions/` at both projectPath and worktreePath for `.md` files
-- [ ] 4.4 Parse frontmatter and format instruction blocks as markdown
-- [ ] 4.5 Append instruction blocks to systemContent before systemMessage construction
-- [ ] 4.6 Add structured JSON logging when instructions are loaded
+- [x] 4.1 Add projectPath resolution from DB in `CopilotEngine._run()` (same pattern as listCommands)
+- [x] 4.2 Import instruction-scanner utilities into copilot/engine.ts
+- [x] 4.3 Scan `.github/instructions/` at both projectPath and worktreePath for `.md` files
+- [x] 4.4 Parse frontmatter and format instruction blocks as markdown
+- [x] 4.5 Append instruction blocks to systemContent before systemMessage construction
+- [x] 4.6 Add structured JSON logging when instructions are loaded
 
 ## 5. Cursor Engine Bug Fix
 
-- [ ] 5.1 Add projectPath resolution from DB in `CursorEngine._run()` (same pattern as listCommands)
-- [ ] 5.2 Pass projectPath to `this.dialect.getSkillPaths(workingDirectory, projectPath)`
+- [x] 5.1 Add projectPath resolution from DB in `CursorEngine._run()` (same pattern as listCommands)
+- [x] 5.2 Pass projectPath to `this.dialect.getSkillPaths(workingDirectory, projectPath)`
 
 ## 6. Unit Tests: instruction-scanner.ts
 
-**File:** `src/bun/test/instruction-scanner.test.ts` (~28 tests)
+**File:** `src/bun/test/instruction-scanner.test.ts` (33 tests)
 **Pattern:** Pure function tests with temp directories (mirrors `cursor-dialect.test.ts`)
 
-### 6.1 parseFrontmatter() (~10 tests)
+### 6.1 parseFrontmatter() (12 tests)
 
-- [ ] 6.1.1 Valid frontmatter with description — returns `{ description, autoApply: false }`
-- [ ] 6.1.2 Valid frontmatter with autoApply true — returns `{ autoApply: true }`
-- [ ] 6.1.3 Valid frontmatter with both fields — returns both
-- [ ] 6.1.4 No frontmatter (plain text) — returns `null`
-- [ ] 6.1.5 Malformed frontmatter (no closing `---`) — returns `null`
-- [ ] 6.1.6 Empty frontmatter — returns `{ description: undefined, autoApply: false }`
-- [ ] 6.1.7 Frontmatter with extra fields — ignores unknown fields
-- [ ] 6.1.8 autoApply: false explicit — returns `{ autoApply: false }`
-- [ ] 6.1.9 autoApply: true without description — returns `{ autoApply: true }`
-- [ ] 6.1.10 Description with special characters — correctly parsed
+- [x] 6.1.1 Valid frontmatter with description — returns `{ description, autoApply: false }`
+- [x] 6.1.2 Valid frontmatter with autoApply true — returns `{ autoApply: true }`
+- [x] 6.1.3 Valid frontmatter with both fields — returns both
+- [x] 6.1.4 No frontmatter (plain text) — returns `null`
+- [x] 6.1.5 Malformed frontmatter (no closing `---`) — returns `null`
+- [x] 6.1.6 Empty frontmatter — returns `{ description: undefined, autoApply: false }`
+- [x] 6.1.7 Frontmatter with extra fields — ignores unknown fields
+- [x] 6.1.8 autoApply: false explicit — returns `{ autoApply: false }`
+- [x] 6.1.9 autoApply: true without description — returns `{ autoApply: true }`
+- [x] 6.1.10 Description with special characters — correctly parsed
+- [x] 6.1.11 Quoted description values — unquoted correctly
+- [x] 6.1.12 Single-quoted description values — unquoted correctly
 
-### 6.2 scanInstructionsFromDir() (~11 tests)
+### 6.2 scanInstructionsFromDir() (12 tests)
 
-- [ ] 6.2.1 Scan directory with matching `.md` files — returns instructions for valid files
-- [ ] 6.2.2 Scan directory with `.mdc` extension — returns instruction
-- [ ] 6.2.3 Mixed extensions (.md, .mdc, .txt) — returns 2, ignores .txt
-- [ ] 6.2.4 Empty directory — returns `[]`
-- [ ] 6.2.5 Non-existent directory — returns `[]` (no error)
-- [ ] 6.2.6 Subdirectory ignored (flat scan) — returns `[]`
-- [ ] 6.2.7 autoApply true includes full content — `content` field populated
-- [ ] 6.2.8 autoApply false excludes content — `content: undefined`
-- [ ] 6.2.9 Instruction name from filename stem — `name: "my-conventions"`
-- [ ] 6.2.10 Instruction sourcePath is absolute — `sourcePath` is absolute
-- [ ] 6.2.11 Multiple files deduplicated by name — only first occurrence
+- [x] 6.2.1 Scan directory with matching `.md` files — returns instructions for valid files
+- [x] 6.2.2 Scan directory with `.mdc` extension — returns instruction
+- [x] 6.2.3 Mixed extensions (.md, .mdc, .txt) — returns 2, ignores .txt
+- [x] 6.2.4 Empty directory — returns `[]`
+- [x] 6.2.5 Non-existent directory — returns `[]` (no error)
+- [x] 6.2.6 Subdirectory ignored (flat scan) — returns `[]`
+- [x] 6.2.7 autoApply true includes full content — `content` field populated
+- [x] 6.2.8 autoApply false excludes content — `content: undefined`
+- [x] 6.2.9 Instruction name from filename stem — `name: "my-conventions"`
+- [x] 6.2.10 Instruction sourcePath is absolute — `sourcePath` is absolute
+- [x] 6.2.11 Files without frontmatter skipped — excluded from results
+- [x] 6.2.12 Files with malformed frontmatter skipped — excluded from results
 
-### 6.3 getInstructionConvention() (~4 tests)
+### 6.3 getInstructionConvention() (4 tests)
 
-- [ ] 6.3.1 Copilot convention — returns `{ subdirectory: ".github/instructions", extensions: [".md"] }`
-- [ ] 6.3.2 Cursor convention — returns `{ subdirectory: ".cursor/rules", extensions: [".mdc", ".md"] }`
-- [ ] 6.3.3 Unknown dialect — returns `null`
-- [ ] 6.3.4 Empty string — returns `null`
+- [x] 6.3.1 Copilot convention — returns `{ subdirectory: ".github/instructions", extensions: [".md"] }`
+- [x] 6.3.2 Cursor convention — returns `{ subdirectory: ".cursor/rules", extensions: [".mdc", ".md"] }`
+- [x] 6.3.3 Unknown dialect — returns `null`
+- [x] 6.3.4 Empty string — returns `null`
 
-### 6.4 Instruction interface (~3 tests)
+### 6.4 Instruction interface (3 tests)
 
-- [ ] 6.4.1 Required fields present — `name`, `description`, `sourcePath` always present
-- [ ] 6.4.2 Optional field absent — `content` is `undefined` when autoApply is false
-- [ ] 6.4.3 Content populated — `content` contains body text when autoApply is true
+- [x] 6.4.1 Required fields present — `name`, `description`, `sourcePath` always present
+- [x] 6.4.2 Optional field absent — `content` is `undefined` when autoApply is false
+- [x] 6.4.3 Content populated — `content` contains body text when autoApply is true
+
+### 6.5 logInstructionsLoaded() (2 tests)
+
+- [x] 6.5.1 Does not log when instructions array is empty
+- [x] 6.5.2 Logs JSON with correct format when instructions loaded
 
 ## 7. Unit Tests: PiDialectResolver.getInstructions()
 
