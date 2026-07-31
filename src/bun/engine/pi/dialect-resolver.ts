@@ -1,17 +1,33 @@
-/**
- * PiDialectResolver — resolves slash prompts, skill paths, and project paths.
- *
- * Wraps the SlashCommandDialect and encapsulates the DB lookups needed to find the
- * project path for a given task/board pair. Keeping this logic here removes the need
- * for the execution controller to import DB helpers directly.
- */
-
+import { join } from "path";
 import type { SlashCommandDialect, ResolvedPrompt } from "../dialects/slash-command-dialect.ts";
 import type { CommandInfo } from "../types.ts";
+import type { Instruction } from "../dialects/instruction-scanner.ts";
+import {
+  getInstructionConvention,
+  scanInstructionsFromDir,
+  logInstructionsLoaded,
+} from "../dialects/instruction-scanner.ts";
 import { FileSystemSkillResolver } from "./skill-resolver.ts";
 
 export class PiDialectResolver {
-  constructor(private readonly dialect: SlashCommandDialect) {}
+  private readonly dialectName: string;
+
+  constructor(private readonly dialect: SlashCommandDialect) {
+    // Determine dialect name from constructor
+    this.dialectName = this.resolveDialectName(dialect);
+  }
+
+  /**
+   * Resolve the dialect name from the dialect instance.
+   */
+  private resolveDialectName(dialect: SlashCommandDialect): string {
+    const className = dialect.constructor.name.toLowerCase();
+    if (className.includes("copilot")) return "copilot";
+    if (className.includes("cursor")) return "cursor";
+    if (className.includes("claude")) return "claude";
+    if (className.includes("null")) return "none";
+    return "none";
+  }
 
   async resolvePrompt(prompt: string, cwd: string, projectPath: string | undefined): Promise<ResolvedPrompt> {
     return this.dialect.resolvePrompt(prompt, cwd, projectPath);
@@ -56,4 +72,50 @@ export class PiDialectResolver {
     return undefined;
   }
 
+  /**
+   * Scan instruction files based on the configured dialect convention.
+   *
+   * Scans both project root (cwd) and worktree root (gitWorktreeRootPath).
+   * Files from cwd have higher priority (deduplicated by name).
+   *
+   * @param cwd - Project root path (monorepo root).
+   * @param gitWorktreeRootPath - Git worktree root path.
+   * @returns Array of Instruction objects.
+   */
+  getInstructions(cwd: string, gitWorktreeRootPath: string): Instruction[] {
+    const convention = getInstructionConvention(this.dialectName);
+    if (convention === null) {
+      return [];
+    }
+
+    const seen = new Set<string>();
+    const instructions: Instruction[] = [];
+
+    // Scan cwd (project root) first — higher priority
+    const cwdDir = join(cwd, convention.subdirectory);
+    const cwdInstructions = scanInstructionsFromDir(cwdDir, convention.extensions);
+    for (const inst of cwdInstructions) {
+      if (!seen.has(inst.name)) {
+        seen.add(inst.name);
+        instructions.push(inst);
+      }
+    }
+
+    // Scan worktree root if different from cwd
+    if (gitWorktreeRootPath !== cwd) {
+      const worktreeDir = join(gitWorktreeRootPath, convention.subdirectory);
+      const worktreeInstructions = scanInstructionsFromDir(worktreeDir, convention.extensions);
+      for (const inst of worktreeInstructions) {
+        if (!seen.has(inst.name)) {
+          seen.add(inst.name);
+          instructions.push(inst);
+        }
+      }
+    }
+
+    logInstructionsLoaded("pi", instructions);
+    return instructions;
+  }
+
 }
+

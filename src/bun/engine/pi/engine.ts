@@ -44,6 +44,7 @@ import { PiSessionManager, DefaultSessionPathResolver } from "./session-manager.
 import { DefaultRunDriver } from "./run-driver.ts";
 import { PiCompactionCoordinator, DefaultMessageAppender } from "./compaction-coordinator.ts";
 import { startExecution } from "./execution-controller.ts";
+import { formatInstructionBlocks } from "./instruction-formatter.ts";
 
 /** Options passed to a SessionFactory when creating a new Pi agent session. */
 export interface SessionFactoryOptions {
@@ -246,9 +247,13 @@ export class PiEngine implements ExecutionEngine {
           ...(taskContext.description ? [`**Description:** ${taskContext.description}`] : []),
         ].join("\n")
       : undefined;
-    const enrichedSystem = [taskBlock, systemInstructions].filter(Boolean).join("\n\n") || undefined;
 
+    // Scan instruction files based on dialect convention
     const cwd = workingDirectory ?? process.cwd();
+    const instructions = this.dialectResolver.getInstructions(cwd, workingDirectory);
+    const instructionBlocks = formatInstructionBlocks(instructions);
+
+    const enrichedSystem = [taskBlock, instructionBlocks, systemInstructions].filter(Boolean).join("\n\n") || undefined;
 
     const projectPath = boardId != null && taskId != null
       ? await this.dialectResolver.lookupProjectPath(taskId, boardId, cwd)

@@ -23,10 +23,14 @@ import { readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 
 import { join, extname, basename, isAbsolute } from "path";
 import { homedir, tmpdir } from "os";
 import { parseFileRef } from "../../utils/resolve-file-attachments.ts";
+import { scanInstructionsFromDir, logInstructionsLoaded } from "../dialects/instruction-scanner.ts";
+import { formatInstructionBlocks } from "../pi/instruction-formatter.ts";
+import { getDb } from "../../db/index.ts";
+import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
+import { getLoadedProjectByKey } from "../../project-store.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
-import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 
 function utf16LineOffsets(text: string): number[] {
   const offsets = [0];
@@ -179,7 +183,64 @@ export class CopilotEngine implements ExecutionEngine {
     const taskBlock = taskContext
       ? [`## Task`, `**Title:** ${taskContext.title}`, ...(taskContext.description ? [`**Description:** ${taskContext.description}`] : [])].join("\n")
       : undefined;
-    const systemContent = [taskBlock, systemInstructions].filter(Boolean).join("\n\n");
+
+    // Resolve projectPath from DB for instruction scanning
+    let projectPath: string | undefined;
+    if (taskId != null) {
+      const db = getDb();
+      const taskRow = db
+        .query<{ board_id: number; project_key: string }, [number]>(
+          "SELECT board_id, project_key FROM tasks WHERE id = ?",
+        )
+        .get(taskId);
+
+      const gitRow = db
+        .query<{ worktree_path: string | null }, [number]>(
+          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+        )
+        .get(taskId);
+
+      const worktreePath = gitRow?.worktree_path ?? workingDirectory ?? process.cwd();
+
+      if (taskRow) {
+        const wsKey =
+          db.query<{ workspace_key: string }, [number]>(
+            "SELECT workspace_key FROM boards WHERE id = ?",
+          ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+        const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
+        if (project?.projectPath && project.projectPath !== worktreePath) {
+          projectPath = project.projectPath;
+        }
+      }
+    }
+
+    // Scan .github/instructions/ at projectPath and worktreePath
+    const instructions: import("../dialects/instruction-scanner.ts").Instruction[] = [];
+    const seen = new Set<string>();
+
+    const scanDir = (dir: string) => {
+      const instDir = join(dir, ".github", "instructions");
+      const insts = scanInstructionsFromDir(instDir, [".md"]);
+      for (const inst of insts) {
+        if (!seen.has(inst.name)) {
+          seen.add(inst.name);
+          instructions.push(inst);
+        }
+      }
+    };
+
+    if (projectPath) {
+      scanDir(projectPath);
+    }
+    const worktreePath = workingDirectory ?? process.cwd();
+    if (!projectPath || projectPath !== worktreePath) {
+      scanDir(worktreePath);
+    }
+
+    logInstructionsLoaded("copilot", instructions);
+    const instructionBlocks = formatInstructionBlocks(instructions);
+
+    const systemContent = [taskBlock, instructionBlocks, systemInstructions].filter(Boolean).join("\n\n");
     const systemMessage = systemContent
       ? { mode: "append" as const, content: systemContent }
       : undefined;

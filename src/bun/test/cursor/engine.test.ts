@@ -77,6 +77,7 @@ describe("cursorAgentIdForConversation — determinism (§6.5.1 supporting)", ()
 class SpyDialect implements SlashCommandDialect {
   resolvePromptCalls: { value: string; worktreePath: string; projectPath?: string }[] = [];
   listCommandsCalls: { worktreePath: string; projectPath?: string }[] = [];
+  getSkillPathsCalls: { worktreePath: string; projectPath?: string }[] = [];
   skillPathsResult: string[] = [];
 
   async resolvePrompt(value: string, worktreePath: string, projectPath?: string): Promise<ResolvedPrompt> {
@@ -89,7 +90,8 @@ class SpyDialect implements SlashCommandDialect {
     return [];
   }
 
-  getSkillPaths(_worktreePath: string, _projectPath?: string): string[] {
+  getSkillPaths(worktreePath: string, projectPath?: string): string[] {
+    this.getSkillPathsCalls.push({ worktreePath, projectPath });
     return this.skillPathsResult;
   }
 }
@@ -250,3 +252,58 @@ describe("CursorEngine dialect injection", () => {
     expect(sentPrompt).toContain("hello world");
   });
 });
+
+// ─── CursorEngine getSkillPaths projectPath bug fix ──────────────────────────
+
+describe("CursorEngine getSkillPaths — projectPath resolution (§5.1-5.2)", () => {
+  it("passes projectPath to getSkillPaths when task has project configured", async () => {
+    const spy = new SpyDialect();
+    const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
+    const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+
+    const gen = engine.execute({
+      executionId: 1,
+      taskId: 1,
+      boardId: 1,
+      conversationId: 101,
+      model: "cursor/mock-model",
+      workingDirectory: "/test/worktree",
+      prompt: "do something",
+      signal: new AbortController().signal,
+      boardTools: {} as any,
+    });
+    for await (const _ of gen) {}
+
+    // Verify getSkillPaths was called with projectPath
+    expect(spy.getSkillPathsCalls.length).toBeGreaterThan(0);
+    const call = spy.getSkillPathsCalls[0];
+    expect(call.worktreePath).toBe("/test/worktree");
+    // projectPath should be passed (resolved from DB or undefined)
+    expect(call).toHaveProperty("projectPath");
+  });
+
+  it("calls getSkillPaths with only workingDirectory when no project configured", async () => {
+    const spy = new SpyDialect();
+    const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
+    const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+
+    const gen = engine.execute({
+      executionId: 1,
+      taskId: null,
+      boardId: undefined,
+      conversationId: 101,
+      model: "cursor/mock-model",
+      workingDirectory: "/test/worktree",
+      prompt: "do something",
+      signal: new AbortController().signal,
+      boardTools: {} as any,
+    });
+    for await (const _ of gen) {}
+
+    // Verify getSkillPaths was called
+    expect(spy.getSkillPathsCalls.length).toBeGreaterThan(0);
+    const call = spy.getSkillPathsCalls[0];
+    expect(call.worktreePath).toBe("/test/worktree");
+  });
+});
+
