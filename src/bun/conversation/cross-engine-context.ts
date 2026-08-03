@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { EngineModelInfo } from "../engine/types.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 import type { EngineRegistry } from "../engine/engine-registry.ts";
@@ -10,7 +10,7 @@ export interface PrepareResult {
 
 export class CrossEngineContextInjector {
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly engineRegistry?: EngineRegistry,
   ) {}
 
@@ -22,11 +22,11 @@ export class CrossEngineContextInjector {
     workspaceKey: string,
     excludeBeforeMsgId?: number,
   ): Promise<PrepareResult> {
-    const conv = this.db
-      .query<{ last_engine_type: string | null }, [number]>(
-        "SELECT last_engine_type FROM conversations WHERE id = ?",
-      )
-      .get(conversationId);
+    const conv = await this.db
+      .get<{ last_engine_type: string | null }>(
+        "SELECT last_engine_type FROM conversations WHERE id = $1",
+        [conversationId],
+      );
 
     if (conv == null || conv.last_engine_type == null) {
       return { historyBlock: undefined };
@@ -38,7 +38,7 @@ export class CrossEngineContextInjector {
 
     const sourceEngine = this.engineRegistry?.getEngineById(conv.last_engine_type) ?? null;
 
-    let messages = this.fetchMessagesSinceAnchor(conversationId, excludeBeforeMsgId);
+    let messages = await this.fetchMessagesSinceAnchor(conversationId, excludeBeforeMsgId);
 
     if (
       targetModelInfo?.contextWindow != null &&
@@ -46,13 +46,13 @@ export class CrossEngineContextInjector {
       "compact" in sourceEngine &&
       typeof sourceEngine.compact === "function"
     ) {
-      const est = new ContextEstimator(this.db).estimate(
+      const est = await new ContextEstimator(this.db).estimate(
         conversationId,
         targetModelInfo.contextWindow,
       );
       if (est.fraction > 0.75) {
         await sourceEngine.compact(null, conversationId, workingDirectory, workspaceKey);
-        messages = this.fetchMessagesSinceAnchor(conversationId, excludeBeforeMsgId);
+        messages = await this.fetchMessagesSinceAnchor(conversationId, excludeBeforeMsgId);
       }
     }
 
@@ -60,31 +60,31 @@ export class CrossEngineContextInjector {
     return { historyBlock };
   }
 
-  private fetchMessagesSinceAnchor(
+  private async fetchMessagesSinceAnchor(
     conversationId: number,
     excludeBeforeMsgId?: number,
-  ): ConversationMessageRow[] {
-    const anchor = this.db
-      .query<{ id: number }, [number]>(
-        "SELECT id FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-      )
-      .get(conversationId);
+  ): Promise<ConversationMessageRow[]> {
+    const anchor = await this.db
+      .get<{ id: number }>(
+        "SELECT id FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+        [conversationId],
+      );
 
     const anchorId = anchor?.id ?? 0;
 
     if (excludeBeforeMsgId != null) {
       return this.db
-        .query<ConversationMessageRow, [number, number, number]>(
-          "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id >= ? AND id < ? ORDER BY id ASC LIMIT 200",
-        )
-        .all(conversationId, anchorId, excludeBeforeMsgId);
+        .rows<ConversationMessageRow>(
+          "SELECT * FROM conversation_messages WHERE conversation_id = $1 AND id >= $2 AND id < $3 ORDER BY id ASC LIMIT 200",
+          [conversationId, anchorId, excludeBeforeMsgId],
+        );
     }
 
     return this.db
-      .query<ConversationMessageRow, [number, number]>(
-        "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id >= ? ORDER BY id ASC LIMIT 200",
-      )
-      .all(conversationId, anchorId);
+      .rows<ConversationMessageRow>(
+        "SELECT * FROM conversation_messages WHERE conversation_id = $1 AND id >= $2 ORDER BY id ASC LIMIT 200",
+        [conversationId, anchorId],
+      );
   }
 
   private formatHistoryBlock(messages: ConversationMessageRow[]): string {

@@ -1,4 +1,4 @@
-import { initDb } from "./helpers.ts";
+import type { Db } from "../db/db.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import type { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
@@ -65,7 +65,9 @@ export class StubStreamProcessor extends StreamProcessor {
   lastRun: { taskId: number | null; params: ExecutionParams } | null = null;
 
   constructor() {
-    const _db = initDb();
+    // StubStreamProcessor overrides every db-touching method, so the db is never
+    // actually used — pass a dummy Db to keep the synchronous no-arg constructor.
+    const _db = {} as unknown as Db;
     const _rawBuf = { enqueue() {}, flush: async () => {} } as unknown as import("../pipeline/write-buffer.ts").WriteBuffer<import("../engine/stream/raw-message-buffer.ts").RawMessageItem>;
     super(_db, _rawBuf, () => {}, () => {}, () => {}, () => {});
   }

@@ -36,18 +36,18 @@ export class PiDialectResolver {
     const { getLoadedProjectByKey } = await import("../../project-store.ts");
 
     const db = getDb();
-    const taskRow = db
-      .query<{ project_key: string }, [number]>(
-        "SELECT project_key FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const taskRow = await db.get<{ project_key: string }>(
+      "SELECT project_key FROM tasks WHERE id = $1",
+      [taskId],
+    );
 
     if (!taskRow) return undefined;
 
     const wsKey =
-      db.query<{ workspace_key: string }, [number]>(
-        "SELECT workspace_key FROM boards WHERE id = ?",
-      ).get(boardId)?.workspace_key ?? getDefaultWorkspaceKey();
+      (await db.get<{ workspace_key: string }>(
+        "SELECT workspace_key FROM boards WHERE id = $1",
+        [boardId],
+      ))?.workspace_key ?? getDefaultWorkspaceKey();
 
     const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
     if (project?.projectPath && project.projectPath !== worktreePath) {

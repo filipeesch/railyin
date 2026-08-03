@@ -182,24 +182,23 @@ export class ClaudeEngine implements ExecutionEngine {
     // Regression tests: src/bun/test/orchestrator.test.ts
     //                   "Orchestrator working-directory resolution"
     const db = getDb();
-    const taskRow = db
-      .query<{ board_id: number; project_key: string }, [number]>(
-        "SELECT board_id, project_key FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const taskRow = await db.get<{ board_id: number; project_key: string }>(
+      "SELECT board_id, project_key FROM tasks WHERE id = $1",
+      [taskId],
+    );
 
     if (!taskRow) return [];
 
-    const gitRow = db
-      .query<{ worktree_path: string | null }, [number]>(
-        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
+    const gitRow = await db.get<{ worktree_path: string | null }>(
+      "SELECT worktree_path FROM task_git_context WHERE task_id = $1",
+      [taskId],
+    );
 
     const wsKey =
-      db.query<{ workspace_key: string }, [number]>(
-        "SELECT workspace_key FROM boards WHERE id = ?",
-      ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+      (await db.get<{ workspace_key: string }>(
+        "SELECT workspace_key FROM boards WHERE id = $1",
+        [taskRow.board_id],
+      ))?.workspace_key ?? getDefaultWorkspaceKey();
     const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
     const cwd = project?.projectPath || gitRow?.worktree_path || process.cwd();
 

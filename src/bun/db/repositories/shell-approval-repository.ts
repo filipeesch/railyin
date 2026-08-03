@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db.ts";
 import { getDb } from "../index.ts";
 
 // ─── Scope ────────────────────────────────────────────────────────────────────
@@ -39,45 +39,43 @@ export interface ShellApprovalState {
 }
 
 export class ShellApprovalRepository {
-  private readonly db: Database;
+  private readonly db: Db;
 
-  constructor(db?: Database) {
+  constructor(db?: Db) {
     this.db = db ?? getDb();
   }
 
-  getState(scope: ShellApprovalScope): ShellApprovalState {
+  async getState(scope: ShellApprovalScope): Promise<ShellApprovalState> {
     if (scope.kind === "task") {
-      const row = this.db
-        .query<{ shell_auto_approve: number; approved_commands: string }, [number]>(
-          "SELECT shell_auto_approve, approved_commands FROM tasks WHERE id = ?",
-        )
-        .get(scope.taskId);
+      const row = await this.db.get<{ shell_auto_approve: number; approved_commands: string }>(
+        "SELECT shell_auto_approve, approved_commands FROM tasks WHERE id = $1",
+        [scope.taskId],
+      );
       return {
         shellAutoApprove: row?.shell_auto_approve === 1,
         approvedCommands: this._parseCommands(row?.approved_commands),
       };
     }
 
-    const row = this.db
-      .query<{ shell_auto_approve: number; approved_commands: string }, [number]>(
-        "SELECT shell_auto_approve, approved_commands FROM chat_sessions WHERE conversation_id = ?",
-      )
-      .get(scope.conversationId);
+    const row = await this.db.get<{ shell_auto_approve: number; approved_commands: string }>(
+      "SELECT shell_auto_approve, approved_commands FROM chat_sessions WHERE conversation_id = $1",
+      [scope.conversationId],
+    );
     return {
       shellAutoApprove: row?.shell_auto_approve === 1,
       approvedCommands: this._parseCommands(row?.approved_commands),
     };
   }
 
-  appendApprovedCommands(scope: ShellApprovalScope, binaries: string[]): void {
-    const current = this.getState(scope).approvedCommands;
+  async appendApprovedCommands(scope: ShellApprovalScope, binaries: string[]): Promise<void> {
+    const current = (await this.getState(scope)).approvedCommands;
     const updated = JSON.stringify([...new Set([...current, ...binaries])]);
 
     if (scope.kind === "task") {
-      this.db.run("UPDATE tasks SET approved_commands = ? WHERE id = ?", [updated, scope.taskId]);
+      await this.db.exec("UPDATE tasks SET approved_commands = $1 WHERE id = $2", [updated, scope.taskId]);
     } else {
-      this.db.run(
-        "UPDATE chat_sessions SET approved_commands = ? WHERE conversation_id = ?",
+      await this.db.exec(
+        "UPDATE chat_sessions SET approved_commands = $1 WHERE conversation_id = $2",
         [updated, scope.conversationId],
       );
     }

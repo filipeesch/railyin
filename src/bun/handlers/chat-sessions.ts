@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { ChatSession, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ChatSessionRow, ConversationMessageRow } from "../db/row-types.ts";
 import { mapChatSession, mapConversationMessage } from "../db/mappers.ts";
@@ -18,27 +18,28 @@ function autoTitle(): string {
 
 export type OnChatSessionUpdated = (session: ChatSession) => void;
 
-export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessionUpdated, orchestrator: ExecutionCoordinator | null) {
+export function chatSessionHandlers(db: Db, onSessionUpdated: OnChatSessionUpdated, orchestrator: ExecutionCoordinator | null) {
   return {
     "chatSessions.list": async (params: { workspaceKey?: string; includeArchived?: boolean }): Promise<ChatSession[]> => {
       const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();
-      const rows = db.query<ChatSessionRow, [string]>(
+      const rows = await db.rows<ChatSessionRow>(
         params.includeArchived
           ? `SELECT cs.*, c.model AS conversation_model,
                     c.sampling_preset_override AS conversation_sampling_preset_override,
                     c.model_params AS conversation_model_params
-              FROM chat_sessions cs 
-              LEFT JOIN conversations c ON c.id = cs.conversation_id 
-              WHERE cs.workspace_key = ? 
+              FROM chat_sessions cs
+              LEFT JOIN conversations c ON c.id = cs.conversation_id
+              WHERE cs.workspace_key = $1
               ORDER BY cs.last_activity_at DESC`
           : `SELECT cs.*, c.model AS conversation_model,
                     c.sampling_preset_override AS conversation_sampling_preset_override,
                     c.model_params AS conversation_model_params
-              FROM chat_sessions cs 
-              LEFT JOIN conversations c ON c.id = cs.conversation_id 
-              WHERE cs.workspace_key = ? AND cs.status != 'archived' 
-             ORDER BY cs.last_activity_at DESC`
-      ).all(wsKey);
+              FROM chat_sessions cs
+              LEFT JOIN conversations c ON c.id = cs.conversation_id
+              WHERE cs.workspace_key = $1 AND cs.status != 'archived'
+             ORDER BY cs.last_activity_at DESC`,
+        [wsKey],
+      );
       return rows.map(mapChatSession);
     },
 
@@ -47,26 +48,26 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       const wsKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const title = params.title ?? autoTitle();
 
-      const session = db.transaction(() => {
+      const session = await db.begin(async (tx) => {
         // Create conversation with no task
-        const convResult = db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+        const convResult = await tx.exec("INSERT INTO conversations (task_id) VALUES (NULL)");
         const conversationId = convResult.lastInsertRowid as number;
 
         // Seed the conversation model with the workspace default
         const workspaceConfig = getWorkspaceConfig(wsKey);
         const modelToSet = workspaceConfig.defaultModel ?? null;
         if (modelToSet) {
-          db.run("UPDATE conversations SET model = ? WHERE id = ?", [modelToSet, conversationId]);
+          await tx.exec("UPDATE conversations SET model = $1 WHERE id = $2", [modelToSet, conversationId]);
         }
 
-        const sessionResult = db.run(
-          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools, shell_auto_approve) VALUES (?, ?, 'idle', ?, '[]', ?)`,
+        const sessionResult = await tx.exec(
+          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools, shell_auto_approve) VALUES ($1, $2, 'idle', $3, '[]', $4)`,
           [wsKey, title, conversationId, workspaceConfig.workspace.shell_auto_approve ? 1 : 0]
         );
         const sessionId = sessionResult.lastInsertRowid as number;
 
-        return fetchChatSessionWithModel(db, sessionId)!;
-      })();
+        return (await fetchChatSessionWithModel(tx, sessionId))!;
+      });
 
       onSessionUpdated(session);
       return session;
@@ -74,38 +75,39 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
     "chatSessions.rename": async (params: { sessionId: number; title: string }): Promise<void> => {
 
-      db.run("UPDATE chat_sessions SET title = ? WHERE id = ?", [params.title, params.sessionId]);
-      const updated = fetchChatSessionWithModel(db, params.sessionId);
+      await db.exec("UPDATE chat_sessions SET title = $1 WHERE id = $2", [params.title, params.sessionId]);
+      const updated = await fetchChatSessionWithModel(db, params.sessionId);
       if (updated) onSessionUpdated(updated);
     },
 
     "chatSessions.archive": async (params: { sessionId: number }): Promise<void> => {
 
-      db.run(
-        "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now') WHERE id = ?",
+      await db.exec(
+        `UPDATE chat_sessions SET status = 'archived', archived_at = ${db.dialect.now()} WHERE id = $1`,
         [params.sessionId]
       );
-      const updated = fetchChatSessionWithModel(db, params.sessionId);
+      const updated = await fetchChatSessionWithModel(db, params.sessionId);
       if (updated) onSessionUpdated(updated);
     },
 
     "chatSessions.markRead": async (params: { sessionId: number }): Promise<void> => {
 
-      db.run(
-        "UPDATE chat_sessions SET last_read_at = datetime('now') WHERE id = ?",
+      await db.exec(
+        `UPDATE chat_sessions SET last_read_at = ${db.dialect.now()} WHERE id = $1`,
         [params.sessionId]
       );
     },
 
     "chatSessions.get": async (params: { sessionId: number }): Promise<ChatSession> => {
-      const row = db.query<ChatSessionRow, [number]>(
+      const row = await db.get<ChatSessionRow>(
         `SELECT cs.*, c.model AS conversation_model,
                 c.sampling_preset_override AS conversation_sampling_preset_override,
                 c.model_params AS conversation_model_params
-         FROM chat_sessions cs 
-         LEFT JOIN conversations c ON c.id = cs.conversation_id 
-         WHERE cs.id = ?`
-      ).get(params.sessionId);
+         FROM chat_sessions cs
+         LEFT JOIN conversations c ON c.id = cs.conversation_id
+         WHERE cs.id = $1`,
+        [params.sessionId],
+      );
       if (!row) throw new Error(`Session ${params.sessionId} not found`);
       return mapChatSession(row);
     },
@@ -117,15 +119,16 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       model?: string | null;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
     }): Promise<{ messageId: number; executionId: number }> => {
-      const session = db.query<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }, [number]>(
-        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override, c.model_params AS conversation_model_params FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
-      ).get(params.sessionId);
+      const session = await db.get<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }>(
+        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override, c.model_params AS conversation_model_params FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = $1`,
+        [params.sessionId],
+      );
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
 
       // Update session activity timestamp
-      db.run(
-        "UPDATE chat_sessions SET last_activity_at = datetime('now') WHERE id = ?",
+      await db.exec(
+        `UPDATE chat_sessions SET last_activity_at = ${db.dialect.now()} WHERE id = $1`,
         [params.sessionId]
       );
 
@@ -152,7 +155,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       );
 
       // Fetch updated session with model from conversation
-      const updatedSession = fetchChatSessionWithModel(db, params.sessionId);
+      const updatedSession = await fetchChatSessionWithModel(db, params.sessionId);
       if (updatedSession) onSessionUpdated(updatedSession);
 
       return { messageId: message.id, executionId };
@@ -163,14 +166,15 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
       generalNotes?: string;
     }): Promise<{ messageId: number; executionId: number }> => {
-      const session = db.query<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }, [number]>(
-        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override, c.model_params AS conversation_model_params FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
-      ).get(params.sessionId);
+      const session = await db.get<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }>(
+        `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override, c.model_params AS conversation_model_params FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = $1`,
+        [params.sessionId],
+      );
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
 
-      db.run(
-        "UPDATE chat_sessions SET last_activity_at = datetime('now') WHERE id = ?",
+      await db.exec(
+        `UPDATE chat_sessions SET last_activity_at = ${db.dialect.now()} WHERE id = $1`,
         [params.sessionId]
       );
 
@@ -196,7 +200,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         prepared.content,
       );
 
-      const updatedSession = fetchChatSessionWithModel(db, params.sessionId);
+      const updatedSession = await fetchChatSessionWithModel(db, params.sessionId);
       if (updatedSession) onSessionUpdated(updatedSession);
 
       return { messageId: message.id, executionId };
@@ -208,21 +212,24 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       limit?: number;
     }): Promise<{ messages: ConversationMessage[]; hasMore: boolean }> => {
 
-      const session = db.query<ChatSessionRow, [number]>(
-        "SELECT conversation_id FROM chat_sessions WHERE id = ?"
-      ).get(params.sessionId);
+      const session = await db.get<ChatSessionRow>(
+        "SELECT conversation_id FROM chat_sessions WHERE id = $1",
+        [params.sessionId],
+      );
       if (!session) return { messages: [], hasMore: false };
 
       const limit = params.limit ?? 50;
       let rows: ConversationMessageRow[];
       if (params.beforeMessageId != null) {
-        rows = db.query<ConversationMessageRow, [number, number, number]>(
-          "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?"
-        ).all(session.conversation_id, params.beforeMessageId, limit + 1);
+        rows = await db.rows<ConversationMessageRow>(
+          "SELECT * FROM conversation_messages WHERE conversation_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3",
+          [session.conversation_id, params.beforeMessageId, limit + 1],
+        );
       } else {
-        rows = db.query<ConversationMessageRow, [number, number]>(
-          "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?"
-        ).all(session.conversation_id, limit + 1);
+        rows = await db.rows<ConversationMessageRow>(
+          "SELECT * FROM conversation_messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT $2",
+          [session.conversation_id, limit + 1],
+        );
       }
       const hasMore = rows.length > limit;
       const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);
@@ -231,43 +238,44 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
     "chatSessions.cancel": async (params: { sessionId: number }): Promise<void> => {
 
-      const sessionRow = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      const sessionRow = await db.get<ChatSessionRow>("SELECT * FROM chat_sessions WHERE id = $1", [params.sessionId]);
       if (!sessionRow) return;
       // Find the running execution for this conversation and cancel it via the orchestrator
       // so the streaming actually stops (not just the UI state).
-      const execRow = db.query<{ id: number }, [number]>(
-        "SELECT id FROM executions WHERE conversation_id = ? AND task_id IS NULL AND status = 'running' ORDER BY id DESC LIMIT 1"
-      ).get(sessionRow.conversation_id);
+      const execRow = await db.get<{ id: number }>(
+        "SELECT id FROM executions WHERE conversation_id = $1 AND task_id IS NULL AND status = 'running' ORDER BY id DESC LIMIT 1",
+        [sessionRow.conversation_id],
+      );
       if (execRow && orchestrator) {
         orchestrator.cancel(execRow.id);
       } else {
         // No running execution found — just update DB status directly.
-        db.run("UPDATE chat_sessions SET status = 'idle' WHERE id = ? AND status = 'running'", [params.sessionId]);
-        const updated = fetchChatSessionWithModel(db, params.sessionId);
+        await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE id = $1 AND status = 'running'", [params.sessionId]);
+        const updated = await fetchChatSessionWithModel(db, params.sessionId);
         if (updated) onSessionUpdated(updated);
       }
     },
 
     "chatSessions.compact": async (params: { sessionId: number }): Promise<void> => {
 
-      const session = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      const session = await db.get<ChatSessionRow>("SELECT * FROM chat_sessions WHERE id = $1", [params.sessionId]);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (!orchestrator) throw new Error("Orchestrator not available");
       await orchestrator.compactConversation(session.conversation_id, session.workspace_key);
     },
     // ─── chatSessions.setModel ───────────────────────────────────────────────
     "chatSessions.setModel": async (params: { sessionId: number; model: string | null }): Promise<ChatSession> => {
-      const session = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      const session = await db.get<ChatSessionRow>("SELECT * FROM chat_sessions WHERE id = $1", [params.sessionId]);
       if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
       if (session.conversation_id === null) {
         throw new Error(`Chat session ${params.sessionId} has no conversation`);
       }
-      db.run("UPDATE conversations SET model = ? WHERE id = ?", [params.model, session.conversation_id]);
+      await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", [params.model, session.conversation_id]);
       const engineModel = params.model && orchestrator
         ? (await orchestrator.listModels(session.workspace_key)).find((m) => m.qualifiedId === params.model)
         : undefined;
-      applyModelParamsPolicy(db, { conversationId: session.conversation_id, engineModel });
-      const updated = fetchChatSessionWithModel(db, params.sessionId);
+      await applyModelParamsPolicy(db, { conversationId: session.conversation_id, engineModel });
+      const updated = await fetchChatSessionWithModel(db, params.sessionId);
       if (!updated) throw new Error(`Chat session ${params.sessionId} not found after update`);
       onSessionUpdated(updated);
       return updated;
@@ -275,11 +283,11 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
     // ─── chatSessions.setShellAutoApprove ────────────────────────────────────
     "chatSessions.setShellAutoApprove": async (params: { sessionId: number; enabled: boolean }): Promise<ChatSession> => {
-      db.run(
-        "UPDATE chat_sessions SET shell_auto_approve = ? WHERE id = ?",
+      await db.exec(
+        "UPDATE chat_sessions SET shell_auto_approve = $1 WHERE id = $2",
         [params.enabled ? 1 : 0, params.sessionId],
       );
-      const updated = fetchChatSessionWithModel(db, params.sessionId);
+      const updated = await fetchChatSessionWithModel(db, params.sessionId);
       if (!updated) throw new Error(`Chat session ${params.sessionId} not found`);
       onSessionUpdated(updated);
       return updated;
@@ -287,22 +295,22 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
   };
 }
 
-export function startChatSessionAutoArchiveJob(db: Database, onSessionUpdated: OnChatSessionUpdated): void {
-  setInterval(() => {
+export function startChatSessionAutoArchiveJob(db: Db, onSessionUpdated: OnChatSessionUpdated): void {
+  setInterval(async () => {
     try {
 
-      const rows = db.query<ChatSessionRow, []>(
+      const rows = await db.rows<ChatSessionRow>(
         `SELECT * FROM chat_sessions
          WHERE status != 'archived'
            AND last_activity_at < datetime('now', '-7 days')`
-      ).all();
+      );
 
       for (const row of rows) {
-        db.run(
-          "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now') WHERE id = ?",
+        await db.exec(
+          `UPDATE chat_sessions SET status = 'archived', archived_at = ${db.dialect.now()} WHERE id = $1`,
           [row.id]
         );
-        const updated = fetchChatSessionWithModel(db, row.id);
+        const updated = await fetchChatSessionWithModel(db, row.id);
         if (updated) onSessionUpdated(updated);
       }
     } catch (err) {

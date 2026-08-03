@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { getLoadedProjectByKey } from "../project-store.ts";
@@ -34,15 +34,15 @@ export interface CreateWorktreeOptions {
 
 export class WorktreeManager {
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly projectResolver: IProjectResolver,
     private readonly gitRepo: GitRepositoryManager,
     private readonly taskGitContextRepo: ITaskGitContextRepository,
   ) {}
 
-  registerContext(taskId: number, gitRootPath: string, subrepoPath?: string): void {
-    this.taskGitContextRepo.upsertContext(taskId, gitRootPath, subrepoPath);
+  async registerContext(taskId: number, gitRootPath: string, subrepoPath?: string): Promise<void> {
+    await this.taskGitContextRepo.upsertContext(taskId, gitRootPath, subrepoPath);
   }
 
   /**
@@ -50,21 +50,20 @@ export class WorktreeManager {
    * Creates one with `worktree_status='not_created'` if missing,
    * using the project's configured `gitRootPath`.
    */
-  ensureContext(taskId: number): void {
-    const ctx = this.taskGitContextRepo.getContext(taskId);
+  async ensureContext(taskId: number): Promise<void> {
+    const ctx = await this.taskGitContextRepo.getContext(taskId);
     if (ctx) return;
 
-    const taskRow = this.db
-      .query<{ project_key: string }, [number]>(
-        "SELECT project_key FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const taskRow = await this.db.get<{ project_key: string }>(
+      "SELECT project_key FROM tasks WHERE id = $1",
+      [taskId],
+    );
     if (!taskRow) return;
 
-    const wsKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const wsKey = await this.wsRepo.getTaskWorkspaceKey(taskId);
     const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
     if (project?.gitRootPath) {
-      this.registerContext(taskId, project.gitRootPath);
+      await this.registerContext(taskId, project.gitRootPath);
     }
   }
 
@@ -72,7 +71,7 @@ export class WorktreeManager {
     taskId: number,
     options?: CreateWorktreeOptions,
   ): Promise<{ path: string; branch: string }> {
-    const ctx = this.taskGitContextRepo.getContext(taskId);
+    const ctx = await this.taskGitContextRepo.getContext(taskId);
     if (!ctx) throw new Error(`No git context for task ${taskId}`);
 
     // Guard against double-creation in the auto-creation path
@@ -87,14 +86,13 @@ export class WorktreeManager {
       };
     }
 
-    const taskRow = this.db
-      .query<{ id: number; title: string; project_key: string }, [number]>(
-        "SELECT id, title, project_key FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const taskRow = await this.db.get<{ id: number; title: string; project_key: string }>(
+      "SELECT id, title, project_key FROM tasks WHERE id = $1",
+      [taskId],
+    );
     if (!taskRow) throw new Error(`Task ${taskId} not found`);
 
-    const wsKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const wsKey = await this.wsRepo.getTaskWorkspaceKey(taskId);
 
     // THE FIX: use project.defaultBranch instead of "HEAD" when no explicit sourceBranch
     const sourceBranch =
@@ -106,7 +104,7 @@ export class WorktreeManager {
       `${this.projectResolver.getWorktreeBasePath(wsKey, taskRow.project_key, ctx.gitRootPath)}/${buildBranchName(taskId, taskRow.title)}`;
 
     if (!existsSync(ctx.gitRootPath)) {
-      this.taskGitContextRepo.updateStatus(taskId, "error");
+      await this.taskGitContextRepo.updateStatus(taskId, "error");
       throw new Error(
         `git_root_path does not exist: "${ctx.gitRootPath}". ` +
         `Check the project's Git Root Path in settings.`,
@@ -118,7 +116,7 @@ export class WorktreeManager {
       mkdirSync(worktreeParent, { recursive: true });
     }
 
-    this.taskGitContextRepo.updateCreating(taskId, worktreePath, branch);
+    await this.taskGitContextRepo.updateCreating(taskId, worktreePath, branch);
 
     try {
       await this.gitRepo.addWorktree(
@@ -130,17 +128,17 @@ export class WorktreeManager {
       );
 
       const baseSha = await this.gitRepo.revParseHead(worktreePath);
-      this.taskGitContextRepo.updateReady(taskId, baseSha);
+      await this.taskGitContextRepo.updateReady(taskId, baseSha);
 
       return { path: worktreePath, branch };
     } catch (err) {
-      this.taskGitContextRepo.updateStatus(taskId, "error");
+      await this.taskGitContextRepo.updateStatus(taskId, "error");
       throw err;
     }
   }
 
   async removeWorktree(taskId: number): Promise<{ warning?: string }> {
-    const ctx = this.taskGitContextRepo.getContext(taskId);
+    const ctx = await this.taskGitContextRepo.getContext(taskId);
     if (!ctx?.worktreePath) return {};
 
     if (!existsSync(ctx.gitRootPath)) {
@@ -156,7 +154,7 @@ export class WorktreeManager {
       return { warning: `Worktree could not be removed: ${msg}` };
     }
 
-    this.taskGitContextRepo.updateRemoved(taskId);
+    await this.taskGitContextRepo.updateRemoved(taskId);
     return {};
   }
 
@@ -164,7 +162,7 @@ export class WorktreeManager {
     taskId: number,
     onStatus?: (msg: string) => void,
   ): Promise<void> {
-    const ctx = this.taskGitContextRepo.getContext(taskId);
+    const ctx = await this.taskGitContextRepo.getContext(taskId);
 
     if (
       ctx?.gitRootPath &&
@@ -179,7 +177,7 @@ export class WorktreeManager {
   }
 
   async listBranches(taskId: number): Promise<string[]> {
-    const ctx = this.taskGitContextRepo.getContext(taskId);
+    const ctx = await this.taskGitContextRepo.getContext(taskId);
     if (!ctx?.gitRootPath) return [];
     return this.gitRepo.listBranches(ctx.gitRootPath);
   }

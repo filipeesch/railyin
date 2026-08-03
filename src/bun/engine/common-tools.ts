@@ -461,7 +461,7 @@ async function executeCommonToolText(
       return ctx.repos.boardTools.execMessageTask(args, boardCtx);
 
     case "list_decisions": {
-      const records = ctx.repos.decisions.listByConversation(ctx.task.conversationId);
+      const records = await ctx.repos.decisions.listByConversation(ctx.task.conversationId);
       if (records.length === 0) return "No decision records found for this conversation.";
       const mapped = records.map((r) => ({
         id: r.id,
@@ -483,7 +483,7 @@ async function executeCommonToolText(
       if (!answer) return "Error: answer is required";
       const weight = args.weight != null ? (args.weight as string) : "medium";
       const notes = args.notes != null ? (args.notes as string) : undefined;
-      ctx.repos.decisions.createRecord(ctx.task.conversationId, {
+      await ctx.repos.decisions.createRecord(ctx.task.conversationId, {
         question,
         answer,
         weight: weight as import("../db/repositories/decision-repository.ts").DecisionWeight,
@@ -501,14 +501,14 @@ async function executeCommonToolText(
       const reason = args.reason != null ? (args.reason as string).trim() : "";
       if (!reason) return "Error: reason is required";
       const notes = args.notes != null ? (args.notes as string) : undefined;
-      const record = ctx.repos.decisions.updateRecord(id, answer, reason, notes);
+      const record = await ctx.repos.decisions.updateRecord(id, answer, reason, notes);
       return `Decision #${id} updated. Revision #${record.revisionCount}.`;
     }
 
     case "delete_decision": {
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      ctx.repos.decisions.deleteRecord(id);
+      await ctx.repos.decisions.deleteRecord(id);
       return `Decision #${id} deleted.`;
     }
 
@@ -516,7 +516,7 @@ async function executeCommonToolText(
       const content = args.content != null ? (args.content as string).trim() : "";
       if (!content) return "Error: content is required";
       const tags = args.tags != null ? (args.tags as string[]) : undefined;
-      const note = ctx.repos.notes.createNote(ctx.task.conversationId, {
+      const note = await ctx.repos.notes.createNote(ctx.task.conversationId, {
         content,
         isSourceAi: true,
         tags,
@@ -526,7 +526,7 @@ async function executeCommonToolText(
 
     case "list_notes": {
       const tags = args.tags != null ? (args.tags as string[]) : undefined;
-      const notes = ctx.repos.notes.listByConversation(ctx.task.conversationId, {
+      const notes = await ctx.repos.notes.listByConversation(ctx.task.conversationId, {
         tagFilter: tags,
       });
       if (notes.length === 0) return "No notes found for this conversation.";
@@ -541,7 +541,7 @@ async function executeCommonToolText(
       const content = rawContent != null ? (rawContent as string).trim() : undefined;
       if (content !== undefined && !content) return "Error: content is required";
       const tags = args.tags != null ? (args.tags as string[]) : undefined;
-      const note = ctx.repos.notes.updateNote(id, { content, tags });
+      const note = await ctx.repos.notes.updateNote(id, { content, tags });
       if (!note) return `Error: Note #${id} not found.`;
       return `Note #${id} updated.`;
     }
@@ -554,7 +554,7 @@ async function executeCommonToolText(
       const description = args.description != null ? (args.description as string).trim() : "";
       if (!description) return "Error: description is required";
       const phase = args.phase != null ? String(args.phase) : undefined;
-      const item = ctx.repos.todos.createTodo(ctx.task.id!, number, title, description, phase);
+      const item = await ctx.repos.todos.createTodo(ctx.task.id!, number, title, description, phase);
       return JSON.stringify({ detailedContent: `Todo created: #${item.id} — "${item.title}" (${item.status})`, data: item });
     }
 
@@ -567,14 +567,14 @@ async function executeCommonToolText(
       if (args.title !== undefined) update.title = (args.title as string).trim();
       if (args.description !== undefined) update.description = args.description as string;
       if ("phase" in args) update.phase = args.phase === "null" || args.phase == null ? null : String(args.phase);
-      const result = ctx.repos.todos.editTodo(ctx.task.id, id, update);
+      const result = await ctx.repos.todos.editTodo(ctx.task.id, id, update);
       if (!result) return `Error: todo ${id} not found`;
       return JSON.stringify({ detailedContent: `Todo #${result.id} updated: "${result.title}" (${result.status})`, data: result });
     }
 
     case "list_todos": {
       if (!ctx.task.id) return "Error: list_todos is only available within a task execution";
-      const todos = ctx.repos.todos.listTodos(ctx.task.id);
+      const todos = await ctx.repos.todos.listTodos(ctx.task.id);
       if (todos.length === 0) return "No todos found.";
       const lines = todos.map((t: { id: number; title: string; status: string }) => `- #${t.id} [${t.status}] ${t.title}`);
       return JSON.stringify({ detailedContent: `${todos.length} todo${todos.length !== 1 ? "s" : ""}:\n${lines.join("\n")}`, data: todos });
@@ -584,7 +584,7 @@ async function executeCommonToolText(
       if (!ctx.task.id) return "Error: get_todo is only available within a task execution";
       const id = args.id != null ? Number(args.id) : NaN;
       if (!id || isNaN(id)) return "Error: id is required";
-      const todo = ctx.repos.todos.getTodo(ctx.task.id, id);
+      const todo = await ctx.repos.todos.getTodo(ctx.task.id, id);
       if (!todo) return `Error: todo ${id} not found`;
       if ("deleted" in todo) return todo.message;
       return JSON.stringify({ detailedContent: `Todo #${todo.id}: "${todo.title}"\nStatus: ${todo.status}${todo.description ? `\nDescription: ${todo.description.slice(0, 200)}${todo.description.length > 200 ? "…" : ""}` : ""}`, data: todo });
@@ -593,7 +593,7 @@ async function executeCommonToolText(
     case "reorganize_todos": {
       if (!ctx.task.id) return "Error: reorganize_todos is only available within a task execution";
       const items = args.items as Array<{ id: number; number: number }>;
-      const updated = ctx.repos.todos.reprioritizeTodos(ctx.task.id, items);
+      const updated = await ctx.repos.todos.reprioritizeTodos(ctx.task.id, items);
       return JSON.stringify({ detailedContent: `Reordered ${updated.length} todo${updated.length !== 1 ? "s" : ""}.`, data: updated });
     }
 
@@ -603,7 +603,7 @@ async function executeCommonToolText(
       if (!id || isNaN(id)) return "Error: id is required";
       const status = args.status != null ? (args.status as string).trim() : "";
       if (!status) return "Error: status is required";
-      const result = ctx.repos.todos.editTodo(ctx.task.id, id, { status: status as import("../db/todos.ts").TodoStatus });
+      const result = await ctx.repos.todos.editTodo(ctx.task.id, id, { status: status as import("../db/todos.ts").TodoStatus });
       if (!result) return `Error: todo ${id} not found`;
       return JSON.stringify({ detailedContent: `Todo #${result.id} status updated to ${result.status}: "${result.title}"`, data: result });
     }
@@ -648,7 +648,7 @@ async function executeCommonToolText(
       const { listBoardsByWorkspace } = await import("../db/board-queries.ts");
       const { getDb } = await import("../db/index.ts");
       const db = getDb();
-      const boards = listBoardsByWorkspace(db, ctx.workspaceKey);
+      const boards = await listBoardsByWorkspace(db, ctx.workspaceKey);
       return JSON.stringify(boards);
     }
 

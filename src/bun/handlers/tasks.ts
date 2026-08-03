@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
@@ -34,12 +34,12 @@ function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinat
   return o;
 }
 
-export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, modelSettingsRepo?: ModelSettingsRepository) {
+export function taskHandlers(db: Db, wsRepo: IWorkspaceRepository, orchestrator: ExecutionCoordinator | null, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, modelSettingsRepo?: ModelSettingsRepository) {
   const positionService = new PositionService(db);
   return {
     "tasks.list": async (params: { boardId: number }): Promise<Task[]> => {
-      return db
-        .query<TaskRow, [number]>(
+      return (await db
+        .rows<TaskRow>(
           `SELECT t.*,
                   gc.worktree_status, gc.branch_name, gc.worktree_path,
                   c.model AS conversation_model,
@@ -49,28 +49,29 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
            LEFT JOIN conversations c ON c.id = t.conversation_id
-           WHERE t.board_id = ?
+           WHERE t.board_id = $1
            ORDER BY t.position ASC`,
-        )
-        .all(params.boardId)
+          [params.boardId],
+        ))
         .map(mapTask);
     },
 
     "tasks.reorder": async (params: { taskId: number; position: number }): Promise<Task> => {
-      db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.position, params.taskId]);
-      const boardRow = db.query<{ board_id: number; workflow_state: string }, [number]>(
-        "SELECT board_id, workflow_state FROM tasks WHERE id = ?",
-      ).get(params.taskId);
+      await db.exec("UPDATE tasks SET position = $1 WHERE id = $2", [params.position, params.taskId]);
+      const boardRow = await db.get<{ board_id: number; workflow_state: string }>(
+        "SELECT board_id, workflow_state FROM tasks WHERE id = $1",
+        [params.taskId],
+      );
       if (boardRow) {
-        positionService.rebalanceColumnPositions(boardRow.board_id, boardRow.workflow_state);
+        await positionService.rebalanceColumnPositions(boardRow.board_id, boardRow.workflow_state);
       }
-      const task = fetchTaskWithModel(db, params.taskId);
+      const task = await fetchTaskWithModel(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
       return task;
     },
 
     "tasks.reorderColumn": async (params: { boardId: number; columnId: string; taskIds: number[] }): Promise<void> => {
-      positionService.reorderColumn(params.boardId, params.taskIds);
+      await positionService.reorderColumn(params.boardId, params.taskIds);
     },
 
     "tasks.create": async (params: {
@@ -80,7 +81,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       description: string;
     }): Promise<Task> => {
 
-      const workspaceKey = wsRepo.getBoardWorkspaceKey(params.boardId);
+      const workspaceKey = await wsRepo.getBoardWorkspaceKey(params.boardId);
       const project = getLoadedProjectByKey(workspaceKey, params.projectKey);
       if (!project) {
         throw new Error(`Project ${params.projectKey} not found in workspace ${workspaceKey}`);
@@ -89,20 +90,20 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const wsShellAutoApprove = getWorkspaceConfig(workspaceKey).workspace.shell_auto_approve ?? false;
 
       // Create conversation first with placeholder task_id=0
-      const convResult = db.run("INSERT INTO conversations (task_id) VALUES (0)");
+      const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES (0)");
       const conversationId = convResult.lastInsertRowid as number;
 
       // Seed conversation model with workspace default (if configured)
-      seedConversationModel(db, conversationId, params.boardId, wsRepo);
+      await seedConversationModel(db, conversationId, params.boardId, wsRepo);
 
       // Note: No automatic model seeding in new architecture
       // Model must be explicitly set via tasks.setModel after creation
 
-      const topPosition = positionService.getTopPosition(params.boardId, "backlog");
-      const taskResult = db.run(
+      const topPosition = await positionService.getTopPosition(params.boardId, "backlog");
+      const taskResult = await db.exec(
         `INSERT INTO tasks
            (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, shell_auto_approve, position, enabled_mcp_tools)
-         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?, ?, ?, '[]')`,
+         VALUES ($1, $2, $3, $4, 'backlog', 'idle', $5, $6, $7, '[]')`,
         [
           params.boardId,
           params.projectKey,
@@ -116,19 +117,19 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const taskId = taskResult.lastInsertRowid as number;
 
       // Fix up conversation → task link
-      db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
+      await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId, conversationId]);
 
       // Register git context for this task so tool calling works (best-effort)
       try {
         if (project.gitRootPath) {
-          worktreeManager.registerContext(taskId, project.gitRootPath);
+          await worktreeManager.registerContext(taskId, project.gitRootPath);
         }
       } catch (err) {
         console.warn("[railyn] failed to register git context for task", taskId, err);
       }
 
       // Seed conversation with task description as first system message
-      appendMessage(db, 
+      await appendMessage(db,
         taskId,
         conversationId,
         "system",
@@ -136,7 +137,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         `Task: ${params.title}\n\n${params.description}`,
       );
 
-      const row = fetchTaskWithModel(db, taskId);
+      const row = await fetchTaskWithModel(db, taskId);
       if (!row) throw new Error(`Task ${taskId} not found after creation`);
 
       onTaskUpdated(row);
@@ -150,7 +151,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
     }): Promise<{ task: Task; executionId: number | null }> => {
 
 
-      const validation = validateTransition(db, params.taskId, params.toState);
+      const validation = await validateTransition(db, params.taskId, params.toState);
       if (!validation.ok) {
         throw new Error(validation.reason);
       }
@@ -159,13 +160,13 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       // When no targetPosition is provided, default to the top of the target column
       // (MIN(position) / 2, or 500 when the column is empty).
       if (params.targetPosition != null) {
-        db.run("UPDATE tasks SET position = ? WHERE id = ?", [params.targetPosition, params.taskId]);
+        await db.exec("UPDATE tasks SET position = $1 WHERE id = $2", [params.targetPosition, params.taskId]);
       } else {
-        const topPos = positionService.getTopPosition(validation.boardId, params.toState);
-        db.run("UPDATE tasks SET position = ? WHERE id = ?", [topPos, params.taskId]);
+        const topPos = await positionService.getTopPosition(validation.boardId, params.toState);
+        await db.exec("UPDATE tasks SET position = $1 WHERE id = $2", [topPos, params.taskId]);
       }
       if (validation.ok) {
-        positionService.rebalanceColumnPositions(validation.boardId, params.toState);
+        await positionService.rebalanceColumnPositions(validation.boardId, params.toState);
       }
 
       // ── Deferred-path: running task ──────────────────────────────────────────
@@ -173,74 +174,73 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       // Just update the workflow_state and set needs_column_prompt if the target
       // column has an on_enter_prompt. The StreamProcessor drain will fire the
       // column prompt once the current execution completes.
-      const runningCheck = db
-        .query<{ execution_state: string; board_id: number; conversation_id: number | null }, [number]>(
-          "SELECT execution_state, board_id, conversation_id FROM tasks WHERE id = ?",
-        )
-        .get(params.taskId);
+      const runningCheck = await db
+        .get<{ execution_state: string; board_id: number; conversation_id: number | null }>(
+          "SELECT execution_state, board_id, conversation_id FROM tasks WHERE id = $1",
+          [params.taskId],
+        );
 
       if (runningCheck?.execution_state === "running") {
-        const fromStateRow = db
-          .query<{ workflow_state: string }, [number]>("SELECT workflow_state FROM tasks WHERE id = ?")
-          .get(params.taskId);
+        const fromStateRow = await db
+          .get<{ workflow_state: string }>("SELECT workflow_state FROM tasks WHERE id = $1", [params.taskId]);
         const fromState = fromStateRow?.workflow_state ?? params.toState;
 
-        db.run(
-          "UPDATE tasks SET workflow_state = ? WHERE id = ?",
+        await db.exec(
+          "UPDATE tasks SET workflow_state = $1 WHERE id = $2",
           [params.toState, params.taskId],
         );
 
-        const wsKey = wsRepo.getBoardWorkspaceKey(runningCheck.board_id);
+        const wsKey = await wsRepo.getBoardWorkspaceKey(runningCheck.board_id);
         const config = getWorkspaceConfig(wsKey);
-        const col = getColumnConfig(config, runningCheck.board_id, params.toState);
+        const col = await getColumnConfig(config, runningCheck.board_id, params.toState);
         if (col?.on_enter_prompt) {
-          db.run("UPDATE tasks SET needs_column_prompt = 1 WHERE id = ?", [params.taskId]);
+          await db.exec("UPDATE tasks SET needs_column_prompt = 1 WHERE id = $1", [params.taskId]);
         }
 
         const convId = runningCheck.conversation_id;
         if (convId != null) {
-          appendMessage(db, params.taskId, convId, "transition_event", null, "", {
+          await appendMessage(db, params.taskId, convId, "transition_event", null, "", {
             from: fromState,
             to: params.toState,
           } as unknown as Record<string, unknown>);
         }
 
-        const deferredRow = fetchTaskWithModel(db, params.taskId);
+        const deferredRow = await fetchTaskWithModel(db, params.taskId);
         if (!deferredRow) throw new Error(`Task ${params.taskId} not found`);
         onTaskUpdated(deferredRow);
         return { task: deferredRow, executionId: null };
       }
 
-      const taskRow = db
-        .query<{ project_key: string; conversation_id: number }, [number]>(
-          "SELECT project_key, conversation_id FROM tasks WHERE id = ?",
-        )
-        .get(params.taskId);
+      const taskRow = await db
+        .get<{ project_key: string; conversation_id: number }>(
+          "SELECT project_key, conversation_id FROM tasks WHERE id = $1",
+          [params.taskId],
+        );
 
       if (taskRow) {
         // Ensure conversation exists — tasks created before conversations were required may have null conversation_id.
         let convId = (taskRow.conversation_id as number | null);
         if (convId == null) {
-          const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [params.taskId]);
+          const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1)", [params.taskId]);
           convId = convResult.lastInsertRowid as number;
-          db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [convId, params.taskId]);
+          await db.exec("UPDATE tasks SET conversation_id = $1 WHERE id = $2", [convId, params.taskId]);
         }
 
         // Backfill git context for tasks created before this was wired up
-        const wsKey = wsRepo.getTaskWorkspaceKey(params.taskId);
+        const wsKey = await wsRepo.getTaskWorkspaceKey(params.taskId);
         const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
-          worktreeManager.registerContext(params.taskId, project.gitRootPath);
+          await worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
-        const postStatus = (msg: string) => {
+        const postStatus = async (msg: string) => {
           // Do NOT call onTaskUpdated here: the DB row still carries the old
           // workflow_state while the worktree is being created (executeTransition
           // hasn't run yet). Broadcasting the stale row causes the UI card to
           // bounce back to the source column and then re-animate to the target.
           // The authoritative state update is pushed at the end of the RPC via
           // orchestrator.executeTransition → onTaskUpdated.
-          appendMessage(db, params.taskId, convId!, "system", null, msg);
+          await appendMessage(db, params.taskId, convId!, "system", null, msg);
         };
 
         try {
@@ -248,15 +248,15 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         } catch (err) {
           // Worktree is required — fail the task so the user sees the error in the UI
           const errMsg = err instanceof Error ? err.message : String(err);
-          db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(db, 
+          await db.exec("UPDATE tasks SET execution_state = 'failed' WHERE id = $1", [params.taskId]);
+          await appendMessage(db,
             params.taskId,
             convId!,
             "system",
             null,
             `Worktree setup failed: ${errMsg}`,
           );
-          const failedRow = fetchTaskWithModel(db, params.taskId);
+          const failedRow = await fetchTaskWithModel(db, params.taskId);
           if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
           onTaskUpdated(failedRow);
           return { task: failedRow, executionId: null };
@@ -264,7 +264,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       }
 
       return requireOrchestrator(orchestrator).executeTransition(params.taskId, params.toState);
-    }, 
+    },
 
     "tasks.sendMessage": async (params: {
       taskId: number;
@@ -283,14 +283,15 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         return requireOrchestrator(orchestrator).executeCodeReview(params.taskId, codeReviewData.manualEdits);
       }
 
-      const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
-      const taskRow2 = db.query<{ conversation_model: string | null }, [number]>(
-        "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?"
-      ).get(params.taskId);
+      const taskWorkspaceKey = await wsRepo.getTaskWorkspaceKey(params.taskId);
+      const taskRow2 = await db.get<{ conversation_model: string | null }>(
+        "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = $1",
+        [params.taskId],
+      );
       const resolvedCtxWindow = taskRow2?.conversation_model
         ? await resolveContextWindow(taskRow2.conversation_model, taskWorkspaceKey, orchestrator, modelSettingsRepo)
         : 128_000;
-      const warning = estimateContextWarning(db, params.taskId, resolvedCtxWindow);
+      const warning = await estimateContextWarning(db, params.taskId, resolvedCtxWindow);
       if (warning) {
         console.warn(`[railyn] context warning for task ${params.taskId}: ${warning}`);
       }
@@ -310,10 +311,11 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
       const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
 
-      const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
-      const submitConvRow = db.query<{ conversation_model: string | null }, [number]>(
-        "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?"
-      ).get(params.taskId);
+      const taskWorkspaceKey = await wsRepo.getTaskWorkspaceKey(params.taskId);
+      const submitConvRow = await db.get<{ conversation_model: string | null }>(
+        "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = $1",
+        [params.taskId],
+      );
       const engine = QualifiedModelId.tryParse(submitConvRow?.conversation_model)?.engineId ?? "copilot";
       const prepared = await prepareMessageForEngine(engine, engineContent, undefined);
 
@@ -326,30 +328,30 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
 
 
       // Retry worktree setup if it previously failed — same logic as tasks.transition
-      const taskRow = db
-        .query<{ project_key: string; conversation_id: number }, [number]>(
-          "SELECT project_key, conversation_id FROM tasks WHERE id = ?",
-        )
-        .get(params.taskId);
+      const taskRow = await db
+        .get<{ project_key: string; conversation_id: number }>(
+          "SELECT project_key, conversation_id FROM tasks WHERE id = $1",
+          [params.taskId],
+        );
 
       if (taskRow) {
         // Ensure conversation exists — tasks created before conversations were required may have null conversation_id.
         let retryConvId = (taskRow.conversation_id as number | null);
         if (retryConvId == null) {
-          const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [params.taskId]);
+          const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1)", [params.taskId]);
           retryConvId = convResult.lastInsertRowid as number;
-          db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [retryConvId, params.taskId]);
+          await db.exec("UPDATE tasks SET conversation_id = $1 WHERE id = $2", [retryConvId, params.taskId]);
         }
 
-        const wsKey = wsRepo.getTaskWorkspaceKey(params.taskId);
+        const wsKey = await wsRepo.getTaskWorkspaceKey(params.taskId);
         const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
         if (project?.gitRootPath) {
-          worktreeManager.registerContext(params.taskId, project.gitRootPath);
+          await worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
-        const postStatus = (msg: string) => {
-          appendMessage(db, params.taskId, retryConvId!, "system", null, msg);
-          const updated = fetchTaskWithModel(db, params.taskId);
+        const postStatus = async (msg: string) => {
+          await appendMessage(db, params.taskId, retryConvId!, "system", null, msg);
+          const updated = await fetchTaskWithModel(db, params.taskId);
           if (updated) onTaskUpdated(updated);
         };
 
@@ -357,9 +359,9 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           await worktreeManager.triggerWorktreeIfNeeded(params.taskId, postStatus);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(db, params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
-          const failedRow = fetchTaskWithModel(db, params.taskId);
+          await db.exec("UPDATE tasks SET execution_state = 'failed' WHERE id = $1", [params.taskId]);
+          await appendMessage(db, params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
+          const failedRow = await fetchTaskWithModel(db, params.taskId);
           if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
           onTaskUpdated(failedRow);
           // Return a fake execution id of -1 since we can't proceed — caller won't use it
@@ -372,18 +374,18 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
 
     // ─── tasks.setModel ──────────────────────────────────────────────────────
     "tasks.setModel": async (params: { taskId: number; model: string | null }): Promise<Task> => {
-      const task = fetchTaskWithModel(db, params.taskId);
+      const task = await fetchTaskWithModel(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
       if (task.conversationId === null) {
         throw new Error(`Task ${params.taskId} has no conversation`);
       }
-      db.run("UPDATE conversations SET model = ? WHERE id = ?", [params.model, task.conversationId]);
-      const workspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
+      await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", [params.model, task.conversationId]);
+      const workspaceKey = await wsRepo.getTaskWorkspaceKey(params.taskId);
       const engineModel = params.model && orchestrator
         ? (await orchestrator.listModels(workspaceKey)).find((m) => m.qualifiedId === params.model)
         : undefined;
-      applyModelParamsPolicy(db, { conversationId: task.conversationId, engineModel });
-      const updated = fetchTaskWithModel(db, params.taskId);
+      await applyModelParamsPolicy(db, { conversationId: task.conversationId, engineModel });
+      const updated = await fetchTaskWithModel(db, params.taskId);
       if (!updated) throw new Error(`Task ${params.taskId} not found after model update`);
       return updated;
     },
@@ -391,20 +393,20 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
     // ─── tasks.contextUsage ──────────────────────────────────────────────────
     "tasks.contextUsage": async (params: { taskId: number }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
 
-      const task = db
-        .query<{ conversation_model: string | null }, [number]>(
-          "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?",
-        )
-        .get(params.taskId);
+      const task = await db
+        .get<{ conversation_model: string | null }>(
+          "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = $1",
+          [params.taskId],
+        );
       const taskModel = task?.conversation_model ?? null;
-      const workspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
+      const workspaceKey = await wsRepo.getTaskWorkspaceKey(params.taskId);
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
       const maxTokens = await runWithConfig(workspaceConfig, async () => (
         taskModel
           ? resolveContextWindow(taskModel, workspaceKey, orchestrator, modelSettingsRepo)
           : Promise.resolve(128_000)
       ));
-      return estimateContextUsage(db, params.taskId, maxTokens);
+      return await estimateContextUsage(db, params.taskId, maxTokens);
     },
 
     // ─── tasks.compact ───────────────────────────────────────────────────────
@@ -415,15 +417,15 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
     // ─── tasks.cancel ────────────────────────────────────────────────────────
     "tasks.cancel": async (params: { taskId: number }): Promise<Task> => {
 
-      const row = db
-        .query<{ current_execution_id: number | null }, [number]>(
-          "SELECT current_execution_id FROM tasks WHERE id = ?",
-        )
-        .get(params.taskId);
+      const row = await db
+        .get<{ current_execution_id: number | null }>(
+          "SELECT current_execution_id FROM tasks WHERE id = $1",
+          [params.taskId],
+        );
       if (row?.current_execution_id != null) {
         orchestrator?.cancel(row.current_execution_id);
       }
-      const task = fetchTaskWithModel(db, params.taskId);
+      const task = await fetchTaskWithModel(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
       return task;
     },
@@ -431,21 +433,21 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
     // ─── tasks.update ────────────────────────────────────────────────────────
     "tasks.update": async (params: { taskId: number; title: string; description: string }): Promise<Task> => {
 
-      const taskRow = db
-        .query<{ workflow_state: string }, [number]>(
-          "SELECT workflow_state FROM tasks WHERE id = ?",
-        )
-        .get(params.taskId);
+      const taskRow = await db
+        .get<{ workflow_state: string }>(
+          "SELECT workflow_state FROM tasks WHERE id = $1",
+          [params.taskId],
+        );
       if (!taskRow) throw new Error(`Task ${params.taskId} not found`);
       // Only allow editing if the task is in the backlog column
       if (taskRow.workflow_state !== "backlog") {
         throw new Error("Cannot edit task once a worktree has been created");
       }
-      db.run(
-        "UPDATE tasks SET title = ?, description = ? WHERE id = ?",
+      await db.exec(
+        "UPDATE tasks SET title = $1, description = $2 WHERE id = $3",
         [params.title.trim(), params.description.trim(), params.taskId],
       );
-      const task = fetchTaskWithModel(db, params.taskId);
+      const task = await fetchTaskWithModel(db, params.taskId);
       if (!task) throw new Error(`Task ${params.taskId} not found`);
       return task;
     },
@@ -455,11 +457,11 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
 
 
       // Cancel any running execution first
-      const row = db
-        .query<{ current_execution_id: number | null; conversation_id: number }, [number]>(
-          "SELECT current_execution_id, conversation_id FROM tasks WHERE id = ?",
-        )
-        .get(params.taskId);
+      const row = await db
+        .get<{ current_execution_id: number | null; conversation_id: number }>(
+          "SELECT current_execution_id, conversation_id FROM tasks WHERE id = $1",
+          [params.taskId],
+        );
       if (row?.current_execution_id != null) {
         orchestrator?.cancel(row.current_execution_id);
       }
@@ -468,16 +470,16 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const { warning } = await worktreeManager.removeWorktree(params.taskId);
 
       // Cascade delete — tasks must be deleted before conversations (FK ref)
-      db.transaction(() => {
-        db.run("DELETE FROM task_hunk_decisions WHERE task_id = ?", [params.taskId]);
-        db.run("DELETE FROM conversation_messages WHERE task_id = ?", [params.taskId]);
-        db.run("DELETE FROM executions WHERE task_id = ?", [params.taskId]);
-        db.run("DELETE FROM task_git_context WHERE task_id = ?", [params.taskId]);
-        db.run("DELETE FROM tasks WHERE id = ?", [params.taskId]);
+      await db.begin(async (tx) => {
+        await tx.exec("DELETE FROM task_hunk_decisions WHERE task_id = $1", [params.taskId]);
+        await tx.exec("DELETE FROM conversation_messages WHERE task_id = $1", [params.taskId]);
+        await tx.exec("DELETE FROM executions WHERE task_id = $1", [params.taskId]);
+        await tx.exec("DELETE FROM task_git_context WHERE task_id = $1", [params.taskId]);
+        await tx.exec("DELETE FROM tasks WHERE id = $1", [params.taskId]);
         if (row?.conversation_id) {
-          db.run("DELETE FROM conversations WHERE id = ?", [row.conversation_id]);
+          await tx.exec("DELETE FROM conversations WHERE id = $1", [row.conversation_id]);
         }
-      })();
+      });
       taskLspRegistry.releaseTask(params.taskId).catch(() => { });
 
       return { success: true, ...(warning ? { warning } : {}) };
@@ -492,8 +494,8 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
     // ─── tasks.setShellAutoApprove ────────────────────────────────────────────
     "tasks.setShellAutoApprove": async (params: { taskId: number; enabled: boolean }): Promise<Task> => {
 
-      db.run("UPDATE tasks SET shell_auto_approve = ? WHERE id = ?", [params.enabled ? 1 : 0, params.taskId]);
-      const updated = fetchTaskWithModel(db, params.taskId);
+      await db.exec("UPDATE tasks SET shell_auto_approve = $1 WHERE id = $2", [params.enabled ? 1 : 0, params.taskId]);
+      const updated = await fetchTaskWithModel(db, params.taskId);
       if (!updated) throw new Error(`Task ${params.taskId} not found`);
       onTaskUpdated(updated);
       return updated;

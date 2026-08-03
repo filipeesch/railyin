@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { getConfig } from "../config/index.ts";
 import { noopLogger, type Logger } from "../logger.ts";
 import { resolveProvider, retryTurn } from "../ai/index.ts";
@@ -239,16 +239,16 @@ export function compactMessages(messages: ConversationMessageRow[], opts?: { log
   return collapsed;
 }
 
-export function estimateContextUsage(
-  db: Database,
+export async function estimateContextUsage(
+  db: Db,
   taskId: number,
   maxTokens: number,
-): { usedTokens: number; maxTokens: number; fraction: number } {
-  const recentExecution = db
-    .query<{ input_tokens: number | null }, [number]>(
-      "SELECT input_tokens FROM executions WHERE task_id = ? AND status = 'completed' AND input_tokens IS NOT NULL ORDER BY id DESC LIMIT 1",
-    )
-    .get(taskId);
+): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> {
+  const recentExecution = await db
+    .get<{ input_tokens: number | null }>(
+      "SELECT input_tokens FROM executions WHERE task_id = $1 AND status = 'completed' AND input_tokens IS NOT NULL ORDER BY id DESC LIMIT 1",
+      [taskId],
+    );
 
   if (recentExecution?.input_tokens != null) {
     const usedTokens = recentExecution.input_tokens;
@@ -256,11 +256,11 @@ export function estimateContextUsage(
     return { usedTokens, maxTokens, fraction };
   }
 
-  const messages = db
-    .query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
-    )
-    .all(taskId);
+  const messages = await db
+    .rows<ConversationMessageRow>(
+      "SELECT * FROM conversation_messages WHERE task_id = $1 ORDER BY id ASC",
+      [taskId],
+    );
 
   const compacted = compactMessages(messages, { logger: noopLogger });
   const totalChars = compacted.reduce((sum, message) => {
@@ -272,10 +272,10 @@ export function estimateContextUsage(
   return { usedTokens, maxTokens, fraction };
 }
 
-export function estimateContextWarning(db: Database, taskId: number, contextWindowOverride?: number): string | null {
+export async function estimateContextWarning(db: Db, taskId: number, contextWindowOverride?: number): Promise<string | null> {
   const contextWindowTokens = contextWindowOverride ?? 128_000;
   const warnAt = Math.floor(contextWindowTokens * CONTEXT_WARN_FRACTION);
-  const { usedTokens } = estimateContextUsage(db, taskId, contextWindowTokens);
+  const { usedTokens } = await estimateContextUsage(db, taskId, contextWindowTokens);
   if (usedTokens >= warnAt) {
     return `Context is ~${usedTokens.toLocaleString()} tokens (${Math.round((usedTokens / contextWindowTokens) * 100)}% of model limit). Consider archiving this task's conversation.`;
   }
@@ -291,13 +291,14 @@ export function extractSummaryBlock(raw: string): string {
   return match?.[1]?.trim() ?? raw.trim();
 }
 
-export async function compactConversation(db: Database, taskId: number): Promise<ConversationMessage> {
-  const task = db.query<TaskRow, [number]>(
-    `SELECT t.*, c.model AS conversation_model 
-     FROM tasks t 
-     LEFT JOIN conversations c ON c.id = t.conversation_id 
-     WHERE t.id = ?`
-  ).get(taskId);
+export async function compactConversation(db: Db, taskId: number): Promise<ConversationMessage> {
+  const task = await db.get<TaskRow>(
+    `SELECT t.*, c.model AS conversation_model
+     FROM tasks t
+     LEFT JOIN conversations c ON c.id = t.conversation_id
+     WHERE t.id = $1`,
+    [taskId],
+  );
   if (!task?.conversation_id) throw new Error(`Task ${taskId} not found`);
 
   const config = getConfig();
@@ -305,11 +306,11 @@ export async function compactConversation(db: Database, taskId: number): Promise
   if (!resolvedModel) throw new Error(`Task ${taskId} has no model configured for compaction`);
 
   const { provider } = resolveProvider(resolvedModel, config.providers);
-  const messages = db
-    .query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
-    )
-    .all(taskId);
+  const messages = await db
+    .rows<ConversationMessageRow>(
+      "SELECT * FROM conversation_messages WHERE task_id = $1 ORDER BY id ASC",
+      [taskId],
+    );
 
   const compacted = compactMessages(messages, { logger: noopLogger });
   const historyText = compacted
@@ -327,9 +328,8 @@ export async function compactConversation(db: Database, taskId: number): Promise
 
   const rawSummary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
   const summary = extractSummaryBlock(rawSummary);
-  const messageId = appendMessage(db, taskId, task.conversation_id, "compaction_summary" as MessageType, null, summary);
-  const messageRow = db
-    .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-    .get(messageId)!;
+  const messageId = await appendMessage(db, taskId, task.conversation_id, "compaction_summary" as MessageType, null, summary);
+  const messageRow = (await db
+    .get<ConversationMessageRow>("SELECT * FROM conversation_messages WHERE id = $1", [messageId]))!;
   return mapConversationMessage(messageRow);
 }

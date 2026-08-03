@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { WaitFn } from "../pipeline/write-buffer.ts";
 
 const defaultWaitFn: WaitFn = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -9,51 +9,48 @@ export class RetentionJob {
   private readonly waitFn: WaitFn;
 
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     waitFn?: WaitFn,
   ) {
     this.waitFn = waitFn ?? defaultWaitFn;
   }
 
-  runNow(): void {
-    this.db.run("DELETE FROM model_raw_messages WHERE created_at < datetime('now', '-1 day')");
-    this.db.run("DELETE FROM stream_events WHERE created_at < datetime('now', '-4 hours')");
+  async runNow(): Promise<void> {
+    await this.db.exec("DELETE FROM model_raw_messages WHERE created_at < datetime('now', '-1 day')");
+    await this.db.exec("DELETE FROM stream_events WHERE created_at < datetime('now', '-4 hours')");
     // Collect conversation IDs owned by expired archived chat sessions, then delete
     // the chat sessions first (to free the FK reference), then clean up executions
     // (no FK cascade in production — must be explicit), then delete the conversations
     // so that ON DELETE CASCADE propagates to conversation_messages and stream_events.
-    const staleConversationIds = this.db
-      .query<{ conversation_id: number }, []>(
-        `SELECT conversation_id FROM chat_sessions
+    const staleConversationIds = (await this.db.rows<{ conversation_id: number }>(
+      `SELECT conversation_id FROM chat_sessions
          WHERE status = 'archived' AND archived_at < datetime('now', '-7 days')`,
-      )
-      .all()
-      .map((r) => r.conversation_id);
+    )).map((r) => r.conversation_id);
 
-    this.db.run(
+    await this.db.exec(
       "DELETE FROM chat_sessions WHERE status = 'archived' AND archived_at < datetime('now', '-7 days')"
     );
 
     if (staleConversationIds.length > 0) {
-      const placeholders = staleConversationIds.map(() => "?").join(", ");
+      const placeholders = staleConversationIds.map((_, i) => `$${i + 1}`).join(", ");
       // Delete task_execution_checkpoints before executions (no ON DELETE CASCADE on execution_id)
-      this.db.run(
+      await this.db.exec(
         `DELETE FROM task_execution_checkpoints WHERE execution_id IN (SELECT id FROM executions WHERE conversation_id IN (${placeholders}))`,
         staleConversationIds,
       );
       // executions.conversation_id has no FK cascade — delete explicitly
-      this.db.run(
+      await this.db.exec(
         `DELETE FROM executions WHERE conversation_id IN (${placeholders})`,
         staleConversationIds,
       );
-      this.db.run(`DELETE FROM conversations WHERE id IN (${placeholders})`, staleConversationIds);
+      await this.db.exec(`DELETE FROM conversations WHERE id IN (${placeholders})`, staleConversationIds);
     }
   }
 
   start(): void {
     if (this.running) return;
     this.running = true;
-    this.runNow();
+    void this.runNow();
     void this._loop();
   }
 
@@ -81,7 +78,7 @@ export class RetentionJob {
           }
         });
       });
-      if (this.running) this.runNow();
+      if (this.running) await this.runNow();
     }
   }
 }

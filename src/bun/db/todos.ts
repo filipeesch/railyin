@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "./db.ts";
 import { getDb } from "./index.ts";
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -68,96 +68,95 @@ function mapTodoRow(row: TodoRow): TodoItem {
 // ─── TodoRepository ───────────────────────────────────────────────────────────
 
 export class TodoRepository {
-  private readonly db: Database;
+  private readonly db: Db;
 
   /**
    * When `db` is provided the repository uses that connection (handler layer).
    * When omitted it falls back to the global `getDb()` singleton (engine tool context).
    */
-  constructor(db?: Database) {
+  constructor(db?: Db) {
     this.db = db ?? getDb();
   }
 
-  createTodo(
+  async createTodo(
     taskId: number,
     number: number,
     title: string,
     description: string,
     phase?: string | null,
-  ): TodoListItem {
-    const res = this.db.run(
+  ): Promise<TodoListItem> {
+    const res = await this.db.exec(
       `INSERT INTO task_todos (task_id, number, title, description, status, phase)
-       VALUES (?, ?, ?, ?, 'pending', ?)`,
+       VALUES ($1, $2, $3, $4, 'pending', $5)`,
       [taskId, number, title, description, phase ?? null],
     );
     const id = res.lastInsertRowid as number;
     return { id, number, title, status: "pending", phase: phase ?? null };
   }
 
-  editTodo(
+  async editTodo(
     taskId: number,
     id: number,
     update: TodoUpdate,
-  ): TodoListItem | null {
+  ): Promise<TodoListItem | null> {
     const fields: string[] = [];
     const values: (string | number | null)[] = [];
 
-    if (update.number !== undefined) { fields.push("number = ?"); values.push(update.number); }
-    if (update.title !== undefined) { fields.push("title = ?"); values.push(update.title); }
-    if (update.description !== undefined) { fields.push("description = ?"); values.push(update.description); }
-    if (update.status !== undefined) { fields.push("status = ?"); values.push(update.status); }
-    if (update.result !== undefined) { fields.push("result = ?"); values.push(update.result); }
-    if ("phase" in update) { fields.push("phase = ?"); values.push(update.phase ?? null); }
+    if (update.number !== undefined) { values.push(update.number); fields.push(`number = $${values.length}`); }
+    if (update.title !== undefined) { values.push(update.title); fields.push(`title = $${values.length}`); }
+    if (update.description !== undefined) { values.push(update.description); fields.push(`description = $${values.length}`); }
+    if (update.status !== undefined) { values.push(update.status); fields.push(`status = $${values.length}`); }
+    if (update.result !== undefined) { values.push(update.result); fields.push(`result = $${values.length}`); }
+    if ("phase" in update) { values.push(update.phase ?? null); fields.push(`phase = $${values.length}`); }
 
     if (fields.length === 0) {
-      const row = this.db
-        .query<Pick<TodoRow, "id" | "number" | "title" | "status" | "phase">, [number, number]>(
-          "SELECT id, number, title, status, phase FROM task_todos WHERE id = ? AND task_id = ?",
-        )
-        .get(id, taskId);
+      const row = await this.db.get<Pick<TodoRow, "id" | "number" | "title" | "status" | "phase">>(
+        "SELECT id, number, title, status, phase FROM task_todos WHERE id = $1 AND task_id = $2",
+        [id, taskId],
+      );
       if (!row) return null;
       return { id: row.id, number: row.number, title: row.title, status: row.status as TodoStatus, phase: row.phase };
     }
 
-    fields.push("updated_at = datetime('now')");
-    values.push(id, taskId);
+    fields.push(`updated_at = ${this.db.dialect.now()}`);
+    values.push(id);
+    const idPos = values.length;
+    values.push(taskId);
+    const taskPos = values.length;
 
-    const res = this.db.run(
-      `UPDATE task_todos SET ${fields.join(", ")} WHERE id = ? AND task_id = ?`,
+    const res = await this.db.exec(
+      `UPDATE task_todos SET ${fields.join(", ")} WHERE id = $${idPos} AND task_id = $${taskPos}`,
       values,
     );
-    if (res.changes === 0) return null;
+    if (res.affectedRows === 0) return null;
 
-    const updated = this.db
-      .query<Pick<TodoRow, "id" | "number" | "title" | "status" | "phase">, [number, number]>(
-        "SELECT id, number, title, status, phase FROM task_todos WHERE id = ? AND task_id = ?",
-      )
-      .get(id, taskId);
+    const updated = await this.db.get<Pick<TodoRow, "id" | "number" | "title" | "status" | "phase">>(
+      "SELECT id, number, title, status, phase FROM task_todos WHERE id = $1 AND task_id = $2",
+      [id, taskId],
+    );
     if (!updated) return null;
     return { id: updated.id, number: updated.number, title: updated.title, status: updated.status as TodoStatus, phase: updated.phase };
   }
 
-  deleteTodo(taskId: number, id: number): TodoListItem | null {
-    const row = this.db
-      .query<Pick<TodoRow, "id" | "number" | "title" | "status" | "phase">, [number, number]>(
-        "SELECT id, number, title, status, phase FROM task_todos WHERE id = ? AND task_id = ?",
-      )
-      .get(id, taskId);
+  async deleteTodo(taskId: number, id: number): Promise<TodoListItem | null> {
+    const row = await this.db.get<Pick<TodoRow, "id" | "number" | "title" | "status" | "phase">>(
+      "SELECT id, number, title, status, phase FROM task_todos WHERE id = $1 AND task_id = $2",
+      [id, taskId],
+    );
     if (!row) return null;
 
-    this.db.run(
-      "UPDATE task_todos SET status = 'deleted', updated_at = datetime('now') WHERE id = ? AND task_id = ?",
+    await this.db.exec(
+      `UPDATE task_todos SET status = 'deleted', updated_at = ${this.db.dialect.now()} WHERE id = $1 AND task_id = $2`,
       [id, taskId],
     );
     return { id: row.id, number: row.number, title: row.title, status: "deleted", phase: row.phase };
   }
 
-  getTodo(taskId: number, id: number): TodoItem | { deleted: true; message: string } | null {
-    const row = this.db
-      .query<TodoRow, [number, number]>(
-        "SELECT * FROM task_todos WHERE id = ? AND task_id = ?",
-      )
-      .get(id, taskId);
+  async getTodo(taskId: number, id: number): Promise<TodoItem | { deleted: true; message: string } | null> {
+    const row = await this.db.get<TodoRow>(
+      "SELECT * FROM task_todos WHERE id = $1 AND task_id = $2",
+      [id, taskId],
+    );
     if (!row) return null;
     if (row.status === "deleted") {
       return { deleted: true, message: `Todo #${row.number} "${row.title}" has been removed. Skip it and move to the next task.` };
@@ -165,46 +164,44 @@ export class TodoRepository {
     return mapTodoRow(row);
   }
 
-  listTodos(taskId: number, includeDeleted = false, currentPhase?: string): TodoListItem[] {
+  async listTodos(taskId: number, includeDeleted = false, currentPhase?: string): Promise<TodoListItem[]> {
     let sql: string;
     let params: (number | string)[];
 
     if (includeDeleted) {
       if (currentPhase !== undefined) {
-        sql = "SELECT id, number, title, status, phase FROM task_todos WHERE task_id = ? AND (phase IS NULL OR phase = ?) ORDER BY number ASC, id ASC";
+        sql = "SELECT id, number, title, status, phase FROM task_todos WHERE task_id = $1 AND (phase IS NULL OR phase = $2) ORDER BY number ASC, id ASC";
         params = [taskId, currentPhase];
       } else {
-        sql = "SELECT id, number, title, status, phase FROM task_todos WHERE task_id = ? ORDER BY number ASC, id ASC";
+        sql = "SELECT id, number, title, status, phase FROM task_todos WHERE task_id = $1 ORDER BY number ASC, id ASC";
         params = [taskId];
       }
     } else {
       if (currentPhase !== undefined) {
-        sql = "SELECT id, number, title, status, phase FROM task_todos WHERE task_id = ? AND status != 'deleted' AND (phase IS NULL OR phase = ?) ORDER BY number ASC, id ASC";
+        sql = "SELECT id, number, title, status, phase FROM task_todos WHERE task_id = $1 AND status != 'deleted' AND (phase IS NULL OR phase = $2) ORDER BY number ASC, id ASC";
         params = [taskId, currentPhase];
       } else {
-        sql = "SELECT id, number, title, status, phase FROM task_todos WHERE task_id = ? AND status != 'deleted' ORDER BY number ASC, id ASC";
+        sql = "SELECT id, number, title, status, phase FROM task_todos WHERE task_id = $1 AND status != 'deleted' ORDER BY number ASC, id ASC";
         params = [taskId];
       }
     }
 
-    return this.db
-      .query<Pick<TodoRow, "id" | "number" | "title" | "status" | "phase">, typeof params>(sql)
-      .all(...params)
-      .map((r) => ({ id: r.id, number: r.number, title: r.title, status: r.status as TodoStatus, phase: r.phase }));
+    const rows = await this.db.rows<Pick<TodoRow, "id" | "number" | "title" | "status" | "phase">>(sql, params);
+    return rows.map((r) => ({ id: r.id, number: r.number, title: r.title, status: r.status as TodoStatus, phase: r.phase }));
   }
 
-  reprioritizeTodos(
+  async reprioritizeTodos(
     taskId: number,
     items: Array<{ id: number; number: number }>,
-  ): TodoListItem[] {
-    this.db.transaction(() => {
+  ): Promise<TodoListItem[]> {
+    await this.db.begin(async (tx) => {
       for (const item of items) {
-        this.db.run(
-          "UPDATE task_todos SET number = ?, updated_at = datetime('now') WHERE id = ? AND task_id = ?",
+        await tx.exec(
+          `UPDATE task_todos SET number = $1, updated_at = ${tx.dialect.now()} WHERE id = $2 AND task_id = $3`,
           [item.number, item.id, taskId],
         );
       }
-    })();
+    });
     return this.listTodos(taskId);
   }
 }

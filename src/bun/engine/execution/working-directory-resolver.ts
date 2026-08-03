@@ -1,11 +1,11 @@
 import { join } from "node:path";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import { getLoadedProjectByKey } from "../../project-store.ts";
 import type { TaskRow, TaskGitContextRow } from "../../db/row-types.ts";
 
 export interface IWorkingDirectoryResolver {
-  resolve(task: TaskRow): string;
+  resolve(task: TaskRow): Promise<string>;
 }
 
 /**
@@ -18,20 +18,19 @@ export interface IWorkingDirectoryResolver {
  */
 export class WorkingDirectoryResolver implements IWorkingDirectoryResolver {
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly wsRepo: IWorkspaceRepository,
   ) {}
 
-  resolve(task: TaskRow): string {
-    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(task.id);
+  async resolve(task: TaskRow): Promise<string> {
+    const workspaceKey = await this.wsRepo.getTaskWorkspaceKey(task.id);
     const project = getLoadedProjectByKey(workspaceKey, task.project_key);
     const projectDirectory = project?.projectPath;
 
-    const gitRow = this.db
-      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
-        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(task.id);
+    const gitRow = await this.db.get<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">>(
+      "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = $1",
+      [task.id],
+    );
 
     if (gitRow?.worktree_status === "ready" && gitRow.worktree_path) {
       const worktreePath = gitRow.worktree_path;

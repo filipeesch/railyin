@@ -1,17 +1,17 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { DecisionRecord, DecisionRevision } from "../../shared/rpc-types.ts";
 import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 
-export function decisionHandlers(db: Database) {
+export function decisionHandlers(db: Db) {
   return {
-    "decisions.list": (params: { conversationId: number }): DecisionRecord[] => {
+    "decisions.list": async (params: { conversationId: number }): Promise<DecisionRecord[]> => {
       const repo = new DecisionRepository(db);
-      return repo.listByConversation(params.conversationId) as DecisionRecord[];
+      return (await repo.listByConversation(params.conversationId)) as DecisionRecord[];
     },
 
-    "decisions.getRevisions": (params: { decisionId: number }): DecisionRevision[] => {
+    "decisions.getRevisions": async (params: { decisionId: number }): Promise<DecisionRevision[]> => {
       const repo = new DecisionRepository(db);
-      return repo.getRevisions(params.decisionId) as DecisionRevision[];
+      return (await repo.getRevisions(params.decisionId)) as DecisionRevision[];
     },
   };
 }

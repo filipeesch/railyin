@@ -24,17 +24,18 @@ export const noopLogger: Logger = {
  *   SELECT * FROM logs WHERE execution_id = 103;
  */
 export function log(level: LogLevel, message: string, opts?: LogOptions): void {
-  const db = getDb();
-  db.run(
-    "INSERT INTO logs (level, task_id, execution_id, message, data) VALUES (?, ?, ?, ?, ?)",
-    [
-      level,
-      opts?.taskId ?? null,
-      opts?.executionId ?? null,
-      message,
-      opts?.data !== undefined ? JSON.stringify(opts.data) : null,
-    ],
-  );
+  void getDb()
+    .exec(
+      "INSERT INTO logs (level, task_id, execution_id, message, data) VALUES ($1, $2, $3, $4, $5)",
+      [
+        level,
+        opts?.taskId ?? null,
+        opts?.executionId ?? null,
+        message,
+        opts?.data !== undefined ? JSON.stringify(opts.data) : null,
+      ],
+    )
+    .catch(() => {});
 }
 
 export const realLogger: Logger = {

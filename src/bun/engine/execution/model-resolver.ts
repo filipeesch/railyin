@@ -1,5 +1,5 @@
 import type { TaskRow } from "../../db/row-types";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository";
 import { getWorkspaceConfig } from "../../workspace-context";
 
@@ -29,28 +29,29 @@ export function resolveModel(
  * Seeds the conversation model with workspace default if not already set.
  * Uses the first allowed engine's configured model (multi-engine aware).
  * 
- * @param db - Database instance
+ * @param db - Db port instance
  * @param conversationId - The conversation ID to seed
  * @param boardId - The board ID to get workspace context from
  */
-export function seedConversationModel(
-  db: Database,
+export async function seedConversationModel(
+  db: Db,
   conversationId: number,
   boardId: number,
   wsRepo: IWorkspaceRepository,
-): void {
-  const workspaceKey = wsRepo.getBoardWorkspaceKey(boardId);
+): Promise<void> {
+  const workspaceKey = await wsRepo.getBoardWorkspaceKey(boardId);
   const config = getWorkspaceConfig(workspaceKey);
-  
+
   const modelToSet = config.defaultModel ?? null;
-  
+
   if (modelToSet) {
-    const current = db.query<{ model: string | null }, [number]>(
-      "SELECT model FROM conversations WHERE id = ?"
-    ).get(conversationId);
-    
+    const current = await db.get<{ model: string | null }>(
+      "SELECT model FROM conversations WHERE id = $1",
+      [conversationId],
+    );
+
     if (!current?.model) {
-      db.run("UPDATE conversations SET model = ? WHERE id = ?", [
+      await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", [
         modelToSet,
         conversationId,
       ]);

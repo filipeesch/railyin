@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { ProviderModelList, ModelInfo } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
@@ -11,7 +11,7 @@ function requireOrchestrator(o: ExecutionCoordinator | null): ExecutionCoordinat
   return o;
 }
 
-export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator | null, modelSettingsRepo?: ModelSettingsRepository) {
+export function modelHandlers(db: Db, orchestrator: ExecutionCoordinator | null, modelSettingsRepo?: ModelSettingsRepository) {
   return {
     // ─── models.list ─────────────────────────────────────────────────────────
     "models.list": async (params: { workspaceKey?: string; engineType?: string } = {}): Promise<ProviderModelList[]> => {
@@ -19,11 +19,11 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
       const coord = requireOrchestrator(orchestrator);
 
       const enabledSet = new Set(
-        db
-          .query<{ qualified_model_id: string }, [string]>(
-            "SELECT qualified_model_id FROM enabled_models WHERE workspace_key = ?",
-          )
-          .all(workspaceKey)
+        (await db
+          .rows<{ qualified_model_id: string }>(
+            "SELECT qualified_model_id FROM enabled_models WHERE workspace_key = $1",
+            [workspaceKey],
+          ))
           .map((r) => r.qualified_model_id),
       );
 
@@ -37,12 +37,12 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
           byProvider.get(providerId)!.push(model);
         }
 
-        return Array.from(byProvider.entries()).map(([providerId, models]) => ({
+        return await Promise.all(Array.from(byProvider.entries()).map(async ([providerId, models]) => ({
           id: providerId,
-          models: models.map((m) => {
+          models: await Promise.all(models.map(async (m) => {
             // Apply DB override precedence: DB override → server-reported → null
             const dbOverride = modelSettingsRepo && m.qualifiedId
-              ? modelSettingsRepo.getContextWindow(workspaceKey, m.qualifiedId)
+              ? await modelSettingsRepo.getContextWindow(workspaceKey, m.qualifiedId)
               : null;
             const contextWindow = dbOverride ?? m.contextWindow ?? null;
             return {
@@ -55,8 +55,8 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
               ...(m.supportsManualCompact ? { supportsManualCompact: true } : {}),
               ...(m.contextWindowEditable ? { contextWindowEditable: true } : {}),
             };
-          }),
-        }));
+          })),
+        })));
       } catch (err) {
         return [
           {
@@ -72,13 +72,13 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
     "models.setEnabled": async (params: { workspaceKey?: string; qualifiedModelId: string; enabled: boolean }): Promise<Record<string, never>> => {
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       if (params.enabled) {
-        db.run(
-          "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)",
+        await db.exec(
+          "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2)",
           [workspaceKey, params.qualifiedModelId],
         );
       } else {
-        db.run(
-          "DELETE FROM enabled_models WHERE workspace_key = ? AND qualified_model_id = ?",
+        await db.exec(
+          "DELETE FROM enabled_models WHERE workspace_key = $1 AND qualified_model_id = $2",
           [workspaceKey, params.qualifiedModelId],
         );
       }
@@ -97,10 +97,10 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
       const [engineModels, dbRows] = await Promise.all([
         orchestrator.listModels(workspaceKey),
         db
-          .query<{ qualified_model_id: string }, [string]>(
-            "SELECT qualified_model_id FROM enabled_models WHERE workspace_key = ? ORDER BY qualified_model_id",
-          )
-          .all(workspaceKey),
+          .rows<{ qualified_model_id: string }>(
+            "SELECT qualified_model_id FROM enabled_models WHERE workspace_key = $1 ORDER BY qualified_model_id",
+            [workspaceKey],
+          ),
       ]);
 
       const concreteEngineIds = new Set(
@@ -134,10 +134,10 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
         }
       }
 
-      return filteredModels
-        .map((m) => {
+      const mappedModels = await Promise.all(filteredModels
+        .map(async (m) => {
           const dbOverride = modelSettingsRepo && m.qualifiedId
-            ? modelSettingsRepo.getContextWindow(workspaceKey, m.qualifiedId)
+            ? await modelSettingsRepo.getContextWindow(workspaceKey, m.qualifiedId)
             : null;
           const contextWindow = dbOverride ?? m.contextWindow ?? null;
           const engineId = m.qualifiedId != null ? m.qualifiedId.split("/")[0] : "copilot";
@@ -153,7 +153,8 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
             ...(availablePresets ? { availablePresets } : {}),
             ...normalizeModelSettings(m),
           };
-        })
+        }));
+      return mappedModels
         .filter((m) => !m.contextWindowEditable || m.contextWindow != null);
     },
 
@@ -161,7 +162,7 @@ export function modelHandlers(db: Database, orchestrator: ExecutionCoordinator |
     "models.setContextWindow": async (params: { workspaceKey?: string; qualifiedModelId: string; contextWindow: number | null }): Promise<Record<string, never>> => {
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       if (!modelSettingsRepo) throw new Error("ModelSettingsRepository not available");
-      modelSettingsRepo.setContextWindow(workspaceKey, params.qualifiedModelId, params.contextWindow);
+      await modelSettingsRepo.setContextWindow(workspaceKey, params.qualifiedModelId, params.contextWindow);
       return {};
     },
   };

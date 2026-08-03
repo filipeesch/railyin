@@ -1,8 +1,8 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { TodoRepository } from "../db/todos.ts";
 import type { TodoStatus } from "../db/todos.ts";
 
-export function todoHandlers(db: Database) {
+export function todoHandlers(db: Db) {
   const todoRepo = new TodoRepository(db);
 
   return {
@@ -23,7 +23,7 @@ export function todoHandlers(db: Database) {
 
     // ─── todos.edit ───────────────────────────────────────────────────────────
     "todos.edit": async (params: { taskId: number; todoId: number; number?: number; title?: string; description?: string; status?: string; phase?: string | null }) => {
-      const todo = todoRepo.getTodo(params.taskId, params.todoId);
+      const todo = await todoRepo.getTodo(params.taskId, params.todoId);
       if (!todo) return { error: "Todo not found" };
       if ("deleted" in todo) return { error: "Cannot edit deleted todo" };
       if (todo.status !== "pending") {

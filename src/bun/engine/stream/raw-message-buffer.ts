@@ -1,4 +1,4 @@
-import type { Database, Statement } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import type { RawModelMessage } from "../types.ts";
 import { WriteBuffer } from "../../pipeline/write-buffer.ts";
 import type { WaitFn } from "../../pipeline/write-buffer.ts";
@@ -17,36 +17,43 @@ export interface RawMessageBufferOptions {
 }
 
 export function createRawMessageBuffer(
-  db: Database,
+  db: Db,
   opts?: RawMessageBufferOptions,
 ): WriteBuffer<RawMessageItem> {
-  const stmt: Statement = db.prepare(
-    `INSERT INTO model_raw_messages
-       (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-
-  const insertBatch = db.transaction((items: RawMessageItem[]) => {
-    for (const item of items) {
-      stmt.run(
-        item.taskId,
-        item.executionId,
-        item.raw.engine,
-        item.raw.sessionId ?? null,
-        item.seq,
-        item.raw.direction,
-        item.raw.eventType,
-        item.raw.eventSubtype ?? null,
-        JSON.stringify(item.raw.payload),
-      );
-    }
-  });
+  const insertBatch = async (items: RawMessageItem[]): Promise<void> => {
+    await db.begin(async (tx) => {
+      for (const item of items) {
+        await tx.exec(
+          `INSERT INTO model_raw_messages
+             (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            item.taskId,
+            item.executionId,
+            item.raw.engine,
+            item.raw.sessionId ?? null,
+            item.seq,
+            item.raw.direction,
+            item.raw.eventType,
+            item.raw.eventSubtype ?? null,
+            JSON.stringify(item.raw.payload),
+          ],
+        );
+      }
+    });
+  };
 
   return new WriteBuffer<RawMessageItem>({
     maxBatch: 50,
     intervalMs: 1000,
     waitFn: opts?.waitFn,
     onEnqueue: opts?.onEnqueue,
-    flushFn: (items) => insertBatch(items),
+    // Fire-and-forget: the DB write runs off the streaming hot path. WriteBuffer.flush()
+    // invokes this synchronously and does not await, preserving non-blocking behavior.
+    flushFn: (items) => {
+      void insertBatch(items).catch((err) =>
+        console.error("[raw-message-buffer] flush failed:", err),
+      );
+    },
   });
 }

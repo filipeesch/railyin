@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "./db.ts";
 
 export interface PersistedStreamEvent {
   id?: number;
@@ -14,30 +14,30 @@ export interface PersistedStreamEvent {
   createdAt?: string;
 }
 
-export function appendStreamEvent(db: Database, event: PersistedStreamEvent): number {
-  const result = db.run(
+export async function appendStreamEvent(db: Db, event: PersistedStreamEvent): Promise<number> {
+  const result = await db.exec(
     `INSERT OR IGNORE INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [event.conversationId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
   );
   return result.lastInsertRowid as number;
 }
 
-export function appendStreamEventBatch(db: Database, events: PersistedStreamEvent[]): void {
+export async function appendStreamEventBatch(db: Db, events: PersistedStreamEvent[]): Promise<void> {
   if (events.length === 0) return;
-  db.transaction(() => {
+  await db.begin(async (tx) => {
     for (const event of events) {
-      db.run(
+      await tx.exec(
         `INSERT OR IGNORE INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [event.conversationId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
       );
     }
-  })();
+  });
 }
 
-export function getStreamEventsByConversation(db: Database, conversationId: number, afterSeq?: number): PersistedStreamEvent[] {
-  const rows = db.query<{
+export async function getStreamEventsByConversation(db: Db, conversationId: number, afterSeq?: number): Promise<PersistedStreamEvent[]> {
+  const rows = await db.rows<{
     id: number;
     conversation_id: number;
     execution_id: number;
@@ -49,9 +49,10 @@ export function getStreamEventsByConversation(db: Database, conversationId: numb
     parent_block_id: string | null;
     subagent_id: string | null;
     created_at: string;
-  }, [number, number, number]>(
-    "SELECT * FROM stream_events WHERE conversation_id = ? AND execution_id = (SELECT MAX(execution_id) FROM stream_events WHERE conversation_id = ?) AND seq > ? ORDER BY seq ASC",
-  ).all(conversationId, conversationId, afterSeq ?? -1);
+  }>(
+    "SELECT * FROM stream_events WHERE conversation_id = $1 AND execution_id = (SELECT MAX(execution_id) FROM stream_events WHERE conversation_id = $2) AND seq > $3 ORDER BY seq ASC",
+    [conversationId, conversationId, afterSeq ?? -1],
+  );
 
   return rows.map((r) => ({
     id: r.id,

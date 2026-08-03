@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -44,41 +44,41 @@ interface EngineFactoryCallbacks {
 }
 
 export interface BackendRpcRuntime {
-    db: Database;
+    db: Db;
     handlers: AllHandlersMap;
     recorder: CallbackRecorder;
     gitDir: string;
     cleanup: () => void;
     createTask: (model?: string) => Promise<{ taskId: number; conversationId: number }>;
-    getMessages: (taskId: number) => Array<{ type: string; role: string | null; content: string }>;
-    getTaskState: (taskId: number) => string | null;
-    getExecutionStatus: (executionId: number) => string | null;
+    getMessages: (taskId: number) => Promise<Array<{ type: string; role: string | null; content: string }>>;
+    getTaskState: (taskId: number) => Promise<string | null>;
+    getExecutionStatus: (executionId: number) => Promise<string | null>;
     waitForExecutionStatus: (executionId: number, status: string, timeoutMs?: number) => Promise<void>;
     waitForTaskState: (taskId: number, state: string, timeoutMs?: number) => Promise<void>;
     /** All StreamEvents delivered to IPC immediately (all types). */
     getIpcEvents: (executionId: number) => StreamEvent[];
     /** StreamEvents written to DB (persisted types only, after WriteBuffer flush). */
-    getDbStreamEvents: (executionId: number) => PersistedStreamEvent[];
+    getDbStreamEvents: (executionId: number) => Promise<PersistedStreamEvent[]>;
     /** Wait until a persisted event of `type` appears in DB for this execution. */
     waitForDbStreamEvent: (executionId: number, type: string, timeoutMs?: number) => Promise<PersistedStreamEvent>;
     /** Poll until predicate returns true (useful for asserting async side-effects after cancellation). */
     waitFor: (predicate: () => boolean, description?: string, timeoutMs?: number) => Promise<void>;
 }
 
-async function waitUntil(predicate: () => boolean, description: string, timeoutMs = 5_000): Promise<void> {
+async function waitUntil(predicate: () => boolean | Promise<boolean>, description: string, timeoutMs = 5_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-        if (predicate()) return;
+        if (await predicate()) return;
         await new Promise((resolve) => setTimeout(resolve, 10));
     }
     throw new Error(`Timed out waiting for ${description}`);
 }
 
-export function createBackendRpcRuntime(options: {
+export async function createBackendRpcRuntime(options: {
     createEngine: (callbacks: EngineFactoryCallbacks) => ExecutionEngine;
     taskModel?: string;
-}): BackendRpcRuntime {
-    const db = initDb();
+}): Promise<BackendRpcRuntime> {
+    const db = await initDb();
     const cfg = setupTestConfig();
     const gitDir = mkdtempSync(join(tmpdir(), "railyn-backend-"));
     execSync("git init", { cwd: gitDir });
@@ -98,7 +98,7 @@ export function createBackendRpcRuntime(options: {
     const streamEventBuffer = new WriteBuffer<PersistedStreamEvent>({
         maxBatch: 100,
         intervalMs: 500,
-        flushFn: (events) => appendStreamEventBatch(db, events),
+        flushFn: (events) => { void appendStreamEventBatch(db, events).catch(() => {}); },
     });
     streamEventBuffer.start();
 
@@ -178,56 +178,55 @@ export function createBackendRpcRuntime(options: {
             cfg.cleanup();
         },
         createTask: async (model = options.taskModel ?? "copilot/mock-model", { workspaceKey = "default" }: { workspaceKey?: string } = {}) => {
-            const { taskId, conversationId } = seedProjectAndTask(db, gitDir, { workspaceKey });
-            db.run("DELETE FROM task_git_context WHERE task_id = ?", [taskId]);
-            db.run(
+            const { taskId, conversationId } = await seedProjectAndTask(db, gitDir, { workspaceKey });
+            await db.exec("DELETE FROM task_git_context WHERE task_id = $1", [taskId]);
+            await db.exec(
                 `INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name)
-         VALUES (?, ?, ?, 'ready', 'test-branch')`,
+         VALUES ($1, $2, $3, 'ready', 'test-branch')`,
                 [taskId, gitDir, gitDir],
             );
-            db.run("UPDATE conversations SET model = ? WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [model, taskId]);
-            db.run("UPDATE tasks SET workflow_state = 'plan', execution_state = 'idle' WHERE id = ?", [taskId]);
-            db.run(
-                "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ('default', ?)",
+            await db.exec("UPDATE conversations SET model = $1 WHERE id = (SELECT conversation_id FROM tasks WHERE id = $2)", [model, taskId]);
+            await db.exec("UPDATE tasks SET workflow_state = 'plan', execution_state = 'idle' WHERE id = $1", [taskId]);
+            await db.exec(
+                "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ('default', $1)",
                 [model],
             );
             return { taskId, conversationId };
         },
         getMessages: (taskId: number) => db
-            .query<{ type: string; role: string | null; content: string }, [number]>(
-                "SELECT type, role, content FROM conversation_messages WHERE task_id = ? ORDER BY id ASC",
-            )
-            .all(taskId),
-        getTaskState: (taskId: number) => db
-            .query<{ execution_state: string | null }, [number]>("SELECT execution_state FROM tasks WHERE id = ?")
-            .get(taskId)?.execution_state ?? null,
-        getExecutionStatus: (executionId: number) => db
-            .query<{ status: string | null }, [number]>("SELECT status FROM executions WHERE id = ?")
-            .get(executionId)?.status ?? null,
+            .rows<{ type: string; role: string | null; content: string }>(
+                "SELECT type, role, content FROM conversation_messages WHERE task_id = $1 ORDER BY id ASC",
+                [taskId],
+            ),
+        getTaskState: async (taskId: number) =>
+            (await db.get<{ execution_state: string | null }>("SELECT execution_state FROM tasks WHERE id = $1", [taskId]))?.execution_state ?? null,
+        getExecutionStatus: async (executionId: number) =>
+            (await db.get<{ status: string | null }>("SELECT status FROM executions WHERE id = $1", [executionId]))?.status ?? null,
         waitForExecutionStatus: async (executionId: number, status: string, timeoutMs = 5_000) => {
             await waitUntil(
-                () => db.query<{ status: string | null }, [number]>("SELECT status FROM executions WHERE id = ?").get(executionId)?.status === status,
+                async () => (await db.get<{ status: string | null }>("SELECT status FROM executions WHERE id = $1", [executionId]))?.status === status,
                 `execution ${executionId} status ${status}`,
                 timeoutMs,
             );
         },
         waitForTaskState: async (taskId: number, state: string, timeoutMs = 5_000) => {
             await waitUntil(
-                () => db.query<{ execution_state: string | null }, [number]>("SELECT execution_state FROM tasks WHERE id = ?").get(taskId)?.execution_state === state,
+                async () => (await db.get<{ execution_state: string | null }>("SELECT execution_state FROM tasks WHERE id = $1", [taskId]))?.execution_state === state,
                 `task ${taskId} state ${state}`,
                 timeoutMs,
             );
         },
         getIpcEvents: (executionId: number) =>
             ipcEvents.filter((e) => e.executionId === executionId),
-        getDbStreamEvents: (executionId: number) =>
-            db.query<{
+        getDbStreamEvents: async (executionId: number) =>
+            (await db.rows<{
                 id: number; task_id: number | null; conversation_id: number; execution_id: number; seq: number;
                 block_id: string; type: string; content: string;
                 metadata: string | null; parent_block_id: string | null; subagent_id: string | null; created_at: string;
-            }, [number]>(
-                "SELECT * FROM stream_events WHERE execution_id = ? ORDER BY seq ASC",
-            ).all(executionId).map((r) => ({
+            }>(
+                "SELECT * FROM stream_events WHERE execution_id = $1 ORDER BY seq ASC",
+                [executionId],
+            )).map((r) => ({
                 id: r.id,
                 taskId: r.task_id,
                 conversationId: r.conversation_id,
@@ -243,20 +242,22 @@ export function createBackendRpcRuntime(options: {
             })),
         waitForDbStreamEvent: async (executionId: number, type: string, timeoutMs = 5_000) => {
             await waitUntil(
-                () => db.query<{ type: string }, [number, string]>(
-                    "SELECT type FROM stream_events WHERE execution_id = ? AND type = ? LIMIT 1",
-                ).get(executionId, type) !== null,
+                async () => (await db.get<{ type: string }>(
+                    "SELECT type FROM stream_events WHERE execution_id = $1 AND type = $2 LIMIT 1",
+                    [executionId, type],
+                )) !== undefined,
                 `DB stream_event type="${type}" for execution ${executionId}`,
                 timeoutMs,
             );
-            const row = db.query<{
+            const row = (await db.get<{
                 id: number; task_id: number; execution_id: number; seq: number;
                 block_id: string; type: string; content: string;
                 metadata: string | null; subagent_id: string | null; created_at: string;
                 conversation_id: number; parent_block_id: string | null;
-            }, [number, string]>(
-                "SELECT * FROM stream_events WHERE execution_id = ? AND type = ? ORDER BY seq ASC LIMIT 1",
-            ).get(executionId, type)!;
+            }>(
+                "SELECT * FROM stream_events WHERE execution_id = $1 AND type = $2 ORDER BY seq ASC LIMIT 1",
+                [executionId, type],
+            ))!;
             return {
                 id: row.id,
                 conversationId: row.conversation_id,

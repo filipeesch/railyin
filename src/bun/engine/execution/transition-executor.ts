@@ -1,5 +1,5 @@
 import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
 import { appendMessage } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
@@ -24,7 +24,7 @@ import { SlashCommandResolver } from "./slash-command-resolver.ts";
 
 export class TransitionExecutor {
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly workdirResolver: IWorkingDirectoryResolver,
@@ -45,27 +45,28 @@ export class TransitionExecutor {
     toState: string,
   ): Promise<{ task: Task; executionId: number | null }> {
     const db = this.db;
-    const task = db.query<TaskRow, [number]>(
-      `SELECT t.*, c.model AS conversation_model 
-       FROM tasks t 
-       LEFT JOIN conversations c ON c.id = t.conversation_id 
-       WHERE t.id = ?`
-    ).get(taskId);
+    const task = await db.get<TaskRow>(
+      `SELECT t.*, c.model AS conversation_model
+       FROM tasks t
+       LEFT JOIN conversations c ON c.id = t.conversation_id
+       WHERE t.id = $1`,
+      [taskId],
+    );
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const workspaceKey = this.wsRepo.getBoardWorkspaceKey(task.board_id);
+    const workspaceKey = await this.wsRepo.getBoardWorkspaceKey(task.board_id);
     const config = getWorkspaceConfig(workspaceKey);
 
     let conversationId = task.conversation_id;
     if (conversationId == null) {
-      const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [taskId]);
+      const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1)", [taskId]);
       conversationId = convResult.lastInsertRowid as number;
-      db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [conversationId, taskId]);
+      await db.exec("UPDATE tasks SET conversation_id = $1 WHERE id = $2", [conversationId, taskId]);
     }
 
     const fromState = task.workflow_state;
-    db.run("UPDATE tasks SET workflow_state = ? WHERE id = ?", [toState, taskId]);
+    await db.exec("UPDATE tasks SET workflow_state = $1 WHERE id = $2", [toState, taskId]);
 
-    const column = getColumnConfig(config, task.board_id, toState);
+    const column = await getColumnConfig(config, task.board_id, toState);
 
     // Use centralized model resolver with isColumnTransition=true
     const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
@@ -73,19 +74,20 @@ export class TransitionExecutor {
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
     if (!column?.on_enter_prompt) {
-      appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
-      db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
-      return { task: fetchTaskWithModel(db, taskId)!, executionId: null };
+      await appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
+      await db.exec("UPDATE tasks SET execution_state = 'idle' WHERE id = $1", [taskId]);
+      return { task: (await fetchTaskWithModel(db, taskId))!, executionId: null };
     }
 
     const resolvedPrompt = column.on_enter_prompt;
-    const updatedRow = db.query<TaskRow, [number]>(
-      `SELECT t.*, c.model AS conversation_model 
-       FROM tasks t 
-       LEFT JOIN conversations c ON c.id = t.conversation_id 
-       WHERE t.id = ?`
-    ).get(taskId)!;
-    const workingDirectory = this.workdirResolver.resolve(updatedRow);
+    const updatedRow = (await db.get<TaskRow>(
+      `SELECT t.*, c.model AS conversation_model
+       FROM tasks t
+       LEFT JOIN conversations c ON c.id = t.conversation_id
+       WHERE t.id = $1`,
+      [taskId],
+    ))!;
+    const workingDirectory = await this.workdirResolver.resolve(updatedRow);
     const targetEngineId = QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
     const transitionMetadata = this.buildTransitionMetadata(
       targetEngineId,
@@ -94,20 +96,20 @@ export class TransitionExecutor {
       resolvedPrompt,
       workingDirectory,
     );
-    appendMessage(db, taskId, conversationId, "transition_event", null, "", transitionMetadata as unknown as Record<string, unknown>);
+    await appendMessage(db, taskId, conversationId, "transition_event", null, "", transitionMetadata as unknown as Record<string, unknown>);
 
-    const execResult = db.run(
+    const execResult = await db.exec(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES (?, ?, ?, ?, ?, 'running', 1)`,
+       VALUES ($1, $2, $3, $4, $5, 'running', 1)`,
       [taskId, conversationId, fromState, toState, column.id],
     );
     const executionId = execResult.lastInsertRowid as number;
-    db.run(
-      "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+    await db.exec(
+      "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
       [executionId, taskId],
     );
 
-    const freshTask = fetchTaskWithModel(db, taskId)!;
+    const freshTask = (await fetchTaskWithModel(db, taskId))!;
     const signal = this.streamProcessor.createSignal(executionId);
 
     const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === effectiveModel);
@@ -118,7 +120,7 @@ export class TransitionExecutor {
       workingDirectory,
       workspaceKey,
     );
-    const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
+    const { decisionsBlock } = await this.decisionInjector.prepare(conversationId);
 
     // Build system instructions + stageInstructionsBlock via the shared collaborator
     const promptFilter: PromptFilterContext = {
@@ -127,7 +129,7 @@ export class TransitionExecutor {
       executionType: "task",
       projectPath: workingDirectory,
     };
-    const { systemInstructions, stageInstructionsBlock } = this.promptAssemblyService.assemble({
+    const { systemInstructions, stageInstructionsBlock } = await this.promptAssemblyService.assemble({
       config,
       boardId: task.board_id,
       columnId: toState,
@@ -166,7 +168,7 @@ export class TransitionExecutor {
     };
 
     const execParams = this.paramsEnricher
-      ? this.paramsEnricher.enrich(baseParams, {
+      ? await this.paramsEnricher.enrich(baseParams, {
           workspaceKey,
           conversationId,
           columnPreset: column.sampling_preset,
@@ -175,8 +177,8 @@ export class TransitionExecutor {
       : baseParams;
 
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
-    db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
-    return { task: fetchTaskWithModel(db, taskId)!, executionId };
+    await db.exec("UPDATE conversations SET last_engine_type = $1 WHERE id = $2", [targetEngineId, conversationId]);
+    return { task: (await fetchTaskWithModel(db, taskId))!, executionId };
   }
 
   private buildTransitionMetadata(

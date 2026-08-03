@@ -1,263 +1,26 @@
-import { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
 import { join, dirname, basename } from "path";
 import { tmpdir } from "os";
-import { getDb, _softResetForTests as resetDbSingleton } from "../db/index.ts";
+import { getDb, initDb as initDbProvider, _resetForTests as resetDbSingleton } from "../db/index.ts";
+import type { Db } from "../db/db.ts";
+import { runMigrations } from "../db/migrations/runner.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
+
+const SILENT_MIGRATION_LOGGER = { info() {}, warn() {} };
 
 // ─── In-memory DB ─────────────────────────────────────────────────────────────
 
-export function initDb(): Database {
+/**
+ * Fresh in-memory `Db` with the real schema built by running the actual SQLite
+ * migrations (decision #49 — no hand-maintained DDL copy, so the fixture cannot
+ * drift from production).
+ */
+export async function initDb(): Promise<Db> {
   process.env.RAILYN_DB = ":memory:";
   resetDbSingleton();
-  const db = getDb();
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS boards (
-      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-      workspace_key        TEXT NOT NULL DEFAULT 'default',
-      name                 TEXT NOT NULL,
-      workflow_template_id TEXT NOT NULL,
-      project_keys         TEXT NOT NULL DEFAULT '[]',
-      created_at           TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-     CREATE TABLE IF NOT EXISTS conversations (
-        id      INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        model   TEXT,
-        last_engine_type TEXT NULL,
-        decisions_injected_after_compaction_id INTEGER NULL,
-        sampling_preset_override TEXT NULL,
-        model_params TEXT NULL
-      );
-    CREATE TABLE IF NOT EXISTS tasks (
-      id                        INTEGER PRIMARY KEY AUTOINCREMENT,
-      board_id                  INTEGER NOT NULL REFERENCES boards(id),
-      project_key               TEXT NOT NULL DEFAULT '',
-      title                     TEXT NOT NULL,
-      description               TEXT NOT NULL DEFAULT '',
-      workflow_state            TEXT NOT NULL DEFAULT 'backlog',
-      execution_state           TEXT NOT NULL DEFAULT 'idle',
-      conversation_id           INTEGER REFERENCES conversations(id),
-      current_execution_id      INTEGER,
-      retry_count               INTEGER NOT NULL DEFAULT 0,
-      created_from_task_id      INTEGER REFERENCES tasks(id),
-      created_from_execution_id INTEGER,
-      model                     TEXT,
-      shell_auto_approve        INTEGER NOT NULL DEFAULT 0,
-      approved_commands         TEXT    NOT NULL DEFAULT '[]',
-      position                  REAL NOT NULL DEFAULT 0,
-      needs_column_prompt       INTEGER NOT NULL DEFAULT 0,
-      enabled_mcp_tools         TEXT    NULL,
-      created_at                TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS task_git_context (
-      task_id         INTEGER PRIMARY KEY REFERENCES tasks(id),
-      git_root_path   TEXT NOT NULL,
-      subrepo_path    TEXT,
-      branch_name     TEXT,
-      worktree_path   TEXT,
-      worktree_status TEXT NOT NULL DEFAULT 'not_created',
-      base_sha        TEXT
-    );
-    CREATE TABLE IF NOT EXISTS executions (
-       id          INTEGER PRIMARY KEY AUTOINCREMENT,
-       task_id     INTEGER REFERENCES tasks(id),
-        conversation_id INTEGER REFERENCES conversations(id),
-       from_state  TEXT NOT NULL,
-       to_state    TEXT NOT NULL,
-      prompt_id   TEXT,
-      status      TEXT NOT NULL DEFAULT 'running',
-      attempt     INTEGER NOT NULL DEFAULT 1,
-      started_at  TEXT NOT NULL DEFAULT (datetime('now')),
-      finished_at TEXT,
-      summary     TEXT,
-      details     TEXT,
-      cost_estimate REAL,
-      input_tokens INTEGER,
-      output_tokens INTEGER,
-      cache_creation_input_tokens INTEGER,
-      cache_read_input_tokens INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS conversation_messages (
-       id              INTEGER PRIMARY KEY AUTOINCREMENT,
-       task_id         INTEGER REFERENCES tasks(id),
-       conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-       type            TEXT NOT NULL,
-      role            TEXT,
-      content         TEXT NOT NULL DEFAULT '',
-      metadata        TEXT,
-      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS logs (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      level        TEXT    NOT NULL DEFAULT 'info',
-      task_id      INTEGER,
-      execution_id INTEGER,
-      message      TEXT    NOT NULL,
-      data         TEXT,
-      created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS task_hunk_decisions (
-      task_id        INTEGER NOT NULL REFERENCES tasks(id),
-      hunk_hash      TEXT    NOT NULL,
-      file_path      TEXT    NOT NULL,
-      reviewer_type  TEXT    NOT NULL DEFAULT 'human',
-      reviewer_id    TEXT    NOT NULL DEFAULT 'user',
-      decision       TEXT    NOT NULL DEFAULT 'pending',
-      comment        TEXT,
-      original_start INTEGER NOT NULL DEFAULT 0,
-      original_end   INTEGER NOT NULL DEFAULT 0,
-      modified_start INTEGER NOT NULL DEFAULT 0,
-      modified_end   INTEGER NOT NULL DEFAULT 0,
-      sent           INTEGER NOT NULL DEFAULT 0,
-      created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
-      updated_at     TEXT    NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (task_id, hunk_hash, reviewer_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_hunk_decisions_task ON task_hunk_decisions(task_id);
-    CREATE TABLE IF NOT EXISTS task_line_comments (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-      file_path     TEXT    NOT NULL,
-      line_start    INTEGER NOT NULL,
-      line_end      INTEGER NOT NULL,
-      col_start     INTEGER NOT NULL DEFAULT 0,
-      col_end       INTEGER NOT NULL DEFAULT 0,
-      line_text     TEXT    NOT NULL,
-      context_lines TEXT,
-      comment       TEXT    NOT NULL,
-      reviewer_type TEXT    NOT NULL DEFAULT 'human',
-      sent          INTEGER NOT NULL DEFAULT 0,
-      created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-      updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_task_line_comments_task ON task_line_comments(task_id);
-    CREATE TABLE IF NOT EXISTS enabled_models (
-      workspace_key       TEXT    NOT NULL DEFAULT 'default',
-      qualified_model_id  TEXT    NOT NULL,
-      PRIMARY KEY (workspace_key, qualified_model_id)
-    );
-    CREATE TABLE IF NOT EXISTS pending_messages (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-      content    TEXT    NOT NULL,
-      created_at TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS task_todos (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-      number      REAL    NOT NULL DEFAULT 0,
-      title       TEXT    NOT NULL,
-      status      TEXT    NOT NULL DEFAULT 'pending',
-      description TEXT    NOT NULL DEFAULT '',
-      phase       TEXT,
-      created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-      updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_task_todos_task ON task_todos(task_id);
-    CREATE TABLE IF NOT EXISTS stream_events (
-       id              INTEGER PRIMARY KEY AUTOINCREMENT,
-       conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-       execution_id    INTEGER NOT NULL,
-       seq             INTEGER NOT NULL,
-       block_id        TEXT NOT NULL,
-       type            TEXT NOT NULL,
-       content         TEXT NOT NULL DEFAULT '',
-       metadata        TEXT,
-       parent_block_id TEXT,
-       subagent_id     TEXT,
-       created_at      TEXT DEFAULT (datetime('now')),
-       UNIQUE (conversation_id, seq)
-    );
-    CREATE INDEX IF NOT EXISTS idx_stream_events_conversation ON stream_events (conversation_id, seq);
-    CREATE INDEX IF NOT EXISTS idx_stream_events_execution ON stream_events (execution_id, seq);
-    CREATE TABLE IF NOT EXISTS task_execution_checkpoints (
-      execution_id INTEGER PRIMARY KEY REFERENCES executions(id),
-      stash_ref    TEXT,
-      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS chat_sessions (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      workspace_key    TEXT NOT NULL DEFAULT 'default',
-      title            TEXT NOT NULL,
-      status           TEXT NOT NULL DEFAULT 'idle',
-      conversation_id  INTEGER NOT NULL REFERENCES conversations(id),
-      enabled_mcp_tools TEXT,
-      shell_auto_approve INTEGER NOT NULL DEFAULT 0,
-      approved_commands  TEXT NOT NULL DEFAULT '[]',
-      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
-      archived_at      TEXT,
-      last_read_at     TEXT
-    );
-    CREATE TABLE IF NOT EXISTS model_raw_messages (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id         INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
-      execution_id    INTEGER NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
-      engine          TEXT    NOT NULL,
-      session_id      TEXT,
-      stream_seq      INTEGER NOT NULL,
-      direction       TEXT    NOT NULL,
-      event_type      TEXT    NOT NULL,
-      event_subtype   TEXT,
-      payload_json    TEXT    NOT NULL,
-      created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_execution_seq ON model_raw_messages (execution_id, stream_seq);
-    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_task_created ON model_raw_messages (task_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_model_raw_messages_engine_type ON model_raw_messages (engine, event_type);
-    CREATE TABLE IF NOT EXISTS decision_batches (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-      label TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS decision_records (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-      batch_id INTEGER REFERENCES decision_batches(id) ON DELETE SET NULL,
-      question TEXT NOT NULL,
-      answer TEXT NOT NULL,
-      weight TEXT NOT NULL DEFAULT 'medium' CHECK (weight IN ('critical', 'medium', 'easy')),
-      notes TEXT,
-      revision_count INTEGER NOT NULL DEFAULT 0,
-      is_source_ai INTEGER NOT NULL DEFAULT 0,
-      is_deleted INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS decision_revisions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      decision_id INTEGER NOT NULL REFERENCES decision_records(id) ON DELETE CASCADE,
-      previous_answer TEXT NOT NULL,
-      previous_notes TEXT,
-      reason TEXT NOT NULL,
-      revised_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS task_notes (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-      content         TEXT    NOT NULL,
-      is_source_ai    INTEGER NOT NULL DEFAULT 0,
-      tags            TEXT    NULL,
-      created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-      updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS model_settings (
-      workspace_key       TEXT    NOT NULL,
-      qualified_model_id  TEXT    NOT NULL,
-      context_window      INTEGER,
-      PRIMARY KEY (workspace_key, qualified_model_id)
-    );
-    CREATE TABLE IF NOT EXISTS conversation_injection_state (
-      conversation_id INTEGER NOT NULL,
-      injection_type TEXT NOT NULL,
-      last_injected_after_compaction_id INTEGER,
-      PRIMARY KEY (conversation_id, injection_type)
-    );
-  `);
-  return db;
+  await initDbProvider();
+  await runMigrations({ logger: SILENT_MIGRATION_LOGGER });
+  return getDb();
 }
 
 // ─── Temp directory fixture ───────────────────────────────────────────────────
@@ -269,25 +32,28 @@ export function makeTempDir(): { dir: string; cleanup: () => void } {
 
 // ─── Seed a project + board + task ───────────────────────────────────────────
 
-export function seedProjectAndTask(
-  db: Database,
+export async function seedProjectAndTask(
+  db: Db,
   _gitRootPath: string,
   { workspaceKey = "default" }: { workspaceKey?: string } = {},
-): { projectKey: string; boardId: number; taskId: number; conversationId: number; workspaceKey: string } {
+): Promise<{ projectKey: string; boardId: number; taskId: number; conversationId: number; workspaceKey: string }> {
   const projectKey = "test-project";
 
-  db.run(`INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('${workspaceKey}', 'test-board', 'delivery')`);
-  const boardId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+  const board = await db.get<{ id: number }>(
+    "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ($1, 'test-board', 'delivery') RETURNING id",
+    [workspaceKey],
+  );
+  const boardId = board!.id;
 
-  db.run("INSERT INTO conversations (task_id) VALUES (0)");
-  const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+  const conv = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+  const conversationId = conv!.id;
 
-  db.run(
-    "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, ?, 'Test task', 'A test task', 'plan', 'idle', ?, 'fake/fake')",
+  const task = await db.get<{ id: number }>(
+    "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id) VALUES ($1, $2, 'Test task', 'A test task', 'plan', 'idle', $3) RETURNING id",
     [boardId, projectKey, conversationId],
   );
-  const taskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-  db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
+  const taskId = task!.id;
+  await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId, conversationId]);
 
   return { projectKey, boardId, taskId, conversationId, workspaceKey };
 }
@@ -406,29 +172,29 @@ import { getWorkspaceConfig, getDefaultWorkspaceKey } from "../workspace-context
  * Seed a standalone chat session with its own conversation.
  * Returns the session id and conversation id for use in executor tests.
  */
-export function seedChatSession(
-  db: Database,
+export async function seedChatSession(
+  db: Db,
   overrides: { workspaceKey?: string; title?: string; model?: string; lastEngineType?: string | null } = {},
-): { sessionId: number; conversationId: number } {
+): Promise<{ sessionId: number; conversationId: number }> {
   const workspaceKey = overrides.workspaceKey ?? "default";
   const title = overrides.title ?? "Test Session";
 
-  db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
-  const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+  const conv = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (NULL) RETURNING id");
+  const conversationId = conv!.id;
 
   if (overrides.model) {
-    db.run("UPDATE conversations SET model = ? WHERE id = ?", [overrides.model, conversationId]);
+    await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", [overrides.model, conversationId]);
   }
 
   if (overrides.lastEngineType !== undefined) {
-    db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [overrides.lastEngineType, conversationId]);
+    await db.exec("UPDATE conversations SET last_engine_type = $1 WHERE id = $2", [overrides.lastEngineType, conversationId]);
   }
 
-  db.run(
-    "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES (?, ?, 'idle', ?)",
+  const session = await db.get<{ id: number }>(
+    "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ($1, $2, 'idle', $3) RETURNING id",
     [workspaceKey, title, conversationId],
   );
-  const sessionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+  const sessionId = session!.id;
 
   return { sessionId, conversationId };
 }

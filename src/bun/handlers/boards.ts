@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { listBoardsByWorkspace } from "../db/board-queries.ts";
 
 import { getConfig } from "../config/index.ts";
@@ -23,19 +23,20 @@ function templateToWorkflowTemplate(t: ReturnType<typeof getConfig>["workflows"]
   };
 }
 
-export function boardHandlers(db: Database) {
+export function boardHandlers(db: Db) {
   return {
     "boards.list": async (): Promise<Array<Board & { template: WorkflowTemplate }>> => {
       // Use extracted function to get board IDs, then query with task counts
-      const boardRows = listBoardsByWorkspace(db);
+      const boardRows = await listBoardsByWorkspace(db);
       if (boardRows.length === 0) return [];
 
       // Build parameterized query with individual placeholders for each board ID
       const boardIds: number[] = boardRows.map((b) => b.id);
-      const placeholders = boardIds.map(() => "?").join(", ");
-      const rows = (db
-        .prepare(`SELECT b.*, COUNT(t.id) as task_count FROM boards b LEFT JOIN tasks t ON t.board_id = b.id WHERE b.id IN (${placeholders}) GROUP BY b.id ORDER BY b.created_at ASC`)
-        .all(boardIds as any) as unknown) as Array<BoardRow & { task_count: number }>;
+      const placeholders = boardIds.map((_, i) => `$${i + 1}`).join(", ");
+      const rows = (await db.rows<BoardRow & { task_count: number }>(
+        `SELECT b.*, COUNT(t.id) as task_count FROM boards b LEFT JOIN tasks t ON t.board_id = b.id WHERE b.id IN (${placeholders}) GROUP BY b.id ORDER BY b.created_at ASC`,
+        boardIds,
+      ));
 
       return rows.map((row) => {
         const board = mapBoard(row, row.task_count);
@@ -59,20 +60,19 @@ export function boardHandlers(db: Database) {
       const templateId = template?.id ?? config.workflows[0]?.id;
       if (!templateId) throw new Error("No workflow templates available in this workspace");
 
-      const result = db.run(
-        "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES (?, ?, ?, ?)",
+      const result = await db.exec(
+        "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES ($1, $2, $3, $4)",
         [params.workspaceKey, params.name.trim(), templateId, JSON.stringify(params.projectKeys ?? [])],
       );
 
-      const row = db
-        .query<BoardRow, [number]>("SELECT * FROM boards WHERE id = ?")
-        .get(result.lastInsertRowid as number)!;
+      const row = (await db
+        .get<BoardRow>("SELECT * FROM boards WHERE id = $1", [result.lastInsertRowid as number]))!;
 
       return mapBoard(row);
     },
 
     "boards.update": async (params: { id: number; name?: string; workflowTemplateId?: string; projectKeys?: string[] }): Promise<Board> => {
-      const existingRow = db.query<BoardRow, [number]>("SELECT * FROM boards WHERE id = ?").get(params.id);
+      const existingRow = await db.get<BoardRow>("SELECT * FROM boards WHERE id = $1", [params.id]);
       if (!existingRow) throw new Error(`Board ${params.id} not found`);
 
       if (params.workflowTemplateId !== undefined) {
@@ -83,29 +83,28 @@ export function boardHandlers(db: Database) {
 
       const updates: string[] = [];
       const values: unknown[] = [];
-      if (params.name !== undefined) { updates.push("name = ?"); values.push(params.name.trim()); }
-      if (params.workflowTemplateId !== undefined) { updates.push("workflow_template_id = ?"); values.push(params.workflowTemplateId); }
-      if (params.projectKeys !== undefined) { updates.push("project_keys = ?"); values.push(JSON.stringify(params.projectKeys)); }
+      if (params.name !== undefined) { values.push(params.name.trim()); updates.push(`name = $${values.length}`); }
+      if (params.workflowTemplateId !== undefined) { values.push(params.workflowTemplateId); updates.push(`workflow_template_id = $${values.length}`); }
+      if (params.projectKeys !== undefined) { values.push(JSON.stringify(params.projectKeys)); updates.push(`project_keys = $${values.length}`); }
 
       if (updates.length === 0) {
         return mapBoard(existingRow, 0);
       }
 
       values.push(params.id);
-      db.run(`UPDATE boards SET ${updates.join(", ")} WHERE id = ?`, values as import("bun:sqlite").SQLQueryBindings[]);
+      await db.exec(`UPDATE boards SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
 
-      const updatedRow = db.query<BoardRow, [number]>("SELECT * FROM boards WHERE id = ?").get(params.id)!;
+      const updatedRow = (await db.get<BoardRow>("SELECT * FROM boards WHERE id = $1", [params.id]))!;
       return mapBoard(updatedRow, 0);
     },
 
     "boards.delete": async (params: { id: number }): Promise<Record<string, never>> => {
-      const taskCount = db
-        .query<{ count: number }, [number]>("SELECT COUNT(*) as count FROM tasks WHERE board_id = ?")
-        .get(params.id);
+      const taskCount = await db
+        .get<{ count: number }>("SELECT COUNT(*) as count FROM tasks WHERE board_id = $1", [params.id]);
       if (taskCount && taskCount.count > 0) {
         throw new Error(`Cannot delete board: it has ${taskCount.count} task(s). Delete all tasks first.`);
       }
-      db.run("DELETE FROM boards WHERE id = ?", [params.id]);
+      await db.exec("DELETE FROM boards WHERE id = $1", [params.id]);
       return {};
     },
   };

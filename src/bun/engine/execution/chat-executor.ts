@@ -1,6 +1,6 @@
 import type { ConversationMessage } from "../../../shared/rpc-types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import { mapConversationMessage } from "../../db/mappers";
 import { appendMessage } from "../../conversation/messages";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../../workspace-context";
@@ -20,7 +20,7 @@ import { SlashCommandResolver } from "./slash-command-resolver.ts";
 
 export class ChatExecutor {
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly streamProcessor: StreamProcessor,
@@ -46,25 +46,23 @@ export class ChatExecutor {
     const db = this.db;
     const config = getWorkspaceConfig(workspaceKey);
 
-    const msgId = appendMessage(db, null, conversationId, "user", "user", content);
+    const msgId = await appendMessage(db, null, conversationId, "user", "user", content);
 
-    const conversationRow = db
-      .prepare(`
-        SELECT c.model, c.last_engine_type, t.id as task_id, t.title, t.description,
-               t.project_key, t.board_id, t.conversation_id as task_conv_id,
-               t.execution_state, t.created_at
-        FROM conversations c
-        LEFT JOIN tasks t ON t.id = c.task_id
-        WHERE c.id = ?
-      `)
-      .get(conversationId) as {
+    const conversationRow = await db.get<{
         model: string | null;
         last_engine_type: string | null;
         task_id: number | null;
         title: string | null;
         description: string | null;
         project_key: string | null;
-      } & Partial<TaskRow> | undefined;
+      } & Partial<TaskRow>>(`
+        SELECT c.model, c.last_engine_type, t.id as task_id, t.title, t.description,
+               t.project_key, t.board_id, t.conversation_id as task_conv_id,
+               t.execution_state, t.created_at
+        FROM conversations c
+        LEFT JOIN tasks t ON t.id = c.task_id
+        WHERE c.id = $1
+      `, [conversationId]);
 
     const conversationModel = conversationRow;
     const taskContext = conversationRow?.title
@@ -78,7 +76,7 @@ export class ChatExecutor {
     const effectiveModel = model ?? modelValue ?? "";
 
     if (effectiveModel && effectiveModel !== modelValue) {
-      db.run("UPDATE conversations SET model = ? WHERE id = ?", [effectiveModel, conversationId]);
+      await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", [effectiveModel, conversationId]);
     }
 
     // For task-linked conversations, resolve the task's worktree path so write tools
@@ -86,7 +84,7 @@ export class ChatExecutor {
     let workingDirectory = getEffectiveWorkspacePath(config);
     if (conversationRow?.task_id && this.workdirResolver) {
       try {
-        workingDirectory = this.workdirResolver.resolve(conversationRow as unknown as TaskRow);
+        workingDirectory = await this.workdirResolver.resolve(conversationRow as unknown as TaskRow);
       } catch {
         // worktree not ready yet — workspace root is acceptable fallback
       }
@@ -96,22 +94,20 @@ export class ChatExecutor {
     // Resolve custom prompts for chat execution
     const engineId = QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
 
-    const contextWindowOverride = this.paramsEnricher?.hasContextWindow(workspaceKey, effectiveModel) ?? false;
+    const contextWindowOverride = (await this.paramsEnricher?.hasContextWindow(workspaceKey, effectiveModel)) ?? false;
 
     // Pre-flight: Pi requires a configured context window — fail fast with a visible error
     if (engineId === "pi" && !contextWindowOverride) {
       const errorContent = `Pi engine requires a context window to be configured for model '${effectiveModel}'. Go to Model Settings to configure it.`;
-      const errorMsgId = appendMessage(db, null, conversationId, "system", null, errorContent);
-      db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+      const errorMsgId = await appendMessage(db, null, conversationId, "system", null, errorContent);
+      await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = $1", [conversationId]);
       if (this.onNewMessage) {
-        const errorMsgRow = db
-          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-          .get(errorMsgId)!;
+        const errorMsgRow = (await db
+          .get<ConversationMessageRow>("SELECT * FROM conversation_messages WHERE id = $1", [errorMsgId]))!;
         this.onNewMessage(mapConversationMessage(errorMsgRow));
       }
-      const userMsgRow = db
-        .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-        .get(msgId)!;
+      const userMsgRow = (await db
+        .get<ConversationMessageRow>("SELECT * FROM conversation_messages WHERE id = $1", [msgId]))!;
       return { message: mapConversationMessage(userMsgRow), executionId: -1 };
     }
 
@@ -142,14 +138,14 @@ export class ChatExecutor {
     };
     const customSystemInstructions = this.customPromptInjector.resolve(promptFilter);
 
-    const execResult = db.run(
+    const execResult = await db.exec(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES (NULL, ?, 'chat', 'chat', 'chat-turn', 'running', 1)`,
+       VALUES (NULL, $1, 'chat', 'chat', 'chat-turn', 'running', 1)`,
       [conversationId],
     );
     const executionId = execResult.lastInsertRowid as number;
 
-    db.run("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = ?", [conversationId]);
+    await db.exec("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = $1", [conversationId]);
 
     const signal = this.streamProcessor.createSignal(executionId);
 
@@ -173,7 +169,7 @@ export class ChatExecutor {
     };
 
     const execParams = this.paramsEnricher
-      ? this.paramsEnricher.enrich(chatBase, {
+      ? await this.paramsEnricher.enrich(chatBase, {
           workspaceKey,
           conversationId,
           model: effectiveModel,
@@ -181,11 +177,10 @@ export class ChatExecutor {
       : chatBase;
 
     this.streamProcessor.runNonNative(null, conversationId, executionId, engine, execParams);
-    db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [engineId, conversationId]);
+    await db.exec("UPDATE conversations SET last_engine_type = $1 WHERE id = $2", [engineId, conversationId]);
 
-    const msgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(msgId)!;
+    const msgRow = (await db
+      .get<ConversationMessageRow>("SELECT * FROM conversation_messages WHERE id = $1", [msgId]))!;
     return { message: mapConversationMessage(msgRow), executionId };
   }
 }

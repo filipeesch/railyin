@@ -1,35 +1,34 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { MessageType } from "../../shared/rpc-types.ts";
 
-export function appendMessage(
-  db: Database,
+export async function appendMessage(
+  db: Db,
   taskId: number | null,
   conversationId: number,
   type: MessageType,
   role: string | null,
   content: string,
   metadata?: Record<string, unknown>,
-): number {
-  const result = db.run(
+): Promise<number> {
+  const result = await db.exec(
     `INSERT INTO conversation_messages (task_id, conversation_id, type, role, content, metadata)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+     VALUES ($1, $2, $3, $4, $5, $6)`,
     [taskId, conversationId, type, role, content, metadata ? JSON.stringify(metadata) : null],
   );
   return result.lastInsertRowid as number;
 }
 
-export function ensureTaskConversation(db: Database, taskId: number, conversationId: number | null): number {
+export async function ensureTaskConversation(db: Db, taskId: number, conversationId: number | null): Promise<number> {
   if (conversationId != null) {
-    const existing = db
-      .query<{ id: number }, [number, number]>(
-        "SELECT id FROM conversations WHERE id = ? AND task_id = ?",
-      )
-      .get(conversationId, taskId);
+    const existing = await db.get<{ id: number }>(
+      "SELECT id FROM conversations WHERE id = $1 AND task_id = $2",
+      [conversationId, taskId],
+    );
     if (existing) return conversationId;
   }
 
-  const convResult = db.run("INSERT INTO conversations (task_id) VALUES (?)", [taskId]);
+  const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1)", [taskId]);
   const ensuredConversationId = convResult.lastInsertRowid as number;
-  db.run("UPDATE tasks SET conversation_id = ? WHERE id = ?", [ensuredConversationId, taskId]);
+  await db.exec("UPDATE tasks SET conversation_id = $1 WHERE id = $2", [ensuredConversationId, taskId]);
   return ensuredConversationId;
 }

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db.ts";
 import { getDb } from "../index.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -76,37 +76,39 @@ function mapRow(row: TaskNoteRow): TaskNote {
 // ─── NoteRepository ───────────────────────────────────────────────────────────
 
 export class NoteRepository {
-  private readonly db: Database;
+  private readonly db: Db;
 
-  constructor(db?: Database) {
+  constructor(db?: Db) {
     this.db = db ?? getDb();
   }
 
-  createNote(
+  async createNote(
     conversationId: number,
     input: { content: string; isSourceAi?: boolean; tags?: string[] },
-  ): TaskNote {
+  ): Promise<TaskNote> {
     const normalizedTags = normalizeTags(input.tags);
     const tagsJson = normalizedTags != null ? JSON.stringify(normalizedTags) : null;
 
-    const res = this.db.run(
+    const res = await this.db.exec(
       `INSERT INTO task_notes (conversation_id, content, is_source_ai, tags)
-       VALUES (?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4)`,
       [conversationId, input.content, input.isSourceAi ? 1 : 0, tagsJson],
     );
-    const row = this.db
-      .query<TaskNoteRow, [number]>("SELECT * FROM task_notes WHERE id = ?")
-      .get(res.lastInsertRowid as number);
+    const row = await this.db.get<TaskNoteRow>(
+      "SELECT * FROM task_notes WHERE id = $1",
+      [res.lastInsertRowid as number],
+    );
     return mapRow(row!);
   }
 
-  updateNote(
+  async updateNote(
     id: number,
     input: { content?: string; tags?: string[] },
-  ): TaskNote | null {
-    const existing = this.db
-      .query<TaskNoteRow, [number]>("SELECT * FROM task_notes WHERE id = ?")
-      .get(id);
+  ): Promise<TaskNote | null> {
+    const existing = await this.db.get<TaskNoteRow>(
+      "SELECT * FROM task_notes WHERE id = $1",
+      [id],
+    );
     if (!existing) return null;
 
     const content = input.content !== undefined ? input.content : existing.content;
@@ -118,31 +120,30 @@ export class NoteRepository {
       tagsJson = normalizedTags != null ? JSON.stringify(normalizedTags) : null;
     }
 
-    this.db.run(
-      `UPDATE task_notes SET content = ?, tags = ?, updated_at = datetime('now') WHERE id = ?`,
+    await this.db.exec(
+      `UPDATE task_notes SET content = $1, tags = $2, updated_at = ${this.db.dialect.now()} WHERE id = $3`,
       [content, tagsJson, id],
     );
 
-    const updated = this.db
-      .query<TaskNoteRow, [number]>("SELECT * FROM task_notes WHERE id = ?")
-      .get(id);
+    const updated = await this.db.get<TaskNoteRow>(
+      "SELECT * FROM task_notes WHERE id = $1",
+      [id],
+    );
     return mapRow(updated!);
   }
 
-  deleteNote(id: number): void {
-    this.db.run("DELETE FROM task_notes WHERE id = ?", [id]);
+  async deleteNote(id: number): Promise<void> {
+    await this.db.exec("DELETE FROM task_notes WHERE id = $1", [id]);
   }
 
-  listByConversation(
+  async listByConversation(
     conversationId: number,
     options?: { tagFilter?: string[] },
-  ): TaskNote[] {
-    const allNotes = this.db
-      .query<TaskNoteRow, [number]>(
-        "SELECT * FROM task_notes WHERE conversation_id = ? ORDER BY created_at ASC",
-      )
-      .all(conversationId)
-      .map(mapRow);
+  ): Promise<TaskNote[]> {
+    const allNotes = (await this.db.rows<TaskNoteRow>(
+      "SELECT * FROM task_notes WHERE conversation_id = $1 ORDER BY created_at ASC",
+      [conversationId],
+    )).map(mapRow);
 
     // No filter — return all
     if (!options?.tagFilter || options.tagFilter.length === 0) {

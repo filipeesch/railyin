@@ -9,10 +9,10 @@ export interface TaskGitContext {
 }
 
 export interface ITaskGitContextRepository {
-  upsertContext(taskId: number, gitRootPath: string, subrepoPath?: string): void;
-  getContext(taskId: number): TaskGitContext | null;
-  updateStatus(taskId: number, status: string): void;
-  updateCreating(taskId: number, worktreePath: string, branchName: string): void;
-  updateReady(taskId: number, baseSha: string | null): void;
-  updateRemoved(taskId: number): void;
+  upsertContext(taskId: number, gitRootPath: string, subrepoPath?: string): Promise<void>;
+  getContext(taskId: number): Promise<TaskGitContext | null>;
+  updateStatus(taskId: number, status: string): Promise<void>;
+  updateCreating(taskId: number, worktreePath: string, branchName: string): Promise<void>;
+  updateReady(taskId: number, baseSha: string | null): Promise<void>;
+  updateRemoved(taskId: number): Promise<void>;
 }

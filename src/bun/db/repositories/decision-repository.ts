@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db.ts";
 import { getDb } from "../index.ts";
 import { ConversationInjectionStateRepository } from "./conversation-injection-state-repository.ts";
 
@@ -89,15 +89,15 @@ function mapRevisionRow(row: DecisionRevisionRow): DecisionRevision {
 // ─── DecisionRepository ───────────────────────────────────────────────────────
 
 export class DecisionRepository {
-  private readonly db: Database;
+  private readonly db: Db;
   private readonly injectionStateRepo: ConversationInjectionStateRepository;
 
-  constructor(db?: Database) {
+  constructor(db?: Db) {
     this.db = db ?? getDb();
     this.injectionStateRepo = new ConversationInjectionStateRepository(this.db);
   }
 
-  createRecord(
+  async createRecord(
     conversationId: number,
     input: {
       batchId?: number | null;
@@ -107,11 +107,11 @@ export class DecisionRepository {
       notes?: string | null;
       isSourceAi?: boolean;
     },
-  ): DecisionRecord {
-    const res = this.db.run(
+  ): Promise<DecisionRecord> {
+    const res = await this.db.exec(
       `INSERT INTO decision_records
         (conversation_id, batch_id, question, answer, weight, notes, is_source_ai)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         conversationId,
         input.batchId ?? null,
@@ -122,78 +122,73 @@ export class DecisionRepository {
         input.isSourceAi ? 1 : 0,
       ],
     );
-    const row = this.db
-      .query<DecisionRecordRow, [number]>(
-        "SELECT * FROM decision_records WHERE id = ?",
-      )
-      .get(res.lastInsertRowid as number);
+    const row = await this.db.get<DecisionRecordRow>(
+      "SELECT * FROM decision_records WHERE id = $1",
+      [res.lastInsertRowid as number],
+    );
     return mapRecordRow(row!);
   }
 
-  updateRecord(
+  async updateRecord(
     id: number,
     newAnswer: string,
     reason: string,
     newNotes?: string | null,
-  ): DecisionRecord {
-    const existing = this.db
-      .query<DecisionRecordRow, [number]>(
-        "SELECT * FROM decision_records WHERE id = ?",
-      )
-      .get(id);
+  ): Promise<DecisionRecord> {
+    const existing = await this.db.get<DecisionRecordRow>(
+      "SELECT * FROM decision_records WHERE id = $1",
+      [id],
+    );
     if (!existing) throw new Error(`Decision record ${id} not found`);
 
-    this.db.run(
+    await this.db.exec(
       `INSERT INTO decision_revisions (decision_id, previous_answer, previous_notes, reason)
-       VALUES (?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4)`,
       [id, existing.answer, existing.notes, reason],
     );
 
     const notesValue = newNotes !== undefined ? newNotes : existing.notes;
-    this.db.run(
+    await this.db.exec(
       `UPDATE decision_records
-       SET answer = ?, notes = ?, revision_count = revision_count + 1, updated_at = datetime('now')
-       WHERE id = ?`,
+       SET answer = $1, notes = $2, revision_count = revision_count + 1, updated_at = ${this.db.dialect.now()}
+       WHERE id = $3`,
       [newAnswer, notesValue, id],
     );
 
-    const updated = this.db
-      .query<DecisionRecordRow, [number]>(
-        "SELECT * FROM decision_records WHERE id = ?",
-      )
-      .get(id);
+    const updated = await this.db.get<DecisionRecordRow>(
+      "SELECT * FROM decision_records WHERE id = $1",
+      [id],
+    );
     return mapRecordRow(updated!);
   }
 
-  deleteRecord(id: number): void {
-    this.db.run(
-      "UPDATE decision_records SET is_deleted = 1, updated_at = datetime('now') WHERE id = ?",
+  async deleteRecord(id: number): Promise<void> {
+    await this.db.exec(
+      `UPDATE decision_records SET is_deleted = 1, updated_at = ${this.db.dialect.now()} WHERE id = $1`,
       [id],
     );
   }
 
-  listByConversation(conversationId: number): DecisionRecord[] {
-    return this.db
-      .query<DecisionRecordRow, [number]>(
-        `SELECT * FROM decision_records
-         WHERE conversation_id = ? AND is_deleted = 0
-         ORDER BY CASE weight WHEN 'critical' THEN 1 WHEN 'medium' THEN 2 WHEN 'easy' THEN 3 END ASC`,
-      )
-      .all(conversationId)
-      .map(mapRecordRow);
+  async listByConversation(conversationId: number): Promise<DecisionRecord[]> {
+    const rows = await this.db.rows<DecisionRecordRow>(
+      `SELECT * FROM decision_records
+       WHERE conversation_id = $1 AND is_deleted = 0
+       ORDER BY CASE weight WHEN 'critical' THEN 1 WHEN 'medium' THEN 2 WHEN 'easy' THEN 3 END ASC`,
+      [conversationId],
+    );
+    return rows.map(mapRecordRow);
   }
 
-  getRevisions(decisionId: number): DecisionRevision[] {
-    return this.db
-      .query<DecisionRevisionRow, [number]>(
-        "SELECT * FROM decision_revisions WHERE decision_id = ? ORDER BY revised_at ASC",
-      )
-      .all(decisionId)
-      .map(mapRevisionRow);
+  async getRevisions(decisionId: number): Promise<DecisionRevision[]> {
+    const rows = await this.db.rows<DecisionRevisionRow>(
+      "SELECT * FROM decision_revisions WHERE decision_id = $1 ORDER BY revised_at ASC",
+      [decisionId],
+    );
+    return rows.map(mapRevisionRow);
   }
 
-  buildContextBlock(conversationId: number): string {
-    const records = this.listByConversation(conversationId);
+  async buildContextBlock(conversationId: number): Promise<string> {
+    const records = await this.listByConversation(conversationId);
     if (records.length === 0) return "";
 
     const lines: string[] = [];
@@ -214,7 +209,7 @@ export class DecisionRepository {
       }
 
       if (record.revisionCount > 0) {
-        const revisions = this.getRevisions(record.id);
+        const revisions = await this.getRevisions(record.id);
         const last = revisions[revisions.length - 1];
         line += `\n  (revised ${record.revisionCount}x · last reason: "${last.reason}")`;
       }
@@ -225,11 +220,11 @@ export class DecisionRepository {
     return `<decisions>\n${lines.join("\n")}\n</decisions>`;
   }
 
-  markDecisionsInjected(conversationId: number, compactionSummaryId: number): void {
-    this.injectionStateRepo.markInjected(conversationId, "decisions", compactionSummaryId);
+  async markDecisionsInjected(conversationId: number, compactionSummaryId: number): Promise<void> {
+    await this.injectionStateRepo.markInjected(conversationId, "decisions", compactionSummaryId);
   }
 
-  getLastInjectedCompactionId(conversationId: number): number | null {
+  async getLastInjectedCompactionId(conversationId: number): Promise<number | null> {
     return this.injectionStateRepo.getLastInjected(conversationId, "decisions");
   }
 }

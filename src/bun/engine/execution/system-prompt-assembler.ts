@@ -39,8 +39,8 @@ export class SystemPromptAssembler {
    * PromptAssemblyService) so systemInstructions stays byte-stable across
    * column transitions (vLLM/SGLang prefix-cache / Anthropic prompt-cache safety).
    */
-  static fromConfig(config: LoadedConfig, boardId: number, columnId: string): SystemPromptAssembler {
-    const template = getWorkflowTemplate(config, boardId);
+  static async fromConfig(config: LoadedConfig, boardId: number, columnId: string): Promise<SystemPromptAssembler> {
+    const template = await getWorkflowTemplate(config, boardId);
     const assembler = new SystemPromptAssembler();
 
     if (template?.workflow_instructions) {
@@ -55,8 +55,8 @@ export class SystemPromptAssembler {
    * if the column has none. Used by StageInstructionsInjector to build the
    * userContent-layer stageInstructionsBlock.
    */
-  static getStageInstructions(config: LoadedConfig, boardId: number, columnId: string): string | undefined {
-    const template = getWorkflowTemplate(config, boardId);
+  static async getStageInstructions(config: LoadedConfig, boardId: number, columnId: string): Promise<string | undefined> {
+    const template = await getWorkflowTemplate(config, boardId);
     const column = template?.columns.find((c) => c.id === columnId);
     return column?.stage_instructions || undefined;
   }

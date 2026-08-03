@@ -1,0 +1,28 @@
+# config/database.yaml — database engine selection (optional)
+#
+# If this file does NOT exist, Railyin uses SQLite at ~/.railyn/railyn.db (the
+# historical default). Create this file to select an engine explicitly.
+#
+# The RAILYN_DB environment variable (e.g. ":memory:" for tests) always takes
+# precedence over this file.
+#
+# Copy to `database.yaml` and edit.
+
+# ── Option A: SQLite (explicit) ───────────────────────────────────────────────
+driver: sqlite
+sqlite:
+  # Absolute file path, or ":memory:" for an ephemeral in-memory database.
+  # Omit to use the default (~/.railyn/railyn.db).
+  path: /var/lib/railyn/railyn.db
+
+# ── Option B: PostgreSQL ──────────────────────────────────────────────────────
+# Uncomment and set `driver: postgres` to use PostgreSQL instead.
+#
+# driver: postgres
+# postgres:
+#   # Connection URL. `${VAR}` is expanded from the environment (keep secrets out of the file).
+#   url: postgres://railyn:${DB_PASSWORD}@localhost:5432/railyn
+#   # Optional connection pool tuning (Bun.SQL defaults apply when omitted).
+#   pool:
+#     max: 10
+#     idleTimeout: 30   # seconds

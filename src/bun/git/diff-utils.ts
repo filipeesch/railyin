@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { FileDiffContent, HunkWithDecisions, HunkDecision, ReviewerDecision } from "../../shared/rpc-types.ts";
 
 // ─── Hunk model ───────────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@ export function extractHunkPatch(diffOutput: string, hunkIndex: number, filePath
 // ─── File diff content reader ─────────────────────────────────────────────────
 
 export async function readFileDiffContent(
-  db: Database,
+  db: Db,
   taskId: number,
   worktreePath: string,
   filePath: string,
@@ -185,11 +185,10 @@ export async function readFileDiffContent(
     if (diffOutput.trim()) {
       const parsed = parseGitDiffHunks(diffOutput, filePath);
       // Join with decisions from DB for the human reviewer
-      const decisionRows = db
-        .query<{ hunk_hash: string; reviewer_type: string; reviewer_id: string; decision: string; comment: string | null }, [number, string]>(
-          "SELECT hunk_hash, reviewer_type, reviewer_id, decision, comment FROM task_hunk_decisions WHERE task_id = ? AND file_path = ?",
-        )
-        .all(taskId, filePath);
+      const decisionRows = await db.rows<{ hunk_hash: string; reviewer_type: string; reviewer_id: string; decision: string; comment: string | null }>(
+        "SELECT hunk_hash, reviewer_type, reviewer_id, decision, comment FROM task_hunk_decisions WHERE task_id = $1 AND file_path = $2",
+        [taskId, filePath],
+      );
       const decisionMap = new Map<string, { reviewerType: string; reviewerId: string; decision: string; comment: string | null }[]>();
       for (const row of decisionRows) {
         const existing = decisionMap.get(row.hunk_hash) ?? [];
@@ -227,11 +226,10 @@ export async function readFileDiffContent(
       // Synthesize a single hunk covering the whole file so the review UI can show it.
       const modifiedLines = modified.split("\n");
       const hash = computeHunkHash(filePath, [], modifiedLines);
-      const humanDecisionRow = db
-        .query<{ decision: string; comment: string | null }, [number, string]>(
-          "SELECT decision, comment FROM task_hunk_decisions WHERE task_id = ? AND hunk_hash = ? AND reviewer_id = 'user' LIMIT 1",
-        )
-        .get(taskId, hash);
+      const humanDecisionRow = await db.get<{ decision: string; comment: string | null }>(
+        "SELECT decision, comment FROM task_hunk_decisions WHERE task_id = $1 AND hunk_hash = $2 AND reviewer_id = 'user' LIMIT 1",
+        [taskId, hash],
+      );
       hunks = [{
         hash,
         hunkIndex: 0,

@@ -91,11 +91,10 @@ export function extractSessionMemory(taskId: number, logger: Logger = realLogger
 async function _doExtract(taskId: number, logger: Logger): Promise<void> {
   try {
     const db = getDb();
-    const task = db
-      .query<{ model: string | null; conversation_id: number | null }, [number]>(
-        "SELECT model, conversation_id FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const task = await db.get<{ model: string | null; conversation_id: number | null }>(
+      "SELECT model, conversation_id FROM tasks WHERE id = $1",
+      [taskId],
+    );
     if (!task?.model) return;
 
     const config = getConfig();
@@ -107,14 +106,12 @@ async function _doExtract(taskId: number, logger: Logger): Promise<void> {
     }
 
     // Fetch the last ~40 messages for context (enough for extraction, bounded cost)
-    const messages = db
-      .query<ConversationMessageRow, [number]>(
-        `SELECT * FROM conversation_messages
-         WHERE task_id = ? AND type IN ('user', 'assistant', 'tool_call', 'tool_result')
+    const messages = (await db.rows<ConversationMessageRow>(
+      `SELECT * FROM conversation_messages
+         WHERE task_id = $1 AND type IN ('user', 'assistant', 'tool_call', 'tool_result')
          ORDER BY id DESC LIMIT 40`,
-      )
-      .all(taskId)
-      .reverse();
+      [taskId],
+    )).reverse();
 
     if (messages.length === 0) return;
 
