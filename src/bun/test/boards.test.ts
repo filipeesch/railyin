@@ -9,7 +9,7 @@
  *   BD — boards.delete
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, setupTestConfig, seedProjectAndTask } from "./helpers.ts";
 import { boardHandlers } from "../handlers/boards.ts";
 
@@ -21,12 +21,12 @@ columns:
 `;
 
 let cleanup: (() => void) | null = null;
-let db: Database;
+let db: Db;
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig("", undefined, [SECOND_WORKFLOW_YAML]);
   cleanup = cfg.cleanup;
-  db = initDb();
+  db = await initDb();
 });
 
 afterEach(() => {
@@ -85,9 +85,9 @@ describe("BL — boards.list taskCount", () => {
 
   it("BL-2: board with 2 tasks has taskCount 2", async () => {
 
-    const { boardId } = seedProjectAndTask(db, "");
+    const { boardId } = await seedProjectAndTask(db, "");
     // Add a second task
-    db.run("INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, 'test-project', 'Task 2', '', 'backlog', 'idle', 1, 'fake/fake')", [boardId]);
+    await db.exec("INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id) VALUES ($1, 'test-project', 'Task 2', '', 'backlog', 'idle', 1)", [boardId]);
     const handlers = boardHandlers(db);
     const boards = await handlers["boards.list"]();
     const board = boards.find((b) => b.id === boardId);
@@ -96,9 +96,9 @@ describe("BL — boards.list taskCount", () => {
 
   it("BL-3: multiple boards have independent taskCounts", async () => {
 
-    const { boardId: b1 } = seedProjectAndTask(db, "");
-    db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'Board 2', 'delivery')");
-    const b2 = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    const { boardId: b1 } = await seedProjectAndTask(db, "");
+    const board2 = await db.get<{ id: number }>("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'Board 2', 'delivery') RETURNING id");
+    const b2 = board2!.id;
     const handlers = boardHandlers(db);
     const boards = await handlers["boards.list"]();
     expect(boards.find((b) => b.id === b1)?.taskCount).toBe(1);
@@ -180,15 +180,15 @@ describe("BD — boards.delete", () => {
 
   it("BD-2: board with 1 task throws with count in message", async () => {
 
-    const { boardId } = seedProjectAndTask(db, "");
+    const { boardId } = await seedProjectAndTask(db, "");
     const handlers = boardHandlers(db);
     await expect(handlers["boards.delete"]({ id: boardId })).rejects.toThrow("1");
   });
 
   it("BD-3: board with multiple tasks throws with correct count", async () => {
 
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, 'test-project', 'Task 2', '', 'backlog', 'idle', 1, 'fake/fake')", [boardId]);
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id) VALUES ($1, 'test-project', 'Task 2', '', 'backlog', 'idle', 1)", [boardId]);
     const handlers = boardHandlers(db);
     await expect(handlers["boards.delete"]({ id: boardId })).rejects.toThrow("2");
   });

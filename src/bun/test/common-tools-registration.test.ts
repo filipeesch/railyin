@@ -13,8 +13,8 @@ import type { CommonToolContext } from "../engine/types.ts";
 
 let baseContext: CommonToolContext;
 
-beforeEach(() => {
-    const db = initDb();
+beforeEach(async () => {
+    const db = await initDb();
     const wsRepo = new WorkspaceRepository(db);
     baseContext = {
         task: { id: 1, boardId: 1, conversationId: 1 },

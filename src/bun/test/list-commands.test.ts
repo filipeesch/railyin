@@ -8,7 +8,7 @@ import { MockCursorSdkAdapter } from "./cursor/mocks.ts";
 import { CopilotDialect } from "../engine/dialects/copilot-dialect.ts";
 import { MockClaudeSdkAdapter } from "./support/claude-sdk-mock.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
 let tmpDir: string;
 
@@ -113,13 +113,13 @@ describe("CopilotDialect.listCommands — personal scope", () => {
 // ─── ClaudeEngine.listCommands — path resolution ──────────────────────────────
 
 describe("ClaudeEngine.listCommands — path resolution", () => {
-  let db: Database;
+  let db: Db;
   let projectDir: string;
   let worktreeDir: string;
   let configCleanup: () => void;
 
-  beforeEach(() => {
-    db = initDb(); // Must run first so RAILYN_DB=":memory:" is set before setupTestConfig
+  beforeEach(async () => {
+    db = await initDb(); // Must run first so RAILYN_DB=":memory:" is set before setupTestConfig
     projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
     worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
     const cfg = setupTestConfig("", projectDir);
@@ -133,7 +133,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
   });
 
   it("passes projectPath as cwd to sdkAdapter.listCommands", async () => {
-    const { taskId } = seedProjectAndTask(db, worktreeDir);
+    const { taskId } = await seedProjectAndTask(db, worktreeDir);
 
     const capturedCwds: string[] = [];
     const adapter = new MockClaudeSdkAdapter();
@@ -152,12 +152,12 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
 
   it("falls back to worktree_path when projectPath is not found", async () => {
     // Use a board with a project_key that doesn't exist in config — project lookup returns null
-    const { boardId, taskId } = seedProjectAndTask(db, worktreeDir);
+    const { boardId, taskId } = await seedProjectAndTask(db, worktreeDir);
     // Override project_key to something unknown so getProjectByKey returns null
-    db.run("UPDATE tasks SET project_key = 'nonexistent-project' WHERE id = ?", [taskId]);
+    await db.exec("UPDATE tasks SET project_key = 'nonexistent-project' WHERE id = $1", [taskId]);
     // Seed git context so fallback uses worktree_path
-    db.run(
-      "INSERT INTO task_git_context (task_id, worktree_path, git_root_path, branch_name) VALUES (?, ?, ?, ?)",
+    await db.exec(
+      "INSERT INTO task_git_context (task_id, worktree_path, git_root_path, branch_name) VALUES ($1, $2, $3, $4)",
       [taskId, worktreeDir, worktreeDir, "main"],
     );
 
@@ -185,7 +185,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
   });
 
   it("maps SDK commands to CommandInfo shape", async () => {
-    const { taskId } = seedProjectAndTask(db, worktreeDir);
+    const { taskId } = await seedProjectAndTask(db, worktreeDir);
 
     const adapter = new MockClaudeSdkAdapter();
     adapter.listCommands = async (_cwd: string) => [
@@ -206,13 +206,13 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
 // ─── CursorEngine.listCommands — path resolution ──────────────────────────────
 
 describe("CursorEngine.listCommands — path resolution", () => {
-  let db: Database;
+  let db: Db;
   let projectDir: string;
   let worktreeDir: string;
   let configCleanup: () => void;
 
-  beforeEach(() => {
-    db = initDb();
+  beforeEach(async () => {
+    db = await initDb();
     projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
     worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
     const cfg = setupTestConfig("", projectDir);
@@ -226,9 +226,9 @@ describe("CursorEngine.listCommands — path resolution", () => {
   });
 
   it("delegates to dialect.listCommands with worktreePath from task_git_context", async () => {
-    const { taskId } = seedProjectAndTask(db, worktreeDir);
-    db.run(
-      "INSERT INTO task_git_context (task_id, worktree_path, git_root_path, branch_name) VALUES (?, ?, ?, ?)",
+    const { taskId } = await seedProjectAndTask(db, worktreeDir);
+    await db.exec(
+      "INSERT INTO task_git_context (task_id, worktree_path, git_root_path, branch_name) VALUES ($1, $2, $3, $4)",
       [taskId, worktreeDir, worktreeDir, "main"],
     );
 
@@ -247,9 +247,9 @@ describe("CursorEngine.listCommands — path resolution", () => {
   });
 
   it("falls back to process.cwd() when no task_git_context row exists", async () => {
-    const { taskId } = seedProjectAndTask(db, worktreeDir);
+    const { taskId } = await seedProjectAndTask(db, worktreeDir);
     // Remove the git context row so fallback triggers
-    db.run("DELETE FROM task_git_context WHERE task_id = ?", [taskId]);
+    await db.exec("DELETE FROM task_git_context WHERE task_id = $1", [taskId]);
 
     const dialectCalls: { worktreePath: string; projectPath?: string }[] = [];
     const spyDialect = {

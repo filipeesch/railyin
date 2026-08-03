@@ -5,20 +5,20 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { codeReviewHandlers } from "../handlers/code-review.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
-let db: Database;
+let db: Db;
 let taskId: number;
 let gitDir: string;
 let worktreesBase: string;
 let configCleanup: () => void;
 
-beforeEach(() => {
+beforeEach(async () => {
   gitDir = mkdtempSync(join(tmpdir(), "railyn-git-"));
   worktreesBase = mkdtempSync(join(tmpdir(), "railyn-wt-"));
   const cfg = setupTestConfig(`worktree_base_path: "${worktreesBase}"`, gitDir);
   configCleanup = cfg.cleanup;
-  db = initDb();
+  db = await initDb();
 
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "test@test.com"', { cwd: gitDir });
@@ -27,7 +27,7 @@ beforeEach(() => {
   execSync("git add .", { cwd: gitDir });
   execSync('git commit -m "init"', { cwd: gitDir });
 
-  ({ taskId } = seedProjectAndTask(db, gitDir));
+  ({ taskId } = await seedProjectAndTask(db, gitDir));
 });
 
 afterEach(() => {
@@ -115,8 +115,8 @@ describe("tasks.writeFile", () => {
     const wtPath = join(worktreesBase, `task-${taskId}`);
     mkdirSync(wtPath, { recursive: true });
     execSync(`git worktree add ${wtPath} -b task-${taskId}`, { cwd: gitDir });
-    db.run(
-      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+    await db.exec(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES ($1, $2, $3, 'ready')",
       [taskId, gitDir, wtPath],
     );
 

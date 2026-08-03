@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
 import { chatSessionHandlers } from "../handlers/chat-sessions.ts";
@@ -23,13 +23,13 @@ const TEST_PROJECT_RESOLVER: IProjectResolver = {
   getWorktreeBasePath: (_wsKey, _projectKey, gitRootPath) => `${gitRootPath}/../worktrees`,
 };
 
-let db: Database;
+let db: Db;
 let wsRepo: WorkspaceRepository;
 let gitDir: string;
 let configCleanup: () => void;
 let worktreeManager: WorktreeManager;
 
-beforeEach(() => {
+beforeEach(async () => {
   gitDir = mkdtempSync(join(tmpdir(), "railyn-dh-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
@@ -37,7 +37,7 @@ beforeEach(() => {
   writeFileSync(join(gitDir, "README.md"), "hello");
   execSync("git add . && git commit -m init", { cwd: gitDir });
 
-  db = initDb();
+  db = await initDb();
   wsRepo = new WorkspaceRepository(db);
   const gitRepo = new GitRepositoryManager();
   worktreeManager = new WorktreeManager(
@@ -82,15 +82,15 @@ function makeCapturingOrchestrator(): ExecutionCoordinator & { captured: Capture
   return {
     captured,
     executeTransition: async (taskId: number, toState: string) => {
-      db.run("UPDATE tasks SET workflow_state = ? WHERE id = ?", [toState, taskId]);
-      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+      await db.exec("UPDATE tasks SET workflow_state = $1 WHERE id = $2", [toState, taskId]);
+      const row = (await db.get<TaskRow>("SELECT * FROM tasks WHERE id = $1", [taskId]))!;
       return { task: mapTask(row), executionId: null };
     },
     executeHumanTurn: async (taskId: number, content: string, _attachments: unknown, engineContent: string) => {
       captured.push({ taskId, userContent: content, engineContent: engineContent ?? undefined });
-      const convId = db.query<{ conversation_id: number }, [number]>(
-        "SELECT conversation_id FROM tasks WHERE id = ?"
-      ).get(taskId)!.conversation_id;
+      const convId = (await db.get<{ conversation_id: number }>(
+        "SELECT conversation_id FROM tasks WHERE id = $1", [taskId]
+      ))!.conversation_id;
       return { message: fakeMessage(convId) as ConversationMessage, executionId: 1 };
     },
     executeRetry: async () => { throw new Error("not implemented"); },
@@ -113,7 +113,7 @@ function makeCapturingOrchestrator(): ExecutionCoordinator & { captured: Capture
 
 describe("tasks.submitDecisions", () => {
   it("DH-1: userContent contains formatted Q&A (visible)", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
     const orchestrator = makeCapturingOrchestrator();
     const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
 
@@ -129,7 +129,7 @@ describe("tasks.submitDecisions", () => {
   });
 
   it("DH-2: engineContent contains hidden instruction to call list_decisions and record_decision", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
     const orchestrator = makeCapturingOrchestrator();
     const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
 
@@ -146,7 +146,7 @@ describe("tasks.submitDecisions", () => {
   });
 
   it("DH-3: userContent does NOT contain the hidden instruction", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
     const orchestrator = makeCapturingOrchestrator();
     const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
 
@@ -169,10 +169,10 @@ describe("chatSessions.submitDecisions", () => {
     const handlers = chatSessionHandlers(db, () => {}, orchestrator);
 
     // Create a chat session directly in DB
-    const convResult = db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES (NULL)");
     const convId = convResult.lastInsertRowid as number;
-    const sessionResult = db.run(
-      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Test Session', 'idle', ?)",
+    const sessionResult = await db.exec(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Test Session', 'idle', $1)",
       [convId],
     );
     const sessionId = sessionResult.lastInsertRowid as number;

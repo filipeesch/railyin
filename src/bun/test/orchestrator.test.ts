@@ -15,11 +15,11 @@ import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from ".
 import { resetConfig, loadConfig } from "../config/index.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 let orchestrator: Orchestrator;
@@ -58,10 +58,10 @@ function makeOrchestrator(): Orchestrator {
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
-  db = initDb();
+  db = await initDb();
 
   gitDir = mkdtempSync(join(tmpdir(), "railyn-orch-"));
   execSync("git init", { cwd: gitDir });
@@ -82,10 +82,10 @@ afterEach(() => {
 
 describe("Orchestrator.executeTransition", () => {
   it("updates workflow_state via configured engine", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run(
-      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, 'ready', 'test-branch')",
       [taskId, gitDir, gitDir],
     );
 
@@ -93,29 +93,29 @@ describe("Orchestrator.executeTransition", () => {
 
     expect(task.workflowState).toBe("plan");
 
-    const row = db
-      .query<{ workflow_state: string }, [number]>("SELECT workflow_state FROM tasks WHERE id = ?")
-      .get(taskId);
+    const row = await db.get<{ workflow_state: string }>(
+      "SELECT workflow_state FROM tasks WHERE id = $1",
+      [taskId],
+    );
     expect(row!.workflow_state).toBe("plan");
   });
 
   it("creates a transition_event message", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
 
     await orchestrator.executeTransition(taskId, "plan");
 
-    const event = db
-      .query<{ type: string }, [number]>(
-        "SELECT type FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' LIMIT 1",
-      )
-      .get(taskId);
+    const event = await db.get<{ type: string }>(
+      "SELECT type FROM conversation_messages WHERE task_id = $1 AND type = 'transition_event' LIMIT 1",
+      [taskId],
+    );
     expect(event).not.toBeNull();
   });
 
   it("returns null executionId for columns without on_enter_prompt", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
 
     const { executionId } = await orchestrator.executeTransition(taskId, "done");
 
@@ -123,8 +123,8 @@ describe("Orchestrator.executeTransition", () => {
   });
 
   it("creates an execution for columns with on_enter_prompt", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
 
     const { executionId } = await orchestrator.executeTransition(taskId, "plan");
 
@@ -133,16 +133,15 @@ describe("Orchestrator.executeTransition", () => {
   }, 10_000);
 
   it("stores prompted transition instructions on the transition event without a standalone prompt row", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
 
     await orchestrator.executeTransition(taskId, "plan");
 
-    const event = db
-      .query<{ metadata: string | null }, [number]>(
-        "SELECT metadata FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' ORDER BY id DESC LIMIT 1",
-      )
-      .get(taskId);
+    const event = await db.get<{ metadata: string | null }>(
+      "SELECT metadata FROM conversation_messages WHERE task_id = $1 AND type = 'transition_event' ORDER BY id DESC LIMIT 1",
+      [taskId],
+    );
     const metadata = JSON.parse(event?.metadata ?? "{}") as {
       from?: string;
       to?: string;
@@ -159,11 +158,10 @@ describe("Orchestrator.executeTransition", () => {
       },
     });
 
-    const promptRows = db
-      .query<{ count: number }, [number]>(
-        "SELECT count(*) AS count FROM conversation_messages WHERE task_id = ? AND type = 'user' AND role = 'prompt'",
-      )
-      .get(taskId);
+    const promptRows = await db.get<{ count: number }>(
+      "SELECT count(*) AS count FROM conversation_messages WHERE task_id = $1 AND type = 'user' AND role = 'prompt'",
+      [taskId],
+    );
     expect(promptRows?.count).toBe(0);
   });
 });
@@ -172,8 +170,8 @@ describe("Orchestrator.executeTransition", () => {
 
 describe("Orchestrator.executeHumanTurn", () => {
   it("appends user + assistant messages to DB", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
 
     let resolveDone!: () => void;
     const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
@@ -185,55 +183,54 @@ describe("Orchestrator.executeHumanTurn", () => {
     await orchestrator.executeHumanTurn(taskId, "What should I do first?");
     await donePromise;
 
-    const userMsg = db
-      .query<{ content: string }, [number]>(
-        "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
-      )
-      .get(taskId);
+    const userMsg = await db.get<{ content: string }>(
+      "SELECT content FROM conversation_messages WHERE task_id = $1 AND type = 'user' ORDER BY id DESC LIMIT 1",
+      [taskId],
+    );
     expect(userMsg!.content).toBe("What should I do first?");
 
-    const assistantMsg = db
-      .query<{ content: string }, [number]>(
-        "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'assistant' ORDER BY id DESC LIMIT 1",
-      )
-      .get(taskId);
+    const assistantMsg = await db.get<{ content: string }>(
+      "SELECT content FROM conversation_messages WHERE task_id = $1 AND type = 'assistant' ORDER BY id DESC LIMIT 1",
+      [taskId],
+    );
     expect(assistantMsg!.content.length).toBeGreaterThan(0);
   });
 
   it("creates an execution record", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
 
-    const before = db
-      .query<{ n: number }, [number]>("SELECT count(*) as n FROM executions WHERE task_id = ?")
-      .get(taskId)!.n;
+    const before = (await db.get<{ n: number }>(
+      "SELECT count(*) as n FROM executions WHERE task_id = $1",
+      [taskId],
+    ))!.n;
 
     await orchestrator.executeHumanTurn(taskId, "Go.");
 
-    const after = db
-      .query<{ n: number }, [number]>("SELECT count(*) as n FROM executions WHERE task_id = ?")
-      .get(taskId)!.n;
+    const after = (await db.get<{ n: number }>(
+      "SELECT count(*) as n FROM executions WHERE task_id = $1",
+      [taskId],
+    ))!.n;
     expect(after).toBe(before + 1);
   });
 
   it("persists conversation_id on task-backed executions", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
 
     const { executionId } = await orchestrator.executeHumanTurn(taskId, "Go.");
 
-    const row = db
-      .query<{ task_id: number | null; conversation_id: number | null }, [number]>(
-        "SELECT task_id, conversation_id FROM executions WHERE id = ?",
-      )
-      .get(executionId);
+    const row = await db.get<{ task_id: number | null; conversation_id: number | null }>(
+      "SELECT task_id, conversation_id FROM executions WHERE id = $1",
+      [executionId],
+    );
 
     expect(row).toEqual({ task_id: taskId, conversation_id: conversationId });
   });
 
   it("returns message and executionId", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
 
     const { message, executionId } = await orchestrator.executeHumanTurn(taskId, "Hello.");
 
@@ -262,15 +259,16 @@ describe("Orchestrator.executeHumanTurn", () => {
       new WorkspaceRepository(db),
     );
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan', conversation_id = NULL WHERE id = ?", [taskId]);
-    db.run("UPDATE conversations SET task_id = 0 WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan', conversation_id = NULL WHERE id = $1", [taskId]);
+    await db.exec("UPDATE conversations SET task_id = 0 WHERE id = $1", [conversationId]);
 
     const { message } = await nonNative.executeHumanTurn(taskId, "Hello from legacy task.");
 
-    const taskRow = db
-      .query<{ conversation_id: number | null }, [number]>("SELECT conversation_id FROM tasks WHERE id = ?")
-      .get(taskId);
+    const taskRow = await db.get<{ conversation_id: number | null }>(
+      "SELECT conversation_id FROM tasks WHERE id = $1",
+      [taskId],
+    );
     expect(taskRow?.conversation_id).not.toBeNull();
     expect(taskRow?.conversation_id).not.toBe(conversationId);
     expect(message.conversationId).toBe(taskRow!.conversation_id!);
@@ -279,21 +277,20 @@ describe("Orchestrator.executeHumanTurn", () => {
 
 describe("Orchestrator.executeChatTurn", () => {
   it("persists conversation_id on session executions", async () => {
-    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
-    const conversationId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
-    db.run(
-      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
+    const conv = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (NULL) RETURNING id");
+    const conversationId = conv!.id;
+    const session = await db.get<{ id: number }>(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', $1) RETURNING id",
       [conversationId],
     );
-    const sessionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    const sessionId = session!.id;
 
     const { executionId } = await orchestrator.executeChatTurn(sessionId, conversationId, "Hello from chat.");
 
-    const row = db
-      .query<{ task_id: number | null; conversation_id: number | null }, [number]>(
-        "SELECT task_id, conversation_id FROM executions WHERE id = ?",
-      )
-      .get(executionId);
+    const row = await db.get<{ task_id: number | null; conversation_id: number | null }>(
+      "SELECT task_id, conversation_id FROM executions WHERE id = $1",
+      [executionId],
+    );
 
     expect(row).toEqual({ task_id: null, conversation_id: conversationId });
   });
@@ -320,14 +317,14 @@ describe("Orchestrator.respondShellApprovalByExecution", () => {
       new WorkspaceRepository(db),
     );
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-    db.run(
-      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'waiting_user', 1)",
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
+    const exec = await db.get<{ id: number }>(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES ($1, 'plan', 'plan', 'human-turn', 'waiting_user', 1) RETURNING id",
       [taskId],
     );
-    const executionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
-    db.run("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?", [executionId, taskId]);
+    const executionId = exec!.id;
+    await db.exec("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = $1 WHERE id = $2", [executionId, taskId]);
 
     await approvalOrchestrator.respondShellApprovalByExecution(executionId, "approve_once");
 
@@ -357,15 +354,15 @@ describe("Orchestrator.respondShellApprovalByExecution", () => {
       new WorkspaceRepository(db),
     );
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run(
-      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'waiting_user', 1)",
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    const exec = await db.get<{ id: number }>(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES ($1, 'plan', 'plan', 'human-turn', 'waiting_user', 1) RETURNING id",
       [taskId],
     );
-    const executionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    const executionId = exec!.id;
     seededExecutionId = executionId;
-    db.run(
-      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?",
+    await db.exec(
+      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = $1 WHERE id = $2",
       [executionId, taskId],
     );
 
@@ -373,18 +370,16 @@ describe("Orchestrator.respondShellApprovalByExecution", () => {
       `Execution ${executionId} is not waiting for resume input`,
     );
 
-    const taskRow = db
-      .query<{ execution_state: string; current_execution_id: number | null }, [number]>(
-        "SELECT execution_state, current_execution_id FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const taskRow = await db.get<{ execution_state: string; current_execution_id: number | null }>(
+      "SELECT execution_state, current_execution_id FROM tasks WHERE id = $1",
+      [taskId],
+    );
     expect(taskRow).toEqual({ execution_state: "waiting_user", current_execution_id: executionId });
 
-    const execRow = db
-      .query<{ status: string; finished_at: string | null }, [number]>(
-        "SELECT status, finished_at FROM executions WHERE id = ?",
-      )
-      .get(executionId);
+    const execRow = await db.get<{ status: string; finished_at: string | null }>(
+      "SELECT status, finished_at FROM executions WHERE id = $1",
+      [executionId],
+    );
     expect(execRow).toEqual({ status: "waiting_user", finished_at: null });
   });
 });
@@ -393,19 +388,15 @@ describe("Orchestrator.respondShellApprovalByExecution", () => {
 
 describe("Orchestrator.executeRetry", () => {
   it("creates a new execution", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
     // Seed a prior execution so retry has something to retry
-    db.run(
-      "INSERT INTO executions (task_id, from_state, to_state, status) VALUES (?, 'backlog', 'plan', 'failed')",
+    const execIns = await db.get<{ id: number }>(
+      "INSERT INTO executions (task_id, from_state, to_state, status) VALUES ($1, 'backlog', 'plan', 'failed') RETURNING id",
       [taskId],
     );
-    const execBefore = db
-      .query<{ id: number }, [number]>(
-        "SELECT id FROM executions WHERE task_id = ? ORDER BY id DESC LIMIT 1",
-      )
-      .get(taskId)!.id;
-    db.run("UPDATE tasks SET current_execution_id = ? WHERE id = ?", [execBefore, taskId]);
+    const execBefore = execIns!.id;
+    await db.exec("UPDATE tasks SET current_execution_id = $1 WHERE id = $2", [execBefore, taskId]);
 
     const { executionId } = await orchestrator.executeRetry(taskId);
 
@@ -418,8 +409,8 @@ describe("Orchestrator.executeRetry", () => {
 
 describe("Orchestrator.cancel", () => {
   it("cancels an in-progress execution without throwing", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
 
     // Start a human turn and immediately cancel
     const turnPromise = orchestrator.executeHumanTurn(taskId, "Start processing.");
@@ -433,7 +424,7 @@ describe("Orchestrator.cancel", () => {
     expect(() => orchestrator.cancel(99999)).not.toThrow();
   });
 
-  it("OC-MODEL-1: marks non-native executions cancelled immediately and preserves model on push", () => {
+  it("OC-MODEL-1: marks non-native executions cancelled immediately and preserves model on push", async () => {
     class CancelStubEngine implements ExecutionEngine {
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
@@ -453,33 +444,31 @@ describe("Orchestrator.cancel", () => {
       new WorkspaceRepository(db),
     );
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-    db.run(
-      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'running', 1)",
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
+    const exec = await db.get<{ id: number }>(
+      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES ($1, 'plan', 'plan', 'human-turn', 'running', 1) RETURNING id",
       [taskId],
     );
-    const executionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
-    db.run(
-      "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+    const executionId = exec!.id;
+    await db.exec(
+      "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
       [executionId, taskId],
     );
 
     expect(() => nonNative.cancel(executionId)).not.toThrow();
 
-    const execRow = db
-      .query<{ status: string; finished_at: string | null }, [number]>(
-        "SELECT status, finished_at FROM executions WHERE id = ?",
-      )
-      .get(executionId);
+    const execRow = await db.get<{ status: string; finished_at: string | null }>(
+      "SELECT status, finished_at FROM executions WHERE id = $1",
+      [executionId],
+    );
     expect(execRow?.status).toBe("cancelled");
     expect(execRow?.finished_at).toBeTruthy();
 
-    const taskRow = db
-      .query<{ execution_state: string; current_execution_id: number | null }, [number]>(
-        "SELECT execution_state, current_execution_id FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const taskRow = await db.get<{ execution_state: string; current_execution_id: number | null }>(
+      "SELECT execution_state, current_execution_id FROM tasks WHERE id = $1",
+      [taskId],
+    );
     expect(taskRow).toEqual({ execution_state: "waiting_user", current_execution_id: executionId });
     expect(taskUpdates.at(-1)?.model).toBe("fake/fake");
   });
@@ -595,19 +584,21 @@ columns:
     );
   }
 
-  function seedBoardAndTask(templateId: string, workflowState = "backlog") {
-    db.run(
-      `INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', '${templateId}')`,
+  async function seedBoardAndTask(templateId: string, workflowState = "backlog") {
+    const board = await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', $1) RETURNING id",
+      [templateId],
     );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-    db.run("INSERT INTO conversations (task_id) VALUES (0)");
-    const conversationId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-    db.run(
-      `INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, model) VALUES (?, 'test-project', 'Test', 'Test', '${workflowState}', 'idle', ?, 'fake/fake')`,
-      [boardId, conversationId],
+    const boardId = board!.id;
+    const conv = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+    const conversationId = conv!.id;
+    await db.exec("UPDATE conversations SET model = 'fake/fake' WHERE id = $1", [conversationId]);
+    const task = await db.get<{ id: number }>(
+      "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id) VALUES ($1, 'test-project', 'Test', 'Test', $2, 'idle', $3) RETURNING id",
+      [boardId, workflowState, conversationId],
     );
-    const taskId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-    db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, conversationId]);
+    const taskId = task!.id;
+    await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId, conversationId]);
     return { boardId, taskId, conversationId };
   }
 
@@ -623,9 +614,9 @@ columns:
   it("transition into column with both fields → systemInstructions has workflow only, stage in prompt", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
     innerCleanup = cleanup;
-    db = initDb();
+    db = await initDb();
 
-    const { taskId } = seedBoardAndTask("wf-both", "backlog");
+    const { taskId } = await seedBoardAndTask("wf-both", "backlog");
     const orc = makeCapturingOrchestrator();
 
     await orc.executeTransition(taskId, "col-both");
@@ -638,9 +629,9 @@ columns:
   it("transition into column with only workflow_instructions → workflow string only", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
     innerCleanup = cleanup;
-    db = initDb();
+    db = await initDb();
 
-    const { taskId } = seedBoardAndTask("wf-both", "backlog");
+    const { taskId } = await seedBoardAndTask("wf-both", "backlog");
     const orc = makeCapturingOrchestrator();
 
     await orc.executeTransition(taskId, "col-wf-only");
@@ -652,9 +643,9 @@ columns:
   it("transition into column with only stage_instructions → systemInstructions undefined, stage in prompt (regression)", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_NONE]);
     innerCleanup = cleanup;
-    db = initDb();
+    db = await initDb();
 
-    const { taskId } = seedBoardAndTask("wf-none", "backlog");
+    const { taskId } = await seedBoardAndTask("wf-none", "backlog");
     const orc = makeCapturingOrchestrator();
 
     await orc.executeTransition(taskId, "col-with-stage");
@@ -667,9 +658,9 @@ columns:
   it("transition into column with neither field → systemInstructions is undefined", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_NONE]);
     innerCleanup = cleanup;
-    db = initDb();
+    db = await initDb();
 
-    const { taskId } = seedBoardAndTask("wf-none", "backlog");
+    const { taskId } = await seedBoardAndTask("wf-none", "backlog");
     const orc = makeCapturingOrchestrator();
 
     await orc.executeTransition(taskId, "col-bare");
@@ -681,9 +672,9 @@ columns:
   it("human-turn in column with both fields → systemInstructions has workflow only, stage in prompt", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
     innerCleanup = cleanup;
-    db = initDb();
+    db = await initDb();
 
-    const { taskId, conversationId } = seedBoardAndTask("wf-both", "col-both");
+    const { taskId } = await seedBoardAndTask("wf-both", "col-both");
     const orc = makeCapturingOrchestrator();
 
     await orc.executeHumanTurn(taskId, "hello");
@@ -696,10 +687,10 @@ columns:
   it("multi-board isolation: only board with workflow_instructions receives it", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH, WF_NONE]);
     innerCleanup = cleanup;
-    db = initDb();
+    db = await initDb();
 
-    const { taskId: taskIdA } = seedBoardAndTask("wf-both", "backlog");
-    const { taskId: taskIdB } = seedBoardAndTask("wf-none", "backlog");
+    const { taskId: taskIdA } = await seedBoardAndTask("wf-both", "backlog");
+    const { taskId: taskIdB } = await seedBoardAndTask("wf-none", "backlog");
 
     const orc = makeCapturingOrchestrator();
 

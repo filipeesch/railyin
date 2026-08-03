@@ -29,12 +29,12 @@ function anthropicSse(events: Array<{ type: string; data: Record<string, unknown
   return events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify({ type: e.type, ...e.data })}\n\n`).join("");
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   // Reset the global DB before each test — without this, tests that exercise
   // realLogger (1.2's AnthropicProvider via resolveProvider, 3.3 directly)
   // inherit whatever DB state a previous suite left in `getDb()`. On Linux
   // CI that can be a connection without the `logs` table.
-  initDb();
+  await initDb();
   clearProviderCache();
 });
 afterEach(() => clearProviderCache());
@@ -1615,7 +1615,7 @@ describe("OpenAICompatibleProvider.stream() — usage event (6.3)", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("instantiateProvider — base_url forwarding", () => {
-  beforeEach(() => initDb());
+  beforeEach(async () => { await initDb(); });
   it("1.2 passes base_url from config to AnthropicProvider", async () => {
     const receivedUrls: string[] = [];
     const server = Bun.serve({
@@ -1717,7 +1717,7 @@ describe("AnthropicProvider — logger injection", () => {
   });
 
   it("3.3 production default: realLogger writes debug row to logs table on message_stop", async () => {
-    const db = initDb();
+    const db = await initDb();
     server = Bun.serve({
       port: 0,
       fetch() {
@@ -1737,11 +1737,9 @@ describe("AnthropicProvider — logger injection", () => {
     const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, realLogger);
     for await (const _ of provider.stream([{ role: "user", content: "Hi" }])) { /* drain */ }
 
-    const row = db
-      .query<{ level: string; message: string }, []>(
-        "SELECT level, message FROM logs WHERE level = 'debug' AND message LIKE '%usage%' LIMIT 1",
-      )
-      .get();
+    const row = await db.get<{ level: string; message: string }>(
+      "SELECT level, message FROM logs WHERE level = 'debug' AND message LIKE '%usage%' LIMIT 1",
+    );
     expect(row).not.toBeNull();
     expect(row?.level).toBe("debug");
   });

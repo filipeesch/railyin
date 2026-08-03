@@ -11,7 +11,7 @@
  *   WP-7  executeCommonTool validates no unexpected args for both tools
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, seedProjectAndTask, seedChatSession, setupTestConfig } from "./helpers.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 import type { CommonToolContext } from "../engine/types.ts";
@@ -20,7 +20,7 @@ import { TodoRepository } from "../db/todos.ts";
 import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../db/repositories/note-repository.ts";
 
-let db: Database;
+let db: Db;
 let cfg: ReturnType<typeof setupTestConfig>;
 let conversationId: number;
 
@@ -50,10 +50,10 @@ function makeCtx(overrides?: Partial<CommonToolContext>): CommonToolContext {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   cfg = setupTestConfig();
-  db = initDb();
-  const { conversationId: cid } = seedProjectAndTask(db, "/tmp/test-git");
+  db = await initDb();
+  const { conversationId: cid } = await seedProjectAndTask(db, "/tmp/test-git");
   conversationId = cid;
 });
 
@@ -92,8 +92,8 @@ describe("WP-2: list_projects returns [] when no projects configured", () => {
         "projects:",
       ].join("\n") + "\n",
     );
-    db = initDb();
-    conversationId = seedChatSession(db).conversationId;
+    db = await initDb();
+    conversationId = (await seedChatSession(db)).conversationId;
 
     const result = await executeCommonTool(
       "list_projects",
@@ -156,8 +156,8 @@ describe("WP-4: list_workflows returns board id+name when boards in DB", () => {
 describe("WP-5: list_workflows returns [] when no boards in DB", () => {
   it("returns an empty JSON array when no boards exist for the workspace", async () => {
     // Seed a fresh DB with no boards
-    db = initDb();
-    conversationId = seedChatSession(db, { workspaceKey: "default" }).conversationId;
+    db = await initDb();
+    conversationId = (await seedChatSession(db, { workspaceKey: "default" })).conversationId;
 
     // Without workspace filter, no boards exist → empty array
     const result = await executeCommonTool(

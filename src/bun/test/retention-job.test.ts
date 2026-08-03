@@ -1,45 +1,44 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, seedProjectAndTask, seedChatSession, setupTestConfig } from "./helpers.ts";
 import { RetentionJob } from "../jobs/retention-job.ts";
 import { createMockWait } from "./support/mock-wait.ts";
 
-let db: Database;
+let db: Db;
 let cleanup: () => void;
 let executionId: number;
 let conversationId: number;
 
-function insertExecution(db: Database): { executionId: number; conversationId: number } {
-  const seed = seedProjectAndTask(db, "/test");
-  db.run(
-    "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'completed', 1)",
+async function insertExecution(db: Db): Promise<{ executionId: number; conversationId: number }> {
+  const seed = await seedProjectAndTask(db, "/test");
+  const row = await db.get<{ id: number }>(
+    "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES ($1, $2, 'plan', 'plan', 'human-turn', 'completed', 1) RETURNING id",
     [seed.taskId, seed.conversationId],
   );
-  const eid = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-  return { executionId: eid, conversationId: seed.conversationId };
+  return { executionId: row!.id, conversationId: seed.conversationId };
 }
 
-function countRaw(db: Database): number {
-  return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM model_raw_messages").get()!.n;
+async function countRaw(db: Db): Promise<number> {
+  return (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM model_raw_messages"))!.n;
 }
 
-function countStreamEvents(db: Database): number {
-  return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
+async function countStreamEvents(db: Db): Promise<number> {
+  return (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM stream_events"))!.n;
 }
 
-function seedRawMsg(db: Database, eid: number, createdAt: string): void {
-  db.run(
+async function seedRawMsg(db: Db, eid: number, createdAt: string): Promise<void> {
+  await db.exec(
     `INSERT INTO model_raw_messages (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json, created_at)
-     VALUES (NULL, ?, 'test', NULL, 0, 'in', 'token', NULL, '{}', ?)`,
+     VALUES (NULL, $1, 'test', NULL, 0, 'in', 'token', NULL, '{}', $2)`,
     [eid, createdAt],
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   cleanup = cfg.cleanup;
-  db = initDb();
-  ({ executionId, conversationId } = insertExecution(db));
+  db = await initDb();
+  ({ executionId, conversationId } = await insertExecution(db));
 });
 
 afterEach(() => {
@@ -49,62 +48,62 @@ afterEach(() => {
 // ─── RJ-1: raw messages older than 1 day deleted ─────────────────────────────
 
 describe("RetentionJob — RJ-1: raw message pruning", () => {
-  it("deletes rows older than 1 day; keeps rows within 1 day", () => {
-    seedRawMsg(db, executionId, "2000-01-01 00:00:00"); // old
+  it("deletes rows older than 1 day; keeps rows within 1 day", async () => {
+    await seedRawMsg(db, executionId, "2000-01-01 00:00:00"); // old
     // Insert a genuinely recent row
-    db.run(
+    await db.exec(
       `INSERT INTO model_raw_messages (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json)
-       VALUES (NULL, ?, 'test', NULL, 1, 'in', 'token', NULL, '{}')`,
+       VALUES (NULL, $1, 'test', NULL, 1, 'in', 'token', NULL, '{}')`,
       [executionId],
     );
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
     // The old row is deleted; recent row survives
-    const remaining = db
-      .query<{ created_at: string }, []>("SELECT created_at FROM model_raw_messages ORDER BY id ASC")
-      .all();
+    const remaining = await db.rows<{ created_at: string }>(
+      "SELECT created_at FROM model_raw_messages ORDER BY id ASC",
+    );
     expect(remaining.every((r) => r.created_at !== "2000-01-01 00:00:00")).toBe(true);
   });
 
-  it("row with created_at 25 hours ago is deleted", () => {
-    db.run(
+  it("row with created_at 25 hours ago is deleted", async () => {
+    await db.exec(
       `INSERT INTO model_raw_messages (task_id, execution_id, engine, session_id, stream_seq, direction, event_type, event_subtype, payload_json, created_at)
-       VALUES (NULL, ?, 'test', NULL, 0, 'in', 'token', NULL, '{}', datetime('now', '-25 hours'))`,
+       VALUES (NULL, $1, 'test', NULL, 0, 'in', 'token', NULL, '{}', datetime('now', '-25 hours'))`,
       [executionId],
     );
-    expect(countRaw(db)).toBe(1);
+    expect(await countRaw(db)).toBe(1);
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
-    expect(countRaw(db)).toBe(0);
+    expect(await countRaw(db)).toBe(0);
   });
 });
 
 // ─── RJ-2: stream events older than 4 hours deleted ──────────────────────────
 
 describe("RetentionJob — RJ-2: stream_events pruning", () => {
-  it("deletes stream events older than 4h; keeps recent events", () => {
-    db.run(
+  it("deletes stream events older than 4h; keeps recent events", async () => {
+    await db.exec(
       `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id, created_at)
-       VALUES (?, ?, 0, 'blk', 'text_chunk', 'old', NULL, NULL, NULL, datetime('now', '-5 hours'))`,
+       VALUES ($1, $2, 0, 'blk', 'text_chunk', 'old', NULL, NULL, NULL, datetime('now', '-5 hours'))`,
       [conversationId, executionId],
     );
-    db.run(
+    await db.exec(
       `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
-       VALUES (?, ?, 1, 'blk', 'text_chunk', 'recent', NULL, NULL, NULL)`,
+       VALUES ($1, $2, 1, 'blk', 'text_chunk', 'recent', NULL, NULL, NULL)`,
       [conversationId, executionId],
     );
 
-    expect(countStreamEvents(db)).toBe(2);
+    expect(await countStreamEvents(db)).toBe(2);
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
-    expect(countStreamEvents(db)).toBe(1);
-    const row = db.query<{ content: string }, []>("SELECT content FROM stream_events").get()!;
+    expect(await countStreamEvents(db)).toBe(1);
+    const row = (await db.get<{ content: string }>("SELECT content FROM stream_events"))!;
     expect(row.content).toBe("recent");
   });
 });
@@ -115,18 +114,18 @@ describe("RetentionJob — RJ-3: start/tick cycle", () => {
   it("start() runs immediately; each tick() triggers another runNow()", async () => {
     const { waitFn, tick } = createMockWait();
 
-    let runCount = 0;
-    // Wrap db.run to count DELETE calls
-    const originalRun = db.run.bind(db);
+    // Wrap db.exec to count DELETE calls
+    const originalExec = db.exec.bind(db);
     let deleteCount = 0;
-    db.run = (...args: Parameters<typeof db.run>) => {
+    db.exec = ((...args: Parameters<typeof db.exec>) => {
       const sql = args[0] as string;
       if (sql.startsWith("DELETE")) deleteCount++;
-      return originalRun(...args);
-    };
+      return originalExec(...args);
+    }) as typeof db.exec;
 
     const job = new RetentionJob(db, waitFn);
     job.start();
+    await new Promise((r) => setTimeout(r, 0));
     // runNow() called immediately on start — 3 DELETEs (raw + stream_events + chat_sessions)
     // Conversations DELETE is conditional (only runs when stale sessions exist)
     expect(deleteCount).toBe(3);
@@ -137,7 +136,7 @@ describe("RetentionJob — RJ-3: start/tick cycle", () => {
     expect(deleteCount).toBe(6);
 
     job.stop();
-    db.run = originalRun;
+    db.exec = originalExec;
   });
 });
 
@@ -148,12 +147,12 @@ describe("RetentionJob — RJ-4: stop halts loop", () => {
     const { waitFn, tick } = createMockWait();
 
     let deleteCount = 0;
-    const originalRun = db.run.bind(db);
-    db.run = (...args: Parameters<typeof db.run>) => {
+    const originalExec = db.exec.bind(db);
+    db.exec = ((...args: Parameters<typeof db.exec>) => {
       const sql = args[0] as string;
       if (sql.startsWith("DELETE")) deleteCount++;
-      return originalRun(...args);
-    };
+      return originalExec(...args);
+    }) as typeof db.exec;
 
     const job = new RetentionJob(db, waitFn);
     job.start(); // 3 DELETEs from immediate runNow (conditional conversations DELETE not triggered)
@@ -165,114 +164,114 @@ describe("RetentionJob — RJ-4: stop halts loop", () => {
     // No extra DELETEs because loop was stopped
     expect(deleteCount).toBe(3);
 
-    db.run = originalRun;
+    db.exec = originalExec;
   });
 });
 
 // ─── RJ-5: archived chat session hard-delete + cascade ───────────────────────
 
-function countChatSessions(db: Database): number {
-  return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM chat_sessions").get()!.n;
+async function countChatSessions(db: Db): Promise<number> {
+  return (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM chat_sessions"))!.n;
 }
 
-function countConversationMessages(db: Database): number {
-  return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM conversation_messages").get()!.n;
+async function countConversationMessages(db: Db): Promise<number> {
+  return (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM conversation_messages"))!.n;
 }
 
 describe("RetentionJob — RJ-5: archived chat session hard-delete", () => {
-  it("RJ-5a: hard-deletes archived session with archived_at > 7 days ago", () => {
-    const { sessionId } = seedChatSession(db);
-    db.run(
-      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+  it("RJ-5a: hard-deletes archived session with archived_at > 7 days ago", async () => {
+    const { sessionId } = await seedChatSession(db);
+    await db.exec(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = $1",
       [sessionId],
     );
-    expect(countChatSessions(db)).toBe(1);
+    expect(await countChatSessions(db)).toBe(1);
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
-    expect(countChatSessions(db)).toBe(0);
+    expect(await countChatSessions(db)).toBe(0);
   });
 
-  it("RJ-5b: preserves archived session archived only 3 days ago", () => {
-    const { sessionId } = seedChatSession(db);
-    db.run(
-      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-3 days') WHERE id = ?",
+  it("RJ-5b: preserves archived session archived only 3 days ago", async () => {
+    const { sessionId } = await seedChatSession(db);
+    await db.exec(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-3 days') WHERE id = $1",
       [sessionId],
     );
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
-    expect(countChatSessions(db)).toBe(1);
+    expect(await countChatSessions(db)).toBe(1);
   });
 
-  it("RJ-5c: never deletes an idle (non-archived) session", () => {
-    seedChatSession(db);
+  it("RJ-5c: never deletes an idle (non-archived) session", async () => {
+    await seedChatSession(db);
     // status defaults to 'idle'
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
-    expect(countChatSessions(db)).toBe(1);
+    expect(await countChatSessions(db)).toBe(1);
   });
 
-  it("RJ-5d: cascade-deletes conversation_messages when session is hard-deleted", () => {
-    const { sessionId, conversationId } = seedChatSession(db);
-    db.run(
-      "INSERT INTO conversation_messages (conversation_id, type, content) VALUES (?, 'user', 'hello')",
+  it("RJ-5d: cascade-deletes conversation_messages when session is hard-deleted", async () => {
+    const { sessionId, conversationId } = await seedChatSession(db);
+    await db.exec(
+      "INSERT INTO conversation_messages (conversation_id, type, content) VALUES ($1, 'user', 'hello')",
       [conversationId],
     );
-    db.run(
-      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+    await db.exec(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = $1",
       [sessionId],
     );
-    expect(countConversationMessages(db)).toBe(1);
+    expect(await countConversationMessages(db)).toBe(1);
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
-    expect(countChatSessions(db)).toBe(0);
-    expect(countConversationMessages(db)).toBe(0);
+    expect(await countChatSessions(db)).toBe(0);
+    expect(await countConversationMessages(db)).toBe(0);
   });
 
-  it("RJ-5e: cascade-deletes stream_events when session is hard-deleted", () => {
-    const { sessionId, conversationId } = seedChatSession(db);
-    db.run(
+  it("RJ-5e: cascade-deletes stream_events when session is hard-deleted", async () => {
+    const { sessionId, conversationId } = await seedChatSession(db);
+    await db.exec(
       `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content)
-       VALUES (?, 0, 1, 'blk', 'text_chunk', 'data')`,
+       VALUES ($1, 0, 1, 'blk', 'text_chunk', 'data')`,
       [conversationId],
     );
-    db.run(
-      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+    await db.exec(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = $1",
       [sessionId],
     );
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
-    expect(countChatSessions(db)).toBe(0);
-    expect(countStreamEvents(db)).toBe(0);
+    expect(await countChatSessions(db)).toBe(0);
+    expect(await countStreamEvents(db)).toBe(0);
   });
 
-  it("RJ-5f: explicitly deletes executions linked to hard-deleted sessions", () => {
-    const { sessionId, conversationId } = seedChatSession(db);
-    db.run(
-      "INSERT INTO executions (conversation_id, from_state, to_state, status, attempt) VALUES (?, 'idle', 'idle', 'completed', 1)",
+  it("RJ-5f: explicitly deletes executions linked to hard-deleted sessions", async () => {
+    const { sessionId, conversationId } = await seedChatSession(db);
+    await db.exec(
+      "INSERT INTO executions (conversation_id, from_state, to_state, status, attempt) VALUES ($1, 'idle', 'idle', 'completed', 1)",
       [conversationId],
     );
-    db.run(
-      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+    await db.exec(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = $1",
       [sessionId],
     );
-    const execCount = () => db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM executions").get()!.n;
-    expect(execCount()).toBe(2); // 1 from beforeEach + 1 for chat session
+    const execCount = async () => (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM executions"))!.n;
+    expect(await execCount()).toBe(2); // 1 from beforeEach + 1 for chat session
 
     const job = new RetentionJob(db);
-    job.runNow();
+    await job.runNow();
 
-    expect(countChatSessions(db)).toBe(0);
+    expect(await countChatSessions(db)).toBe(0);
     // The chat execution is removed; the task execution from beforeEach remains
-    expect(execCount()).toBe(1);
+    expect(await execCount()).toBe(1);
   });
 });

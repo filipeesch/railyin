@@ -5,13 +5,13 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { conversationHandlers } from "../handlers/conversations.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 
-beforeEach(() => {
+beforeEach(async () => {
   gitDir = mkdtempSync(join(tmpdir(), "railyn-pg-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
@@ -19,39 +19,42 @@ beforeEach(() => {
   writeFileSync(join(gitDir, "README.md"), "hello");
   execSync("git add . && git commit -m init", { cwd: gitDir });
 
-  db = initDb();
+  db = await initDb();
   const cfg = setupTestConfig("", gitDir);
   configCleanup = cfg.cleanup;
 });
 
-afterEach(() => {
-  db.close();
+afterEach(async () => {
+  await db.close();
   configCleanup();
   rmSync(gitDir, { recursive: true, force: true });
 });
 
-function seedMessages(taskId: number, conversationId: number, count: number) {
+async function seedMessages(taskId: number, conversationId: number, count: number) {
   for (let i = 1; i <= count; i++) {
-    db.run(
-      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', ?)",
+    await db.exec(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES ($1, $2, 'user', 'user', $3)",
       [taskId, conversationId, `msg-${i}`],
     );
   }
 }
 
-function getIds(contents: string[]): number[] {
-  return contents.map((c) => {
-    const row = db
-      .query<{ id: number }, [string]>("SELECT id FROM conversation_messages WHERE content = ?")
-      .get(c);
-    return row!.id;
-  });
+async function getIds(contents: string[]): Promise<number[]> {
+  const ids: number[] = [];
+  for (const c of contents) {
+    const row = await db.get<{ id: number }>(
+      "SELECT id FROM conversation_messages WHERE content = $1",
+      [c],
+    );
+    ids.push(row!.id);
+  }
+  return ids;
 }
 
 describe("conversations.getMessages pagination", () => {
   it("P-1: returns all messages (ascending) when count <= limit", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    seedMessages(taskId, conversationId, 3);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await seedMessages(taskId, conversationId, 3);
 
     const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId });
@@ -63,8 +66,8 @@ describe("conversations.getMessages pagination", () => {
   });
 
   it("P-2: hasMore is true when total exceeds limit", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    seedMessages(taskId, conversationId, 55);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await seedMessages(taskId, conversationId, 55);
 
     const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId, limit: 50 });
@@ -77,8 +80,8 @@ describe("conversations.getMessages pagination", () => {
   });
 
   it("P-3: messages are returned in ascending id order", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    seedMessages(taskId, conversationId, 10);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await seedMessages(taskId, conversationId, 10);
 
     const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId, limit: 10 });
@@ -89,8 +92,8 @@ describe("conversations.getMessages pagination", () => {
   });
 
   it("P-4: cursor (beforeMessageId) returns older page without overlap", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    seedMessages(taskId, conversationId, 10);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await seedMessages(taskId, conversationId, 10);
 
     const handlers = conversationHandlers(db, null);
 
@@ -123,8 +126,8 @@ describe("conversations.getMessages pagination", () => {
   });
 
   it("P-5: cursor with exactly limit messages returns hasMore false", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    seedMessages(taskId, conversationId, 10);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await seedMessages(taskId, conversationId, 10);
 
     const handlers = conversationHandlers(db, null);
 
@@ -143,7 +146,7 @@ describe("conversations.getMessages pagination", () => {
   });
 
   it("P-6: empty conversation returns empty messages with hasMore false", async () => {
-    const { conversationId } = seedProjectAndTask(db, gitDir);
+    const { conversationId } = await seedProjectAndTask(db, gitDir);
 
     const handlers = conversationHandlers(db, null);
     const result = await handlers["conversations.getMessages"]({ conversationId });
@@ -153,14 +156,15 @@ describe("conversations.getMessages pagination", () => {
   });
 
   it("P-7: messages from other conversations are never included in results", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    seedMessages(taskId, conversationId, 5);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await seedMessages(taskId, conversationId, 5);
 
     // Create a second conversation with its own messages
-    db.run("INSERT INTO conversations (task_id) VALUES (0)");
-    const otherConvId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run(
-      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', ?)",
+    const otherConvId = (await db.get<{ id: number }>(
+      "INSERT INTO conversations (task_id) VALUES (0) RETURNING id",
+    ))!.id;
+    await db.exec(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES ($1, $2, 'user', 'user', $3)",
       [taskId, otherConvId, "other-msg"],
     );
 

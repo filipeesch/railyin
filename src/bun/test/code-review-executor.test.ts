@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { execSync } from "child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -14,14 +14,14 @@ import { StageInstructionsInjector } from "../conversation/stage-instructions-in
 import { initDb, makeTestRegistry, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { CapturingParamsBuilder, StubStreamProcessor, StubWorkdirResolver, TestEngine } from "./executor-test-helpers.ts";
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 let wsRepo: WorkspaceRepository;
 let boardTools: BoardToolExecutor;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   wsRepo = new WorkspaceRepository(db);
   boardTools = new BoardToolExecutor(db, wsRepo);
   gitDir = mkdtempSync(join(tmpdir(), "railyn-crx-"));
@@ -41,10 +41,10 @@ describe("CodeReviewExecutor", () => {
   it("CR-MODEL-1: onTaskUpdated receives task with model from conversation", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-    db.run(
-      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES (?, 'h1', 'index.ts', 'user', 'approved', 1, 1, 1, 1)",
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
+    await db.exec(
+      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES ($1, 'h1', 'index.ts', 'user', 'approved', 1, 1, 1, 1)",
       [taskId],
     );
 
@@ -86,9 +86,9 @@ describe("CodeReviewExecutor — stage instructions injection", () => {
   it("CR-SI-1: stage_instructions block is prepended to the review prompt when due", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir); // seeded task is in 'plan' column, which has stage_instructions
-    db.run(
-      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES (?, 'h1', 'index.ts', 'user', 'approved', 1, 1, 1, 1)",
+    const { taskId } = await seedProjectAndTask(db, gitDir); // seeded task is in 'plan' column, which has stage_instructions
+    await db.exec(
+      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES ($1, 'h1', 'index.ts', 'user', 'approved', 1, 1, 1, 1)",
       [taskId],
     );
 
@@ -103,9 +103,9 @@ describe("CodeReviewExecutor — stage instructions injection", () => {
   it("CR-SI-2: stage_instructions is NOT re-injected on a second review (no compaction since last injection)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run(
-      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES (?, 'h1', 'index.ts', 'user', 'approved', 1, 1, 1, 1)",
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec(
+      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES ($1, 'h1', 'index.ts', 'user', 'approved', 1, 1, 1, 1)",
       [taskId],
     );
 
@@ -114,8 +114,8 @@ describe("CodeReviewExecutor — stage instructions injection", () => {
     await executor.execute(taskId);
     expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
 
-    db.run(
-      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES (?, 'h2', 'index.ts', 'user', 'approved', 2, 2, 2, 2)",
+    await db.exec(
+      "INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_id, decision, original_start, original_end, modified_start, modified_end) VALUES ($1, 'h2', 'index.ts', 'user', 'approved', 2, 2, 2, 2)",
       [taskId],
     );
     await executor.execute(taskId);

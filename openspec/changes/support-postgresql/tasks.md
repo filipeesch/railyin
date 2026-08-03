@@ -51,6 +51,6 @@
 
 ## 9. Verification
 
-- [ ] 9.1 Boot with no `config/database.yaml` and confirm SQLite default path is unchanged (existing data intact)
+- [x] 9.1 Boot with no `config/database.yaml` and confirm SQLite default path is unchanged (existing data intact)
 - [ ] 9.2 Boot with `driver: postgres` against a local PostgreSQL, confirm baseline provisions the schema and core flows (tasks, conversations, executions, decisions, notes) work end-to-end
-- [ ] 9.3 Confirm the 53 SQLite migration files are byte-identical (checksums valid) and `RAILYN_DB=:memory:` tests still run
+- [x] 9.3 Confirm the 53 SQLite migration files are byte-identical (checksums valid) and `RAILYN_DB=:memory:` tests still run

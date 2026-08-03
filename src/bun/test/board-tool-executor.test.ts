@@ -126,9 +126,10 @@ describe("BE-5: execMoveTask updates workflow_state in injected DB", () => {
       makeCtx(),
     );
     expect(result).not.toMatch(/^Error:/);
-    const row = db.query<{ workflow_state: string }, [number]>(
-      "SELECT workflow_state FROM tasks WHERE id = ?",
-    ).get(taskId);
+    const row = await db.get<{ workflow_state: string }>(
+      "SELECT workflow_state FROM tasks WHERE id = $1",
+      [taskId],
+    );
     expect(row?.workflow_state).toBe("done");
   });
 });

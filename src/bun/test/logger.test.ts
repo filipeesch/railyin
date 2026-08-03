@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { noopLogger, realLogger } from "../logger.ts";
 import { makeSpyLogger } from "./support/logger-test-utils.ts";
 import { initDb } from "./helpers.ts";
+import { getDb } from "../db/index.ts";
 
 // ─── noopLogger ───────────────────────────────────────────────────────────────
 
@@ -66,29 +67,25 @@ describe("makeSpyLogger", () => {
 // ─── realLogger integration ───────────────────────────────────────────────────
 
 describe("realLogger (integration)", () => {
-  let db: ReturnType<typeof initDb>;
-
-  beforeEach(() => {
-    db = initDb();
+  beforeEach(async () => {
+    await initDb();
   });
 
-  it("writes a log row to the logs table", () => {
+  it("writes a log row to the logs table", async () => {
     realLogger.log("info", "test-entry");
-    const row = db
-      .query<{ level: string; message: string }, []>("SELECT level, message FROM logs WHERE message = 'test-entry' LIMIT 1")
-      .get();
-    expect(row).not.toBeNull();
+    const row = await getDb().get<{ level: string; message: string }>(
+      "SELECT level, message FROM logs WHERE message = 'test-entry' LIMIT 1",
+    );
+    expect(row).not.toBeUndefined();
     expect(row?.level).toBe("info");
     expect(row?.message).toBe("test-entry");
   });
 
-  it("stores taskId and executionId when provided", () => {
+  it("stores taskId and executionId when provided", async () => {
     realLogger.log("debug", "with-ids", { taskId: 7, executionId: 42 });
-    const row = db
-      .query<{ task_id: number | null; execution_id: number | null }, []>(
-        "SELECT task_id, execution_id FROM logs WHERE message = 'with-ids' LIMIT 1",
-      )
-      .get();
+    const row = await getDb().get<{ task_id: number | null; execution_id: number | null }>(
+      "SELECT task_id, execution_id FROM logs WHERE message = 'with-ids' LIMIT 1",
+    );
     expect(row?.task_id).toBe(7);
     expect(row?.execution_id).toBe(42);
   });

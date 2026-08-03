@@ -45,7 +45,7 @@ afterEach(() => {
     runtime?.cleanup();
 });
 
-function makeRuntime(engine: ScriptedEngine): BackendRpcRuntime {
+function makeRuntime(engine: ScriptedEngine): Promise<BackendRpcRuntime> {
     return createBackendRpcRuntime({ createEngine: () => engine });
 }
 
@@ -65,12 +65,12 @@ describe("S-14 [stream-tree]: simple text produces single root assistant block",
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const tree = buildStreamTree(db);
 
         const expectedBlockId = `${executionId}-t1`;
@@ -102,12 +102,12 @@ describe("S-15 [stream-tree]: reasoning + text produces two ordered roots", () =
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const tree = buildStreamTree(db);
 
         const r1 = `${executionId}-r1`;
@@ -154,12 +154,12 @@ describe("S-16 [stream-tree]: text → tool → text produces three ordered root
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const tree = buildStreamTree(db);
 
         const t1 = `${executionId}-t1`;
@@ -194,7 +194,7 @@ describe("S-17 [stream-tree]: cancel mid-text flushes assistant block into tree"
             scriptWaitForAbort(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -205,7 +205,7 @@ describe("S-17 [stream-tree]: cancel mid-text flushes assistant block into tree"
         await runtime.handlers["tasks.cancel"]({ taskId });
         await runtime.recorder.waitForStreamDone(executionId, 5_000);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const tree = buildStreamTree(db);
 
         const t1 = `${executionId}-t1`;
@@ -254,12 +254,12 @@ describe("S-18 [stream-tree]: tool call appears as sibling of reasoning bubble, 
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const tree = buildStreamTree(db);
 
         const preR1 = `${executionId}-pre-r1`;
@@ -329,12 +329,12 @@ describe("S-19 [stream-tree]: nested tool calls produce parent–child hierarchy
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const tree = buildStreamTree(db);
 
         const t1 = `${executionId}-t1`;

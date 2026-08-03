@@ -1,16 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, setupTestConfig } from "./helpers.ts";
 import { getColumnConfig, getWorkflowTemplate } from "../workflow/column-config.ts";
 import { getConfig } from "../config/index.ts";
 
-let db: Database;
+let db: Db;
 let configCleanup: () => void;
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
-  db = initDb();
+  db = await initDb();
 });
 
 afterEach(() => {
@@ -18,90 +18,85 @@ afterEach(() => {
 });
 
 describe("getColumnConfig", () => {
-  it("returns the column object when board and column both exist", () => {
-    db.run(
-      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery')",
-    );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+  it("returns the column object when board and column both exist", async () => {
+    const boardId = (await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery') RETURNING id",
+    ))!.id;
     const config = getConfig();
 
-    const col = getColumnConfig(config, boardId, "plan");
+    const col = await getColumnConfig(config, boardId, "plan");
 
     expect(col).not.toBeNull();
     expect(col!.id).toBe("plan");
   });
 
-  it("falls back to the 'delivery' template when boardId is not in the database", () => {
+  it("falls back to the 'delivery' template when boardId is not in the database", async () => {
     const config = getConfig();
 
     // board not found → templateId defaults to "delivery", so a known column is still found
-    const col = getColumnConfig(config, 99999, "plan");
+    const col = await getColumnConfig(config, 99999, "plan");
 
     expect(col).not.toBeNull();
     expect(col!.id).toBe("plan");
   });
 
-  it("returns null when board exists but columnId is not in the workflow template", () => {
-    db.run(
-      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery')",
-    );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+  it("returns null when board exists but columnId is not in the workflow template", async () => {
+    const boardId = (await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery') RETURNING id",
+    ))!.id;
     const config = getConfig();
 
-    const col = getColumnConfig(config, boardId, "nonexistent-column");
+    const col = await getColumnConfig(config, boardId, "nonexistent-column");
 
     expect(col).toBeNull();
   });
 
-  it("falls back to 'delivery' template when board has no matching template", () => {
-    db.run(
-      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'unknown-template')",
-    );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+  it("falls back to 'delivery' template when board has no matching template", async () => {
+    const boardId = (await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'unknown-template') RETURNING id",
+    ))!.id;
     const config = getConfig();
 
-    const col = getColumnConfig(config, boardId, "backlog");
+    const col = await getColumnConfig(config, boardId, "backlog");
 
     expect(col).toBeNull();
   });
 });
 
 describe("getWorkflowTemplate", () => {
-  it("returns the template for a board with a known template", () => {
-    db.run(
-      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery')",
-    );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+  it("returns the template for a board with a known template", async () => {
+    const boardId = (await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery') RETURNING id",
+    ))!.id;
     const config = getConfig();
 
-    const tmpl = getWorkflowTemplate(config, boardId);
+    const tmpl = await getWorkflowTemplate(config, boardId);
 
     expect(tmpl).not.toBeNull();
     expect(tmpl!.id).toBe("delivery");
   });
 
-  it("falls back to 'delivery' template when board is not found", () => {
+  it("falls back to 'delivery' template when board is not found", async () => {
     const config = getConfig();
 
-    const tmpl = getWorkflowTemplate(config, 99999);
+    const tmpl = await getWorkflowTemplate(config, 99999);
 
     expect(tmpl).not.toBeNull();
     expect(tmpl!.id).toBe("delivery");
   });
 
-  it("returns null when board has an unknown template id", () => {
-    db.run(
-      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'nonexistent')",
-    );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+  it("returns null when board has an unknown template id", async () => {
+    const boardId = (await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'nonexistent') RETURNING id",
+    ))!.id;
     const config = getConfig();
 
-    const tmpl = getWorkflowTemplate(config, boardId);
+    const tmpl = await getWorkflowTemplate(config, boardId);
 
     expect(tmpl).toBeNull();
   });
 
-  it("returns workflow_instructions field when set on the template", () => {
+  it("returns workflow_instructions field when set on the template", async () => {
     const wfYaml = `id: wf-with-instructions
 name: With Instructions
 workflow_instructions: "Always be helpful."
@@ -112,13 +107,12 @@ columns:
     const { cleanup } = setupTestConfig("", "/tmp/test-git", [wfYaml]);
     configCleanup = cleanup;
 
-    db.run(
-      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'wf-with-instructions')",
-    );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    const boardId = (await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'wf-with-instructions') RETURNING id",
+    ))!.id;
     const config = getConfig();
 
-    const tmpl = getWorkflowTemplate(config, boardId);
+    const tmpl = await getWorkflowTemplate(config, boardId);
 
     expect(tmpl).not.toBeNull();
     expect(tmpl!.workflow_instructions).toBe("Always be helpful.");
@@ -127,7 +121,7 @@ columns:
 
 describe("sampling_preset in column config", () => {
   // CC-PRESET-1: column with sampling_preset field is read correctly
-  it("CC-PRESET-1: column with sampling_preset returns the preset name", () => {
+  it("CC-PRESET-1: column with sampling_preset returns the preset name", async () => {
     const wfYaml = `id: wf-preset
 name: WithPreset
 columns:
@@ -142,20 +136,19 @@ columns:
     const { cleanup } = setupTestConfig("", "/tmp/test-git", [wfYaml]);
     configCleanup = cleanup;
 
-    db.run(
-      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'wf-preset')",
-    );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    const boardId = (await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'wf-preset') RETURNING id",
+    ))!.id;
     const config = getConfig();
 
-    const col = getColumnConfig(config, boardId, "plan");
+    const col = await getColumnConfig(config, boardId, "plan");
 
     expect(col).not.toBeNull();
     expect(col!.sampling_preset).toBe("balanced");
   });
 
   // CC-PRESET-2: column without sampling_preset has undefined
-  it("CC-PRESET-2: column without sampling_preset has undefined sampling_preset", () => {
+  it("CC-PRESET-2: column without sampling_preset has undefined sampling_preset", async () => {
     const wfYaml = `id: wf-no-preset
 name: NoPreset
 columns:
@@ -169,13 +162,12 @@ columns:
     const { cleanup } = setupTestConfig("", "/tmp/test-git", [wfYaml]);
     configCleanup = cleanup;
 
-    db.run(
-      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'wf-no-preset')",
-    );
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    const boardId = (await db.get<{ id: number }>(
+      "INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'wf-no-preset') RETURNING id",
+    ))!.id;
     const config = getConfig();
 
-    const col = getColumnConfig(config, boardId, "plan");
+    const col = await getColumnConfig(config, boardId, "plan");
 
     expect(col).not.toBeNull();
     expect(col!.sampling_preset).toBeUndefined();
@@ -228,4 +220,3 @@ columns:
     expect(piConfig.default_sampling_preset).toBeUndefined();
   });
 });
-

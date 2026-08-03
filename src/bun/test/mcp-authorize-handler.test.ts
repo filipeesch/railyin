@@ -3,7 +3,7 @@ import { mcpHandlers, handleMcpOAuthCallback } from "../handlers/mcp.ts";
 import type { McpRegistryPool } from "../mcp/registry-pool.ts";
 import type { McpClientRegistry } from "../mcp/registry.ts";
 import type { McpServerStatus } from "../mcp/types.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
 // ─── Fakes ──────────────────────────────────────────────────────────────────
 
@@ -31,7 +31,7 @@ describe("mcp.authorize handler", () => {
     const registry = makeFakeRegistry({
       getStatus: vi.fn().mockReturnValue(status),
     });
-    const handlers = mcpHandlers({} as Database, {
+    const handlers = mcpHandlers({} as Db, {
       registryPool: makeFakePool(registry),
       resolveProject: () => null,
     });
@@ -47,7 +47,7 @@ describe("mcp.authorize handler", () => {
     const registry = makeFakeRegistry({
       authorize: vi.fn().mockRejectedValue(new Error("boom")),
     });
-    const handlers = mcpHandlers({} as Database, {
+    const handlers = mcpHandlers({} as Db, {
       registryPool: makeFakePool(registry),
       resolveProject: () => null,
     });

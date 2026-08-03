@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { TOOL_GROUPS } from "../workflow/tools.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
@@ -12,7 +12,7 @@ import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
-let db: Database;
+let db: Db;
 let cfg: ReturnType<typeof setupTestConfig>;
 let taskId: number;
 let boardId: number;
@@ -53,10 +53,10 @@ const commonCtx = (overrides?: {
     runtime: {},
 });
 
-beforeEach(() => {
+beforeEach(async () => {
     cfg = setupTestConfig();
-    db = initDb();
-    ({ projectKey, boardId, taskId, conversationId } = seedProjectAndTask(db, "/tmp/test-git"));
+    db = await initDb();
+    ({ projectKey, boardId, taskId, conversationId } = await seedProjectAndTask(db, "/tmp/test-git"));
 });
 
 afterEach(() => {
@@ -103,8 +103,8 @@ describe("executeCommonTool / get_card", () => {
     });
 
     it("includes conversation messages when include_messages is set", async () => {
-        db.run(
-            "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'user', 'user', 'Hello!')",
+        await db.exec(
+            "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES ($1, $2, 'user', 'user', 'Hello!')",
             [taskId, conversationId],
         );
         const result = await executeCommonTool(
@@ -330,8 +330,8 @@ describe("executeCommonTool / edit_card", () => {
     });
 
     it("rejects edit when a branch has been created (worktree_status != not_created)", async () => {
-        db.run(
-            "INSERT INTO task_git_context (task_id, git_root_path, branch_name, worktree_status) VALUES (?, '/tmp', 'feat/branch', 'ready')",
+        await db.exec(
+            "INSERT INTO task_git_context (task_id, git_root_path, branch_name, worktree_status) VALUES ($1, '/tmp', 'feat/branch', 'ready')",
             [taskId],
         );
         const result = await executeCommonTool(
@@ -362,14 +362,12 @@ describe("executeCommonTool / delete_card", () => {
         expect(res.deleted_task_id).toBe(taskId);
 
         // Task should no longer exist
-        const row = db.query<{ id: number }, [number]>("SELECT id FROM tasks WHERE id = ?").get(taskId);
-        expect(row).toBeNull();
+        const row = await db.get<{ id: number }>("SELECT id FROM tasks WHERE id = $1", [taskId]);
+        expect(row).toBeUndefined();
 
         // Conversation should be deleted too
-        const conv = db
-            .query<{ id: number }, [number]>("SELECT id FROM conversations WHERE id = ?")
-            .get(conversationId);
-        expect(conv).toBeNull();
+        const conv = await db.get<{ id: number }>("SELECT id FROM conversations WHERE id = $1", [conversationId]);
+        expect(conv).toBeUndefined();
     });
 
     it("returns error for a nonexistent task", async () => {
@@ -388,12 +386,12 @@ describe("executeCommonTool / delete_card", () => {
 
     it("calls onCancel callback when task has a running execution", async () => {
         // Seed an in-progress execution
-        db.run(
-            "INSERT INTO executions (task_id, from_state, to_state, status) VALUES (?, 'backlog', 'plan', 'running')",
+        const execRow = await db.get<{ id: number }>(
+            "INSERT INTO executions (task_id, from_state, to_state, status) VALUES ($1, 'backlog', 'plan', 'running') RETURNING id",
             [taskId],
         );
-        const execId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-        db.run("UPDATE tasks SET current_execution_id = ?, execution_state = 'running' WHERE id = ?", [
+        const execId = execRow!.id;
+        await db.exec("UPDATE tasks SET current_execution_id = $1, execution_state = 'running' WHERE id = $2", [
             execId,
             taskId,
         ]);
@@ -422,9 +420,7 @@ describe("executeCommonTool / move_card", () => {
         expect(res.success).toBe(true);
         expect(res.workflow_state).toBe("done");
 
-        const row = db
-            .query<{ workflow_state: string }, [number]>("SELECT workflow_state FROM tasks WHERE id = ?")
-            .get(taskId);
+        const row = await db.get<{ workflow_state: string }>("SELECT workflow_state FROM tasks WHERE id = $1", [taskId]);
         expect(row?.workflow_state).toBe("done");
     });
 
@@ -439,11 +435,11 @@ describe("executeCommonTool / move_card", () => {
 
     it("fires onTransition (Case B) for idle other task moving to prompt column", async () => {
         // Seed a second idle task that is NOT the calling task
-        db.run(
-            "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state) VALUES (?, ?, 'Other task', 'backlog', 'idle')",
+        const otherTaskRow = await db.get<{ id: number }>(
+            "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state) VALUES ($1, $2, 'Other task', 'backlog', 'idle') RETURNING id",
             [boardId, projectKey],
         );
-        const otherTaskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+        const otherTaskId = otherTaskRow!.id;
 
         let calledWith: [number, string] | null = null;
         await executeCommonTool(
@@ -464,9 +460,7 @@ describe("executeCommonTool / move_card", () => {
         );
         // onTransition should NOT be called immediately — deferred via needs_column_prompt flag
         expect(calledWith).toBeNull();
-        const row = db
-            .query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?")
-            .get(taskId);
+        const row = await db.get<{ needs_column_prompt: number }>("SELECT needs_column_prompt FROM tasks WHERE id = $1", [taskId]);
         expect(row?.needs_column_prompt).toBe(1);
     });
 
@@ -478,19 +472,17 @@ describe("executeCommonTool / move_card", () => {
             commonCtx({ onTransition: (id, state) => { calledWith = [id, state]; } }),
         );
         expect(calledWith).toBeNull();
-        const row = db
-            .query<{ workflow_state: string }, [number]>("SELECT workflow_state FROM tasks WHERE id = ?")
-            .get(taskId);
+        const row = await db.get<{ workflow_state: string }>("SELECT workflow_state FROM tasks WHERE id = $1", [taskId]);
         expect(row?.workflow_state).toBe("done");
     });
 
     it("defers column prompt (Case A2) when moving a running other task to prompt column", async () => {
         // Seed another task and mark it as running
-        db.run(
-            "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state) VALUES (?, ?, 'Running task', 'backlog', 'running')",
+        const runningTaskRow = await db.get<{ id: number }>(
+            "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state) VALUES ($1, $2, 'Running task', 'backlog', 'running') RETURNING id",
             [boardId, projectKey],
         );
-        const runningTaskId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+        const runningTaskId = runningTaskRow!.id;
 
         let calledWith: [number, string] | null = null;
         await executeCommonTool(
@@ -499,9 +491,7 @@ describe("executeCommonTool / move_card", () => {
             commonCtx({ onTransition: (id, state) => { calledWith = [id, state]; } }),
         );
         expect(calledWith).toBeNull();
-        const row = db
-            .query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?")
-            .get(runningTaskId);
+        const row = await db.get<{ needs_column_prompt: number }>("SELECT needs_column_prompt FROM tasks WHERE id = $1", [runningTaskId]);
         expect(row?.needs_column_prompt).toBe(1);
     });
 
@@ -526,9 +516,7 @@ describe("executeCommonTool / move_card", () => {
 
     it("sets position to 500 when moving to an empty column", async () => {
         await executeCommonTool("move_card", { task_id: taskId, workflow_state: "done" }, commonCtx());
-        const row = db
-            .query<{ position: number }, [number]>("SELECT position FROM tasks WHERE id = ?")
-            .get(taskId);
+        const row = await db.get<{ position: number }>("SELECT position FROM tasks WHERE id = $1", [taskId]);
         expect(row?.position).toBe(500);
     });
 });
@@ -551,7 +539,7 @@ describe("executeCommonTool / message_card", () => {
     });
 
     it("queues message (inserts pending_messages row) when task is running", async () => {
-        db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+        await db.exec("UPDATE tasks SET execution_state = 'running' WHERE id = $1", [taskId]);
 
         const result = await executeCommonTool(
             "message_card",
@@ -561,11 +549,10 @@ describe("executeCommonTool / message_card", () => {
         const res = JSON.parse(result.text);
         expect(res.status).toBe("queued");
 
-        const pending = db
-            .query<{ content: string }, [number]>(
-                "SELECT content FROM pending_messages WHERE task_id = ?",
-            )
-            .get(taskId);
+        const pending = await db.get<{ content: string }>(
+            "SELECT content FROM pending_messages WHERE task_id = $1",
+            [taskId],
+        );
         expect(pending?.content).toBe("Queue me");
     });
 
@@ -726,7 +713,8 @@ describe("executeCommonTool / list_boards", () => {
     });
 
     it("returns empty array when no boards exist", async () => {
-        db.run("DELETE FROM tasks; DELETE FROM boards");
+        await db.exec("DELETE FROM tasks");
+        await db.exec("DELETE FROM boards");
         const result = await executeCommonTool("list_boards", {}, commonCtx());
         const boards = JSON.parse(result.text) as Array<unknown>;
         expect(boards.length).toBe(0);

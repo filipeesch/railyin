@@ -2,17 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, setupTestConfig, seedProjectAndTask } from "./helpers.ts";
 import { todoHandlers } from "../handlers/todos.ts";
 import { TodoRepository } from "../db/todos.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
-let db: Database;
+let db: Db;
 let taskId: number;
 let cleanupConfig: () => void;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   const cfg = setupTestConfig();
   cleanupConfig = cfg.cleanup;
-  const seed = seedProjectAndTask(db, cfg.configDir);
+  const seed = await seedProjectAndTask(db, cfg.configDir);
   taskId = seed.taskId;
 });
 
@@ -36,11 +36,10 @@ describe("todoHandlers — TH-2: todos.create uses the injected db (not singleto
     const handlers = todoHandlers(db);
     await handlers["todos.create"]({ taskId, number: 1, title: "Injected DB", description: "check injection" });
 
-    const rows = db
-      .query<{ id: number; title: string }, [number]>(
-        "SELECT id, title FROM task_todos WHERE task_id = ?",
-      )
-      .all(taskId);
+    const rows = await db.rows<{ id: number; title: string }>(
+      "SELECT id, title FROM task_todos WHERE task_id = $1",
+      [taskId],
+    );
 
     expect(rows.length).toBe(1);
     expect(rows[0].title).toBe("Injected DB");
@@ -108,7 +107,7 @@ describe("todoHandlers — TH-8: todos.edit returns error when status is not pen
     const created = await handlers["todos.create"]({ taskId, number: 1, title: "In flight", description: "" });
 
     // Move to in-progress directly via DB so edit guard triggers
-    db.run("UPDATE task_todos SET status = 'in-progress' WHERE id = ?", [created.id]);
+    await db.exec("UPDATE task_todos SET status = 'in-progress' WHERE id = $1", [created.id]);
 
     const result = await handlers["todos.edit"]({ taskId, todoId: created.id, title: "Rejected" });
     expect(result).toMatchObject({ error: expect.any(String) });
@@ -125,9 +124,7 @@ describe("todoHandlers — TH-9: todos.delete soft-deletes the todo", () => {
     expect((result as { status: string }).status).toBe("deleted");
 
     // Row still exists in DB (soft delete)
-    const row = db
-      .query<{ status: string }, [number]>("SELECT status FROM task_todos WHERE id = ?")
-      .get(created.id);
+    const row = await db.get<{ status: string }>("SELECT status FROM task_todos WHERE id = $1", [created.id]);
     expect(row?.status).toBe("deleted");
   });
 });

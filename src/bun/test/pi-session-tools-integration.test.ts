@@ -656,9 +656,9 @@ describe("Pi SDK session — note tool allowlist", () => {
     const { initDb } = await import("./helpers.ts");
     const { NoteRepository } = await import("../db/repositories/note-repository.ts");
 
-    const db = initDb();
+    const db = await initDb();
     // Seed a conversation row to satisfy the FK on task_notes.conversation_id
-    db.run("INSERT INTO conversations (id, task_id) VALUES (1, NULL)");
+    await db.exec("INSERT INTO conversations (id, task_id) VALUES (1, NULL)");
     const notes = new NoteRepository(db);
     const conversationId = 1;
 
@@ -668,7 +668,7 @@ describe("Pi SDK session — note tool allowlist", () => {
       description: "Create a note",
       parameters: z.object({ content: z.string() }),
       execute: async (_callId, params: { content: string }) => {
-        const note = notes.createNote(conversationId, { content: params.content, isSourceAi: true });
+        const note = await notes.createNote(conversationId, { content: params.content, isSourceAi: true });
         return { content: [{ type: "text" as const, text: `Note #${note.id} created.` }], details: undefined };
       },
     });
@@ -676,7 +676,7 @@ describe("Pi SDK session — note tool allowlist", () => {
     // Call execute directly to verify persistence — the allowlist integration is covered by IT-NOTE-1
     await createNoteTool.execute("call-1", { content: "test note" }, undefined, undefined, {} as any);
 
-    const storedNotes = notes.listByConversation(conversationId);
+    const storedNotes = await notes.listByConversation(conversationId);
     expect(storedNotes).toHaveLength(1);
     expect(storedNotes[0].content).toBe("test note");
   });

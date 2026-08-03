@@ -34,7 +34,7 @@ import {
 
 const runtimes: BackendRpcRuntime[] = [];
 
-function createCopilotRuntime(adapter: MockCopilotSdkAdapter): BackendRpcRuntime {
+async function createCopilotRuntime(adapter: MockCopilotSdkAdapter): Promise<BackendRpcRuntime> {
     adapter.setModels([
         {
             id: "mock-model",
@@ -46,7 +46,7 @@ function createCopilotRuntime(adapter: MockCopilotSdkAdapter): BackendRpcRuntime
         },
     ]);
 
-    const runtime = createBackendRpcRuntime({
+    const runtime = await createBackendRpcRuntime({
         taskModel: "copilot/mock-model",
         createEngine: ({ onTaskUpdated, onNewMessage }) =>
             new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
@@ -69,7 +69,7 @@ describe("Copilot backend RPC scenarios", () => {
             .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Hello"), token(" world"), usage(10, 20), done()] }))
             .queueResumeSuccess(new MockCopilotSession().queueTurn({ steps: [token("Reply one"), done()] }))
             .queueResumeSuccess(new MockCopilotSession().queueTurn({ steps: [token("Reply two"), done()] }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
 
         await runSingleTurnChatScenario(runtime);
         await runMultiTurnChatScenario(runtime);
@@ -85,7 +85,7 @@ describe("Copilot backend RPC scenarios", () => {
             .queueResumeSuccess(new MockCopilotSession().queueTurn({
                 steps: [toolStart("call-tool-2", "edit_card"), toolResult("call-tool-2", "failed", false), token("recovered"), done()],
             }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
 
         await runToolSuccessScenario(runtime);
         await runToolFailureScenario(runtime);
@@ -97,7 +97,7 @@ describe("Copilot backend RPC scenarios", () => {
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Need input"), askUser('{"question":"Need input"}')] }))
             .queueResumeSuccess(new MockCopilotSession().queueTurn({ steps: [token("streaming"), waitForAbort()] }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
 
         await runAskUserScenario(runtime);
         await runCancellationScenario(runtime);
@@ -112,7 +112,7 @@ describe("Copilot backend RPC scenarios", () => {
                     .queueTurn({ steps: [askUser('{"questions":[{"question":"Need input","selection_mode":"single","options":[]}]}')] })
                     .queueTurn({ steps: [token("Resumed successfully"), done()] }),
             );
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
 
         await runAskUserResumeScenario(runtime);
         expect(adapter.trace.createCalls).toHaveLength(1);
@@ -124,7 +124,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(new MockCopilotSession().queueTurn({ sendError: new Error("SDK exploded"), steps: [] }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
 
         await runFatalFailureScenario(runtime);
         await runModelListingScenario(runtime);
@@ -143,7 +143,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter.queueResumeSuccess(
             new MockCopilotSession().queueTurn({ steps: [reasoning("plan"), token("done"), done()] }),
         );
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Resume existing" });
@@ -158,7 +158,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("no session"))
             .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("created"), done()] }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Create fallback" });
@@ -174,7 +174,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("no session"))
             .queueCreateSuccess(session);
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Cancel session" });
@@ -205,14 +205,14 @@ describe("Copilot backend RPC scenarios", () => {
             .queueCreateSuccess(
                 new MockCopilotSession().queueTurn({ steps: [toolCall("decision_request", interviewArgs)] }),
             );
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need architecture input" });
 
         await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
-        expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-        expect(runtime.getMessages(taskId).some((message) => message.type === "decision_request_prompt")).toBe(true);
+        expect(await runtime.getTaskState(taskId)).toBe("waiting_user");
+        expect((await runtime.getMessages(taskId)).some((message) => message.type === "decision_request_prompt")).toBe(true);
     });
 
     it("stores raw slash prompts while executing the resolved prompt body", async () => {
@@ -221,7 +221,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session);
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const promptDir = join(runtime.gitDir, ".github", "prompts");
@@ -239,11 +239,10 @@ describe("Copilot backend RPC scenarios", () => {
         expect(session.prompts).toEqual([
           '<active_directive>\nYou are a planning assistant.\n\nThis directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n</active_directive>\n\n<command name="opsx-propose" args="add-dark-mode">\nResolved body: add-dark-mode\n</command>',
         ]);
-        const persisted = runtime.db
-            .query<{ content: string; role: string | null; metadata: string | null }, [number]>(
-                "SELECT content, role, metadata FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
-            )
-            .get(taskId);
+        const persisted = await runtime.db.get<{ content: string; role: string | null; metadata: string | null }>(
+            "SELECT content, role, metadata FROM conversation_messages WHERE task_id = $1 AND type = 'user' ORDER BY id DESC LIMIT 1",
+            [taskId],
+        );
         expect(persisted?.role).toBe("user");
         expect(persisted?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
         expect(persisted?.metadata).toBeNull();
@@ -255,7 +254,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session);
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({
@@ -288,7 +287,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session);
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const filePath = join(runtime.gitDir, ".gitignore");
@@ -331,7 +330,7 @@ describe("Copilot backend RPC scenarios", () => {
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session)
             .queueResumeSuccess(session); // second sendMessage resumes the existing session
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         // First turn — no attachment
@@ -366,7 +365,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session);
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         // Write file inside gitDir (which is the workingDirectory for the task)
@@ -398,7 +397,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session);
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({
@@ -427,7 +426,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session);
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({
@@ -455,7 +454,7 @@ describe("Copilot backend RPC scenarios", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session);
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const filePath = join(runtime.gitDir, "lines.ts");
@@ -497,17 +496,16 @@ describe("Copilot backend RPC scenarios", () => {
                     done(),
                 ],
             }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Show me the result" });
         await runtime.recorder.waitForStreamDone(result.executionId);
 
-        const persistedTools = runtime.db
-            .query<{ type: string; content: string }, [number]>(
-                "SELECT type, content FROM conversation_messages WHERE task_id = ? AND type IN ('tool_call', 'tool_result') ORDER BY id ASC",
-            )
-            .all(taskId);
+        const persistedTools = await runtime.db.rows<{ type: string; content: string }>(
+            "SELECT type, content FROM conversation_messages WHERE task_id = $1 AND type IN ('tool_call', 'tool_result') ORDER BY id ASC",
+            [taskId],
+        );
         expect(persistedTools).toHaveLength(2);
         expect(persistedTools.map((row) => row.type)).toEqual(["tool_call", "tool_result"]);
 
@@ -544,18 +542,16 @@ describe("Copilot backend RPC scenarios", () => {
                     done(),
                 ],
             }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Edit files" });
         await runtime.recorder.waitForStreamDone(result.executionId);
 
-        const toolResults = runtime.db
-            .query<{ content: string }, [number]>(
-                "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'tool_result' ORDER BY id ASC",
-            )
-            .all(taskId)
-            .map((row) => JSON.parse(row.content) as { writtenFiles?: Array<{ operation: string; path: string }> });
+        const toolResults = (await runtime.db.rows<{ content: string }>(
+            "SELECT content FROM conversation_messages WHERE task_id = $1 AND type = 'tool_result' ORDER BY id ASC",
+            [taskId],
+        )).map((row) => JSON.parse(row.content) as { writtenFiles?: Array<{ operation: string; path: string }> });
 
         expect(toolResults).toHaveLength(3);
         expect(toolResults[0]?.writtenFiles?.[0]).toEqual({
@@ -575,7 +571,7 @@ describe("Copilot backend RPC scenarios", () => {
             "patch_file:src/new-file.ts",
         ]);
 
-        const fileDiffs = runtime.getDbStreamEvents(result.executionId)
+        const fileDiffs = (await runtime.getDbStreamEvents(result.executionId))
             .filter((event) => event.type === "file_diff")
             .map((event) => JSON.parse(event.content) as { operation: string; path: string; added?: number; removed?: number });
 
@@ -604,7 +600,7 @@ describe("Copilot engine — systemInstructions propagation", () => {
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(session);
 
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         // The task is in 'plan' state which has stage_instructions "You are a planning assistant."
@@ -634,14 +630,14 @@ describe("Copilot engine — systemInstructions propagation", () => {
             .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Done."), done()] }));
 
         // Move task to 'backlog' which has no stage_instructions or workflow_instructions
-        const runtime = createBackendRpcRuntime({
+        const runtime = await createBackendRpcRuntime({
             taskModel: "copilot/mock-model",
             createEngine: ({ onTaskUpdated, onNewMessage }) =>
                 new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
         });
         runtimes.push(runtime);
         const { taskId } = await runtime.createTask();
-        runtime.db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+        await runtime.db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello" });
         await runtime.waitForExecutionStatus(result.executionId, "completed");
@@ -663,7 +659,7 @@ describe("Copilot lease timeout fixes (Bug B + Bug C)", () => {
         adapter
             .queueResumeFailure(new Error("missing session"))
             .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("streaming"), waitForAbort()] }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId, conversationId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
@@ -675,7 +671,7 @@ describe("Copilot lease timeout fixes (Bug B + Bug C)", () => {
         await adapter.triggerBeforeEvict(sdkSessionId);
 
         await runtime.waitForExecutionStatus(result.executionId, "cancelled");
-        expect(runtime.getExecutionStatus(result.executionId)).toBe("cancelled");
+        expect(await runtime.getExecutionStatus(result.executionId)).toBe("cancelled");
     });
 
     it("C2: touchCalls contains running state after a tool starts executing (heartbeat wiring smoke)", async () => {
@@ -685,7 +681,7 @@ describe("Copilot lease timeout fixes (Bug B + Bug C)", () => {
             .queueCreateSuccess(new MockCopilotSession().queueTurn({
                 steps: [toolStart("t1", "create_card"), toolResult("t1", "ok"), token("done"), done()],
             }));
-        const runtime = createCopilotRuntime(adapter);
+        const runtime = await createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "work" });

@@ -59,7 +59,7 @@ afterEach(() => {
     runtime?.cleanup();
 });
 
-function makeRuntime(engine: ScriptedEngine): BackendRpcRuntime {
+async function makeRuntime(engine: ScriptedEngine): Promise<BackendRpcRuntime> {
     return createBackendRpcRuntime({ createEngine: () => engine });
 }
 
@@ -83,7 +83,7 @@ describe("S-1 [model-reasoning]: reasoning_chunk arrives on IPC while streaming 
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -120,7 +120,7 @@ describe("S-2 [model-reasoning]: reasoning_chunk precedes tool_call on IPC (time
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -155,13 +155,13 @@ describe("S-3 [model-reasoning]: reasoning persisted to DB before tool_call row"
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId, conversationId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const dbTypes = db.map((e) => e.type);
 
         expect(db.every((event) => event.conversationId === conversationId)).toBe(true);
@@ -189,13 +189,13 @@ describe("S-4 [model-reasoning]: reasoning persisted to DB before assistant row 
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const dbTypes = db.map((e) => e.type);
 
         expect(dbTypes).toContain("reasoning");
@@ -228,13 +228,13 @@ describe("S-5 [model-reasoning]: two independent reasoning rounds produce two DB
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const reasoningEvents = db.filter((e) => e.type === "reasoning");
 
         // Two independent reasoning rows
@@ -274,13 +274,13 @@ describe("S-6 [model-reasoning]: no reasoning row in DB when engine emits no rea
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         expect(db.filter((e) => e.type === "reasoning").length).toBe(0);
     });
 });
@@ -306,13 +306,13 @@ describe("S-7 [model-reasoning]: after IPC done, full reasoning content is in DB
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const reasoning = db.find((e) => e.type === "reasoning");
 
         // Full accumulated content in DB
@@ -345,7 +345,7 @@ describe("S-8 [model-reasoning]: cancel mid-reasoning flushes accumulated reason
             scriptWaitForAbort(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -364,7 +364,7 @@ describe("S-8 [model-reasoning]: cancel mid-reasoning flushes accumulated reason
         expect(ipc.some((e) => e.type === "done")).toBe(true);
 
         // DB: reasoning persisted, not truncated
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const reasoning = db.find((e) => e.type === "reasoning");
         expect(reasoning).toBeDefined();
         expect(reasoning?.content).toContain("step 1");
@@ -392,14 +392,14 @@ describe("S-9 [task-detail]: ephemeral chunks on IPC only; persisted events in b
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
         await runtime.recorder.waitForStreamDone(executionId);
 
         const ipc = runtime.getIpcEvents(executionId);
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
 
         // IPC receives all event types (live rendering)
         expect(ipc.some((e) => e.type === "status_chunk")).toBe(true);
@@ -446,13 +446,13 @@ describe("S-10 [file-diff]: file_diff emission is structured-only", () => {
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "mix history" });
 
         await runtime.recorder.waitForStreamDone(executionId);
 
-        const db = runtime.getDbStreamEvents(executionId);
+        const db = await runtime.getDbStreamEvents(executionId);
         const fileDiffs = db.filter((e) => e.type === "file_diff");
 
         expect(fileDiffs).toHaveLength(1);
@@ -500,7 +500,7 @@ describe("S-11 [file-diff]: cancel/retry preserves nested file_diff parent assoc
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
 
         const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "run 1" });
@@ -524,8 +524,8 @@ describe("S-11 [file-diff]: cancel/retry preserves nested file_diff parent assoc
         expect(firstIpcPayload?.path).toBe("src/child-a.ts");
         expect(secondIpcPayload?.path).toBe("src/child-b.ts");
 
-        const firstDbDiffs = runtime.getDbStreamEvents(first.executionId).filter((e) => e.type === "file_diff");
-        const secondDbDiffs = runtime.getDbStreamEvents(second.executionId).filter((e) => e.type === "file_diff");
+        const firstDbDiffs = (await runtime.getDbStreamEvents(first.executionId)).filter((e) => e.type === "file_diff");
+        const secondDbDiffs = (await runtime.getDbStreamEvents(second.executionId)).filter((e) => e.type === "file_diff");
 
         expect(firstDbDiffs.at(0)?.parentBlockId).toBe("child-call");
         if (secondDbDiffs.length > 0) {
@@ -555,7 +555,7 @@ describe("S-13 [subagent]: parallel children with colliding callIds get distinct
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "delegate" });
         await runtime.recorder.waitForStreamDone(executionId);
@@ -603,7 +603,7 @@ describe("S-14 [subagent]: single child reusing a callId sequentially gets disti
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "delegate" });
         await runtime.recorder.waitForStreamDone(executionId);
@@ -641,7 +641,7 @@ describe("S-12: Cancel stops streaming — no text_chunk events after done", () 
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -680,7 +680,7 @@ describe("S-13: Cancel transitions task to waiting_user", () => {
             scriptWaitForAbort(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -729,7 +729,7 @@ class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
     }
 }
 
-function makeClaudeRuntime(sdkAdapter: ClaudeSdkAdapter): BackendRpcRuntime {
+async function makeClaudeRuntime(sdkAdapter: ClaudeSdkAdapter): Promise<BackendRpcRuntime> {
     return createBackendRpcRuntime({
         createEngine: () => new ClaudeEngine(undefined, () => {}, () => {}, sdkAdapter),
     });
@@ -750,7 +750,7 @@ describe("S-14 [stream_event]: token events from ClaudeEngine flow through to te
             { type: "done" },
         ]);
 
-        runtime = makeClaudeRuntime(adapter);
+        runtime = await makeClaudeRuntime(adapter);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -777,7 +777,7 @@ describe("S-14 [stream_event]: token events from ClaudeEngine flow through to te
             { type: "done" },
         ]);
 
-        runtime = makeClaudeRuntime(adapter);
+        runtime = await makeClaudeRuntime(adapter);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -817,7 +817,7 @@ describe("S-15 [per-token delivery]: each text_chunk reaches IPC before the next
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -864,7 +864,7 @@ describe("S-16 [per-token delivery]: status event does not delay broadcast of su
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -900,7 +900,7 @@ describe("S-17 [per-token delivery]: burst of N tokens produces N individual tex
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
@@ -938,7 +938,7 @@ describe("S-15 [subagent]: subagent_stop closes the subagent bubble", () => {
             scriptDone(),
         ]);
 
-        runtime = makeRuntime(engine);
+        runtime = await makeRuntime(engine);
         const { taskId } = await runtime.createTask();
         const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
         await runtime.recorder.waitForStreamDone(executionId);

@@ -5,24 +5,24 @@ import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
 import type { ConversationMessage } from "../../shared/rpc-types.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
 function noop(..._args: unknown[]): void {}
 
 const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 
-let db: Database;
+let db: Db;
 let configCleanup: () => void;
 let taskId: number;
 let conversationId: number;
 let executionId: number;
 
-function insertExecution(db: Database, tid: number, cid: number): number {
-  db.run(
-    "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'running', 1)",
+async function insertExecution(db: Db, tid: number, cid: number): Promise<number> {
+  const row = await db.get<{ id: number }>(
+    "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES ($1, $2, 'plan', 'plan', 'human-turn', 'running', 1) RETURNING id",
     [tid, cid],
   );
-  return (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+  return row!.id;
 }
 
 function makeParams(tid: number | null, cid: number, eid: number, signal?: AbortSignal): ExecutionParams {
@@ -47,14 +47,14 @@ class NoopEngine implements ExecutionEngine {
   async listCommands() { return []; }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
-  db = initDb();
-  const seed = seedProjectAndTask(db, "/test-git");
+  db = await initDb();
+  const seed = await seedProjectAndTask(db, "/test-git");
   taskId = seed.taskId;
   conversationId = seed.conversationId;
-  executionId = insertExecution(db, taskId, conversationId);
+  executionId = await insertExecution(db, taskId, conversationId);
 });
 
 afterEach(() => {
@@ -118,9 +118,10 @@ describe("StreamProcessor", () => {
 
     await consumePromise;
 
-    const row = db.query<{ role: string; content: string; type: string }, [number]>(
-      "SELECT role, content, type FROM conversation_messages WHERE conversation_id = ? AND type = 'assistant'",
-    ).get(conversationId);
+    const row = await db.get<{ role: string; content: string; type: string }>(
+      "SELECT role, content, type FROM conversation_messages WHERE conversation_id = $1 AND type = 'assistant'",
+      [conversationId],
+    );
 
     expect(row).not.toBeNull();
     expect(row!.content).toContain("hello");
@@ -158,9 +159,10 @@ describe("StreamProcessor", () => {
 
     await consumePromise;
 
-    const row = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'reasoning'",
-    ).get(conversationId);
+    const row = await db.get<{ type: string; content: string }>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = $1 AND type = 'reasoning'",
+      [conversationId],
+    );
 
     expect(row).not.toBeNull();
     expect(row!.content).toContain("thinking...");
@@ -183,14 +185,16 @@ describe("StreamProcessor", () => {
 
     await sp.consume(taskId, conversationId, executionId, engine.execute(params));
 
-    const execRow = db.query<{ status: string }, [number]>(
-      "SELECT status FROM executions WHERE id = ?",
-    ).get(executionId);
+    const execRow = await db.get<{ status: string }>(
+      "SELECT status FROM executions WHERE id = $1",
+      [executionId],
+    );
     expect(execRow!.status).toBe("failed");
 
-    const taskRow = db.query<{ execution_state: string }, [number]>(
-      "SELECT execution_state FROM tasks WHERE id = ?",
-    ).get(taskId);
+    const taskRow = await db.get<{ execution_state: string }>(
+      "SELECT execution_state FROM tasks WHERE id = $1",
+      [taskId],
+    );
     expect(taskRow!.execution_state).toBe("failed");
   });
 
@@ -226,7 +230,7 @@ describe("StreamProcessor", () => {
   });
 
   it("SP-7: needs_column_prompt=1 triggers onDeferredTransition with (taskId, workflow_state) and clears flag", async () => {
-    db.run("UPDATE tasks SET needs_column_prompt = 1, workflow_state = 'review' WHERE id = ?", [taskId]);
+    await db.exec("UPDATE tasks SET needs_column_prompt = 1, workflow_state = 'review' WHERE id = $1", [taskId]);
 
     let deferredArgs: [number, string] | null = null;
     const sp = new StreamProcessor(
@@ -237,13 +241,13 @@ describe("StreamProcessor", () => {
     await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
 
     expect(deferredArgs).toEqual([taskId, "review"]);
-    const row = db.query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?").get(taskId);
+    const row = await db.get<{ needs_column_prompt: number }>("SELECT needs_column_prompt FROM tasks WHERE id = $1", [taskId]);
     expect(row?.needs_column_prompt).toBe(0);
   });
 
   it("SP-8: pending_messages rows and needs_column_prompt=0 → onPendingMessage called per row, rows deleted", async () => {
-    db.run("INSERT INTO pending_messages (task_id, content) VALUES (?, ?)", [taskId, "hello"]);
-    db.run("INSERT INTO pending_messages (task_id, content) VALUES (?, ?)", [taskId, "world"]);
+    await db.exec("INSERT INTO pending_messages (task_id, content) VALUES ($1, $2)", [taskId, "hello"]);
+    await db.exec("INSERT INTO pending_messages (task_id, content) VALUES ($1, $2)", [taskId, "world"]);
 
     const delivered: string[] = [];
     const sp = new StreamProcessor(
@@ -255,7 +259,7 @@ describe("StreamProcessor", () => {
     await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
 
     expect(delivered).toEqual(["hello", "world"]);
-    const remaining = db.query<{ c: number }, [number]>("SELECT COUNT(*) as c FROM pending_messages WHERE task_id = ?").get(taskId);
+    const remaining = await db.get<{ c: number }>("SELECT COUNT(*) as c FROM pending_messages WHERE task_id = $1", [taskId]);
     expect(remaining?.c).toBe(0);
   });
 
@@ -280,8 +284,8 @@ describe("StreamProcessor", () => {
   });
 
   it("SP-10: needs_column_prompt=1 AND pending_messages → only onDeferredTransition fires; onPendingMessage NOT called", async () => {
-    db.run("UPDATE tasks SET needs_column_prompt = 1, workflow_state = 'done' WHERE id = ?", [taskId]);
-    db.run("INSERT INTO pending_messages (task_id, content) VALUES (?, ?)", [taskId, "pending"]);
+    await db.exec("UPDATE tasks SET needs_column_prompt = 1, workflow_state = 'done' WHERE id = $1", [taskId]);
+    await db.exec("INSERT INTO pending_messages (task_id, content) VALUES ($1, $2)", [taskId, "pending"]);
 
     let deferredCalled = false;
     let pendingCalled = false;
@@ -297,13 +301,13 @@ describe("StreamProcessor", () => {
     expect(deferredCalled).toBe(true);
     expect(pendingCalled).toBe(false);
 
-    const remaining = db.query<{ c: number }, [number]>("SELECT COUNT(*) as c FROM pending_messages WHERE task_id = ?").get(taskId);
+    const remaining = await db.get<{ c: number }>("SELECT COUNT(*) as c FROM pending_messages WHERE task_id = $1", [taskId]);
     expect(remaining?.c).toBe(1); // NOT deleted — deferred path skips pending drain
   });
 
   it("SP-GC-1: onTaskUpdated receives Task with worktreePath when task_git_context row exists", async () => {
-    db.run(
-      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, ?, ?)",
+    await db.exec(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, $4, $5)",
       [taskId, "/tmp/git-root", "/wt/1", "ready", "feature/test"],
     );
 
@@ -367,9 +371,10 @@ describe("SP-COMPACT: compaction_done content persistence", () => {
     ]);
     await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
 
-    const row = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
+    const row = await db.get<{ type: string; content: string }>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+      [conversationId],
+    );
     expect(row).toBeDefined();
     expect(row!.content).toBe("Summarised 40 messages.");
   });
@@ -382,9 +387,10 @@ describe("SP-COMPACT: compaction_done content persistence", () => {
     ]);
     await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
 
-    const row = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
+    const row = await db.get<{ type: string; content: string }>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+      [conversationId],
+    );
     expect(row).toBeDefined();
     expect(row!.content).toBe("");
   });
@@ -398,9 +404,10 @@ describe("SP-COMPACT: compaction_done content persistence", () => {
     ]);
     await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
 
-    const rows = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND (type = 'compaction_summary' OR (type = 'system' AND content = 'Compacting conversation…')) ORDER BY id ASC",
-    ).all(conversationId);
+    const rows = await db.rows<{ type: string; content: string }>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = $1 AND (type = 'compaction_summary' OR (type = 'system' AND content = 'Compacting conversation…')) ORDER BY id ASC",
+      [conversationId],
+    );
     expect(rows).toHaveLength(2);
     expect(rows[0]!.type).toBe("system");
     expect(rows[1]!.type).toBe("compaction_summary");

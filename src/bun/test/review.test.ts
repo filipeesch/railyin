@@ -15,16 +15,16 @@ import { TaskGitContextRepository } from "../db/repositories/TaskGitContextRepos
 import type { IProjectResolver } from "../git/IProjectResolver.ts";
 import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { compactMessages } from "../conversation/context.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { CodeReviewPayload } from "../../shared/rpc-types.ts";
 import type { EngineEvent, ExecutionEngine, ExecutionParams, EngineResumeInput } from "../engine/types.ts";
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
 
@@ -47,7 +47,7 @@ const TEST_PROJECT_RESOLVER: IProjectResolver = {
   getWorktreeBasePath: (_wsKey, _projectKey, gitRootPath) => `${gitRootPath}/../worktrees`,
 };
 
-function makeWorktreeManager(db: Database) {
+function makeWorktreeManager(db: Db) {
   const wsRepo = new WorkspaceRepository(db);
   const gitRepo = new GitRepositoryManager();
   return { worktreeManager: new WorktreeManager(db, wsRepo, TEST_PROJECT_RESOLVER, gitRepo, new TaskGitContextRepository(db)), gitRepo };
@@ -82,10 +82,10 @@ function makeHandlers() {
 }
 
 /** Insert task_git_context pointing to gitDir as both root and worktree. */
-function seedGitContext(taskId: number, status: string = "ready") {
-  db.run(
+async function seedGitContext(taskId: number, status: string = "ready") {
+  await db.exec(
     `INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name)
-     VALUES (?, ?, ?, ?, 'test-branch')`,
+     VALUES ($1, $2, $3, $4, 'test-branch')`,
     [taskId, gitDir, gitDir, status],
   );
 }
@@ -94,8 +94,8 @@ function seedGitContext(taskId: number, status: string = "ready") {
 
 describe("tasks.getChangedFiles", () => {
   it("returns empty array for a clean worktree", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     const files = await handlers["tasks.getChangedFiles"]({ taskId });
@@ -103,8 +103,8 @@ describe("tasks.getChangedFiles", () => {
   });
 
   it("returns changed file paths when worktree has modifications", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     // Modify the tracked file (uncommitted change vs HEAD)
@@ -115,8 +115,8 @@ describe("tasks.getChangedFiles", () => {
   });
 
   it("returns [] when worktree is not ready", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId, "not_created");
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId, "not_created");
     const handlers = makeHandlers();
 
     const files = await handlers["tasks.getChangedFiles"]({ taskId });
@@ -124,8 +124,8 @@ describe("tasks.getChangedFiles", () => {
   });
 
   it("returns new (untracked staged) file paths", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     // Add and stage a new file (but don't commit)
@@ -141,8 +141,8 @@ describe("tasks.getChangedFiles", () => {
 
 describe("tasks.getFileDiff", () => {
   it("returns original from HEAD and modified from working tree", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     writeFileSync(join(gitDir, "app.ts"), 'const x = 99;\nconst y = 2;\nconst z = 3;\n');
@@ -153,8 +153,8 @@ describe("tasks.getFileDiff", () => {
   });
 
   it("returns empty string as original for a new file", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     writeFileSync(join(gitDir, "brand-new.ts"), 'export const n = 5;\n');
@@ -169,8 +169,8 @@ describe("tasks.getFileDiff", () => {
 
 describe("tasks.rejectHunk", () => {
   it("reverts a single-hunk change and returns updated diff", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     // Change the first line only (one hunk)
@@ -187,8 +187,8 @@ describe("tasks.rejectHunk", () => {
   });
 
   it("throws when hunk index is out of range", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     writeFileSync(join(gitDir, "app.ts"), 'const x = 999;\nconst y = 2;\nconst z = 3;\n');
@@ -308,8 +308,8 @@ describe("compactMessages", () => {
 
 describe("tasks.setHunkDecision", () => {
   it("inserts a new hunk decision and upserts on second call", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     await handlers["tasks.setHunkDecision"]({
@@ -324,11 +324,10 @@ describe("tasks.setHunkDecision", () => {
       modifiedEnd: 3,
     });
 
-    const row = db
-      .query<{ decision: string; comment: string | null }, [number, string]>(
-        "SELECT decision, comment FROM task_hunk_decisions WHERE task_id = ? AND hunk_hash = ?",
-      )
-      .get(taskId, "abc123");
+    const row = await db.get<{ decision: string; comment: string | null }>(
+      "SELECT decision, comment FROM task_hunk_decisions WHERE task_id = $1 AND hunk_hash = $2",
+      [taskId, "abc123"],
+    );
     expect(row?.decision).toBe("accepted");
     expect(row?.comment).toBeNull();
 
@@ -345,11 +344,10 @@ describe("tasks.setHunkDecision", () => {
       modifiedEnd: 3,
     });
 
-    const updated = db
-      .query<{ decision: string; comment: string | null }, [number, string]>(
-        "SELECT decision, comment FROM task_hunk_decisions WHERE task_id = ? AND hunk_hash = ?",
-      )
-      .get(taskId, "abc123");
+    const updated = await db.get<{ decision: string; comment: string | null }>(
+      "SELECT decision, comment FROM task_hunk_decisions WHERE task_id = $1 AND hunk_hash = $2",
+      [taskId, "abc123"],
+    );
     expect(updated?.decision).toBe("change_request");
     expect(updated?.comment).toBe("Use const");
   });
@@ -359,8 +357,8 @@ describe("tasks.setHunkDecision", () => {
 
 describe("tasks.getFileDiff hunk enrichment", () => {
   it("returns hunks with decisions joined from DB; missing decision defaults to pending", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     // Modify a file so there's a diff
@@ -394,14 +392,14 @@ describe("tasks.getFileDiff hunk enrichment", () => {
 
 describe("handleCodeReview DB read", () => {
   it("builds payload from task_hunk_decisions table without frontend payload", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
     // Seed a hunk decision
-    db.run(
+    await db.exec(
       `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start)
-       VALUES (?, 'deadbeef', 'app.ts', 'human', 'user', 'change_request', 'fix this', 1, 1)`,
+       VALUES ($1, 'deadbeef', 'app.ts', 'human', 'user', 'change_request', 'fix this', 1, 1)`,
       [taskId],
     );
 
@@ -416,13 +414,13 @@ describe("handleCodeReview DB read", () => {
   });
 
   it("includes frontend manual edits in the stored code_review payload", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
     const handlers = makeHandlers();
 
-    db.run(
+    await db.exec(
       `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start)
-       VALUES (?, 'deadbeef', 'app.ts', 'human', 'user', 'change_request', 'fix this', 1, 1)`,
+       VALUES ($1, 'deadbeef', 'app.ts', 'human', 'user', 'change_request', 'fix this', 1, 1)`,
       [taskId],
     );
 

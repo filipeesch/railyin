@@ -58,7 +58,7 @@ export class CapturingParamsBuilder extends ExecutionParamsBuilder {
 
 export class StubWorkdirResolver implements IWorkingDirectoryResolver {
   constructor(private readonly dir: string) {}
-  resolve(): string { return this.dir; }
+  async resolve(): Promise<string> { return this.dir; }
 }
 
 export class StubStreamProcessor extends StreamProcessor {

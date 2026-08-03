@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync } from "fs";
 import { join } from "path";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, setupTestConfig } from "./helpers.ts";
 import { workflowHandlers } from "../handlers/workflow.ts";
 import { boardHandlers } from "../handlers/boards.ts";
 
 const WS = "default";
 
-let db: Database;
+let db: Db;
 let cleanupConfig: (() => void) | null = null;
 let notifyCount = 0;
 const notify = () => { notifyCount++; };
@@ -33,8 +33,8 @@ function configure(extraIds: string[] = []): void {
   cleanupConfig = setupTestConfig("", undefined, extraIds.map((id) => wf(id))).cleanup;
 }
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   notifyCount = 0;
 });
 

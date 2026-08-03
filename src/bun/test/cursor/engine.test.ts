@@ -14,7 +14,7 @@ describe("CursorEngine — deterministic agentId forwarding (§6.5.1)", () => {
         const adapter = new MockCursorSdkAdapter()
             .queueTurn({ steps: [token("first")] })
             .queueTurn({ steps: [token("second")] });
-        const runtime = createCursorRpcRuntime(adapter);
+        const runtime = await createCursorRpcRuntime(adapter);
 
         try {
             const { taskId, conversationId } = await runtime.createTask();

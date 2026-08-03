@@ -11,7 +11,7 @@ import { PiEngine } from "../../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { NullModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import type { ExecutionParams } from "../../engine/types.ts";
 
 // ─── MockLoopSession ──────────────────────────────────────────────────────────
@@ -119,17 +119,17 @@ async function runExecution(engine: PiEngine, convId: number, execId = 1): Promi
 
 // ─── Test state ────────────────────────────────────────────────────────────────
 
-let db: Database;
+let db: Db;
 let configCleanup: () => void;
 let conversationId: number;
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
-  db = initDb();
-  const seed = seedProjectAndTask(db, "/test-git");
+  db = await initDb();
+  const seed = await seedProjectAndTask(db, "/test-git");
   conversationId = seed.conversationId;
-  db.run("UPDATE conversations SET model = ? WHERE id = ?", ["test-pi/lmstudio/test-model", conversationId]);
+  await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", ["test-pi/lmstudio/test-model", conversationId]);
 });
 
 afterEach(() => {
@@ -196,8 +196,8 @@ describe("PiEngine loop detection (integration)", () => {
   });
 
   test("LDE-4: two distinct conversations have independent detectors", async () => {
-    const seed2 = seedProjectAndTask(db, "/test-git-2");
-    db.run("UPDATE conversations SET model = ? WHERE id = ?", ["test-pi/lmstudio/test-model", seed2.conversationId]);
+    const seed2 = await seedProjectAndTask(db, "/test-git-2");
+    await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", ["test-pi/lmstudio/test-model", seed2.conversationId]);
 
     const session1 = new MockLoopSession();
     const session2 = new MockLoopSession();

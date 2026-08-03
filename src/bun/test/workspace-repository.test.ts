@@ -9,44 +9,44 @@
  *   WR-5  interface contract is satisfied at compile time
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, seedProjectAndTask } from "./helpers.ts";
 import { WorkspaceRepository, type IWorkspaceRepository } from "../db/workspace-repository.ts";
 import { getDefaultWorkspaceKey } from "../workspace-context.ts";
 
-let db: Database;
+let db: Db;
 let wsRepo: WorkspaceRepository;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   wsRepo = new WorkspaceRepository(db);
 });
 
 describe("WR-1: getBoardWorkspaceKey returns stored key", () => {
-  it("returns the workspace_key for a known board", () => {
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workspace_key = 'myworkspace' WHERE id = ?", [boardId]);
-    expect(wsRepo.getBoardWorkspaceKey(boardId)).toBe("myworkspace");
+  it("returns the workspace_key for a known board", async () => {
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workspace_key = 'myworkspace' WHERE id = $1", [boardId]);
+    expect(await wsRepo.getBoardWorkspaceKey(boardId)).toBe("myworkspace");
   });
 });
 
 describe("WR-2: getBoardWorkspaceKey falls back to default for unknown board", () => {
-  it("returns getDefaultWorkspaceKey() for a non-existent board id", () => {
-    expect(wsRepo.getBoardWorkspaceKey(99999)).toBe(getDefaultWorkspaceKey());
+  it("returns getDefaultWorkspaceKey() for a non-existent board id", async () => {
+    expect(await wsRepo.getBoardWorkspaceKey(99999)).toBe(getDefaultWorkspaceKey());
   });
 });
 
 describe("WR-3: getTaskWorkspaceKey returns key via board join", () => {
-  it("returns the workspace_key from the task's board", () => {
-    const { taskId, boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workspace_key = 'ws2' WHERE id = ?", [boardId]);
-    expect(wsRepo.getTaskWorkspaceKey(taskId)).toBe("ws2");
+  it("returns the workspace_key from the task's board", async () => {
+    const { taskId, boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workspace_key = 'ws2' WHERE id = $1", [boardId]);
+    expect(await wsRepo.getTaskWorkspaceKey(taskId)).toBe("ws2");
   });
 });
 
 describe("WR-4: getTaskWorkspaceKey falls back to default for unknown task", () => {
-  it("returns getDefaultWorkspaceKey() for a non-existent task id", () => {
-    expect(wsRepo.getTaskWorkspaceKey(99999)).toBe(getDefaultWorkspaceKey());
+  it("returns getDefaultWorkspaceKey() for a non-existent task id", async () => {
+    expect(await wsRepo.getTaskWorkspaceKey(99999)).toBe(getDefaultWorkspaceKey());
   });
 });
 

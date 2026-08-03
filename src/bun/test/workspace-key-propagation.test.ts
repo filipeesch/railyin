@@ -16,7 +16,7 @@ import { EngineRegistry } from "../engine/engine-registry.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, EngineModelInfo } from "../engine/types.ts";
 import type { LoadedConfig } from "../config/index.ts";
 
@@ -62,7 +62,7 @@ function makeMultiEngineRegistry(
 }
 
 function makeOrchestrator(
-  db: Database,
+  db: Db,
   registry: EngineRegistry,
 ): Orchestrator {
   return new Orchestrator(
@@ -77,13 +77,13 @@ function makeOrchestrator(
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 let copilotEngine: CapturingEngine;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   gitDir = mkdtempSync(join(tmpdir(), "railyn-wk-prop-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
@@ -114,8 +114,8 @@ describe("WP-1..3: Full pipeline workspaceKey propagation", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = $1", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "Hello from user");
 
@@ -132,9 +132,9 @@ describe("WP-1..3: Full pipeline workspaceKey propagation", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = ?", [conversationId]);
-    db.run("UPDATE tasks SET workflow_state = 'backlog', execution_state = 'idle' WHERE id = ?", [taskId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = $1", [conversationId]);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog', execution_state = 'idle' WHERE id = $1", [taskId]);
 
     // Execute a transition (backlog → plan)
     const result = await orchestrator.executeTransition(taskId, "plan");
@@ -154,9 +154,9 @@ describe("WP-1..3: Full pipeline workspaceKey propagation", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = ?", [conversationId]);
-    db.run("UPDATE tasks SET workflow_state = 'plan', execution_state = 'failed' WHERE id = ?", [taskId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = $1", [conversationId]);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan', execution_state = 'failed' WHERE id = $1", [taskId]);
 
     // Execute a retry
     const result = await orchestrator.executeRetry(taskId);

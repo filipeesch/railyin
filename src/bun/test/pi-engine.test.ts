@@ -3,7 +3,7 @@ import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { PiEngine } from "../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../config/index.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
 // ─── MockAgentSession ─────────────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ class StubModelSettingsRepository extends NullModelSettingsRepository {
     super();
     this.contextWindow = contextWindow;
   }
-  override getContextWindow(_workspaceKey: string, _qualifiedModelId: string): number | null {
+  override async getContextWindow(_workspaceKey: string, _qualifiedModelId: string): Promise<number | null> {
     return this.contextWindow;
   }
 }
@@ -88,18 +88,18 @@ async function simulateGetOrCreate(engine: PiEngine, conversationId: number, too
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-let db: Database;
+let db: Db;
 let configCleanup: () => void;
 let conversationId: number;
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
-  db = initDb();
-  const seed = seedProjectAndTask(db, "/test-git");
+  db = await initDb();
+  const seed = await seedProjectAndTask(db, "/test-git");
   conversationId = seed.conversationId;
   // Seed the conversation's model so compact() can resolve it from DB
-  db.run("UPDATE conversations SET model = ? WHERE id = ?", ["test-pi/lmstudio/test-model", conversationId]);
+  await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", ["test-pi/lmstudio/test-model", conversationId]);
 });
 
 afterEach(() => {
@@ -109,10 +109,10 @@ afterEach(() => {
 // ─── compact() model resolution tests ─────────────────────────────────────────
 
 describe("PiEngine.compact() — model resolution", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     const cfg = setupTestConfig();
-    db = initDb();
-    const seed = seedProjectAndTask(db, "/test-git");
+    db = await initDb();
+    const seed = await seedProjectAndTask(db, "/test-git");
     conversationId = seed.conversationId;
   });
 
@@ -122,7 +122,7 @@ describe("PiEngine.compact() — model resolution", () => {
 
   it("PE-COMPACT-5: compact() passes stored model to session creation (strips engine prefix)", async () => {
     // Seed conversation model
-    db.run("UPDATE conversations SET model = ? WHERE id = ?", ["pi-local/lmstudio/llama-3.2-3b", conversationId]);
+    await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", ["pi-local/lmstudio/llama-3.2-3b", conversationId]);
 
     let capturedModel: any = null;
     const session = new MockAgentSession();
@@ -148,7 +148,7 @@ describe("PiEngine.compact() — model resolution", () => {
   });
 
   it("PE-COMPACT-6: compact() resolves contextWindow from modelSettingsRepo", async () => {
-    db.run("UPDATE conversations SET model = ? WHERE id = ?", ["pi-local/lmstudio/qwen3:8b", conversationId]);
+    await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", ["pi-local/lmstudio/qwen3:8b", conversationId]);
 
     let capturedContextWindow: number | undefined;
     const session = new MockAgentSession();
@@ -173,7 +173,7 @@ describe("PiEngine.compact() — model resolution", () => {
   });
 
   it("PE-COMPACT-7: compact() rejects when modelSettingsRepo returns null contextWindow", async () => {
-    db.run("UPDATE conversations SET model = ? WHERE id = ?", ["pi-local/lmstudio/qwen3:8b", conversationId]);
+    await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", ["pi-local/lmstudio/qwen3:8b", conversationId]);
 
     const mockRepo = { getContextWindow: () => null } as any;
 
@@ -249,9 +249,10 @@ describe("PiEngine.compact()", () => {
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
-    const row = db.query<{ content: string }, [number]>(
-      "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
+    const row = await db.get<{ content: string }>(
+      "SELECT content FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+      [conversationId],
+    );
     expect(row).toBeDefined();
     expect(row!.content).toBe("the summary");
   });
@@ -263,11 +264,12 @@ describe("PiEngine.compact()", () => {
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
-    const row = db.query<{ content: string }, [number]>(
-      "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
+    const row = await db.get<{ content: string }>(
+      "SELECT content FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+      [conversationId],
+    );
 
-    expect(row).toBeNull();
+    expect(row).toBeUndefined();
   });
 
   it("PE-COMPACT-9: no live session → shadow session (built with empty tools) is disposed after compact() succeeds, so the next execute() rebuilds a fresh session with the full tool set instead of reusing the tool-crippled one", async () => {
