@@ -12,11 +12,16 @@ import type { DbDriver } from "./db-config.ts";
  *  - Generated ids are 32-bit integers on both engines, so they come back as JS
  *    `number` (no bigint coercion needed).
  */
+export type IntervalUnit = "seconds" | "minutes" | "hours" | "days";
+
 export interface Dialect {
   readonly kind: DbDriver;
 
   /** SQL expression for the current UTC timestamp as a `YYYY-MM-DD HH:MM:SS` string. */
   now(): string;
+
+  /** SQL expression for (now - amount unit) as a `YYYY-MM-DD HH:MM:SS` string, comparable to `now()`/stored timestamps. */
+  intervalAgo(amount: number, unit: IntervalUnit): string;
 
   /**
    * SQL expression extracting a (dotted) path from a JSON/JSONB text column.
@@ -45,6 +50,10 @@ export class SqliteDialect implements Dialect {
     return "datetime('now')";
   }
 
+  intervalAgo(amount: number, unit: IntervalUnit): string {
+    return `datetime('now', '-${amount} ${unit}')`;
+  }
+
   jsonExtract(column: string, path: string): string {
     return `json_extract(${column}, '$.${path}')`;
   }
@@ -67,6 +76,10 @@ export class PostgresDialect implements Dialect {
 
   now(): string {
     return "to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS')";
+  }
+
+  intervalAgo(amount: number, unit: IntervalUnit): string {
+    return `to_char(((now() at time zone 'utc') - interval '${amount} ${unit}'), 'YYYY-MM-DD HH24:MI:SS')`;
   }
 
   jsonExtract(column: string, path: string): string {

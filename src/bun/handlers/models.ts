@@ -73,7 +73,7 @@ export function modelHandlers(db: Db, orchestrator: ExecutionCoordinator | null,
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       if (params.enabled) {
         await db.exec(
-          "INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2)",
+          "INSERT INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2) ON CONFLICT (workspace_key, qualified_model_id) DO NOTHING",
           [workspaceKey, params.qualifiedModelId],
         );
       } else {

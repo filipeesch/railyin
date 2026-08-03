@@ -11,10 +11,20 @@ export default defineConfig({
       // phase (Stryker/vitest runs).  Production code always uses bun:sqlite
       // natively via the Bun runtime.
       "bun:sqlite": resolve(__dirname, "src/bun/test/shims/bun-sqlite.ts"),
+      // "bun" (the Bun.SQL client) is a Bun built-in Vite cannot resolve.
+      // Every test that runs under this config uses the SQLite driver, which
+      // never constructs Bun.SQL, so a throwing stub is enough to satisfy
+      // module resolution — see the shim file for details.
+      "bun": resolve(__dirname, "src/bun/test/shims/bun-sql.ts"),
     },
   },
   test: {
     include: ["src/bun/test/**/*.test.ts"],
+    // The PostgreSQL testcontainers tier runs under its own config
+    // (vitest.postgres.config.ts) with a Node-native Db adapter — it doesn't
+    // fit this config's bun:sqlite/bun shim setup and needs a real Docker
+    // daemon, so it's excluded from the default/Stryker run.
+    exclude: ["**/node_modules/**", "src/bun/test/postgres/**"],
     // forks pool gives each test file an isolated subprocess with its own
     // module registry — same isolation guarantees as bun test.
     // Note: Stryker's vitest-runner hardcodes pool:'threads', but we patch it

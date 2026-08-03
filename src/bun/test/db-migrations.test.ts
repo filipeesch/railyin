@@ -324,6 +324,36 @@ describe("runMigrations", () => {
     expect(row?.checksum).not.toBe(oldChecksum);
   });
 
+  it("checksum mismatch on an unamended migration is a hard failure (PC-7)", async () => {
+    await runMigrations({ logger: silentLogger });
+    const db = getDb();
+    // Corrupt the stored checksum for a migration with no previousChecksums entry.
+    await db.exec("UPDATE schema_migrations SET checksum = $1 WHERE id = $2", [
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "001_initial",
+    ]);
+    resetDbSingleton();
+    process.env.RAILYN_DB = dbPath;
+    await expect(runMigrations({ logger: silentLogger })).rejects.toThrow(/Checksum mismatch/);
+  });
+
+  it("backup file is created before applying pending migrations to a file DB (PC-7)", async () => {
+    const { existsSync } = await import("fs");
+    expect(existsSync(`${dbPath}.backup`)).toBe(false);
+    await runMigrations({ logger: silentLogger });
+    expect(existsSync(`${dbPath}.backup`)).toBe(true);
+  });
+
+  it("backup is skipped for an in-memory DB (PC-7)", async () => {
+    process.env.RAILYN_DB = ":memory:";
+    resetDbSingleton();
+    await runMigrations({ logger: silentLogger });
+    const { existsSync } = await import("fs");
+    // No backup path exists for :memory: — nothing to assert a path against,
+    // but the run must complete without attempting a file copy (no throw above).
+    expect(existsSync(`${dbPath}.backup`)).toBe(false);
+  });
+
   it("migration 044: converts NULL enabled_mcp_tools to '[]' in tasks and chat_sessions", async () => {
     const rawDb = new Database(dbPath, { create: true });
     // Mark all prior migrations as already applied so the runner only runs 044.

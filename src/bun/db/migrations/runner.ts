@@ -215,7 +215,8 @@ async function discoverPostgresMigrations(): Promise<Array<{ migration: Postgres
   return result;
 }
 
-async function runPostgresMigrations(db: Db, logger: MigrationLogger): Promise<void> {
+/** Exported for direct testing (e.g. against a NodePgDb-backed testcontainer) without going through the Bun-only `getDb()`/`createDb()` provider chain. */
+export async function runPostgresMigrations(db: Db, logger: MigrationLogger): Promise<void> {
   await db.exec(
     `CREATE TABLE IF NOT EXISTS schema_migrations (
        id         text PRIMARY KEY,

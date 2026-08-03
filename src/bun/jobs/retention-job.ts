@@ -16,19 +16,20 @@ export class RetentionJob {
   }
 
   async runNow(): Promise<void> {
-    await this.db.exec("DELETE FROM model_raw_messages WHERE created_at < datetime('now', '-1 day')");
-    await this.db.exec("DELETE FROM stream_events WHERE created_at < datetime('now', '-4 hours')");
+    const dialect = this.db.dialect;
+    await this.db.exec(`DELETE FROM model_raw_messages WHERE created_at < ${dialect.intervalAgo(1, "days")}`);
+    await this.db.exec(`DELETE FROM stream_events WHERE created_at < ${dialect.intervalAgo(4, "hours")}`);
     // Collect conversation IDs owned by expired archived chat sessions, then delete
     // the chat sessions first (to free the FK reference), then clean up executions
     // (no FK cascade in production — must be explicit), then delete the conversations
     // so that ON DELETE CASCADE propagates to conversation_messages and stream_events.
     const staleConversationIds = (await this.db.rows<{ conversation_id: number }>(
       `SELECT conversation_id FROM chat_sessions
-         WHERE status = 'archived' AND archived_at < datetime('now', '-7 days')`,
+         WHERE status = 'archived' AND archived_at < ${dialect.intervalAgo(7, "days")}`,
     )).map((r) => r.conversation_id);
 
     await this.db.exec(
-      "DELETE FROM chat_sessions WHERE status = 'archived' AND archived_at < datetime('now', '-7 days')"
+      `DELETE FROM chat_sessions WHERE status = 'archived' AND archived_at < ${dialect.intervalAgo(7, "days")}`
     );
 
     if (staleConversationIds.length > 0) {

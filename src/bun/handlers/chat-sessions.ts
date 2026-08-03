@@ -302,7 +302,7 @@ export function startChatSessionAutoArchiveJob(db: Db, onSessionUpdated: OnChatS
       const rows = await db.rows<ChatSessionRow>(
         `SELECT * FROM chat_sessions
          WHERE status != 'archived'
-           AND last_activity_at < datetime('now', '-7 days')`
+           AND last_activity_at < ${db.dialect.intervalAgo(7, "days")}`
       );
 
       for (const row of rows) {

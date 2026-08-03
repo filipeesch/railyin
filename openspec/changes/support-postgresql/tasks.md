@@ -47,10 +47,10 @@
 - [x] 8.1 Replace `datetime('now')` occurrences in live queries with `Dialect.now()`
 - [x] 8.2 Replace `json_extract` occurrences with `Dialect.jsonExtract()`
 - [x] 8.3 Replace `lastInsertRowid` / `last_insert_rowid()` usage with the dialect RETURNING-based insert-id path
-- [ ] 8.4 Normalize boolean/bigint returns in row mappers so SQLite and PostgreSQL yield identical TypeScript shapes
+- [x] 8.4 Normalize boolean/bigint returns in row mappers so SQLite and PostgreSQL yield identical TypeScript shapes
 
 ## 9. Verification
 
 - [x] 9.1 Boot with no `config/database.yaml` and confirm SQLite default path is unchanged (existing data intact)
-- [ ] 9.2 Boot with `driver: postgres` against a local PostgreSQL, confirm baseline provisions the schema and core flows (tasks, conversations, executions, decisions, notes) work end-to-end
+- [x] 9.2 Boot with `driver: postgres` against a local PostgreSQL, confirm baseline provisions the schema and core flows (tasks, conversations, executions, decisions, notes) work end-to-end
 - [x] 9.3 Confirm the 53 SQLite migration files are byte-identical (checksums valid) and `RAILYN_DB=:memory:` tests still run
