@@ -140,10 +140,11 @@ export class ChatExecutor {
 
     const execResult = await db.exec(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES (NULL, $1, 'chat', 'chat', 'chat-turn', 'running', 1)`,
+       VALUES (NULL, $1, 'chat', 'chat', 'chat-turn', 'running', 1)
+       RETURNING id`,
       [conversationId],
     );
-    const executionId = execResult.lastInsertRowid as number;
+    const executionId = (execResult.rows[0] as { id: number }).id;
 
     await db.exec("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = $1", [conversationId]);
 

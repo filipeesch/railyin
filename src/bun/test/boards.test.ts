@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import type { Db } from "../db/db.ts";
 import { initDb, setupTestConfig, seedProjectAndTask } from "./helpers.ts";
 import { boardHandlers } from "../handlers/boards.ts";
+import { FakeDb } from "./fixtures/fake-db.ts";
 
 const SECOND_WORKFLOW_YAML = `id: sprint
 name: Sprint
@@ -70,6 +71,37 @@ describe("BC — boards.create", () => {
     });
     // Falls back to delivery (first workflow)
     expect(board.workflowTemplateId).toBe("delivery");
+  });
+
+  it("BC-3: works when the Db never returns lastInsertRowid (PostgresDb regression — reported bug: 'undefined is not an object (evaluating row.id)')", async () => {
+    // PostgresDb.exec()/get() always return lastInsertRowid: null (Postgres has
+    // no rowid concept — the port relies on RETURNING instead, see Dialect.returningId).
+    // A FakeDb that mirrors that contract exactly reproduces the bug if the
+    // handler ever regresses to reading `.lastInsertRowid` instead of using
+    // `RETURNING *` + reading the row back from `db.get`.
+    const fake = new FakeDb();
+    fake.primeRows([
+      {
+        id: 42,
+        workspace_key: "default",
+        name: "PG Board",
+        workflow_template_id: "delivery",
+        project_keys: "[]",
+        created_at: "now",
+      },
+    ]);
+    const handlers = boardHandlers(fake);
+    const board = await handlers["boards.create"]({
+      workspaceKey: "default",
+      name: "PG Board",
+      projectKeys: [],
+      workflowTemplateId: "delivery",
+    });
+    expect(board.id).toBe(42);
+    expect(board.name).toBe("PG Board");
+    // Confirms the handler used a single RETURNING-based call, not exec()+get() keyed off lastInsertRowid.
+    expect(fake.calls.length).toBe(1);
+    expect(fake.calls[0]?.text).toContain("RETURNING");
   });
 });
 

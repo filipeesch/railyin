@@ -89,14 +89,11 @@ export class NoteRepository {
     const normalizedTags = normalizeTags(input.tags);
     const tagsJson = normalizedTags != null ? JSON.stringify(normalizedTags) : null;
 
-    const res = await this.db.exec(
-      `INSERT INTO task_notes (conversation_id, content, is_source_ai, tags)
-       VALUES ($1, $2, $3, $4)`,
-      [conversationId, input.content, input.isSourceAi ? 1 : 0, tagsJson],
-    );
     const row = await this.db.get<TaskNoteRow>(
-      "SELECT * FROM task_notes WHERE id = $1",
-      [res.lastInsertRowid as number],
+      `INSERT INTO task_notes (conversation_id, content, is_source_ai, tags)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [conversationId, input.content, input.isSourceAi ? 1 : 0, tagsJson],
     );
     return mapRow(row!);
   }

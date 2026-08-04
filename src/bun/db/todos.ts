@@ -87,10 +87,11 @@ export class TodoRepository {
   ): Promise<TodoListItem> {
     const res = await this.db.exec(
       `INSERT INTO task_todos (task_id, number, title, description, status, phase)
-       VALUES ($1, $2, $3, $4, 'pending', $5)`,
+       VALUES ($1, $2, $3, $4, 'pending', $5)
+       RETURNING id`,
       [taskId, number, title, description, phase ?? null],
     );
-    const id = res.lastInsertRowid as number;
+    const id = (res.rows[0] as { id: number }).id;
     return { id, number, title, status: "pending", phase: phase ?? null };
   }
 

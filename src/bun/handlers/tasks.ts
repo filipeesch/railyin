@@ -90,8 +90,8 @@ export function taskHandlers(db: Db, wsRepo: IWorkspaceRepository, orchestrator:
       const wsShellAutoApprove = getWorkspaceConfig(workspaceKey).workspace.shell_auto_approve ?? false;
 
       // Create conversation first with placeholder task_id=0
-      const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES (0)");
-      const conversationId = convResult.lastInsertRowid as number;
+      const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+      const conversationId = (convResult.rows[0] as { id: number }).id;
 
       // Seed conversation model with workspace default (if configured)
       await seedConversationModel(db, conversationId, params.boardId, wsRepo);
@@ -103,7 +103,8 @@ export function taskHandlers(db: Db, wsRepo: IWorkspaceRepository, orchestrator:
       const taskResult = await db.exec(
         `INSERT INTO tasks
            (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, shell_auto_approve, position, enabled_mcp_tools)
-         VALUES ($1, $2, $3, $4, 'backlog', 'idle', $5, $6, $7, '[]')`,
+         VALUES ($1, $2, $3, $4, 'backlog', 'idle', $5, $6, $7, '[]')
+         RETURNING id`,
         [
           params.boardId,
           params.projectKey,
@@ -114,7 +115,7 @@ export function taskHandlers(db: Db, wsRepo: IWorkspaceRepository, orchestrator:
           topPosition,
         ],
       );
-      const taskId = taskResult.lastInsertRowid as number;
+      const taskId = (taskResult.rows[0] as { id: number }).id;
 
       // Fix up conversation → task link
       await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId, conversationId]);
@@ -221,8 +222,8 @@ export function taskHandlers(db: Db, wsRepo: IWorkspaceRepository, orchestrator:
         // Ensure conversation exists — tasks created before conversations were required may have null conversation_id.
         let convId = (taskRow.conversation_id as number | null);
         if (convId == null) {
-          const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1)", [params.taskId]);
-          convId = convResult.lastInsertRowid as number;
+          const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1) RETURNING id", [params.taskId]);
+          convId = (convResult.rows[0] as { id: number }).id;
           await db.exec("UPDATE tasks SET conversation_id = $1 WHERE id = $2", [convId, params.taskId]);
         }
 
@@ -338,8 +339,8 @@ export function taskHandlers(db: Db, wsRepo: IWorkspaceRepository, orchestrator:
         // Ensure conversation exists — tasks created before conversations were required may have null conversation_id.
         let retryConvId = (taskRow.conversation_id as number | null);
         if (retryConvId == null) {
-          const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1)", [params.taskId]);
-          retryConvId = convResult.lastInsertRowid as number;
+          const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1) RETURNING id", [params.taskId]);
+          retryConvId = (convResult.rows[0] as { id: number }).id;
           await db.exec("UPDATE tasks SET conversation_id = $1 WHERE id = $2", [retryConvId, params.taskId]);
         }
 

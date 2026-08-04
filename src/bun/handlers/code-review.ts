@@ -187,11 +187,12 @@ export function codeReviewHandlers(db: Db) {
       const colEnd = params.colEnd ?? 0;
       const result = await db.exec(
         `INSERT INTO task_line_comments (task_id, file_path, line_start, line_end, col_start, col_end, line_text, context_lines, comment, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ${db.dialect.now()})`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ${db.dialect.now()})
+         RETURNING id`,
         [params.taskId, params.filePath, params.lineStart, params.lineEnd, colStart, colEnd, JSON.stringify(params.lineText), JSON.stringify(params.contextLines), params.comment],
       );
       return {
-        id: result.lastInsertRowid as number,
+        id: (result.rows[0] as { id: number }).id,
         filePath: params.filePath,
         lineStart: params.lineStart,
         lineEnd: params.lineEnd,

@@ -108,10 +108,11 @@ export class DecisionRepository {
       isSourceAi?: boolean;
     },
   ): Promise<DecisionRecord> {
-    const res = await this.db.exec(
+    const row = await this.db.get<DecisionRecordRow>(
       `INSERT INTO decision_records
         (conversation_id, batch_id, question, answer, weight, notes, is_source_ai)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
       [
         conversationId,
         input.batchId ?? null,
@@ -121,10 +122,6 @@ export class DecisionRepository {
         input.notes ?? null,
         input.isSourceAi ? 1 : 0,
       ],
-    );
-    const row = await this.db.get<DecisionRecordRow>(
-      "SELECT * FROM decision_records WHERE id = $1",
-      [res.lastInsertRowid as number],
     );
     return mapRecordRow(row!);
   }

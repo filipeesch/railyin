@@ -60,15 +60,12 @@ export function boardHandlers(db: Db) {
       const templateId = template?.id ?? config.workflows[0]?.id;
       if (!templateId) throw new Error("No workflow templates available in this workspace");
 
-      const result = await db.exec(
-        "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES ($1, $2, $3, $4)",
+      const row = await db.get<BoardRow>(
+        "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES ($1, $2, $3, $4) RETURNING *",
         [params.workspaceKey, params.name.trim(), templateId, JSON.stringify(params.projectKeys ?? [])],
       );
 
-      const row = (await db
-        .get<BoardRow>("SELECT * FROM boards WHERE id = $1", [result.lastInsertRowid as number]))!;
-
-      return mapBoard(row);
+      return mapBoard(row!);
     },
 
     "boards.update": async (params: { id: number; name?: string; workflowTemplateId?: string; projectKeys?: string[] }): Promise<Board> => {

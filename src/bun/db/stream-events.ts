@@ -14,16 +14,6 @@ export interface PersistedStreamEvent {
   createdAt?: string;
 }
 
-export async function appendStreamEvent(db: Db, event: PersistedStreamEvent): Promise<number> {
-  const result = await db.exec(
-    `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     ON CONFLICT (conversation_id, seq) DO NOTHING`,
-    [event.conversationId, event.executionId, event.seq, event.blockId, event.type, event.content, event.metadata ?? null, event.parentBlockId ?? null, event.subagentId ?? null],
-  );
-  return result.lastInsertRowid as number;
-}
-
 export async function appendStreamEventBatch(db: Db, events: PersistedStreamEvent[]): Promise<void> {
   if (events.length === 0) return;
   await db.begin(async (tx) => {

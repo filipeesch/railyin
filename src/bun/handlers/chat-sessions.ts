@@ -50,8 +50,8 @@ export function chatSessionHandlers(db: Db, onSessionUpdated: OnChatSessionUpdat
 
       const session = await db.begin(async (tx) => {
         // Create conversation with no task
-        const convResult = await tx.exec("INSERT INTO conversations (task_id) VALUES (NULL)");
-        const conversationId = convResult.lastInsertRowid as number;
+        const convResult = await tx.exec("INSERT INTO conversations (task_id) VALUES (NULL) RETURNING id");
+        const conversationId = (convResult.rows[0] as { id: number }).id;
 
         // Seed the conversation model with the workspace default
         const workspaceConfig = getWorkspaceConfig(wsKey);
@@ -61,10 +61,10 @@ export function chatSessionHandlers(db: Db, onSessionUpdated: OnChatSessionUpdat
         }
 
         const sessionResult = await tx.exec(
-          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools, shell_auto_approve) VALUES ($1, $2, 'idle', $3, '[]', $4)`,
+          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools, shell_auto_approve) VALUES ($1, $2, 'idle', $3, '[]', $4) RETURNING id`,
           [wsKey, title, conversationId, workspaceConfig.workspace.shell_auto_approve ? 1 : 0]
         );
-        const sessionId = sessionResult.lastInsertRowid as number;
+        const sessionId = (sessionResult.rows[0] as { id: number }).id;
 
         return (await fetchChatSessionWithModel(tx, sessionId))!;
       });

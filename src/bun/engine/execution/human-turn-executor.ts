@@ -99,10 +99,11 @@ export class HumanTurnExecutor {
         const taskForFallback: TaskRow = { ...task, conversation_model: modelValue };
         const execResult = await db.exec(
           `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-           VALUES ($1, $2, $3, $4, 'human-turn', 'running', $5)`,
+           VALUES ($1, $2, $3, $4, 'human-turn', 'running', $5)
+           RETURNING id`,
           [taskId, conversationId, task.workflow_state, task.workflow_state, task.retry_count + 1],
         );
-        const newExecutionId = execResult.lastInsertRowid as number;
+        const newExecutionId = (execResult.rows[0] as { id: number }).id;
         await db.exec(
           "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
           [newExecutionId, taskId],
@@ -182,10 +183,11 @@ export class HumanTurnExecutor {
 
     const execResult = await db.exec(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES ($1, $2, $3, $4, 'human-turn', 'running', $5)`,
+       VALUES ($1, $2, $3, $4, 'human-turn', 'running', $5)
+       RETURNING id`,
       [taskId, conversationId, task.workflow_state, task.workflow_state, task.retry_count + 1],
     );
-    const executionId = execResult.lastInsertRowid as number;
+    const executionId = (execResult.rows[0] as { id: number }).id;
     await db.exec(
       "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
       [executionId, taskId],

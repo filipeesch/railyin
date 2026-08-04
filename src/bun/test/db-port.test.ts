@@ -128,15 +128,14 @@ describe("Provider + constructor DI (PC-4)", () => {
       created_at: "now",
       updated_at: "now",
     };
-    fake.primeExec({});
     fake.primeRows([row]);
     const repo = new DecisionRepository(fake);
     const record = await repo.createRecord(5, { question: "Q", answer: "A" });
     expect(record.question).toBe("Q");
-    expect(fake.calls.length).toBe(2);
-    expect(fake.calls[0]?.op).toBe("exec");
+    expect(fake.calls.length).toBe(1);
+    expect(fake.calls[0]?.op).toBe("get");
     expect(fake.calls[0]?.text).toContain("INSERT INTO decision_records");
-    expect(fake.calls[1]?.op).toBe("get");
+    expect(fake.calls[0]?.text).toContain("RETURNING");
   });
 
   it("DP-8: FakeDb records exact SQL text and bound params for assertion", async () => {

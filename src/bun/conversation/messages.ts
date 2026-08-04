@@ -12,10 +12,11 @@ export async function appendMessage(
 ): Promise<number> {
   const result = await db.exec(
     `INSERT INTO conversation_messages (task_id, conversation_id, type, role, content, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
     [taskId, conversationId, type, role, content, metadata ? JSON.stringify(metadata) : null],
   );
-  return result.lastInsertRowid as number;
+  return (result.rows[0] as { id: number }).id;
 }
 
 export async function ensureTaskConversation(db: Db, taskId: number, conversationId: number | null): Promise<number> {
@@ -27,8 +28,8 @@ export async function ensureTaskConversation(db: Db, taskId: number, conversatio
     if (existing) return conversationId;
   }
 
-  const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1)", [taskId]);
-  const ensuredConversationId = convResult.lastInsertRowid as number;
+  const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1) RETURNING id", [taskId]);
+  const ensuredConversationId = (convResult.rows[0] as { id: number }).id;
   await db.exec("UPDATE tasks SET conversation_id = $1 WHERE id = $2", [ensuredConversationId, taskId]);
   return ensuredConversationId;
 }

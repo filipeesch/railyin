@@ -58,8 +58,8 @@ export class TransitionExecutor {
 
     let conversationId = task.conversation_id;
     if (conversationId == null) {
-      const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1)", [taskId]);
-      conversationId = convResult.lastInsertRowid as number;
+      const convResult = await db.exec("INSERT INTO conversations (task_id) VALUES ($1) RETURNING id", [taskId]);
+      conversationId = (convResult.rows[0] as { id: number }).id;
       await db.exec("UPDATE tasks SET conversation_id = $1 WHERE id = $2", [conversationId, taskId]);
     }
 
@@ -100,10 +100,11 @@ export class TransitionExecutor {
 
     const execResult = await db.exec(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES ($1, $2, $3, $4, $5, 'running', 1)`,
+       VALUES ($1, $2, $3, $4, $5, 'running', 1)
+       RETURNING id`,
       [taskId, conversationId, fromState, toState, column.id],
     );
-    const executionId = execResult.lastInsertRowid as number;
+    const executionId = (execResult.rows[0] as { id: number }).id;
     await db.exec(
       "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
       [executionId, taskId],
