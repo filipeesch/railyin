@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { mapChatSession, mapTask } from "../db/mappers.ts";
 import type { ChatSessionRow, TaskRow } from "../db/row-types.ts";
 import { getDataDir } from "../config/index.ts";
@@ -8,7 +8,7 @@ import type { McpServerStatus } from "../mcp/types.ts";
 import type { McpRegistryPool } from "../mcp/registry-pool.ts";
 import type { ChatSession, Task } from "../../shared/rpc-types.ts";
 
-export function mcpHandlers(db: Database, { registryPool, resolveProject }: {
+export function mcpHandlers(db: Db, { registryPool, resolveProject }: {
   registryPool: McpRegistryPool;
   resolveProject: (workspaceKey: string, projectKey: string) => { projectPath: string } | null;
 }) {
@@ -75,16 +75,16 @@ export function mcpHandlers(db: Database, { registryPool, resolveProject }: {
 
     "mcp.setTaskTools": async (params: { taskId: number; enabledTools: string[] | null }): Promise<Task> => {
       const value = params.enabledTools === null ? null : JSON.stringify(params.enabledTools);
-      db.run("UPDATE tasks SET enabled_mcp_tools = ? WHERE id = ?", [value, params.taskId]);
-      const row = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(params.taskId);
+      await db.exec("UPDATE tasks SET enabled_mcp_tools = $1 WHERE id = $2", [value, params.taskId]);
+      const row = await db.get<TaskRow>("SELECT * FROM tasks WHERE id = $1", [params.taskId]);
       if (!row) throw new Error(`Task ${params.taskId} not found`);
       return mapTask(row);
     },
 
     "mcp.setSessionTools": async (params: { sessionId: number; enabledTools: string[] | null }): Promise<ChatSession> => {
       const value = params.enabledTools === null ? null : JSON.stringify(params.enabledTools);
-      db.run("UPDATE chat_sessions SET enabled_mcp_tools = ? WHERE id = ?", [value, params.sessionId]);
-      const row = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
+      await db.exec("UPDATE chat_sessions SET enabled_mcp_tools = $1 WHERE id = $2", [value, params.sessionId]);
+      const row = await db.get<ChatSessionRow>("SELECT * FROM chat_sessions WHERE id = $1", [params.sessionId]);
       if (!row) throw new Error(`Chat session ${params.sessionId} not found`);
       return mapChatSession(row);
     },

@@ -18,13 +18,13 @@ import { appendMessage } from "../../conversation/messages.ts";
 
 /** Narrow interface so the coordinator does not import getDb() directly. */
 export interface MessageAppender {
-  appendCompactionSummary(conversationId: number, summary: string): void;
+  appendCompactionSummary(conversationId: number, summary: string): Promise<void>;
 }
 
 /** Production implementation wrapping the real appendMessage helper. */
 export class DefaultMessageAppender implements MessageAppender {
-  appendCompactionSummary(conversationId: number, summary: string): void {
-    appendMessage(getDb(), null, conversationId, "compaction_summary", null, summary);
+  async appendCompactionSummary(conversationId: number, summary: string): Promise<void> {
+    await appendMessage(getDb(), null, conversationId, "compaction_summary", null, summary);
   }
 }
 
@@ -74,7 +74,7 @@ export class PiCompactionCoordinator {
     try {
       const result = await session.compact();
       if (result?.summary) {
-        this.appender.appendCompactionSummary(conversationId, result.summary);
+        await this.appender.appendCompactionSummary(conversationId, result.summary);
       }
     } catch (err) {
       console.error("[pi] background compaction failed:", err);

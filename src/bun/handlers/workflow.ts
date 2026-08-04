@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "fs";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import * as yaml from "js-yaml";
 import { getConfigDir, resetConfig, loadConfig } from "../config/index.ts";
 import {
@@ -14,23 +14,23 @@ import { getDefaultWorkspaceKey } from "../workspace-context.ts";
 import type { WorkflowSummary } from "../../shared/rpc-types.ts";
 
 /** Count, per workflow template id, how many boards in the workspace reference it. */
-function boardCountsByWorkflow(db: Database, workspaceKey: string): Record<string, number> {
-  const rows = db
-    .query<{ workflow_template_id: string; count: number }, [string]>(
-      "SELECT workflow_template_id, COUNT(*) as count FROM boards WHERE workspace_key = ? GROUP BY workflow_template_id",
-    )
-    .all(workspaceKey);
+async function boardCountsByWorkflow(db: Db, workspaceKey: string): Promise<Record<string, number>> {
+  const rows = await db
+    .rows<{ workflow_template_id: string; count: number }>(
+      "SELECT workflow_template_id, COUNT(*) as count FROM boards WHERE workspace_key = $1 GROUP BY workflow_template_id",
+      [workspaceKey],
+    );
   const counts: Record<string, number> = {};
   for (const row of rows) counts[row.workflow_template_id] = row.count;
   return counts;
 }
 
-export function workflowHandlers(db: Database, notifyReloaded: () => void) {
+export function workflowHandlers(db: Db, notifyReloaded: () => void) {
   return {
     "workflow.list": async (params: { workspaceKey?: string }): Promise<WorkflowSummary[]> => {
       const workspaceKey = params.workspaceKey ?? getDefaultWorkspaceKey();
       const files = listWorkflowFiles(getConfigDir(workspaceKey));
-      const counts = boardCountsByWorkflow(db, workspaceKey);
+      const counts = await boardCountsByWorkflow(db, workspaceKey);
       const bundled = listBundledWorkflowIds();
       return files.map((wf) => {
         const guard = evaluateDeletable(wf.id, counts, files.length, bundled.has(wf.id));
@@ -64,7 +64,7 @@ export function workflowHandlers(db: Database, notifyReloaded: () => void) {
 
       // Re-validate the delete guard server-side.
       const files = listWorkflowFiles(configDir);
-      const counts = boardCountsByWorkflow(db, workspaceKey);
+      const counts = await boardCountsByWorkflow(db, workspaceKey);
       const guard = evaluateDeletable(
         params.templateId,
         counts,

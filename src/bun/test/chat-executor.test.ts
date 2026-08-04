@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { ChatExecutor } from "../engine/execution/chat-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
@@ -18,7 +18,7 @@ import { initDb, setupTestConfig, makeTestRegistry, makeTestRegistryWith, seedCh
 import { appendMessage } from "../conversation/messages.ts";
 import { resetConfig } from "../config/index.ts";
 
-let db: Database;
+let db: Db;
 let configCleanup: (() => void) | undefined;
 
 // ─── Test doubles ─────────────────────────────────────────────────────────────
@@ -35,16 +35,17 @@ class PassThroughEngine implements ExecutionEngine {
 
 class StubWorkdirResolver implements IWorkingDirectoryResolver {
   constructor(private readonly dir: string = "/tmp") {}
-  resolve(): string { return this.dir; }
+  async resolve(): Promise<string> { return this.dir; }
 }
 
 class StubStreamProcessor extends StreamProcessor {
   lastRun: { taskId: number | null; params: ExecutionParams } | null = null;
 
   constructor() {
-    const _db = initDb();
     const _rawBuf = { enqueue() {}, flush: async () => {} } as unknown as import("../pipeline/write-buffer.ts").WriteBuffer<import("../engine/stream/raw-message-buffer.ts").RawMessageItem>;
-    super(_db, _rawBuf, () => {}, () => {}, () => {}, () => {});
+    // db-touching methods (createSignal/makePersistCallback/runNonNative) are all
+    // overridden below, so the module-level test Db is passed only to satisfy super().
+    super(db, _rawBuf, () => {}, () => {}, () => {}, () => {});
   }
 
   override createSignal(_executionId: number): AbortSignal {
@@ -63,8 +64,8 @@ class StubStreamProcessor extends StreamProcessor {
 /** Returns a ModelSettingsRepository that always returns a fixed context window value. */
 function fixedContextWindowRepo(value: number): ModelSettingsRepository {
   return {
-    getContextWindow: () => value,
-    setContextWindow: () => {},
+    getContextWindow: async () => value,
+    setContextWindow: async () => {},
   };
 }
 
@@ -95,10 +96,10 @@ function makeExecutor(opts: {
   return { executor, streamProcessor };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
-  db = initDb();
+  db = await initDb();
 });
 
 afterEach(() => {
@@ -110,7 +111,7 @@ afterEach(() => {
 
 describe("CE-1: contextWindowOverride injected when configured", () => {
   it("passes contextWindowOverride from ModelSettingsRepository into ExecutionParams", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/mock-model" });
     const { executor, streamProcessor } = makeExecutor({ modelSettingsRepo: fixedContextWindowRepo(32768) });
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
@@ -120,7 +121,7 @@ describe("CE-1: contextWindowOverride injected when configured", () => {
   });
 
   it("leaves contextWindowOverride undefined when ModelSettingsRepository returns null", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/mock-model" });
     const { executor, streamProcessor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
@@ -134,7 +135,7 @@ describe("CE-1: contextWindowOverride injected when configured", () => {
 
 describe("CE-2: boardTools injected into ExecutionParams", () => {
   it("passes boardTools instance into ExecutionParams", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/mock-model" });
     const wsRepo = new WorkspaceRepository(db);
     const boardTools = new BoardToolExecutor(db, wsRepo);
     const { executor, streamProcessor } = makeExecutor({ boardTools });
@@ -146,7 +147,7 @@ describe("CE-2: boardTools injected into ExecutionParams", () => {
   });
 
   it("does not set boardTools when not provided", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/mock-model" });
     const { executor, streamProcessor } = makeExecutor({});
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
@@ -160,40 +161,43 @@ describe("CE-2: boardTools injected into ExecutionParams", () => {
 
 describe("CE-3: pre-flight fires for Pi + no context window", () => {
   it("does not create an executions row when Pi has no context window", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "pi/some-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "pi/some-model" });
     const { executor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
 
     await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
 
-    const execRow = db.query<{ id: number }, [number]>(
-      "SELECT id FROM executions WHERE conversation_id = ?",
-    ).get(conversationId);
-    expect(execRow).toBeNull();
+    const execRow = await db.get<{ id: number }>(
+      "SELECT id FROM executions WHERE conversation_id = $1",
+      [conversationId],
+    );
+    expect(execRow).toBeUndefined();
   });
 
   it("persists a system message when Pi has no context window", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "pi/some-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "pi/some-model" });
     const { executor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
 
     await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
 
-    const systemMsg = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'system'",
-    ).get(conversationId);
+    const systemMsg = await db.get<{ type: string; content: string }>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = $1 AND type = 'system'",
+      [conversationId],
+    );
     expect(systemMsg).not.toBeNull();
     expect(systemMsg!.type).toBe("system");
     expect(systemMsg!.content).toContain("pi/some-model");
   });
 
   it("resets chat_sessions status to idle after pre-flight error", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "pi/some-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "pi/some-model" });
     const { executor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
 
     await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
 
-    const session = db.query<{ status: string }, [number]>(
-      "SELECT status FROM chat_sessions WHERE id = ?",
-    ).get(sessionId);
+    const session = await db.get<{ status: string }>(
+      "SELECT status FROM chat_sessions WHERE id = $1",
+      [sessionId],
+    );
     expect(session?.status).toBe("idle");
   });
 });
@@ -202,7 +206,7 @@ describe("CE-3: pre-flight fires for Pi + no context window", () => {
 
 describe("CE-4: onNewMessage called exactly once on pre-flight failure", () => {
   it("calls onNewMessage with a system-typed ConversationMessage", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "pi/some-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "pi/some-model" });
     const captured: ConversationMessage[] = [];
     const { executor } = makeExecutor({
       modelSettingsRepo: new NullModelSettingsRepository(),
@@ -221,7 +225,7 @@ describe("CE-4: onNewMessage called exactly once on pre-flight failure", () => {
 
 describe("CE-5: pre-flight passes for Pi when context window is configured", () => {
   it("proceeds to execution when Pi has a configured context window", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "pi/some-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "pi/some-model" });
     const { executor, streamProcessor } = makeExecutor({ modelSettingsRepo: fixedContextWindowRepo(8192) });
 
     await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
@@ -230,15 +234,16 @@ describe("CE-5: pre-flight passes for Pi when context window is configured", () 
   });
 
   it("does not persist a system error message when context window is configured", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "pi/some-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "pi/some-model" });
     const { executor } = makeExecutor({ modelSettingsRepo: fixedContextWindowRepo(8192) });
 
     await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
 
-    const systemMsg = db.query<{ id: number }, [number]>(
-      "SELECT id FROM conversation_messages WHERE conversation_id = ? AND type = 'system'",
-    ).get(conversationId);
-    expect(systemMsg).toBeNull();
+    const systemMsg = await db.get<{ id: number }>(
+      "SELECT id FROM conversation_messages WHERE conversation_id = $1 AND type = 'system'",
+      [conversationId],
+    );
+    expect(systemMsg).toBeUndefined();
   });
 });
 
@@ -246,7 +251,7 @@ describe("CE-5: pre-flight passes for Pi when context window is configured", () 
 
 describe("CE-6: pre-flight does NOT fire for non-Pi engines (e.g. copilot)", () => {
   it("proceeds to execution even when copilot model has no context window configured", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/gpt-4o" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/gpt-4o" });
     const { executor, streamProcessor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/gpt-4o");
@@ -255,15 +260,16 @@ describe("CE-6: pre-flight does NOT fire for non-Pi engines (e.g. copilot)", () 
   });
 
   it("does not persist a system error message for non-Pi engines", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/gpt-4o" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/gpt-4o" });
     const { executor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/gpt-4o");
 
-    const systemMsg = db.query<{ id: number }, [number]>(
-      "SELECT id FROM conversation_messages WHERE conversation_id = ? AND type = 'system'",
-    ).get(conversationId);
-    expect(systemMsg).toBeNull();
+    const systemMsg = await db.get<{ id: number }>(
+      "SELECT id FROM conversation_messages WHERE conversation_id = $1 AND type = 'system'",
+      [conversationId],
+    );
+    expect(systemMsg).toBeUndefined();
   });
 });
 
@@ -271,7 +277,7 @@ describe("CE-6: pre-flight does NOT fire for non-Pi engines (e.g. copilot)", () 
 
 describe("CE-7: onNewMessage not called in pre-flight phase on successful execution", () => {
   it("does not call onNewMessage when execution proceeds normally", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/gpt-4o" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/gpt-4o" });
     let called = false;
     const { executor } = makeExecutor({
       modelSettingsRepo: new NullModelSettingsRepository(),
@@ -288,7 +294,7 @@ describe("CE-7: onNewMessage not called in pre-flight phase on successful execut
 
 describe("CE-8: historyBlock injected into params.prompt on engine switch", () => {
   it("params.prompt contains <message_history> when last_engine_type differs from target engine", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "copilot/mock-model",
       lastEngineType: "claude",
     });
@@ -301,7 +307,7 @@ describe("CE-8: historyBlock injected into params.prompt on engine switch", () =
   });
 
   it("params.prompt starts with the engine-switch context header on switch", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "copilot/mock-model",
       lastEngineType: "claude",
     });
@@ -320,7 +326,7 @@ describe("CE-8: historyBlock injected into params.prompt on engine switch", () =
 
 describe("CE-9: no historyBlock injection when last_engine_type matches target engine", () => {
   it("params.prompt equals the raw user content when engine has not changed", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "copilot/mock-model",
       lastEngineType: "copilot",
     });
@@ -337,7 +343,7 @@ describe("CE-9: no historyBlock injection when last_engine_type matches target e
 
 describe("CE-10: no historyBlock injection on first turn (null last_engine_type)", () => {
   it("params.prompt equals the raw user content when last_engine_type is null", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/mock-model" });
     const { executor, streamProcessor } = makeExecutor({});
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
@@ -351,7 +357,7 @@ describe("CE-10: no historyBlock injection on first turn (null last_engine_type)
 
 describe("CE-11: historyBlock not stored in user conversation_messages row", () => {
   it("the persisted user message content equals the original input, not the injected prompt", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "copilot/mock-model",
       lastEngineType: "claude",
     });
@@ -359,9 +365,10 @@ describe("CE-11: historyBlock not stored in user conversation_messages row", () 
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
 
-    const userMsg = db.query<{ content: string }, [number]>(
-      "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'user'",
-    ).get(conversationId);
+    const userMsg = await db.get<{ content: string }>(
+      "SELECT content FROM conversation_messages WHERE conversation_id = $1 AND type = 'user'",
+      [conversationId],
+    );
     expect(userMsg).not.toBeNull();
     expect(userMsg!.content).toBe("hello");
     expect(userMsg!.content).not.toContain("<message_history>");
@@ -372,19 +379,20 @@ describe("CE-11: historyBlock not stored in user conversation_messages row", () 
 
 describe("CE-12: conversations.last_engine_type written after execute", () => {
   it("sets last_engine_type to 'copilot' after executing with 'copilot/mock-model'", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/mock-model" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/mock-model" });
     const { executor } = makeExecutor({});
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
 
-    const row = db.query<{ last_engine_type: string | null }, [number]>(
-      "SELECT last_engine_type FROM conversations WHERE id = ?",
-    ).get(conversationId);
+    const row = await db.get<{ last_engine_type: string | null }>(
+      "SELECT last_engine_type FROM conversations WHERE id = $1",
+      [conversationId],
+    );
     expect(row?.last_engine_type).toBe("copilot");
   });
 
   it("updates last_engine_type to 'claude' after switching from copilot to 'claude/claude-sonnet-4-5'", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "copilot/mock-model",
       lastEngineType: "copilot",
     });
@@ -392,9 +400,10 @@ describe("CE-12: conversations.last_engine_type written after execute", () => {
 
     await executor.execute(sessionId, conversationId, "hello", "claude/claude-sonnet-4-5");
 
-    const row = db.query<{ last_engine_type: string | null }, [number]>(
-      "SELECT last_engine_type FROM conversations WHERE id = ?",
-    ).get(conversationId);
+    const row = await db.get<{ last_engine_type: string | null }>(
+      "SELECT last_engine_type FROM conversations WHERE id = $1",
+      [conversationId],
+    );
     expect(row?.last_engine_type).toBe("claude");
   });
 });
@@ -403,7 +412,7 @@ describe("CE-12: conversations.last_engine_type written after execute", () => {
 
 describe("CE-13: last_engine_type not written when Pi pre-flight exits early", () => {
   it("leaves last_engine_type unchanged when Pi engine has no configured context window", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "pi/some-model",
       lastEngineType: "copilot",
     });
@@ -411,9 +420,10 @@ describe("CE-13: last_engine_type not written when Pi pre-flight exits early", (
 
     await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
 
-    const row = db.query<{ last_engine_type: string | null }, [number]>(
-      "SELECT last_engine_type FROM conversations WHERE id = ?",
-    ).get(conversationId);
+    const row = await db.get<{ last_engine_type: string | null }>(
+      "SELECT last_engine_type FROM conversations WHERE id = $1",
+      [conversationId],
+    );
     expect(row?.last_engine_type).toBe("copilot");
   });
 });
@@ -422,14 +432,15 @@ describe("CE-13: last_engine_type not written when Pi pre-flight exits early", (
 
 describe("CE-14: model-update syncs conversations.model when model changes", () => {
   it("updates conversations.model when execute is called with a different model", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/v1" });
+    const { sessionId, conversationId } = await seedChatSession(db, { model: "copilot/v1" });
     const { executor } = makeExecutor({});
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/v2");
 
-    const row = db.query<{ model: string | null }, [number]>(
-      "SELECT model FROM conversations WHERE id = ?",
-    ).get(conversationId);
+    const row = await db.get<{ model: string | null }>(
+      "SELECT model FROM conversations WHERE id = $1",
+      [conversationId],
+    );
     expect(row?.model).toBe("copilot/v2");
   });
 });
@@ -438,11 +449,11 @@ describe("CE-14: model-update syncs conversations.model when model changes", () 
 
 describe("CE-15..17: cross-engine context injection", () => {
   it("CE-15: prior engine turns appear in prompt when engine switches (pi → claude)", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "claude/opus",
       lastEngineType: "pi",
     });
-    appendMessage(db, null, conversationId, "assistant", null, "Pi assistant response");
+    await appendMessage(db, null, conversationId, "assistant", null, "Pi assistant response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["pi", new PassThroughEngine()],
@@ -457,12 +468,12 @@ describe("CE-15..17: cross-engine context injection", () => {
   });
 
   it("CE-16: compaction_summary + pi turns → prompt contains <SUMMARY> and post-compaction turns", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "claude/opus",
       lastEngineType: "pi",
     });
-    appendMessage(db, null, conversationId, "compaction_summary", null, "Pi compaction summary");
-    appendMessage(db, null, conversationId, "assistant", null, "Pi post-compaction response");
+    await appendMessage(db, null, conversationId, "compaction_summary", null, "Pi compaction summary");
+    await appendMessage(db, null, conversationId, "assistant", null, "Pi post-compaction response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["pi", new PassThroughEngine()],
@@ -478,11 +489,11 @@ describe("CE-15..17: cross-engine context injection", () => {
   });
 
   it("CE-17: current user message is NOT included inside <message_history> block", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, {
+    const { sessionId, conversationId } = await seedChatSession(db, {
       model: "claude/opus",
       lastEngineType: "copilot",
     });
-    appendMessage(db, null, conversationId, "assistant", null, "Copilot prior response");
+    await appendMessage(db, null, conversationId, "assistant", null, "Copilot prior response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["copilot", new PassThroughEngine()],

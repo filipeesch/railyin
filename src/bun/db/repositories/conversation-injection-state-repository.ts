@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db.ts";
 import { getDb } from "../index.ts";
 import type { ConversationInjectionStateRow } from "../row-types.ts";
 
@@ -16,25 +16,24 @@ export type InjectionType = "decisions" | "stage_instructions";
  * tracking table + shared repository, not duplicated per injector type).
  */
 export class ConversationInjectionStateRepository {
-  private readonly db: Database;
+  private readonly db: Db;
 
-  constructor(db?: Database) {
+  constructor(db?: Db) {
     this.db = db ?? getDb();
   }
 
-  getLastInjected(conversationId: number, injectionType: InjectionType): number | null {
-    const row = this.db
-      .query<Pick<ConversationInjectionStateRow, "last_injected_after_compaction_id">, [number, string]>(
-        "SELECT last_injected_after_compaction_id FROM conversation_injection_state WHERE conversation_id = ? AND injection_type = ?",
-      )
-      .get(conversationId, injectionType);
+  async getLastInjected(conversationId: number, injectionType: InjectionType): Promise<number | null> {
+    const row = await this.db.get<Pick<ConversationInjectionStateRow, "last_injected_after_compaction_id">>(
+      "SELECT last_injected_after_compaction_id FROM conversation_injection_state WHERE conversation_id = $1 AND injection_type = $2",
+      [conversationId, injectionType],
+    );
     return row?.last_injected_after_compaction_id ?? null;
   }
 
-  markInjected(conversationId: number, injectionType: InjectionType, compactionSummaryId: number): void {
-    this.db.run(
+  async markInjected(conversationId: number, injectionType: InjectionType, compactionSummaryId: number): Promise<void> {
+    await this.db.exec(
       `INSERT INTO conversation_injection_state (conversation_id, injection_type, last_injected_after_compaction_id)
-       VALUES (?, ?, ?)
+       VALUES ($1, $2, $3)
        ON CONFLICT(conversation_id, injection_type)
        DO UPDATE SET last_injected_after_compaction_id = excluded.last_injected_after_compaction_id`,
       [conversationId, injectionType, compactionSummaryId],

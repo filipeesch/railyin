@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { Task } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
@@ -6,13 +6,13 @@ import type { WorktreeManager } from "../git/WorktreeManager.ts";
 import type { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
 
-export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, gitRepo: GitRepositoryManager) {
+export function taskGitHandlers(db: Db, onTaskUpdated: OnTaskUpdated, worktreeManager: WorktreeManager, gitRepo: GitRepositoryManager) {
   return {
     // ─── tasks.listBranches ────────────────────────────────────────────────────
     "tasks.listBranches": async (params: { taskId: number }): Promise<{ branches: string[] }> => {
       // Ensure git context exists so we can resolve gitRootPath from project config.
       // Tasks created via board tool may have no task_git_context row yet.
-      worktreeManager.ensureContext(params.taskId);
+      await worktreeManager.ensureContext(params.taskId);
       const branches = await worktreeManager.listBranches(params.taskId);
       return { branches };
     },
@@ -28,7 +28,7 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated, work
       // Ensure git context exists before creating worktree.
       // Tasks created via board tool or when gitRootPath was missing may have no
       // context row — register it now so createWorktree can proceed.
-      worktreeManager.ensureContext(params.taskId);
+      await worktreeManager.ensureContext(params.taskId);
 
       await worktreeManager.createWorktree(params.taskId, {
         mode: params.mode,
@@ -36,13 +36,14 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated, work
         path: params.path,
         sourceBranch: params.sourceBranch,
       });
-      const row = db.query<TaskRow, [number]>(
+      const row = await db.get<TaskRow>(
         `SELECT t.*, gc.worktree_status, gc.branch_name, gc.worktree_path, c.model AS conversation_model
          FROM tasks t
          LEFT JOIN task_git_context gc ON gc.task_id = t.id
          LEFT JOIN conversations c ON c.id = t.conversation_id
-         WHERE t.id = ?`,
-      ).get(params.taskId);
+         WHERE t.id = $1`,
+        [params.taskId],
+      );
       if (!row) throw new Error(`Task ${params.taskId} not found`);
       const task = mapTask(row);
       onTaskUpdated(task);
@@ -52,24 +53,25 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated, work
     // ─── tasks.removeWorktree ──────────────────────────────────────────────────
     "tasks.removeWorktree": async (params: { taskId: number }): Promise<{ warning?: string }> => {
       const { warning } = await worktreeManager.removeWorktree(params.taskId);
-      const row = db.query<TaskRow, [number]>(
+      const row = await db.get<TaskRow>(
         `SELECT t.*, gc.worktree_status, gc.branch_name, gc.worktree_path, c.model AS conversation_model
          FROM tasks t
          LEFT JOIN task_git_context gc ON gc.task_id = t.id
          LEFT JOIN conversations c ON c.id = t.conversation_id
-         WHERE t.id = ?`,
-      ).get(params.taskId);
+         WHERE t.id = $1`,
+        [params.taskId],
+      );
       if (row) onTaskUpdated(mapTask(row));
       return { ...(warning ? { warning } : {}) };
     },
 
     // ─── tasks.getGitStat ─────────────────────────────────────────────────────
     "tasks.getGitStat": async (params: { taskId: number }): Promise<import("../../shared/rpc-types.ts").GitNumstat | null> => {
-      const gitRow = db
-        .query<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }, [number]>(
-          "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = ?",
-        )
-        .get(params.taskId);
+      const gitRow = await db
+        .get<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }>(
+          "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = $1",
+          [params.taskId],
+        );
       if (!gitRow?.worktree_path || gitRow.worktree_status !== "ready") return null;
       try {
         const diffRange = gitRow.base_sha ? [gitRow.base_sha, "HEAD"] : ["HEAD"];
@@ -115,11 +117,11 @@ export function taskGitHandlers(db: Database, onTaskUpdated: OnTaskUpdated, work
 
     // ─── tasks.getChangedFiles ─────────────────────────────────────────────────
     "tasks.getChangedFiles": async (params: { taskId: number }): Promise<string[]> => {
-      const gitRow = db
-        .query<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }, [number]>(
-          "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = ?",
-        )
-        .get(params.taskId);
+      const gitRow = await db
+        .get<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }>(
+          "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = $1",
+          [params.taskId],
+        );
       if (!gitRow?.worktree_path || gitRow.worktree_status !== "ready") return [];
       try {
         const diffArgs = gitRow.base_sha

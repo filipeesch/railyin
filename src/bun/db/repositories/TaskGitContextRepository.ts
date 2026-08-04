@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db.ts";
 import type { ITaskGitContextRepository, TaskGitContext } from "./ITaskGitContextRepository.ts";
 
 interface TaskGitContextRow {
@@ -24,61 +24,59 @@ function mapRow(row: TaskGitContextRow): TaskGitContext {
 }
 
 export class TaskGitContextRepository implements ITaskGitContextRepository {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Db) {}
 
-  upsertContext(taskId: number, gitRootPath: string, subrepoPath?: string): void {
-    const existing = this.db
-      .query<{ task_id: number }, [number]>(
-        "SELECT task_id FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
+  async upsertContext(taskId: number, gitRootPath: string, subrepoPath?: string): Promise<void> {
+    const existing = await this.db.get<{ task_id: number }>(
+      "SELECT task_id FROM task_git_context WHERE task_id = $1",
+      [taskId],
+    );
 
     if (existing) {
-      this.db.run(
-        "UPDATE task_git_context SET git_root_path = ?, subrepo_path = ? WHERE task_id = ?",
+      await this.db.exec(
+        "UPDATE task_git_context SET git_root_path = $1, subrepo_path = $2 WHERE task_id = $3",
         [gitRootPath, subrepoPath ?? null, taskId],
       );
     } else {
-      this.db.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, subrepo_path, worktree_status) VALUES (?, ?, ?, 'not_created')",
+      await this.db.exec(
+        "INSERT INTO task_git_context (task_id, git_root_path, subrepo_path, worktree_status) VALUES ($1, $2, $3, 'not_created')",
         [taskId, gitRootPath, subrepoPath ?? null],
       );
     }
   }
 
-  getContext(taskId: number): TaskGitContext | null {
-    const row = this.db
-      .query<TaskGitContextRow, [number]>(
-        "SELECT task_id, git_root_path, subrepo_path, branch_name, worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
+  async getContext(taskId: number): Promise<TaskGitContext | null> {
+    const row = await this.db.get<TaskGitContextRow>(
+      "SELECT task_id, git_root_path, subrepo_path, branch_name, worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = $1",
+      [taskId],
+    );
     return row ? mapRow(row) : null;
   }
 
-  updateStatus(taskId: number, status: string): void {
-    this.db.run(
-      "UPDATE task_git_context SET worktree_status = ? WHERE task_id = ?",
+  async updateStatus(taskId: number, status: string): Promise<void> {
+    await this.db.exec(
+      "UPDATE task_git_context SET worktree_status = $1 WHERE task_id = $2",
       [status, taskId],
     );
   }
 
-  updateCreating(taskId: number, worktreePath: string, branchName: string): void {
-    this.db.run(
-      "UPDATE task_git_context SET worktree_status = 'creating', worktree_path = ?, branch_name = ? WHERE task_id = ?",
+  async updateCreating(taskId: number, worktreePath: string, branchName: string): Promise<void> {
+    await this.db.exec(
+      "UPDATE task_git_context SET worktree_status = 'creating', worktree_path = $1, branch_name = $2 WHERE task_id = $3",
       [worktreePath, branchName, taskId],
     );
   }
 
-  updateReady(taskId: number, baseSha: string | null): void {
-    this.db.run(
-      "UPDATE task_git_context SET worktree_status = 'ready', base_sha = ? WHERE task_id = ?",
+  async updateReady(taskId: number, baseSha: string | null): Promise<void> {
+    await this.db.exec(
+      "UPDATE task_git_context SET worktree_status = 'ready', base_sha = $1 WHERE task_id = $2",
       [baseSha, taskId],
     );
   }
 
-  updateRemoved(taskId: number): void {
-    this.db.run(
-      "UPDATE task_git_context SET worktree_status = 'removed' WHERE task_id = ?",
+  async updateRemoved(taskId: number): Promise<void> {
+    await this.db.exec(
+      "UPDATE task_git_context SET worktree_status = 'removed' WHERE task_id = $1",
       [taskId],
     );
   }

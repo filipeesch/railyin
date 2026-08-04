@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { ConversationInjectionStateRepository } from "../db/repositories/conversation-injection-state-repository.ts";
 
 export interface StageInstructionsPrepareResult {
@@ -43,7 +43,7 @@ function wrapActiveDirective(body: string): string {
 export class StageInstructionsInjector {
   private readonly injectionStateRepo: ConversationInjectionStateRepository;
 
-  constructor(private readonly db: Database) {
+  constructor(private readonly db: Db) {
     this.injectionStateRepo = new ConversationInjectionStateRepository(db);
   }
 
@@ -57,14 +57,14 @@ export class StageInstructionsInjector {
    *   currently has real stage_instructions or none (cancellation is re-sent on the
    *   same schedule as the real directive, not on every ordinary turn).
    */
-  prepare(conversationId: number, stageInstructions: string | undefined, forceInject: boolean): StageInstructionsPrepareResult {
-    const lastInjected = this.injectionStateRepo.getLastInjected(conversationId, "stage_instructions");
+  async prepare(conversationId: number, stageInstructions: string | undefined, forceInject: boolean): Promise<StageInstructionsPrepareResult> {
+    const lastInjected = await this.injectionStateRepo.getLastInjected(conversationId, "stage_instructions");
 
-    const lastCompaction = this.db
-      .query<{ id: number }, [number]>(
-        "SELECT id FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-      )
-      .get(conversationId);
+    const lastCompaction = await this.db
+      .get<{ id: number }>(
+        "SELECT id FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+        [conversationId],
+      );
     const currentCompactionId = lastCompaction?.id ?? 0;
 
     // NULL = never injected; otherwise injected up to currentCompactionId already.
@@ -73,7 +73,7 @@ export class StageInstructionsInjector {
       return { stageInstructionsBlock: undefined };
     }
 
-    this.injectionStateRepo.markInjected(conversationId, "stage_instructions", currentCompactionId);
+    await this.injectionStateRepo.markInjected(conversationId, "stage_instructions", currentCompactionId);
 
     if (!stageInstructions) {
       return { stageInstructionsBlock: wrapActiveDirective(ACTIVE_DIRECTIVE_CANCELLATION) };

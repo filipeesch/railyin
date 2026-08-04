@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { IBroadcastChannel } from "./broadcast-channel.ts";
 import { StreamEventEnricher } from "../pipeline/stream-event-enricher.ts";
 import { WriteBuffer } from "../pipeline/write-buffer.ts";
@@ -15,7 +15,7 @@ export class StreamEventProcessor {
     "user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system",
   ]);
 
-  constructor(private readonly channel: IBroadcastChannel, db: Database) {
+  constructor(private readonly channel: IBroadcastChannel, db: Db) {
     this.streamEventBuffer = new WriteBuffer<PersistedStreamEvent>({
       maxBatch: 100,
       intervalMs: 500,

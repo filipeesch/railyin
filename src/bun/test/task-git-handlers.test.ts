@@ -10,9 +10,9 @@ import { GitRepositoryManager } from "../git/GitRepositoryManager.ts";
 import { TaskGitContextRepository } from "../db/repositories/TaskGitContextRepository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { IProjectResolver } from "../git/IProjectResolver.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let worktreesBase: string;
 let configCleanup: () => void;
@@ -24,12 +24,12 @@ const TEST_PROJECT_RESOLVER: IProjectResolver = {
   getWorktreeBasePath: (_wsKey, _projectKey, gitRootPath) => `${gitRootPath}/../worktrees`,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   gitDir = mkdtempSync(join(tmpdir(), "railyn-git-"));
   worktreesBase = mkdtempSync(join(tmpdir(), "railyn-wt-"));
   const cfg = setupTestConfig(`worktree_base_path: "${worktreesBase}"`, gitDir);
   configCleanup = cfg.cleanup;
-  db = initDb();
+  db = await initDb();
   gitRepo = new GitRepositoryManager();
   worktreeManager = new WorktreeManager(
     db,
@@ -57,7 +57,7 @@ afterEach(() => {
 
 describe("tasks.listBranches", () => {
   it("returns empty array when no git context row exists for the task", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
     // ensureContext is called by the handler, which creates the context row
     // so listBranches can find gitRootPath from project config
 
@@ -72,8 +72,8 @@ describe("tasks.listBranches", () => {
 
 describe("tasks.getChangedFiles", () => {
   it("returns empty array when worktree is not ready", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    worktreeManager.registerContext(taskId, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await worktreeManager.registerContext(taskId, gitDir);
     // worktree_status defaults to 'not_created' after registerProjectGitContext
 
     const handlers = taskGitHandlers(db, () => {}, worktreeManager, gitRepo);
@@ -85,15 +85,15 @@ describe("tasks.getChangedFiles", () => {
   // ─── TG-3: tasks.getChangedFiles (worktree ready with untracked file) ────────
 
   it("returns untracked files when worktree is ready", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    worktreeManager.registerContext(taskId, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await worktreeManager.registerContext(taskId, gitDir);
 
     // Create a git worktree directory and mark it ready in the DB
     const wtPath = join(worktreesBase, `task-${taskId}`);
     mkdirSync(wtPath, { recursive: true });
     execSync(`git worktree add ${wtPath} -b task-${taskId}`, { cwd: gitDir });
-    db.run(
-      "UPDATE task_git_context SET worktree_path = ?, worktree_status = 'ready' WHERE task_id = ?",
+    await db.exec(
+      "UPDATE task_git_context SET worktree_path = $1, worktree_status = 'ready' WHERE task_id = $2",
       [wtPath, taskId],
     );
 

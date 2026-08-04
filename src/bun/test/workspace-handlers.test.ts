@@ -3,18 +3,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "os";
 import { join } from "path";
 import yaml from "js-yaml";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { setupTestConfig, initDb } from "./helpers.ts";
 import { workspaceHandlers } from "../handlers/workspace.ts";
 import { projectHandlers } from "../handlers/projects.ts";
 import { getWorkspaceRegistry, loadConfig, resetConfig, patchWorkspaceYaml } from "../config/index.ts";
 
 let cleanupConfig: () => void;
-let db: Database;
+let db: Db;
 
-beforeEach(() => {
+beforeEach(async () => {
   cleanupConfig = setupTestConfig().cleanup;
-  db = initDb();
+  db = await initDb();
 });
 
 afterEach(() => {
@@ -265,8 +265,8 @@ describe("workspaceHandlers", () => {
 describe("projectHandlers", () => {
   let cleanupDb: () => void;
 
-  beforeEach(() => {
-    initDb();
+  beforeEach(async () => {
+    await initDb();
     cleanupDb = () => { /* db is :memory: — reset via setupTestConfig cleanup */ };
   });
 
@@ -298,18 +298,18 @@ describe("projectHandlers", () => {
     const { getDb } = await import("../db/index.ts");
     const db = getDb();
     // Seed a board and task for the project
-    db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'b', 'delivery')");
-    const boardId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run("INSERT INTO conversations (task_id) VALUES (0)");
-    const convId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run("INSERT INTO tasks (board_id, project_key, title, conversation_id) VALUES (?, 'test-project', 'T', ?)", [boardId, convId]);
+    const boardRes = await db.exec("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'b', 'delivery') RETURNING id");
+    const boardId = (boardRes.rows[0] as { id: number }).id;
+    const convRes = await db.exec("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+    const convId = (convRes.rows[0] as { id: number }).id;
+    await db.exec("INSERT INTO tasks (board_id, project_key, title, conversation_id) VALUES ($1, 'test-project', 'T', $2)", [boardId, convId]);
 
     const handlers = projectHandlers();
     await handlers["projects.delete"]({ workspaceKey: "default", key: "test-project" });
 
     const raw = readFileSync(join(configDir, "workspace.test.yaml"), "utf-8");
     expect(raw).not.toContain("test-project");
-    const remaining = db.query<{ cnt: number }, []>("SELECT count(*) as cnt FROM tasks WHERE project_key = 'test-project'").get()!;
+    const remaining = (await db.get<{ cnt: number }>("SELECT count(*) as cnt FROM tasks WHERE project_key = 'test-project'"))!;
     expect(remaining.cnt).toBe(0);
   });
 });

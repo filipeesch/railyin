@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb } from "./helpers.ts";
 import { SqliteModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 
@@ -23,70 +23,69 @@ const MODEL_A = "pi/llama-3.3-70b";
 const MODEL_B = "pi/mistral-7b";
 const WK_B = "workspace-b";
 
-let db: Database;
+let db: Db;
 let repo: SqliteModelSettingsRepository;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   repo = new SqliteModelSettingsRepository(db);
 });
 
 // ─── MSR-1 ───────────────────────────────────────────────────────────────────
 
 describe("MSR-1: getContextWindow returns null for unknown entry", () => {
-  it("returns null when no row exists for the workspace+model pair", () => {
-    expect(repo.getContextWindow(WK, MODEL_A)).toBeNull();
+  it("returns null when no row exists for the workspace+model pair", async () => {
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBeNull();
   });
 });
 
 // ─── MSR-2 ───────────────────────────────────────────────────────────────────
 
 describe("MSR-2: setContextWindow stores value, getContextWindow retrieves it", () => {
-  it("stores 65536 and retrieves 65536", () => {
-    repo.setContextWindow(WK, MODEL_A, 65536);
-    expect(repo.getContextWindow(WK, MODEL_A)).toBe(65536);
+  it("stores 65536 and retrieves 65536", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 65536);
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBe(65536);
   });
 
-  it("stores 128000 and retrieves 128000", () => {
-    repo.setContextWindow(WK, MODEL_A, 128_000);
-    expect(repo.getContextWindow(WK, MODEL_A)).toBe(128_000);
+  it("stores 128000 and retrieves 128000", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 128_000);
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBe(128_000);
   });
 });
 
 // ─── MSR-3 ───────────────────────────────────────────────────────────────────
 
 describe("MSR-3: setContextWindow(null) removes the override", () => {
-  it("returns null after storing a value then passing null", () => {
-    repo.setContextWindow(WK, MODEL_A, 65536);
-    expect(repo.getContextWindow(WK, MODEL_A)).toBe(65536);
+  it("returns null after storing a value then passing null", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 65536);
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBe(65536);
 
-    repo.setContextWindow(WK, MODEL_A, null);
-    expect(repo.getContextWindow(WK, MODEL_A)).toBeNull();
+    await repo.setContextWindow(WK, MODEL_A, null);
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBeNull();
   });
 
-  it("calling null on a non-existent row does not throw", () => {
-    expect(() => repo.setContextWindow(WK, MODEL_A, null)).not.toThrow();
-    expect(repo.getContextWindow(WK, MODEL_A)).toBeNull();
+  it("calling null on a non-existent row does not throw", async () => {
+    await expect(repo.setContextWindow(WK, MODEL_A, null)).resolves.toBeUndefined();
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBeNull();
   });
 });
 
 // ─── MSR-4 ───────────────────────────────────────────────────────────────────
 
 describe("MSR-4: setContextWindow upserts — second call updates the row", () => {
-  it("overrides the previous value with the new one", () => {
-    repo.setContextWindow(WK, MODEL_A, 32_768);
-    repo.setContextWindow(WK, MODEL_A, 200_000);
-    expect(repo.getContextWindow(WK, MODEL_A)).toBe(200_000);
+  it("overrides the previous value with the new one", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 32_768);
+    await repo.setContextWindow(WK, MODEL_A, 200_000);
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBe(200_000);
   });
 
-  it("row count stays at 1 after two sets for the same pair", () => {
-    repo.setContextWindow(WK, MODEL_A, 32_768);
-    repo.setContextWindow(WK, MODEL_A, 64_000);
-    const count = db
-      .query<{ n: number }, [string, string]>(
-        "SELECT COUNT(*) as n FROM model_settings WHERE workspace_key = ? AND qualified_model_id = ?",
-      )
-      .get(WK, MODEL_A)!.n;
+  it("row count stays at 1 after two sets for the same pair", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 32_768);
+    await repo.setContextWindow(WK, MODEL_A, 64_000);
+    const count = (await db.get<{ n: number }>(
+      "SELECT COUNT(*) as n FROM model_settings WHERE workspace_key = $1 AND qualified_model_id = $2",
+      [WK, MODEL_A],
+    ))!.n;
     expect(count).toBe(1);
   });
 });
@@ -94,41 +93,41 @@ describe("MSR-4: setContextWindow upserts — second call updates the row", () =
 // ─── MSR-5 ───────────────────────────────────────────────────────────────────
 
 describe("MSR-5: setContextWindow is idempotent with same value", () => {
-  it("calling twice with the same value does not throw and returns the same value", () => {
-    repo.setContextWindow(WK, MODEL_A, 128_000);
-    expect(() => repo.setContextWindow(WK, MODEL_A, 128_000)).not.toThrow();
-    expect(repo.getContextWindow(WK, MODEL_A)).toBe(128_000);
+  it("calling twice with the same value does not throw and returns the same value", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 128_000);
+    await expect(repo.setContextWindow(WK, MODEL_A, 128_000)).resolves.toBeUndefined();
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBe(128_000);
   });
 });
 
 // ─── MSR-6 ───────────────────────────────────────────────────────────────────
 
 describe("MSR-6: workspace keys are isolated", () => {
-  it("override on workspace-a does not appear on workspace-b", () => {
-    repo.setContextWindow(WK, MODEL_A, 65536);
-    expect(repo.getContextWindow(WK_B, MODEL_A)).toBeNull();
+  it("override on workspace-a does not appear on workspace-b", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 65536);
+    expect(await repo.getContextWindow(WK_B, MODEL_A)).toBeNull();
   });
 
-  it("each workspace can have an independent override for the same model", () => {
-    repo.setContextWindow(WK, MODEL_A, 65536);
-    repo.setContextWindow(WK_B, MODEL_A, 200_000);
-    expect(repo.getContextWindow(WK, MODEL_A)).toBe(65536);
-    expect(repo.getContextWindow(WK_B, MODEL_A)).toBe(200_000);
+  it("each workspace can have an independent override for the same model", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 65536);
+    await repo.setContextWindow(WK_B, MODEL_A, 200_000);
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBe(65536);
+    expect(await repo.getContextWindow(WK_B, MODEL_A)).toBe(200_000);
   });
 });
 
 // ─── MSR-7 ───────────────────────────────────────────────────────────────────
 
 describe("MSR-7: model IDs are isolated within the same workspace", () => {
-  it("override on model-A does not affect model-B", () => {
-    repo.setContextWindow(WK, MODEL_A, 65536);
-    expect(repo.getContextWindow(WK, MODEL_B)).toBeNull();
+  it("override on model-A does not affect model-B", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 65536);
+    expect(await repo.getContextWindow(WK, MODEL_B)).toBeNull();
   });
 
-  it("each model can have an independent override within the same workspace", () => {
-    repo.setContextWindow(WK, MODEL_A, 65536);
-    repo.setContextWindow(WK, MODEL_B, 32_768);
-    expect(repo.getContextWindow(WK, MODEL_A)).toBe(65536);
-    expect(repo.getContextWindow(WK, MODEL_B)).toBe(32_768);
+  it("each model can have an independent override within the same workspace", async () => {
+    await repo.setContextWindow(WK, MODEL_A, 65536);
+    await repo.setContextWindow(WK, MODEL_B, 32_768);
+    expect(await repo.getContextWindow(WK, MODEL_A)).toBe(65536);
+    expect(await repo.getContextWindow(WK, MODEL_B)).toBe(32_768);
   });
 });

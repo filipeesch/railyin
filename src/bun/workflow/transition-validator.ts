@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { WorkflowColumnConfig } from "../config/index.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
 
@@ -22,19 +22,18 @@ type TaskBoardRow = {
  *   3. Target column is not at capacity
  *   4. Source column's allowed_transitions (if defined) includes the target
  */
-export function validateTransition(
-  db: Database,
+export async function validateTransition(
+  db: Db,
   taskId: number,
   toState: string,
-): TransitionResult {
-  const taskRow = db
-    .query<TaskBoardRow, [number]>(
-      `SELECT t.workflow_state, t.board_id, b.workflow_template_id, b.workspace_key
+): Promise<TransitionResult> {
+  const taskRow = await db.get<TaskBoardRow>(
+    `SELECT t.workflow_state, t.board_id, b.workflow_template_id, b.workspace_key
        FROM tasks t
        JOIN boards b ON b.id = t.board_id
-       WHERE t.id = ?`,
-    )
-    .get(taskId);
+       WHERE t.id = $1`,
+    [taskId],
+  );
 
   if (!taskRow) {
     return { ok: false, reason: `task ${taskId} not found` };
@@ -53,11 +52,10 @@ export function validateTransition(
   }
 
   if (toCol.limit != null) {
-    const countRow = db
-      .query<{ count: number }, [number, string]>(
-        "SELECT COUNT(*) as count FROM tasks WHERE board_id = ? AND workflow_state = ?",
-      )
-      .get(taskRow.board_id, toState);
+    const countRow = await db.get<{ count: number }>(
+      "SELECT COUNT(*) as count FROM tasks WHERE board_id = $1 AND workflow_state = $2",
+      [taskRow.board_id, toState],
+    );
     if ((countRow?.count ?? 0) >= toCol.limit) {
       return {
         ok: false,

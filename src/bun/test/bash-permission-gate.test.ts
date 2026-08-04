@@ -15,11 +15,11 @@ class FakeShellApprovalRepo extends ShellApprovalRepository {
     this.state = { shellAutoApprove: false, approvedCommands: [], ...state };
   }
 
-  override getState(_scope: ShellApprovalScope): ShellApprovalState {
+  override async getState(_scope: ShellApprovalScope): Promise<ShellApprovalState> {
     return this.state;
   }
 
-  override appendApprovedCommands(_scope: ShellApprovalScope, binaries: string[]): void {
+  override async appendApprovedCommands(_scope: ShellApprovalScope, binaries: string[]): Promise<void> {
     this.appendedCommands.push(binaries);
     this.state = { ...this.state, approvedCommands: [...this.state.approvedCommands, ...binaries] };
   }

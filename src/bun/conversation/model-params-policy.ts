@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { ModelParamValue, ModelSettingAxis } from "../../shared/rpc-types.ts";
 import { normalizeModelSettings } from "../models/model-settings-normalizer.ts";
 import type { EngineModelInfo } from "../engine/types.ts";
@@ -16,22 +16,22 @@ interface ModelParamsPolicyParams {
  * - If no explicit value exists for an axis and the model has a default, persists the default.
  * - If the model has no settings, clears all model_params.
  */
-export function applyModelParamsPolicy(db: Database, params: ModelParamsPolicyParams): void {
+export async function applyModelParamsPolicy(db: Db, params: ModelParamsPolicyParams): Promise<void> {
   const { conversationId, engineModel } = params;
 
   const normalized = normalizeModelSettings(engineModel);
   const settings: ModelSettingAxis[] = normalized.modelSettings.settings;
 
   if (settings.length === 0) {
-    db.run("UPDATE conversations SET model_params = NULL WHERE id = ?", [conversationId]);
+    await db.exec("UPDATE conversations SET model_params = NULL WHERE id = $1", [conversationId]);
     return;
   }
 
-  const row = db
-    .query<{ model_params: string | null }, [number]>(
-      "SELECT model_params FROM conversations WHERE id = ?",
-    )
-    .get(conversationId);
+  const row = await db
+    .get<{ model_params: string | null }>(
+      "SELECT model_params FROM conversations WHERE id = $1",
+      [conversationId],
+    );
 
   const current = parseModelParams(row?.model_params ?? null);
   const next = new Map<string, string>();
@@ -48,7 +48,7 @@ export function applyModelParamsPolicy(db: Database, params: ModelParamsPolicyPa
 
   const nextArray: ModelParamValue[] = Array.from(next.entries()).map(([id, value]) => ({ id, value }));
   const nextJson = nextArray.length > 0 ? JSON.stringify(nextArray) : null;
-  db.run("UPDATE conversations SET model_params = ? WHERE id = ?", [nextJson, conversationId]);
+  await db.exec("UPDATE conversations SET model_params = $1 WHERE id = $2", [nextJson, conversationId]);
 }
 
 function parseModelParams(raw: string | null): ModelParamValue[] {

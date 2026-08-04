@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { execSync } from "child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -22,14 +22,14 @@ import { SlashCommandResolver } from "../engine/execution/slash-command-resolver
 import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
 import { CapturingParamsBuilder, StubStreamProcessor, StubWorkdirResolver, TestEngine } from "./executor-test-helpers.ts";
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 let wsRepo: WorkspaceRepository;
 let boardTools: BoardToolExecutor;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   wsRepo = new WorkspaceRepository(db);
   boardTools = new BoardToolExecutor(db, wsRepo);
   gitDir = mkdtempSync(join(tmpdir(), "railyn-ht-"));
@@ -71,15 +71,15 @@ describe("HumanTurnExecutor — model resolution (normal path)", () => {
   it("uses task.model when task already has a model set", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'task/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'task/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "hello");
 
     expect(builder.lastBuilt?.model).toBe("task/custom-model");
     // No write-back needed since task already had model
-    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    const row = (await db.get<{ model: string | null }>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = $1", [taskId]))!;
     expect(row.model).toBe("task/custom-model");
   });
 
@@ -87,14 +87,14 @@ describe("HumanTurnExecutor — model resolution (normal path)", () => {
   it("uses empty string when task has no model (no fallback to engine defaults)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "hello");
 
     expect(builder.lastBuilt?.model).toBe(""); // No fallback to engine model
-    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    const row = (await db.get<{ model: string | null }>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = $1", [taskId]))!;
     expect(row.model).toBeNull(); // DB remains NULL
   });
 
@@ -102,28 +102,28 @@ describe("HumanTurnExecutor — model resolution (normal path)", () => {
   it("uses empty string when no model is configured anywhere", async () => {
     const cfg = setupTestConfig("", gitDir, [], null);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "hello");
 
     expect(builder.lastBuilt?.model).toBe("");
-    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    const row = (await db.get<{ model: string | null }>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = $1", [taskId]))!;
     expect(row.model).toBeNull();
   });
 });
 
 describe("HumanTurnExecutor — model resolution (engine-lost fallback path)", () => {
-  function seedWaitingUserTask(taskId: number) {
+  async function seedWaitingUserTask(taskId: number) {
     // Insert a dummy execution in running state
-    db.run(
+    const inserted = await db.get<{ id: number }>(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES (?, (SELECT conversation_id FROM tasks WHERE id = ?), 'backlog', 'backlog', 'human-turn', 'running', 1)`,
+       VALUES ($1, (SELECT conversation_id FROM tasks WHERE id = $2), 'backlog', 'backlog', 'human-turn', 'running', 1) RETURNING id`,
       [taskId, taskId],
     );
-    const execId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?", [execId, taskId]);
+    const execId = inserted!.id;
+    await db.exec("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = $1 WHERE id = $2", [execId, taskId]);
     return execId;
   }
 
@@ -131,15 +131,15 @@ describe("HumanTurnExecutor — model resolution (engine-lost fallback path)", (
   it("uses empty string in engine-lost path when no model is configured", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-    seedWaitingUserTask(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
+    await seedWaitingUserTask(taskId);
 
     const { builder, executor } = makeExecutor(new TestEngine(true));
     await executor.execute(taskId, "continue please");
 
     expect(builder.lastBuilt?.model).toBe(""); // No fallback to engine model
-    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    const row = (await db.get<{ model: string | null }>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = $1", [taskId]))!;
     expect(row.model).toBeNull(); // DB remains NULL
   });
 });
@@ -148,12 +148,12 @@ describe("HumanTurnExecutor — decision context injection", () => {
   it("HT-D-1: decisions block is prepended to prompt when decisions exist (first turn)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
 
     // Seed a decision record
-    const convRow = db.query<{conversation_id: number}, [number]>("SELECT conversation_id FROM tasks WHERE id = ?").get(taskId)!;
-    db.run(
-      "INSERT INTO decision_records (conversation_id, question, answer, weight) VALUES (?, ?, ?, ?)",
+    const convRow = (await db.get<{conversation_id: number}>("SELECT conversation_id FROM tasks WHERE id = $1", [taskId]))!;
+    await db.exec(
+      "INSERT INTO decision_records (conversation_id, question, answer, weight) VALUES ($1, $2, $3, $4)",
       [convRow.conversation_id, "Test question?", "Test answer", "medium"],
     );
 
@@ -167,7 +167,7 @@ describe("HumanTurnExecutor — decision context injection", () => {
   it("HT-D-2: decisions block is NOT included when no decisions exist", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "user prompt");
@@ -179,11 +179,11 @@ describe("HumanTurnExecutor — decision context injection", () => {
   it("HT-D-3: decisions not injected again on second turn (sentinel skips re-injection)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
 
-    const convRow = db.query<{conversation_id: number}, [number]>("SELECT conversation_id FROM tasks WHERE id = ?").get(taskId)!;
-    db.run(
-      "INSERT INTO decision_records (conversation_id, question, answer, weight) VALUES (?, ?, ?, ?)",
+    const convRow = (await db.get<{conversation_id: number}>("SELECT conversation_id FROM tasks WHERE id = $1", [taskId]))!;
+    await db.exec(
+      "INSERT INTO decision_records (conversation_id, question, answer, weight) VALUES ($1, $2, $3, $4)",
       [convRow.conversation_id, "Test question?", "Test answer", "medium"],
     );
 
@@ -200,7 +200,7 @@ describe("HumanTurnExecutor — stage instructions injection", () => {
   it("HT-SI-1: stage_instructions block is prepended to prompt on first turn in a column that defines it", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir); // seeded task starts in 'plan' column, which has stage_instructions
+    const { taskId } = await seedProjectAndTask(db, gitDir); // seeded task starts in 'plan' column, which has stage_instructions
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "user prompt");
@@ -212,7 +212,7 @@ describe("HumanTurnExecutor — stage instructions injection", () => {
   it("HT-SI-2: stage_instructions is NOT re-injected on second turn (no compaction since last injection)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "first message");
@@ -225,14 +225,14 @@ describe("HumanTurnExecutor — stage instructions injection", () => {
   it("HT-SI-3: stage_instructions is re-injected after a compaction occurs", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "first message");
     expect(builder.lastBuilt?.prompt).toContain("You are a planning assistant.");
 
-    db.run(
-      "INSERT INTO conversation_messages (conversation_id, role, content, type) VALUES (?, 'assistant', 'summary', 'compaction_summary')",
+    await db.exec(
+      "INSERT INTO conversation_messages (conversation_id, role, content, type) VALUES ($1, 'assistant', 'summary', 'compaction_summary')",
       [conversationId],
     );
 
@@ -243,8 +243,8 @@ describe("HumanTurnExecutor — stage instructions injection", () => {
   it("HT-SI-4: stage_instructions absent for the column yields the explicit cancellation active_directive", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'done' WHERE id = ?", [taskId]); // 'done' column has no stage_instructions
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'done' WHERE id = $1", [taskId]); // 'done' column has no stage_instructions
 
     const { builder, executor } = makeExecutor(new TestEngine());
     await executor.execute(taskId, "user prompt");
@@ -261,17 +261,17 @@ describe("HumanTurnExecutor — stage instructions injection", () => {
   it("HT-SI-FB-1: fallback branch after engine-session-lost receives the same stage_instructions treatment as the normal path", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
 
     // Seed a 'waiting_user' execution so HumanTurnExecutor takes the resume path,
     // then TestEngine(true) throws on resume() to trigger the fallback branch.
-    db.run(
+    const inserted = await db.get<{ id: number }>(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES (?, ?, 'plan', 'plan', 'human-turn', 'running', 1)`,
+       VALUES ($1, $2, 'plan', 'plan', 'human-turn', 'running', 1) RETURNING id`,
       [taskId, conversationId],
     );
-    const execId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?", [execId, taskId]);
+    const execId = inserted!.id;
+    await db.exec("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = $1 WHERE id = $2", [execId, taskId]);
 
     const { builder, executor } = makeExecutor(new TestEngine(true));
     await executor.execute(taskId, "continue please");
@@ -282,21 +282,21 @@ describe("HumanTurnExecutor — stage instructions injection", () => {
 });
 
 describe("HumanTurnExecutor — git context propagation via onTaskUpdated", () => {
-  function seedGitContext(taskId: number) {
-    db.run(
-      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, ?, ?)",
+  async function seedGitContext(taskId: number) {
+    await db.exec(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, $4, $5)",
       [taskId, gitDir, "/wt/1", "ready", "feature/test"],
     );
   }
 
-  function seedWaitingUserState(taskId: number, conversationId: number) {
-    db.run(
-      "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'running', 1)",
+  async function seedWaitingUserState(taskId: number, conversationId: number) {
+    const inserted = await db.get<{ id: number }>(
+      "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES ($1, $2, 'plan', 'plan', 'human-turn', 'running', 1) RETURNING id",
       [taskId, conversationId],
     );
-    const execId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run(
-      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?",
+    const execId = inserted!.id;
+    await db.exec(
+      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = $1 WHERE id = $2",
       [execId, taskId],
     );
   }
@@ -304,9 +304,9 @@ describe("HumanTurnExecutor — git context propagation via onTaskUpdated", () =
   it("HT-GC-1: waiting_user resume broadcasts task with worktreePath via onTaskUpdated", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
-    seedWaitingUserState(taskId, conversationId);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
+    await seedWaitingUserState(taskId, conversationId);
 
     let capturedTask: Task | null = null;
     const { executor } = makeExecutor(new TestEngine(), (t) => { capturedTask = t; });
@@ -321,9 +321,9 @@ describe("HumanTurnExecutor — git context propagation via onTaskUpdated", () =
   it("HT-GC-2: session-lost fallback broadcasts task with worktreePath via onTaskUpdated", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
-    seedWaitingUserState(taskId, conversationId);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
+    await seedWaitingUserState(taskId, conversationId);
 
     const capturedTasks: Task[] = [];
     const { executor } = makeExecutor(new TestEngine(true), (t) => { capturedTasks.push(t); });
@@ -338,8 +338,8 @@ describe("HumanTurnExecutor — git context propagation via onTaskUpdated", () =
   it("HT-GC-3: new execution start broadcasts task with worktreePath via onTaskUpdated", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    seedGitContext(taskId);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await seedGitContext(taskId);
 
     let capturedTask: Task | null = null;
     const { executor } = makeExecutor(new TestEngine(), (t) => { capturedTask = t; });
@@ -358,9 +358,9 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
   it("HT-CE-1: prior copilot turns appear in prompt when engine switches (copilot → claude)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = $1", [conversationId]);
+    await appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
@@ -376,9 +376,9 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
   it("HT-CE-2: current user message is NOT inside <message_history> block", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot prior response");
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = $1", [conversationId]);
+    await appendMessage(db, taskId, conversationId, "assistant", null, "Copilot prior response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
@@ -396,10 +396,10 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
   it("HT-CE-3: no engine switch (same engine) → no <message_history> injected", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
     // last_engine_type = null means no prior engine, so no cross-engine injection
-    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Some prior assistant response");
+    await db.exec("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = $1", [conversationId]);
+    await appendMessage(db, taskId, conversationId, "assistant", null, "Some prior assistant response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
@@ -418,9 +418,9 @@ describe("HT-WK-1: workspaceKey propagation through human turn", () => {
   it("HT-WK-1: human turn preserves task's board workspaceKey", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan', execution_state = 'idle' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan', execution_state = 'idle' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();

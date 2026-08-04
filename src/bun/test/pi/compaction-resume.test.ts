@@ -13,7 +13,7 @@ import type { PiEngineConfig } from "../../config/index.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { NullModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import { ProviderLimiterRegistry } from "../../engine/pi/provider-limiter.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import type { ExecutionParams, EngineEvent } from "../../engine/types.ts";
 
 // ─── Shared interfaces ────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ class StubModelSettingsRepository extends NullModelSettingsRepository {
     super();
     this.contextWindow = contextWindow;
   }
-  override getContextWindow(_workspaceKey: string, _qualifiedModelId: string): number | null {
+  override async getContextWindow(_workspaceKey: string, _qualifiedModelId: string): Promise<number | null> {
     return this.contextWindow;
   }
 }
@@ -234,17 +234,17 @@ const baseConfig: PiEngineConfig = {
 
 // ─── Test state ───────────────────────────────────────────────────────────────
 
-let db: Database;
+let db: Db;
 let configCleanup: () => void;
 let conversationId: number;
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
-  db = initDb();
-  const seed = seedProjectAndTask(db, "/test-git");
+  db = await initDb();
+  const seed = await seedProjectAndTask(db, "/test-git");
   conversationId = seed.conversationId;
-  db.run("UPDATE conversations SET model = ? WHERE id = ?", ["test-pi/lmstudio/test-model", conversationId]);
+  await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", ["test-pi/lmstudio/test-model", conversationId]);
 });
 
 afterEach(() => {

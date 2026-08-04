@@ -16,9 +16,9 @@ import type { CommonToolContext } from "../engine/types.ts";
 import { TodoRepository } from "../db/todos.ts";
 import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../db/repositories/note-repository.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 
@@ -27,12 +27,12 @@ const TEST_PROJECT_RESOLVER: IProjectResolver = {
   getWorktreeBasePath: (_wsKey, _projectKey, gitRootPath) => `${gitRootPath}/../worktrees`,
 };
 
-function makeWorktreeManager(db: Database) {
+function makeWorktreeManager(db: Db) {
   const wsRepo = new WorkspaceRepository(db);
   return new WorktreeManager(db, wsRepo, TEST_PROJECT_RESOLVER, new GitRepositoryManager(), new TaskGitContextRepository(db));
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   gitDir = mkdtempSync(join(tmpdir(), "railyn-cg-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
@@ -40,7 +40,7 @@ beforeEach(() => {
   writeFileSync(join(gitDir, "README.md"), "hello");
   execSync("git add . && git commit -m init", { cwd: gitDir });
 
-  db = initDb();
+  db = await initDb();
 });
 
 afterEach(() => {
@@ -68,22 +68,22 @@ columns:
 `;
 
 /** Seed a board with the delivery-with-limit workflow template. */
-function seedBoardWithLimit() {
+async function seedBoardWithLimit() {
   const cfg = setupTestConfig("", gitDir, [EXTRA_WORKFLOW_WITH_LIMIT]);
   configCleanup = cfg.cleanup;
 
-  db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery-lim')");
-  const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+  const board = await db.get<{ id: number }>("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery-lim') RETURNING id");
+  const boardId = board!.id;
 
-  function insertTask(state: string, position: number): number {
-    db.run("INSERT INTO conversations (task_id) VALUES (0)");
-    const convId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-    db.run(
-      "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES (?, 'p', 'T', '', ?, 'idle', ?, ?)",
+  async function insertTask(state: string, position: number): Promise<number> {
+    const conv = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+    const convId = conv!.id;
+    const task = await db.get<{ id: number }>(
+      "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES ($1, 'p', 'T', '', $2, 'idle', $3, $4) RETURNING id",
       [boardId, state, convId, position],
     );
-    const taskId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-    db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, convId]);
+    const taskId = task!.id;
+    await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId, convId]);
     return taskId;
   }
 
@@ -97,8 +97,8 @@ describe("position rebalancing", () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
 
-    db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery')");
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    const board = await db.get<{ id: number }>("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery') RETURNING id");
+    const boardId = board!.id;
 
     // Insert 5 tasks into 'plan' column with collapsing float positions
     // Simulate what happens after repeated top-of-column inserts:
@@ -106,14 +106,14 @@ describe("position rebalancing", () => {
     const positions = [500, 250, 125, 62.5, 31.25];
     const taskIds: number[] = [];
     for (const pos of positions) {
-      db.run("INSERT INTO conversations (task_id) VALUES (0)");
-      const convId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-      db.run(
-        "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES (?, 'p', 'T', '', 'plan', 'idle', ?, ?)",
+      const conv = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+      const convId = conv!.id;
+      const task = await db.get<{ id: number }>(
+        "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES ($1, 'p', 'T', '', 'plan', 'idle', $2, $3) RETURNING id",
         [boardId, convId, pos],
       );
-      const taskId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-      db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, convId]);
+      const taskId = task!.id;
+      await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId, convId]);
       taskIds.push(taskId);
     }
 
@@ -123,17 +123,16 @@ describe("position rebalancing", () => {
     // We reorder the last task to a new position that creates a tiny gap (< 1.0)
     // The gap between 31.25 and 62.5 is 31.25, but between 31.25 and 62.5 is 31.25 (> 1)
     // Instead, insert a task at a position that creates a sub-1 gap
-    db.run("UPDATE tasks SET position = 0.5 WHERE id = ?", [taskIds[taskIds.length - 1]]);
+    await db.exec("UPDATE tasks SET position = 0.5 WHERE id = $1", [taskIds[taskIds.length - 1]]);
 
     // Now trigger rebalance by calling tasks.reorder
     await handlers["tasks.reorder"]({ taskId: taskIds[0], position: 0.4 });
 
     // After rebalance, all positions should be multiples of 1000
-    const rows = db
-      .query<{ position: number }, [number, string]>(
-        "SELECT position FROM tasks WHERE board_id = ? AND workflow_state = ? ORDER BY position ASC",
-      )
-      .all(boardId, "plan");
+    const rows = await db.rows<{ position: number }>(
+      "SELECT position FROM tasks WHERE board_id = $1 AND workflow_state = $2 ORDER BY position ASC",
+      [boardId, "plan"],
+    );
 
     for (let i = 0; i < rows.length; i++) {
       expect(rows[i].position).toBe((i + 1) * 1000);
@@ -144,20 +143,20 @@ describe("position rebalancing", () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
 
-    db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery')");
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    const board = await db.get<{ id: number }>("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery') RETURNING id");
+    const boardId = board!.id;
 
     const positions = [1000, 2000, 3000];
     const taskIds: number[] = [];
     for (const pos of positions) {
-      db.run("INSERT INTO conversations (task_id) VALUES (0)");
-      const convId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-      db.run(
-        "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES (?, 'p', 'T', '', 'plan', 'idle', ?, ?)",
+      const conv = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+      const convId = conv!.id;
+      const task = await db.get<{ id: number }>(
+        "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES ($1, 'p', 'T', '', 'plan', 'idle', $2, $3) RETURNING id",
         [boardId, convId, pos],
       );
-      const taskId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-      db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, convId]);
+      const taskId = task!.id;
+      await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId, convId]);
       taskIds.push(taskId);
     }
 
@@ -165,11 +164,10 @@ describe("position rebalancing", () => {
     // Reorder to a position with adequate gap
     await handlers["tasks.reorder"]({ taskId: taskIds[0], position: 1500 });
 
-    const rows = db
-      .query<{ id: number; position: number }, [number, string]>(
-        "SELECT id, position FROM tasks WHERE board_id = ? AND workflow_state = ? ORDER BY position ASC",
-      )
-      .all(boardId, "plan");
+    const rows = await db.rows<{ id: number; position: number }>(
+      "SELECT id, position FROM tasks WHERE board_id = $1 AND workflow_state = $2 ORDER BY position ASC",
+      [boardId, "plan"],
+    );
 
     // The reordered task (taskIds[0]) is now at 1500 — no rebalance needed
     const positions2 = rows.map((r) => r.position);
@@ -183,14 +181,14 @@ describe("position rebalancing", () => {
 
 describe("card limit enforcement in tasks.transition", () => {
   it("throws an error when the target column is at capacity", async () => {
-    const { boardId, insertTask } = seedBoardWithLimit();
+    const { boardId, insertTask } = await seedBoardWithLimit();
 
     // Fill inprogress to limit (2)
-    insertTask("inprogress", 1000);
-    insertTask("inprogress", 2000);
+    await insertTask("inprogress", 1000);
+    await insertTask("inprogress", 2000);
 
     // Insert a backlog task to move
-    const taskId = insertTask("backlog", 500);
+    const taskId = await insertTask("backlog", 500);
 
     const handlers = makeHandlers();
     await expect(
@@ -199,12 +197,12 @@ describe("card limit enforcement in tasks.transition", () => {
   });
 
   it("allows transition when column is below limit", async () => {
-    const { boardId, insertTask } = seedBoardWithLimit();
+    const { boardId, insertTask } = await seedBoardWithLimit();
 
     // Fill inprogress with 1 (limit is 2)
-    insertTask("inprogress", 1000);
+    await insertTask("inprogress", 1000);
 
-    const taskId = insertTask("backlog", 500);
+    const taskId = await insertTask("backlog", 500);
     const handlers = makeHandlers();
     // The limit check passes; transition may fail later for other reasons (no orchestrator in tests)
     // We only assert that no "at capacity" error is thrown
@@ -219,29 +217,29 @@ describe("card limit enforcement in tasks.transition", () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
 
-    db.run("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery')");
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
+    const board = await db.get<{ id: number }>("INSERT INTO boards (workspace_key, name, workflow_template_id) VALUES ('default', 'test-board', 'delivery') RETURNING id");
+    const boardId = board!.id;
 
     // Insert 10 tasks in 'plan' (no limit configured) and one in 'backlog'
     for (let i = 0; i < 10; i++) {
-      db.run("INSERT INTO conversations (task_id) VALUES (0)");
-      const convId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-      db.run(
-        "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES (?, 'p', 'T', '', 'plan', 'idle', ?, ?)",
+      const conv = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+      const convId = conv!.id;
+      const task = await db.get<{ id: number }>(
+        "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES ($1, 'p', 'T', '', 'plan', 'idle', $2, $3) RETURNING id",
         [boardId, convId, (i + 1) * 1000],
       );
-      const taskId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-      db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId, convId]);
+      const taskId = task!.id;
+      await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId, convId]);
     }
 
-    db.run("INSERT INTO conversations (task_id) VALUES (0)");
-    const convId2 = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-    db.run(
-      "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES (?, 'p', 'T', '', 'backlog', 'idle', ?, 500)",
+    const conv2 = await db.get<{ id: number }>("INSERT INTO conversations (task_id) VALUES (0) RETURNING id");
+    const convId2 = conv2!.id;
+    const task2 = await db.get<{ id: number }>(
+      "INSERT INTO tasks (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, position) VALUES ($1, 'p', 'T', '', 'backlog', 'idle', $2, 500) RETURNING id",
       [boardId, convId2],
     );
-    const taskId2 = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id;
-    db.run("UPDATE conversations SET task_id = ? WHERE id = ?", [taskId2, convId2]);
+    const taskId2 = task2!.id;
+    await db.exec("UPDATE conversations SET task_id = $1 WHERE id = $2", [taskId2, convId2]);
 
     const handlers = makeHandlers();
     // The limit check passes; the transition may fail for other reasons (no orchestrator in tests)
@@ -276,14 +274,14 @@ const makeCommonCtx = (taskId: number, boardId: number): CommonToolContext => ({
 
 describe("card limit enforcement in move_card", () => {
   it("returns an error string when target column is at capacity", async () => {
-    const { boardId, insertTask } = seedBoardWithLimit();
+    const { boardId, insertTask } = await seedBoardWithLimit();
 
     // Fill inprogress to limit (2)
-    insertTask("inprogress", 1000);
-    insertTask("inprogress", 2000);
+    await insertTask("inprogress", 1000);
+    await insertTask("inprogress", 2000);
 
     // Task to move
-    const taskId = insertTask("backlog", 500);
+    const taskId = await insertTask("backlog", 500);
 
     const result = await executeCommonTool(
       "move_card",
@@ -295,11 +293,11 @@ describe("card limit enforcement in move_card", () => {
   });
 
   it("succeeds when target column is below limit", async () => {
-    const { boardId, insertTask } = seedBoardWithLimit();
+    const { boardId, insertTask } = await seedBoardWithLimit();
 
     // Only 1 task in inprogress (limit is 2)
-    insertTask("inprogress", 1000);
-    const taskId = insertTask("backlog", 500);
+    await insertTask("inprogress", 1000);
+    const taskId = await insertTask("backlog", 500);
 
     const result = await executeCommonTool(
       "move_card",

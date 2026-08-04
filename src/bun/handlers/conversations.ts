@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { ConversationMessage, ModelParamValue } from "../../shared/rpc-types.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 import { mapConversationMessage } from "../db/mappers.ts";
@@ -10,7 +10,7 @@ import { resolveContextWindow } from "../context-usage.ts";
 import { ContextEstimator } from "../conversation/context-estimator.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 
-export function conversationHandlers(db: Database, orchestrator: ExecutionCoordinator | null, modelSettingsRepo?: ModelSettingsRepository) {
+export function conversationHandlers(db: Db, orchestrator: ExecutionCoordinator | null, modelSettingsRepo?: ModelSettingsRepository) {
   return {
     "conversations.getMessages": async (params: {
       conversationId?: number;
@@ -20,9 +20,10 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
     }): Promise<{ messages: ConversationMessage[]; hasMore: boolean }> => {
       let conversationId = params.conversationId;
       if (conversationId == null && params.taskId != null) {
-        const row = db.query<{ conversation_id: number }, [number]>(
-          "SELECT conversation_id FROM tasks WHERE id = ?",
-        ).get(params.taskId);
+        const row = await db.get<{ conversation_id: number }>(
+          "SELECT conversation_id FROM tasks WHERE id = $1",
+          [params.taskId],
+        );
         if (!row) throw new Error(`Task ${params.taskId} not found`);
         conversationId = row.conversation_id;
       }
@@ -30,17 +31,15 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       const limit = params.limit ?? 50;
       let rows: ConversationMessageRow[];
       if (params.beforeMessageId != null) {
-        rows = db
-          .query<ConversationMessageRow, [number, number, number]>(
-            "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
-          )
-          .all(conversationId, params.beforeMessageId, limit + 1);
+        rows = await db.rows<ConversationMessageRow>(
+          "SELECT * FROM conversation_messages WHERE conversation_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3",
+          [conversationId, params.beforeMessageId, limit + 1],
+        );
       } else {
-        rows = db
-          .query<ConversationMessageRow, [number, number]>(
-            "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
-          )
-          .all(conversationId, limit + 1);
+        rows = await db.rows<ConversationMessageRow>(
+          "SELECT * FROM conversation_messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT $2",
+          [conversationId, limit + 1],
+        );
       }
       const hasMore = rows.length > limit;
       const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);
@@ -51,27 +50,28 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       conversationId: number;
       afterSeq?: number;
     }): Promise<PersistedStreamEvent[]> => {
-      return getStreamEventsByConversation(db, params.conversationId, params.afterSeq);
+      return await getStreamEventsByConversation(db, params.conversationId, params.afterSeq);
     },
 
     "conversations.contextUsage": async (params: {
       conversationId: number;
     }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
-      const row = db.query<{
+      const row = await db.get<{
         conversation_model: string | null;
         task_workspace_key: string | null;
         session_workspace_key: string | null;
-      }, [number]>(
-        `SELECT 
+      }>(
+        `SELECT
            c.model AS conversation_model,
-           b.workspace_key AS task_workspace_key, 
-           cs.workspace_key AS session_workspace_key 
+           b.workspace_key AS task_workspace_key,
+           cs.workspace_key AS session_workspace_key
          FROM conversations c
          LEFT JOIN tasks t ON t.conversation_id = c.id
          LEFT JOIN boards b ON b.id = t.board_id
          LEFT JOIN chat_sessions cs ON cs.conversation_id = c.id
-         WHERE c.id = ?`,
-      ).get(params.conversationId);
+         WHERE c.id = $1`,
+        [params.conversationId],
+      );
 
       const workspaceKey = row?.task_workspace_key ?? row?.session_workspace_key ?? getDefaultWorkspaceKey();
       const workspaceConfig = getWorkspaceConfig(workspaceKey);
@@ -82,15 +82,15 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
         ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator, modelSettingsRepo)) 
         : 128_000;
       
-      return new ContextEstimator(db).estimate(params.conversationId, maxTokens);
+      return await new ContextEstimator(db).estimate(params.conversationId, maxTokens);
     },
 
     "conversations.setSamplingPreset": async (params: {
       conversationId: number;
       presetName: string | null;
     }): Promise<Record<string, never>> => {
-      db.run(
-        "UPDATE conversations SET sampling_preset_override = ? WHERE id = ?",
+      await db.exec(
+        "UPDATE conversations SET sampling_preset_override = $1 WHERE id = $2",
         [params.presetName, params.conversationId],
       );
       return {};
@@ -100,8 +100,8 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       conversationId: number;
       modelParams: ModelParamValue[];
     }): Promise<Record<string, never>> => {
-      db.run(
-        "UPDATE conversations SET model_params = ? WHERE id = ?",
+      await db.exec(
+        "UPDATE conversations SET model_params = $1 WHERE id = $2",
         [params.modelParams.length > 0 ? JSON.stringify(params.modelParams) : null, params.conversationId],
       );
       return {};

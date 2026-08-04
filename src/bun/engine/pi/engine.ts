@@ -425,26 +425,25 @@ export class PiEngine implements ExecutionEngine {
     const { getLoadedProjectByKey } = await import("../../project-store.ts");
 
     const db = getDb();
-    const taskRow = db
-      .query<{ board_id: number; project_key: string }, [number]>(
-        "SELECT board_id, project_key FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const taskRow = await db.get<{ board_id: number; project_key: string }>(
+      "SELECT board_id, project_key FROM tasks WHERE id = $1",
+      [taskId],
+    );
 
-    const gitRow = db
-      .query<{ worktree_path: string | null }, [number]>(
-        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
+    const gitRow = await db.get<{ worktree_path: string | null }>(
+      "SELECT worktree_path FROM task_git_context WHERE task_id = $1",
+      [taskId],
+    );
 
     const worktreePath = gitRow?.worktree_path ?? process.cwd();
 
     let projectPath: string | undefined;
     if (taskRow) {
       const wsKey =
-        db.query<{ workspace_key: string }, [number]>(
-          "SELECT workspace_key FROM boards WHERE id = ?",
-        ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+        (await db.get<{ workspace_key: string }>(
+          "SELECT workspace_key FROM boards WHERE id = $1",
+          [taskRow.board_id],
+        ))?.workspace_key ?? getDefaultWorkspaceKey();
       const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
       if (project?.projectPath && project.projectPath !== worktreePath) {
         projectPath = project.projectPath;
@@ -468,14 +467,15 @@ export class PiEngine implements ExecutionEngine {
     const isShadowSession = !session;
     if (!session) {
       const db = getDb();
-      const row = db
-        .query<{ model: string | null }, [number]>("SELECT model FROM conversations WHERE id = ?")
-        .get(conversationId);
+      const row = await db.get<{ model: string | null }>(
+        "SELECT model FROM conversations WHERE id = $1",
+        [conversationId],
+      );
       const conversationModel = row?.model ?? null;
       if (!conversationModel) {
         throw new Error(`Cannot compact conversation ${conversationId}: no model stored for conversation`);
       }
-      const contextWindow = this.modelSettingsRepo.getContextWindow(workspaceKey, conversationModel);
+      const contextWindow = await this.modelSettingsRepo.getContextWindow(workspaceKey, conversationModel);
       if (contextWindow == null) {
         throw new Error(`Cannot compact conversation ${conversationId}: no context window configured for model "${conversationModel}"`);
       }
@@ -497,7 +497,7 @@ export class PiEngine implements ExecutionEngine {
       const result = await session.compact();
       if (result?.summary) {
         const db = getDb();
-        appendMessage(db, null, conversationId, "compaction_summary", null, result.summary);
+        await appendMessage(db, null, conversationId, "compaction_summary", null, result.summary);
       }
     } catch (err) {
       console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);

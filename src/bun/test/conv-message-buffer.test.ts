@@ -1,18 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { ConvMessageBuffer } from "../conversation/conv-message-buffer.ts";
 
-let db: Database;
+let db: Db;
 let conversationId: number;
 let taskId: number;
 let cleanup: () => void;
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   cleanup = cfg.cleanup;
-  db = initDb();
-  const seed = seedProjectAndTask(db, "/test");
+  db = await initDb();
+  const seed = await seedProjectAndTask(db, "/test");
   taskId = seed.taskId;
   conversationId = seed.conversationId;
 });
@@ -24,15 +24,14 @@ afterEach(() => {
 // ─── CMB-1: enqueue does not write to DB ─────────────────────────────────────
 
 describe("ConvMessageBuffer — CMB-1: enqueue is lazy", () => {
-  it("enqueue does not INSERT until flush()", () => {
+  it("enqueue does not INSERT until flush()", async () => {
     const buf = new ConvMessageBuffer(db);
     buf.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: "hello", notify: false });
 
-    const count = db
-      .query<{ n: number }, [number]>(
-        "SELECT COUNT(*) as n FROM conversation_messages WHERE conversation_id = ?",
-      )
-      .get(conversationId);
+    const count = await db.get<{ n: number }>(
+      "SELECT COUNT(*) as n FROM conversation_messages WHERE conversation_id = $1",
+      [conversationId],
+    );
     expect(count!.n).toBe(0);
   });
 });
@@ -40,19 +39,18 @@ describe("ConvMessageBuffer — CMB-1: enqueue is lazy", () => {
 // ─── CMB-2: flush inserts all rows in one transaction with real IDs ───────────
 
 describe("ConvMessageBuffer — CMB-2: flush inserts in transaction", () => {
-  it("flush() inserts all messages and returns notify=true ones with real IDs", () => {
+  it("flush() inserts all messages and returns notify=true ones with real IDs", async () => {
     const buf = new ConvMessageBuffer(db);
     buf.enqueue({ taskId, conversationId, type: "user", role: "user", content: "question", notify: false });
     buf.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: "answer", notify: true });
 
-    const notified = buf.flush();
+    const notified = await buf.flush();
 
     // Two rows in DB
-    const count = db
-      .query<{ n: number }, [number]>(
-        "SELECT COUNT(*) as n FROM conversation_messages WHERE conversation_id = ?",
-      )
-      .get(conversationId);
+    const count = await db.get<{ n: number }>(
+      "SELECT COUNT(*) as n FROM conversation_messages WHERE conversation_id = $1",
+      [conversationId],
+    );
     expect(count!.n).toBe(2);
 
     // Only the notify=true message returned
@@ -62,11 +60,11 @@ describe("ConvMessageBuffer — CMB-2: flush inserts in transaction", () => {
     expect(notified[0].id).toBeGreaterThan(0);
   });
 
-  it("flush() content and role are preserved round-trip", () => {
+  it("flush() content and role are preserved round-trip", async () => {
     const buf = new ConvMessageBuffer(db);
     buf.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: '{"name":"bash"}', notify: true });
 
-    const notified = buf.flush();
+    const notified = await buf.flush();
     expect(notified[0].content).toBe('{"name":"bash"}');
     expect(notified[0].role).toBeNull();
   });
@@ -75,17 +73,16 @@ describe("ConvMessageBuffer — CMB-2: flush inserts in transaction", () => {
 // ─── CMB-3: empty flush is a no-op ───────────────────────────────────────────
 
 describe("ConvMessageBuffer — CMB-3: empty flush", () => {
-  it("flush() on empty buffer returns [] and does not write to DB", () => {
+  it("flush() on empty buffer returns [] and does not write to DB", async () => {
     const buf = new ConvMessageBuffer(db);
 
-    const result = buf.flush();
+    const result = await buf.flush();
     expect(result).toEqual([]);
 
-    const count = db
-      .query<{ n: number }, [number]>(
-        "SELECT COUNT(*) as n FROM conversation_messages WHERE conversation_id = ?",
-      )
-      .get(conversationId);
+    const count = await db.get<{ n: number }>(
+      "SELECT COUNT(*) as n FROM conversation_messages WHERE conversation_id = $1",
+      [conversationId],
+    );
     expect(count!.n).toBe(0);
   });
 });

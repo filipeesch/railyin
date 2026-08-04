@@ -1,24 +1,23 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "./db.ts";
 import type { Task } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "./row-types.ts";
 import { mapTask } from "./mappers.ts";
 
 export class TaskRepository {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Db) {}
 
-  findById(id: number): Task | null {
-    const row = this.db
-      .query<TaskRow, [number]>(
-        `SELECT t.*,
-                gc.worktree_status, gc.branch_name, gc.worktree_path,
-                (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count,
-                c.model AS conversation_model
-         FROM tasks t
-         LEFT JOIN task_git_context gc ON gc.task_id = t.id
-         LEFT JOIN conversations c ON c.id = t.conversation_id
-         WHERE t.id = ?`,
-      )
-      .get(id);
+  async findById(id: number): Promise<Task | null> {
+    const row = await this.db.get<TaskRow>(
+      `SELECT t.*,
+              gc.worktree_status, gc.branch_name, gc.worktree_path,
+              (SELECT COUNT(*) FROM executions e WHERE e.task_id = t.id) AS execution_count,
+              c.model AS conversation_model
+       FROM tasks t
+       LEFT JOIN task_git_context gc ON gc.task_id = t.id
+       LEFT JOIN conversations c ON c.id = t.conversation_id
+       WHERE t.id = $1`,
+      [id],
+    );
     return row ? mapTask(row) : null;
   }
 }

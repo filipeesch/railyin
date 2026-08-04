@@ -10,13 +10,13 @@
  *   BE-6  execMessageTask invokes onHumanTurn for idle task
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { BoardToolExecutor, type IBoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { BoardToolContext } from "../workflow/tools/types.ts";
 
-let db: Database;
+let db: Db;
 let cfg: ReturnType<typeof setupTestConfig>;
 let taskId: number;
 let boardId: number;
@@ -37,10 +37,10 @@ function makeCtx(overrides?: Partial<BoardToolContext>): BoardToolContext {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   cfg = setupTestConfig();
-  db = initDb();
-  ({ taskId, boardId } = seedProjectAndTask(db, "/tmp/test-git"));
+  db = await initDb();
+  ({ taskId, boardId } = await seedProjectAndTask(db, "/tmp/test-git"));
   executor = new BoardToolExecutor(db, new WorkspaceRepository(db));
 });
 
@@ -74,47 +74,46 @@ describe("BE-3: execGetTask returns error string for unknown id", () => {
 
 describe("BE-4: execCreateTask inserts into injected in-memory DB", () => {
   it("inserts a new task into the in-memory DB", async () => {
-    const before = db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM tasks").get()!.count;
+    const before = (await db.get<{ count: number }>("SELECT COUNT(*) as count FROM tasks"))!.count;
     await executor.execCreateTask(
       { title: "New Task", project_key: "test-project", board_id: boardId },
       makeCtx(),
     );
-    const after = db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM tasks").get()!.count;
+    const after = (await db.get<{ count: number }>("SELECT COUNT(*) as count FROM tasks"))!.count;
     expect(after).toBe(before + 1);
   });
 
   it("BE-4.2: places new task above existing tasks when backlog is non-empty", async () => {
     // move seed task into backlog at an explicit position
-    db.run("UPDATE tasks SET workflow_state = 'backlog', position = 500 WHERE id = ?", [taskId]);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog', position = 500 WHERE id = $1", [taskId]);
 
     await executor.execCreateTask(
       { title: "On Top", project_key: "test-project", board_id: boardId },
       makeCtx(),
     );
 
-    const positions = db
-      .query<{ position: number }, [number]>(
-        "SELECT position FROM tasks WHERE board_id = ? AND workflow_state = 'backlog' ORDER BY position ASC",
+    const positions = (
+      await db.rows<{ position: number }>(
+        "SELECT position FROM tasks WHERE board_id = $1 AND workflow_state = 'backlog' ORDER BY position ASC",
+        [boardId],
       )
-      .all(boardId)
-      .map((r) => r.position);
+    ).map((r) => r.position);
 
     expect(positions[0]).toBeLessThan(500);
   });
 
   it("BE-4.3: assigns position 500 when backlog is empty", async () => {
-    db.run("DELETE FROM tasks WHERE board_id = ?", [boardId]);
+    await db.exec("DELETE FROM tasks WHERE board_id = $1", [boardId]);
 
     await executor.execCreateTask(
       { title: "Empty board task", project_key: "test-project", board_id: boardId },
       makeCtx(),
     );
 
-    const row = db
-      .query<{ position: number }, [number]>(
-        "SELECT position FROM tasks WHERE board_id = ? ORDER BY id DESC LIMIT 1",
-      )
-      .get(boardId);
+    const row = await db.get<{ position: number }>(
+      "SELECT position FROM tasks WHERE board_id = $1 ORDER BY id DESC LIMIT 1",
+      [boardId],
+    );
 
     expect(row!.position).toBe(500);
   });
@@ -127,9 +126,10 @@ describe("BE-5: execMoveTask updates workflow_state in injected DB", () => {
       makeCtx(),
     );
     expect(result).not.toMatch(/^Error:/);
-    const row = db.query<{ workflow_state: string }, [number]>(
-      "SELECT workflow_state FROM tasks WHERE id = ?",
-    ).get(taskId);
+    const row = await db.get<{ workflow_state: string }>(
+      "SELECT workflow_state FROM tasks WHERE id = $1",
+      [taskId],
+    );
     expect(row?.workflow_state).toBe("done");
   });
 });

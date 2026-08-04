@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { LoadedConfig } from "../config/index.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -24,11 +24,11 @@ function makeConfig(engineIds: string[], allowedEngineIds?: string[]): LoadedCon
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
-let db: Database;
+let db: Db;
 let configCleanup: () => void;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   configCleanup = setupTestConfig("", "/tmp").cleanup;
   vi.restoreAllMocks();
 });

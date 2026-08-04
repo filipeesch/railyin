@@ -1,5 +1,5 @@
 import type { ConversationMessage, ManualEdit, CodeReviewPayload, CodeReviewHunk, LineComment, HunkDecision } from "../../../shared/rpc-types.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
@@ -44,7 +44,7 @@ type LineCommentRow = {
 
 export class CodeReviewExecutor {
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly workdirResolver: IWorkingDirectoryResolver,
@@ -62,37 +62,34 @@ export class CodeReviewExecutor {
     manualEdits?: ManualEdit[],
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = this.db;
-    const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
+    const task = await db.get<TaskRow>("SELECT * FROM tasks WHERE id = $1", [taskId]);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const workspaceKey = await this.wsRepo.getTaskWorkspaceKey(taskId);
     const config = getWorkspaceConfig(workspaceKey);
     const conversationModel = task.conversation_id
-      ? (db.prepare("SELECT model FROM conversations WHERE id = ?").get(task.conversation_id) as { model: string | null } | undefined)?.model
+      ? (await db.get<{ model: string | null }>("SELECT model FROM conversations WHERE id = $1", [task.conversation_id]))?.model
       : null;
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, conversationModel);
 
-    const decisions = db
-      .query<DecisionRow, [number]>(
-        `SELECT hunk_hash, file_path, decision, comment, original_start, original_end, modified_start, modified_end
+    const decisions = await db.rows<DecisionRow>(
+      `SELECT hunk_hash, file_path, decision, comment, original_start, original_end, modified_start, modified_end
           FROM task_hunk_decisions
-          WHERE task_id = ? AND reviewer_id = 'user' AND sent = 0
+          WHERE task_id = $1 AND reviewer_id = 'user' AND sent = 0
           ORDER BY file_path, modified_start`,
-      )
-      .all(taskId);
-    const lineComments = db
-      .query<LineCommentRow, [number]>(
-        `SELECT id, file_path, line_start, line_end, line_text, context_lines, comment, reviewer_type
+      [taskId],
+    );
+    const lineComments = await db.rows<LineCommentRow>(
+      `SELECT id, file_path, line_start, line_end, line_text, context_lines, comment, reviewer_type
          FROM task_line_comments
-         WHERE task_id = ? AND sent = 0
+         WHERE task_id = $1 AND sent = 0
          ORDER BY file_path, line_start`,
-      )
-      .all(taskId);
+      [taskId],
+    );
 
-    const gitRow = db
-      .query<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">, [number]>(
-        "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
+    const gitRow = await db.get<Pick<TaskGitContextRow, "worktree_path" | "worktree_status">>(
+      "SELECT worktree_path, worktree_status FROM task_git_context WHERE task_id = $1",
+      [taskId],
+    );
     const worktreePath = gitRow?.worktree_status === "ready" ? (gitRow.worktree_path ?? "") : "";
 
     const uniqueFiles = [...new Set(decisions.map((row) => row.file_path))];
@@ -135,33 +132,33 @@ export class CodeReviewExecutor {
     };
     const reviewText = formatReviewMessageForLLM(payload);
 
-    db.run(
-      `UPDATE task_hunk_decisions SET sent = 1 WHERE task_id = ? AND reviewer_id = 'user' AND sent = 0`,
+    await db.exec(
+      `UPDATE task_hunk_decisions SET sent = 1 WHERE task_id = $1 AND reviewer_id = 'user' AND sent = 0`,
       [taskId],
     );
-    db.run(`UPDATE task_line_comments SET sent = 1 WHERE task_id = ? AND sent = 0`, [taskId]);
+    await db.exec(`UPDATE task_line_comments SET sent = 1 WHERE task_id = $1 AND sent = 0`, [taskId]);
 
-    const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
+    const conversationId = await ensureTaskConversation(db, taskId, task.conversation_id);
 
-    const reviewMsgId = appendMessage(db, taskId, conversationId, "code_review", "user", JSON.stringify(payload));
-    appendMessage(db, taskId, conversationId, "user", "user", reviewText);
+    const reviewMsgId = await appendMessage(db, taskId, conversationId, "code_review", "user", JSON.stringify(payload));
+    await appendMessage(db, taskId, conversationId, "user", "user", reviewText);
 
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
-    const execResult = db.run(
+    const execResult = await db.exec(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES (?, ?, ?, ?, 'code-review', 'running', ?)`,
+       VALUES ($1, $2, $3, $4, 'code-review', 'running', $5)
+       RETURNING id`,
       [taskId, conversationId, task.workflow_state, task.workflow_state, task.retry_count + 1],
     );
-    const executionId = execResult.lastInsertRowid as number;
-    db.run(
-      "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+    const executionId = (execResult.rows[0] as { id: number }).id;
+    await db.exec(
+      "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
       [executionId, taskId],
     );
-    this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
+    this.onTaskUpdated((await fetchTaskWithModel(db, taskId))!);
 
-    const reviewMsgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(reviewMsgId)!;
+    const reviewMsgRow = (await db
+      .get<ConversationMessageRow>("SELECT * FROM conversation_messages WHERE id = $1", [reviewMsgId]))!;
     this.onNewMessage(mapConversationMessage(reviewMsgRow));
 
     const signal = this.streamProcessor.createSignal(executionId);
@@ -171,9 +168,9 @@ export class CodeReviewExecutor {
       modelId: conversationModel ?? "",
       engineId: QualifiedModelId.tryParse(conversationModel)?.engineId ?? config.engines[0]?.id ?? "copilot",
       executionType: "task",
-      projectPath: this.workdirResolver.resolve(task),
+      projectPath: await this.workdirResolver.resolve(task),
     };
-    const { systemInstructions, stageInstructionsBlock } = this.promptAssemblyService.assemble({
+    const { systemInstructions, stageInstructionsBlock } = await this.promptAssemblyService.assemble({
       config,
       boardId: task.board_id,
       columnId: task.workflow_state,
@@ -191,7 +188,7 @@ export class CodeReviewExecutor {
         executionId,
         reviewContent,
         systemInstructions,
-        this.workdirResolver.resolve(task),
+        await this.workdirResolver.resolve(task),
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
@@ -201,7 +198,7 @@ export class CodeReviewExecutor {
       ),
       boardTools: this.boardTools,
       onSoftCancel: () => this.streamProcessor.abort(executionId),
-      ...(this.modelSettingsRepo && conversationModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, conversationModel) ?? undefined } : {}),
+      ...(this.modelSettingsRepo && conversationModel ? { contextWindowOverride: (await this.modelSettingsRepo.getContextWindow(workspaceKey, conversationModel)) ?? undefined } : {}),
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 

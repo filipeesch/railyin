@@ -6,23 +6,24 @@
  * and then enriches the result with template data.
  */
 
-import type { Database } from "bun:sqlite";
+import type { Db } from "./db.ts";
 import type { BoardRow } from "./row-types.ts";
 
 /**
  * List boards, optionally filtered by workspace key.
  * Returns minimal data (id, name, workspace_key) ordered by creation time.
  */
-export function listBoardsByWorkspace(
-  db: Database,
+export async function listBoardsByWorkspace(
+  db: Db,
   workspaceKey?: string,
-): Pick<BoardRow, "id" | "name" | "workspace_key">[] {
+): Promise<Pick<BoardRow, "id" | "name" | "workspace_key">[]> {
   if (workspaceKey) {
-    return db
-      .prepare("SELECT id, name, workspace_key FROM boards WHERE workspace_key = ? ORDER BY created_at ASC")
-      .all(workspaceKey) as Pick<BoardRow, "id" | "name" | "workspace_key">[];
+    return db.rows<Pick<BoardRow, "id" | "name" | "workspace_key">>(
+      "SELECT id, name, workspace_key FROM boards WHERE workspace_key = $1 ORDER BY created_at ASC",
+      [workspaceKey],
+    );
   }
-  return db
-    .prepare("SELECT id, name, workspace_key FROM boards ORDER BY created_at ASC")
-    .all() as Pick<BoardRow, "id" | "name" | "workspace_key">[];
+  return db.rows<Pick<BoardRow, "id" | "name" | "workspace_key">>(
+    "SELECT id, name, workspace_key FROM boards ORDER BY created_at ASC",
+  );
 }

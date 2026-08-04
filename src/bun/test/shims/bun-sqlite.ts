@@ -44,7 +44,7 @@ export function closeAll(): void {
 interface QueryResult<T> {
   get(...params: BindValue[]): T | null;
   all(...params: BindValue[]): T[];
-  run(...params: BindValue[]): void;
+  run(...params: BindValue[]): { changes: number; lastInsertRowid: number };
 }
 
 export class Database {
@@ -76,7 +76,10 @@ export class Database {
     return {
       get: (...params: BindValue[]) => (stmt.get(...params) as T) ?? null,
       all: (...params: BindValue[]) => stmt.all(...params) as T[],
-      run: (...params: BindValue[]) => { stmt.run(...params); },
+      run: (...params: BindValue[]) => {
+        const result = stmt.run(...params);
+        return { changes: result.changes, lastInsertRowid: Number(result.lastInsertRowid) };
+      },
     };
   }
 

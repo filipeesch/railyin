@@ -1,21 +1,21 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { TaskRepository } from "../db/task-repository.ts";
 import { initDb, seedProjectAndTask } from "./helpers.ts";
 
-let db: Database;
+let db: Db;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
 });
 
 describe("TaskRepository", () => {
-  it("TR-MODEL-1: findById returns model from conversations join", () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, "/tmp/git");
-    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = ?", [conversationId]);
+  it("TR-MODEL-1: findById returns model from conversations join", async () => {
+    const { taskId, conversationId } = await seedProjectAndTask(db, "/tmp/git");
+    await db.exec("UPDATE conversations SET model = 'fake/fake' WHERE id = $1", [conversationId]);
 
     const repo = new TaskRepository(db);
-    const task = repo.findById(taskId);
+    const task = await repo.findById(taskId);
 
     expect(task?.model).toBe("fake/fake");
   });

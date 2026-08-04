@@ -107,6 +107,33 @@ jobs:
       - name: Run API smoke tests
         run: bun test e2e/api --timeout 30000
 
+  postgres-tests:
+    name: PostgreSQL Testcontainers Tier
+    needs: type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install
+
+      # This tier runs under Node/vitest, not bun test — @testcontainers/postgresql
+      # hangs indefinitely under the Bun runtime (see vitest.postgres.config.ts).
+      # GitHub-hosted ubuntu-latest runners include both Docker and Node.js.
+      - name: Run PostgreSQL testcontainers tests
+        run: bun run test:postgres
+
   e2e:
     name: Playwright E2E (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     needs: [build, backend-tests, api-tests]

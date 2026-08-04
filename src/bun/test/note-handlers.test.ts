@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { noteHandlers } from "../handlers/notes.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
-let db: Database;
+let db: Db;
 let configCleanup: () => void;
 let conversationId: number;
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig();
   configCleanup = cfg.cleanup;
-  db = initDb();
-  const seed = seedProjectAndTask(db, "/test-git");
+  db = await initDb();
+  const seed = await seedProjectAndTask(db, "/test-git");
   conversationId = seed.conversationId;
 });
 
@@ -22,46 +22,46 @@ afterEach(() => {
 // ─── notes.list ────────────────────────────────────────────────────────────────
 
 describe("notes.list", () => {
-  it("NL-1: empty result when no notes exist for conversation", () => {
+  it("NL-1: empty result when no notes exist for conversation", async () => {
     const handlers = noteHandlers(db);
 
-    const result = handlers["notes.list"]({ conversationId });
+    const result = await handlers["notes.list"]({ conversationId });
     expect(result).toEqual([]);
   });
 
-  it("NL-2: returns all notes for a conversation", () => {
+  it("NL-2: returns all notes for a conversation", async () => {
     const handlers = noteHandlers(db);
 
-    db.run(
-      "INSERT INTO task_notes (conversation_id, content) VALUES (?, ?)",
+    await db.exec(
+      "INSERT INTO task_notes (conversation_id, content) VALUES ($1, $2)",
       [conversationId, "Note 1"],
     );
-    db.run(
-      "INSERT INTO task_notes (conversation_id, content) VALUES (?, ?)",
+    await db.exec(
+      "INSERT INTO task_notes (conversation_id, content) VALUES ($1, $2)",
       [conversationId, "Note 2"],
     );
 
-    const result = handlers["notes.list"]({ conversationId });
+    const result = await handlers["notes.list"]({ conversationId });
     expect(result).toHaveLength(2);
     expect(result[0].content).toBe("Note 1");
     expect(result[1].content).toBe("Note 2");
   });
 
-  it("NL-3: cross-conversation isolation", () => {
+  it("NL-3: cross-conversation isolation", async () => {
     const handlers = noteHandlers(db);
 
-    db.run(
-      "INSERT INTO task_notes (conversation_id, content) VALUES (?, ?)",
+    await db.exec(
+      "INSERT INTO task_notes (conversation_id, content) VALUES ($1, $2)",
       [conversationId, "This conversation"],
     );
     // Create another conversation with its own note
-    const otherSeed = seedProjectAndTask(db, "/test-git");
-    db.run(
-      "INSERT INTO task_notes (conversation_id, content) VALUES (?, ?)",
+    const otherSeed = await seedProjectAndTask(db, "/test-git");
+    await db.exec(
+      "INSERT INTO task_notes (conversation_id, content) VALUES ($1, $2)",
       [otherSeed.conversationId, "Other conversation"],
     );
 
-    const result = handlers["notes.list"]({ conversationId });
+    const result = await handlers["notes.list"]({ conversationId });
     expect(result).toHaveLength(1);
     expect(result[0].content).toBe("This conversation");
   });
@@ -70,10 +70,10 @@ describe("notes.list", () => {
 // ─── notes.create ──────────────────────────────────────────────────────────────
 
 describe("notes.create", () => {
-  it("NC-1: returns full TaskNote object", () => {
+  it("NC-1: returns full TaskNote object", async () => {
     const handlers = noteHandlers(db);
 
-    const result = handlers["notes.create"]({
+    const result = await handlers["notes.create"]({
       conversationId,
       content: "New note",
     });
@@ -86,10 +86,10 @@ describe("notes.create", () => {
     expect(result).toHaveProperty("updatedAt");
   });
 
-  it("NC-2: isSourceAi is false by default", () => {
+  it("NC-2: isSourceAi is false by default", async () => {
     const handlers = noteHandlers(db);
 
-    const result = handlers["notes.create"]({
+    const result = await handlers["notes.create"]({
       conversationId,
       content: "Note content",
     });
@@ -101,20 +101,20 @@ describe("notes.create", () => {
 // ─── notes.update ──────────────────────────────────────────────────────────────
 
 describe("notes.update", () => {
-  it("NU-1: patches content", () => {
+  it("NU-1: patches content", async () => {
     const handlers = noteHandlers(db);
-    const created = handlers["notes.create"]({ conversationId, content: "Original" });
+    const created = await handlers["notes.create"]({ conversationId, content: "Original" });
 
-    handlers["notes.update"]({ id: created.id, content: "Updated" });
+    await handlers["notes.update"]({ id: created.id, content: "Updated" });
 
-    const updated = handlers["notes.list"]({ conversationId }).find((n) => n.id === created.id);
+    const updated = (await handlers["notes.list"]({ conversationId })).find((n) => n.id === created.id);
     expect(updated!.content).toBe("Updated");
   });
 
-  it("NU-2: update on non-existent id throws", () => {
+  it("NU-2: update on non-existent id throws", async () => {
     const handlers = noteHandlers(db);
 
-    expect(() => handlers["notes.update"]({ id: 99999, content: "x" })).toThrow(
+    await expect(handlers["notes.update"]({ id: 99999, content: "x" })).rejects.toThrow(
       "Note #99999 not found",
     );
   });
@@ -123,21 +123,21 @@ describe("notes.update", () => {
 // ─── notes.delete ──────────────────────────────────────────────────────────────
 
 describe("notes.delete", () => {
-  it("ND-1: note absent after delete", () => {
+  it("ND-1: note absent after delete", async () => {
     const handlers = noteHandlers(db);
-    const created = handlers["notes.create"]({ conversationId, content: "To delete" });
+    const created = await handlers["notes.create"]({ conversationId, content: "To delete" });
 
-    handlers["notes.delete"]({ id: created.id });
+    await handlers["notes.delete"]({ id: created.id });
 
-    const result = handlers["notes.list"]({ conversationId });
+    const result = await handlers["notes.list"]({ conversationId });
     expect(result).toHaveLength(0);
   });
 
-  it("ND-2: delete on unknown id is a no-op (repo ignores missing)", () => {
+  it("ND-2: delete on unknown id is a no-op (repo ignores missing)", async () => {
     const handlers = noteHandlers(db);
 
     // deleteNote doesn't throw for missing ids — it's idempotent
-    handlers["notes.delete"]({ id: 99999 });
+    await handlers["notes.delete"]({ id: 99999 });
     // Should not throw
   });
 });
@@ -145,24 +145,24 @@ describe("notes.delete", () => {
 // ─── notes.list with tags ─────────────────────────────────────────────────────
 
 describe("notes.list with tags", () => {
-  it("NL-4: notes.list with tags filter passes to repository", () => {
+  it("NL-4: notes.list with tags filter passes to repository", async () => {
     const handlers = noteHandlers(db);
 
-    handlers["notes.create"]({ conversationId, content: "Note 1", tags: ["design"] });
-    handlers["notes.create"]({ conversationId, content: "Note 2", tags: ["architecture"] });
+    await handlers["notes.create"]({ conversationId, content: "Note 1", tags: ["design"] });
+    await handlers["notes.create"]({ conversationId, content: "Note 2", tags: ["architecture"] });
 
-    const result = handlers["notes.list"]({ conversationId, tags: ["design"] });
+    const result = await handlers["notes.list"]({ conversationId, tags: ["design"] });
     expect(result).toHaveLength(1);
     expect(result[0].content).toBe("Note 1");
   });
 
-  it("NL-5: notes.list without tags returns all notes", () => {
+  it("NL-5: notes.list without tags returns all notes", async () => {
     const handlers = noteHandlers(db);
 
-    handlers["notes.create"]({ conversationId, content: "Note 1", tags: ["design"] });
-    handlers["notes.create"]({ conversationId, content: "Note 2", tags: ["architecture"] });
+    await handlers["notes.create"]({ conversationId, content: "Note 1", tags: ["design"] });
+    await handlers["notes.create"]({ conversationId, content: "Note 2", tags: ["architecture"] });
 
-    const result = handlers["notes.list"]({ conversationId });
+    const result = await handlers["notes.list"]({ conversationId });
     expect(result).toHaveLength(2);
   });
 });
@@ -170,10 +170,10 @@ describe("notes.list with tags", () => {
 // ─── notes.create with tags ───────────────────────────────────────────────────
 
 describe("notes.create with tags", () => {
-  it("NC-3: notes.create with tags persists normalized tags", () => {
+  it("NC-3: notes.create with tags persists normalized tags", async () => {
     const handlers = noteHandlers(db);
 
-    const result = handlers["notes.create"]({
+    const result = await handlers["notes.create"]({
       conversationId,
       content: "New note",
       tags: [" Design ", "TODO"],
@@ -182,10 +182,10 @@ describe("notes.create with tags", () => {
     expect(result.tags).toEqual(["design", "todo"]);
   });
 
-  it("NC-4: notes.create without tags has null tags", () => {
+  it("NC-4: notes.create without tags has null tags", async () => {
     const handlers = noteHandlers(db);
 
-    const result = handlers["notes.create"]({
+    const result = await handlers["notes.create"]({
       conversationId,
       content: "New note",
     });
@@ -197,23 +197,23 @@ describe("notes.create with tags", () => {
 // ─── notes.update with tags ───────────────────────────────────────────────────
 
 describe("notes.update with tags", () => {
-  it("NU-3: notes.update with tags replaces existing", () => {
+  it("NU-3: notes.update with tags replaces existing", async () => {
     const handlers = noteHandlers(db);
-    const created = handlers["notes.create"]({ conversationId, content: "Original", tags: ["old"] });
+    const created = await handlers["notes.create"]({ conversationId, content: "Original", tags: ["old"] });
 
-    handlers["notes.update"]({ id: created.id, tags: ["new"] });
+    await handlers["notes.update"]({ id: created.id, tags: ["new"] });
 
-    const updated = handlers["notes.list"]({ conversationId }).find((n) => n.id === created.id);
+    const updated = (await handlers["notes.list"]({ conversationId })).find((n) => n.id === created.id);
     expect(updated!.tags).toEqual(["new"]);
   });
 
-  it("NU-4: notes.update without tags preserves existing", () => {
+  it("NU-4: notes.update without tags preserves existing", async () => {
     const handlers = noteHandlers(db);
-    const created = handlers["notes.create"]({ conversationId, content: "Original", tags: ["existing"] });
+    const created = await handlers["notes.create"]({ conversationId, content: "Original", tags: ["existing"] });
 
-    handlers["notes.update"]({ id: created.id, content: "Updated" });
+    await handlers["notes.update"]({ id: created.id, content: "Updated" });
 
-    const updated = handlers["notes.list"]({ conversationId }).find((n) => n.id === created.id);
+    const updated = (await handlers["notes.list"]({ conversationId })).find((n) => n.id === created.id);
     expect(updated!.tags).toEqual(["existing"]);
   });
 });

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "./db/db.ts";
 import { resolveModelContextWindow } from "./conversation/context.ts";
 import { ContextEstimator } from "./conversation/context-estimator.ts";
 import type { ExecutionCoordinator } from "./engine/coordinator.ts";
@@ -12,7 +12,7 @@ export async function resolveContextWindow(
 ): Promise<number> {
   // DB override takes highest precedence
   if (modelSettingsRepo) {
-    const dbOverride = modelSettingsRepo.getContextWindow(workspaceKey, model);
+    const dbOverride = await modelSettingsRepo.getContextWindow(workspaceKey, model);
     if (dbOverride != null) return dbOverride;
   }
 
@@ -33,10 +33,10 @@ export async function resolveContextWindow(
   }
 }
 
-export function estimateConversationContextUsage(
-  db: Database,
+export async function estimateConversationContextUsage(
+  db: Db,
   conversationId: number,
   maxTokens: number,
-): { usedTokens: number; maxTokens: number; fraction: number } {
+): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> {
   return new ContextEstimator(db).estimate(conversationId, maxTokens);
 }

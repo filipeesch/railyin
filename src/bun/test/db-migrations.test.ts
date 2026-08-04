@@ -6,6 +6,8 @@ import { Database } from "bun:sqlite";
 import { _resetForTests as resetDbSingleton, getDb } from "../db/index.ts";
 import { runMigrations } from "../db/migrations/runner.ts";
 
+const silentLogger = { info() {}, warn() {} };
+
 let tempDir: string;
 let dbPath: string;
 
@@ -120,46 +122,45 @@ describe("runMigrations", () => {
     `);
     rawDb.close();
 
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
 
     const db = getDb();
-    const applied = db.query<{ id: string }, [string]>("SELECT id FROM schema_migrations WHERE id = ?").get("015_workspace_config_key");
+    const applied = await db.get<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["015_workspace_config_key"]);
     expect(applied?.id).toBe("015_workspace_config_key");
   });
 
   it("boards and tasks have no FK constraints after migration — arbitrary workspace/project keys are accepted", async () => {
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
 
     const db = getDb();
 
     // Insert a board with an arbitrary workspace_key — no compat row required
-    expect(() =>
-      db.run(
+    await expect(
+      db.exec(
         "INSERT INTO boards (workspace_key, name, workflow_template_id, project_keys) VALUES ('nonexistent-ws', 'FK-Free Board', 'delivery', '[]')",
       )
-    ).not.toThrow();
-    const boardId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    ).resolves.toBeDefined();
+    const boardId = (await db.get<{ id: number }>("SELECT last_insert_rowid() AS id"))!.id;
 
-    db.run("INSERT INTO conversations (task_id) VALUES (0)");
-    const convId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
+    await db.exec("INSERT INTO conversations (task_id) VALUES (0)");
+    const convId = (await db.get<{ id: number }>("SELECT last_insert_rowid() AS id"))!.id;
 
     // Insert a task with an arbitrary project_key — no compat row required
-    expect(() =>
-      db.run(
-        "INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state, conversation_id, created_at) VALUES (?, 'nonexistent-proj', 'FK-Free Task', 'backlog', 'idle', ?, datetime('now'))",
+    await expect(
+      db.exec(
+        `INSERT INTO tasks (board_id, project_key, title, workflow_state, execution_state, conversation_id, created_at) VALUES ($1, 'nonexistent-proj', 'FK-Free Task', 'backlog', 'idle', $2, ${db.dialect.now()})`,
         [boardId, convId],
       )
-    ).not.toThrow();
+    ).resolves.toBeDefined();
   });
 
   it("workspaces and projects tables do not exist after migration", async () => {
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
 
     const db = getDb();
-    const tables = db
-      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('workspaces', 'projects')")
-      .all()
-      .map((r) => r.name);
+    const tables = (await db.rows<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('workspaces', 'projects')",
+    )).map((r) => r.name);
     expect(tables).toEqual([]);
   });
 
@@ -270,36 +271,34 @@ describe("runMigrations", () => {
     `);
     rawDb.close();
 
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
 
     const db = getDb();
-    const taskRow = db.query<{ conversation_id: number | null }, [number]>(
-      "SELECT conversation_id FROM tasks WHERE id = ?",
-    ).get(2);
+    const taskRow = await db.get<{ conversation_id: number | null }>(
+      "SELECT conversation_id FROM tasks WHERE id = $1",
+      [2],
+    );
     expect(taskRow?.conversation_id).toBe(102);
 
-    const executionRow = db.query<{ conversation_id: number | null }, [number]>(
-      "SELECT conversation_id FROM executions WHERE id = ?",
-    ).get(12);
+    const executionRow = await db.get<{ conversation_id: number | null }>(
+      "SELECT conversation_id FROM executions WHERE id = $1",
+      [12],
+    );
     expect(executionRow?.conversation_id).toBe(102);
 
-    const streamRows = db.query<{ id: number; conversation_id: number | null }, []>(
+    const streamRows = await db.rows<{ id: number; conversation_id: number | null }>(
       "SELECT id, conversation_id FROM stream_events ORDER BY id ASC",
-    ).all();
+    );
     expect(streamRows).toEqual([
       { id: 201, conversation_id: 101 },
       { id: 202, conversation_id: 102 },
     ]);
 
-    const taskIdColumn = db
-      .query<{ name: string; notnull: number }, []>("PRAGMA table_info(stream_events)")
-      .all()
+    const taskIdColumn = (await db.rows<{ name: string; notnull: number }>("PRAGMA table_info(stream_events)"))
       .find((column) => column.name === "task_id");
     expect(taskIdColumn).toBeUndefined();
 
-    const conversationIdColumn = db
-      .query<{ name: string; notnull: number }, []>("PRAGMA table_info(stream_events)")
-      .all()
+    const conversationIdColumn = (await db.rows<{ name: string; notnull: number }>("PRAGMA table_info(stream_events)"))
       .find((column) => column.name === "conversation_id");
     expect(conversationIdColumn?.notnull).toBe(1);
   });
@@ -307,21 +306,52 @@ describe("runMigrations", () => {
   it("previousChecksums: does not throw when a migration file was amended after being applied", async () => {
     // Simulate a DB where migration 037 was applied with the OLD (buggy) checksum.
     // The runner should accept it via previousChecksums and update the stored checksum.
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
     const db = getDb();
 
     // Overwrite the stored checksum for 037 with a value listed in its previousChecksums.
     const oldChecksum = "ff09dd18e2e49e937ae505b9cc04d00f2b9977c61e254f80934d986292e3a1f0";
-    db.run("UPDATE schema_migrations SET checksum = ? WHERE id = ?", [oldChecksum, "037_remove_model_from_tasks"]);
+    await db.exec("UPDATE schema_migrations SET checksum = $1 WHERE id = $2", [oldChecksum, "037_remove_model_from_tasks"]);
 
     // runMigrations should not throw — it recognises the old checksum and updates it.
-    await expect(runMigrations()).resolves.toBeUndefined();
+    await expect(runMigrations({ logger: silentLogger })).resolves.toBeUndefined();
 
     // Stored checksum should now be the current file checksum (not the old one).
-    const row = db.query<{ checksum: string }, [string]>(
-      "SELECT checksum FROM schema_migrations WHERE id = ?",
-    ).get("037_remove_model_from_tasks");
+    const row = await db.get<{ checksum: string }>(
+      "SELECT checksum FROM schema_migrations WHERE id = $1",
+      ["037_remove_model_from_tasks"],
+    );
     expect(row?.checksum).not.toBe(oldChecksum);
+  });
+
+  it("checksum mismatch on an unamended migration is a hard failure (PC-7)", async () => {
+    await runMigrations({ logger: silentLogger });
+    const db = getDb();
+    // Corrupt the stored checksum for a migration with no previousChecksums entry.
+    await db.exec("UPDATE schema_migrations SET checksum = $1 WHERE id = $2", [
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "001_initial",
+    ]);
+    resetDbSingleton();
+    process.env.RAILYN_DB = dbPath;
+    await expect(runMigrations({ logger: silentLogger })).rejects.toThrow(/Checksum mismatch/);
+  });
+
+  it("backup file is created before applying pending migrations to a file DB (PC-7)", async () => {
+    const { existsSync } = await import("fs");
+    expect(existsSync(`${dbPath}.backup`)).toBe(false);
+    await runMigrations({ logger: silentLogger });
+    expect(existsSync(`${dbPath}.backup`)).toBe(true);
+  });
+
+  it("backup is skipped for an in-memory DB (PC-7)", async () => {
+    process.env.RAILYN_DB = ":memory:";
+    resetDbSingleton();
+    await runMigrations({ logger: silentLogger });
+    const { existsSync } = await import("fs");
+    // No backup path exists for :memory: — nothing to assert a path against,
+    // but the run must complete without attempting a file copy (no throw above).
+    expect(existsSync(`${dbPath}.backup`)).toBe(false);
   });
 
   it("migration 044: converts NULL enabled_mcp_tools to '[]' in tasks and chat_sessions", async () => {
@@ -373,18 +403,18 @@ describe("runMigrations", () => {
     rawDb.run("INSERT INTO chat_sessions (enabled_mcp_tools) VALUES (?)", ['[]']);
     rawDb.close();
 
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
 
     const db = getDb();
-    const taskRows = db.query<{ enabled_mcp_tools: string | null }, []>(
+    const taskRows = await db.rows<{ enabled_mcp_tools: string | null }>(
       "SELECT enabled_mcp_tools FROM tasks ORDER BY id",
-    ).all();
+    );
     expect(taskRows[0].enabled_mcp_tools).toBe("[]");
     expect(taskRows[1].enabled_mcp_tools).toBe('["server:tool"]');
 
-    const sessionRows = db.query<{ enabled_mcp_tools: string | null }, []>(
+    const sessionRows = await db.rows<{ enabled_mcp_tools: string | null }>(
       "SELECT enabled_mcp_tools FROM chat_sessions ORDER BY id",
-    ).all();
+    );
     expect(sessionRows[0].enabled_mcp_tools).toBe("[]");
     expect(sessionRows[1].enabled_mcp_tools).toBe("[]");
   });
@@ -434,14 +464,12 @@ describe("Migration 053 — conversation_injection_state backfill", () => {
     rawDb.run("INSERT INTO conversations (id, decisions_injected_after_compaction_id) VALUES (3, NULL)");
     rawDb.close();
 
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
 
     const db = getDb();
-    const rows = db
-      .query<{ conversation_id: number; injection_type: string; last_injected_after_compaction_id: number | null }, []>(
-        "SELECT conversation_id, injection_type, last_injected_after_compaction_id FROM conversation_injection_state ORDER BY conversation_id",
-      )
-      .all();
+    const rows = await db.rows<{ conversation_id: number; injection_type: string; last_injected_after_compaction_id: number | null }>(
+      "SELECT conversation_id, injection_type, last_injected_after_compaction_id FROM conversation_injection_state ORDER BY conversation_id",
+    );
 
     // Only the two non-null rows are backfilled, both under injection_type = 'decisions'
     expect(rows).toEqual([
@@ -453,47 +481,47 @@ describe("Migration 053 — conversation_injection_state backfill", () => {
 
 describe("Migration 048 — chat cascade", () => {
   it("M-048a: full migration stack completes without error", async () => {
-    await expect(runMigrations()).resolves.toBeUndefined();
+    await expect(runMigrations({ logger: silentLogger })).resolves.toBeUndefined();
   });
 
   it("M-048b: deleting a conversation cascades to conversation_messages", async () => {
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
     const db = getDb();
 
-    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
-    const { id: convId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+    await db.exec("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const { id: convId } = (await db.get<{ id: number }>("SELECT last_insert_rowid() as id"))!;
 
-    db.run(
-      "INSERT INTO conversation_messages (conversation_id, type, content) VALUES (?, 'user', 'hi')",
+    await db.exec(
+      "INSERT INTO conversation_messages (conversation_id, type, content) VALUES ($1, 'user', 'hi')",
       [convId],
     );
-    const before = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM conversation_messages").get()!.n;
+    const before = (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM conversation_messages"))!.n;
     expect(before).toBe(1);
 
-    db.run("DELETE FROM conversations WHERE id = ?", [convId]);
+    await db.exec("DELETE FROM conversations WHERE id = $1", [convId]);
 
-    const after = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM conversation_messages").get()!.n;
+    const after = (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM conversation_messages"))!.n;
     expect(after).toBe(0);
   });
 
   it("M-048c: deleting a conversation cascades to stream_events", async () => {
-    await runMigrations();
+    await runMigrations({ logger: silentLogger });
     const db = getDb();
 
-    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
-    const { id: convId } = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+    await db.exec("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const { id: convId } = (await db.get<{ id: number }>("SELECT last_insert_rowid() as id"))!;
 
-    db.run(
+    await db.exec(
       `INSERT INTO stream_events (conversation_id, execution_id, seq, block_id, type, content)
-       VALUES (?, 0, 1, 'blk', 'text_chunk', 'data')`,
+       VALUES ($1, 0, 1, 'blk', 'text_chunk', 'data')`,
       [convId],
     );
-    const before = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
+    const before = (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM stream_events"))!.n;
     expect(before).toBe(1);
 
-    db.run("DELETE FROM conversations WHERE id = ?", [convId]);
+    await db.exec("DELETE FROM conversations WHERE id = $1", [convId]);
 
-    const after = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
+    const after = (await db.get<{ n: number }>("SELECT COUNT(*) as n FROM stream_events"))!.n;
     expect(after).toBe(0);
   });
 });

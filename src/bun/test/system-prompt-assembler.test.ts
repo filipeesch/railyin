@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { resetConfig } from "../config/index.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
 import { SystemPromptAssembler } from "../engine/execution/system-prompt-assembler.ts";
@@ -78,11 +78,11 @@ describe("SystemPromptAssembler", () => {
 });
 
 describe("SystemPromptAssembler.fromConfig / getStageInstructions (real config)", () => {
-  let db: Database;
+  let db: Db;
   let configCleanup: () => void;
 
-  beforeEach(() => {
-    db = initDb();
+  beforeEach(async () => {
+    db = await initDb();
   });
 
   afterEach(() => {
@@ -90,7 +90,7 @@ describe("SystemPromptAssembler.fromConfig / getStageInstructions (real config)"
     resetConfig();
   });
 
-  it("fromConfig().assemble() never includes stage_instructions content", () => {
+  it("fromConfig().assemble() never includes stage_instructions content", async () => {
     const cfg = setupTestConfig("", undefined, [
       `id: spa-workflow
 name: SpaWorkflow
@@ -105,15 +105,15 @@ columns:
 `,
     ]);
     configCleanup = cfg.cleanup;
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workflow_template_id = 'spa-workflow' WHERE id = ?", [boardId]);
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workflow_template_id = 'spa-workflow' WHERE id = $1", [boardId]);
     const config = getWorkspaceConfig("default");
 
-    const assembler = SystemPromptAssembler.fromConfig(config, boardId, "plan");
+    const assembler = await SystemPromptAssembler.fromConfig(config, boardId, "plan");
     expect(assembler.assemble()).toBe("Workflow context.");
   });
 
-  it("getStageInstructions() returns the column's raw stage_instructions text", () => {
+  it("getStageInstructions() returns the column's raw stage_instructions text", async () => {
     const cfg = setupTestConfig("", undefined, [
       `id: spa-workflow-2
 name: SpaWorkflow2
@@ -127,14 +127,14 @@ columns:
 `,
     ]);
     configCleanup = cfg.cleanup;
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workflow_template_id = 'spa-workflow-2' WHERE id = ?", [boardId]);
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workflow_template_id = 'spa-workflow-2' WHERE id = $1", [boardId]);
     const config = getWorkspaceConfig("default");
 
-    expect(SystemPromptAssembler.getStageInstructions(config, boardId, "plan")).toBe("Column context.");
+    expect(await SystemPromptAssembler.getStageInstructions(config, boardId, "plan")).toBe("Column context.");
   });
 
-  it("getStageInstructions() returns undefined when the column defines no stage_instructions", () => {
+  it("getStageInstructions() returns undefined when the column defines no stage_instructions", async () => {
     const cfg = setupTestConfig("", undefined, [
       `id: spa-workflow-3
 name: SpaWorkflow3
@@ -147,10 +147,10 @@ columns:
 `,
     ]);
     configCleanup = cfg.cleanup;
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workflow_template_id = 'spa-workflow-3' WHERE id = ?", [boardId]);
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workflow_template_id = 'spa-workflow-3' WHERE id = $1", [boardId]);
     const config = getWorkspaceConfig("default");
 
-    expect(SystemPromptAssembler.getStageInstructions(config, boardId, "plan")).toBeUndefined();
+    expect(await SystemPromptAssembler.getStageInstructions(config, boardId, "plan")).toBeUndefined();
   });
 });

@@ -9,7 +9,7 @@ export async function runSingleTurnChatScenario(runtime: BackendRpcRuntime): Pro
     await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
 
-    const messages = runtime.getMessages(taskId);
+    const messages = await runtime.getMessages(taskId);
     expect(messages.at(-2)?.type).toBe("user");
     expect(messages.at(-2)?.content).toBe("Hello from single-turn");
     expect(messages.at(-1)?.type).toBe("assistant");
@@ -26,7 +26,7 @@ export async function runMultiTurnChatScenario(runtime: BackendRpcRuntime): Prom
     await runtime.recorder.waitForStreamDone(second.executionId);
     await runtime.waitForExecutionStatus(second.executionId, "completed");
 
-    const tail = runtime.getMessages(taskId).slice(-4).map((message) => [message.type, message.content]);
+    const tail = (await runtime.getMessages(taskId)).slice(-4).map((message) => [message.type, message.content]);
     expect(tail).toEqual([
         ["user", "First turn"],
         ["assistant", tail[1][1]],
@@ -41,7 +41,7 @@ export async function runToolSuccessScenario(runtime: BackendRpcRuntime): Promis
     await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
 
-    const messages = runtime.getMessages(taskId);
+    const messages = await runtime.getMessages(taskId);
     const toolCall = messages.find((message) => message.type === "tool_call");
     const toolResult = messages.find((message) => message.type === "tool_result");
     const assistant = messages.at(-1);
@@ -59,10 +59,10 @@ export async function runToolFailureScenario(runtime: BackendRpcRuntime): Promis
     await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
 
-    const toolResult = runtime.getMessages(taskId).find((message) => message.type === "tool_result");
+    const toolResult = (await runtime.getMessages(taskId)).find((message) => message.type === "tool_result");
     expect(toolResult).toBeDefined();
     expect(toolResult?.content).toContain('"is_error":true');
-    expect(runtime.getMessages(taskId).at(-1)?.type).toBe("assistant");
+    expect((await runtime.getMessages(taskId)).at(-1)?.type).toBe("assistant");
 }
 
 export async function runAskUserScenario(runtime: BackendRpcRuntime): Promise<void> {
@@ -72,7 +72,7 @@ export async function runAskUserScenario(runtime: BackendRpcRuntime): Promise<vo
     await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
     await runtime.waitForTaskState(taskId, "waiting_user");
 
-    const messages = runtime.getMessages(taskId);
+    const messages = await runtime.getMessages(taskId);
     expect(messages.filter((message) => message.type === "assistant")).toHaveLength(0);
     expect(messages.some((message) => message.type === "ask_user_prompt")).toBe(true);
 }
@@ -91,7 +91,7 @@ export async function runAskUserResumeScenario(runtime: BackendRpcRuntime): Prom
     await runtime.waitForExecutionStatus(second.executionId, "completed");
     await runtime.waitForTaskState(taskId, "completed");
 
-    const tail = runtime.getMessages(taskId).slice(-3).map((message) => [message.type, message.content]);
+    const tail = (await runtime.getMessages(taskId)).slice(-3).map((message) => [message.type, message.content]);
     expect(tail[0]?.[0]).toBe("ask_user_prompt");
     expect(tail[1]).toEqual(["user", "Use option A"]);
     expect(tail[2]?.[0]).toBe("assistant");
@@ -113,7 +113,7 @@ export async function runCancellationScenario(runtime: BackendRpcRuntime): Promi
     expect(streamContentAfterCancel).toBeGreaterThanOrEqual(streamContentBeforeCancel);
     // Partial text accumulated before cancel is saved so the message is not lost.
     // streamContentBeforeCancel > 0 is guaranteed by waitForAnyStreamContent above.
-    expect(runtime.getMessages(taskId).filter((message) => message.type === "assistant").length).toBeGreaterThan(0);
+    expect((await runtime.getMessages(taskId)).filter((message) => message.type === "assistant").length).toBeGreaterThan(0);
 }
 
 export async function runFatalFailureScenario(runtime: BackendRpcRuntime): Promise<void> {
@@ -123,7 +123,7 @@ export async function runFatalFailureScenario(runtime: BackendRpcRuntime): Promi
     await runtime.recorder.waitForError(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "failed");
     await runtime.waitForTaskState(taskId, "failed");
-    expect(runtime.getMessages(taskId).filter((message) => message.type === "assistant")).toHaveLength(0);
+    expect((await runtime.getMessages(taskId)).filter((message) => message.type === "assistant")).toHaveLength(0);
 }
 
 export async function runModelListingScenario(runtime: BackendRpcRuntime): Promise<void> {

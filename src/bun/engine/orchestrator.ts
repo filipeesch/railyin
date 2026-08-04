@@ -21,7 +21,7 @@ import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
 import { mapTask, mapConversationMessage } from "../db/mappers.ts";
 import { fetchTaskWithModel } from "../db/task-queries.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
@@ -52,7 +52,7 @@ import { ExecutionParamsEnricher } from "./execution/execution-params-enricher.t
 import type { McpRegistryPool } from "../mcp/registry-pool.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
-  private readonly db: Database;
+  private readonly db: Db;
   private readonly registry: EngineRegistry;
   private readonly streamProcessor: StreamProcessor;
   private readonly paramsBuilder: ExecutionParamsBuilder;
@@ -72,7 +72,7 @@ export class Orchestrator implements ExecutionCoordinator {
   }
 
   constructor(
-    db: Database,
+    db: Db,
     registry: EngineRegistry,
     onError: OnError,
     onTaskUpdated: OnTaskUpdated,
@@ -179,38 +179,40 @@ export class Orchestrator implements ExecutionCoordinator {
     this.streamProcessor.markClaudeExecution(executionId);
   }
 
-  cancel(executionId: number): void {
+  async cancel(executionId: number): Promise<void> {
     this.streamProcessor.abort(executionId);
 
     const db = this.db;
     // Fetch row BEFORE nativeCancelExecution — it may overwrite status to 'failed'
     // (zombie cleanup path) which would prevent our non-native 'cancelled' update below.
-    const execRow = db.query<{ task_id: number | null; status: string; finished_at: string | null }, [number]>(
-      "SELECT task_id, status, finished_at FROM executions WHERE id = ?",
-    ).get(executionId);
+    const execRow = await db.get<{ task_id: number | null; status: string; finished_at: string | null }>(
+      "SELECT task_id, status, finished_at FROM executions WHERE id = $1",
+      [executionId],
+    );
 
     this.registry.cancelAll(executionId);
 
     if (!execRow) return;
     const taskId = execRow.task_id ?? null;
-    const execConvRow = db.query<{ conversation_id: number | null }, [number]>(
-      "SELECT conversation_id FROM executions WHERE id = ?",
-    ).get(executionId);
+    const execConvRow = await db.get<{ conversation_id: number | null }>(
+      "SELECT conversation_id FROM executions WHERE id = $1",
+      [executionId],
+    );
     const conversationId = execConvRow?.conversation_id ?? 0;
     if (taskId != null) {
       if (execRow.status === "running" && execRow.finished_at == null) {
-        db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
-        db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
-        const taskRow = fetchTaskWithModel(db, taskId);
+        await db.exec(`UPDATE executions SET status = 'cancelled', finished_at = ${db.dialect.now()} WHERE id = $1`, [executionId]);
+        await db.exec("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = $1", [taskId]);
+        const taskRow = await fetchTaskWithModel(db, taskId);
         if (taskRow) {
           this.onTaskUpdated(taskRow);
         }
         this.streamProcessor.emitDone(taskId, conversationId, executionId);
       }
     } else if (execRow.status === "running" && execRow.finished_at == null) {
-      db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
+      await db.exec(`UPDATE executions SET status = 'cancelled', finished_at = ${db.dialect.now()} WHERE id = $1`, [executionId]);
       if (conversationId) {
-        db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+        await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = $1", [conversationId]);
       }
       this.streamProcessor.emitDone(null, conversationId, executionId);
     }
@@ -248,14 +250,15 @@ export class Orchestrator implements ExecutionCoordinator {
 
   async listCommands(taskId: number) {
     const db = this.db;
-    const task = db.query<{ board_id: number; conversation_id: number | null }, [number]>(
-      "SELECT board_id, conversation_id FROM tasks WHERE id = ?",
-    ).get(taskId);
+    const task = await db.get<{ board_id: number; conversation_id: number | null }>(
+      "SELECT board_id, conversation_id FROM tasks WHERE id = $1",
+      [taskId],
+    );
     if (!task) return [];
-    const key = this.wsRepo.getBoardWorkspaceKey(task.board_id);
+    const key = await this.wsRepo.getBoardWorkspaceKey(task.board_id);
     const config = getWorkspaceConfig(key);
     const conversationModel = task.conversation_id
-      ? (db.prepare("SELECT model FROM conversations WHERE id = ?").get(task.conversation_id) as { model: string | null } | undefined)?.model
+      ? (await db.get<{ model: string | null }>("SELECT model FROM conversations WHERE id = $1", [task.conversation_id]))?.model
       : null;
     const engine = this.registry.resolveEngineForModel(key, conversationModel);
     return runWithConfig(config, () => engine.listCommands(taskId));
@@ -273,41 +276,39 @@ export class Orchestrator implements ExecutionCoordinator {
   ): Promise<void> {
     const db = this.db;
 
-    const execRow = db
-      .query<{ task_id: number | null; conversation_id: number | null; model: string | null }, [number]>(
-        `SELECT e.task_id, e.conversation_id, c.model
+    const execRow = await db.get<{ task_id: number | null; conversation_id: number | null; model: string | null }>(
+      `SELECT e.task_id, e.conversation_id, c.model
          FROM executions e
          LEFT JOIN conversations c ON c.id = e.conversation_id
-         WHERE e.id = ?`,
-      )
-      .get(executionId);
+         WHERE e.id = $1`,
+      [executionId],
+    );
 
     if (!execRow) return;
 
     const { task_id: taskId, conversation_id: conversationId } = execRow;
 
     const workspaceKey = taskId != null
-      ? this.wsRepo.getTaskWorkspaceKey(taskId)
-      : (db
-          .query<{ workspace_key: string }, [number]>(
-            "SELECT cs.workspace_key FROM chat_sessions cs WHERE cs.conversation_id = ?",
-          )
-          .get(conversationId ?? 0)?.workspace_key ?? getDefaultWorkspaceKey());
+      ? await this.wsRepo.getTaskWorkspaceKey(taskId)
+      : (await db.get<{ workspace_key: string }>(
+          "SELECT cs.workspace_key FROM chat_sessions cs WHERE cs.conversation_id = $1",
+          [conversationId ?? 0],
+        ))?.workspace_key ?? getDefaultWorkspaceKey();
 
     const engine = this.registry.resolveEngineForModel(workspaceKey, execRow.model);
     await engine.resume(executionId, { type: "shell_approval", decision });
 
     if (taskId != null) {
-      db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
-      db.run(
-        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
+      await db.exec("UPDATE tasks SET execution_state = 'running' WHERE id = $1", [taskId]);
+      await db.exec(
+        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = $1",
         [executionId],
       );
-      this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
+      this.onTaskUpdated((await fetchTaskWithModel(db, taskId))!);
     } else if (conversationId != null) {
-      db.run("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = ?", [conversationId]);
-      db.run(
-        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
+      await db.exec("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = $1", [conversationId]);
+      await db.exec(
+        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = $1",
         [executionId],
       );
     }
@@ -315,21 +316,23 @@ export class Orchestrator implements ExecutionCoordinator {
 
   async compactTask(taskId: number): Promise<void> {
     const db = this.db;
-    const task = db.query<TaskRow & { conversation_model: string | null }, [number]>(
-      `SELECT t.*, c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?`,
-    ).get(taskId);
+    const task = await db.get<TaskRow & { conversation_model: string | null }>(
+      `SELECT t.*, c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = $1`,
+      [taskId],
+    );
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const workspaceKey = await this.wsRepo.getTaskWorkspaceKey(taskId);
     const engine = this.registry.resolveEngineForModel(workspaceKey, task.conversation_model);
     if (!engine.compact) {
       throw new Error(`Engine for task ${taskId} does not support manual compaction`);
     }
-    const workingDirectory = this.workdirResolver.resolve(task);
+    const workingDirectory = await this.workdirResolver.resolve(task);
     const conversationId = task.conversation_id ?? 0;
     await engine.compact(taskId, conversationId, workingDirectory, workspaceKey);
-    const lastMsg = db.query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
+    const lastMsg = await db.get<ConversationMessageRow>(
+      "SELECT * FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+      [conversationId],
+    );
     if (lastMsg) {
       this.onNewMessage(mapConversationMessage(lastMsg));
     }
@@ -337,16 +340,17 @@ export class Orchestrator implements ExecutionCoordinator {
 
   async compactConversation(conversationId: number, workspaceKey = getDefaultWorkspaceKey()): Promise<void> {
     const config = getWorkspaceConfig(workspaceKey);
-    const conversationModel = (this.db.prepare("SELECT model FROM conversations WHERE id = ?").get(conversationId) as { model: string | null } | undefined)?.model;
+    const conversationModel = (await this.db.get<{ model: string | null }>("SELECT model FROM conversations WHERE id = $1", [conversationId]))?.model;
     const engine = this.registry.resolveEngineForModel(workspaceKey, conversationModel);
     if (!engine.compact) {
       throw new Error(`Engine for conversation ${conversationId} does not support manual compaction`);
     }
     const workingDirectory = getEffectiveWorkspacePath(config);
     await engine.compact(null, conversationId, workingDirectory, workspaceKey);
-    const lastMsg = this.db.query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
+    const lastMsg = await this.db.get<ConversationMessageRow>(
+      "SELECT * FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+      [conversationId],
+    );
     if (lastMsg) {
       this.onNewMessage(mapConversationMessage(lastMsg));
     }

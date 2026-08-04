@@ -3,7 +3,7 @@ import { initDb, setupTestConfig } from "./helpers.ts";
 import { modelHandlers } from "../handlers/models.ts";
 import { SqliteModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 
 const mockOrchestrator = {
   listModels: async (_workspaceKey: string) => [
@@ -41,11 +41,11 @@ const mockOrchestratorWithPi = {
   ],
 } as unknown as ExecutionCoordinator;
 
-let db: Database;
+let db: Db;
 let cleanupConfig: () => void;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   cleanupConfig = setupTestConfig().cleanup;
 });
 
@@ -148,7 +148,7 @@ describe("modelHandlers — MH-CTX-2: models.setContextWindow stores value and r
     });
 
     expect(result).toEqual({});
-    expect(repo.getContextWindow("default", "pi/llama-3.3-70b")).toBe(65536);
+    expect(await repo.getContextWindow("default", "pi/llama-3.3-70b")).toBe(65536);
   });
 });
 
@@ -158,14 +158,14 @@ describe("modelHandlers — MH-CTX-3: models.setContextWindow(null) clears overr
     const handlers = modelHandlers(db, mockOrchestratorWithPi, repo);
 
     await handlers["models.setContextWindow"]({ qualifiedModelId: "pi/llama-3.3-70b", contextWindow: 65536 });
-    expect(repo.getContextWindow("default", "pi/llama-3.3-70b")).toBe(65536);
+    expect(await repo.getContextWindow("default", "pi/llama-3.3-70b")).toBe(65536);
 
     const result = await handlers["models.setContextWindow"]({
       qualifiedModelId: "pi/llama-3.3-70b",
       contextWindow: null,
     });
     expect(result).toEqual({});
-    expect(repo.getContextWindow("default", "pi/llama-3.3-70b")).toBeNull();
+    expect(await repo.getContextWindow("default", "pi/llama-3.3-70b")).toBeNull();
   });
 });
 
@@ -175,7 +175,7 @@ describe("modelHandlers — MH-CTX-4: models.list applies DB override over engin
     const handlers = modelHandlers(db, mockOrchestratorWithPi, repo);
 
     // Engine reports 128_000; override with 200_000
-    repo.setContextWindow("default", "pi/llama-3.3-70b", 200_000);
+    await repo.setContextWindow("default", "pi/llama-3.3-70b", 200_000);
 
     const list = await handlers["models.list"]();
     const piProvider = list.find((p) => p.id === "pi");
@@ -237,8 +237,8 @@ describe("modelHandlers — MH-L-1: Pi model with null contextWindow absent from
     const handlers = modelHandlers(db, mockOrchestratorListEnabled, repo);
 
     // Enable both models in DB
-    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "pi/llama-3.3-70b"]);
-    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "copilot/gpt-4o"]);
+    await db.exec("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2)", ["default", "pi/llama-3.3-70b"]);
+    await db.exec("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2)", ["default", "copilot/gpt-4o"]);
 
     const enabled = await handlers["models.listEnabled"]();
     const ids = enabled.map((m) => m.id);
@@ -251,12 +251,12 @@ describe("modelHandlers — MH-L-1: Pi model with null contextWindow absent from
 describe("modelHandlers — MH-L-2: Pi model with DB override present in listEnabled", () => {
   it("Pi model with null engine ctx + DB override 32768 is present", async () => {
     const repo = new SqliteModelSettingsRepository(db);
-    repo.setContextWindow("default", "pi/llama-3.3-70b", 32768);
+    await repo.setContextWindow("default", "pi/llama-3.3-70b", 32768);
 
     const handlers = modelHandlers(db, mockOrchestratorListEnabled, repo);
 
-    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "pi/llama-3.3-70b"]);
-    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "copilot/gpt-4o"]);
+    await db.exec("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2)", ["default", "pi/llama-3.3-70b"]);
+    await db.exec("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2)", ["default", "copilot/gpt-4o"]);
 
     const enabled = await handlers["models.listEnabled"]();
     const ids = enabled.map((m) => m.id);
@@ -278,11 +278,11 @@ describe("modelHandlers — MH-L-3: Pi model with non-null engine ctx + DB overr
     } as unknown as ExecutionCoordinator;
 
     const repo = new SqliteModelSettingsRepository(db);
-    repo.setContextWindow("default", "pi/llama-3.3-70b", 65536);
+    await repo.setContextWindow("default", "pi/llama-3.3-70b", 65536);
 
     const handlers = modelHandlers(db, orchestratorWithPiCtx, repo);
 
-    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "pi/llama-3.3-70b"]);
+    await db.exec("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2)", ["default", "pi/llama-3.3-70b"]);
 
     const enabled = await handlers["models.listEnabled"]();
     const piModel = enabled.find((m) => m.id === "pi/llama-3.3-70b");
@@ -297,7 +297,7 @@ describe("modelHandlers — MH-L-4: Non-Pi model unaffected by filter", () => {
     // No DB entry for copilot
     const handlers = modelHandlers(db, mockOrchestratorListEnabled, repo);
 
-    db.run("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES (?, ?)", ["default", "copilot/gpt-4o"]);
+    await db.exec("INSERT OR IGNORE INTO enabled_models (workspace_key, qualified_model_id) VALUES ($1, $2)", ["default", "copilot/gpt-4o"]);
 
     const enabled = await handlers["models.listEnabled"]();
     const copilotModel = enabled.find((m) => m.id === "copilot/gpt-4o");
@@ -317,8 +317,8 @@ describe("modelHandlers — MH-CTX-7: models.setContextWindow respects explicit 
       contextWindow: 32_768,
     });
 
-    expect(repo.getContextWindow("my-workspace", "pi/llama-3.3-70b")).toBe(32_768);
+    expect(await repo.getContextWindow("my-workspace", "pi/llama-3.3-70b")).toBe(32_768);
     // Default workspace unaffected
-    expect(repo.getContextWindow("default", "pi/llama-3.3-70b")).toBeNull();
+    expect(await repo.getContextWindow("default", "pi/llama-3.3-70b")).toBeNull();
   });
 });

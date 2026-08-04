@@ -132,7 +132,7 @@ export function updateProject(params: {
   return toProject(project, workspacePath);
 }
 
-export function deleteProject(workspaceKey: string, projectKey: string): void {
+export async function deleteProject(workspaceKey: string, projectKey: string): Promise<void> {
   const workspaceConfig = getWorkspaceConfig(workspaceKey);
   const currentProjects = workspaceConfig.workspace.projects ?? [];
   const idx = currentProjects.findIndex(
@@ -143,8 +143,8 @@ export function deleteProject(workspaceKey: string, projectKey: string): void {
   patchWorkspaceYaml({ projects: filtered }, workspaceKey);
   // Cascade: delete all tasks belonging to this project in this workspace
   const db = getDb();
-  db.run(
-    "DELETE FROM tasks WHERE project_key = ? AND board_id IN (SELECT id FROM boards WHERE workspace_key = ?)",
+  await db.exec(
+    "DELETE FROM tasks WHERE project_key = $1 AND board_id IN (SELECT id FROM boards WHERE workspace_key = $2)",
     [projectKey, workspaceKey],
   );
 }

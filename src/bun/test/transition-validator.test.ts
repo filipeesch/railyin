@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { validateTransition } from "../workflow/transition-validator.ts";
 
@@ -30,13 +30,13 @@ columns:
   - id: done
     label: Done`;
 
-let db: Database;
+let db: Db;
 let cleanup: () => void;
 
-beforeEach(() => {
+beforeEach(async () => {
   const cfg = setupTestConfig("", undefined, [RESTRICTED_WORKFLOW_YAML, LIMITED_WORKFLOW_YAML]);
   cleanup = cfg.cleanup;
-  db = initDb();
+  db = await initDb();
 });
 
 afterEach(() => {
@@ -46,8 +46,8 @@ afterEach(() => {
 // ─── TV-1: task not found ─────────────────────────────────────────────────────
 
 describe("validateTransition — TV-1: task not found returns ok:false", () => {
-  it("returns ok:false with task not found reason for non-existent task", () => {
-    const result = validateTransition(db, 99999, "plan");
+  it("returns ok:false with task not found reason for non-existent task", async () => {
+    const result = await validateTransition(db, 99999, "plan");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("task 99999 not found");
@@ -58,9 +58,9 @@ describe("validateTransition — TV-1: task not found returns ok:false", () => {
 // ─── TV-2: invalid target column ──────────────────────────────────────────────
 
 describe("validateTransition — TV-2: invalid target column returns ok:false with valid column list", () => {
-  it("returns ok:false with valid column list when target column does not exist", () => {
-    const { taskId } = seedProjectAndTask(db, "/test");
-    const result = validateTransition(db, taskId, "nonexistent");
+  it("returns ok:false with valid column list when target column does not exist", async () => {
+    const { taskId } = await seedProjectAndTask(db, "/test");
+    const result = await validateTransition(db, taskId, "nonexistent");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toContain("nonexistent");
@@ -72,15 +72,15 @@ describe("validateTransition — TV-2: invalid target column returns ok:false wi
 // ─── TV-3: column at capacity ─────────────────────────────────────────────────
 
 describe("validateTransition — TV-3: column at capacity returns ok:false", () => {
-  it("returns ok:false when target column is full (limit=1 with 1 task already there)", () => {
-    const { taskId, boardId } = seedProjectAndTask(db, "/test");
-    db.run("UPDATE boards SET workflow_template_id = 'limited' WHERE id = ?", [boardId]);
+  it("returns ok:false when target column is full (limit=1 with 1 task already there)", async () => {
+    const { taskId, boardId } = await seedProjectAndTask(db, "/test");
+    await db.exec("UPDATE boards SET workflow_template_id = 'limited' WHERE id = $1", [boardId]);
 
     // Seed a second task and place it in "review" to fill the slot
-    const { taskId: task2Id } = seedProjectAndTask(db, "/test2");
-    db.run("UPDATE tasks SET workflow_state = 'review', board_id = ? WHERE id = ?", [boardId, task2Id]);
+    const { taskId: task2Id } = await seedProjectAndTask(db, "/test2");
+    await db.exec("UPDATE tasks SET workflow_state = 'review', board_id = $1 WHERE id = $2", [boardId, task2Id]);
 
-    const result = validateTransition(db, taskId, "review");
+    const result = await validateTransition(db, taskId, "review");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toContain("review");
@@ -92,13 +92,13 @@ describe("validateTransition — TV-3: column at capacity returns ok:false", () 
 // ─── TV-4: allowed_transitions blocks forbidden target ────────────────────────
 
 describe("validateTransition — TV-4: allowed_transitions blocks forbidden target", () => {
-  it("returns ok:false when target is not in allowed_transitions of source column", () => {
-    const { taskId, boardId } = seedProjectAndTask(db, "/test");
-    db.run("UPDATE boards SET workflow_template_id = 'restricted' WHERE id = ?", [boardId]);
+  it("returns ok:false when target is not in allowed_transitions of source column", async () => {
+    const { taskId, boardId } = await seedProjectAndTask(db, "/test");
+    await db.exec("UPDATE boards SET workflow_template_id = 'restricted' WHERE id = $1", [boardId]);
     // Move task to backlog (backlog only allows -> plan)
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
 
-    const result = validateTransition(db, taskId, "blocked");
+    const result = await validateTransition(db, taskId, "blocked");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toContain("backlog");
@@ -110,13 +110,13 @@ describe("validateTransition — TV-4: allowed_transitions blocks forbidden targ
 // ─── TV-5: allowed_transitions permits allowed target ────────────────────────
 
 describe("validateTransition — TV-5: allowed_transitions permits allowed target", () => {
-  it("returns ok:true when target is listed in allowed_transitions", () => {
-    const { taskId, boardId } = seedProjectAndTask(db, "/test");
-    db.run("UPDATE boards SET workflow_template_id = 'restricted' WHERE id = ?", [boardId]);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
+  it("returns ok:true when target is listed in allowed_transitions", async () => {
+    const { taskId, boardId } = await seedProjectAndTask(db, "/test");
+    await db.exec("UPDATE boards SET workflow_template_id = 'restricted' WHERE id = $1", [boardId]);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
 
     // backlog -> plan is the one allowed transition
-    const result = validateTransition(db, taskId, "plan");
+    const result = await validateTransition(db, taskId, "plan");
     expect(result.ok).toBe(true);
   });
 });
@@ -124,10 +124,10 @@ describe("validateTransition — TV-5: allowed_transitions permits allowed targe
 // ─── TV-6: no allowed_transitions → any target is allowed ────────────────────
 
 describe("validateTransition — TV-6: no allowed_transitions → any target is allowed", () => {
-  it("allows any transition when source column has no allowed_transitions defined", () => {
-    const { taskId } = seedProjectAndTask(db, "/test");
+  it("allows any transition when source column has no allowed_transitions defined", async () => {
+    const { taskId } = await seedProjectAndTask(db, "/test");
     // Default "delivery" workflow: task starts in "plan" which has no allowed_transitions
-    const result = validateTransition(db, taskId, "done");
+    const result = await validateTransition(db, taskId, "done");
     expect(result.ok).toBe(true);
   });
 });
@@ -135,10 +135,10 @@ describe("validateTransition — TV-6: no allowed_transitions → any target is 
 // ─── TV-7: successful transition returns correct boardId and col objects ──────
 
 describe("validateTransition — TV-7: successful transition returns correct boardId and col objects", () => {
-  it("returns boardId, fromCol.id, and toCol.id on a valid transition", () => {
-    const { taskId, boardId } = seedProjectAndTask(db, "/test");
+  it("returns boardId, fromCol.id, and toCol.id on a valid transition", async () => {
+    const { taskId, boardId } = await seedProjectAndTask(db, "/test");
     // task starts in "plan"; transition to "done"
-    const result = validateTransition(db, taskId, "done");
+    const result = await validateTransition(db, taskId, "done");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.boardId).toBe(boardId);

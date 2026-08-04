@@ -1,5 +1,5 @@
 import { join } from "path";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { getConfigDir, getConfig } from "../config/index.ts";
 import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { detectLanguages, probeInstalled } from "../lsp/detect.ts";
@@ -21,7 +21,7 @@ export interface DetectedLanguage {
 }
 
 export function lspHandlers(
-  db: Database,
+  db: Db,
   wsRepo: IWorkspaceRepository,
   registry: TaskLSPRegistry = taskLspRegistry,
   installer: typeof runInstall = runInstall,
@@ -85,16 +85,16 @@ export function lspHandlers(
       let scopeId: string | number = "default";
 
       if (params.taskId != null) {
-        const row = db
-          .query<{ board_id: number; worktree_path: string | null; project_key: string }, [number]>(
+        const row = await db
+          .get<{ board_id: number; worktree_path: string | null; project_key: string }>(
             `SELECT t.board_id, t.project_key, gc.worktree_path
              FROM tasks t
              LEFT JOIN task_git_context gc ON gc.task_id = t.id
-             WHERE t.id = ?`,
-          )
-          .get(params.taskId);
+             WHERE t.id = $1`,
+            [params.taskId],
+          );
         if (!row) return [];
-        const workspaceKey = wsRepo.getBoardWorkspaceKey(row.board_id);
+        const workspaceKey = await wsRepo.getBoardWorkspaceKey(row.board_id);
         config = getConfig(workspaceKey);
         if (row.worktree_path) {
           worktreePath = row.worktree_path;

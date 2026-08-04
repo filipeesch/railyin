@@ -6,7 +6,7 @@ import { MockCursorSdkAdapter } from "../cursor/mocks.ts";
  * Creates a backend RPC runtime with the CursorEngine wired to the supplied
  * mock adapter. Tests queue turns on the adapter before driving the runtime.
  */
-export function createCursorRpcRuntime(adapter: MockCursorSdkAdapter = new MockCursorSdkAdapter()): BackendRpcRuntime {
+export function createCursorRpcRuntime(adapter: MockCursorSdkAdapter = new MockCursorSdkAdapter()): Promise<BackendRpcRuntime> {
     return createBackendRpcRuntime({
         taskModel: "cursor/mock-model",
         createEngine: ({ onTaskUpdated, onNewMessage }) =>

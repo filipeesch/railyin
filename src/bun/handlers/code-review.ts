@@ -1,27 +1,27 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { FileDiffContent, HunkDecision, LineComment } from "../../shared/rpc-types.ts";
 import { readFileDiffContent, parseGitDiffHunks, computeHunkHash, extractHunkPatch } from "../git/diff-utils.ts";
 
-export function codeReviewHandlers(db: Database) {
+export function codeReviewHandlers(db: Db) {
   return {
     // ─── tasks.getFileDiff ─────────────────────────────────────────────────────
     "tasks.getFileDiff": async (params: { taskId: number; filePath: string; checkpointRef?: string }): Promise<FileDiffContent> => {
-      const gitRow = db
-        .query<{ worktree_path: string | null; base_sha: string | null }, [number]>(
-          "SELECT worktree_path, base_sha FROM task_git_context WHERE task_id = ?",
-        )
-        .get(params.taskId);
+      const gitRow = await db
+        .get<{ worktree_path: string | null; base_sha: string | null }>(
+          "SELECT worktree_path, base_sha FROM task_git_context WHERE task_id = $1",
+          [params.taskId],
+        );
       if (!gitRow?.worktree_path) return { original: "", modified: "", hunks: [] };
-      return readFileDiffContent(db, params.taskId, gitRow.worktree_path, params.filePath, params.checkpointRef, gitRow.base_sha ?? undefined);
+      return await readFileDiffContent(db, params.taskId, gitRow.worktree_path, params.filePath, params.checkpointRef, gitRow.base_sha ?? undefined);
     },
 
     // ─── tasks.rejectHunk ─────────────────────────────────────────────────────
     "tasks.rejectHunk": async (params: { taskId: number; filePath: string; hunkIndex: number }): Promise<FileDiffContent> => {
-      const gitRow = db
-        .query<{ worktree_path: string | null; base_sha: string | null }, [number]>(
-          "SELECT worktree_path, base_sha FROM task_git_context WHERE task_id = ?",
-        )
-        .get(params.taskId);
+      const gitRow = await db
+        .get<{ worktree_path: string | null; base_sha: string | null }>(
+          "SELECT worktree_path, base_sha FROM task_git_context WHERE task_id = $1",
+          [params.taskId],
+        );
       if (!gitRow?.worktree_path) throw new Error("Worktree not found for task");
 
       const worktreePath = gitRow.worktree_path;
@@ -52,14 +52,14 @@ export function codeReviewHandlers(db: Database) {
         const content = await diskFile.text();
         const modifiedLines = content.split("\n");
         const hash = computeHunkHash(filePath, [], modifiedLines);
-        db.run(
+        await db.exec(
           `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start, updated_at)
-           VALUES (?, ?, ?, 'human', 'user', 'rejected', NULL, 0, 1, datetime('now'))
+           VALUES ($1, $2, $3, 'human', 'user', 'rejected', NULL, 0, 1, ${db.dialect.now()})
            ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
-             decision = 'rejected', comment = NULL, updated_at = datetime('now')`,
+             decision = 'rejected', comment = NULL, updated_at = ${db.dialect.now()}`,
           [params.taskId, hash, filePath],
         );
-        return readFileDiffContent(db, params.taskId, worktreePath, filePath, undefined, baseSha);
+        return await readFileDiffContent(db, params.taskId, worktreePath, filePath, undefined, baseSha);
       }
 
       // Parse hunks to get hash of the hunk being rejected
@@ -87,25 +87,25 @@ export function codeReviewHandlers(db: Database) {
       }
 
       // Persist the rejected decision to DB
-      db.run(
+      await db.exec(
         `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, modified_start, updated_at)
-         VALUES (?, ?, ?, 'human', 'user', 'rejected', NULL, ?, ?, datetime('now'))
+         VALUES ($1, $2, $3, 'human', 'user', 'rejected', NULL, $4, $5, ${db.dialect.now()})
          ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
-           decision = 'rejected', comment = NULL, updated_at = datetime('now')`,
+           decision = 'rejected', comment = NULL, updated_at = ${db.dialect.now()}`,
         [params.taskId, targetHunk.hash, filePath, targetHunk.originalStart, targetHunk.modifiedStart],
       );
 
       // Return updated content
-      return readFileDiffContent(db, params.taskId, worktreePath, filePath, undefined, baseSha);
+      return await readFileDiffContent(db, params.taskId, worktreePath, filePath, undefined, baseSha);
     },
 
     // ─── tasks.decideAllHunks ─────────────────────────────────────────────────
     "tasks.decideAllHunks": async (params: { taskId: number; decision: "accepted" | "rejected" }): Promise<{ decided: number }> => {
-      const gitRow = db
-        .query<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }, [number]>(
-          "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = ?",
-        )
-        .get(params.taskId);
+      const gitRow = await db
+        .get<{ worktree_path: string | null; worktree_status: string | null; base_sha: string | null }>(
+          "SELECT worktree_path, worktree_status, base_sha FROM task_git_context WHERE task_id = $1",
+          [params.taskId],
+        );
       if (!gitRow?.worktree_path || gitRow.worktree_status !== "ready") return { decided: 0 };
 
       const worktreePath = gitRow.worktree_path;
@@ -132,11 +132,11 @@ export function codeReviewHandlers(db: Database) {
         const diff = await readFileDiffContent(db, params.taskId, worktreePath, filePath, undefined, baseSha);
         for (const hunk of diff.hunks) {
           if (hunk.humanDecision !== "pending") continue;
-          db.run(
+          await db.exec(
             `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, original_end, modified_start, modified_end, updated_at)
-             VALUES (?, ?, ?, 'human', 'user', ?, NULL, ?, ?, ?, ?, datetime('now'))
+             VALUES ($1, $2, $3, 'human', 'user', $4, NULL, $5, $6, $7, $8, ${db.dialect.now()})
              ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
-               decision = excluded.decision, comment = NULL, updated_at = datetime('now')`,
+               decision = excluded.decision, comment = NULL, updated_at = ${db.dialect.now()}`,
             [params.taskId, hunk.hash, filePath, params.decision, hunk.originalStart, hunk.originalEnd, hunk.modifiedStart, hunk.modifiedEnd],
           );
           decided++;
@@ -157,16 +157,16 @@ export function codeReviewHandlers(db: Database) {
       modifiedStart: number;
       modifiedEnd: number;
     }): Promise<void> => {
-      db.run(
+      await db.exec(
         `INSERT INTO task_hunk_decisions (task_id, hunk_hash, file_path, reviewer_type, reviewer_id, decision, comment, original_start, original_end, modified_start, modified_end, updated_at)
-         VALUES (?, ?, ?, 'human', 'user', ?, ?, ?, ?, ?, ?, datetime('now'))
+         VALUES ($1, $2, $3, 'human', 'user', $4, $5, $6, $7, $8, $9, ${db.dialect.now()})
          ON CONFLICT(task_id, hunk_hash, reviewer_id) DO UPDATE SET
            decision = excluded.decision,
            comment  = excluded.comment,
            file_path = excluded.file_path,
            original_end = excluded.original_end,
            modified_end = excluded.modified_end,
-           updated_at = datetime('now')`,
+           updated_at = ${db.dialect.now()}`,
         [params.taskId, params.hunkHash, params.filePath, params.decision, params.comment, params.originalStart, params.originalEnd, params.modifiedStart, params.modifiedEnd],
       );
     },
@@ -185,13 +185,14 @@ export function codeReviewHandlers(db: Database) {
     }): Promise<LineComment> => {
       const colStart = params.colStart ?? 0;
       const colEnd = params.colEnd ?? 0;
-      const result = db.run(
+      const result = await db.exec(
         `INSERT INTO task_line_comments (task_id, file_path, line_start, line_end, col_start, col_end, line_text, context_lines, comment, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ${db.dialect.now()})
+         RETURNING id`,
         [params.taskId, params.filePath, params.lineStart, params.lineEnd, colStart, colEnd, JSON.stringify(params.lineText), JSON.stringify(params.contextLines), params.comment],
       );
       return {
-        id: result.lastInsertRowid as number,
+        id: (result.rows[0] as { id: number }).id,
         filePath: params.filePath,
         lineStart: params.lineStart,
         lineEnd: params.lineEnd,
@@ -206,12 +207,13 @@ export function codeReviewHandlers(db: Database) {
 
     // ─── tasks.getLineComments ────────────────────────────────────────────────
     "tasks.getLineComments": async (params: { taskId: number }): Promise<LineComment[]> => {
-      const rows = db.query(
+      const rows = await db.rows(
         `SELECT id, file_path, line_start, line_end, col_start, col_end, line_text, context_lines, comment, reviewer_type
          FROM task_line_comments
-         WHERE task_id = ? AND sent = 0
+         WHERE task_id = $1 AND sent = 0
          ORDER BY file_path, line_start`,
-      ).all(params.taskId) as Array<{
+        [params.taskId],
+      ) as Array<{
         id: number;
         file_path: string;
         line_start: number;
@@ -239,16 +241,16 @@ export function codeReviewHandlers(db: Database) {
 
     // ─── tasks.deleteLineComment ──────────────────────────────────────────────
     "tasks.deleteLineComment": async (params: { taskId: number; commentId: number }): Promise<void> => {
-      db.run(`DELETE FROM task_line_comments WHERE id = ? AND task_id = ?`, [params.commentId, params.taskId]);
+      await db.exec(`DELETE FROM task_line_comments WHERE id = $1 AND task_id = $2`, [params.commentId, params.taskId]);
     },
 
     // ─── tasks.writeFile ──────────────────────────────────────────────────────
     "tasks.writeFile": async (params: { taskId: number; filePath: string; content: string }): Promise<void> => {
-      const gitRow = db
-        .query<{ worktree_path: string | null }, [number]>(
-          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-        )
-        .get(params.taskId);
+      const gitRow = await db
+        .get<{ worktree_path: string | null }>(
+          "SELECT worktree_path FROM task_git_context WHERE task_id = $1",
+          [params.taskId],
+        );
       if (!gitRow?.worktree_path) throw new Error("Worktree not found for task");
       const { resolve, normalize } = await import("node:path");
       const resolvedPath = resolve(gitRow.worktree_path, params.filePath);
@@ -265,16 +267,16 @@ export function codeReviewHandlers(db: Database) {
       // A file is fully decided when ALL its hunks have a decision row.
       // Files with no decisions at all won't appear here — the frontend
       // must default those to "all pending".
-      const rows = db
-        .query<{ file_path: string; totalDecided: number; acceptedCount: number }, [number]>(
+      const rows = await db
+        .rows<{ file_path: string; totalDecided: number; acceptedCount: number }>(
           `SELECT file_path,
                   COUNT(*) as totalDecided,
                   SUM(CASE WHEN decision = 'accepted' THEN 1 ELSE 0 END) as acceptedCount
            FROM task_hunk_decisions
-           WHERE task_id = ? AND sent = 0
+           WHERE task_id = $1 AND sent = 0
            GROUP BY file_path`,
-        )
-        .all(params.taskId);
+          [params.taskId],
+        );
       // Return pendingCount=0 only for files where every decision is accounted for.
       // (The frontend still needs to add files absent from this list as fully pending.)
       return rows.map((r) => ({
@@ -286,20 +288,20 @@ export function codeReviewHandlers(db: Database) {
     // ─── tasks.getCheckpointRef ───────────────────────────────────────────────
     "tasks.getCheckpointRef": async (params: { taskId: number }): Promise<string | null> => {
       // Find the most recent execution for this task that has unsent pending hunk decisions
-      const row = db
-        .query<{ stash_ref: string | null }, [number, number]>(
+      const row = await db
+        .get<{ stash_ref: string | null }>(
           `SELECT tec.stash_ref
            FROM task_execution_checkpoints tec
            JOIN executions e ON tec.execution_id = e.id
-           WHERE e.task_id = ?
+           WHERE e.task_id = $1
              AND EXISTS (
                SELECT 1 FROM task_hunk_decisions thd
-               WHERE thd.task_id = ? AND thd.sent = 0
+               WHERE thd.task_id = $2 AND thd.sent = 0
              )
            ORDER BY tec.created_at DESC
            LIMIT 1`,
-        )
-        .get(params.taskId, params.taskId);
+          [params.taskId, params.taskId],
+        );
       return row?.stash_ref ?? null;
     },
   };

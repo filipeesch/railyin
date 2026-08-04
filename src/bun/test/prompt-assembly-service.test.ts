@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { resetConfig } from "../config/index.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
 import { PromptAssemblyService } from "../engine/execution/prompt-assembly-service.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 
-let db: Database;
+let db: Db;
 let configCleanup: () => void;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
 });
 
 afterEach(() => {
@@ -22,7 +22,7 @@ afterEach(() => {
 // column config via getDb()), but the CustomPromptInjector and StageInstructionsInjector
 // collaborators are mocked to isolate PromptAssemblyService's own assembly/ordering logic.
 describe("PromptAssemblyService", () => {
-  it("PAS-1: systemInstructions never contains stage_instructions content", () => {
+  it("PAS-1: systemInstructions never contains stage_instructions content", async () => {
     const cfg = setupTestConfig("", undefined, [
       `id: pas-workflow
 name: PasWorkflow
@@ -37,15 +37,15 @@ columns:
 `,
     ]);
     configCleanup = cfg.cleanup;
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workflow_template_id = 'pas-workflow' WHERE id = ?", [boardId]);
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workflow_template_id = 'pas-workflow' WHERE id = $1", [boardId]);
     const config = getWorkspaceConfig("default");
 
     const customPromptInjector = { resolveList: vi.fn().mockReturnValue([]) };
     const stageInstructionsInjector = { prepare: vi.fn().mockReturnValue({ stageInstructionsBlock: "Column context." }) };
     const service = new PromptAssemblyService(customPromptInjector as any, stageInstructionsInjector as any);
 
-    const result = service.assemble({
+    const result = await service.assemble({
       config,
       boardId,
       columnId: "plan",
@@ -58,7 +58,7 @@ columns:
     expect(result.systemInstructions).not.toContain("Column context.");
   });
 
-  it("PAS-2: custom-prompt/workflow-instruction ordering is preserved (custom prompts first)", () => {
+  it("PAS-2: custom-prompt/workflow-instruction ordering is preserved (custom prompts first)", async () => {
     const cfg = setupTestConfig("", undefined, [
       `id: pas-workflow-2
 name: PasWorkflow2
@@ -72,8 +72,8 @@ columns:
 `,
     ]);
     configCleanup = cfg.cleanup;
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workflow_template_id = 'pas-workflow-2' WHERE id = ?", [boardId]);
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workflow_template_id = 'pas-workflow-2' WHERE id = $1", [boardId]);
     const config = getWorkspaceConfig("default");
 
     const customPromptInjector = {
@@ -82,7 +82,7 @@ columns:
     const stageInstructionsInjector = { prepare: vi.fn().mockReturnValue({ stageInstructionsBlock: undefined }) };
     const service = new PromptAssemblyService(customPromptInjector as any, stageInstructionsInjector as any);
 
-    const result = service.assemble({
+    const result = await service.assemble({
       config,
       boardId,
       columnId: "plan",
@@ -94,7 +94,7 @@ columns:
     expect(result.systemInstructions).toBe("Custom prompt.\n\nWorkflow context.");
   });
 
-  it("PAS-3: stageInstructionsBlock passes through the value returned by the stage-instructions injector", () => {
+  it("PAS-3: stageInstructionsBlock passes through the value returned by the stage-instructions injector", async () => {
     const cfg = setupTestConfig("", undefined, [
       `id: pas-workflow-3
 name: PasWorkflow3
@@ -108,8 +108,8 @@ columns:
 `,
     ]);
     configCleanup = cfg.cleanup;
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workflow_template_id = 'pas-workflow-3' WHERE id = ?", [boardId]);
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workflow_template_id = 'pas-workflow-3' WHERE id = $1", [boardId]);
     const config = getWorkspaceConfig("default");
 
     const customPromptInjector = { resolveList: vi.fn().mockReturnValue([]) };
@@ -118,7 +118,7 @@ columns:
     };
     const service = new PromptAssemblyService(customPromptInjector as any, stageInstructionsInjector as any);
 
-    const result = service.assemble({
+    const result = await service.assemble({
       config,
       boardId,
       columnId: "plan",
@@ -131,7 +131,7 @@ columns:
     expect(stageInstructionsInjector.prepare).toHaveBeenCalledWith(42, "Column context.", true);
   });
 
-  it("PAS-4: forwards isTransition through to the stage-instructions injector's forceInject parameter", () => {
+  it("PAS-4: forwards isTransition through to the stage-instructions injector's forceInject parameter", async () => {
     const cfg = setupTestConfig("", undefined, [
       `id: pas-workflow-4
 name: PasWorkflow4
@@ -144,15 +144,15 @@ columns:
 `,
     ]);
     configCleanup = cfg.cleanup;
-    const { boardId } = seedProjectAndTask(db, "");
-    db.run("UPDATE boards SET workflow_template_id = 'pas-workflow-4' WHERE id = ?", [boardId]);
+    const { boardId } = await seedProjectAndTask(db, "");
+    await db.exec("UPDATE boards SET workflow_template_id = 'pas-workflow-4' WHERE id = $1", [boardId]);
     const config = getWorkspaceConfig("default");
 
     const customPromptInjector = { resolveList: vi.fn().mockReturnValue([]) };
     const stageInstructionsInjector = { prepare: vi.fn().mockReturnValue({ stageInstructionsBlock: undefined }) };
     const service = new PromptAssemblyService(customPromptInjector as any, stageInstructionsInjector as any);
 
-    service.assemble({
+    await service.assemble({
       config,
       boardId,
       columnId: "plan",

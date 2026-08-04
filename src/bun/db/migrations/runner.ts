@@ -2,26 +2,57 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { copyFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getDb, getDbPath } from "../index.ts";
+import { getDbConfig, getDbPath, getDb, getSqliteMigrationHandle } from "../index.ts";
+import type { Db } from "../db.ts";
+
+/** Minimal logger the runner writes to (defaults to console). */
+export interface MigrationLogger {
+  info(message: string): void;
+  warn(message: string): void;
+}
+
+const consoleLogger: MigrationLogger = {
+  info: (m) => console.log(m),
+  warn: (m) => console.warn(m),
+};
 
 export interface Migration {
   readonly id: string;
   readonly managesTransaction?: boolean;
-  /** Old checksums for this file — used when a known-bugfix changes the file
-   * after it was already applied to some databases.  The runner will accept any
-   * stored checksum that appears in this list, update the record to the current
-   * checksum, and continue rather than aborting. */
+  /** Old checksums for this file — accepted for known-bugfix amendments. */
   readonly previousChecksums?: readonly string[];
   up(db: Database): void;
 }
 
+/** A PostgreSQL migration — async, runs through the `Db` port. */
+export interface PostgresMigration {
+  readonly id: string;
+  up(db: Db): Promise<void>;
+}
+
 // import.meta.dir is Bun-only; fall back to import.meta.dirname (Node 20.11+)
 const MIGRATIONS_DIR = (import.meta as { dir?: string }).dir ?? import.meta.dirname;
+const PG_MIGRATIONS_DIR = join(MIGRATIONS_DIR, "..", "migrations-postgres");
 
 function checksumOf(filePath: string): string {
   const content = readFileSync(filePath, "utf-8");
   return createHash("sha256").update(content).digest("hex");
 }
+
+// ─── Public entry point ───────────────────────────────────────────────────────
+
+export async function runMigrations(opts: { logger?: MigrationLogger } = {}): Promise<void> {
+  const logger = opts.logger ?? consoleLogger;
+  if (getDbConfig().driver === "postgres") {
+    await runPostgresMigrations(getDb(), logger);
+  } else {
+    const handle = getSqliteMigrationHandle();
+    if (!handle) throw new Error("SQLite migration handle unavailable");
+    await runSqliteMigrations(handle, logger);
+  }
+}
+
+// ─── SQLite path (bun:sqlite, sync, checksum-guarded) ─────────────────────────
 
 async function discoverMigrations(): Promise<
   Array<{ filename: string; filePath: string; migration: Migration; checksum: string }>
@@ -41,7 +72,6 @@ async function discoverMigrations(): Promise<
 }
 
 function validateMigrations(entries: Array<{ filename: string; migration: Migration }>): void {
-  // Validate no duplicate IDs
   const seenIds = new Map<string, string>();
   for (const { filename, migration } of entries) {
     if (seenIds.has(migration.id)) {
@@ -52,7 +82,6 @@ function validateMigrations(entries: Array<{ filename: string; migration: Migrat
     seenIds.set(migration.id, filename);
   }
 
-  // Validate filename sort order matches ID lexicographic sort order
   const ids = entries.map((e) => e.migration.id);
   const sortedIds = [...ids].sort((a, b) => a.localeCompare(b));
   for (let i = 0; i < ids.length; i++) {
@@ -73,7 +102,6 @@ function bootstrapMigrationsTable(db: Database): void {
       applied_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
-  // Add checksum column on first upgrade (pre-existing DBs lack it)
   try {
     db.exec("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT;");
   } catch {
@@ -88,21 +116,18 @@ function loadApplied(db: Database): Map<string, string | null> {
   return new Map(rows.map((r) => [r.id, r.checksum]));
 }
 
-function backupDb(): void {
+function backupDb(logger: MigrationLogger): void {
   const dbPath = getDbPath();
   if (dbPath === ":memory:") return;
   try {
     copyFileSync(dbPath, `${dbPath}.backup`);
-    console.log("[db] Backup created:", `${dbPath}.backup`);
+    logger.info(`[db] Backup created: ${dbPath}.backup`);
   } catch (err) {
-    console.warn("[db] Backup failed (non-fatal):", err);
+    logger.warn(`[db] Backup failed (non-fatal): ${err}`);
   }
 }
 
-function backfillChecksums(
-  db: Database,
-  byId: Map<string, { checksum: string }>,
-): void {
+function backfillChecksums(db: Database, byId: Map<string, { checksum: string }>): void {
   const nullRows = db
     .query<{ id: string }, []>("SELECT id FROM schema_migrations WHERE checksum IS NULL")
     .all();
@@ -114,8 +139,7 @@ function backfillChecksums(
   }
 }
 
-export async function runMigrations(): Promise<void> {
-  const db = getDb();
+async function runSqliteMigrations(db: Database, logger: MigrationLogger): Promise<void> {
   bootstrapMigrationsTable(db);
 
   const entries = await discoverMigrations();
@@ -124,18 +148,14 @@ export async function runMigrations(): Promise<void> {
   const applied = loadApplied(db);
   const byId = new Map(entries.map((e) => [e.migration.id, e]));
 
-  // Validate checksums of already-applied migrations (fail on tamper)
   for (const [id, storedChecksum] of applied) {
-    if (storedChecksum === null) continue; // legacy row without checksum — skip
+    if (storedChecksum === null) continue;
     const entry = byId.get(id);
-    if (!entry) continue; // file removed after apply — skip
+    if (!entry) continue;
     if (entry.checksum !== storedChecksum) {
-      // Allow intentional amendments: if the stored checksum is listed in the
-      // migration's previousChecksums, this is a known bugfix — update the
-      // stored checksum and continue.
       const prev = entry.migration.previousChecksums;
       if (prev && prev.includes(storedChecksum)) {
-        console.warn(
+        logger.warn(
           `[db] Migration "${id}" was amended after being applied (known bugfix). ` +
             `Updating stored checksum from ${storedChecksum} to ${entry.checksum}.`,
         );
@@ -155,12 +175,11 @@ export async function runMigrations(): Promise<void> {
     return;
   }
 
-  backupDb();
+  backupDb(logger);
 
   for (const { migration, checksum } of pending) {
     try {
       if (migration.managesTransaction) {
-        // Migration owns its transaction lifecycle and inserts its own schema_migrations row.
         migration.up(db);
       } else {
         db.transaction(() => {
@@ -168,19 +187,68 @@ export async function runMigrations(): Promise<void> {
           db.run("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)", [migration.id, checksum]);
         })();
       }
-      console.log(`[db] Applied migration: ${migration.id}`);
+      logger.info(`[db] Applied migration: ${migration.id}`);
     } catch (error) {
-      console.error(`[db] Failed to apply migration: ${migration.id}`);
-      console.error(`[db] Error: ${error instanceof Error ? error.message : String(error)}`);
-      if (error instanceof Error && error.stack) {
-        console.error(`[db] Stack trace:`);
-        console.error(error.stack);
-      }
-      console.error(`[db] Rolling back and exiting...`);
+      logger.warn(`[db] Failed to apply migration: ${migration.id}`);
+      logger.warn(`[db] Error: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error && error.stack) logger.warn(error.stack);
+      logger.warn(`[db] Rolling back and exiting...`);
       process.exit(1);
     }
   }
 
-  // Backfill checksums for managesTransaction migrations that inserted (id, NULL)
   backfillChecksums(db, byId);
+}
+
+// ─── PostgreSQL path (Bun.SQL, async) ─────────────────────────────────────────
+
+async function discoverPostgresMigrations(): Promise<Array<{ migration: PostgresMigration; checksum: string }>> {
+  const files = readdirSync(PG_MIGRATIONS_DIR)
+    .filter((f) => f.endsWith(".ts") && !f.startsWith("_"))
+    .sort();
+  const result: Array<{ migration: PostgresMigration; checksum: string }> = [];
+  for (const filename of files) {
+    const filePath = join(PG_MIGRATIONS_DIR, filename);
+    const migration = (await import(filePath)) as PostgresMigration;
+    result.push({ migration, checksum: checksumOf(filePath) });
+  }
+  return result;
+}
+
+/** Exported for direct testing (e.g. against a NodePgDb-backed testcontainer) without going through the Bun-only `getDb()`/`createDb()` provider chain. */
+export async function runPostgresMigrations(db: Db, logger: MigrationLogger): Promise<void> {
+  await db.exec(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+       id         text PRIMARY KEY,
+       applied_at text NOT NULL DEFAULT (to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS')),
+       checksum   text
+     )`,
+  );
+
+  const appliedRows = await db.rows<{ id: string }>("SELECT id FROM schema_migrations");
+  const applied = new Set(appliedRows.map((r) => r.id));
+
+  const entries = await discoverPostgresMigrations();
+  const pending = entries.filter((e) => !applied.has(e.migration.id));
+  if (pending.length === 0) return;
+
+  // PostgreSQL file backup does not apply — external backup (pg_dump) is the operator's responsibility.
+  logger.info("[db] PostgreSQL detected — file backup not applicable (use pg_dump for backups).");
+
+  for (const { migration, checksum } of pending) {
+    try {
+      await db.begin(async (tx) => {
+        await migration.up(tx);
+        await tx.exec(
+          "INSERT INTO schema_migrations (id, checksum) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+          [migration.id, checksum],
+        );
+      });
+      logger.info(`[db] Applied migration: ${migration.id}`);
+    } catch (error) {
+      logger.warn(`[db] Failed to apply migration: ${migration.id}`);
+      logger.warn(`[db] Error: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  }
 }

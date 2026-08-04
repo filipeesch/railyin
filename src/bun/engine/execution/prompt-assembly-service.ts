@@ -34,15 +34,15 @@ export class PromptAssemblyService {
     private readonly stageInstructionsInjector: StageInstructionsInjector,
   ) {}
 
-  assemble(params: PromptAssemblyParams): PromptAssemblyResult {
+  async assemble(params: PromptAssemblyParams): Promise<PromptAssemblyResult> {
     const { config, boardId, columnId, conversationId, promptFilter, isTransition } = params;
 
-    const assembler = SystemPromptAssembler.fromConfig(config, boardId, columnId);
+    const assembler = await SystemPromptAssembler.fromConfig(config, boardId, columnId);
     assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
     const systemInstructions = assembler.assemble();
 
-    const stageInstructions = SystemPromptAssembler.getStageInstructions(config, boardId, columnId);
-    const { stageInstructionsBlock } = this.stageInstructionsInjector.prepare(conversationId, stageInstructions, isTransition);
+    const stageInstructions = await SystemPromptAssembler.getStageInstructions(config, boardId, columnId);
+    const { stageInstructionsBlock } = await this.stageInstructionsInjector.prepare(conversationId, stageInstructions, isTransition);
 
     return { systemInstructions, stageInstructionsBlock };
   }

@@ -28,8 +28,8 @@ import {
 
 const runtimes: BackendRpcRuntime[] = [];
 
-function createRuntime(adapter: MockCursorSdkAdapter): BackendRpcRuntime {
-    const runtime = createCursorRpcRuntime(adapter);
+async function createRuntime(adapter: MockCursorSdkAdapter): Promise<BackendRpcRuntime> {
+    const runtime = await createCursorRpcRuntime(adapter);
     runtimes.push(runtime);
     return runtime;
 }
@@ -44,7 +44,7 @@ describe("Cursor backend RPC scenarios", () => {
             .queueTurn({ steps: [token("Hello"), token(" world")] })
             .queueTurn({ steps: [token("Reply one")] })
             .queueTurn({ steps: [token("Reply two")] });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
 
         await runSingleTurnChatScenario(runtime);
         await runMultiTurnChatScenario(runtime);
@@ -66,7 +66,7 @@ describe("Cursor backend RPC scenarios", () => {
                     token("recovered"),
                 ],
             });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
 
         await runToolSuccessScenario(runtime);
         await runToolFailureScenario(runtime);
@@ -88,14 +88,14 @@ describe("Cursor backend RPC scenarios", () => {
         const adapter = new MockCursorSdkAdapter().queueTurn({
             steps: [callTool("decision_request", interviewArgs)],
         });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need architecture input" });
         await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
 
-        expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-        expect(runtime.getMessages(taskId).some((m) => m.type === "decision_request_prompt")).toBe(true);
+        expect(await runtime.getTaskState(taskId)).toBe("waiting_user");
+        expect((await runtime.getMessages(taskId)).some((m) => m.type === "decision_request_prompt")).toBe(true);
     });
 
     it("§6.3.5b — sending a follow-up message after decision_request restarts as a fresh execution", async () => {
@@ -108,7 +108,7 @@ describe("Cursor backend RPC scenarios", () => {
                 })],
             })
             .queueTurn({ steps: [token("Resumed with new execution")] });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need clarification" });
@@ -121,7 +121,7 @@ describe("Cursor backend RPC scenarios", () => {
         await runtime.recorder.waitForStreamDone(second.executionId);
         await runtime.waitForExecutionStatus(second.executionId, "completed");
 
-        const tail = runtime.getMessages(taskId).slice(-2).map((m) => m.type);
+        const tail = (await runtime.getMessages(taskId)).slice(-2).map((m) => m.type);
         expect(tail).toEqual(["user", "assistant"]);
     });
 
@@ -129,7 +129,7 @@ describe("Cursor backend RPC scenarios", () => {
         const adapter = new MockCursorSdkAdapter().queueTurn({
             steps: [token("streaming"), waitForAbort()],
         });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
 
         await runCancellationScenario(runtime);
     });
@@ -139,7 +139,7 @@ describe("Cursor backend RPC scenarios", () => {
             sendError: new Error("Cursor SDK exploded"),
             steps: [],
         });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
 
         await runFatalFailureScenario(runtime);
     });
@@ -148,7 +148,7 @@ describe("Cursor backend RPC scenarios", () => {
         const adapter = new MockCursorSdkAdapter().queueTurn({
             steps: [token("partial"), fatalError("agent crashed mid-stream")],
         });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Explode mid-stream" });
@@ -163,7 +163,7 @@ describe("Cursor backend RPC scenarios", () => {
                 steps: [token("partial"), fatalError("agent crashed mid-stream")],
             })
             .queueTurn({ steps: [token("Recovered after failure")] });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Explode mid-stream" });
@@ -178,13 +178,13 @@ describe("Cursor backend RPC scenarios", () => {
         await runtime.recorder.waitForStreamDone(second.executionId);
         await runtime.waitForExecutionStatus(second.executionId, "completed");
 
-        const tail = runtime.getMessages(taskId).slice(-2).map((m) => m.type);
+        const tail = (await runtime.getMessages(taskId)).slice(-2).map((m) => m.type);
         expect(tail).toEqual(["user", "assistant"]);
     });
 
     it("§6.3.8 — model listing via shared scenario", async () => {
         const adapter = new MockCursorSdkAdapter();
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
 
         await runModelListingScenario(runtime);
         expect(adapter.trace.listModelsCalls).toBeGreaterThan(0);
@@ -198,7 +198,7 @@ describe("Cursor backend RPC scenarios", () => {
                 token("done"),
             ],
         });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
 
         await runCursorShellToolScenario(runtime);
     });
@@ -213,7 +213,7 @@ describe("Cursor backend RPC scenarios", () => {
                 token("done"),
             ],
         });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
 
         await runCursorEditToolScenario(runtime);
     });
@@ -222,7 +222,7 @@ describe("Cursor backend RPC scenarios", () => {
 describe("Cursor slash-command resolution", () => {
     it("resolves slash prompt via dialect before sending to adapter; raw chip is stored in conversation_messages", async () => {
         const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("resolved response")] });
-        const runtime = createRuntime(adapter);
+        const runtime = await createRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         // Write a .cursor/commands/ file in the task's worktree (gitDir)
@@ -243,11 +243,10 @@ describe("Cursor slash-command resolution", () => {
         expect(sentPrompt).not.toContain("[/opsx-propose|/opsx-propose]");
 
         // The raw chip was stored verbatim in conversation_messages
-        const persisted = runtime.db
-            .query<{ content: string; role: string | null }, [number]>(
-                "SELECT content, role FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
-            )
-            .get(taskId);
+        const persisted = await runtime.db.get<{ content: string; role: string | null }>(
+            "SELECT content, role FROM conversation_messages WHERE task_id = $1 AND type = 'user' ORDER BY id DESC LIMIT 1",
+            [taskId],
+        );
         expect(persisted?.role).toBe("user");
         expect(persisted?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
     });

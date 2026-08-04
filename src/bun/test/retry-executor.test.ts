@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { execSync } from "child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -19,7 +19,7 @@ import { PromptAssemblyService } from "../engine/execution/prompt-assembly-servi
 import { SlashCommandResolver } from "../engine/execution/slash-command-resolver.ts";
 import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 let wsRepo: WorkspaceRepository;
@@ -52,16 +52,15 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
 
 class StubWorkdirResolver implements IWorkingDirectoryResolver {
   constructor(private readonly dir: string) {}
-  resolve(): string { return this.dir; }
+  async resolve(): Promise<string> { return this.dir; }
 }
 
 class StubStreamProcessor extends StreamProcessor {
   lastRun: { taskId: number | null; params: ExecutionParams } | null = null;
 
-  constructor() {
-    const _db = initDb();
+  constructor(dbArg: Db) {
     const _rawBuf = { enqueue() {}, flush: async () => {} } as unknown as import("../pipeline/write-buffer.ts").WriteBuffer<import("../engine/stream/raw-message-buffer.ts").RawMessageItem>;
-    super(_db, _rawBuf, () => {}, () => {}, () => {}, () => {});
+    super(dbArg, _rawBuf, () => {}, () => {}, () => {}, () => {});
   }
 
   override createSignal(_executionId: number): AbortSignal {
@@ -77,8 +76,8 @@ class StubStreamProcessor extends StreamProcessor {
   }
 }
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   wsRepo = new WorkspaceRepository(db);
   boardTools = new BoardToolExecutor(db, wsRepo);
   gitDir = mkdtempSync(join(tmpdir(), "railyn-retry-"));
@@ -96,7 +95,7 @@ afterEach(() => {
 
 function makeExecutor() {
   const builder = new CapturingParamsBuilder();
-  const streamProcessor = new StubStreamProcessor();
+  const streamProcessor = new StubStreamProcessor(db);
   const executor = new RetryExecutor(
     db,
     makeTestRegistry(new TestEngine()),
@@ -116,14 +115,14 @@ describe("RetryExecutor — model resolution", () => {
   it("uses task.model when task already has a model set", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'task/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'task/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
 
     expect(builder.lastBuilt?.model).toBe("task/custom-model");
-    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    const row = (await db.get<{ model: string | null }>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = $1", [taskId]))!;
     expect(row.model).toBe("task/custom-model");
   });
 
@@ -131,14 +130,14 @@ describe("RetryExecutor — model resolution", () => {
   it("uses empty string when task has no model (no fallback to engine defaults)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
 
     expect(builder.lastBuilt?.model).toBe(""); // No fallback to engine model
-    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    const row = (await db.get<{ model: string | null }>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = $1", [taskId]))!;
     expect(row.model).toBeNull(); // DB remains NULL
   });
 
@@ -146,14 +145,14 @@ describe("RetryExecutor — model resolution", () => {
   it("uses empty string when no model is configured anywhere", async () => {
     const cfg = setupTestConfig("", gitDir, [], null);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
 
     expect(builder.lastBuilt?.model).toBe("");
-    const row = db.query<{ model: string | null }, [number]>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = ?").get(taskId)!;
+    const row = (await db.get<{ model: string | null }>("SELECT c.model FROM conversations c JOIN tasks t ON c.id = t.conversation_id WHERE t.id = $1", [taskId]))!;
     expect(row.model).toBeNull();
   });
 });
@@ -162,9 +161,9 @@ describe("RetryExecutor — git context propagation", () => {
   it("RE-GC-1: retry returns task with worktreePath when task_git_context row exists", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run(
-      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, ?, ?)",
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, $4, $5)",
       [taskId, "/tmp/git-root", "/wt/1", "ready", "feature/test"],
     );
 
@@ -181,9 +180,9 @@ describe("RE-WK-1: workspaceKey propagation through retry", () => {
   it("RE-WK-1: retry preserves task's board workspaceKey", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan', execution_state = 'failed' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan', execution_state = 'failed' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
@@ -198,7 +197,7 @@ describe("RetryExecutor — stage instructions injection", () => {
   it("RE-SI-1: stage_instructions block is prepended to the retry prompt when due", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir); // seeded task is in 'plan' column, which has stage_instructions
+    const { taskId } = await seedProjectAndTask(db, gitDir); // seeded task is in 'plan' column, which has stage_instructions
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);
@@ -216,7 +215,7 @@ describe("RetryExecutor — stage instructions injection", () => {
   it("RE-SI-2: stage_instructions is NOT re-injected on a second retry (no compaction since last injection)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
 
     const { builder, executor } = makeExecutor();
     await executor.execute(taskId);

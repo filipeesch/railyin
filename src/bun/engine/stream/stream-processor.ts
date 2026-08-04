@@ -10,7 +10,7 @@ import type {
   RawModelMessage,
 } from "../types.ts";
 import type { MessageType } from "../../../shared/rpc-types.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import { ConvMessageBuffer } from "../../conversation/conv-message-buffer.ts";
 import type { WriteBuffer } from "../../pipeline/write-buffer.ts";
 import type { RawMessageItem } from "./raw-message-buffer.ts";
@@ -50,7 +50,7 @@ export class StreamProcessor {
   private readonly claudeExecutionIds = new Set<number>();
 
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly rawBuffer: WriteBuffer<RawMessageItem>,
     private readonly onToken: OnToken,
     private readonly onError: OnError,
@@ -174,28 +174,28 @@ export class StreamProcessor {
       })();
 
       if (taskId != null) {
-        db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+        await db.exec("UPDATE tasks SET execution_state = 'running' WHERE id = $1", [taskId]);
       } else {
-        db.run("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = ?", [conversationId]);
+        await db.exec("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = $1", [conversationId]);
       }
-      db.run(
-        "UPDATE executions SET status = 'running', started_at = datetime('now') WHERE id = ?",
+      await db.exec(
+        `UPDATE executions SET status = 'running', started_at = ${db.dialect.now()} WHERE id = $1`,
         [executionId],
       );
 
       for await (const event of stream) {
         if (abortController.signal.aborted) {
           this._flushAccumulators(convBuffer, taskId, conversationId, executionId, tokenAccum, reasoningAccum, callStack);
-          convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+          (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
           tokenAccum = "";
           reasoningAccum = "";
           if (taskId != null) {
-            db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+            await db.exec("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = $1", [taskId]);
           } else {
-            db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+            await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = $1", [conversationId]);
           }
-          db.run(
-            "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
+          await db.exec(
+            `UPDATE executions SET status = 'cancelled', finished_at = ${db.dialect.now()} WHERE id = $1`,
             [executionId],
           );
           this.onToken(taskId, conversationId, executionId, "", true);
@@ -207,7 +207,7 @@ export class StreamProcessor {
           case "token": {
             if (reasoningAccum) {
               convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
-              convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+              (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               reasoningAccum = "";
             }
@@ -238,7 +238,7 @@ export class StreamProcessor {
             this.onToken(taskId, conversationId, executionId, event.message, false, false, true);
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "status_chunk", content: event.message, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
             convBuffer.enqueue({ taskId, conversationId, type: "status", role: null, content: event.message, notify: false });
-            convBuffer.flush();
+            await convBuffer.flush();
             break;
           }
 
@@ -253,7 +253,7 @@ export class StreamProcessor {
             });
             const subagentMeta = { parent_tool_call_id: null };
             convBuffer.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: subagentCallContent, metadata: subagentMeta, notify: true });
-            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: event.callId, type: "tool_call", content: subagentCallContent, metadata: JSON.stringify(subagentMeta), parentBlockId: null, done: false, subagentId: event.callId });
             // Do NOT push to callStack — subagent blocks are structural containers, not call frames
             break;
@@ -263,7 +263,7 @@ export class StreamProcessor {
             const subagentResultContent = JSON.stringify({ type: "tool_result", tool_use_id: event.callId, content: "" });
             const subagentResultMeta = { tool_call_id: event.callId, parent_tool_call_id: null };
             convBuffer.enqueue({ taskId, conversationId, type: "tool_result", role: null, content: subagentResultContent, metadata: subagentResultMeta, notify: true });
-            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: event.callId, type: "tool_result", content: subagentResultContent, metadata: JSON.stringify(subagentResultMeta), parentBlockId: null, done: true, subagentId: event.callId });
             break;
           }
@@ -277,14 +277,14 @@ export class StreamProcessor {
               if (reasoningAccum) {
                 const rBlockId = `${executionId}-pre-r${++reasoningFlushCount}`;
                 convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
-                convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+                (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
                 this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: rBlockId, type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
                 reasoningBlockId = rBlockId;
                 reasoningAccum = "";
               }
               if (tokenAccum) {
                 convBuffer.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, notify: true });
-                convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+                (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
                 this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
                 tokenAccum = "";
               }
@@ -300,7 +300,7 @@ export class StreamProcessor {
               parent_tool_call_id: event.parentCallId ?? null,
             };
             convBuffer.enqueue({ taskId, conversationId, type: "tool_call", role: null, content: toolCallMsg, metadata: toolMeta, notify: true });
-            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
             const toolParentBlockId = event.parentCallId ?? null;
             // Subagent child tool callIds are only unique WITHIN a child session. They can
             // collide with parent callIds, with PARALLEL siblings (different bubbles), or be
@@ -330,7 +330,7 @@ export class StreamProcessor {
             hadOutput = true;
             if (!event.isInternal && reasoningAccum) {
               convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
-              convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+              (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               reasoningAccum = "";
             }
@@ -348,7 +348,7 @@ export class StreamProcessor {
               parent_tool_call_id: event.parentCallId ?? null,
             };
             convBuffer.enqueue({ taskId, conversationId, type: "tool_result", role: null, content: resultMsg, metadata: resultMeta, notify: true });
-            const flushedResult = convBuffer.flush();
+            const flushedResult = await convBuffer.flush();
             const resultMsgRow = flushedResult[0];
             if (resultMsgRow) this.onNewMessage(resultMsgRow);
             const resultCallId = event.callId ?? (resultMsgRow?.id.toString() ?? "");
@@ -388,8 +388,8 @@ export class StreamProcessor {
           }
 
           case "usage": {
-            db.run(
-              "UPDATE executions SET input_tokens = ?, output_tokens = ? WHERE id = ?",
+            await db.exec(
+              "UPDATE executions SET input_tokens = $1, output_tokens = $2 WHERE id = $3",
               [event.inputTokens ?? null, event.outputTokens ?? null, executionId],
             );
             if (event.inputTokens != null) {
@@ -427,15 +427,15 @@ export class StreamProcessor {
               const warnMsg = "Agent completed with no output. The prompt may not have been resolved correctly.";
               convBuffer.enqueue({ taskId, conversationId, type: "system", role: null, content: warnMsg, notify: true });
             }
-            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
 
             if (taskId != null) {
-              db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
+              await db.exec("UPDATE tasks SET execution_state = 'completed' WHERE id = $1", [taskId]);
             } else {
-              db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+              await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = $1", [conversationId]);
             }
-            db.run(
-              "UPDATE executions SET status = 'completed', finished_at = datetime('now') WHERE id = ?",
+            await db.exec(
+              `UPDATE executions SET status = 'completed', finished_at = ${db.dialect.now()} WHERE id = $1`,
               [executionId],
             );
             this.onToken(taskId, conversationId, executionId, "", true);
@@ -446,12 +446,12 @@ export class StreamProcessor {
           case "error": {
             if (event.fatal) {
               if (taskId != null) {
-                db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+                await db.exec("UPDATE tasks SET execution_state = 'failed' WHERE id = $1", [taskId]);
               } else {
-                db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+                await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = $1", [conversationId]);
               }
-              db.run(
-                "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
+              await db.exec(
+                `UPDATE executions SET status = 'failed', finished_at = ${db.dialect.now()}, details = $1 WHERE id = $2`,
                 [event.message, executionId],
               );
               this.onError(taskId, conversationId, executionId, event.message);
@@ -461,35 +461,35 @@ export class StreamProcessor {
             }
             this.onError(taskId, conversationId, executionId, event.message);
             convBuffer.enqueue({ taskId, conversationId, type: "system", role: null, content: `Error: ${event.message}`, notify: false });
-            convBuffer.flush();
+            await convBuffer.flush();
             break;
           }
 
           case "shell_approval": {
-            this._appendPromptMessage(
+            await this._appendPromptMessage(
               convBuffer,
               taskId,
               conversationId,
               JSON.stringify({ subtype: "shell_approval", command: event.command, unapprovedBinaries: [], executionId }),
             );
-            this._pauseExecution(taskId, conversationId, executionId);
+            await this._pauseExecution(taskId, conversationId, executionId);
             break;
           }
 
           case "ask_user": {
-            this._appendPromptMessage(convBuffer, taskId, conversationId, event.payload);
-            this._pauseExecution(taskId, conversationId, executionId);
+            await this._appendPromptMessage(convBuffer, taskId, conversationId, event.payload);
+            await this._pauseExecution(taskId, conversationId, executionId);
             break;
           }
 
           case "decision_request": {
             convBuffer.enqueue({ taskId, conversationId, type: "decision_request_prompt", role: null, content: event.payload, notify: true });
-            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
             if (taskId != null) {
-              db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+              await db.exec("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = $1", [taskId]);
             }
-            db.run(
-              "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",
+            await db.exec(
+              `UPDATE executions SET status = 'waiting_user', finished_at = ${db.dialect.now()} WHERE id = $1`,
               [executionId],
             );
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
@@ -499,17 +499,18 @@ export class StreamProcessor {
 
           case "compaction_start": {
             convBuffer.enqueue({ taskId, conversationId, type: "system", role: null, content: "Compacting conversation…", notify: true });
-            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
             break;
           }
 
           case "compaction_done": {
-            const lastMsg = db.query<{ type: string }, [number]>(
-              "SELECT type FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1"
-            ).get(conversationId);
+            const lastMsg = await db.get<{ type: string }>(
+              "SELECT type FROM conversation_messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT 1",
+              [conversationId],
+            );
             if (lastMsg?.type === "compaction_summary") break;
             convBuffer.enqueue({ taskId, conversationId, type: "compaction_summary", role: null, content: event.summary ?? "", notify: true });
-            convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+            (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
             break;
           }
 
@@ -531,16 +532,16 @@ export class StreamProcessor {
       // Post-loop: generator ended normally (done event handled above) or was aborted.
       if (abortController.signal.aborted) {
         this._flushAccumulators(convBuffer, taskId, conversationId, executionId, tokenAccum, reasoningAccum, callStack);
-        convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+        (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
         tokenAccum = "";
         reasoningAccum = "";
         if (taskId != null) {
-          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+          await db.exec("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = $1", [taskId]);
         } else {
-          db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+          await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = $1", [conversationId]);
         }
-        db.run(
-          "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
+        await db.exec(
+          `UPDATE executions SET status = 'cancelled', finished_at = ${db.dialect.now()} WHERE id = $1`,
           [executionId],
         );
         this.onToken(taskId, conversationId, executionId, "", true);
@@ -549,12 +550,12 @@ export class StreamProcessor {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       if (taskId != null) {
-        db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+        await db.exec("UPDATE tasks SET execution_state = 'failed' WHERE id = $1", [taskId]);
       } else {
-        db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+        await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = $1", [conversationId]);
       }
-      db.run(
-        "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
+      await db.exec(
+        `UPDATE executions SET status = 'failed', finished_at = ${db.dialect.now()}, details = $1 WHERE id = $2`,
         [errMsg, executionId],
       );
       this.abortControllers.get(executionId)?.abort();
@@ -566,24 +567,24 @@ export class StreamProcessor {
       this.clearClaudeExecution(executionId);
 
       if (taskId != null) {
-        const finalTask = fetchTaskWithModel(db, taskId);
+        const finalTask = await fetchTaskWithModel(db, taskId);
         if (finalTask) {
           this.onTaskUpdated(finalTask);
 
-          const finalRow = db.query<{ needs_column_prompt: number; workflow_state: string }, [number]>(
-            "SELECT needs_column_prompt, workflow_state FROM tasks WHERE id = ?",
-          ).get(taskId);
+          const finalRow = await db.get<{ needs_column_prompt: number; workflow_state: string }>(
+            "SELECT needs_column_prompt, workflow_state FROM tasks WHERE id = $1",
+            [taskId],
+          );
           if (finalRow?.needs_column_prompt === 1) {
-            db.run("UPDATE tasks SET needs_column_prompt = 0 WHERE id = ?", [taskId]);
+            await db.exec("UPDATE tasks SET needs_column_prompt = 0 WHERE id = $1", [taskId]);
             void this.onDeferredTransition(taskId, finalRow.workflow_state);
           } else {
-            const pending = db
-              .query<{ id: number; content: string }, [number]>(
-                "SELECT id, content FROM pending_messages WHERE task_id = ? ORDER BY id",
-              )
-              .all(taskId);
+            const pending = await db.rows<{ id: number; content: string }>(
+              "SELECT id, content FROM pending_messages WHERE task_id = $1 ORDER BY id",
+              [taskId],
+            );
             if (pending.length > 0) {
-              db.run("DELETE FROM pending_messages WHERE task_id = ?", [taskId]);
+              await db.exec("DELETE FROM pending_messages WHERE task_id = $1", [taskId]);
               for (const row of pending) {
                 void this.onPendingMessage(taskId, row.content);
               }
@@ -616,25 +617,25 @@ export class StreamProcessor {
     }
   }
 
-  private _appendPromptMessage(
+  private async _appendPromptMessage(
     convBuffer: ConvMessageBuffer,
     taskId: number | null,
     conversationId: number,
     content: string,
-  ): void {
+  ): Promise<void> {
     convBuffer.enqueue({ taskId, conversationId, type: "ask_user_prompt" as MessageType, role: null, content, notify: true });
-    convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
+    (await convBuffer.flush()).forEach((msg) => this.onNewMessage(msg));
   }
 
-  private _pauseExecution(taskId: number | null, conversationId: number, executionId: number): void {
+  private async _pauseExecution(taskId: number | null, conversationId: number, executionId: number): Promise<void> {
     const db = this.db;
     if (taskId != null) {
-      db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+      await db.exec("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = $1", [taskId]);
     } else {
-      db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+      await db.exec("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = $1", [conversationId]);
     }
-    db.run(
-      "UPDATE executions SET status = 'waiting_user', finished_at = NULL WHERE id = ?",
+    await db.exec(
+      "UPDATE executions SET status = 'waiting_user', finished_at = NULL WHERE id = $1",
       [executionId],
     );
     this.onToken(taskId, conversationId, executionId, "", true);
@@ -663,7 +664,7 @@ export class StreamProcessor {
       // Persisted row keeps the raw callId (reload nests via tool_call_id). The LIVE block must
       // nest under the namespaced child tool block when one was assigned, else the raw callId.
       const liveParentBlockId = liveParentBlockIdOverride ?? callId;
-      convBuffer.flush().forEach((msg) => {
+      (await convBuffer.flush()).forEach((msg) => {
         this.onNewMessage(msg);
         this.onStreamEvent?.({
           taskId,

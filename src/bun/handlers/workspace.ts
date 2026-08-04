@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { existsSync } from "fs";
 import { join } from "path";
 import { getConfig, getWorkspaceRegistry, resetConfig, loadConfig, patchWorkspaceYaml, sanitizeWorkspaceKey, ensureWorkspaceConfigExists, type WorkspaceYaml } from "../config/index.ts";
@@ -8,7 +8,7 @@ import { clearProviderCache } from "../ai/index.ts";
 import type { WorkspaceConfig, WorkspaceSummary } from "../../shared/rpc-types.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 
-export function workspaceHandlers(db: Database) {
+export function workspaceHandlers(db: Db) {
   return {
     "workspace.getConfig": async (params: { workspaceKey?: string }): Promise<WorkspaceConfig> => {
       resetConfig();
@@ -141,11 +141,11 @@ export function workspaceHandlers(db: Database) {
     "workspace.listFiles": async (params: { taskId?: number; workspaceKey?: string; query?: string }): Promise<{ name: string; path: string }[]> => {
       let cwd = process.cwd();
       if (params.taskId != null) {
-        const row = db
-          .query<{ worktree_path: string | null }, [number]>(
-            "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-          )
-          .get(params.taskId);
+        const row = await db
+          .get<{ worktree_path: string | null }>(
+            "SELECT worktree_path FROM task_git_context WHERE task_id = $1",
+            [params.taskId],
+          );
         cwd = row?.worktree_path ?? cwd;
       } else {
         const workspaceConfig = getWorkspaceConfig(params.workspaceKey ?? getDefaultWorkspaceKey());

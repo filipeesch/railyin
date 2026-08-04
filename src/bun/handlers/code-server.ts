@@ -1,19 +1,19 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { startCodeServer, stopCodeServer, getCodeServerEntry } from "../launch/code-server.ts";
 import type { CodeRef } from "../../shared/rpc-types.ts";
 
-export function codeServerHandlers(db: Database, broadcast: (msg: object) => void, serverPort: number) {
+export function codeServerHandlers(db: Db, broadcast: (msg: object) => void, serverPort: number) {
   return {
     "codeServer.start": async (params: { taskId: number }): Promise<{ port: number } | { error: string }> => {
 
-      const row = db
-        .query<{ worktree_path: string | null }, [number]>(
+      const row = await db
+        .get<{ worktree_path: string | null }>(
           `SELECT gc.worktree_path
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
-           WHERE t.id = ?`,
-        )
-        .get(params.taskId);
+           WHERE t.id = $1`,
+          [params.taskId],
+        );
 
       if (!row) return { error: "Task not found" };
       if (!row.worktree_path) return { error: "Task has no worktree path" };

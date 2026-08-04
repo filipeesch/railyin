@@ -1,6 +1,6 @@
 import type { Task } from "../../../shared/rpc-types.ts";
 import { QualifiedModelId } from "../qualified-model-id";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
@@ -21,7 +21,7 @@ import { SlashCommandResolver } from "./slash-command-resolver.ts";
 
 export class RetryExecutor {
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly workdirResolver: IWorkingDirectoryResolver,
@@ -35,43 +35,46 @@ export class RetryExecutor {
 
   async execute(taskId: number): Promise<{ task: Task; executionId: number }> {
     const db = this.db;
-    const task = db.query<TaskRow, [number]>(
-      `SELECT t.*, c.model AS conversation_model 
-       FROM tasks t 
-       LEFT JOIN conversations c ON c.id = t.conversation_id 
-       WHERE t.id = ?`
-    ).get(taskId);
+    const task = await db.get<TaskRow>(
+      `SELECT t.*, c.model AS conversation_model
+       FROM tasks t
+       LEFT JOIN conversations c ON c.id = t.conversation_id
+       WHERE t.id = $1`,
+      [taskId],
+    );
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const workspaceKey = await this.wsRepo.getTaskWorkspaceKey(taskId);
     const config = getWorkspaceConfig(workspaceKey);
 
-    const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
-    db.run("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ?", [taskId]);
+    const conversationId = await ensureTaskConversation(db, taskId, task.conversation_id);
+    await db.exec("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = $1", [taskId]);
     const attempt = (task.retry_count ?? 0) + 1;
 
-    const column = getColumnConfig(config, task.board_id, task.workflow_state);
+    const column = await getColumnConfig(config, task.board_id, task.workflow_state);
     const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
     const effectiveModel = resolveModel(taskWithModel, column?.model, false);
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
-    const execResult = db.run(
+    const execResult = await db.exec(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES (?, ?, ?, ?, ?, 'running', ?)`,
+       VALUES ($1, $2, $3, $4, $5, 'running', $6)
+       RETURNING id`,
       [taskId, conversationId, task.workflow_state, task.workflow_state, column?.id ?? "retry", attempt],
     );
-    const executionId = execResult.lastInsertRowid as number;
-    db.run(
-      "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+    const executionId = (execResult.rows[0] as { id: number }).id;
+    await db.exec(
+      "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
       [executionId, taskId],
     );
-    appendMessage(db, taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
+    await appendMessage(db, taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
 
-    const updatedRow = db.query<TaskRow & { conversation_model: string | null }, [number]>(
-      `SELECT t.*, c.model AS conversation_model 
-       FROM tasks t 
-       LEFT JOIN conversations c ON c.id = t.conversation_id 
-       WHERE t.id = ?`
-    ).get(taskId)!;
+    const updatedRow = (await db.get<TaskRow & { conversation_model: string | null }>(
+      `SELECT t.*, c.model AS conversation_model
+       FROM tasks t
+       LEFT JOIN conversations c ON c.id = t.conversation_id
+       WHERE t.id = $1`,
+      [taskId],
+    ))!;
     const retryPrompt = column?.on_enter_prompt ?? "Please continue with the task.";
 
     const signal = this.streamProcessor.createSignal(executionId);
@@ -81,9 +84,9 @@ export class RetryExecutor {
       modelId: effectiveModel ?? "",
       engineId: QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot",
       executionType: "task",
-      projectPath: this.workdirResolver.resolve(updatedRow),
+      projectPath: await this.workdirResolver.resolve(updatedRow),
     };
-    const { systemInstructions, stageInstructionsBlock } = this.promptAssemblyService.assemble({
+    const { systemInstructions, stageInstructionsBlock } = await this.promptAssemblyService.assemble({
       config,
       boardId: task.board_id,
       columnId: task.workflow_state,
@@ -99,7 +102,7 @@ export class RetryExecutor {
       config,
       promptFilter.engineId,
       retryPrompt,
-      promptFilter.projectPath ?? this.workdirResolver.resolve(updatedRow),
+      promptFilter.projectPath ?? await this.workdirResolver.resolve(updatedRow),
       config.projects.find((p) => p.key === updatedRow.project_key)?.projectPath,
     );
 
@@ -112,7 +115,7 @@ export class RetryExecutor {
         executionId,
         retryContent,
         systemInstructions,
-        this.workdirResolver.resolve(updatedRow),
+        await this.workdirResolver.resolve(updatedRow),
         signal,
         this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
@@ -126,7 +129,7 @@ export class RetryExecutor {
     };
 
     const execParams = this.paramsEnricher
-      ? this.paramsEnricher.enrich(retryBase, {
+      ? await this.paramsEnricher.enrich(retryBase, {
           workspaceKey,
           conversationId,
           columnPreset: column?.sampling_preset,
@@ -135,6 +138,6 @@ export class RetryExecutor {
       : retryBase;
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 
-    return { task: fetchTaskWithModel(db, taskId)!, executionId };
+    return { task: (await fetchTaskWithModel(db, taskId))!, executionId };
   }
 }

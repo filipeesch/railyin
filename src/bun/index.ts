@@ -1,6 +1,6 @@
 import { runMigrations } from "./db/migrations/runner.ts";
 import { seedDefaultWorkspace } from "./db/seed.ts";
-import { getDb } from "./db/index.ts";
+import { getDb, initDb } from "./db/index.ts";
 import { loadConfig, getDataDir, getWorkspaceRegistry, markWorkflowDirSeeded, type EngineConfig, type EngineEntry } from "./config/index.ts";
 import { seedWorkflows } from "./config/workflows.ts";
 import { getTmpDir } from "./utils/platform.ts";
@@ -82,9 +82,10 @@ if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 // 0. Resolve shell environment at startup (captures user PATH from login shell)
 await getResolvedShellEnv();
 
-// 1. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
+// 1. Establish the DB connection (fail fast), run migrations, then seed defaults.
+await initDb();
 await runMigrations();
-seedDefaultWorkspace();
+await seedDefaultWorkspace();
 
 const db = getDb();
 const modelSettingsRepo = new SqliteModelSettingsRepository(db);

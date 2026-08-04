@@ -22,7 +22,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { join, dirname, basename, relative } from "path";
 import { tmpdir } from "os";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { resetConfig, loadConfig } from "../config/index.ts";
 import { WorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
@@ -89,23 +89,23 @@ function setupMonorepoConfig(
   };
 }
 
-function getTaskRow(db: Database, taskId: number): TaskRow {
-  return db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId)!;
+async function getTaskRow(db: Db, taskId: number): Promise<TaskRow> {
+  return (await db.get<TaskRow>("SELECT * FROM tasks WHERE id = $1", [taskId]))!;
 }
 
 describe("WorkingDirectoryResolver", () => {
-  it("returns worktree_path when worktree is ready (single-repo)", () => {
+  it("returns worktree_path when worktree is ready (single-repo)", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
     const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
     const localConfig = setupTestConfig("", projectDir);
     try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, projectDir);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
+      const localDb = await initDb();
+      const { taskId } = await seedProjectAndTask(localDb, projectDir);
+      await localDb.exec(
+        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, 'ready', 'test-branch')",
         [taskId, projectDir, worktreeDir],
       );
-      expect(new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId))).toBe(worktreeDir);
+      expect(await new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(await getTaskRow(localDb, taskId))).toBe(worktreeDir);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(worktreeDir, { recursive: true, force: true });
@@ -113,20 +113,20 @@ describe("WorkingDirectoryResolver", () => {
     }
   });
 
-  it("returns worktree_path/subdir when worktree is ready (monorepo)", () => {
+  it("returns worktree_path/subdir when worktree is ready (monorepo)", async () => {
     const gitRootDir = mkdtempSync(join(tmpdir(), "railyn-gitroot-"));
     const projectDir = join(gitRootDir, "packages", "app");
     mkdirSync(projectDir, { recursive: true });
     const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
     const localConfig = setupMonorepoConfig(projectDir, gitRootDir);
     try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, projectDir);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
+      const localDb = await initDb();
+      const { taskId } = await seedProjectAndTask(localDb, projectDir);
+      await localDb.exec(
+        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, 'ready', 'test-branch')",
         [taskId, gitRootDir, worktreeDir],
       );
-      expect(new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId))).toBe(
+      expect(await new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(await getTaskRow(localDb, taskId))).toBe(
         join(worktreeDir, "packages", "app"),
       );
     } finally {
@@ -136,21 +136,22 @@ describe("WorkingDirectoryResolver", () => {
     }
   });
 
-  it("throws when projectPath is outside gitRootPath", () => {
+  it("throws when projectPath is outside gitRootPath", async () => {
     const gitRootDir = mkdtempSync(join(tmpdir(), "railyn-gitroot-"));
     const unrelatedDir = mkdtempSync(join(tmpdir(), "railyn-unrelated-"));
     const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
     const localConfig = setupMonorepoConfig(unrelatedDir, gitRootDir);
     try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, unrelatedDir);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
+      const localDb = await initDb();
+      const { taskId } = await seedProjectAndTask(localDb, unrelatedDir);
+      await localDb.exec(
+        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, 'ready', 'test-branch')",
         [taskId, gitRootDir, worktreeDir],
       );
-      expect(() =>
-        new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId)),
-      ).toThrow("outside gitRootPath");
+      const taskRow = await getTaskRow(localDb, taskId);
+      await expect(
+        new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(taskRow),
+      ).rejects.toThrow("outside gitRootPath");
     } finally {
       rmSync(gitRootDir, { recursive: true, force: true });
       rmSync(unrelatedDir, { recursive: true, force: true });
@@ -159,35 +160,35 @@ describe("WorkingDirectoryResolver", () => {
     }
   });
 
-  it("falls back to projectPath when worktree is not yet created", () => {
+  it("falls back to projectPath when worktree is not yet created", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "railyn-proj-"));
     const localConfig = setupTestConfig("", projectDir);
     try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, projectDir);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'not_created', 'test-branch')",
+      const localDb = await initDb();
+      const { taskId } = await seedProjectAndTask(localDb, projectDir);
+      await localDb.exec(
+        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, 'not_created', 'test-branch')",
         [taskId, projectDir, null],
       );
-      expect(new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId))).toBe(projectDir);
+      expect(await new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(await getTaskRow(localDb, taskId))).toBe(projectDir);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       localConfig.cleanup();
     }
   });
 
-  it("falls back to worktree_path when projectPath is not configured", () => {
+  it("falls back to worktree_path when projectPath is not configured", async () => {
     const worktreeDir = mkdtempSync(join(tmpdir(), "railyn-wt-"));
     const localConfig = setupTestConfig("", worktreeDir);
     try {
-      const localDb = initDb();
-      const { taskId } = seedProjectAndTask(localDb, worktreeDir);
-      localDb.run("UPDATE tasks SET project_key = 'no-project-path' WHERE id = ?", [taskId]);
-      localDb.run(
-        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, 'ready', 'test-branch')",
+      const localDb = await initDb();
+      const { taskId } = await seedProjectAndTask(localDb, worktreeDir);
+      await localDb.exec("UPDATE tasks SET project_key = 'no-project-path' WHERE id = $1", [taskId]);
+      await localDb.exec(
+        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, 'ready', 'test-branch')",
         [taskId, worktreeDir, worktreeDir],
       );
-      expect(new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(getTaskRow(localDb, taskId))).toBe(worktreeDir);
+      expect(await new WorkingDirectoryResolver(localDb, new WorkspaceRepository(localDb)).resolve(await getTaskRow(localDb, taskId))).toBe(worktreeDir);
     } finally {
       rmSync(worktreeDir, { recursive: true, force: true });
       localConfig.cleanup();

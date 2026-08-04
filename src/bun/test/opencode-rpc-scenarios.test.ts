@@ -35,10 +35,10 @@ const QUALIFIED_MODEL: import("../engine/types.ts").EngineModelInfo = {
 
 const runtimes: BackendRpcRuntime[] = [];
 
-function createOpenCodeRuntime(adapter: MockOpenCodeSdkAdapter): BackendRpcRuntime {
+async function createOpenCodeRuntime(adapter: MockOpenCodeSdkAdapter): Promise<BackendRpcRuntime> {
   adapter.setModels([QUALIFIED_MODEL]);
 
-  const runtime = createBackendRpcRuntime({
+  const runtime = await createBackendRpcRuntime({
     taskModel: TASK_MODEL,
     createEngine: ({ onTaskUpdated, onNewMessage }) =>
       new OpenCodeEngine(onTaskUpdated, onNewMessage, adapter),
@@ -62,7 +62,7 @@ describe("OpenCode backend RPC scenarios", () => {
       .queueCreate({ steps: [token("Hello"), token(" world"), usage(10, 20), done()] })
       .queueCreate({ steps: [token("Reply one"), done()] })
       .queueResume({ steps: [token("Reply two"), done()] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
 
     await runSingleTurnChatScenario(runtime);
     await runMultiTurnChatScenario(runtime);
@@ -77,7 +77,7 @@ describe("OpenCode backend RPC scenarios", () => {
       .queueCreate({
         steps: [toolStart("call-tool-2", "edit_card"), toolResult("call-tool-2", "edit_card", "failed", true), token("recovered"), done()],
       });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
 
     await runToolSuccessScenario(runtime);
     await runToolFailureScenario(runtime);
@@ -87,7 +87,7 @@ describe("OpenCode backend RPC scenarios", () => {
     const adapter = new MockOpenCodeSdkAdapter();
     // No preceding token — ask_user is the first event so no assistant message is flushed
     adapter.queueCreate({ steps: [askUser('{"question":"Need input"}')] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
 
     await runAskUserScenario(runtime);
   });
@@ -95,7 +95,7 @@ describe("OpenCode backend RPC scenarios", () => {
   it("covers cancellation via shared scenario", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
     adapter.queueCreate({ steps: [token("working"), waitForAbort()] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
 
     await runCancellationScenario(runtime);
   });
@@ -103,7 +103,7 @@ describe("OpenCode backend RPC scenarios", () => {
   it("covers fatal failures and model listing via shared scenarios", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
     adapter.queueCreate({ steps: [fatal("OpenCode exploded")] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
 
     await runFatalFailureScenario(runtime);
     await runModelListingScenario(runtime);
@@ -112,14 +112,14 @@ describe("OpenCode backend RPC scenarios", () => {
   it("includes reasoning events in conversation messages", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
     adapter.queueCreate({ steps: [reasoning("internal plan"), token("Done."), done()] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Think step by step" });
     await runtime.recorder.waitForStreamDone(result.executionId);
     await runtime.waitForExecutionStatus(result.executionId, "completed");
 
-    const messages = runtime.getMessages(taskId);
+    const messages = await runtime.getMessages(taskId);
     const hasReasoning = messages.some((m) => m.type === "reasoning" || m.content?.includes("internal plan"));
     expect(hasReasoning).toBe(true);
   });
@@ -139,7 +139,7 @@ describe("OpenCode ask_user resume", () => {
       ],
     });
 
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
     await runAskUserResumeScenario(runtime);
   });
 });
@@ -152,13 +152,13 @@ describe("OpenCode shell_approval", () => {
     adapter.queueCreate({
       steps: [shellApproval("npm test"), token("Running tests..."), done()],
     });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Run the test suite" });
     await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
 
-    expect(runtime.getMessages(taskId).some(
+    expect((await runtime.getMessages(taskId)).some(
       (m) => m.type === "ask_user_prompt" && m.content.includes('"subtype":"shell_approval"'),
     )).toBe(true);
 
@@ -172,7 +172,7 @@ describe("OpenCode shell_approval", () => {
     adapter.queueCreate({
       steps: [shellApproval("rm -rf /"), token("This should not appear"), done()],
     });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Delete everything" });
@@ -190,7 +190,7 @@ describe("OpenCode session lifecycle", () => {
   it("creates a new session on first execution (task 6.1)", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
     adapter.queueCreate({ steps: [token("first"), done()] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello" });
@@ -205,7 +205,7 @@ describe("OpenCode session lifecycle", () => {
     adapter
       .queueCreate({ steps: [token("first"), done()] })
       .queueResume({ steps: [token("second"), done()] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
     const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "First" });
@@ -224,7 +224,7 @@ describe("OpenCode session lifecycle", () => {
     adapter
       .queueCreate({ steps: [token("task-1 done"), done()] })
       .queueCreate({ steps: [token("task-2 done"), done()] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
 
     const { taskId: taskId1 } = await runtime.createTask();
     const { taskId: taskId2 } = await runtime.createTask();
@@ -243,7 +243,7 @@ describe("OpenCode session lifecycle", () => {
   it("cleans up activeContexts after successful execution (task 6.4)", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
     adapter.queueCreate({ steps: [token("done"), done()] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Execute" });
@@ -256,7 +256,7 @@ describe("OpenCode session lifecycle", () => {
   it("cleans up activeContexts after fatal error execution (task 6.5)", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
     adapter.queueCreate({ steps: [fatal("something went wrong")] });
-    const runtime = createOpenCodeRuntime(adapter);
+    const runtime = await createOpenCodeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
     const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Explode" });

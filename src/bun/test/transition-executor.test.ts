@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { execSync } from "child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -29,7 +29,7 @@ import { ExecutionParamsEnricher } from "../engine/execution/execution-params-en
 
 const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 let wsRepo: WorkspaceRepository;
@@ -84,7 +84,7 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
 class StubWorkdirResolver implements IWorkingDirectoryResolver {
   constructor(private readonly dir: string) {}
 
-  resolve(): string {
+  async resolve(): Promise<string> {
     return this.dir;
   }
 }
@@ -115,18 +115,17 @@ class StubStreamProcessor extends StreamProcessor {
   }
 }
 
-function readLatestTransitionMetadata(taskId: number): TransitionEventMetadata {
-  const row = db
-    .query<{ metadata: string | null }, [number]>(
-      "SELECT metadata FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' ORDER BY id DESC LIMIT 1",
-    )
-    .get(taskId);
+async function readLatestTransitionMetadata(taskId: number): Promise<TransitionEventMetadata> {
+  const row = await db.get<{ metadata: string | null }>(
+    "SELECT metadata FROM conversation_messages WHERE task_id = $1 AND type = 'transition_event' ORDER BY id DESC LIMIT 1",
+    [taskId],
+  );
 
   return JSON.parse(row?.metadata ?? "{}") as TransitionEventMetadata;
 }
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   wsRepo = new WorkspaceRepository(db);
   boardTools = new BoardToolExecutor(db, wsRepo);
   gitDir = mkdtempSync(join(tmpdir(), "railyn-transition-"));
@@ -146,8 +145,8 @@ describe("TransitionExecutor", () => {
   it("keeps non-prompted transitions as basic transition events and idle tasks", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -171,24 +170,23 @@ describe("TransitionExecutor", () => {
     expect(builder.lastBuilt).toBeNull();
     expect(streamProcessor.lastRun).toBeNull();
 
-    const metadata = readLatestTransitionMetadata(taskId);
+    const metadata = await readLatestTransitionMetadata(taskId);
     expect(metadata).toEqual({ from: "plan", to: "done" });
 
-    const promptRows = db
-      .query<{ count: number }, [number]>(
-        "SELECT count(*) AS count FROM conversation_messages WHERE task_id = ? AND type = 'user' AND role = 'prompt'",
-      )
-      .get(taskId);
+    const promptRows = await db.get<{ count: number }>(
+      "SELECT count(*) AS count FROM conversation_messages WHERE task_id = $1 AND type = 'user' AND role = 'prompt'",
+      [taskId],
+    );
     expect(promptRows?.count).toBe(0);
   });
 
   it("TE-GC-1: no-prompt transition returns task with worktreePath when task_git_context row exists", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
-    db.run(
-      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES (?, ?, ?, ?, ?)",
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
+    await db.exec(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status, branch_name) VALUES ($1, $2, $3, $4, $5)",
       [taskId, "/tmp/git-root", "/wt/1", "ready", "feature/test"],
     );
 
@@ -214,9 +212,9 @@ describe("TransitionExecutor", () => {
   it("TE-MODEL-1: returned task preserves model from conversations join", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
-    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
 
     const executor = new TransitionExecutor(
       db,
@@ -258,9 +256,9 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'slashy' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'slashy' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -289,7 +287,7 @@ columns:
     );
     expect(builder.lastBuilt?.workingDirectory).toBe(gitDir);
 
-    const metadata = readLatestTransitionMetadata(taskId);
+    const metadata = await readLatestTransitionMetadata(taskId);
     expect(metadata).toEqual({
       from: "backlog",
       to: "plan",
@@ -301,11 +299,10 @@ columns:
       },
     });
 
-    const promptRows = db
-      .query<{ count: number }, [number]>(
-        "SELECT count(*) AS count FROM conversation_messages WHERE task_id = ? AND type = 'user' AND role = 'prompt'",
-      )
-      .get(taskId);
+    const promptRows = await db.get<{ count: number }>(
+      "SELECT count(*) AS count FROM conversation_messages WHERE task_id = $1 AND type = 'user' AND role = 'prompt'",
+      [taskId],
+    );
     expect(promptRows?.count).toBe(0);
   });
 
@@ -325,10 +322,10 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE conversations SET model = 'conversation/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'no-col-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE conversations SET model = 'conversation/custom-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'no-col-model' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -367,10 +364,10 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'no-fallback' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = $1)", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'no-fallback' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -411,9 +408,9 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'col-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'col-model' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -452,9 +449,9 @@ columns:
     ], null);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'no-model' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'no-model' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -480,7 +477,7 @@ columns:
   it("TE-BADGE: returned task has execution_state='running' (not stale 'idle')", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
     // task starts in 'plan' column (which has on_enter_prompt), execution_state = 'idle'
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -528,9 +525,9 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'custom-prompt-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'custom-prompt-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -574,9 +571,9 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'no-custom-prompt-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'no-custom-prompt-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -619,9 +616,9 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'preset-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'preset-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -663,9 +660,9 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'no-preset-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'no-preset-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -715,10 +712,10 @@ describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
   it("TE-CE-1: prior copilot turns appear in prompt when engine switches (copilot → claude)", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = $1", [conversationId]);
+    await appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
@@ -734,10 +731,10 @@ describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
   it("TE-CE-2: no engine switch (last_engine_type = null) → no <message_history> injected", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
-    db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Some prior response");
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'plan' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = $1", [conversationId]);
+    await appendMessage(db, taskId, conversationId, "assistant", null, "Some prior response");
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
@@ -756,9 +753,9 @@ describe("TE-WK-1..2: workspaceKey propagation through transition", () => {
   it("TE-WK-1: transition uses task's board workspaceKey in ExecutionParams", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workspace_key = 'ws-other' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -784,9 +781,9 @@ describe("TE-WK-1..2: workspaceKey propagation through transition", () => {
   it("TE-WK-2: transition with non-default workspace key flows through", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workspace_key = 'test-workspace' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workspace_key = 'test-workspace' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();
@@ -836,9 +833,9 @@ columns:
     ]);
     configCleanup = cfg.cleanup;
 
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
-    db.run("UPDATE boards SET workflow_template_id = 'byteid-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = ?)", [taskId]);
+    const { taskId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE tasks SET workflow_state = 'backlog' WHERE id = $1", [taskId]);
+    await db.exec("UPDATE boards SET workflow_template_id = 'byteid-workflow' WHERE id = (SELECT board_id FROM tasks WHERE id = $1)", [taskId]);
 
     const builder = new CapturingParamsBuilder();
     const streamProcessor = new StubStreamProcessor();

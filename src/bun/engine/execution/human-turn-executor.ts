@@ -1,6 +1,6 @@
 import type { ConversationMessage } from "../../../shared/rpc-types";
 import type { Attachment } from "../../../shared/rpc-types";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../../db/db.ts";
 import { mapConversationMessage } from "../../db/mappers";
 import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
 import { fetchTaskWithModel } from "../../db/task-queries";
@@ -27,7 +27,7 @@ import { SlashCommandResolver } from "./slash-command-resolver.ts";
 export class HumanTurnExecutor {
 
   constructor(
-    private readonly db: Database,
+    private readonly db: Db,
     private readonly engineRegistry: EngineRegistry,
     private readonly paramsBuilder: ExecutionParamsBuilder,
     private readonly workdirResolver: IWorkingDirectoryResolver,
@@ -51,67 +51,67 @@ export class HumanTurnExecutor {
     engineContent?: string,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = this.db;
-    const task = db.query<TaskRow, [number]>(
-      `SELECT t.*, c.model AS conversation_model 
-       FROM tasks t 
-       LEFT JOIN conversations c ON c.id = t.conversation_id 
-       WHERE t.id = ?`
-    ).get(taskId);
+    const task = await db.get<TaskRow>(
+      `SELECT t.*, c.model AS conversation_model
+       FROM tasks t
+       LEFT JOIN conversations c ON c.id = t.conversation_id
+       WHERE t.id = $1`,
+      [taskId],
+    );
     if (!task) throw new Error(`Task ${taskId} not found`);
-    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
+    const workspaceKey = await this.wsRepo.getTaskWorkspaceKey(taskId);
     const config = getWorkspaceConfig(workspaceKey);
 
-    const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
+    const conversationId = await ensureTaskConversation(db, taskId, task.conversation_id);
 
     if (task.execution_state === "waiting_user" && task.current_execution_id != null) {
-      const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);
-      db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
-      db.run(
-        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
+      const msgId = await appendMessage(db, taskId, conversationId, "user", "user", content);
+      await db.exec("UPDATE tasks SET execution_state = 'running' WHERE id = $1", [taskId]);
+      await db.exec(
+        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = $1",
         [task.current_execution_id],
       );
-      this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
+      this.onTaskUpdated((await fetchTaskWithModel(db, taskId))!);
       const resumeEngine = this.engineRegistry.resolveEngineForModel(workspaceKey, (task as any).conversation_model);
       try {
         await resumeEngine.resume(task.current_execution_id, { type: "ask_user", content: engineContent ?? content });
-        const msgRow = db
-          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-          .get(msgId)!;
+        const msgRow = (await db
+          .get<ConversationMessageRow>("SELECT * FROM conversation_messages WHERE id = $1", [msgId]))!;
         return { message: mapConversationMessage(msgRow), executionId: task.current_execution_id };
       } catch {
         // Roll back optimistic state writes — engine session lost; restart as new execution
-        db.run(
-          "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = 'Engine session lost; restarted as new execution' WHERE id = ?",
+        await db.exec(
+          `UPDATE executions SET status = 'failed', finished_at = ${db.dialect.now()}, details = 'Engine session lost; restarted as new execution' WHERE id = $1`,
           [task.current_execution_id],
         );
-        db.run(
-          "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = NULL WHERE id = ?",
+        await db.exec(
+          "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = NULL WHERE id = $1",
           [taskId],
         );
 
-        const conversationModel = db
-          .prepare("SELECT model FROM conversations WHERE id = ?")
-          .get(task.conversation_id) as { model: string | null } | undefined;
+        const conversationModel = await db
+          .get<{ model: string | null }>("SELECT model FROM conversations WHERE id = $1", [task.conversation_id]);
         const modelValue = conversationModel?.model ?? null;
 
-        const column = getColumnConfig(config, task.board_id, task.workflow_state);
+        const column = await getColumnConfig(config, task.board_id, task.workflow_state);
         const taskWithModelFallback = { ...task, conversation_model: modelValue };
         const effectiveModel = resolveModel(taskWithModelFallback, column?.model, false);
         const taskForFallback: TaskRow = { ...task, conversation_model: modelValue };
-        const execResult = db.run(
+        const execResult = await db.exec(
           `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-           VALUES (?, ?, ?, ?, 'human-turn', 'running', ?)`,
+           VALUES ($1, $2, $3, $4, 'human-turn', 'running', $5)
+           RETURNING id`,
           [taskId, conversationId, task.workflow_state, task.workflow_state, task.retry_count + 1],
         );
-        const newExecutionId = execResult.lastInsertRowid as number;
-        db.run(
-          "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+        const newExecutionId = (execResult.rows[0] as { id: number }).id;
+        await db.exec(
+          "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
           [newExecutionId, taskId],
         );
-        this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
+        this.onTaskUpdated((await fetchTaskWithModel(db, taskId))!);
 
         const signal = this.streamProcessor.createSignal(newExecutionId);
-        const fallbackWorkingDirectory = this.workdirResolver.resolve(taskForFallback);
+        const fallbackWorkingDirectory = await this.workdirResolver.resolve(taskForFallback);
         const fallbackTargetEngineId =
           QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
         const fallbackPromptFilter: PromptFilterContext = {
@@ -121,7 +121,7 @@ export class HumanTurnExecutor {
           projectPath: fallbackWorkingDirectory,
         };
         const { systemInstructions: fallbackSystemInstructions, stageInstructionsBlock: fallbackStageInstructionsBlock } =
-          this.promptAssemblyService.assemble({
+          await this.promptAssemblyService.assemble({
             config,
             boardId: task.board_id,
             columnId: task.workflow_state,
@@ -158,7 +158,7 @@ export class HumanTurnExecutor {
           ...(this.onHumanTurnCallback ? { onHumanTurn: this.onHumanTurnCallback } : {}),
         };
         const execParams = this.paramsEnricher
-          ? this.paramsEnricher.enrich(fallbackBase, {
+          ? await this.paramsEnricher.enrich(fallbackBase, {
               workspaceKey,
               conversationId,
               columnPreset: column?.sampling_preset,
@@ -167,38 +167,38 @@ export class HumanTurnExecutor {
           : fallbackBase;
         this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel), execParams);
 
-        const msgRow = db
-          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-          .get(msgId)!;
+        const msgRow = (await db
+          .get<ConversationMessageRow>("SELECT * FROM conversation_messages WHERE id = $1", [msgId]))!;
         return { message: mapConversationMessage(msgRow), executionId: newExecutionId };
       }
     }
 
-    const column = getColumnConfig(config, task.board_id, task.workflow_state);
+    const column = await getColumnConfig(config, task.board_id, task.workflow_state);
     const taskWithModel = { ...task, conversation_model: (task as any).conversation_model };
     const resolvedModel = resolveModel(taskWithModel, column?.model, false);
     if (resolvedModel && !task.conversation_model) {
-      db.run("UPDATE conversations SET model = ? WHERE id = ?", [resolvedModel, task.conversation_id]);
+      await db.exec("UPDATE conversations SET model = $1 WHERE id = $2", [resolvedModel, task.conversation_id]);
     }
     const taskForExecution: TaskRow = resolvedModel ? { ...task, conversation_model: resolvedModel } : task;
 
-    const execResult = db.run(
+    const execResult = await db.exec(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
-       VALUES (?, ?, ?, ?, 'human-turn', 'running', ?)`,
+       VALUES ($1, $2, $3, $4, 'human-turn', 'running', $5)
+       RETURNING id`,
       [taskId, conversationId, task.workflow_state, task.workflow_state, task.retry_count + 1],
     );
-    const executionId = execResult.lastInsertRowid as number;
-    db.run(
-      "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
+    const executionId = (execResult.rows[0] as { id: number }).id;
+    await db.exec(
+      "UPDATE tasks SET execution_state = 'running', current_execution_id = $1 WHERE id = $2",
       [executionId, taskId],
     );
-    this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
+    this.onTaskUpdated((await fetchTaskWithModel(db, taskId))!);
 
     const resolvedPrompt = engineContent ?? content;
-    const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);
+    const msgId = await appendMessage(db, taskId, conversationId, "user", "user", content);
 
     const signal = this.streamProcessor.createSignal(executionId);
-    const workingDirectory = this.workdirResolver.resolve(taskForExecution);
+    const workingDirectory = await this.workdirResolver.resolve(taskForExecution);
     const targetEngineId = QualifiedModelId.tryParse(resolvedModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, resolvedModel);
     const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === resolvedModel);
@@ -210,7 +210,7 @@ export class HumanTurnExecutor {
       workspaceKey,
       msgId,
     );
-    const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
+    const { decisionsBlock } = await this.decisionInjector.prepare(conversationId);
 
     // Build system instructions + stageInstructionsBlock via the shared collaborator
     const promptFilter: PromptFilterContext = {
@@ -219,7 +219,7 @@ export class HumanTurnExecutor {
       executionType: "task",
       projectPath: workingDirectory,
     };
-    const { systemInstructions, stageInstructionsBlock } = this.promptAssemblyService.assemble({
+    const { systemInstructions, stageInstructionsBlock } = await this.promptAssemblyService.assemble({
       config,
       boardId: task.board_id,
       columnId: task.workflow_state,
@@ -263,7 +263,7 @@ export class HumanTurnExecutor {
     };
 
     const execParams = this.paramsEnricher
-      ? this.paramsEnricher.enrich(baseParams, {
+      ? await this.paramsEnricher.enrich(baseParams, {
           workspaceKey,
           conversationId,
           columnPreset: column?.sampling_preset,
@@ -271,11 +271,10 @@ export class HumanTurnExecutor {
         })
       : baseParams;
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
-    db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
+    await db.exec("UPDATE conversations SET last_engine_type = $1 WHERE id = $2", [targetEngineId, conversationId]);
 
-    const msgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(msgId)!;
+    const msgRow = (await db
+      .get<ConversationMessageRow>("SELECT * FROM conversation_messages WHERE id = $1", [msgId]))!;
     return { message: mapConversationMessage(msgRow), executionId };
   }
 }

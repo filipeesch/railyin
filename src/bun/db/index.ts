@@ -1,38 +1,77 @@
-import { Database } from "bun:sqlite";
-import { join } from "path";
-import { mkdirSync } from "fs";
-import { getDataDir } from "../utils/platform.ts";
+import type { Database } from "bun:sqlite";
+import { createDb, type CreatedDb, type Db } from "./db.ts";
+import { loadDbConfig, type DbConfig } from "./db-config.ts";
 
-let _db: Database | null = null;
+let _config: DbConfig | null = null;
+let _created: CreatedDb | null = null;
 
-export function getDbPath(): string {
-  // RAILYN_DB can be set to ":memory:" for tests or an explicit file path
-  if (process.env.RAILYN_DB) return process.env.RAILYN_DB;
-  const dataDir = getDataDir();
-  mkdirSync(dataDir, { recursive: true });
-  return join(dataDir, "railyn.db");
+/** The resolved DB config (lazily loaded). */
+export function getDbConfig(): DbConfig {
+  if (!_config) _config = loadDbConfig();
+  return _config;
 }
 
-export function getDb(): Database {
-  if (!_db) {
-    _db = new Database(getDbPath(), { create: true });
-    _db.exec("PRAGMA journal_mode = WAL;");
-    _db.exec("PRAGMA busy_timeout = 5000;");
-    _db.exec("PRAGMA foreign_keys = ON;");
+/** Override the resolved config (tests only) — call before the first getDb(). */
+export function _setDbConfigForTests(config: DbConfig): void {
+  _config = config;
+}
+
+function ensureCreated(): CreatedDb {
+  if (!_created) _created = createDb(getDbConfig());
+  return _created;
+}
+
+/**
+ * The async data-layer port. Sync-lazy: the client object is constructed on first
+ * access (Postgres connects lazily on first query). Call `initDb()` at boot to
+ * establish the connection eagerly and fail fast.
+ */
+export function getDb(): Db {
+  return ensureCreated().db;
+}
+
+/**
+ * The shared bun:sqlite handle backing the SQLite `Db`, or `null` for Postgres.
+ * Used by the migration runner's SQLite path so it operates on the SAME database
+ * (critical for `:memory:`).
+ */
+export function getSqliteMigrationHandle(): Database | null {
+  return ensureCreated().sqliteHandle;
+}
+
+/** The effective SQLite file path (or ":memory:"); throws for Postgres. */
+export function getDbPath(): string {
+  const config = getDbConfig();
+  if (config.driver !== "sqlite") {
+    throw new Error("getDbPath() is only valid for the SQLite driver");
   }
-  return _db;
+  return config.path;
+}
+
+/** Establish the connection eagerly and fail fast (Postgres) at boot. */
+export async function initDb(): Promise<Db> {
+  const { db } = ensureCreated();
+  if (db.driver === "postgres") {
+    try {
+      await db.rows("SELECT 1");
+    } catch (err) {
+      throw new Error(
+        `Failed to connect to the configured PostgreSQL database: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return db;
 }
 
 /** Only for tests — closes and discards the current DB singleton. */
 export function _resetForTests(): void {
-  _db?.close();
-  _db = null;
+  void _created?.db.close();
+  _created = null;
+  _config = null;
 }
 
-/** Only for tests — discards the singleton reference WITHOUT closing it.
- *  Use when background buffers (rawBuffer, WriteBuffer) still hold the old
- *  db reference and may flush after the test completes. The old in-memory db
- *  will be garbage-collected once all references are dropped. */
+/** Only for tests — discards the singleton reference WITHOUT closing it. */
 export function _softResetForTests(): void {
-  _db = null;
+  _created = null;
+  _config = null;
 }

@@ -18,7 +18,7 @@ import { EngineRegistry } from "../engine/engine-registry.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, EngineModelInfo } from "../engine/types.ts";
 import type { LoadedConfig } from "../config/index.ts";
@@ -69,7 +69,7 @@ function makeMultiEngineRegistry(
 }
 
 function makeOrchestrator(
-  db: Database,
+  db: Db,
   registry: EngineRegistry,
 ): Orchestrator {
   return new Orchestrator(
@@ -84,15 +84,15 @@ function makeOrchestrator(
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
-let db: Database;
+let db: Db;
 let gitDir: string;
 let configCleanup: () => void;
 let copilotEngine: CapturingEngine;
 let claudeEngine: CapturingEngine;
 let opencodeEngine: CapturingEngine;
 
-beforeEach(() => {
-  db = initDb();
+beforeEach(async () => {
+  db = await initDb();
   gitDir = mkdtempSync(join(tmpdir(), "railyn-multi-engine-"));
   execSync("git init", { cwd: gitDir });
   execSync('git config user.email "t@t.com"', { cwd: gitDir });
@@ -128,8 +128,8 @@ describe("ME-1..2: execution routing to correct engine", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = $1", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "Hello from copilot model");
 
@@ -144,8 +144,8 @@ describe("ME-1..2: execution routing to correct engine", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = $1", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "Hello from claude model");
 
@@ -160,8 +160,8 @@ describe("ME-1..2: execution routing to correct engine", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'opencode/anthropic/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'opencode/anthropic/claude-sonnet-4-5' WHERE id = $1", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "Hello from opencode model");
 
@@ -176,11 +176,11 @@ describe("ME-1..2: execution routing to correct engine", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId: task1, conversationId: conv1 } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = ?", [conv1]);
+    const { taskId: task1, conversationId: conv1 } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = $1", [conv1]);
 
-    const { taskId: task2, conversationId: conv2 } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = ?", [conv2]);
+    const { taskId: task2, conversationId: conv2 } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = $1", [conv2]);
 
     await orchestrator.executeHumanTurn(task1, "copilot turn");
     await orchestrator.executeHumanTurn(task2, "claude turn");
@@ -200,8 +200,8 @@ describe("ME-6: default engine selection", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = NULL WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = NULL WHERE id = $1", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "No model set");
 
@@ -258,8 +258,8 @@ describe("ME-WK-1..3: workspaceKey propagation through multi-engine", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'copilot/gpt-4.1' WHERE id = $1", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "test message");
 
@@ -274,8 +274,8 @@ describe("ME-WK-1..3: workspaceKey propagation through multi-engine", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'claude/claude-sonnet-4-5' WHERE id = $1", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "test message");
 
@@ -291,8 +291,8 @@ describe("ME-WK-1..3: workspaceKey propagation through multi-engine", () => {
     );
     const orchestrator = makeOrchestrator(db, registry);
 
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'opencode/anthropic/claude-sonnet-4-5' WHERE id = ?", [conversationId]);
+    const { taskId, conversationId } = await seedProjectAndTask(db, gitDir);
+    await db.exec("UPDATE conversations SET model = 'opencode/anthropic/claude-sonnet-4-5' WHERE id = $1", [conversationId]);
 
     await orchestrator.executeHumanTurn(taskId, "test message");
 

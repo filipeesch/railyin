@@ -14,8 +14,8 @@ import type { CommonToolContext } from "../engine/types.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeContext(taskId: number | null, conversationId = 1): CommonToolContext {
-  const db = initDb();
+async function makeContext(taskId: number | null, conversationId = 1): Promise<CommonToolContext> {
+  const db = await initDb();
   const wsRepo = new WorkspaceRepository(db);
   return {
     task: { id: taskId, boardId: taskId != null ? 1 : null, conversationId },
@@ -53,8 +53,8 @@ describe("TCF-1: TODO_TOOL_NAMES contains all task-scoped tool names", () => {
 // ─── Pi engine filtering ──────────────────────────────────────────────────────
 
 describe("Pi engine tool filtering", () => {
-  it("TCF-2: excludes todo tools for chat sessions (taskId null)", () => {
-    const ctx = makeContext(null);
+  it("TCF-2: excludes todo tools for chat sessions (taskId null)", async () => {
+    const ctx = await makeContext(null);
     const tools = buildCommonTools(ctx);
     const names = tools.map((t) => t.name);
     for (const todoName of TODO_TOOL_NAMES) {
@@ -62,8 +62,8 @@ describe("Pi engine tool filtering", () => {
     }
   });
 
-  it("TCF-3: includes todo tools for task executions (taskId set)", () => {
-    const ctx = makeContext(1);
+  it("TCF-3: includes todo tools for task executions (taskId set)", async () => {
+    const ctx = await makeContext(1);
     const tools = buildCommonTools(ctx);
     const names = tools.map((t) => t.name);
     for (const todoName of TODO_TOOL_NAMES) {
@@ -75,8 +75,8 @@ describe("Pi engine tool filtering", () => {
 // ─── Copilot engine filtering ─────────────────────────────────────────────────
 
 describe("Copilot engine tool filtering", () => {
-  it("TCF-4: excludes todo tools for chat sessions (taskId null)", () => {
-    const ctx = makeContext(null);
+  it("TCF-4: excludes todo tools for chat sessions (taskId null)", async () => {
+    const ctx = await makeContext(null);
     const tools = buildCopilotTools(ctx);
     const names = tools.map((t) => t.name);
     for (const todoName of TODO_TOOL_NAMES) {
@@ -84,8 +84,8 @@ describe("Copilot engine tool filtering", () => {
     }
   });
 
-  it("TCF-5: includes todo tools for task executions (taskId set)", () => {
-    const ctx = makeContext(1);
+  it("TCF-5: includes todo tools for task executions (taskId set)", async () => {
+    const ctx = await makeContext(1);
     const tools = buildCopilotTools(ctx);
     const names = tools.map((t) => t.name);
     for (const todoName of TODO_TOOL_NAMES) {
@@ -97,8 +97,8 @@ describe("Copilot engine tool filtering", () => {
 // ─── Claude engine filtering ──────────────────────────────────────────────────
 
 describe("Claude engine tool filtering", () => {
-  it("TCF-6: excludes todo tools for chat sessions (taskId null)", () => {
-    const ctx = makeContext(null);
+  it("TCF-6: excludes todo tools for chat sessions (taskId null)", async () => {
+    const ctx = await makeContext(null);
     const registeredNames: string[] = [];
     const sdk = {
       tool: (name: string, _desc: string, _schema: unknown, _handler: unknown) => {
@@ -128,8 +128,8 @@ describe("Claude engine tool filtering", () => {
 // ─── Cursor engine filtering ──────────────────────────────────────────────────
 
 describe("Cursor engine tool filtering", () => {
-  it("TCF-7: excludes todo tools for chat sessions (taskId null)", () => {
-    const ctx = makeContext(null);
+  it("TCF-7: excludes todo tools for chat sessions (taskId null)", async () => {
+    const ctx = await makeContext(null);
     const tools = buildCursorTools(ctx);
     const names = Object.keys(tools);
     for (const todoName of TODO_TOOL_NAMES) {
@@ -141,8 +141,8 @@ describe("Cursor engine tool filtering", () => {
 // ─── Other tools remain available ─────────────────────────────────────────────
 
 describe("TCF-9: Other tools remain available in chat sessions", () => {
-  it("note tools remain available when taskId is null", () => {
-    const ctx = makeContext(null);
+  it("note tools remain available when taskId is null", async () => {
+    const ctx = await makeContext(null);
     const tools = buildCopilotTools(ctx);
     const names = tools.map((t) => t.name);
     expect(names).toContain("create_note");
@@ -150,8 +150,8 @@ describe("TCF-9: Other tools remain available in chat sessions", () => {
     expect(names).toContain("update_note");
   });
 
-  it("decision tools remain available when taskId is null", () => {
-    const ctx = makeContext(null);
+  it("decision tools remain available when taskId is null", async () => {
+    const ctx = await makeContext(null);
     const tools = buildCopilotTools(ctx);
     const names = tools.map((t) => t.name);
     expect(names).toContain("decision_request");
@@ -159,8 +159,8 @@ describe("TCF-9: Other tools remain available in chat sessions", () => {
     expect(names).toContain("record_decision");
   });
 
-  it("board tools remain available when taskId is null", () => {
-    const ctx = makeContext(null);
+  it("board tools remain available when taskId is null", async () => {
+    const ctx = await makeContext(null);
     const tools = buildCopilotTools(ctx);
     const names = tools.map((t) => t.name);
     expect(names).toContain("list_boards");
@@ -168,8 +168,8 @@ describe("TCF-9: Other tools remain available in chat sessions", () => {
     expect(names).toContain("get_board_summary");
   });
 
-  it("workspace tools remain available when taskId is null", () => {
-    const ctx = makeContext(null);
+  it("workspace tools remain available when taskId is null", async () => {
+    const ctx = await makeContext(null);
     const tools = buildCopilotTools(ctx);
     const names = tools.map((t) => t.name);
     expect(names).toContain("list_projects");

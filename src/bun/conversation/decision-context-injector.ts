@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 
 export interface DecisionPrepareResult {
@@ -8,18 +8,18 @@ export interface DecisionPrepareResult {
 export class DecisionContextInjector {
   private readonly decisionRepo: DecisionRepository;
 
-  constructor(private readonly db: Database) {
+  constructor(private readonly db: Db) {
     this.decisionRepo = new DecisionRepository(db);
   }
 
-  prepare(conversationId: number): DecisionPrepareResult {
-    const lastInjected = this.decisionRepo.getLastInjectedCompactionId(conversationId);
+  async prepare(conversationId: number): Promise<DecisionPrepareResult> {
+    const lastInjected = await this.decisionRepo.getLastInjectedCompactionId(conversationId);
 
-    const lastCompaction = this.db
-      .query<{ id: number }, [number]>(
-        "SELECT id FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-      )
-      .get(conversationId);
+    const lastCompaction = await this.db
+      .get<{ id: number }>(
+        "SELECT id FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+        [conversationId],
+      );
 
     const currentCompactionId = lastCompaction?.id ?? 0;
 
@@ -29,14 +29,14 @@ export class DecisionContextInjector {
       return { decisionsBlock: undefined };
     }
 
-    const block = this.decisionRepo.buildContextBlock(conversationId);
+    const block = await this.decisionRepo.buildContextBlock(conversationId);
     if (!block) {
       // No decisions yet — still mark as injected (sentinel) so we don't keep checking
-      this.decisionRepo.markDecisionsInjected(conversationId, currentCompactionId);
+      await this.decisionRepo.markDecisionsInjected(conversationId, currentCompactionId);
       return { decisionsBlock: undefined };
     }
 
-    this.decisionRepo.markDecisionsInjected(conversationId, currentCompactionId);
+    await this.decisionRepo.markDecisionsInjected(conversationId, currentCompactionId);
 
     const decisionsBlock =
       "## Decision Records\n" +

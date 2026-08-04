@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import { mapTask } from "../db/mappers.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import type { LaunchConfig } from "../../shared/rpc-types.ts";
@@ -9,18 +9,18 @@ import { createPtySession, killPtySession } from "../launch/pty.ts";
 import { getLoadedProjectByKey } from "../project-store.ts";
 import { getDefaultShell, getShellArgs } from "../utils/platform.ts";
 
-export function launchHandlers(db: Database) {
+export function launchHandlers(db: Db) {
   return {
     "launch.getConfig": async (params: { taskId: number }): Promise<LaunchConfig | null> => {
 
-      const row = db
-        .query<{ project_key: string; workspace_key: string }, [number]>(
+      const row = await db
+        .get<{ project_key: string; workspace_key: string }>(
           `SELECT t.project_key, b.workspace_key
            FROM tasks t
            JOIN boards b ON b.id = t.board_id
-           WHERE t.id = ?`,
-        )
-        .get(params.taskId);
+           WHERE t.id = $1`,
+          [params.taskId],
+        );
       if (!row) return null;
 
       const project = getLoadedProjectByKey(row.workspace_key, row.project_key);
@@ -34,15 +34,15 @@ export function launchHandlers(db: Database) {
       mode: "terminal" | "external-terminal" | "app";
     }): Promise<{ ok: true; sessionId?: string } | { ok: false; error: string }> => {
 
-      const taskRow = db
-        .query<TaskRow & { worktree_path: string | null; workspace_key: string }, [number]>(
+      const taskRow = await db
+        .get<TaskRow & { worktree_path: string | null; workspace_key: string }>(
           `SELECT t.*, gc.worktree_path, b.workspace_key
            FROM tasks t
            LEFT JOIN task_git_context gc ON gc.task_id = t.id
            JOIN boards b ON b.id = t.board_id
-           WHERE t.id = ?`,
-        )
-        .get(params.taskId);
+           WHERE t.id = $1`,
+          [params.taskId],
+        );
       if (!taskRow) return { ok: false, error: "Task not found" };
 
       const task = mapTask(taskRow);

@@ -41,7 +41,7 @@ export class BashPermissionGate {
     }
 
     const command = extractCommand(input);
-    const shellState = this.shellApprovalRepo.getState(scope);
+    const shellState = await this.shellApprovalRepo.getState(scope);
 
     if (shellState.shellAutoApprove) {
       return buildPreToolAllow(input);
@@ -59,7 +59,7 @@ export class BashPermissionGate {
     }
 
     if (resumeInput.decision === "approve_all") {
-      this.shellApprovalRepo.appendApprovedCommands(scope, unapproved);
+      await this.shellApprovalRepo.appendApprovedCommands(scope, unapproved);
     }
 
     return buildPreToolAllow(input);

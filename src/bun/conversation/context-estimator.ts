@@ -1,21 +1,21 @@
-import type { Database } from "bun:sqlite";
+import type { Db } from "../db/db.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 
 const SYSTEM_MESSAGE_OVERHEAD_TOKENS = 400;
 
 export class ContextEstimator {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Db) {}
 
-  estimate(
+  async estimate(
     conversationId: number,
     maxTokens: number,
-  ): { usedTokens: number; maxTokens: number; fraction: number } {
+  ): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> {
     // Fast path: last completed execution input_tokens
-    const recentExec = this.db
-      .query<{ input_tokens: number | null }, [number]>(
-        "SELECT input_tokens FROM executions WHERE conversation_id = ? AND status = 'completed' AND input_tokens IS NOT NULL ORDER BY id DESC LIMIT 1",
-      )
-      .get(conversationId);
+    const recentExec = await this.db
+      .get<{ input_tokens: number | null }>(
+        "SELECT input_tokens FROM executions WHERE conversation_id = $1 AND status = 'completed' AND input_tokens IS NOT NULL ORDER BY id DESC LIMIT 1",
+        [conversationId],
+      );
 
     if (recentExec?.input_tokens != null) {
       const usedTokens = Math.min(recentExec.input_tokens, maxTokens);
@@ -24,17 +24,17 @@ export class ContextEstimator {
     }
 
     // Slow path: find last compaction_summary anchor, load up to 200 messages after it
-    const anchor = this.db
-      .query<{ id: number }, [number]>(
-        "SELECT id FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-      )
-      .get(conversationId);
+    const anchor = await this.db
+      .get<{ id: number }>(
+        "SELECT id FROM conversation_messages WHERE conversation_id = $1 AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
+        [conversationId],
+      );
 
-    const messages = this.db
-      .query<ConversationMessageRow, [number, number, number]>(
-        "SELECT * FROM conversation_messages WHERE conversation_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
-      )
-      .all(conversationId, anchor?.id ?? 0, 200);
+    const messages = await this.db
+      .rows<ConversationMessageRow>(
+        "SELECT * FROM conversation_messages WHERE conversation_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3",
+        [conversationId, anchor?.id ?? 0, 200],
+      );
 
     const totalChars = messages.reduce((sum, msg) => {
       const isToolMsg = msg.type === "tool_call" || msg.type === "tool_result";

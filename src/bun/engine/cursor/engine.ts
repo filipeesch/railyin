@@ -83,26 +83,25 @@ export class CursorEngine implements ExecutionEngine {
     const { getLoadedProjectByKey } = await import("../../project-store.ts");
 
     const db = getDb();
-    const taskRow = db
-      .query<{ board_id: number; project_key: string }, [number]>(
-        "SELECT board_id, project_key FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
+    const taskRow = await db.get<{ board_id: number; project_key: string }>(
+      "SELECT board_id, project_key FROM tasks WHERE id = $1",
+      [taskId],
+    );
 
-    const gitRow = db
-      .query<{ worktree_path: string | null }, [number]>(
-        "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-      )
-      .get(taskId);
+    const gitRow = await db.get<{ worktree_path: string | null }>(
+      "SELECT worktree_path FROM task_git_context WHERE task_id = $1",
+      [taskId],
+    );
 
     const worktreePath = gitRow?.worktree_path ?? process.cwd();
 
     let projectPath: string | undefined;
     if (taskRow) {
       const wsKey =
-        db.query<{ workspace_key: string }, [number]>(
-          "SELECT workspace_key FROM boards WHERE id = ?",
-        ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+        (await db.get<{ workspace_key: string }>(
+          "SELECT workspace_key FROM boards WHERE id = $1",
+          [taskRow.board_id],
+        ))?.workspace_key ?? getDefaultWorkspaceKey();
       const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
       if (project?.projectPath && project.projectPath !== worktreePath) {
         projectPath = project.projectPath;
