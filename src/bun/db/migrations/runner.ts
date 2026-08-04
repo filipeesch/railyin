@@ -239,7 +239,10 @@ export async function runPostgresMigrations(db: Db, logger: MigrationLogger): Pr
     try {
       await db.begin(async (tx) => {
         await migration.up(tx);
-        await tx.exec("INSERT INTO schema_migrations (id, checksum) VALUES ($1, $2)", [migration.id, checksum]);
+        await tx.exec(
+          "INSERT INTO schema_migrations (id, checksum) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+          [migration.id, checksum],
+        );
       });
       logger.info(`[db] Applied migration: ${migration.id}`);
     } catch (error) {
