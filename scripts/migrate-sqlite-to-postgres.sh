@@ -98,16 +98,24 @@ for table in "${TABLES[@]}"; do
   echo "==> Loading $row_count row(s) into Postgres.$table..."
   psql "$PG_URL" -v ON_ERROR_STOP=1 -c "\\copy $table FROM '$csv_file' WITH (FORMAT csv, HEADER true)"
 
-  # Rows were inserted with explicit ids, so the table's identity sequence
-  # (if any) needs to be advanced past the max id, or the next app-side
-  # INSERT will collide.
-  psql "$PG_URL" -v ON_ERROR_STOP=1 -t -c "
-    SELECT setval(
-      pg_get_serial_sequence('$table', 'id'),
-      GREATEST(COALESCE((SELECT MAX(id) FROM $table), 1), 1)
-    )
-    WHERE pg_get_serial_sequence('$table', 'id') IS NOT NULL;
-  " >/dev/null
+  # Rows were inserted with explicit ids, so a table's identity sequence needs
+  # to be advanced past the max id, or the next app-side INSERT will collide.
+  # Not every table has its own generated `id` column (e.g. task_git_context's
+  # PK is task_id, a foreign key into tasks — no sequence to fix), so check
+  # first rather than assume.
+  has_id_column=$(psql "$PG_URL" -t -A -c "
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = '$table' AND column_name = 'id'
+  ")
+  if [[ "$has_id_column" == "1" ]]; then
+    psql "$PG_URL" -v ON_ERROR_STOP=1 -t -c "
+      SELECT setval(
+        pg_get_serial_sequence('$table', 'id'),
+        GREATEST(COALESCE((SELECT MAX(id) FROM $table), 1), 1)
+      )
+      WHERE pg_get_serial_sequence('$table', 'id') IS NOT NULL;
+    " >/dev/null
+  fi
 done
 
 echo
