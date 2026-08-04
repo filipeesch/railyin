@@ -14,9 +14,11 @@
 #     (boot the app once with `driver: postgres` in config/database.yaml —
 #     that runs the consolidated baseline migration — then stop it before
 #     running this script).
-#   - The target tables must be EMPTY. This script does not merge or dedupe;
-#     it INSERTs everything from SQLite as-is.
 #   - `sqlite3` and `psql` CLIs must be on PATH.
+#
+# WARNING: this script TRUNCATEs every target table before loading (see
+# below) — it is destructive and irreversible. It does not merge or dedupe;
+# it wipes the target tables and INSERTs everything from SQLite as-is.
 #
 # Usage:
 #   ./scripts/migrate-sqlite-to-postgres.sh <path-to-railyn.db> <postgres-connection-url>
@@ -72,13 +74,18 @@ TABLES=(
 echo "SQLite source: $SQLITE_DB"
 echo "Postgres target: $PG_URL"
 echo
-echo "This will INSERT all rows from the tables above into the target"
-echo "Postgres database. The target tables are expected to be EMPTY."
+echo "This will TRUNCATE every table listed above in the target Postgres"
+echo "database (ALL EXISTING DATA IN THOSE TABLES WILL BE DELETED,"
+echo "IRREVERSIBLY), then INSERT all rows from the matching SQLite tables."
 read -r -p "Continue? [y/N] " CONFIRM
 if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
   echo "Aborted."
   exit 1
 fi
+
+TABLE_LIST="$(IFS=,; echo "${TABLES[*]}")"
+echo "==> Truncating target tables..."
+psql "$PG_URL" -v ON_ERROR_STOP=1 -c "TRUNCATE TABLE $TABLE_LIST RESTART IDENTITY CASCADE;"
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
