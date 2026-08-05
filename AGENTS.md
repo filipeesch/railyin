@@ -51,6 +51,7 @@ Run `bun run build` first — Playwright config spares `dist/` via `vite preview
 - **Prompt refs**: `.github/prompts/*.prompt.md` files are referenced as `/prompt-name`. The reference must be the entire leading value, not inline prose.
 - **Conversation UI**: Two layers — persisted `conversation_messages` + live stream blocks from WebSocket events (`src/mainview/stores/conversation.ts`). Changes must preserve both.
 - **Task movement**: Not just UI state. `tasks.transition` enforces column limits, may trigger worktree setup / git context / execution. Keep lifecycle changes across handlers, DB state, and board UI aligned.
+- **Pi per-model config (breaking)**: Pi engine-level `sampling_presets` / `default_sampling_preset` are **removed** — presets now live under each model's `models.<id>.sampling_presets` + `default_sampling_preset` (`src/bun/config/index.ts`, `model-config.ts`). Columns/conversations resolve preset names against the active model's set. Existing `engines.yaml` configs must move presets under each model entry.
 - **Playwright UI tests intercept backend traffic** via `e2e/ui/fixtures/mock-api.ts` and mock events. Add API calls or push events to the mocks, not the real Bun server.
 
 ## Gotchas

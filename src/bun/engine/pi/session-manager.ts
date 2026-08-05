@@ -64,7 +64,6 @@ export class PiSessionManager {
     const entry = this.sessions.get(conversationId);
     if (entry) {
       entry.session.agent.state.model = model as any;
-      entry.session.agent.state.thinkingLevel = "off";
       if (qualifiedModelId !== entry.qualifiedModelId) {
         if (systemPrompt !== undefined) entry.session.agent.state.systemPrompt = systemPrompt;
         entry.qualifiedModelId = qualifiedModelId;

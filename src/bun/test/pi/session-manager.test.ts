@@ -148,4 +148,19 @@ describe("PiSessionManager", () => {
 
     expect(fake.agent.state.systemPrompt).toBe("prompt-b");
   });
+
+  test("SM-8: session reuse does NOT reset thinkingLevel to 'off'", async () => {
+    const fake = new FakeAgentSession();
+    const factory = async () => fake as unknown as AgentSession;
+    const resolver = new FakeSessionPathResolver("/tmp/pi-sessions");
+    const manager = new PiSessionManager(factory, config, resolver);
+
+    await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-a");
+    // Simulate _applyModelConfigToSession setting thinkingLevel to "high"
+    fake.agent.state.thinkingLevel = "high";
+    // Reuse the session — thinkingLevel should NOT be reset to "off"
+    await manager.getOrCreate(1, model, tools, undefined, "/cwd", "provider/model-b");
+
+    expect(fake.agent.state.thinkingLevel).toBe("high");
+  });
 });

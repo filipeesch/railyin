@@ -9,7 +9,9 @@ import type {
   OnNewMessage,
 } from "../types.ts";
 import { resolveSamplingPreset } from "./sampling-params.ts";
-import type { PiEngineConfig } from "../../config/index.ts";
+import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
+import type { ModelSettingAxis, ModelParamValue } from "../../../shared/rpc-types.ts";
+import { derivePiModelAxes, derivePiModelSettings, resolvePiModelConfig } from "./model-config.ts";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -117,7 +119,6 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
     }),
   });
 
-  session.agent.state.thinkingLevel = "off";
   return session;
 }
 
@@ -275,9 +276,12 @@ export class PiEngine implements ExecutionEngine {
     const piModel = this.modelBuilder.build(modelOverride, contextWindowOverride);
     const providerName = piModel.provider;
 
+    const modelStr = modelOverride ?? this.config.model ?? "default";
+    const modelCfg = resolvePiModelConfig(this.config, modelStr);
+
     const session = await this.sessionManager.getOrCreate(conversationId, piModel, tools, enrichedSystem, cwd, modelOverride);
 
-    this._applyPresetToSession(session, samplingPresetName);
+    this._applyModelConfigToSession(session, modelCfg, modelStr, samplingPresetName, params.modelParams);
 
     const harnessCtx = this.toolFactory.getOrCreateHarnessContext(conversationId, cwd, signal);
     harnessCtx.loopDetector.reset();
@@ -403,12 +407,22 @@ export class PiEngine implements ExecutionEngine {
         for (const m of json.data ?? []) {
           if (m.id.includes("embed")) continue;
           const qualifiedId = `${this.engineId}/${providerId}/${m.id}`;
+          const modelCfg = resolvePiModelConfig(this.config, `${providerId}/${m.id}`)
+            ?? resolvePiModelConfig(this.config, m.id);
+          const settings = this._buildSettings(modelCfg);
+          const presetNames = modelCfg?.sampling_presets ? Object.keys(modelCfg.sampling_presets) : [];
+          const availablePresets = presetNames.map((name) => ({
+            name,
+            params: modelCfg!.sampling_presets![name],
+          }));
           results.push({
             qualifiedId,
-            displayName: m.id,
+            displayName: modelCfg?.name ?? m.id,
             contextWindow: m.context_length ?? undefined,
             contextWindowEditable: true,
             supportsManualCompact: true,
+            ...(settings.length > 0 ? { settings } : {}),
+            ...(availablePresets.length > 0 ? { availablePresets } : {}),
           });
         }
       } catch (err) {
@@ -532,12 +546,127 @@ export class PiEngine implements ExecutionEngine {
   }
 
   /**
-   * Sets or clears `session.agent.onPayload` for the current execution.
+   * Builds the normalized `ModelSettingAxis[]` for a Pi model: a "Mode" axis from
+   * `variants` when present, plus any explicit `axes` declared in config.
    */
-  _applyPresetToSession(session: AgentSession, presetName: string | undefined): void {
-    const resolved = resolveSamplingPreset(presetName, this.config);
-    if (resolved !== undefined) {
-      session.agent.onPayload = (payload: unknown) => ({ ...(payload as Record<string, unknown>), ...resolved });
+  _buildSettings(modelCfg: PiModelConfig | undefined): ModelSettingAxis[] {
+    const settings: ModelSettingAxis[] = [];
+
+    const variants = modelCfg?.variants
+      ? Object.keys(modelCfg.variants).filter((v) => modelCfg!.variants![v].disabled !== true)
+      : [];
+    if (variants.length > 0) {
+      settings.push({
+        id: "mode",
+        label: "Mode",
+        options: variants.map((value) => ({ value, label: modelCfg?.variants?.[value]?.label ?? value })),
+        defaultValue: variants[0] ?? null,
+        visible: true,
+        axisType: "select",
+      });
+    }
+
+    for (const axis of modelCfg?.axes ?? []) {
+      settings.push({
+        id: axis.id,
+        label: axis.label,
+        options: axis.options ?? [],
+        defaultValue: axis.defaultValue ?? null,
+        visible: axis.visible ?? true,
+        axisType: axis.axisType ?? "select",
+      });
+    }
+
+    return settings;
+  }
+
+  /**
+   * Applies the per-model config to `session.agent` for the current execution:
+   *  - Resolves the active Mode/Reasoning axis value (UI `modelParams` override wins over config default)
+   *    and sets `session.agent.state.thinkingLevel`.
+   *  - Deep-merges the model's static `options` plus any custom-axis runtime overrides into the
+   *    request body via `onPayload`.
+   *  - Resolves the sampling preset against the active model set and merges its defined fields.
+   */
+  _applyModelConfigToSession(
+    session: AgentSession,
+    modelCfg: PiModelConfig | undefined,
+    modelStr: string,
+    presetName: string | undefined,
+    modelParams: ModelParamValue[] | undefined,
+  ): void {
+    const baseOptions = modelCfg?.options ?? {};
+    const mergedOptions: Record<string, unknown> = { ...baseOptions };
+
+    // Apply UI-editable custom axes via their runtime path templates.
+    for (const axis of modelCfg?.axes ?? []) {
+      const chosen = modelParams?.find((p) => p.id === axis.id)?.value ?? axis.defaultValue;
+      if (chosen == null || !axis.runtime) continue;
+      for (const [path, tmpl] of Object.entries(axis.runtime)) {
+        if (typeof tmpl !== "string") continue;
+        const resolved = tmpl.includes("{value}") ? tmpl.replace("{value}", String(chosen)) : tmpl;
+        mergedOptions[path] = resolved;
+      }
+    }
+
+    // Mode/Reasoning level → session thinking level + provider knob.
+    const modeValue =
+      modelParams?.find((p) => p.id === "mode")?.value ?? modelParams?.find((p) => p.id === "thinkingLevel")?.value;
+    if (modeValue) {
+      session.agent.state.thinkingLevel = (modeValue === "off" ? "off" : modeValue) as never;
+      // Merge variant options into request body when a Mode variant is selected.
+      const variantOpts = modelCfg?.variants?.[modeValue]?.options;
+      if (variantOpts && typeof variantOpts === "object") {
+        Object.assign(mergedOptions, variantOpts);
+      }
+      // Only fall back to `reasoning_effort = modeValue` when the variant does not
+      // already carry its own reasoning knob (e.g. DeepSeek variants define
+      // `reasoningEffort`). Otherwise the variant name (e.g. "normal") would be
+      // sent as an invalid `reasoning_effort` value and rejected by the provider.
+      const REASONING_KEYS = [
+        "reasoning_effort",
+        "reasoningEffort",
+        "enable_thinking",
+        "chat_template_kwargs",
+        "thinking",
+      ];
+      const variantDefinesReasoning =
+        variantOpts &&
+        typeof variantOpts === "object" &&
+        Object.keys(variantOpts).some((k) => REASONING_KEYS.includes(k));
+      if (variantDefinesReasoning && variantOpts && typeof variantOpts === "object") {
+        // The SDK derives `reasoning_effort` (snake_case) from the session
+        // thinkingLevel. When the variant name is not a valid SDK level, the SDK
+        // clamps it to `off` and sends `reasoning_effort: "off"`, which conflicts
+        // with the variant's own reasoning option (e.g. `reasoningEffort: "high"`).
+        // Override the SDK's snake_case `reasoning_effort` with the variant's
+        // reasoning value so the request body stays consistent.
+        const variantOptsRecord = variantOpts as Record<string, unknown>;
+        const variantReasoningValue =
+          variantOptsRecord.reasoning_effort ?? variantOptsRecord.reasoningEffort;
+        if (variantReasoningValue !== undefined) {
+          mergedOptions.reasoning_effort = variantReasoningValue;
+        }
+      } else {
+        mergedOptions.reasoning_effort = modeValue;
+      }
+    }
+    if (modeValue == null) {
+      session.agent.state.thinkingLevel = (modelCfg?.thinking_level ?? "off") as never;
+    }
+
+    const sampling = resolveSamplingPreset(presetName, modelCfg);
+    if (sampling !== undefined) {
+      session.agent.onPayload = (payload: unknown) => ({
+        ...(payload as Record<string, unknown>),
+        ...mergedOptions,
+        ...sampling,
+      });
+    } else if (Object.keys(mergedOptions).length > 0) {
+      session.agent.onPayload = (payload: unknown) => ({
+        ...(payload as Record<string, unknown>),
+        ...mergedOptions,
+      });
     } else {
       session.agent.onPayload = undefined;
     }

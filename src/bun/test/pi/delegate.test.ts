@@ -563,5 +563,25 @@ describe("buildDelegateTool", () => {
     expect(lastBlockReason).toContain("search");
     expect(lastBlockReason.toLowerCase()).toContain("different approach");
   });
+
+  test("DL-19: parent thinking level is forwarded to the child session factory", async () => {
+    let receivedThinkingLevel: string | undefined;
+    const factory: ChildSessionFactory = async (opts) => {
+      receivedThinkingLevel = opts.thinkingLevel;
+      const session: any = {
+        agent: { state: { thinkingLevel: opts.thinkingLevel ?? "off" } },
+        subscribe: () => () => {},
+        prompt: async () => {},
+        dispose: () => {},
+        abort: () => {},
+      };
+      return { session, dispose: () => {} };
+    };
+    const opts = makeOpts({ childSessionFactory: factory, parentThinkingLevel: "high" });
+    const [tool] = buildDelegateTool(fakeHarnessCtx, opts);
+    await tool.execute("call-19", { tasks: [{ id: "tl-test", prompt: "work" }] }, undefined);
+
+    expect(receivedThinkingLevel).toBe("high");
+  });
 });
 

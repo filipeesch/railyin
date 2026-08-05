@@ -157,15 +157,67 @@ export interface PiBackgroundCompactionConfig {
   early_margin_tokens?: number;
 }
 
+  /** A named variant bundle for a Pi model — mirrors opencode's model `variants` node. */
+export interface PiVariantConfig {
+  /** When true, the variant is hidden from the UI Mode axis. */
+  disabled?: boolean;
+  /** Optional display label shown in the UI Mode axis; falls back to the variant id. */
+  label?: string;
+  /** Request-body params applied when this variant is active (e.g. reasoning_effort). */
+  [key: string]: unknown;
+}
+
+/** An optional UI-presentation axis for a Pi model. */
+export interface PiModelAxisConfig {
+  id: string;
+  label: string;
+  /** Explicit choices; when omitted, derived from the axis `source`. */
+  options?: Array<{ value: string; label: string }>;
+  defaultValue?: string | null;
+  axisType?: "toggle" | "select";
+  /** When false, the axis is hidden from the UI. Default: true. */
+  visible?: boolean;
+  /** Maps request-body path → value template. "{value}" is replaced with the chosen option value. */
+  runtime?: Record<string, string>;
+  /** Source binding the axis edits: "variants", "sampling_presets", or "options.<path>". */
+  source?: string;
+}
+
+/** Per-model config for the Pi engine — mirrors opencode's ProviderConfig.models shape. */
+export interface PiModelConfig {
+  /** Display name shown in the model picker. */
+  name?: string;
+  /** Whether the model supports extended thinking/reasoning. */
+  reasoning?: boolean;
+  /** Whether the model supports tool calling. */
+  tool_call?: boolean;
+  /** Reasoning field name used by the provider, or false when none. */
+  interleaved?: "reasoning" | "reasoning_content" | "reasoning_text" | boolean;
+  /** Token limits for this model — maps to the Pi SDK model.contextWindow/maxTokens. */
+  limit?: { context?: number; output?: number };
+  /** Default per-request body params, deep-merged into every request. */
+  options?: Record<string, unknown>;
+  /** Named variant bundles; each overrides request-body params. disabled:true hides one from the Mode axis. */
+  variants?: Record<string, PiVariantConfig>;
+  /** Named sampling parameter presets for THIS model (per-model, not engine-wide). */
+  sampling_presets?: Record<string, SamplingPreset>;
+  /** Preset name applied when a column/conversation specifies none. */
+  default_sampling_preset?: string;
+  /** Default thinking level ("off"|"minimal"|"low"|"medium"|"high"|"xhigh"). */
+  thinking_level?: string;
+  /** Optional UI-presentation axes overriding the auto-derived Mode/Sampling axes. */
+  axes?: PiModelAxisConfig[];
+}
+
 /** Pi engine config — uses the Pi agent SDK for local LLMs (LM Studio, Ollama, OpenAI-compatible). */
 export interface PiEngineConfig {
   type: "pi";
   /** Default model in "provider/model" format, e.g. "lmstudio/qwen3-8b". */
   model?: string;
   /**
-   * Context window size in tokens for the model. Used to calibrate the Pi SDK's
+   * Context window size in tokens for the engine default model. Used to calibrate the Pi SDK's
    * auto-compaction threshold (fires at contextWindow - 16,384 tokens).
-   * Default: 128_000. Override for smaller models (e.g. 8192 for Mistral-7B).
+   * Per-model `limit.context` overrides this.
    */
   context_window?: number;
   /**
@@ -189,10 +241,8 @@ export interface PiEngineConfig {
    * - "none"    — no slash commands (default when omitted)
    */
   dialect?: "copilot" | "claude" | "none";
-  /** Named sampling parameter presets for this Pi engine instance. */
-  sampling_presets?: Record<string, SamplingPreset>;
-  /** Name of the preset to use when a column does not specify one. */
-  default_sampling_preset?: string;
+  /** Per-model configuration keyed by model id (e.g. "lmstudio/qwen3-8b"). */
+  models?: Record<string, PiModelConfig>;
 }
 
 /** Cursor engine config — uses the Cursor Agent SDK. */

@@ -181,21 +181,23 @@ columns:
     expect(col!.sampling_preset).toBeUndefined();
   });
 
-  // CC-PRESET-3: PiEngineConfig reads sampling_presets from engines.yaml
-  it("CC-PRESET-3: PiEngineConfig.sampling_presets is loaded from engines.yaml", () => {
+  // CC-PRESET-3: PiEngineConfig reads per-model sampling_presets from engines.yaml
+  it("CC-PRESET-3: PiEngineConfig.models sampling_presets is loaded from engines.yaml", () => {
     const enginesYaml = `engines:
   - id: pi
     type: pi
     model: anthropic/claude-sonnet-4-5
-    sampling_presets:
-      balanced:
-        temperature: 0.7
-        top_p: 0.9
-      creative:
-        temperature: 1.2
-        top_p: 0.95
-        top_k: 40
-    default_sampling_preset: balanced
+    models:
+      anthropic/claude-sonnet-4-5:
+        sampling_presets:
+          balanced:
+            temperature: 0.7
+            top_p: 0.9
+          creative:
+            temperature: 1.2
+            top_p: 0.95
+            top_k: 40
+        default_sampling_preset: balanced
 `;
     const { cleanup } = setupTestConfig("", "/tmp/test-git", [], undefined, undefined, enginesYaml);
     configCleanup = cleanup;
@@ -203,14 +205,16 @@ columns:
     const config = getConfig();
     const piEntry = config.engines.find(e => e.id === "pi");
     const piConfig = piEntry!.config as import("../config/index.ts").PiEngineConfig;
+    const modelCfg = piConfig.models?.["anthropic/claude-sonnet-4-5"];
 
-    expect(piConfig.sampling_presets).toBeDefined();
-    expect(piConfig.sampling_presets!["balanced"].temperature).toBe(0.7);
-    expect(piConfig.sampling_presets!["creative"].top_k).toBe(40);
-    expect(piConfig.default_sampling_preset).toBe("balanced");
+    expect(modelCfg).toBeDefined();
+    expect(modelCfg!.sampling_presets).toBeDefined();
+    expect(modelCfg!.sampling_presets!["balanced"].temperature).toBe(0.7);
+    expect(modelCfg!.sampling_presets!["creative"].top_k).toBe(40);
+    expect(modelCfg!.default_sampling_preset).toBe("balanced");
   });
 
-  // CC-PRESET-4: PiEngineConfig without presets has undefined fields
+  // CC-PRESET-4: PiEngineConfig without per-model presets has undefined fields
   it("CC-PRESET-4: PiEngineConfig without sampling_presets has undefined fields", () => {
     const enginesYaml = `engines:
   - id: pi
@@ -224,8 +228,8 @@ columns:
     const piEntry = config.engines.find(e => e.id === "pi");
     const piConfig = piEntry!.config as import("../config/index.ts").PiEngineConfig;
 
-    expect(piConfig.sampling_presets).toBeUndefined();
-    expect(piConfig.default_sampling_preset).toBeUndefined();
+    expect(piConfig.models?.["anthropic/claude-sonnet-4-5"]?.sampling_presets).toBeUndefined();
+    expect(piConfig.models?.["anthropic/claude-sonnet-4-5"]?.default_sampling_preset).toBeUndefined();
   });
 });
 
