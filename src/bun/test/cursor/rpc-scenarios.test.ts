@@ -3,6 +3,9 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { createCursorRpcRuntime } from "@bun/test/support/cursor-rpc-runtime.ts";
 import type { BackendRpcRuntime } from "@bun/test/support/backend-rpc-runtime.ts";
+import { McpRegistryPool } from "../../mcp/registry-pool.ts";
+import { McpClientRegistry } from "../../mcp/registry.ts";
+import { FakeMcpClient } from "../support/fake-mcp-client.ts";
 import {
     MockCursorSdkAdapter,
     callTool,
@@ -17,6 +20,7 @@ import {
 import {
     runCancellationScenario,
     runFatalFailureScenario,
+    runMcpDiscoveryScenario,
     runModelListingScenario,
     runMultiTurnChatScenario,
     runSingleTurnChatScenario,
@@ -28,8 +32,8 @@ import {
 
 const runtimes: BackendRpcRuntime[] = [];
 
-function createRuntime(adapter: MockCursorSdkAdapter): BackendRpcRuntime {
-    const runtime = createCursorRpcRuntime(adapter);
+function createRuntime(adapter: MockCursorSdkAdapter, registryPool?: McpRegistryPool): BackendRpcRuntime {
+    const runtime = createCursorRpcRuntime(adapter, registryPool);
     runtimes.push(runtime);
     return runtime;
 }
@@ -250,5 +254,33 @@ describe("Cursor slash-command resolution", () => {
             .get(taskId);
         expect(persisted?.role).toBe("user");
         expect(persisted?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
+    });
+});
+
+describe("Cursor — MCP discovery tools (dynamic-mcp-discovery)", () => {
+    it("covers list_mcp_servers → list_mcp_tools → invoke_mcp_tool via the shared scenario", async () => {
+        const registry = new McpClientRegistry(
+            { servers: [{ name: "alpha", transport: { type: "stdio", command: "alpha-cmd" } }] },
+            {
+                clientFactory: () =>
+                    new FakeMcpClient({
+                        tools: [{ name: "echo", description: "echoes input", inputSchema: { type: "object" } }],
+                        callToolResult: "echoed!",
+                    }),
+            },
+        );
+        await registry.startAll();
+        const registryPool = new McpRegistryPool(() => registry);
+
+        const adapter = new MockCursorSdkAdapter().queueTurn({
+            steps: [
+                callTool("list_mcp_servers", {}),
+                callTool("list_mcp_tools", { server: "alpha" }),
+                callTool("invoke_mcp_tool", { server: "alpha", tool: "echo", arguments: {} }),
+            ],
+        });
+        const runtime = createRuntime(adapter, registryPool);
+
+        await runMcpDiscoveryScenario(runtime);
     });
 });

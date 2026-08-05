@@ -126,6 +126,48 @@ export async function runFatalFailureScenario(runtime: BackendRpcRuntime): Promi
     expect(runtime.getMessages(taskId).filter((message) => message.type === "assistant")).toHaveLength(0);
 }
 
+/**
+ * Full-loop MCP discovery scenario (dynamic-mcp-discovery, mcp-tool-discovery/spec.md):
+ * scripts a turn where the model calls list_mcp_servers → list_mcp_tools → invoke_mcp_tool
+ * in sequence, backed by a FakeMcpClient-driven McpClientRegistry injected into the runtime's
+ * McpRegistryPool (see `createBackendRpcRuntime({ registryPool })`). Verifies real per-engine
+ * tool dispatch reaches the real discovery executor (src/bun/mcp/discovery-tools.ts) end-to-end
+ * through the real Orchestrator + in-memory DB — not just that the tool defs are registered.
+ *
+ * Callers must queue the engine-specific mock turn with 3 real-dispatch tool-call steps (in
+ * this order) before invoking this scenario: list_mcp_servers, list_mcp_tools({server:"alpha"}),
+ * invoke_mcp_tool({server:"alpha", tool:"echo", arguments:{}}) — and must configure a
+ * FakeMcpClient-backed "alpha" server exposing an "echo" tool whose callToolResult contains
+ * "echoed!", per this scenario's assertions. Callers must also allow-list "alpha:echo" via
+ * `runtime.setEnabledMcpTools(taskId, ["alpha:echo"])` before sending the message (done here).
+ */
+export async function runMcpDiscoveryScenario(runtime: BackendRpcRuntime): Promise<void> {
+    const { taskId } = await runtime.createTask();
+    runtime.setEnabledMcpTools(taskId, ["alpha:echo"]);
+
+    const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Discover and invoke an MCP tool" });
+    await runtime.recorder.waitForStreamDone(result.executionId);
+    await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+    const streamEvents = runtime.recorder.streamEventsForExecution(result.executionId);
+    const toolCallEvents = streamEvents.filter((e) => e.type === "tool_call");
+    const toolResultEvents = streamEvents.filter((e) => e.type === "tool_result");
+
+    const resultFor = (toolName: string): string => {
+        const call = toolCallEvents.find((e) => {
+            try { return JSON.parse(e.content)?.function?.name === toolName; } catch { return false; }
+        });
+        expect(call, `expected a ${toolName} tool_call event`).toBeDefined();
+        const toolResult = toolResultEvents.find((e) => e.blockId === call?.blockId);
+        expect(toolResult, `expected a tool_result event for ${toolName}`).toBeDefined();
+        return toolResult!.content;
+    };
+
+    expect(resultFor("list_mcp_servers")).toContain("alpha");
+    expect(resultFor("list_mcp_tools")).toContain("echo");
+    expect(resultFor("invoke_mcp_tool")).toContain("echoed!");
+}
+
 export async function runModelListingScenario(runtime: BackendRpcRuntime): Promise<void> {
     const listed = await runtime.handlers["models.list"]();
     const enabled = await runtime.handlers["models.listEnabled"]();

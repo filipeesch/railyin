@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ClaudeEngine } from "../engine/claude/engine.ts";
 import type { BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import { createBackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
+import { McpRegistryPool } from "../mcp/registry-pool.ts";
+import { McpClientRegistry } from "../mcp/registry.ts";
+import { FakeMcpClient } from "./support/fake-mcp-client.ts";
 import {
   MockClaudeSdkAdapter,
   askUser,
+  callTool,
   done,
   fatal,
   reasoning,
@@ -22,6 +26,7 @@ import {
   runAskUserScenario,
   runCancellationScenario,
   runFatalFailureScenario,
+  runMcpDiscoveryScenario,
   runModelListingScenario,
   runMultiTurnChatScenario,
   runSingleTurnChatScenario,
@@ -31,7 +36,7 @@ import {
 
 const runtimes: BackendRpcRuntime[] = [];
 
-function createClaudeRuntime(adapter: MockClaudeSdkAdapter): BackendRpcRuntime {
+function createClaudeRuntime(adapter: MockClaudeSdkAdapter, registryPool?: McpRegistryPool): BackendRpcRuntime {
   adapter.setModels([
     {
       value: "claude-sonnet-4-6",
@@ -45,6 +50,7 @@ function createClaudeRuntime(adapter: MockClaudeSdkAdapter): BackendRpcRuntime {
     taskModel: "claude/claude-sonnet-4-6",
     createEngine: ({ onTaskUpdated, onNewMessage }) =>
       new ClaudeEngine("claude-sonnet-4-6", onTaskUpdated, onNewMessage, adapter),
+    registryPool,
   });
   runtimes.push(runtime);
   return runtime;
@@ -293,5 +299,35 @@ describe("Claude engine — subagent scenarios", () => {
     const dbEvents = runtime.getDbStreamEvents(executionId);
     const dbStop = dbEvents.find((e) => e.type === "tool_result" && e.subagentId === "sa-4");
     expect(dbStop).toBeDefined();
+  });
+});
+
+describe("Claude — MCP discovery tools (dynamic-mcp-discovery)", () => {
+  it("covers list_mcp_servers → list_mcp_tools → invoke_mcp_tool via the shared scenario", async () => {
+    const registry = new McpClientRegistry(
+      { servers: [{ name: "alpha", transport: { type: "stdio", command: "alpha-cmd" } }] },
+      {
+        clientFactory: () =>
+          new FakeMcpClient({
+            tools: [{ name: "echo", description: "echoes input", inputSchema: { type: "object" } }],
+            callToolResult: "echoed!",
+          }),
+      },
+    );
+    await registry.startAll();
+    const registryPool = new McpRegistryPool(() => registry);
+
+    const adapter = new MockClaudeSdkAdapter();
+    adapter.queueCreate({
+      steps: [
+        callTool("list_mcp_servers", {}),
+        callTool("list_mcp_tools", { server: "alpha" }),
+        callTool("invoke_mcp_tool", { server: "alpha", tool: "echo", arguments: {} }),
+        done(),
+      ],
+    });
+    const runtime = createClaudeRuntime(adapter, registryPool);
+
+    await runMcpDiscoveryScenario(runtime);
   });
 });

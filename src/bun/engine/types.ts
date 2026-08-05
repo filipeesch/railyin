@@ -250,5 +250,9 @@ export interface CommonToolContext {
   runtime: {
     lspManager?: LSPServerManager;
     worktreePath?: string;
+    /** Resolved once per conversation/task by each engine, mirroring `lspManager`'s resolution pattern. */
+    mcpRegistry?: McpClientRegistry;
+    /** Per-task/session "server:tool" visibility allow-list — see mcp-discovery-tool-definitions.ts. */
+    mcpEnabledTools?: string[] | null;
   };
 }

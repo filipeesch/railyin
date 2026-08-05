@@ -2,7 +2,7 @@
   <Popover ref="popoverRef" @hide="onHide">
     <div class="mcp-tools-popover">
       <div class="mcp-tools-popover__header">
-        <span class="mcp-tools-popover__title">MCP Tools</span>
+        <span class="mcp-tools-popover__title" title="Checked tools are visible to the model via list_mcp_tools/invoke_mcp_tool">MCP Tools</span>
         <Button
           v-tooltip="'Reload all'"
           icon="pi pi-refresh"
@@ -28,6 +28,7 @@
               <i class="pi pi-chevron-right" :class="{ 'is-expanded': expanded.has(server.name) }" />
             </button>
             <Checkbox
+              title="Make all tools on this server visible to the model"
               :model-value="serverCheckState(server) === 'all'"
               :binary="true"
               :indeterminate="serverCheckState(server) === 'some'"
@@ -71,6 +72,7 @@
               class="mcp-tools-popover__tool"
             >
               <Checkbox
+                title="Make this tool visible to the model via list_mcp_tools"
                 :model-value="isToolEnabled(server.name, tool.name)"
                 :binary="true"
                 @update:model-value="(val: boolean) => toggleTool(server.name, tool.name, val)"

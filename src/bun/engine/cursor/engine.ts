@@ -174,16 +174,13 @@ export class CursorEngine implements ExecutionEngine {
       runtime: {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
+        mcpRegistry: params.mcpRegistry ?? undefined,
+        mcpEnabledTools: params.enabledMcpTools ?? null,
       },
       workspaceKey: params.workspaceKey!,
     };
 
-    const customTools = buildCursorTools(
-      toolContext,
-      params.mcpRegistry ?? null,
-      params.enabledMcpTools ?? [],
-      onSuspend,
-    );
+    const customTools = buildCursorTools(toolContext, onSuspend);
 
     // The Cursor SDK has no system-message slot — inline the task context and
     // stage instructions as a prefix to the user prompt.

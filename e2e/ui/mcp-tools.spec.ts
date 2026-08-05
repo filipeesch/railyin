@@ -10,6 +10,7 @@
  *   V-17 to V-23 — File editor overlay (mcp.json editing)
  *   V-24 to V-27 — Tree behavior
  *   V-28 to V-32 — OAuth auth_required state and polling
+ *   V-33         — Visibility-semantics copy (checkboxes control model discovery, not injection)
  *
  * Backend is fully mocked. Monaco is controlled via window.monaco evaluate().
  */
@@ -633,5 +634,27 @@ test.describe("V — MCP auth_required state and OAuth polling", () => {
         await page.waitForTimeout(3500);
         const additionalCalls = callCount - countAfterReopenLoad;
         expect(additionalCalls).toBe(1);
+    });
+});
+
+// ─── Suite V-33 — Visibility-semantics copy ──────────────────────────────────
+// The popover's checkboxes are a pure copy/title-attribute relabeling (dynamic-mcp-discovery):
+// they now control whether a tool is *visible to the model* via list_mcp_tools/
+// invoke_mcp_tool, rather than gating native per-tool injection. Same RPCs/structure —
+// only the explanatory copy changed, so this is a minimal addition, not a new scenario.
+
+test.describe("V — MCP visibility-semantics copy", () => {
+    test("V-33: Title and checkboxes explain visibility-to-model semantics via title attribute", async ({ page, api, task }) => {
+        api.returns("mcp.getStatus", [makeMcpStatus()]);
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await openMcpPopover(page);
+        await expandServer(page);
+
+        await expect(page.locator(".mcp-tools-popover__title")).toHaveAttribute("title", /visible to the model/i);
+        await expect(page.locator(".mcp-tools-popover__server-row .p-checkbox").first()).toHaveAttribute("title", /visible to the model/i);
+        await expect(page.locator(".mcp-tools-popover__tool .p-checkbox").first()).toHaveAttribute("title", /list_mcp_tools/);
     });
 });

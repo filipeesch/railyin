@@ -270,6 +270,8 @@ export class PiEngine implements ExecutionEngine {
       skillResolver,
       suspendRef,
       signal,
+      params.mcpRegistry,
+      params.enabledMcpTools,
     );
 
     const piModel = this.modelBuilder.build(modelOverride, contextWindowOverride);

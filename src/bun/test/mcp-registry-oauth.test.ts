@@ -14,45 +14,12 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { createFakeOAuthServer, type FakeOAuthServerHandle } from "./support/fake-oauth-server.ts";
+import { FakeMcpClient } from "./support/fake-mcp-client.ts";
 import { McpClientRegistry } from "../mcp/registry.ts";
-import { McpClient } from "../mcp/client.ts";
 import { McpOAuthChallengeError, McpAuthRequiredError } from "../oauth/errors.ts";
 import { getServerTokens, getDcrClient } from "../oauth/token-store.ts";
-import type { McpToolDef, McpServerConfig } from "../mcp/types.ts";
+import type { McpServerConfig } from "../mcp/types.ts";
 import type { TokenProvider } from "../oauth/types.ts";
-
-// ─── Fake McpClient ─────────────────────────────────────────────────────────
-
-class FakeMcpClient extends McpClient {
-  closed = false;
-
-  constructor(
-    private readonly opts: {
-      initializeError?: Error;
-      callToolError?: Error;
-      tools?: Array<Omit<McpToolDef, "serverName" | "qualifiedName">>;
-    } = {},
-  ) {
-    super();
-  }
-
-  async initialize(): Promise<void> {
-    if (this.opts.initializeError) throw this.opts.initializeError;
-  }
-
-  async listTools(): Promise<McpToolDef[]> {
-    return (this.opts.tools ?? []).map((t) => ({ ...t, serverName: "", qualifiedName: "" }));
-  }
-
-  async callTool(_name: string, _args: Record<string, unknown>): Promise<string> {
-    if (this.opts.callToolError) throw this.opts.callToolError;
-    return "ok";
-  }
-
-  async close(): Promise<void> {
-    this.closed = true;
-  }
-}
 
 // ─── Config helpers ──────────────────────────────────────────────────────────
 

@@ -37,7 +37,12 @@ export function normalizeToMcpConfig(parsed: unknown): McpConfig {
             auth: normalizeAuthConfig(e.auth),
           }
         : { type: "stdio" as const, command: e.command as string, args: e.args as string[] | undefined, env: e.env as Record<string, string> | undefined };
-      return { name, transport };
+      return {
+        name,
+        transport,
+        ...(typeof e.description === "string" ? { description: e.description } : {}),
+        ...(typeof e.enabled === "boolean" ? { enabled: e.enabled } : {}),
+      };
     }
   );
   return { servers };

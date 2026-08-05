@@ -15,7 +15,6 @@
 import type { SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
 import type { CommonToolContext } from "../types.ts";
 import { COMMON_TOOL_DEFINITIONS, TODO_TOOL_NAMES, executeCommonTool } from "../common-tools.ts";
-import type { McpClientRegistry } from "../../mcp/registry.ts";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve as resolvePath } from "node:path";
@@ -193,13 +192,10 @@ function buildBypassTools(worktreePath: string): Record<string, SDKCustomTool> {
 
 /**
  * Build a Record of Cursor SDKCustomTool entries (keyed by tool name) for the
- * given execution context. Common tools and (optionally) MCP tools are merged
- * into a single map suitable for `LocalAgentOptions.customTools`.
+ * given execution context, suitable for `LocalAgentOptions.customTools`.
  */
 export function buildCursorTools(
   context: CommonToolContext,
-  mcpRegistry?: McpClientRegistry | null,
-  enabledMcpTools?: string[] | null,
   onSuspend?: (payload: string) => void,
 ): Record<string, SDKCustomTool> {
   const tools: Record<string, SDKCustomTool> = {};
@@ -230,22 +226,6 @@ export function buildCursorTools(
         }
       },
     };
-  }
-
-  if (mcpRegistry) {
-    for (const def of mcpRegistry.listTools(enabledMcpTools ?? null)) {
-      tools[def.qualifiedName] = {
-        description: def.description ?? `MCP tool: ${def.name}`,
-        inputSchema: def.inputSchema as Record<string, SDKJsonValue>,
-        execute: async (args) => {
-          return (await mcpRegistry.callTool(
-            def.serverName,
-            def.name,
-            (args as Record<string, unknown>) ?? {},
-          )) as SDKJsonValue;
-        },
-      };
-    }
   }
 
   if (context.runtime.worktreePath) {
