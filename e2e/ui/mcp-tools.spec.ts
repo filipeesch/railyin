@@ -10,6 +10,7 @@
  *   V-17 to V-23 — File editor overlay (mcp.json editing)
  *   V-24 to V-27 — Tree behavior
  *   V-28 to V-32 — OAuth auth_required state and polling
+ *   V-33         — Visibility-semantics copy (checkboxes control model discovery, not injection)
  *
  * Backend is fully mocked. Monaco is controlled via window.monaco evaluate().
  */
@@ -205,7 +206,7 @@ test.describe("V — MCP popover content", () => {
 // ─── Suite V-12 to V-14 — Tool checkbox state and toggling ───────────────────
 
 test.describe("V — MCP tool checkboxes", () => {
-    test("V-12: enabledMcpTools=null means all tools are UNchecked", async ({ page, api, task }) => {
+    test("V-12: enabledMcpTools=null means all tools are checked (visible by default)", async ({ page, api, task }) => {
         const t = makeTask({ id: 1, enabledMcpTools: null });
         api.returns("mcp.getStatus", [makeMcpStatus()]);
         api.handle("tasks.list", () => [t]);
@@ -217,8 +218,8 @@ test.describe("V — MCP tool checkboxes", () => {
 
         const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
         await expect(checkboxes).toHaveCount(2);
-        await expect(checkboxes.nth(0)).not.toHaveClass(/p-checkbox-checked/);
-        await expect(checkboxes.nth(1)).not.toHaveClass(/p-checkbox-checked/);
+        await expect(checkboxes.nth(0)).toHaveClass(/p-checkbox-checked/);
+        await expect(checkboxes.nth(1)).toHaveClass(/p-checkbox-checked/);
     });
 
     test("V-13: enabledMcpTools=[toolA] means only toolA is checked", async ({ page, api, task }) => {
@@ -257,6 +258,28 @@ test.describe("V — MCP tool checkboxes", () => {
 
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: ["test-server:toolA"] });
+    });
+
+    test("V-14b: Unchecking a tool from the implicit null/all-visible state materializes 'all minus one'", async ({ page, api, task }) => {
+        const t = makeTask({ id: 1, enabledMcpTools: null });
+        const updatedTask = makeTask({ id: 1, enabledMcpTools: ["test-server:toolB"] });
+
+        api.returns("mcp.getStatus", [makeMcpStatus()]);
+        api.handle("tasks.list", () => [t]);
+        const calls = api.capture("mcp.setTaskTools", updatedTask);
+
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await openMcpPopover(page);
+        await expandServer(page);
+
+        // Uncheck toolA (first checkbox) — starts checked with null (all-visible) semantics
+        const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
+        await expect(checkboxes).toHaveCount(2);
+        await checkboxes.nth(0).click();
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: ["test-server:toolB"] });
     });
 });
 
@@ -633,5 +656,27 @@ test.describe("V — MCP auth_required state and OAuth polling", () => {
         await page.waitForTimeout(3500);
         const additionalCalls = callCount - countAfterReopenLoad;
         expect(additionalCalls).toBe(1);
+    });
+});
+
+// ─── Suite V-33 — Visibility-semantics copy ──────────────────────────────────
+// The popover's checkboxes are a pure copy/title-attribute relabeling (dynamic-mcp-discovery):
+// they now control whether a tool is *visible to the model* via list_mcp_tools/
+// invoke_mcp_tool, rather than gating native per-tool injection. Same RPCs/structure —
+// only the explanatory copy changed, so this is a minimal addition, not a new scenario.
+
+test.describe("V — MCP visibility-semantics copy", () => {
+    test("V-33: Title and checkboxes explain visibility-to-model semantics via title attribute", async ({ page, api, task }) => {
+        api.returns("mcp.getStatus", [makeMcpStatus()]);
+        api.handle("tasks.list", () => [task]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+        await openMcpPopover(page);
+        await expandServer(page);
+
+        await expect(page.locator(".mcp-tools-popover__title")).toHaveAttribute("title", /visible to the model/i);
+        await expect(page.locator(".mcp-tools-popover__server-row .p-checkbox").first()).toHaveAttribute("title", /visible to the model/i);
+        await expect(page.locator(".mcp-tools-popover__tool .p-checkbox").first()).toHaveAttribute("title", /list_mcp_tools/);
     });
 });

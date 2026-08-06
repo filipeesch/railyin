@@ -36,7 +36,7 @@ export function mapTask(row: TaskRow): Task {
     worktreePath: row.worktree_path ?? null,
     executionCount: row.execution_count ?? 0,
     position: row.position ?? 0,
-    enabledMcpTools: (() => { try { return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : []; } catch { return []; } })(),
+    enabledMcpTools: (() => { try { return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : null; } catch { return null; } })(),
     samplingPresetOverride: (row as any).conversation_sampling_preset_override ?? null,
     modelParams: parseModelParams((row as any).conversation_model_params),
   };
@@ -90,9 +90,9 @@ export function mapChatSession(row: ChatSessionRow): ChatSession {
     model: row.conversation_model ?? null,
     enabledMcpTools: (() => {
       try {
-        return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : [];
+        return row.enabled_mcp_tools ? JSON.parse(row.enabled_mcp_tools) : null;
       } catch {
-        return [];
+        return null;
       }
     })(),
     shellAutoApprove: row.shell_auto_approve === 1,

@@ -167,6 +167,38 @@ describe("normalizeToMcpConfig", () => {
     expect(result.servers).toHaveLength(3);
     expect(result.servers.map((s) => s.name)).toEqual(["first", "second", "third"]);
   });
+
+  // Regression test for a pre-existing bug: the object-map branch built only
+  // { name, transport }, silently dropping `description`/`enabled` even though
+  // McpServerConfig supports both and the array-format branch preserves them.
+  // This matters for list_mcp_servers (mcp-tool-discovery), which needs
+  // `description` to be reliable regardless of config authoring style.
+  it("preserves description on an object-map entry", () => {
+    const input = {
+      servers: {
+        docs: { command: "docs-server", description: "Internal documentation search" },
+      },
+    };
+    const result = normalizeToMcpConfig(input);
+    expect(result.servers[0].description).toBe("Internal documentation search");
+  });
+
+  it("preserves enabled: false on an object-map entry", () => {
+    const input = {
+      servers: {
+        legacy: { command: "legacy-server", enabled: false },
+      },
+    };
+    const result = normalizeToMcpConfig(input);
+    expect(result.servers[0].enabled).toBe(false);
+  });
+
+  it("leaves description/enabled undefined when not present on an object-map entry", () => {
+    const input = { servers: { plain: { command: "plain-server" } } };
+    const result = normalizeToMcpConfig(input);
+    expect(result.servers[0].description).toBeUndefined();
+    expect(result.servers[0].enabled).toBeUndefined();
+  });
 });
 
 describe("loadMcpConfigFile", () => {
@@ -217,5 +249,19 @@ describe("loadMcpConfigFile", () => {
     expect(result.servers).toHaveLength(1);
     expect(result.servers[0].name).toBe("myTool");
     expect(result.servers[0].transport.type).toBe("stdio");
+  });
+
+  it("preserves description and enabled from an object-map format file", () => {
+    const filePath = join(tempDir, "mcp.json");
+    const content = JSON.stringify({
+      servers: {
+        myTool: { command: "tool", description: "My internal tool", enabled: false },
+      },
+    });
+    writeFileSync(filePath, content, "utf-8");
+
+    const result = loadMcpConfigFile(filePath);
+    expect(result.servers[0].description).toBe("My internal tool");
+    expect(result.servers[0].enabled).toBe(false);
   });
 });

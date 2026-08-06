@@ -24,6 +24,7 @@ import { GitRepositoryManager } from "../../git/GitRepositoryManager.ts";
 import { TaskGitContextRepository } from "../../db/repositories/TaskGitContextRepository.ts";
 import type { IProjectResolver } from "../../git/IProjectResolver.ts";
 import { getWorkspaceConfig, getDefaultWorkspaceKey } from "../../workspace-context.ts";
+import type { McpRegistryPool } from "../../mcp/registry-pool.ts";
 
 /** Minimal project resolver for tests — no real config lookup needed */
 const TEST_PROJECT_RESOLVER: IProjectResolver = {
@@ -50,6 +51,8 @@ export interface BackendRpcRuntime {
     gitDir: string;
     cleanup: () => void;
     createTask: (model?: string) => Promise<{ taskId: number; conversationId: number }>;
+    /** Sets the task's per-task MCP tool visibility allow-list (server:tool pairs) — mirrors mcp.ts's setEnabledMcpTools handler. */
+    setEnabledMcpTools: (taskId: number, tools: string[]) => void;
     getMessages: (taskId: number) => Array<{ type: string; role: string | null; content: string }>;
     getTaskState: (taskId: number) => string | null;
     getExecutionStatus: (executionId: number) => string | null;
@@ -77,6 +80,8 @@ async function waitUntil(predicate: () => boolean, description: string, timeoutM
 export function createBackendRpcRuntime(options: {
     createEngine: (callbacks: EngineFactoryCallbacks) => ExecutionEngine;
     taskModel?: string;
+    /** Injected into the Orchestrator so ExecutionParamsBuilder resolves a real (test-controlled) McpClientRegistry instead of null. */
+    registryPool?: McpRegistryPool;
 }): BackendRpcRuntime {
     const db = initDb();
     const cfg = setupTestConfig();
@@ -117,6 +122,10 @@ export function createBackendRpcRuntime(options: {
         recorder.recordTaskUpdate,
         recorder.recordNewMessage,
         new WorkspaceRepository(db),
+        undefined,
+        undefined,
+        undefined,
+        options.registryPool,
     );
 
     coordinator.setOnStreamEvent((event: StreamEvent) => {
@@ -192,6 +201,9 @@ export function createBackendRpcRuntime(options: {
                 [model],
             );
             return { taskId, conversationId };
+        },
+        setEnabledMcpTools: (taskId: number, tools: string[]) => {
+            db.run("UPDATE tasks SET enabled_mcp_tools = ? WHERE id = ?", [JSON.stringify(tools), taskId]);
         },
         getMessages: (taskId: number) => db
             .query<{ type: string; role: string | null; content: string }, [number]>(

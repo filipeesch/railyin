@@ -7,7 +7,6 @@ import { ShellApprovalRepository, getUnapprovedShellBinaries } from "../../db/re
 import type { ShellApprovalScope } from "../../db/repositories/shell-approval-repository.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
-import type { McpServerConfig } from "../../mcp/types.ts";
 import { BashPermissionGate } from "./bash-permission-gate.ts";
 
 export interface ClaudeSdkModelInfo {
@@ -48,10 +47,6 @@ export interface ClaudeRunConfig {
   toolMetaByCallId?: Map<string, ToolMetadata>;
   /** Captures file content before write/edit tools for accurate per-call diffs. */
   fileStateCache?: FileStateCache;
-  /** External MCP server configs to pass natively to the Claude SDK. */
-  externalMcpServers?: McpServerConfig[];
-  /** Tool filter: null = all enabled, string[] = "server:tool" pairs that are enabled. */
-  enabledMcpTools?: string[] | null;
   /** Model parameter overrides (e.g. effort level) from the conversation's model_params. */
   modelParams?: import("../../../shared/rpc-types.ts").ModelParamValue[];
 }
@@ -155,66 +150,6 @@ function buildAskUserPayload(message: string, requestedSchema?: Record<string, u
 function normalizeClaudeModel(model?: string): string | undefined {
   if (!model) return undefined;
   return model.startsWith("claude/") ? model.slice("claude/".length) : model;
-}
-
-/**
- * Convert our internal McpServerConfig list to the format the Claude Agent SDK
- * expects for external mcpServers (transport config keyed by server name).
- * Servers with no enabled tools are excluded when a filter is provided.
- */
-function buildExternalMcpServers(
-  servers: McpServerConfig[] | undefined,
-  enabledMcpTools: string[] | null | undefined,
-): Record<string, unknown> {
-  if (!servers?.length) return {};
-  const result: Record<string, unknown> = {};
-  for (const srv of servers) {
-    // If a filter is provided, only include servers with at least one enabled tool.
-    if (Array.isArray(enabledMcpTools)) {
-      const hasEnabled = enabledMcpTools.some((t) => t.startsWith(`${srv.name}:`));
-      if (!hasEnabled) continue;
-    }
-    result[srv.name] = srv.transport;
-  }
-  return result;
-}
-
-/**
- * Build the allowedTools list for external MCP servers.
- *
- * The SDK's allowedTools option pre-approves tools so they run without a permission prompt.
- * Tool names follow the pattern `mcp__{server-name}__{tool-name}`.
- *
- * Our internal enabledMcpTools filter uses `"serverName:toolName"` format — translate to
- * SDK format here. When enabledMcpTools is null (all enabled), emit a wildcard per server.
- * When a specific list is provided, translate each entry to its SDK-format tool name.
- *
- * Ref: https://code.claude.com/docs/en/agent-sdk/mcp#allow-mcp-tools
- */
-function buildAllowedExternalMcpTools(
-  servers: McpServerConfig[] | undefined,
-  enabledMcpTools: string[] | null | undefined,
-): string[] {
-  if (!servers?.length) return [];
-  const allowed: string[] = [];
-  for (const srv of servers) {
-    if (!Array.isArray(enabledMcpTools)) {
-      // null = all tools enabled — use a wildcard for this server.
-      allowed.push(`mcp__${srv.name}__*`);
-    } else {
-      // Translate "serverName:toolName" → "mcp__serverName__toolName".
-      for (const entry of enabledMcpTools) {
-        const colonIdx = entry.indexOf(":");
-        if (colonIdx === -1) continue;
-        const serverName = entry.slice(0, colonIdx);
-        const toolName = entry.slice(colonIdx + 1);
-        if (serverName === srv.name) {
-          allowed.push(`mcp__${serverName}__${toolName}`);
-        }
-      }
-    }
-  }
-  return allowed;
 }
 
 export function buildAllowPermissionResult(
@@ -387,11 +322,9 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             // allowedTools pre-approves every tool in our in-process server so they run
             // without going through the PreToolUse hook permission path.
             // The wildcard "mcp__railyin__*" pre-approves every tool in our in-process server.
-            // External MCP tools are also pre-approved here when enabledMcpTools is provided.
             // Ref: https://code.claude.com/docs/en/agent-sdk/mcp#allow-mcp-tools
             allowedTools: [
               "mcp__railyin__*",
-              ...buildAllowedExternalMcpTools(config.externalMcpServers, config.enabledMcpTools),
             ],
             permissionMode: "bypassPermissions",
             // SDK docs: allowDangerouslySkipPermissions is REQUIRED when using bypassPermissions.
@@ -486,7 +419,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
               : { type: "preset", preset: "claude_code" },
             mcpServers: {
               railyin: toolServer,
-              ...buildExternalMcpServers(config.externalMcpServers, config.enabledMcpTools),
             },
             onElicitation: async (request: { message: string; requestedSchema?: Record<string, unknown> }) => {
               const payload = buildAskUserPayload(request.message, request.requestedSchema);

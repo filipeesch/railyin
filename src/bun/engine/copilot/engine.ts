@@ -169,11 +169,13 @@ export class CopilotEngine implements ExecutionEngine {
       runtime: {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
+        mcpRegistry: params.mcpRegistry ?? undefined,
+        mcpEnabledTools: params.enabledMcpTools ?? null,
       },
       workspaceKey: params.workspaceKey!,
     };
 
-    const tools = buildCopilotTools(toolContext, params.mcpRegistry ?? null, params.enabledMcpTools ?? [], onSuspend);
+    const tools = buildCopilotTools(toolContext, onSuspend);
 
     // Build system message — prepend task identity then append stage_instructions
     const taskBlock = taskContext

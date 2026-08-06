@@ -1,5 +1,6 @@
 import type { EngineEvent, EngineResumeInput } from "../../engine/types.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter, ClaudeSdkModelInfo } from "../../engine/claude/adapter.ts";
+import { executeCommonTool } from "../../engine/common-tools.ts";
 
 type MockTurnStep =
   | { kind: "emit"; event: EngineEvent }
@@ -7,6 +8,7 @@ type MockTurnStep =
   | { kind: "shell_approval"; command: string }
   | { kind: "subagent_start"; callId: string; intent: string; prompt: string }
   | { kind: "subagent_stop"; callId: string }
+  | { kind: "callTool"; toolName: string; args: unknown }
   | { kind: "waitForAbort" };
 
 export interface MockClaudeTurnScript {
@@ -100,6 +102,20 @@ export class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
             break;
           }
 
+          case "callTool": {
+            // Real dispatch: invoke the actual executeCommonTool handler with the shared
+            // CommonToolContext already carried in config, and persist genuine
+            // tool_start/tool_result events using its real return value — mirrors what
+            // production Claude tool dispatch does, instead of the scripted
+            // toolStart/toolResult pairs used elsewhere, which fake both the call AND its result.
+            const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            yield { type: "tool_start", name: step.toolName, arguments: JSON.stringify(step.args), callId };
+            const result = await executeCommonTool(step.toolName, step.args as Record<string, unknown>, config.commonToolContext);
+            const resultText = result.type === "suspend" ? result.payload : result.text;
+            yield { type: "tool_result", name: step.toolName, result: resultText, callId, isError: false };
+            break;
+          }
+
           case "waitForAbort":
             await new Promise<void>((resolve) => {
               if (aborted) {
@@ -176,4 +192,8 @@ export function subagentStart(callId: string, intent: string, prompt = ""): Mock
 
 export function subagentStop(callId: string): MockTurnStep {
   return { kind: "subagent_stop", callId };
+}
+
+export function callTool(toolName: string, args: unknown = {}): MockTurnStep {
+  return { kind: "callTool", toolName, args };
 }
