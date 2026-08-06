@@ -1,9 +1,8 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { resolveSamplingPreset } from "@bun/engine/pi/sampling-params.ts";
-import type { PiEngineConfig } from "@bun/config/index.ts";
+import type { PiModelConfig } from "@bun/config/index.ts";
 
-const baseConfig: PiEngineConfig = {
-  type: "pi",
+const baseConfig: PiModelConfig = {
   sampling_presets: {
     precise: { temperature: 0.2, top_p: 0.85 },
     balanced: { temperature: 0.7, top_p: 0.9, top_k: 40, presence_penalty: 0.1 },
@@ -20,8 +19,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-2: Partial preset has no extra keys (label/description stripped)
   it("PS-2: partial preset only has defined sampling keys", () => {
-    const config: PiEngineConfig = {
-      type: "pi",
+    const config: PiModelConfig = {
       sampling_presets: { minimal: { temperature: 0.8 } },
     };
     const result = resolveSamplingPreset("minimal", config);
@@ -37,8 +35,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-3: All eight params present when defined
   it("PS-3: preset with all eight params returns all eight", () => {
-    const config: PiEngineConfig = {
-      type: "pi",
+    const config: PiModelConfig = {
       sampling_presets: {
         full: {
           temperature: 0.7,
@@ -73,7 +70,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-5: undefined presetName, default set → returns default preset
   it("PS-5: undefined presetName falls back to default_sampling_preset", () => {
-    const config: PiEngineConfig = {
+    const config: PiModelConfig = {
       ...baseConfig,
       default_sampling_preset: "balanced",
     };
@@ -88,7 +85,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-6: explicit preset takes precedence over default
   it("PS-6: explicit preset overrides default_sampling_preset", () => {
-    const config: PiEngineConfig = {
+    const config: PiModelConfig = {
       ...baseConfig,
       default_sampling_preset: "balanced",
     };
@@ -100,7 +97,7 @@ describe("resolveSamplingPreset", () => {
   it("PS-7: unknown preset logs a warning and falls back to default", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const config: PiEngineConfig = {
+      const config: PiModelConfig = {
         ...baseConfig,
         default_sampling_preset: "balanced",
       };
@@ -125,15 +122,14 @@ describe("resolveSamplingPreset", () => {
 
   // PS-9: sampling_presets undefined → returns undefined without throwing
   it("PS-9: missing sampling_presets returns undefined without throwing", () => {
-    const config: PiEngineConfig = { type: "pi" };
+    const config: PiModelConfig = {};
     expect(() => resolveSamplingPreset("any", config)).not.toThrow();
     expect(resolveSamplingPreset("any", config)).toBeUndefined();
   });
 
   // PS-10: temperature: 0 is not filtered as falsy
   it("PS-10: temperature: 0 is preserved in returned preset", () => {
-    const config: PiEngineConfig = {
-      type: "pi",
+    const config: PiModelConfig = {
       sampling_presets: { zero: { temperature: 0 } },
     };
     const result = resolveSamplingPreset("zero", config);
@@ -142,8 +138,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-11: repetition_penalty is forwarded
   it("PS-11: preset with repetition_penalty returns it in resolved params", () => {
-    const config: PiEngineConfig = {
-      type: "pi",
+    const config: PiModelConfig = {
       sampling_presets: { penalized: { temperature: 0.7, repetition_penalty: 1.1 } },
     };
     const result = resolveSamplingPreset("penalized", config);
@@ -152,8 +147,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-12: frequency_penalty is forwarded
   it("PS-12: preset with frequency_penalty returns it in resolved params", () => {
-    const config: PiEngineConfig = {
-      type: "pi",
+    const config: PiModelConfig = {
       sampling_presets: { freq: { temperature: 0.5, frequency_penalty: 0.3 } },
     };
     const result = resolveSamplingPreset("freq", config);
@@ -162,8 +156,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-13: seed is forwarded
   it("PS-13: preset with seed returns it in resolved params", () => {
-    const config: PiEngineConfig = {
-      type: "pi",
+    const config: PiModelConfig = {
       sampling_presets: { reproducible: { temperature: 0.7, seed: 42 } },
     };
     const result = resolveSamplingPreset("reproducible", config);
@@ -172,8 +165,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-14: min_p is forwarded
   it("PS-14: preset with min_p returns it in resolved params", () => {
-    const config: PiEngineConfig = {
-      type: "pi",
+    const config: PiModelConfig = {
       sampling_presets: { minp: { temperature: 0.7, min_p: 0.1 } },
     };
     const result = resolveSamplingPreset("minp", config);
@@ -182,8 +174,7 @@ describe("resolveSamplingPreset", () => {
 
   // PS-15: label and description are stripped from resolved SamplingParams
   it("PS-15: preset with label and description — neither appears in resolved SamplingParams", () => {
-    const config: PiEngineConfig = {
-      type: "pi",
+    const config: PiModelConfig = {
       sampling_presets: {
         labeled: {
           label: "Balanced",

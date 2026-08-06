@@ -88,45 +88,62 @@ engines:
   #                              # claude  → .claude/commands/**/*.md (colon-namespaced subdirs)
   #                              # none    → no slash commands (default when omitted)
   #
-  #   # ── Sampling parameter presets ────────────────────────────────────────────
-  #   # Named presets of LLM sampling parameters. Columns can reference a preset
-  #   # by name via `sampling_preset: <name>` in the workflow YAML.
-  #   # Fallback chain: column.sampling_preset → default_sampling_preset → none
+  #   # ── Per-model configuration ─────────────────────────────────────────────
+  #   # Models can carry their own sampling presets, default preset, and optional
+  #   # UI presentation axes. Keyed by "provider/model" or bare model id.
   #   #
-  #   # `label` and `description` are optional — used in the UI preset selector.
-  #   # The YAML key is used as the stable identifier in column config and the DB.
+  #   #   models:
+  #   #     lmstudio/qwen3-8b:
+  #   #       # Named sampling parameter presets. A column can pick one by name
+  #   #       # via `sampling_preset: <name>` in the workflow YAML.
+  #   #       # Fallback chain: column.sampling_preset → model.default_sampling_preset → none
+  #   #       #
+  #   #       # `label` and `description` are optional — used in the UI preset selector.
+  #   #       # The YAML key is the stable identifier in column config and the DB.
+  #   #       #
+  #   #       sampling_presets:
+  #   #         balanced:                     # good all-round default
+  #   #           label: "Balanced"
+  #   #           description: "Good all-round default for most tasks"
+  #   #           temperature: 0.8
+  #   #           top_p: 0.95
+  #   #         precise:                      # low-variance for code writing / bug fixing
+  #   #           label: "Precise / Code"
+  #   #           description: "Low variance for deterministic code and bug fixing"
+  #   #           temperature: 0.2
+  #   #           top_p: 0.85
+  #   #         creative:                     # high-variance for brainstorming / exploration
+  #   #           label: "Creative / Design"
+  #   #           description: "High variance for brainstorming and open-ended exploration"
+  #   #           temperature: 1.2
+  #   #           top_p: 0.98
+  #   #           presence_penalty: 0.3
+  #   #       default_sampling_preset: balanced   # used when a column specifies none
   #   #
-  #   # default_sampling_preset: balanced   # used when a column has no sampling_preset
-  #   # sampling_presets:
-  #   #   balanced:                         # good all-round default
-  #   #     label: "Balanced"
-  #   #     description: "Good all-round default for most tasks"
-  #   #     temperature: 0.8
-  #   #     top_p: 0.95
-  #   #   precise:                          # low-variance for code writing / bug fixing
-  #   #     label: "Precise / Code"
-  #   #     description: "Low variance for deterministic code and bug fixing"
-  #   #     temperature: 0.2
-  #   #     top_p: 0.85
-  #   #   creative:                         # high-variance for brainstorming / exploration
-  #   #     label: "Creative / Design"
-  #   #     description: "High variance for brainstorming and open-ended exploration"
-  #   #     temperature: 1.2
-  #   #     top_p: 0.98
-  #   #     presence_penalty: 0.3
+  #   #   # Optional UI presentation axes (overrides the auto-derived Mode/Sampling axes).
+  #   #   axes:
+  #   #     - id: mode
+  #   #       label: "Mode"
+  #   #       options:
+  #   #         - { id: off, label: "Off (no thinking)" }
+  #   #         - { id: low, label: "Low" }
+  #   #         - { id: medium, label: "Medium" }
+  #   #         - { id: high, label: "High" }
+  #   #       runtime:
+  #   #         thinking: "{value}"
   #   #
   #   # Additional sampling parameters (optional):
-  #   #   repetition_penalty: 1.1   # penalizes tokens based on frequency (vLLM, SGLang, OpenRouter)
-  #   #   frequency_penalty: 0.5    # penalizes based on text so far (OpenAI, vLLM, SGLang, OpenRouter)
-  #   #   seed: 42                  # reproducible outputs (vLLM, SGLang, OpenRouter, Ollama)
-  #   #   min_p: 0.1                # alternative to temperature/top_p (vLLM, SGLang)
-  #   #   top_k: 40                 # limits to top-k tokens (vLLM, SGLang, Ollama, OpenRouter)
+  #   #   # top_k: 40                 # limits to top-k tokens (vLLM, SGLang, Ollama, OpenRouter)
+  #   #   # seed: 42                  # reproducible outputs (vLLM, SGLang, OpenRouter, Ollama)
+  #   #   # min_p: 0.1                # alternative to temperature/top_p (vLLM, SGLang)
+  #   #   # repetition_penalty: 1.1   # penalizes repeated tokens (vLLM, SGLang, OpenRouter)
   #   #
   #   # Backend support matrix:
-  #   #   vLLM      ✅ repetition_penalty, frequency_penalty, seed, min_p, top_k
-  #   #   SGLang    ✅ repetition_penalty, frequency_penalty, seed, min_p, top_k
+  #   #   vLLM      ✅ repetition_penalty, seed, min_p, top_k
+  #   #   SGLang    ✅ repetition_penalty, seed, min_p, top_k
   #   #   LM Studio ✅ (backed by vLLM) — same as vLLM
-  #   #   OpenRouter ✅ repetition_penalty, frequency_penalty, seed (min_p varies by provider)
+  #   #   OpenRouter ✅ repetition_penalty, seed (min_p varies by provider)
   #   #   Ollama    ❌ repetition_penalty (uses repeat_penalty natively), ✅ seed
   #   #   Groq      ❌ (only temperature, top_p, frequency_penalty, presence_penalty)
   #   #   Mistral   ❌ (only temperature, top_p, max_tokens)
+  #   #

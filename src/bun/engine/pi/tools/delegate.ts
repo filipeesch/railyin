@@ -32,6 +32,8 @@ export interface DelegateToolOptions {
   parentCwd?: string;
   parentConversationId?: number;
   engineConfig?: PiEngineConfig;
+  /** Parent's resolved thinking level — children inherit it instead of hardcoded "off". */
+  parentThinkingLevel?: string;
   /** Callback for forwarding child raw-model events to the parent's observability pipeline. */
   onRawModelMessage?: (message: RawModelMessage) => void;
   /** Builds tools for child sessions — injected by buildAllTools to avoid circular imports. */
@@ -260,6 +262,7 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
             model,
             config,
             parentSystemPrompt: opts.parentSystemPrompt,
+            thinkingLevel: opts.parentThinkingLevel,
             cwd: childCwd,
           });
 

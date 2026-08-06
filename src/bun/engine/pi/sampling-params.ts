@@ -1,4 +1,4 @@
-import type { PiEngineConfig, SamplingPreset } from "../../config/index.ts";
+import type { PiModelConfig, SamplingPreset } from "../../config/index.ts";
 
 /**
  * LLM-facing sampling parameters — the subset of SamplingPreset fields that
@@ -61,9 +61,9 @@ function filterDefined(preset: SamplingPreset): SamplingParams {
  */
 export function resolveSamplingPreset(
   presetName: string | undefined,
-  config: PiEngineConfig,
+  modelCfg: PiModelConfig | undefined,
 ): SamplingParams | undefined {
-  const presets = config.sampling_presets ?? {};
+  const presets = modelCfg?.sampling_presets ?? {};
 
   if (presetName !== undefined) {
     const preset = presets[presetName];
@@ -71,17 +71,17 @@ export function resolveSamplingPreset(
       return filterDefined(preset);
     }
     console.warn(
-      `[PiEngine] sampling_preset "${presetName}" not found in engine config — falling back to default`,
+      `[PiEngine] sampling_preset "${presetName}" not found for model — falling back to default`,
     );
   }
 
-  if (config.default_sampling_preset !== undefined) {
-    const defaultPreset = presets[config.default_sampling_preset];
+  if (modelCfg?.default_sampling_preset !== undefined) {
+    const defaultPreset = presets[modelCfg.default_sampling_preset];
     if (defaultPreset !== undefined) {
       return filterDefined(defaultPreset);
     }
     console.warn(
-      `[PiEngine] default_sampling_preset "${config.default_sampling_preset}" not found in engine config — no sampling override`,
+      `[PiEngine] default_sampling_preset "${modelCfg.default_sampling_preset}" not found for model — no sampling override`,
     );
   }
 

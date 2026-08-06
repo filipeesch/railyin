@@ -1,0 +1,19 @@
+- [x] 1.1 Add `PiModelConfig` type (name, reasoning, tool_call, interleaved, limit{context,output}, options, variants, sampling_presets, default_sampling_preset, axes) and `models?: Record<string, PiModelConfig>`
+- [x] 1.2 Add config validation rejecting unknown keys and invalid variant/axis combinations
+- [x] 2.1 Implement model resolution precedence
+- [x] 2.2 Derive Mode/Reasoning axis from variants
+- [x] 2.3 Derive Sampling axis from sampling_presets
+- [x] 2.4 Unit-test translator
+- [x] 3.1 Synthesize EngineModelInfo.settings from translator
+- [x] 3.2 Build availablePresets per active model
+- [x] 3.3 Confirm normalizeModelSettings passes axes through unchanged
+- [x] 4.1 Resolve each axis active value
+- [x] 4.2 Deep-merge model options as base request body
+- [x] 4.3 Apply Sampling axis merged sampling params
+- [x] 4.4 Resolve sampling preset against active model
+- [x] 4.5 Set child session thinkingLevel from parent
+- [x] 5.1 Update handlers/models.ts for per-model availablePresets
+- [x] 5.2 Update model-params-policy.ts to prune stale overrides
+- [x] 5.3 Confirm ConversationInput preset selector
+- [x] 6.1 Update config/engines.yaml.sample
+- [x] 6.2 Update AGENTS.md

@@ -1,6 +1,7 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
 import type { ModelParamValue, ModelSettingAxis } from "../../shared/rpc-types.ts";
+import type { SamplingPreset } from "../config/index.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
 import type { IBoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import type { McpClientRegistry } from "../mcp/registry.ts";
@@ -166,6 +167,8 @@ export interface EngineModelInfo {
   enabled?: boolean;
   /** Generic model parameter axes exposed by this model. Empty/undefined = no configurable settings. */
   settings?: ModelSettingAxis[];
+  /** Per-model sampling presets (name → params). */
+  availablePresets?: { name: string; params: SamplingPreset }[];
 }
 
 export type EngineLeaseState = "running" | "waiting_user" | "idle" | "closing";

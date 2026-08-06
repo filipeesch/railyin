@@ -63,4 +63,80 @@ describe("validatePiEngineConfig", () => {
     const config: PiEngineConfig = { type: "pi" };
     expect(() => validatePiEngineConfig(config)).not.toThrow();
   });
+
+  test("CV-8: model limit context = 0 throws", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: { "qwen3-8b": { limit: { context: 0 } } },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow("limit.context");
+  });
+
+  test("CV-9: model limit output = 0 throws", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: { "qwen3-8b": { limit: { output: 0 } } },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow("limit.output");
+  });
+
+  test("CV-10: model limit context > 0 passes", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: { "qwen3-8b": { limit: { context: 8192 } } },
+    };
+    expect(() => validatePiEngineConfig(config)).not.toThrow();
+  });
+
+  test("CV-11: non-disabled variant without options throws", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: { "qwen3-8b": { variants: { fast: {} } } },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow("options");
+  });
+
+  test("CV-12: non-disabled variant with options passes", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: { "qwen3-8b": { variants: { fast: { options: { temperature: 0.1 } } } } },
+    };
+    expect(() => validatePiEngineConfig(config)).not.toThrow();
+  });
+
+  test("CV-13: disabled variant without options passes", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: { "qwen3-8b": { variants: { fast: { disabled: true } } } },
+    };
+    expect(() => validatePiEngineConfig(config)).not.toThrow();
+  });
+
+  test("CV-14: axis without id throws", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: { "qwen3-8b": { axes: [{ label: "No ID" }] as any } },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow("id");
+  });
+
+  test("CV-15: axis without label throws", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: { "qwen3-8b": { axes: [{ id: "mode" }] as any } },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow("label");
+  });
+
+  test("CV-16: axis with id and label passes", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: {
+        "qwen3-8b": {
+          axes: [{ id: "mode", label: "Mode" }],
+        },
+      },
+    };
+    expect(() => validatePiEngineConfig(config)).not.toThrow();
+  });
 });
