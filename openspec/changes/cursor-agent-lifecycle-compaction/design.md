@@ -14,7 +14,7 @@ Separately:
 - Keep a Cursor conversation's agent warm across turns via a pooled, idle-timeout-evicted agent registry (mirrors Copilot), so turns `Resume` a live agent rather than recreating it.
 - Fix the Cursor live-stream ordering + reasoning-disappearing bug by aligning committed blockIds with streamed chunk blockIds in the backend pipeline, without touching the frontend store.
 - Report accurate Cursor `contextWindow` + per-run `usage` so the console warning and UI gauge reflect the real model context.
-- Give the Cursor engine manual + automatic compaction with the existing UI button, lifecycle events, and `compaction_summary` message.
+- Give the Cursor engine manual compaction (existing UI button) that stores a Railyin `compaction_summary`; the `@cursor/sdk` manages the agent's own context compaction autonomously, so Railyin adds no auto-threshold trigger and no SDK-agent context reset.
 
 **Non-Goals:**
 - No change to the frontend `conversation.ts` live-tail store (Unit 2 stays backend-only).
@@ -62,13 +62,13 @@ Because the issue is Cursor-specific (chunk + committed events share one enriche
 - **usage**: after `run.wait()`, read `RunResult.usage` (input/output tokens) and emit a `usage` EngineEvent so `consume()` persists `executions.input_tokens`/`output_tokens`, giving `ContextEstimator` a real fast path instead of the char/4 heuristic.
 - Remove/replace the misleading hardcoded `128_000` fallback in `resolveModelContextWindow()` (used only when no engine contextWindow is known).
 
-### D5 — Cursor compaction: manual + automatic, SDK-native first (Unit 3b)
+### D5 — Cursor compaction: manual only, reusing the shared summary flow (Unit 3b)
 
-- Implement `CursorEngine.compact?()` mirroring `CopilotEngine.compact()`: resolve the pooled/warm agent for the conversation, trigger compaction, emit `compaction_start`/`compaction_done` events, persist `compaction_summary`, and put the agent back to idle. Set `supportsManualCompact: true` in `listModels()` so the existing `ContextPopover` "Compact conversation" button appears (wired via `orchestrator.compactTask`/`compactConversation`).
-- **Mechanism first**: investigate whether the local `@cursor/sdk` Agent exposes a native `compact()`/summarize method. If present, use it (like Copilot `session.compact()`). If absent (current docs/self-tests suggest none), fall back to Railyin's existing summarize-and-recreate flow (`compactConversation`/`compactMessages`): ask a model to produce the structured summary, store a `compaction_summary`, and recreate/reseed the agent with the summarized history as the new context.
-- **Automatic**: after each Cursor execution completes, if estimated context usage crosses the auto-compact threshold (default ~80%, mirroring Pi's `contextWindow - reserve` style check), trigger compaction. Guard against (a) compaction already in progress, and (b) racing an in-flight run / evicting an active pooled agent — perform the check when no run is active for that conversation and only touch the agent via the pool lease.
+- Implement `CursorEngine.compact?()`: reuse the shared `compactConversation`/`compactMessages` summarize-and-recreate flow to persist a Railyin `compaction_summary` (which future Railyin-side context estimation and prompt assembly use). Add `CursorSdkAdapter.compact(agentId)` as a no-op keep-warm hook. Set `supportsManualCompact: true` in `listModels()` so the existing `ContextPopover` "Compact conversation" button appears (wired via `orchestrator.compactTask`/`compactConversation`).
+- **Mechanism**: the local `@cursor/sdk` exposes no native `compact()` (confirmed by inspecting its type surface), and it manages the agent's own context compaction autonomously. So Railyin does NOT reset/recreate the SDK agent, and does NOT implement a Railyin-side auto-threshold trigger.
+- No `compaction_start`/`compaction_done` stream events are required for the manual Cursor path — the UI feedback is the orchestrator's `message.new` broadcast of the `compaction_summary` divider plus the button's `compacting` state.
 
-**Alternative considered:** recreate-with-summary as the only mechanism without checking for a native `compact()`. Rejected per user decision ("investigate SDK native compact() first") to match Copilot's cleaner native path if it exists.
+**Alternative considered:** Railyin-side auto-threshold compaction + SDK-agent context reset. Rejected per user decision: the `@cursor/sdk` compacts the agent's context autonomously, so neither is needed.
 
 ## Risks / Trade-offs
 
