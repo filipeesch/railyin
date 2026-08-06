@@ -73,6 +73,8 @@ export class CursorEngine implements ExecutionEngine {
       qualifiedId: `cursor/${m.value}`,
       displayName: m.displayName,
       description: m.description,
+      contextWindow: m.contextWindow,
+      supportsManualCompact: true,
       settings: buildCursorSettings(m),
     }));
   }
@@ -114,6 +116,26 @@ export class CursorEngine implements ExecutionEngine {
 
   async shutdown(_options?: unknown): Promise<void> {
     await this.adapter.shutdownAll?.();
+  }
+
+  async compact(
+    taskId: number | null,
+    conversationId: number,
+    _workingDirectory: string,
+    _workspaceKey: string,
+  ): Promise<void> {
+    if (taskId == null) {
+      throw new Error("Cursor does not currently support chat-session compaction");
+    }
+    // The @cursor/sdk compacts the agent's own context autonomously; this stores
+    // Railyin's `compaction_summary` so the Railyin-side context gauge and prompt
+    // assembly reflect the compacted conversation.
+    const { compactConversation } = await import("../../conversation/context.ts");
+    const { getDb } = await import("../../db/index.ts");
+    await compactConversation(getDb(), taskId);
+    // Keep the conversation's agent warm (Cursor handles context autonomously).
+    const agentId = cursorAgentIdForConversation(taskId, conversationId);
+    await this.adapter.compact?.(agentId);
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {

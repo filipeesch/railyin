@@ -15,8 +15,16 @@ import { Agent, Cursor } from "@cursor/sdk";
 import type { Agent as AgentClass, Run, SDKAgent } from "@cursor/sdk";
 import type { EngineEvent } from "../types.ts";
 import { buildBaseOptions } from "./options.ts";
-import { PersistentBusyError, sendPromptWithRecovery, type RecoveryLog } from "./recovery.ts";
-import type { AgentNamespace } from "./resume.ts";
+import {
+  legacyAgentLifecycle,
+  PersistentBusyError,
+  sendPromptWithRecovery,
+  type AgentLifecycle,
+  type RecoveryLog,
+} from "./recovery.ts";
+import { resumeOrCreateAgent, type AgentNamespace } from "./resume.ts";
+import { AgentPool } from "./agent-pool.ts";
+import { resolveModelContextWindow, type CursorModelParameter } from "./model-context.ts";
 import { translateCursorMessage, type CursorSDKMessage } from "./translate-events.ts";
 import type {
   CursorAdapterOptions,
@@ -66,6 +74,8 @@ export interface CursorSdkClient {
 interface RunState {
   agent?: SDKAgent;
   run?: Run;
+  /** The conversation agent id this run is attached to (undefined = unpooled legacy). */
+  agentId?: string;
   aborted: boolean;
   /** Set when the per-run stall watchdog fires; treated like `aborted` for post-loop wait()/done-sentinel skipping. */
   stalled: boolean;
@@ -85,6 +95,13 @@ const DEFAULT_STALL_TIMEOUT_MS = 5 * 60_000;
  * hanging forever; it does not need to be as tight as the idle threshold.
  */
 const DEFAULT_TOOL_EXECUTION_STALL_TIMEOUT_MS = 30 * 60_000;
+
+/** Agent-pool idle timeout. Reuses Copilot's `RAILYN_ENGINE_IDLE_TIMEOUT_MS` (default 10 min). */
+function resolveAgentPoolIdleTimeoutMs(): number {
+  const raw = process.env.RAILYN_ENGINE_IDLE_TIMEOUT_MS;
+  const parsed = raw != null ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60 * 1000;
+}
 
 const logToConsole: RecoveryLog = (level, message) => {
   const fn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
@@ -111,17 +128,23 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
   private readonly stallTimeoutMs: number;
   private readonly toolExecutionStallTimeoutMs: number;
   private readonly activeRuns = new Map<string, RunState>();
+  private readonly pool: AgentPool<SDKAgent>;
 
   constructor(
     options: CursorAdapterOptions = {},
     sdk: CursorSdkClient = { Agent, Cursor },
     stallTimeoutMs: number = DEFAULT_STALL_TIMEOUT_MS,
     toolExecutionStallTimeoutMs: number = DEFAULT_TOOL_EXECUTION_STALL_TIMEOUT_MS,
+    pool?: AgentPool<SDKAgent>,
   ) {
     this.apiKey = options.apiKey;
     this.sdk = sdk;
     this.stallTimeoutMs = stallTimeoutMs;
     this.toolExecutionStallTimeoutMs = toolExecutionStallTimeoutMs;
+    this.pool = pool ?? new AgentPool<SDKAgent>({
+      idleTimeoutMs: resolveAgentPoolIdleTimeoutMs(),
+      close: (agent) => agent.close(),
+    });
   }
 
   private resolveApiKey(): string | undefined {
@@ -180,20 +203,33 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
         config.modelParams,
       );
 
+      // Acquire the agent through the pool (keeping it warm across turns) when
+      // an agentId is pinned, else fall back to the legacy create/close path.
+      const lifecycle: AgentLifecycle<SDKAgent> = config.agentId
+        ? {
+            acquire: () =>
+              this.pool.acquire(config.agentId!, (id) =>
+                resumeOrCreateAgent(this.sdk.Agent as AgentNamespace, id, baseOptions),
+              ),
+            release: () => this.pool.release(config.agentId!),
+            evict: () => this.pool.evict(config.agentId!),
+          }
+        : legacyAgentLifecycle(this.sdk.Agent as AgentNamespace, undefined, baseOptions);
+
       const { agent, run } = await sendPromptWithRecovery<SDKAgent, Run>(
-        this.sdk.Agent,
-        config.agentId,
-        baseOptions,
+        lifecycle,
         config.prompt,
         {
           runId,
           executionId: config.executionId,
           taskId: config.taskId,
           conversationId: config.conversationId,
+          agentId: config.agentId ?? null,
           log: logToConsole,
         },
       );
       state.agent = agent;
+      state.agentId = config.agentId;
       state.run = run;
 
       const iterator = run.stream()[Symbol.asyncIterator]();
@@ -271,6 +307,15 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
               fatal: true,
             };
           }
+          // Report the run's real token usage so context estimation uses actual
+          // counts instead of a char/4 heuristic. Absent when the SDK omits it.
+          if (result.usage) {
+            yield {
+              type: "usage",
+              inputTokens: result.usage.inputTokens,
+              outputTokens: result.usage.outputTokens,
+            };
+          }
         } catch (waitErr) {
           yield {
             type: "error",
@@ -335,16 +380,30 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
       await state.run.cancel().catch(() => {});
     }
     if (state.agent) {
-      try {
-        await state.agent.close();
-      } catch {
-        // Ignore close failures; the run has already terminated.
+      if (state.agentId) {
+        // Keep the agent warm in the pool for the next turn.
+        this.pool.release(state.agentId);
+      } else {
+        // Unpooled legacy path: close the agent directly.
+        try {
+          await state.agent.close();
+        } catch {
+          // Ignore close failures; the run has already terminated.
+        }
       }
     }
   }
 
   async cancel(_executionId: number): Promise<void> {
     // Cancel is driven by the AbortSignal passed into run(); no separate path.
+  }
+
+  async compact(agentId: string): Promise<void> {
+    // The @cursor/sdk manages Cursor context compaction autonomously, so there
+    // is nothing SDK-specific to trigger here. Keep the agent warm in the pool
+    // (arming idle eviction) so the next turn resumes it intact; Railyin stores
+    // its own `compaction_summary` at the engine level.
+    this.pool.release(agentId);
   }
 
   async listModels(_workingDirectory: string): Promise<CursorSdkModelInfo[]> {
@@ -361,6 +420,10 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
       supportsThinking: Boolean(m.supportsThinking),
       variants: Array.isArray(m.variants) ? m.variants : undefined,
       parameters: Array.isArray(m.parameters) ? m.parameters : undefined,
+      contextWindow: resolveModelContextWindow(
+        Array.isArray(m.parameters) ? (m.parameters as CursorModelParameter[]) : undefined,
+        m.id,
+      ),
     }));
   }
 
@@ -377,5 +440,6 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
       await this.finalizeRunState(state);
     }
     this.activeRuns.clear();
+    await this.pool.closeAll();
   }
 }
