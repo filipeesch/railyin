@@ -187,4 +187,111 @@ describe("chatSessions.submitDecisions", () => {
     expect(engineContent).toContain("list_decisions()");
     expect(engineContent).toContain("update_decision");
   });
+
+  it("DH-5: tasks.submitDecisions with recordAsDecisions=false → engineContent excludes list_decisions/record_decision", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    const orchestrator = makeCapturingOrchestrator();
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
+
+    const answers: DecisionAnswer[] = [
+      { question: "Which DB?", answer: "SQLite", weight: "easy" },
+    ];
+
+    await handlers["tasks.submitDecisions"]({ taskId, answers, recordAsDecisions: false });
+
+    const engineContent = orchestrator.captured[0].engineContent ?? "";
+    expect(engineContent).toContain("Do NOT call record_decision");
+    expect(engineContent).not.toContain("list_decisions()");
+  });
+
+  it("DH-6: tasks.submitDecisions with recordAsDecisions=false → userContent unaffected (no hidden instruction)", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    const orchestrator = makeCapturingOrchestrator();
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
+
+    const answers: DecisionAnswer[] = [
+      { question: "Which DB?", answer: "PostgreSQL", weight: "critical" },
+    ];
+
+    await handlers["tasks.submitDecisions"]({ taskId, answers, recordAsDecisions: false });
+
+    expect(orchestrator.captured[0].userContent).not.toContain("list_decisions()");
+    expect(orchestrator.captured[0].userContent).not.toContain("Do NOT call record_decision");
+  });
+
+  it("DH-7: chatSessions.submitDecisions with recordAsDecisions=false → engineContent contains NO_RECORD_INSTRUCTION", async () => {
+    const orchestrator = makeCapturingOrchestrator();
+    const handlers = chatSessionHandlers(db, () => {}, orchestrator);
+
+    const convResult = db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const convId = convResult.lastInsertRowid as number;
+    const sessionResult = db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Test Session', 'idle', ?)",
+      [convId],
+    );
+    const sessionId = sessionResult.lastInsertRowid as number;
+
+    const answers: DecisionAnswer[] = [
+      { question: "Test question?", answer: "Test answer", weight: "medium" },
+    ];
+
+    await handlers["chatSessions.submitDecisions"]({ sessionId, answers, recordAsDecisions: false });
+
+    const engineContent = orchestrator.captured[0].engineContent ?? "";
+    expect(engineContent).toContain("Do NOT call record_decision");
+    expect(engineContent).not.toContain("list_decisions()");
+  });
+
+  it("DH-8: tasks.submitDecisions without recordAsDecisions flag defaults to recording (regression guard)", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    const orchestrator = makeCapturingOrchestrator();
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
+
+    const answers: DecisionAnswer[] = [
+      { question: "Which DB?", answer: "SQLite", weight: "easy" },
+    ];
+
+    await handlers["tasks.submitDecisions"]({ taskId, answers });
+
+    const engineContent = orchestrator.captured[0].engineContent ?? "";
+    expect(engineContent).toContain("list_decisions()");
+    expect(engineContent).toContain("record_decision");
+  });
+
+  it("DH-9: chatSessions.submitDecisions without recordAsDecisions flag defaults to recording (regression guard)", async () => {
+    const orchestrator = makeCapturingOrchestrator();
+    const handlers = chatSessionHandlers(db, () => {}, orchestrator);
+
+    const convResult = db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const convId = convResult.lastInsertRowid as number;
+    const sessionResult = db.run(
+      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Test Session', 'idle', ?)",
+      [convId],
+    );
+    const sessionId = sessionResult.lastInsertRowid as number;
+
+    const answers: DecisionAnswer[] = [
+      { question: "Test question?", answer: "Test answer", weight: "medium" },
+    ];
+
+    await handlers["chatSessions.submitDecisions"]({ sessionId, answers });
+
+    const engineContent = orchestrator.captured[0].engineContent ?? "";
+    expect(engineContent).toContain("list_decisions()");
+  });
+
+  it("DH-10: tasks.submitDecisions with recordAsDecisions=false → userContent still has formatted Q/A pairs", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    const orchestrator = makeCapturingOrchestrator();
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
+
+    const answers: DecisionAnswer[] = [
+      { question: "Which DB?", answer: "MongoDB", weight: "critical" },
+    ];
+
+    await handlers["tasks.submitDecisions"]({ taskId, answers, recordAsDecisions: false });
+
+    expect(orchestrator.captured[0].userContent).toContain("**Q [CRITICAL]:** Which DB?");
+    expect(orchestrator.captured[0].userContent).toContain("**A:** MongoDB");
+  });
 });

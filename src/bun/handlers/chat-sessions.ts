@@ -162,6 +162,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       sessionId: number;
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
       generalNotes?: string;
+      recordAsDecisions?: boolean;
     }): Promise<{ messageId: number; executionId: number }> => {
       const session = db.query<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }, [number]>(
         `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override, c.model_params AS conversation_model_params FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
@@ -175,7 +176,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       );
 
       const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
-      const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
+      const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes, params.recordAsDecisions);
 
       const engine = QualifiedModelId.tryParse(session.conversation_model)?.engineId ?? "copilot";
       const prepared = await prepareMessageForEngine(engine, engineContent, undefined);

@@ -159,8 +159,8 @@ export const useTaskStore = defineStore("task", () => {
     conversationStore.appendMessage(message);
   }
 
-  async function submitDecisions(taskId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string) {
-    const { message } = await api("tasks.submitDecisions", { taskId, answers, generalNotes });
+  async function submitDecisions(taskId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string, recordAsDecisions = true) {
+    const { message } = await api("tasks.submitDecisions", { taskId, answers, generalNotes, recordAsDecisions });
     // Background task: skip display to prevent cross-chat contamination.
     if (taskId !== activeTaskId.value) return;
     // Active task: sync conversationId if backend assigned a new one (e.g. first message: 0→N).

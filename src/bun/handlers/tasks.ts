@@ -306,9 +306,10 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       taskId: number;
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
       generalNotes?: string;
+      recordAsDecisions?: boolean;
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
-      const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
+      const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes, params.recordAsDecisions);
 
       const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
       const submitConvRow = db.query<{ conversation_model: string | null }, [number]>(

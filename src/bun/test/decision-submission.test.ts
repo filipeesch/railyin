@@ -68,4 +68,46 @@ describe("buildDecisionSubmission", () => {
     );
     expect(result.userContent).toContain("---");
   });
+
+  it("DS-13: recordAsDecisions=false → engineContent contains NO_RECORD_INSTRUCTION", () => {
+    const result = buildDecisionSubmission([{ question: "Q?", answer: "A" }], undefined, false);
+    expect(result.engineContent).toContain("Do NOT call record_decision");
+  });
+
+  it("DS-14: recordAsDecisions=false → engineContent does NOT contain list_decisions()", () => {
+    const result = buildDecisionSubmission([{ question: "Q?", answer: "A" }], undefined, false);
+    expect(result.engineContent).not.toContain("list_decisions()");
+  });
+
+  it("DS-15: recordAsDecisions=false → engineContent does NOT contain the HIDDEN_INSTRUCTION update_decision instruction", () => {
+    const result = buildDecisionSubmission([{ question: "Q?", answer: "A" }], undefined, false);
+    expect(result.engineContent).not.toContain("call update_decision");
+  });
+
+  it("DS-16: recordAsDecisions=false → userContent is identical to recordAsDecisions=true", () => {
+    const withRecord = buildDecisionSubmission([{ question: "Q?", answer: "A", weight: "critical" }]);
+    const withoutRecord = buildDecisionSubmission([{ question: "Q?", answer: "A", weight: "critical" }], undefined, false);
+    expect(withoutRecord.userContent).toBe(withRecord.userContent);
+  });
+
+  it("DS-17: recordAsDecisions=false → NO_RECORD_INSTRUCTION NOT in userContent", () => {
+    const result = buildDecisionSubmission([{ question: "Q?", answer: "A" }], undefined, false);
+    expect(result.userContent).not.toContain("Do NOT call record_decision");
+  });
+
+  it("DS-18: recordAsDecisions=false with generalNotes → NO_RECORD_INSTRUCTION still appended", () => {
+    const result = buildDecisionSubmission(
+      [{ question: "DB?", answer: "SQLite" }],
+      "Extra context",
+      false
+    );
+    expect(result.engineContent).toContain("Do NOT call record_decision");
+    expect(result.userContent).toContain("**General notes:** Extra context");
+  });
+
+  it("DS-19: default recordAsDecisions=true keeps existing behavior (list_decisions present)", () => {
+    const result = buildDecisionSubmission([{ question: "Style?", answer: "Tabs" }]);
+    expect(result.engineContent).toContain("list_decisions()");
+    expect(result.engineContent).toContain("record_decision");
+  });
 });

@@ -4,52 +4,6 @@ import { LSP_TOOL_DEFINITIONS } from "../../engine/lsp-tool-definitions.ts";
 import { CARD_TOOL_DEFINITIONS } from "../../engine/card-tool-definitions.ts";
 
 export const TOOL_DEFINITIONS: AIToolDefinition[] = [
-  {
-    name: "ask_me",
-    description:
-      "Pause execution and ask one or more questions with structured options.\n\n" +
-      "Usage:\n" +
-      "- Each question needs: question text, selection_mode ('single'/'multi'), and options array\n" +
-      "- Options support: label (required), description, recommended, preview (markdown)\n" +
-      "- ALWAYS batch related decisions into the same call to minimize interruptions\n" +
-      "- NEVER use for confirmation on routine operations",
-    parameters: {
-      type: "object",
-      properties: {
-        questions: {
-          type: "array",
-          description: "One or more questions to ask. Batch related decisions into the same call.",
-          items: {
-            type: "object",
-            properties: {
-              question: { type: "string", description: "The question text." },
-              selection_mode: {
-                type: "string",
-                enum: ["single", "multi"],
-                description: "'single' for one selection, 'multi' for multiple.",
-              },
-              options: {
-                type: "array",
-                description: "Options to present. Must contain at least one.",
-                items: {
-                  type: "object",
-                  properties: {
-                    label: { type: "string", description: "Option text." },
-                    description: { type: "string", description: "Secondary explanation." },
-                    recommended: { type: "boolean", description: "Highlight as default." },
-                    preview: { type: "string", description: "Markdown preview pane content." },
-                  },
-                  required: ["label"],
-                },
-              },
-            },
-            required: ["question", "selection_mode", "options"],
-          },
-        },
-      },
-      required: ["questions"],
-    },
-  },
   DECISION_REQUEST_TOOL_DEFINITION,
   {
     name: "spawn_agent",
@@ -289,7 +243,7 @@ export const TOOL_DEFINITIONS: AIToolDefinition[] = [
 /** Built-in tool groups. A column's `tools` array may use group names, individual
  * tool names, or a mix. Groups are expanded by resolveToolsForColumn. */
 export const TOOL_GROUPS: Map<string, string[]> = new Map([
-  ["interactions", ["ask_me", "decision_request"]],
+  ["interactions", ["decision_request"]],
   ["agents", ["spawn_agent"]],
   ["web", ["fetch_url", "search_internet"]],
   ["cards_read", ["list_boards", "get_card", "get_board_summary", "list_cards"]],
@@ -315,7 +269,6 @@ export const DEFAULT_TOOL_NAMES = ["cards_read", "cards_write"];
 
 /** One-line natural-language description for each tool, used in the worktree context block. */
 const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
-  ["ask_me", "ask_me(questions): pause and ask questions with structured options (label, description?, recommended?, preview?). Batch related decisions into one call."],
   ["decision_request", "decision_request(questions, context?): ALWAYS use instead of prose for architectural decisions, technology choices, or any high-stakes direction. Each option has a rich markdown description explaining tradeoffs. Supports exclusive, non_exclusive, and freetext question types."],
   ["spawn_agent", "spawn_agent(children): run parallel sub-agents. Each child needs self-contained instructions and tools array — no access to parent conversation. Returns JSON array of results."],
   ["fetch_url", "fetch_url(url): fetch a public URL and return its text content (HTML stripped to readable text). Use for documentation, API references, web pages."],
