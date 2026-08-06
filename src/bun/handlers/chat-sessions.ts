@@ -60,7 +60,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         }
 
         const sessionResult = db.run(
-          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, enabled_mcp_tools, shell_auto_approve) VALUES (?, ?, 'idle', ?, '[]', ?)`,
+          `INSERT INTO chat_sessions (workspace_key, title, status, conversation_id, shell_auto_approve) VALUES (?, ?, 'idle', ?, ?)`,
           [wsKey, title, conversationId, workspaceConfig.workspace.shell_auto_approve ? 1 : 0]
         );
         const sessionId = sessionResult.lastInsertRowid as number;

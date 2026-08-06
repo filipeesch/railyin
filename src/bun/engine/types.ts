@@ -89,7 +89,13 @@ export interface ExecutionParams {
    */
   onRawModelMessage?: (message: RawModelMessage) => void;
 
-  /** MCP tool filter: [] = all disabled, string[] = "server:tool" pairs enabled. */
+  /**
+   * MCP tool visibility filter for list_mcp_tools/invoke_mcp_tool.
+   * null/undefined = no per-task/session override => all tools from running, enabled MCP
+   * servers are visible (the default for new tasks/sessions). [] = user explicitly disabled
+   * every tool via the MCP tools panel => nothing visible. Non-empty string[] = explicit
+   * "server:tool" allow-list.
+   */
   enabledMcpTools?: string[] | null;
   /** MCP client registry for this execution. null when no registry available. */
   mcpRegistry?: McpClientRegistry | null;
@@ -252,7 +258,10 @@ export interface CommonToolContext {
     worktreePath?: string;
     /** Resolved once per conversation/task by each engine, mirroring `lspManager`'s resolution pattern. */
     mcpRegistry?: McpClientRegistry;
-    /** Per-task/session "server:tool" visibility allow-list — see mcp-discovery-tool-definitions.ts. */
+    /**
+     * Per-task/session "server:tool" visibility allow-list — see discovery-tools.ts.
+     * null/undefined = all tools visible (default); [] = none visible; non-empty = allow-list.
+     */
     mcpEnabledTools?: string[] | null;
   };
 }

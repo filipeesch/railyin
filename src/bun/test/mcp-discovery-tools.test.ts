@@ -88,10 +88,10 @@ describe("execListMcpTools", () => {
     expect(result).toMatch(/no tools are visible/i);
   });
 
-  it("treats a missing (undefined/null) filter the same as an empty one — deny by default", async () => {
+  it("treats a missing (undefined/null) filter as unfiltered — all visible by default", async () => {
     const registry = await buildRunningRegistry();
-    expect(execListMcpTools(registry, undefined, "alpha")).toMatch(/no tools are visible/i);
-    expect(execListMcpTools(registry, null, "alpha")).toMatch(/no tools are visible/i);
+    expect(execListMcpTools(registry, undefined, "alpha")).toContain("read_file");
+    expect(execListMcpTools(registry, null, "alpha")).toContain("read_file");
   });
 
   it("returns an error for a server that is not running", async () => {
@@ -132,6 +132,12 @@ describe("execInvokeMcpTool", () => {
     const registry = await buildRunningRegistry();
     const result = await execInvokeMcpTool(registry, [], "alpha", "read_file", {});
     expect(result).toMatch(/not enabled/i);
+  });
+
+  it("allows invocation when the filter is null/undefined — unfiltered by default", async () => {
+    const registry = await buildRunningRegistry({ callToolResult: "file contents" });
+    expect(await execInvokeMcpTool(registry, undefined, "alpha", "read_file", {})).toBe("file contents");
+    expect(await execInvokeMcpTool(registry, null, "alpha", "read_file", {})).toBe("file contents");
   });
 
   it("rejects invocation for a non-running server", async () => {

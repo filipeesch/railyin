@@ -206,7 +206,7 @@ test.describe("V — MCP popover content", () => {
 // ─── Suite V-12 to V-14 — Tool checkbox state and toggling ───────────────────
 
 test.describe("V — MCP tool checkboxes", () => {
-    test("V-12: enabledMcpTools=null means all tools are UNchecked", async ({ page, api, task }) => {
+    test("V-12: enabledMcpTools=null means all tools are checked (visible by default)", async ({ page, api, task }) => {
         const t = makeTask({ id: 1, enabledMcpTools: null });
         api.returns("mcp.getStatus", [makeMcpStatus()]);
         api.handle("tasks.list", () => [t]);
@@ -218,8 +218,8 @@ test.describe("V — MCP tool checkboxes", () => {
 
         const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
         await expect(checkboxes).toHaveCount(2);
-        await expect(checkboxes.nth(0)).not.toHaveClass(/p-checkbox-checked/);
-        await expect(checkboxes.nth(1)).not.toHaveClass(/p-checkbox-checked/);
+        await expect(checkboxes.nth(0)).toHaveClass(/p-checkbox-checked/);
+        await expect(checkboxes.nth(1)).toHaveClass(/p-checkbox-checked/);
     });
 
     test("V-13: enabledMcpTools=[toolA] means only toolA is checked", async ({ page, api, task }) => {
@@ -258,6 +258,28 @@ test.describe("V — MCP tool checkboxes", () => {
 
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: ["test-server:toolA"] });
+    });
+
+    test("V-14b: Unchecking a tool from the implicit null/all-visible state materializes 'all minus one'", async ({ page, api, task }) => {
+        const t = makeTask({ id: 1, enabledMcpTools: null });
+        const updatedTask = makeTask({ id: 1, enabledMcpTools: ["test-server:toolB"] });
+
+        api.returns("mcp.getStatus", [makeMcpStatus()]);
+        api.handle("tasks.list", () => [t]);
+        const calls = api.capture("mcp.setTaskTools", updatedTask);
+
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await openMcpPopover(page);
+        await expandServer(page);
+
+        // Uncheck toolA (first checkbox) — starts checked with null (all-visible) semantics
+        const checkboxes = page.locator(".mcp-tools-popover__tool .p-checkbox");
+        await expect(checkboxes).toHaveCount(2);
+        await checkboxes.nth(0).click();
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({ taskId: 1, enabledTools: ["test-server:toolB"] });
     });
 });
 

@@ -8,17 +8,19 @@ import type { McpClientRegistry } from "./registry.ts";
  * from `engine/common-tools.ts` (keeps that dispatcher a thin switch, not a home for MCP
  * domain logic). No DB or transport access — takes the registry and enabled-tools filter as
  * plain arguments, so it's testable with an in-memory `McpClientRegistry` alone.
+ *
+ * Visibility filter semantics for `enabledMcpTools` (matches `McpClientRegistry.listTools()`'s
+ * own filter semantics — no bespoke override here):
+ * - `null`/`undefined` (no per-task/session override yet) => unfiltered, all tools visible.
+ *   This is the default for every new task/chat session, satisfying "MCP tools enabled by
+ *   default" without requiring per-tool opt-in.
+ * - `[]` (user explicitly unchecked everything in the MCP tools popover) => nothing visible.
+ * - non-empty `string[]` => only the listed "server:tool" pairs are visible.
  */
 
-function normalizeFilter(enabledMcpTools: string[] | null | undefined): string[] {
-  // Absence of an explicit list is treated the same as an empty list ("nothing visible"),
-  // not as "no filter" — visibility is opt-in by design, even though McpClientRegistry.listTools()
-  // itself treats `null`/`undefined` as unfiltered for its other (non-discovery-tool) callers.
-  return enabledMcpTools ?? [];
-}
-
 function isToolVisible(enabledMcpTools: string[] | null | undefined, server: string, tool: string): boolean {
-  return normalizeFilter(enabledMcpTools).includes(`${server}:${tool}`);
+  if (enabledMcpTools == null) return true;
+  return enabledMcpTools.includes(`${server}:${tool}`);
 }
 
 /** Formats a not-found/unavailable error consistently across list_mcp_tools and invoke_mcp_tool. */
@@ -50,8 +52,7 @@ export function execListMcpTools(registry: McpClientRegistry, enabledMcpTools: s
   const unavailable = serverUnavailableError(registry, server);
   if (unavailable) return unavailable;
 
-  const filter = normalizeFilter(enabledMcpTools);
-  const tools = registry.listTools(filter).filter((t) => t.serverName === server);
+  const tools = registry.listTools(enabledMcpTools).filter((t) => t.serverName === server);
   if (tools.length === 0) {
     return (
       `No tools are visible for MCP server "${server}" in this task. ` +

@@ -58,9 +58,9 @@ export class ExecutionParamsBuilder {
 
     const base = this._buildBase(conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments);
 
-    const enabledMcpTools: string[] = (() => {
-      if (!task.enabled_mcp_tools) return [];
-      try { return JSON.parse(task.enabled_mcp_tools); } catch { return []; }
+    const enabledMcpTools: string[] | null = (() => {
+      if (!task.enabled_mcp_tools) return null;
+      try { return JSON.parse(task.enabled_mcp_tools); } catch { return null; }
     })();
 
     const mcpRegistry: McpClientRegistry | null = this.pool
@@ -104,7 +104,7 @@ export class ExecutionParamsBuilder {
       taskId: null,
       model,
       workspaceKey,
-      enabledMcpTools: enabledMcpTools ?? [],
+      enabledMcpTools,
       mcpRegistry,
       ...(taskContext ? { taskContext } : {}),
     };

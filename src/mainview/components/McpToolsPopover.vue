@@ -209,6 +209,11 @@ function onHide() {
 
 // ─── Server-level checkbox state ──────────────────────────────────────────────
 
+/** All "server:tool" keys currently known from the polled MCP status, across every server. */
+function allKnownToolKeys(): string[] {
+  return servers.value.flatMap(s => s.tools.map(t => `${s.name}:${t.name}`));
+}
+
 function serverCheckState(server: McpServerStatus): "all" | "some" | "none" {
   if (server.tools.length === 0) return "none";
   const enabled = server.tools.filter(t => isToolEnabled(server.name, t.name));
@@ -218,7 +223,9 @@ function serverCheckState(server: McpServerStatus): "all" | "some" | "none" {
 }
 
 async function toggleServer(server: McpServerStatus, checked: boolean) {
-  const current = localEnabled.value ?? [];
+  // null means "not customized" = everything implicitly enabled; materialize the full
+  // known key set before adding/removing this server's keys so unrelated servers stay enabled.
+  const current = localEnabled.value ?? allKnownToolKeys();
   const serverKeys = server.tools.map(t => `${server.name}:${t.name}`);
   let next: string[];
   if (checked) {
@@ -240,13 +247,16 @@ async function toggleServer(server: McpServerStatus, checked: boolean) {
 // ─── Tool enable/disable ──────────────────────────────────────────────────────
 
 function isToolEnabled(serverName: string, toolName: string): boolean {
-  if (localEnabled.value === null) return false;
+  // null means "not customized" — every tool is implicitly enabled by default.
+  if (localEnabled.value === null) return true;
   return localEnabled.value.includes(`${serverName}:${toolName}`);
 }
 
 async function toggleTool(serverName: string, toolName: string, enabled: boolean) {
   const key = `${serverName}:${toolName}`;
-  const current = localEnabled.value ?? [];
+  // null means "not customized" = everything implicitly enabled; materialize the full
+  // known key set so unchecking one tool doesn't silently disable every other tool too.
+  const current = localEnabled.value ?? allKnownToolKeys();
 
   let next: string[];
   if (enabled) {

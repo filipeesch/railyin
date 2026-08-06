@@ -360,6 +360,17 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
       return { label: "list projects" };
     case "list_workflows":
       return { label: "list workflows" };
+    case "list_mcp_servers":
+      return { label: "list mcp servers" };
+    case "list_mcp_tools":
+      return { label: "list mcp tools", subject: args.server != null ? String(args.server) : undefined };
+    case "invoke_mcp_tool":
+      return {
+        label: "invoke mcp tool",
+        subject: args.server != null && args.tool != null
+          ? `${args.server}:${args.tool}`
+          : (args.tool != null ? String(args.tool) : undefined),
+      };
     default:
       return { label: humanizeToolName(name) };
   }
