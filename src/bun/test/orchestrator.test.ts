@@ -31,6 +31,7 @@ const taskUpdates: Task[] = [];
 const newMessages: ConversationMessage[] = [];
 
 class TestEngine implements ExecutionEngine {
+  readonly type = "scripted";
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "token", content: "Done." };
     yield { type: "done" };
@@ -244,6 +245,7 @@ describe("Orchestrator.executeHumanTurn", () => {
 
   it("backfills a missing conversation for non-native human turns", async () => {
     class StubEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -302,6 +304,7 @@ describe("Orchestrator.executeChatTurn", () => {
 describe("Orchestrator.respondShellApprovalByExecution", () => {
   it("OSA-MODEL-1: shell approval push preserves task model", async () => {
     class ApproveEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -337,6 +340,7 @@ describe("Orchestrator.respondShellApprovalByExecution", () => {
   it("keeps waiting_user state when resume fails", async () => {
     let seededExecutionId = 0;
     class RejectingResumeEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -435,6 +439,7 @@ describe("Orchestrator.cancel", () => {
 
   it("OC-MODEL-1: marks non-native executions cancelled immediately and preserves model on push", () => {
     class CancelStubEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -506,6 +511,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
     let shutdownCalls = 0;
 
     class ShutdownStubEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -571,6 +577,7 @@ columns:
   let innerCleanup: (() => void) | null = null;
 
   class CapturingEngine implements ExecutionEngine {
+    readonly type = "scripted";
     async *execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
       capturedParams.push(params);
       yield { type: "done" };

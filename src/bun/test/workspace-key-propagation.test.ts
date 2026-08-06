@@ -23,6 +23,7 @@ import type { LoadedConfig } from "../config/index.ts";
 // ─── CapturingEngine ─────────────────────────────────────────────────────────
 
 class CapturingEngine implements ExecutionEngine {
+  readonly type = "scripted";
   readonly executedParams: ExecutionParams[] = [];
   readonly modelInfos: EngineModelInfo[];
 

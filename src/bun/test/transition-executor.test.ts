@@ -36,6 +36,10 @@ let wsRepo: WorkspaceRepository;
 let boardTools: BoardToolExecutor;
 
 class TestEngine implements ExecutionEngine {
+  readonly type: "scripted" | "copilot" | "claude" | "pi";
+  constructor(type: "scripted" | "copilot" | "claude" | "pi" = "scripted") {
+    this.type = type;
+  }
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "done" };
   }
@@ -720,9 +724,11 @@ describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
     appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
 
-    const engine = new TestEngine();
-    const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
-    const { streamProcessor, executor } = makeTransitionExecutorWith(engine, registry);
+    const registry = makeTestRegistryWith(new Map([
+      ["copilot", new TestEngine("copilot")],
+      ["claude", new TestEngine("claude")],
+    ]));
+    const { streamProcessor, executor } = makeTransitionExecutorWith(new TestEngine("claude"), registry);
 
     await executor.execute(taskId, "plan");
 

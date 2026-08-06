@@ -10,6 +10,7 @@ import type { PiEngineConfig } from "../../config/index.ts";
 import { QualifiedModelId } from "../qualified-model-id.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
+import { resolvePiModelConfig } from "./model-config.ts";
 
 /** Default max tokens per response. */
 export const DEFAULT_MAX_TOKENS = 8_192;
@@ -51,18 +52,32 @@ export class PiModelBuilder {
       );
     }
 
+    const modelCfg = resolvePiModelConfig(this.config, nativeId);
+    const reasoning = modelCfg?.reasoning ?? true;
+    const thinkingFormat = modelCfg?.thinkingFormat;
+
+    const compat: Record<string, unknown> = { supportsDeveloperRole: false };
+    if (thinkingFormat !== undefined) {
+      compat.thinkingFormat = thinkingFormat;
+      // DeepSeek streams reasoning in a separate `reasoning_content` field on assistant
+      // messages; the SDK must replay/send that field to keep the conversation coherent.
+      if (thinkingFormat === "deepseek") {
+        compat.requiresReasoningContentOnAssistantMessages = true;
+      }
+    }
+
     return {
       id: modelId,
       name: nativeId,
       api: "openai-completions",
       provider: providerName ?? "default",
       baseUrl,
-      reasoning: true,
+      reasoning,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: contextWindowOverride,
       maxTokens: DEFAULT_MAX_TOKENS,
-      compat: { supportsDeveloperRole: false },
+      compat,
     } as unknown as Model<"openai-completions">;
   }
 

@@ -187,7 +187,13 @@ export interface EngineShutdownOptions {
 
 // ─── ExecutionEngine interface ────────────────────────────────────────────────
 
+/** Engine family identifiers — used to detect when two engine entries share the same session store. */
+export type EngineType = "pi" | "claude" | "cursor" | "copilot" | "opencode" | "scripted";
+
 export interface ExecutionEngine {
+  /** The engine family. Same-type engines share per-conversation session storage. */
+  readonly type: EngineType;
+
   /**
    * Start an execution and return an async iterable of events.
    * The caller should consume all events to drive the state machine.

@@ -31,6 +31,7 @@ interface ExecutionState {
 }
 
 export class CursorEngine implements ExecutionEngine {
+  readonly type = "cursor";
   private readonly adapter: CursorSdkAdapter;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly dialect: SlashCommandDialect;

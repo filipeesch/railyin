@@ -15,6 +15,7 @@ function makeEngine(overrides: Partial<ExecutionEngine> = {}): ExecutionEngine &
   const obj = {
     cancelCalls: [] as number[],
     shutdownCalled: false,
+    type: "pi" as const,
     async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> { yield { type: "done" }; },
     async resume(_id: number, _input: EngineResumeInput): Promise<void> {},
     cancel(executionId: number): void { obj.cancelCalls.push(executionId); },
@@ -159,6 +160,7 @@ describe("EngineRegistry.shutdown", () => {
 
   it("does not throw when an engine has no shutdown method", async () => {
     const noShutdown: ExecutionEngine = {
+      type: "pi" as const,
       async *execute(_p: ExecutionParams): AsyncIterable<EngineEvent> { yield { type: "done" }; },
       async resume(_id: number, _input: EngineResumeInput): Promise<void> {},
       cancel(_id: number): void {},

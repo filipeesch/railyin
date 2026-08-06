@@ -362,9 +362,11 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
     appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
 
-    const engine = new TestEngine();
-    const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
-    const { builder, executor } = makeExecutor(engine, undefined, registry);
+    const registry = makeTestRegistryWith(new Map([
+      ["copilot", new TestEngine(false, "copilot")],
+      ["claude", new TestEngine(false, "claude")],
+    ]));
+    const { builder, executor } = makeExecutor(new TestEngine(false, "claude"), undefined, registry);
 
     await executor.execute(taskId, "new claude question");
 
@@ -380,9 +382,11 @@ describe("HT-CE-1..3: cross-engine context injection on human turn", () => {
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
     appendMessage(db, taskId, conversationId, "assistant", null, "Copilot prior response");
 
-    const engine = new TestEngine();
-    const registry = makeTestRegistryWith(new Map([["copilot", engine]]));
-    const { builder, executor } = makeExecutor(engine, undefined, registry);
+    const registry = makeTestRegistryWith(new Map([
+      ["copilot", new TestEngine(false, "copilot")],
+      ["claude", new TestEngine(false, "claude")],
+    ]));
+    const { builder, executor } = makeExecutor(new TestEngine(false, "claude"), undefined, registry);
 
     await executor.execute(taskId, "current user question");
 

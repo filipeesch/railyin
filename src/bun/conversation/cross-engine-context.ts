@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { EngineModelInfo } from "../engine/types.ts";
+import type { EngineModelInfo, EngineType } from "../engine/types.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 import type { EngineRegistry } from "../engine/engine-registry.ts";
 import { ContextEstimator } from "./context-estimator.ts";
@@ -20,6 +20,7 @@ export class CrossEngineContextInjector {
     targetModelInfo: EngineModelInfo | undefined,
     workingDirectory: string,
     workspaceKey: string,
+    targetEngineType: EngineType,
     excludeBeforeMsgId?: number,
   ): Promise<PrepareResult> {
     const conv = this.db
@@ -37,6 +38,13 @@ export class CrossEngineContextInjector {
     }
 
     const sourceEngine = this.engineRegistry?.getEngineById(conv.last_engine_type) ?? null;
+
+    // Same engine type (e.g. two `pi` entries) → they share the same per-conversation
+    // session storage; the fresh session replays it, so neither a history block nor a
+    // pre-switch compaction is needed. This avoids the lossy/duplicative transfer.
+    if (sourceEngine != null && sourceEngine.type === targetEngineType) {
+      return { historyBlock: undefined };
+    }
 
     let messages = this.fetchMessagesSinceAnchor(conversationId, excludeBeforeMsgId);
 

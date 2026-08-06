@@ -19,8 +19,26 @@ export function validatePiEngineConfig(config: PiEngineConfig): void {
     );
   }
 
+  const VALID_THINKING_FORMATS = new Set([
+    "openai", "openrouter", "deepseek", "together", "zai", "qwen",
+    "chat-template", "qwen-chat-template", "string-thinking", "ant-ling",
+  ]);
+
   for (const [modelId, modelCfg] of Object.entries(config.models ?? {})) {
-    const { limit, variants, sampling_presets, axes } = modelCfg;
+    const { limit, variants, sampling_presets, axes, thinkingFormat } = modelCfg;
+    // Legacy configs may still carry `interleaved` (removed from the type). Catch it at runtime
+    // with a clear migration pointer rather than silently dropping it.
+    const legacyInterleaved = (modelCfg as Record<string, unknown>).interleaved;
+    if (legacyInterleaved !== undefined) {
+      throw new Error(
+        `Pi engine config: models.${modelId}.interleaved is no longer supported — rename it to "thinkingFormat" (e.g. thinkingFormat: deepseek)`,
+      );
+    }
+    if (thinkingFormat !== undefined && !VALID_THINKING_FORMATS.has(thinkingFormat)) {
+      throw new Error(
+        `Pi engine config: models.${modelId}.thinkingFormat must be one of: ${[...VALID_THINKING_FORMATS].join(", ")}, got: ${thinkingFormat}`,
+      );
+    }
     if (limit) {
       if (limit.context != null && limit.context <= 0) {
         throw new Error(

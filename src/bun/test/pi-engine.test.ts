@@ -432,15 +432,15 @@ describe("_applyModelConfigToSession", () => {
     expect(result.temperature).toBe(0.1);
     expect(result.top_p).toBe(0.5);
     expect(result.frequency_penalty).toBe(0.2);
-    expect(result.reasoning_effort).toBe("fast");
+    // The effort key is SDK-owned: Railyin never emits it, regardless of mode.
+    expect(result.reasoning_effort).toBeUndefined();
+    expect(result.reasoningEffort).toBeUndefined();
   });
 
-  it("PE-VARIANT-2: variant without options still sets reasoning_effort", () => {
+  it("PE-VARIANT-2: variant without options and non-canonical mode → thinkingLevel off, no reasoning_effort", () => {
     const session = new MockAgentSession();
     const modelCfg: import("../config/index.ts").PiModelConfig = {
-      variants: {
-        fast: {},
-      },
+      variants: { fast: {} },
     };
     const engine = makePiEngine(session);
     (engine as any)._applyModelConfigToSession(
@@ -450,18 +450,52 @@ describe("_applyModelConfigToSession", () => {
       undefined,
       [{ id: "mode", value: "fast" }],
     );
-    expect(session.agent.state.thinkingLevel).toBe("fast");
-    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
-      expect(result.reasoning_effort).toBe("fast");
-    });
+    // "fast" is not a canonical level and the variant has no effort → off.
+    expect(session.agent.state.thinkingLevel).toBe("off");
+    // No non-reasoning body options → onPayload is not set (empty).
+    expect(session.agent.onPayload).toBeUndefined();
+  });
 
-    it("PE-VARIANT-3: variant that defines its own reasoning knob (e.g. reasoningEffort) does NOT set reasoning_effort", () => {
+  it("PE-VARIANT-3: variant reasoningEffort maps to canonical thinkingLevel and is NOT forwarded to onPayload", () => {
+    const session = new MockAgentSession();
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      variants: {
+        none: { options: { reasoningEffort: "none" } },
+        normal: { options: { reasoningEffort: "high", temperature: 0.4 } },
+        max: { options: { reasoningEffort: "xhigh" } },
+      },
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "vllm/test-model",
+      undefined,
+      [{ id: "mode", value: "normal" }],
+    );
+    // Variant's reasoningEffort is the canonical level (high), not the variant name.
+    expect(session.agent.state.thinkingLevel).toBe("high");
+    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+    // Non-reasoning options are merged...
+    expect(result.temperature).toBe(0.4);
+    // ...but neither the camel nor snake effort key is emitted by Railyin (SDK-owned).
+    expect(result.reasoningEffort).toBeUndefined();
+    expect(result.reasoning_effort).toBeUndefined();
+  });
+
+  it("PE-VARIANT-4: none/normal/max variants resolve to off/high/xhigh canonical levels", () => {
+    const cases: Array<[string, string]> = [
+      ["none", "off"],
+      ["normal", "high"],
+      ["max", "xhigh"],
+    ];
+    for (const [mode, expectedLevel] of cases) {
       const session = new MockAgentSession();
       const modelCfg: import("../config/index.ts").PiModelConfig = {
         variants: {
           none: { options: { reasoningEffort: "none" } },
           normal: { options: { reasoningEffort: "high" } },
-          max: { options: { reasoningEffort: "max" } },
+          max: { options: { reasoningEffort: "xhigh" } },
         },
       };
       const engine = makePiEngine(session);
@@ -470,15 +504,55 @@ describe("_applyModelConfigToSession", () => {
         modelCfg,
         "vllm/test-model",
         undefined,
-        [{ id: "mode", value: "normal" }],
+        [{ id: "mode", value: mode }],
       );
-      expect(session.agent.state.thinkingLevel).toBe("normal");
-      const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
-      expect(result.reasoningEffort).toBe("high");
-      // The SDK's snake_case `reasoning_effort` is overridden with the variant's
-      // reasoning value so it doesn't conflict with the camel `reasoningEffort`.
-      expect(result.reasoning_effort).toBe("high");
-    });
+      expect(session.agent.state.thinkingLevel).toBe(expectedLevel);
+    }
+  });
+
+  it("PE-VARIANT-5: provider-specific reasoning knob (chat_template_kwargs/enable_thinking) passes through onPayload", () => {
+    const session = new MockAgentSession();
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      variants: {
+        qwen: { options: { chat_template_kwargs: { enable_thinking: true }, reasoningEffort: "high" } },
+      },
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "vllm/test-model",
+      undefined,
+      [{ id: "mode", value: "qwen" }],
+    );
+    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+    // Provider-specific reasoning knob is forwarded for per-model flexibility.
+    expect(result.chat_template_kwargs).toEqual({ enable_thinking: true });
+    // ...but the SDK-owned effort key is dropped.
+    expect(result.reasoning_effort).toBeUndefined();
+    expect(result.reasoningEffort).toBeUndefined();
+  });
+
+  it("PE-VARIANT-6: provider-specific reasoning knob is NOT auto-injected when not declared", () => {
+    const session = new MockAgentSession();
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      variants: { normal: { options: { reasoningEffort: "high", temperature: 0.4 } } },
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "vllm/test-model",
+      undefined,
+      [{ id: "mode", value: "normal" }],
+    );
+    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+    // Non-reasoning option present so onPayload is set, but no reasoning knob is auto-injected.
+    expect(result.temperature).toBe(0.4);
+    expect(result.enable_thinking).toBeUndefined();
+    expect(result.chat_template_kwargs).toBeUndefined();
+    expect(result.thinking).toBeUndefined();
+  });
 
     it("PE-MODE-LABEL-1: Mode axis uses variant label when present, falls back to variant id", () => {
       const session = new MockAgentSession();

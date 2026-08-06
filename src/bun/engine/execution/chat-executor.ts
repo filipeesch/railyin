@@ -122,6 +122,7 @@ export class ChatExecutor {
       targetModelInfo,
       workingDirectory,
       workspaceKey,
+      engine.type,
       msgId,
     );
 

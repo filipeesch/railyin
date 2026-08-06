@@ -1,5 +1,6 @@
 import type {
   ExecutionEngine,
+  EngineType,
   ExecutionParams,
   EngineEvent,
   EngineModelInfo,
@@ -8,7 +9,6 @@ import type {
   OnTaskUpdated,
   OnNewMessage,
 } from "../types.ts";
-import { resolveSamplingPreset } from "./sampling-params.ts";
 import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
 import type { ModelSettingAxis, ModelParamValue } from "../../../shared/rpc-types.ts";
 import { derivePiModelAxes, derivePiModelSettings, resolvePiModelConfig } from "./model-config.ts";
@@ -40,6 +40,7 @@ import { homedir } from "os";
 // ─── Services ────────────────────────────────────────────────────────────────
 
 import { PiModelBuilder } from "./model-builder.ts";
+import { PiModelConfigApplier } from "./model-config-applier.ts";
 import { PiDialectResolver } from "./dialect-resolver.ts";
 import { PiToolFactory } from "./tool-factory.ts";
 import { PiSessionManager, DefaultSessionPathResolver } from "./session-manager.ts";
@@ -123,6 +124,7 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
 }
 
 export class PiEngine implements ExecutionEngine {
+  readonly type: EngineType = "pi";
   private readonly engineId: string;
   private readonly config: PiEngineConfig;
   private readonly _onTaskUpdated: OnTaskUpdated;
@@ -143,6 +145,8 @@ export class PiEngine implements ExecutionEngine {
   readonly registry: ProviderLimiterRegistry;
   /** Model object builder. */
   readonly modelBuilder: PiModelBuilder;
+  /** Per-model config → session thinking level + request-body merge. */
+  readonly modelConfigApplier: PiModelConfigApplier;
   /** Dialect + project path resolution. */
   readonly dialectResolver: PiDialectResolver;
   /** Tool and harness context management. */
@@ -163,6 +167,7 @@ export class PiEngine implements ExecutionEngine {
     modelSettingsRepo: ModelSettingsRepository,
     sessionFactory: SessionFactory = defaultSessionFactory,
     registry?: ProviderLimiterRegistry,
+    modelConfigApplier?: PiModelConfigApplier,
   ) {
     this.engineId = engineId;
     this.config = config;
@@ -184,6 +189,8 @@ export class PiEngine implements ExecutionEngine {
     for (const [name] of Object.entries(config.providers ?? {})) {
       this.modelBuilder.warnIfLmStudioOverloaded(name);
     }
+
+    this.modelConfigApplier = modelConfigApplier ?? new PiModelConfigApplier();
 
     this.dialectResolver = new PiDialectResolver(dialect);
 
@@ -552,43 +559,12 @@ export class PiEngine implements ExecutionEngine {
    * `variants` when present, plus any explicit `axes` declared in config.
    */
   _buildSettings(modelCfg: PiModelConfig | undefined): ModelSettingAxis[] {
-    const settings: ModelSettingAxis[] = [];
-
-    const variants = modelCfg?.variants
-      ? Object.keys(modelCfg.variants).filter((v) => modelCfg!.variants![v].disabled !== true)
-      : [];
-    if (variants.length > 0) {
-      settings.push({
-        id: "mode",
-        label: "Mode",
-        options: variants.map((value) => ({ value, label: modelCfg?.variants?.[value]?.label ?? value })),
-        defaultValue: variants[0] ?? null,
-        visible: true,
-        axisType: "select",
-      });
-    }
-
-    for (const axis of modelCfg?.axes ?? []) {
-      settings.push({
-        id: axis.id,
-        label: axis.label,
-        options: axis.options ?? [],
-        defaultValue: axis.defaultValue ?? null,
-        visible: axis.visible ?? true,
-        axisType: axis.axisType ?? "select",
-      });
-    }
-
-    return settings;
+    return this.modelConfigApplier.buildSettings(modelCfg);
   }
 
   /**
-   * Applies the per-model config to `session.agent` for the current execution:
-   *  - Resolves the active Mode/Reasoning axis value (UI `modelParams` override wins over config default)
-   *    and sets `session.agent.state.thinkingLevel`.
-   *  - Deep-merges the model's static `options` plus any custom-axis runtime overrides into the
-   *    request body via `onPayload`.
-   *  - Resolves the sampling preset against the active model set and merges its defined fields.
+   * Applies the per-model config to `session.agent` for the current execution.
+   * Delegates to the injectable PiModelConfigApplier service.
    */
   _applyModelConfigToSession(
     session: AgentSession,
@@ -597,81 +573,7 @@ export class PiEngine implements ExecutionEngine {
     presetName: string | undefined,
     modelParams: ModelParamValue[] | undefined,
   ): void {
-    const baseOptions = modelCfg?.options ?? {};
-    const mergedOptions: Record<string, unknown> = { ...baseOptions };
-
-    // Apply UI-editable custom axes via their runtime path templates.
-    for (const axis of modelCfg?.axes ?? []) {
-      const chosen = modelParams?.find((p) => p.id === axis.id)?.value ?? axis.defaultValue;
-      if (chosen == null || !axis.runtime) continue;
-      for (const [path, tmpl] of Object.entries(axis.runtime)) {
-        if (typeof tmpl !== "string") continue;
-        const resolved = tmpl.includes("{value}") ? tmpl.replace("{value}", String(chosen)) : tmpl;
-        mergedOptions[path] = resolved;
-      }
-    }
-
-    // Mode/Reasoning level → session thinking level + provider knob.
-    const modeValue =
-      modelParams?.find((p) => p.id === "mode")?.value ?? modelParams?.find((p) => p.id === "thinkingLevel")?.value;
-    if (modeValue) {
-      session.agent.state.thinkingLevel = (modeValue === "off" ? "off" : modeValue) as never;
-      // Merge variant options into request body when a Mode variant is selected.
-      const variantOpts = modelCfg?.variants?.[modeValue]?.options;
-      if (variantOpts && typeof variantOpts === "object") {
-        Object.assign(mergedOptions, variantOpts);
-      }
-      // Only fall back to `reasoning_effort = modeValue` when the variant does not
-      // already carry its own reasoning knob (e.g. DeepSeek variants define
-      // `reasoningEffort`). Otherwise the variant name (e.g. "normal") would be
-      // sent as an invalid `reasoning_effort` value and rejected by the provider.
-      const REASONING_KEYS = [
-        "reasoning_effort",
-        "reasoningEffort",
-        "enable_thinking",
-        "chat_template_kwargs",
-        "thinking",
-      ];
-      const variantDefinesReasoning =
-        variantOpts &&
-        typeof variantOpts === "object" &&
-        Object.keys(variantOpts).some((k) => REASONING_KEYS.includes(k));
-      if (variantDefinesReasoning && variantOpts && typeof variantOpts === "object") {
-        // The SDK derives `reasoning_effort` (snake_case) from the session
-        // thinkingLevel. When the variant name is not a valid SDK level, the SDK
-        // clamps it to `off` and sends `reasoning_effort: "off"`, which conflicts
-        // with the variant's own reasoning option (e.g. `reasoningEffort: "high"`).
-        // Override the SDK's snake_case `reasoning_effort` with the variant's
-        // reasoning value so the request body stays consistent.
-        const variantOptsRecord = variantOpts as Record<string, unknown>;
-        const variantReasoningValue =
-          variantOptsRecord.reasoning_effort ?? variantOptsRecord.reasoningEffort;
-        if (variantReasoningValue !== undefined) {
-          mergedOptions.reasoning_effort = variantReasoningValue;
-        }
-      } else {
-        mergedOptions.reasoning_effort = modeValue;
-      }
-    }
-    if (modeValue == null) {
-      session.agent.state.thinkingLevel = (modelCfg?.thinking_level ?? "off") as never;
-    }
-
-    const sampling = resolveSamplingPreset(presetName, modelCfg);
-    if (sampling !== undefined) {
-      session.agent.onPayload = (payload: unknown) => ({
-        ...(payload as Record<string, unknown>),
-        ...mergedOptions,
-        ...sampling,
-      });
-    } else if (Object.keys(mergedOptions).length > 0) {
-      session.agent.onPayload = (payload: unknown) => ({
-        ...(payload as Record<string, unknown>),
-        ...mergedOptions,
-      });
-    } else {
-      session.agent.onPayload = undefined;
-    }
+    this.modelConfigApplier.applyToSession(session, modelCfg, modelStr, presetName, modelParams);
   }
 
   // ─── Compatibility shims for tests that access private state via `as any` ───

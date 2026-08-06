@@ -38,6 +38,7 @@ function makeParams(tid: number | null, cid: number, eid: number, signal?: Abort
 }
 
 class NoopEngine implements ExecutionEngine {
+  readonly type = "scripted";
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "done" };
   }
@@ -93,6 +94,7 @@ describe("StreamProcessor", () => {
     const tokenYielded = new Promise<void>(r => { tokenYieldedFn = r; });
 
     class PausableEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "token", content: "hello" };
         tokenYieldedFn();
@@ -133,6 +135,7 @@ describe("StreamProcessor", () => {
     const reasoningYielded = new Promise<void>(r => { reasoningYieldedFn = r; });
 
     class PausableReasoningEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "reasoning", content: "thinking..." };
         reasoningYieldedFn();
@@ -168,6 +171,7 @@ describe("StreamProcessor", () => {
 
   it("SP-5: fatal error sets execution status and task execution_state to failed", async () => {
     class FatalErrorEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "error", message: "boom", fatal: true };
       }
@@ -196,6 +200,7 @@ describe("StreamProcessor", () => {
 
   it("SP-6: onNewMessage called once with real DB id after assistant message flush", async () => {
     class TextEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "token", content: "hello world" };
         yield { type: "done" };
@@ -342,6 +347,7 @@ describe("StreamProcessor", () => {
 describe("SP-COMPACT: compaction_done content persistence", () => {
   function makeSummaryEngine(events: EngineEvent[]): ExecutionEngine {
     return {
+      type: "pi" as const,
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         for (const e of events) yield e;
       },
