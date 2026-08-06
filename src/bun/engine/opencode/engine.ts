@@ -93,6 +93,8 @@ export class OpenCodeEngine implements ExecutionEngine {
       },
       runtime: {
         worktreePath: workingDirectory,
+        mcpRegistry: params.mcpRegistry ?? undefined,
+        mcpEnabledTools: params.enabledMcpTools ?? null,
       },
     };
 

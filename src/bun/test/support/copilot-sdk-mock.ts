@@ -62,7 +62,15 @@ export class MockCopilotSession implements CopilotSdkSession {
                 if (step.kind === "callTool") {
                     const tool = this.tools.find((t) => t.name === step.toolName);
                     if (!tool) throw new Error(`Mock tool not found: ${step.toolName}`);
-                    await tool.handler(step.args);
+                    // Real dispatch: invoke the actual handler (wraps executeCommonTool) and
+                    // persist genuine tool_call/tool_result events using its real return value —
+                    // mirrors what the real Copilot SDK does when the model calls a registered
+                    // tool, instead of the scripted toolStart/toolResult pairs used elsewhere,
+                    // which fake both the call AND its result.
+                    const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+                    this.emit({ type: "tool.execution_start", data: { toolCallId: callId, toolName: step.toolName, arguments: step.args } });
+                    const resultText = await tool.handler(step.args);
+                    this.emit({ type: "tool.execution_complete", data: { toolCallId: callId, success: true, result: { content: resultText } } });
                     continue;
                 }
                 await new Promise<void>((resolve) => {

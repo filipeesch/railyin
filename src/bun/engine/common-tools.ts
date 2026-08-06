@@ -28,6 +28,8 @@ import {
 import { validateToolArgs } from "./validate-tool-args.ts";
 import { CARD_TOOL_DEFINITIONS, CARD_TOOL_NAMES } from "./card-tool-definitions.ts";
 import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_TOOL_NAMES } from "./workspace-tool-definitions.ts";
+import { MCP_DISCOVERY_TOOL_DEFINITIONS, MCP_DISCOVERY_TOOL_NAMES } from "./mcp-discovery-tool-definitions.ts";
+import { execListMcpServers, execListMcpTools, execInvokeMcpTool } from "../mcp/discovery-tools.ts";
 import { getDefaultWorkspaceKey } from "../workspace-context.ts";
 
 
@@ -283,11 +285,12 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   ...LSP_TOOL_DEFINITIONS,
   ...WORKSPACE_TOOL_DEFINITIONS,
+  ...MCP_DISCOVERY_TOOL_DEFINITIONS,
 ];
 
 export const TODO_TOOL_NAMES = new Set(["create_todo", "edit_todo", "list_todos", "get_todo", "reorganize_todos", "update_todo_status"]);
 
-export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request", "list_decisions", "record_decision", "update_decision", "delete_decision", "create_note", "list_notes", "update_note", ...TODO_TOOL_NAMES, ...LSP_TOOL_DEFINITIONS.map((t) => t.name), ...WORKSPACE_TOOL_NAMES]);
+export const COMMON_TOOL_NAMES = new Set([...CARD_TOOL_NAMES, "decision_request", "list_decisions", "record_decision", "update_decision", "delete_decision", "create_note", "list_notes", "update_note", ...TODO_TOOL_NAMES, ...LSP_TOOL_DEFINITIONS.map((t) => t.name), ...WORKSPACE_TOOL_NAMES, ...MCP_DISCOVERY_TOOL_NAMES]);
 
 // ─── Display builder ──────────────────────────────────────────────────────────
 
@@ -357,6 +360,17 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
       return { label: "list projects" };
     case "list_workflows":
       return { label: "list workflows" };
+    case "list_mcp_servers":
+      return { label: "list mcp servers" };
+    case "list_mcp_tools":
+      return { label: "list mcp tools", subject: args.server != null ? String(args.server) : undefined };
+    case "invoke_mcp_tool":
+      return {
+        label: "invoke mcp tool",
+        subject: args.server != null && args.tool != null
+          ? `${args.server}:${args.tool}`
+          : (args.tool != null ? String(args.tool) : undefined),
+      };
     default:
       return { label: humanizeToolName(name) };
   }
@@ -650,6 +664,24 @@ async function executeCommonToolText(
       const db = getDb();
       const boards = listBoardsByWorkspace(db, ctx.workspaceKey);
       return JSON.stringify(boards);
+    }
+
+    case "list_mcp_servers":
+    case "list_mcp_tools":
+    case "invoke_mcp_tool": {
+      if (!ctx.runtime.mcpRegistry) {
+        return "Error: no MCP servers are configured for this scope.";
+      }
+      const registry = ctx.runtime.mcpRegistry;
+      const enabledMcpTools = ctx.runtime.mcpEnabledTools;
+      switch (name) {
+        case "list_mcp_servers":
+          return execListMcpServers(registry);
+        case "list_mcp_tools":
+          return execListMcpTools(registry, enabledMcpTools, args.server as string);
+        default:
+          return execInvokeMcpTool(registry, enabledMcpTools, args.server as string, args.tool as string, args.arguments as Record<string, unknown> | undefined);
+      }
     }
 
     default:

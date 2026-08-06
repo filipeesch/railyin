@@ -39,7 +39,7 @@ The chat drawer SHALL display an icon-only button (no label) in the model-row to
 - **THEN** the button shows a warning indicator (exclamation mark)
 
 ### Requirement: MCP tools popover
-The `McpToolsPopover` SHALL display a balloon overlay with a tree of MCP servers and their tools as checkboxes, a per-server reload button (or "Sign in" button when the server requires authorization), and actions to reload config and open config editors.
+The `McpToolsPopover` SHALL display a balloon overlay with a tree of MCP servers and their tools as checkboxes, a per-server reload button (or "Sign in" button when the server requires authorization), and actions to reload config and open config editors. Checkboxes now control whether a tool is **visible to the model via the `list_mcp_tools`/`invoke_mcp_tool` discovery tools** (the `mcp-tool-discovery` capability), rather than whether the tool is natively injected — the underlying `enabled_mcp_tools` storage and `mcp.setTaskTools`/`mcp.setSessionTools` RPCs are unchanged.
 
 #### Scenario: Server tree with status
 - **WHEN** the popover is opened
@@ -47,11 +47,11 @@ The `McpToolsPopover` SHALL display a balloon overlay with a tree of MCP servers
 
 #### Scenario: All tools unchecked by default for new task
 - **WHEN** the popover is opened for a task with `enabled_mcp_tools = []`
-- **THEN** all tool checkboxes are unchecked
+- **THEN** all tool checkboxes are unchecked, and `list_mcp_tools` returns no tools for that task until the user checks some
 
 #### Scenario: Enable a tool for current task
 - **WHEN** a user checks a tool in the popover
-- **THEN** the tool is added to the `enabled_mcp_tools` list for the current task via `mcp.setTaskTools` RPC
+- **THEN** the tool is added to the `enabled_mcp_tools` list for the current task via `mcp.setTaskTools` RPC, making it visible to `list_mcp_tools` and callable via `invoke_mcp_tool` for that task
 
 #### Scenario: Reload individual server
 - **WHEN** the user clicks the reload button next to a server not in `auth_required` state

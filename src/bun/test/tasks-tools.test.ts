@@ -813,3 +813,28 @@ describe("buildCommonToolDisplay / card tools", () => {
         expect(result.label).toBe("list boards");
     });
 });
+
+describe("buildCommonToolDisplay / mcp discovery tools", () => {
+    it("list_mcp_servers display label is 'list mcp servers' with no subject", () => {
+        const result = buildCommonToolDisplay("list_mcp_servers", {});
+        expect(result.label).toBe("list mcp servers");
+        expect(result.subject).toBeUndefined();
+    });
+
+    it("list_mcp_tools display subject surfaces the server name", () => {
+        const result = buildCommonToolDisplay("list_mcp_tools", { server: "atlassian" });
+        expect(result.label).toBe("list mcp tools");
+        expect(result.subject).toBe("atlassian");
+    });
+
+    it("invoke_mcp_tool display subject surfaces 'server:tool'", () => {
+        const result = buildCommonToolDisplay("invoke_mcp_tool", { server: "atlassian", tool: "search_issues" });
+        expect(result.label).toBe("invoke mcp tool");
+        expect(result.subject).toBe("atlassian:search_issues");
+    });
+
+    it("invoke_mcp_tool display subject falls back to bare tool name when server is missing", () => {
+        const result = buildCommonToolDisplay("invoke_mcp_tool", { tool: "search_issues" });
+        expect(result.subject).toBe("search_issues");
+    });
+});
