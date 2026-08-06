@@ -584,8 +584,13 @@ describe("InProcessCursorAdapter.usage", () => {
     const agent = makeFakeAgent(run);
     const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
 
-    const events = await collect(adapter);
-    expect(events).toContainEqual({ type: "usage", inputTokens: 12_345, outputTokens: 678 });
+    const events = await collect(adapter, baseConfig({ model: "claude-sonnet-4-6" }));
+    expect(events).toContainEqual({
+      type: "usage",
+      inputTokens: 12_345,
+      outputTokens: 678,
+      contextWindow: 200_000, // resolved from the model id for the gauge's stream-event path
+    });
     // The terminal done sentinel is still emitted after usage.
     expect(events.at(-1)).toEqual({ type: "done" });
   });

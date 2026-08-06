@@ -309,11 +309,14 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
           }
           // Report the run's real token usage so context estimation uses actual
           // counts instead of a char/4 heuristic. Absent when the SDK omits it.
+          // The context window is derived from the model id so the frontend
+          // gauge's stream-event path resolves the real max window (not 128k).
           if (result.usage) {
             yield {
               type: "usage",
               inputTokens: result.usage.inputTokens,
               outputTokens: result.usage.outputTokens,
+              contextWindow: resolveModelContextWindow(undefined, config.model),
             };
           }
         } catch (waitErr) {
