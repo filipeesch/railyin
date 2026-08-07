@@ -98,8 +98,11 @@ export class ChatExecutor {
 
     const contextWindowOverride = this.paramsEnricher?.hasContextWindow(workspaceKey, effectiveModel) ?? false;
 
-    // Pre-flight: Pi requires a configured context window — fail fast with a visible error
-    if (engineId === "pi" && !contextWindowOverride) {
+    // Pre-flight: Pi requires a configured context window — fail fast with a visible error.
+    // Check the engine TYPE (catches custom Pi engine ids like `pi-local`, `pi-openrouter`)
+    // OR the engineId (catches the standard `pi/...` qualified model). This guards against
+    // Pi engines silently failing when the engine id differs from the literal `pi`.
+    if ((engine.type === "pi" || engineId === "pi") && !contextWindowOverride) {
       const errorContent = `Pi engine requires a context window to be configured for model '${effectiveModel}'. Go to Model Settings to configure it.`;
       const errorMsgId = appendMessage(db, null, conversationId, "system", null, errorContent);
       db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
