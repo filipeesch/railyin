@@ -529,9 +529,31 @@ describe("InProcessCursorAdapter.listModels", () => {
         supportsThinking: true,
         variants: [{ params: [], displayName: "Fast" }],
         parameters: [{ id: "effort", values: [{ value: "low" }] }],
+        contextWindow: 200_000, // derived from the bundled model snapshot
       },
     ]);
     expect(sdk.Cursor.models.list).toHaveBeenCalledWith({ apiKey: "test-key" });
+  });
+
+  it("derives contextWindow from the model's context parameter", async () => {
+    const run = makeFakeRun();
+    const agent = makeFakeAgent(run);
+    const sdk = makeSdkClient(agent, {
+      models: [
+        {
+          id: "claude-opus-4-8",
+          displayName: "Claude Opus 4.8",
+          parameters: [
+            { id: "context", values: [{ value: "auto" }, { value: "300k" }, { value: "1m" }] },
+          ],
+        },
+      ],
+    });
+    const adapter = new InProcessCursorAdapter({ apiKey: "test-key" }, sdk);
+
+    const models = await adapter.listModels("/tmp");
+    // Max explicit context value wins over the bundled snapshot.
+    expect(models[0]!.contextWindow).toBe(1_000_000);
   });
 });
 
@@ -541,6 +563,88 @@ describe("InProcessCursorAdapter.listCommands", () => {
     const agent = makeFakeAgent(run);
     const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
     expect(await adapter.listCommands("/tmp")).toEqual([]);
+  });
+});
+
+describe("InProcessCursorAdapter.usage", () => {
+  it("emits a usage EngineEvent from RunResult.usage after wait()", async () => {
+    const run = makeFakeRun({
+      waitResult: {
+        id: "run-1",
+        status: "finished",
+        usage: {
+          inputTokens: 12_345,
+          outputTokens: 678,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 13_023,
+        },
+      },
+    });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
+
+    const events = await collect(adapter, baseConfig({ model: "claude-sonnet-4-6" }));
+    expect(events).toContainEqual({
+      type: "usage",
+      inputTokens: 12_345,
+      outputTokens: 678,
+      contextWindow: 200_000, // resolved from the model id for the gauge's stream-event path
+    });
+    // The terminal done sentinel is still emitted after usage.
+    expect(events.at(-1)).toEqual({ type: "done" });
+  });
+
+  it("does not emit a usage event when RunResult.usage is absent", async () => {
+    const run = makeFakeRun({ waitResult: { id: "run-1", status: "finished" } });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
+
+    const events = await collect(adapter);
+    expect(events.some((e) => e.type === "usage")).toBe(false);
+  });
+});
+
+describe("InProcessCursorAdapter — keep-alive pool", () => {
+  it("keeps the agent warm across runs for the same agentId (no close, no recreate)", async () => {
+    const agent = makeFakeAgent(makeFakeRun());
+    const sdk = makeSdkClient(agent);
+    const adapter = new InProcessCursorAdapter({}, sdk);
+
+    // Two runs against the same pinned agentId.
+    await collect(adapter, baseConfig({ agentId: "agent-pooled" }));
+    await collect(adapter, baseConfig({ agentId: "agent-pooled" }));
+
+    // Acquired once (warm resumed on turn 2 via the pool) and never closed.
+    expect(sdk.Agent.resume).toHaveBeenCalledTimes(1);
+    expect(sdk.Agent.create).not.toHaveBeenCalled();
+    expect(agent.close).not.toHaveBeenCalled();
+  });
+
+  it("returns a decision_request-aborted run's agent to the pool (warm)", async () => {
+    let releaseHook: () => void = () => {};
+    const hook = new Promise<void>((resolve) => { releaseHook = resolve; });
+    async function* stream(): AsyncGenerator<CursorSDKMessage> {
+      await hook; // blocks until aborted (simulates decision_request cut)
+    }
+    const run = makeFakeRun({ stream });
+    const agent = makeFakeAgent(run);
+    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
+
+    const config = baseConfig({ agentId: "agent-pooled" });
+    const signal = new AbortController();
+    config.signal = signal.signal;
+
+    const events: EngineEvent[] = [];
+    const iterate = (async () => { for await (const e of adapter.run(config)) events.push(e); })();
+    await new Promise((r) => setTimeout(r, 0));
+    signal.abort();
+    releaseHook();
+    await iterate;
+
+    // Aborted run still returns the agent to the pool (not closed).
+    expect(agent.close).not.toHaveBeenCalled();
+    expect(run.cancel).toHaveBeenCalled();
   });
 });
 

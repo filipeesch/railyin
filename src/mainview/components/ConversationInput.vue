@@ -302,10 +302,10 @@
 
       <!-- Context ring (when contextUsage provided) -->
       <button
-        v-if="props.contextUsage"
+        v-if="resolvedContextUsage"
         ref="contextRingBtnRef"
         class="context-ring-btn"
-        :title="`~${props.contextUsage.usedTokens.toLocaleString()} / ${props.contextUsage.maxTokens.toLocaleString()} tokens (${Math.round(props.contextUsage.fraction * 100)}%)`"
+        :title="`~${resolvedContextUsage.usedTokens.toLocaleString()} / ${resolvedContextUsage.maxTokens.toLocaleString()} tokens (${Math.round(resolvedContextUsage.fraction * 100)}%)`"
         @click="contextPopoverRef?.toggle($event)"
       >
         <svg class="context-ring" width="28" height="28" viewBox="0 0 28 28">
@@ -314,23 +314,23 @@
             cx="14" cy="14" r="10" fill="none" stroke-width="3"
             stroke-linecap="round"
             stroke-dasharray="62.83"
-            :stroke-dashoffset="62.83 * (1 - props.contextUsage.fraction)"
-            :stroke="props.contextUsage.fraction >= 0.90 ? 'var(--p-red-500, #ef4444)' : props.contextUsage.fraction >= 0.70 ? 'var(--p-yellow-500, #eab308)' : 'var(--p-green-500, #22c55e)'"
+            :stroke-dashoffset="62.83 * (1 - resolvedContextUsage.fraction)"
+            :stroke="resolvedContextUsage.fraction >= 0.90 ? 'var(--p-red-500, #ef4444)' : resolvedContextUsage.fraction >= 0.70 ? 'var(--p-yellow-500, #eab308)' : 'var(--p-green-500, #22c55e)'"
             transform="rotate(-90 14 14)"
           />
           <text
-            v-if="props.contextUsage.fraction > 0"
+            v-if="resolvedContextUsage.fraction > 0"
             x="14" y="18"
             text-anchor="middle"
             font-size="7"
             class="context-ring__label"
-          >{{ Math.round(props.contextUsage.fraction * 100) }}%</text>
+          >{{ Math.round(resolvedContextUsage.fraction * 100) }}%</text>
         </svg>
       </button>
       <ContextPopover
-        v-if="props.contextUsage"
+        v-if="resolvedContextUsage"
         ref="contextPopoverRef"
-        :context-usage="props.contextUsage"
+        :context-usage="resolvedContextUsage"
         :model-display-name="selectedModelOption?.label"
         :supports-manual-compact="supportsManualCompact"
         :disabled="isRunning"
@@ -580,14 +580,35 @@ function updateParam(axisId: string, value: string | null) {
   emit("update:modelParams", current);
 }
 
-const supportsManualCompact = computed(() => {
+const resolvedModelId = computed(() => {
   // In task context (taskId is set), never fall back to the first available model —
   // the conversation's model is explicit, and null means "no model selected yet".
-  const resolvedModelId = props.taskId != null
+  return props.taskId != null
     ? props.modelId ?? null
     : (props.modelId ?? workspaceStore.availableModels[0]?.id ?? null);
-  if (resolvedModelId == null) return false;
-  return workspaceStore.availableModels.find((m) => m.id === resolvedModelId)?.supportsManualCompact === true;
+});
+
+const selectedModel = computed(() => {
+  const id = resolvedModelId.value;
+  if (id == null) return undefined;
+  return workspaceStore.availableModels.find((m) => m.id === id);
+});
+
+const supportsManualCompact = computed(
+  () => selectedModel.value?.supportsManualCompact === true,
+);
+
+// The context gauge's max window should reflect the SELECTED model's real
+// contextWindow (from ModelInfo) so it follows the model when switched, and is
+// not stuck on a backend-resolved 128k fallback. Recompute fraction with it.
+const resolvedContextUsage = computed(() => {
+  const usage = props.contextUsage;
+  if (!usage) return null;
+  const window = selectedModel.value?.contextWindow;
+  if (window == null || !Number.isFinite(window) || window <= 0) return usage;
+  if (usage.maxTokens === window) return usage;
+  const fraction = window > 0 ? Math.min(usage.usedTokens / window, 1) : 0;
+  return { usedTokens: usage.usedTokens, maxTokens: window, fraction };
 });
 
 // ─── Send logic ───────────────────────────────────────────────────────────────

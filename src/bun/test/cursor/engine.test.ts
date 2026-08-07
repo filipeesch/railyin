@@ -250,3 +250,30 @@ describe("CursorEngine dialect injection", () => {
     expect(sentPrompt).toContain("hello world");
   });
 });
+
+describe("CursorEngine — compaction wiring (§7 compaction)", () => {
+    it("listModels reports supportsManualCompact: true and forwards contextWindow", async () => {
+        const adapter = new MockCursorSdkAdapter().setModels([{
+            value: "claude-opus-4-8",
+            displayName: "Claude Opus 4.8",
+            contextWindow: 300_000,
+        }]);
+        const engine = new CursorEngine(() => {}, () => {}, adapter);
+
+        const models = await engine.listModels();
+        expect(models[0]).toMatchObject({
+            qualifiedId: "cursor/claude-opus-4-8",
+            contextWindow: 300_000,
+            supportsManualCompact: true,
+        });
+    });
+
+    it("compact(taskId=null) rejects chat-session compaction as unsupported", async () => {
+        const adapter = new MockCursorSdkAdapter();
+        const engine = new CursorEngine(() => {}, () => {}, adapter);
+
+        await expect(
+            engine.compact(null, 1234, "/tmp", "workspace"),
+        ).rejects.toThrow("does not currently support chat-session compaction");
+    });
+});

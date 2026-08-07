@@ -35,8 +35,7 @@ The system SHALL run the `@cursor/sdk` directly in the Bun main process. No subp
 - **AND** this suppression applies process-wide (accepted trade-off; the Bun server has no other high-volume `AbortSignal` listener source that this would need to mask)
 
 ### Requirement: Per-conversation agent lifecycle
-
-The system SHALL use a caller-defined deterministic Cursor `agentId` per conversation and resume the same agent across turns so SDK-side chat history is preserved without any Railyin-side persistence.
+The system SHALL use a caller-defined deterministic Cursor `agentId` per conversation, keep the conversation's agent warm in a pool between turns, and resume the same agent across turns so SDK-side chat history is preserved without any Railyin-side persistence.
 
 #### Scenario: Deterministic id derivation
 
@@ -47,23 +46,30 @@ The system SHALL use a caller-defined deterministic Cursor `agentId` per convers
 
 #### Scenario: First execution on a conversation
 
-- **WHEN** the adapter starts a run and `Agent.resume(agentId, ...)` throws (no agent exists yet)
+- **WHEN** the adapter starts a run and no agent exists yet for the `agentId` (first turn)
 - **THEN** the adapter calls `Agent.create({ agentId, apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` with the same caller-supplied `agentId`
 - **AND** sends the prompt via `agent.send(prompt)`
 - **AND** the agent's working directory is the task's worktree path
 - **AND** if `agent.send(prompt)` throws `AgentBusyError`, the adapter retries with `{ local: { force: true } }`
 
-#### Scenario: Subsequent execution resumes the agent
+#### Scenario: Subsequent execution resumes the warm pooled agent
 
-- **WHEN** the adapter starts a run with the same `agentId` and an agent already exists in the SDK's local store
-- **THEN** `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` succeeds and returns the prior agent
-- **AND** the adapter does NOT call `Agent.create`
+- **WHEN** the adapter starts a run with the same `agentId` and that agent is still alive in the pool
+- **THEN** `Agent.resume(agentId, { apiKey, model, local: { cwd, customTools, settingSources: ["project"] } })` succeeds and returns the same live agent
+- **AND** the adapter does NOT call `Agent.create` and does NOT close the agent after the run
 
-#### Scenario: Resume failure of an existing agent falls back to create
+#### Scenario: Agent recreated from the local store after eviction or restart
 
-- **WHEN** `Agent.resume(agentId, ...)` throws for any reason
+- **WHEN** the adapter starts a run with an `agentId` not present in the pool (evicted after idle timeout, or after process restart) and `Agent.resume(agentId, ...)` throws
 - **THEN** the adapter falls back to `Agent.create({ ...baseOptions, agentId })` with the same `agentId`
+- **AND** the conversation context is restored from the SDK local store (not lost)
 - **AND** the new agent can be resumed on future turns
+
+#### Scenario: Agent is kept open across run terminations, not closed per-turn
+
+- **WHEN** a run ends (normal completion, cancellation, stall, or decision_request abort)
+- **THEN** the adapter returns the agent to the pool keyed by `agentId` and does NOT call `agent.close()`
+- **AND** the agent is only closed when its idle lease expires or on engine shutdown
 
 #### Scenario: In-turn resume is rejected to force fresh execution
 
@@ -102,12 +108,12 @@ The system SHALL translate `@cursor/sdk` `SDKMessage` events to Railyin's `Engin
 - **AND** if `result.status === "error"` the adapter emits a fatal `EngineEvent.error` with the SDK's error detail (or "Cursor agent run failed with no detail" when the SDK omits it)
 - **AND** otherwise the adapter emits an `EngineEvent` of `type: "done"`
 
-
 #### Scenario: Status transitions carry the real status value
 - **WHEN** the SDK emits a `type: "status"` message
 - **THEN** the adapter yields an `EngineEvent` of `type: "status"` whose `message` field is derived from the SDK message's `status` field (e.g. `"RUNNING"`, `"FINISHED"`, `"ERROR"`)
 - **AND** the adapter does NOT read a non-existent `message.message` field
 - **AND** if `status` is absent for any reason, the `message` field falls back to an empty string rather than throwing
+
 ### Requirement: Custom tool registration and direct execution
 
 The system SHALL register Railyin's common task tools and MCP-registry tools as Cursor `SDKCustomTool` entries, with `execute` invoked directly in-process — no serialization boundary or proxy round-trip.
@@ -140,14 +146,20 @@ The system SHALL leave Cursor's built-in tools enabled (the SDK does not expose 
 - **AND** the composed prompt includes a "Tool routing (IMPORTANT)" prefix instructing the agent to prefer them over the SDK's `Shell` / `Grep` / `Glob` / `Read`
 
 ### Requirement: Model listing
+The system SHALL list Cursor models available to the configured `api_key`, exposing each model's display metadata and its real context window.
 
-The system SHALL list Cursor models available to the configured `api_key`.
-
-#### Scenario: Models listed
+#### Scenario: Models listed with context window
 
 - **WHEN** the engine registry calls `CursorEngine.listModels`
 - **THEN** the adapter calls `Cursor.models.list({ apiKey })` directly in-process
-- **AND** Railyin returns each as `{ qualifiedId: 'cursor/' + id, displayName, description }`
+- **AND** Railyin returns each as `{ qualifiedId: 'cursor/' + id, displayName, description, contextWindow }`
+- **AND** `contextWindow` reflects the model's real context window from the SDK model catalog (e.g. 272k, 300k, 1m), not a hardcoded value
+
+#### Scenario: Context gauge and warning use the real window
+
+- **WHEN** Cursor model selection resolves context usage for a conversation
+- **THEN** `resolveContextWindow` uses the `contextWindow` reported by Cursor `listModels()` (falling back only when it is unknown)
+- **AND** the UI context gauge and the console context warning reflect the real window rather than a hardcoded 128k
 
 #### Scenario: Missing API key
 
@@ -227,6 +239,7 @@ The system SHALL resolve the task's worktree path and project path from the data
 - **THEN** it queries `task_git_context.worktree_path` for the worktree
 - **AND** resolves the project path via `getLoadedProjectByKey`
 - **AND** delegates to `CursorDialect.listCommands(worktreePath, projectPath)`
+
 ### Requirement: HTTP/1.1 forcing for local-agent SDK transport
 
 The system SHALL configure the Cursor SDK, once at adapter module load, to use HTTP/1.1 with SSE instead of HTTP/2 for local-agent backend streams, to avoid a known, unfixed upstream HTTP/2 session-teardown bug class in the SDK's bundled `@connectrpc/connect-node` transport.
@@ -278,4 +291,24 @@ The system SHALL log stall-timeout events and observed Cursor-SDK session-closed
 #### Scenario: Stall timeout is logged with correlation ids
 - **WHEN** the stall watchdog fires for a run
 - **THEN** a `console.error` line is emitted containing `executionId`, `taskId`, `conversationId`, and `agentId` (when known), tagged with an event name identifying it as a stall timeout
+
+### Requirement: Per-run token usage reporting
+The system SHALL report Cursor per-run token usage so context estimation uses real token counts instead of a character-based heuristic.
+
+#### Scenario: Usage emitted from RunResult
+
+- **WHEN** a Cursor run completes via `run.wait()` and the result carries `usage`
+- **THEN** the adapter emits a `usage` EngineEvent with the run's input/output token counts
+- **AND** the stream processor persists `executions.input_tokens` / `output_tokens` from that event
+
+#### Scenario: Context estimator uses real usage when available
+
+- **WHEN** a completed Cursor execution has persisted `input_tokens`
+- **THEN** `ContextEstimator`/`estimateContextUsage` uses that value as its fast path instead of the character-based heuristic
+
+#### Scenario: Usage absent falls back gracefully
+
+- **WHEN** a Cursor run result carries no `usage`
+- **THEN** the adapter does not emit a `usage` event
+- **AND** context estimation falls back to the character-based heuristic (with the correct context window) without error
 

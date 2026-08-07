@@ -48,6 +48,7 @@ export class MockCursorSdkAdapter implements CursorSdkAdapter {
     listModelsCalls: 0,
     listCommandsCalls: 0,
     shutdownCalls: 0,
+    compactCalls: [] as string[],
   };
 
   queueTurn(turn: CursorMockTurn): this {
@@ -123,6 +124,10 @@ export class MockCursorSdkAdapter implements CursorSdkAdapter {
 
   async cancel(_executionId: number): Promise<void> {
     this.trace.cancelCalls += 1;
+  }
+
+  async compact(agentId: string): Promise<void> {
+    this.trace.compactCalls.push(agentId);
   }
 
   async listModels(_workingDirectory: string): Promise<CursorSdkModelInfo[]> {
