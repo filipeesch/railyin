@@ -198,7 +198,7 @@ export const useChatStore = defineStore("chat", () => {
     });
   }
 
-  async function submitDecisions(sessionId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string) {
+  async function submitDecisions(sessionId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string, recordAsDecisions = true) {
     const session = activeSession.value;
     if (!session) return;
     const now = new Date().toISOString();
@@ -207,7 +207,7 @@ export const useChatStore = defineStore("chat", () => {
       lastActivityAt: now,
       lastReadAt: now,
     });
-    await api("chatSessions.submitDecisions", { sessionId, answers, generalNotes });
+    await api("chatSessions.submitDecisions", { sessionId, answers, generalNotes, recordAsDecisions });
   }
 
   async function renameSession(sessionId: number, title: string) {

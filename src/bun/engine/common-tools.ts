@@ -53,7 +53,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
     name: "record_decision",
     description:
       "Silently record an AI-made decision without user interaction. Use when you've made a choice and want to persist it for future context. For user-interactive decisions, use decision_request instead.\n\n" +
-      "ALWAYS call this tool after every decision_request response to record each answered question — never skip or defer.\n" +
+      "Call this tool after a decision_request when the user chose to record answers as decisions (the 'Record as decisions' toggle in the UI).\n" +
       "ALWAYS call list_decisions() first to check whether a record already exists for the question before calling record_decision.\n" +
       "NEVER call record_decision when a record already exists — use update_decision instead to avoid duplicates.",
     parameters: {
@@ -96,6 +96,7 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: "create_note",
     description:
+      "⚠️ NOTE TOOL — use ONLY when the user EXPLICITLY asks to create a note. " +
       "Create a new free-form markdown note scoped to this task/conversation. " +
       "Use notes to capture context, observations, findings, or any information worth preserving. " +
       "Notes are visible to the human user in the Notes panel.",
@@ -129,7 +130,9 @@ export const COMMON_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: "update_note",
-    description: "Update an existing note's content and/or tags. Call list_notes first to get the note ID.",
+    description:
+      "⚠️ NOTE TOOL — use ONLY when the user EXPLICITLY asks to edit or update a note. " +
+      "Update an existing note's content and/or tags. Call list_notes first to get the note ID.",
     parameters: {
       type: "object",
       properties: {
