@@ -8,8 +8,7 @@ export const DECISION_REQUEST_TOOL_DEFINITION: AIToolDefinition = {
         "CRITICAL RULES:\n" +
         "- For 'exclusive' or 'non_exclusive' questions you MUST supply at least 2 entries in the 'options' array. NEVER embed choices or alternatives in the 'question' text — put them in 'options'.\n" +
         "- 'freetext' questions have no options — omit the 'options' field entirely.\n" +
-        "- Batch all related decisions into one call.\n" +
-        "- After the user submits answers, call record_decision (or update_decision if a record already exists) for EVERY question — never skip this step.\n\n" +
+        "- Batch all related decisions into one call.\n\n" +
         "Writing effective questions:\n" +
         "- One focused decision per question. Use **bold** to highlight the key choice.\n" +
         "- Set 'weight' honestly: 'critical' (hard to undo), 'medium' (costly to undo), 'easy' (easily revisited).\n" +

@@ -601,3 +601,120 @@ test.describe("T-O — submitDecisions endpoint used on submit", () => {
         expect(submitDecisionsCalled).toBe(true);
     });
 });
+
+// ─── T-P: "Record as decisions" toggle ──────────────────────────────────────
+
+test.describe("T-P — Record as decisions toggle", () => {
+    test("T-P1: toggle is visible and checked by default", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const toggle = page.locator(".interview__record-toggle");
+        await expect(toggle).toBeVisible();
+        await expect(toggle.locator("input")).toBeChecked();
+    });
+
+    test("T-P2: unchecking toggle and submitting sends recordAsDecisions=false", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        const replyMsg = makeUserMessage(task.id, "A: PostgreSQL");
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        let capturedBody: { recordAsDecisions?: boolean } | null = null;
+        api.handle("tasks.submitDecisions", (body) => {
+            capturedBody = body as typeof capturedBody;
+            return { message: replyMsg, executionId: 9999 };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).click();
+
+        // Uncheck the toggle
+        await page.locator(".interview__record-toggle input").uncheck();
+
+        await page.locator(".interview__submit").click();
+
+        await expect.poll(() => capturedBody).toBeTruthy();
+        expect(capturedBody!.recordAsDecisions).toBe(false);
+    });
+
+    test("T-P3: leaving toggle checked and submitting sends recordAsDecisions=true", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        const replyMsg = makeUserMessage(task.id, "A: PostgreSQL");
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        let capturedBody: { recordAsDecisions?: boolean } | null = null;
+        api.handle("tasks.submitDecisions", (body) => {
+            capturedBody = body as typeof capturedBody;
+            return { message: replyMsg, executionId: 9999 };
+        });
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).click();
+        await page.locator(".interview__submit").click();
+
+        await expect.poll(() => capturedBody).toBeTruthy();
+        expect(capturedBody!.recordAsDecisions).toBe(true);
+    });
+
+    test("T-Q3: toggle is visible regardless of question type", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [freetextQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".interview__record-toggle")).toBeVisible();
+    });
+});
+
+// ─── T-Q: Multiselect "Other" textarea visibility ───────────────────────────
+
+test.describe("T-Q — multiselect Other textarea", () => {
+    test("T-Q1: clicking Other checkbox directly shows Other textarea and enables submit when filled", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [nonExclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const submit = page.locator(".interview__submit");
+        await expect(submit).toBeDisabled();
+
+        // Click the "Other" checkbox directly (not the row) — @click.stop prevents focus change
+        await page.locator(".interview__option").filter({ hasText: "Other" }).locator(".interview__checkbox").click();
+
+        // The Other textarea should be visible even though the row wasn't clicked
+        const otherTextarea = page.locator(".interview__textarea--other");
+        await expect(otherTextarea).toBeVisible();
+        await expect(submit).toBeDisabled();
+
+        // Fill the Other textarea → submit becomes enabled
+        await otherTextarea.fill("Custom feature");
+        await expect(submit).toBeEnabled();
+    });
+
+    test("T-Q2: Other checked but text empty keeps submit disabled", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [nonExclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const submit = page.locator(".interview__submit");
+
+        await page.locator(".interview__option").filter({ hasText: "Other" }).locator(".interview__checkbox").click();
+
+        const otherTextarea = page.locator(".interview__textarea--other");
+        await expect(otherTextarea).toBeVisible();
+
+        // Empty text — submit stays disabled
+        await expect(submit).toBeDisabled();
+    });
+});

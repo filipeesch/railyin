@@ -1,7 +1,4 @@
-## Purpose
-Defines the dedicated RPC endpoints for submitting decision_request answers, the shared `buildDecisionSubmission` helper, and the removal of the legacy `decisionBatch` path from `sendMessage`.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: tasks.submitDecisions and chatSessions.submitDecisions RPC methods handle decision submission
 The system SHALL expose `tasks.submitDecisions({ taskId: number; answers: DecisionAnswer[]; generalNotes?: string; recordAsDecisions?: boolean })` and `chatSessions.submitDecisions({ sessionId: number; answers: DecisionAnswer[]; generalNotes?: string; recordAsDecisions?: boolean })` RPC methods. Both SHALL use a shared `buildDecisionSubmission(answers, generalNotes?, recordAsDecisions = true)` helper from `src/bun/conversation/decision-submission.ts` that returns `{ userContent: string; engineContent: string }`. `userContent` SHALL contain the formatted Q&A text visible to the user. `engineContent` SHALL contain `userContent` plus a hidden plain-text instruction. When `recordAsDecisions` is `true`, the instruction directs the AI to: for each answer, (1) call `list_decisions()` to check if a record already exists for that question, (2) if found call `update_decision(id, newAnswer, reason)` with a brief reason (e.g. "user re-answered via decision_request"), (3) if not found call `record_decision(question, answer, weight, notes?)`. The instruction SHALL use NEVER language to prohibit creating duplicate records. When `recordAsDecisions` is `false`, the engineContent SHALL instead include an instruction telling the model these are questions (not decisions) and to NOT call `record_decision` or `update_decision`. Both methods SHALL route to the existing orchestrator execute methods (`executeHumanTurn` for tasks, `executeChatTurn` for chat sessions) using `engineContent` as the engine-side content.
@@ -35,21 +32,3 @@ The system SHALL expose `tasks.submitDecisions({ taskId: number; answers: Decisi
 #### Scenario: tasks.submitDecisions passes recordAsDecisions to buildDecisionSubmission
 - **WHEN** `tasks.submitDecisions({ taskId: 1, answers: [...], recordAsDecisions: false })` is called
 - **THEN** `buildDecisionSubmission` is invoked with `recordAsDecisions = false`
-
-### Requirement: DecisionAnswer type is defined in rpc-types.ts
-The system SHALL define `DecisionAnswer` in `src/shared/rpc-types.ts` with fields `question: string`, `answer: string`, `weight: string`, and `notes?: string | null`. The `DecisionBatch`-related parameters SHALL be removed from `tasks.sendMessage` and `chatSessions.sendMessage` params.
-
-#### Scenario: sendMessage no longer accepts decisionBatch
-- **WHEN** `tasks.sendMessage` or `chatSessions.sendMessage` is called
-- **THEN** neither method accepts or processes a `decisionBatch` parameter
-
-#### Scenario: DecisionAnswer is usable from frontend
-- **WHEN** `MessageBubble.vue` imports `DecisionAnswer` from `@shared/rpc-types`
-- **THEN** the type compiles with the expected fields
-
-### Requirement: MessageBubble.vue calls submitDecisions for decision_request_prompt responses
-`MessageBubble.vue`'s `onInterviewSubmit` handler SHALL call `taskStore.submitDecisions` or `chatStore.submitDecisions` instead of the `sendMessage` variants. It SHALL pass the structured answer array directly without constructing `engineContent` or `decisionBatch` in the component.
-
-#### Scenario: Decision submission does not construct engineContent in Vue
-- **WHEN** `onInterviewSubmit` fires
-- **THEN** no `engineContent` or `engineText` is constructed in the Vue component for the decision path; the store method receives only `{ taskId/sessionId, answers }`
