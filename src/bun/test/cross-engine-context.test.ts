@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistryWith } from "./helpers.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { appendMessage } from "../conversation/messages.ts";
-import type { ExecutionEngine, EngineModelInfo } from "../engine/types.ts";
+import type { ExecutionEngine, EngineModelInfo, EngineType } from "../engine/types.ts";
 
 let db: Database;
 let cleanup: (() => void) | undefined;
@@ -20,6 +20,7 @@ function makeModelInfo(contextWindow?: number): EngineModelInfo {
 
 function makeSourceEngine(overrides: Partial<ExecutionEngine> = {}): ExecutionEngine {
   return {
+    type: "copilot" as EngineType,
     async *execute() { yield { type: "done" as const }; },
     async resume() {},
     cancel() {},
@@ -47,14 +48,14 @@ describe("CrossEngineContextInjector", () => {
   it("CEC-1: same engine both turns → no injection (undefined)", async () => {
     seedConversation("claude");
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
     expect(historyBlock).toBeUndefined();
   });
 
   it("CEC-2: null last_engine_type (first turn) → no injection", async () => {
     seedConversation(null);
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
     expect(historyBlock).toBeUndefined();
   });
 
@@ -64,7 +65,7 @@ describe("CrossEngineContextInjector", () => {
     appendMessage(db, taskId, conversationId, "assistant", null, "Copilot response here");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).toContain("## Context from previous conversation (engine switch)");
@@ -79,7 +80,7 @@ describe("CrossEngineContextInjector", () => {
     appendMessage(db, taskId, conversationId, "user", "user", "New message after compaction");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).toContain("New message after compaction");
@@ -97,7 +98,7 @@ describe("CrossEngineContextInjector", () => {
     const registry = makeTestRegistryWith(new Map([["copilot", source]]));
     const injector = new CrossEngineContextInjector(db, registry);
     const { historyBlock } = await injector.prepareSwitch(
-      conversationId, "claude", makeModelInfo(undefined), "/tmp", "test-workspace"
+      conversationId, "claude", makeModelInfo(undefined), "/tmp", "test-workspace", "claude"
     );
 
     expect(compactFn).not.toHaveBeenCalled();
@@ -114,7 +115,7 @@ describe("CrossEngineContextInjector", () => {
     // 200_000 token context window — "small message" is far below 75%
     const injector = new CrossEngineContextInjector(db, registry);
     const { historyBlock } = await injector.prepareSwitch(
-      conversationId, "claude", makeModelInfo(200_000), "/tmp", "test-workspace"
+      conversationId, "claude", makeModelInfo(200_000), "/tmp", "test-workspace", "claude"
     );
 
     expect(compactFn).not.toHaveBeenCalled();
@@ -135,7 +136,7 @@ describe("CrossEngineContextInjector", () => {
     // 1000 token window → 20 * (500+500) chars ≈ 5000 tokens >> 75%
     const injector = new CrossEngineContextInjector(db, registry);
     await injector.prepareSwitch(
-      conversationId, "claude", makeModelInfo(1_000), "/tmp", "test-workspace"
+      conversationId, "claude", makeModelInfo(1_000), "/tmp", "test-workspace", "claude"
     );
 
     expect(compactFn).toHaveBeenCalledWith(null, conversationId, "/tmp", "test-workspace");
@@ -153,7 +154,7 @@ describe("CrossEngineContextInjector", () => {
     const injector = new CrossEngineContextInjector(db, registry);
     // Should not throw
     const { historyBlock } = await injector.prepareSwitch(
-      conversationId, "claude", makeModelInfo(1_000), "/tmp", "test-workspace"
+      conversationId, "claude", makeModelInfo(1_000), "/tmp", "test-workspace", "claude"
     );
 
     expect(historyBlock).toBeDefined();
@@ -168,7 +169,7 @@ describe("CrossEngineContextInjector", () => {
     appendMessage(db, taskId, conversationId, "assistant", null, "Recent answer");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).toContain("Recent question");
@@ -186,7 +187,7 @@ describe("CrossEngineContextInjector", () => {
     appendMessage(db, taskId, conversationId, "assistant", null, "Assistant reply");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).not.toContain('{"tool":"run_command"}');
@@ -214,7 +215,7 @@ describe("CrossEngineContextInjector", () => {
     appendMessage(db, taskId, conversationId, "assistant", null, "Pi assistant response");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).toContain("<ASSISTANT>");
@@ -227,7 +228,7 @@ describe("CrossEngineContextInjector", () => {
     appendMessage(db, taskId, conversationId, "assistant", null, "Post-compaction Pi turn");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).toContain("<SUMMARY>");
@@ -241,7 +242,7 @@ describe("CrossEngineContextInjector", () => {
     const msgId = appendMessage(db, taskId, conversationId, "user", "user", "current user question");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", msgId);
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude", msgId);
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).toContain("Copilot prior response");
@@ -254,7 +255,7 @@ describe("CrossEngineContextInjector", () => {
 
     const registry = makeTestRegistryWith(new Map());
     const injector = new CrossEngineContextInjector(db, registry);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", makeModelInfo(1_000), "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", makeModelInfo(1_000), "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
   });
@@ -268,7 +269,7 @@ describe("CrossEngineContextInjector", () => {
     appendMessage(db, taskId, conversationId, "assistant", null, "Engine B answer");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).toContain("Compaction between engines");
@@ -283,10 +284,50 @@ describe("CrossEngineContextInjector", () => {
     appendMessage(db, taskId, conversationId, "compaction_summary", null, "Just the summary, no more messages");
 
     const injector = new CrossEngineContextInjector(db);
-    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace");
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
 
     expect(historyBlock).toBeDefined();
     expect(historyBlock!).toContain("<SUMMARY>");
     expect(historyBlock!).toContain("Just the summary, no more messages");
+  });
+
+  // ─── New: same-type vs cross-type engine switches (decision #1879/#1881) ───
+
+  it("CEC-21: same engine type (different engine id) → no history block injected (pi→pi)", async () => {
+    seedConversation("pi-local");
+    appendMessage(db, taskId, conversationId, "user", "user", "Hello from pi-local");
+    const source = makeSourceEngine({ type: "pi" as EngineType });
+    const registry = makeTestRegistryWith(new Map([["pi-local", source]]));
+    const injector = new CrossEngineContextInjector(db, registry);
+
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "pi-deepseek", undefined, "/tmp", "test-workspace", "pi");
+    expect(historyBlock).toBeUndefined();
+  });
+
+  it("CEC-22: same engine type skips pre-switch compact() even when context >75%", async () => {
+    seedConversation("pi-local");
+    for (let i = 0; i < 20; i++) {
+      appendMessage(db, taskId, conversationId, "user", "user", "A".repeat(500));
+    }
+    const compactFn = vi.fn().mockResolvedValue(undefined);
+    const source = makeSourceEngine({ type: "pi" as EngineType, compact: compactFn } as any);
+    const registry = makeTestRegistryWith(new Map([["pi-local", source]]));
+    const injector = new CrossEngineContextInjector(db, registry);
+
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "pi-deepseek", makeModelInfo(1_000), "/tmp", "test-workspace", "pi");
+    expect(historyBlock).toBeUndefined();
+    expect(compactFn).not.toHaveBeenCalled();
+  });
+
+  it("CEC-23: different engine type still injects historyBlock and compacts when >75% (pi→claude)", async () => {
+    seedConversation("pi-local");
+    appendMessage(db, taskId, conversationId, "user", "user", "Pi content");
+    const compactFn = vi.fn().mockResolvedValue(undefined);
+    const source = makeSourceEngine({ type: "pi" as EngineType, compact: compactFn } as any);
+    const registry = makeTestRegistryWith(new Map([["pi-local", source]]));
+    const injector = new CrossEngineContextInjector(db, registry);
+
+    const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", makeModelInfo(1_000), "/tmp", "test-workspace", "claude");
+    expect(historyBlock).toBeDefined();
   });
 });

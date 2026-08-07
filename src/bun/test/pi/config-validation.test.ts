@@ -139,4 +139,34 @@ describe("validatePiEngineConfig", () => {
     };
     expect(() => validatePiEngineConfig(config)).not.toThrow();
   });
+
+  test("CV-17: legacy interleaved key rejected with renaming guidance", () => {
+    const config = {
+      type: "pi",
+      models: {
+        "deepseek-chat": { interleaved: "reasoning_content" },
+      },
+    };
+    expect(() => validatePiEngineConfig(config as PiEngineConfig)).toThrow(/thinkingFormat/);
+  });
+
+  test("CV-18: invalid thinkingFormat rejected", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: {
+        "deepseek-chat": { thinkingFormat: "not-a-format" as never },
+      },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow(/thinkingFormat/);
+  });
+
+  test("CV-19: valid thinkingFormat passes", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      models: {
+        "deepseek-chat": { thinkingFormat: "deepseek" },
+      },
+    };
+    expect(() => validatePiEngineConfig(config)).not.toThrow();
+  });
 });

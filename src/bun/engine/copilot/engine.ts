@@ -66,6 +66,7 @@ const MEDIA_TYPE_EXT: Record<string, string> = {
 };
 
 export class CopilotEngine implements ExecutionEngine {
+  readonly type = "copilot";
   private readonly sdkAdapter: CopilotSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
   private readonly dialect: CopilotDialect;

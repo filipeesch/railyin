@@ -3,6 +3,7 @@ import {
   resolvePiModelConfig,
   derivePiModelSettings,
   derivePiModelAxes,
+  canonicalThinkingLevel,
 } from "../../engine/pi/model-config.ts";
 import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
 
@@ -142,5 +143,32 @@ describe("derivePiModelAxes", () => {
     const cfg = makeConfig({ "lmstudio/qwen3-8b": {} });
     const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
     expect(derivePiModelAxes(m)).toEqual([]);
+  });
+});
+
+describe("canonicalThinkingLevel", () => {
+  test("MC-CANON-1: none maps to off", () => {
+    expect(canonicalThinkingLevel({ reasoningEffort: "none" })).toBe("off");
+    expect(canonicalThinkingLevel({ reasoning_effort: "none" })).toBe("off");
+  });
+
+  test("MC-CANON-2: valid canonical levels pass through", () => {
+    for (const level of ["minimal", "low", "medium", "high", "xhigh"] as const) {
+      expect(canonicalThinkingLevel({ reasoningEffort: level })).toBe(level);
+    }
+  });
+
+  test("MC-CANON-3: no effort, no knob → off", () => {
+    expect(canonicalThinkingLevel({})).toBe("off");
+    expect(canonicalThinkingLevel(undefined)).toBe("off");
+  });
+
+  test("MC-CANON-4: invalid effort falls back to off", () => {
+    expect(canonicalThinkingLevel({ reasoningEffort: "max" } as Record<string, unknown>)).toBe("off");
+  });
+
+  test("MC-CANON-5: provider-specific knob without effort → high (reasoning enabled)", () => {
+    expect(canonicalThinkingLevel({ enable_thinking: true })).toBe("high");
+    expect(canonicalThinkingLevel({ chat_template_kwargs: { enable_thinking: true } })).toBe("high");
   });
 });

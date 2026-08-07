@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Per-model config mirrors opencode's `models.<id>` shape
-The Pi engine config `models` map SHALL accept entries keyed by bare model id or `provider/model`, each carrying `name`, `reasoning`, `tool_call`, `interleaved`, `limit{context,output}`, `options` (default request-body params), `variants` (named bundles of `options`, each may set `disabled: true` to hide one), `sampling_presets`, `default_sampling_preset`, and optional `axes` presentation overrides. Config validation SHALL reject unknown keys and invalid combinations.
+The Pi engine config `models` map SHALL accept entries keyed by bare model id or `provider/model`, each carrying `name`, `reasoning`, `tool_call`, `thinkingFormat` (renamed from the legacy `interleaved`), `limit{context,output}`, `options` (default request-body params), `variants` (named bundles of `options`, each may set `disabled: true` to hide one), `sampling_presets`, `default_sampling_preset`, and optional `axes` presentation overrides. Config validation SHALL reject unknown keys and invalid combinations (including a legacy `interleaved` key).
 
 #### Scenario: Config with a single model is parsed
 - **WHEN** `engines.yaml` contains a Pi engine entry with `models: { "deepseek-v4-flash": { name, reasoning: true, options: { reasoning_effort: high }, limit: { context: 524288, output: 65536 } } }`

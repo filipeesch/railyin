@@ -16,6 +16,7 @@ import type { ShellApprovalScope } from "../../db/repositories/shell-approval-re
 
 
 export class ClaudeEngine implements ExecutionEngine {
+  readonly type = "claude";
   private readonly defaultModel: string | undefined;
   private readonly sdkAdapter: ClaudeSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;

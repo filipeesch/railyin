@@ -208,6 +208,7 @@ export class HumanTurnExecutor {
       targetModelInfo,
       workingDirectory,
       workspaceKey,
+      engine.type,
       msgId,
     );
     const { decisionsBlock } = this.decisionInjector.prepare(conversationId);

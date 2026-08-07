@@ -24,6 +24,10 @@ let configCleanup: (() => void) | undefined;
 // ─── Test doubles ─────────────────────────────────────────────────────────────
 
 class PassThroughEngine implements ExecutionEngine {
+  readonly type: "scripted" | "copilot" | "claude" | "pi";
+  constructor(type: "scripted" | "copilot" | "claude" | "pi" = "scripted") {
+    this.type = type;
+  }
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "done" };
   }
@@ -445,7 +449,8 @@ describe("CE-15..17: cross-engine context injection", () => {
     appendMessage(db, null, conversationId, "assistant", null, "Pi assistant response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
-      ["pi", new PassThroughEngine()],
+      ["pi", new PassThroughEngine("pi")],
+      ["claude", new PassThroughEngine("claude")],
     ])));
     const { executor, streamProcessor } = makeExecutor({ crossEngineInjector: injector });
 
@@ -465,7 +470,8 @@ describe("CE-15..17: cross-engine context injection", () => {
     appendMessage(db, null, conversationId, "assistant", null, "Pi post-compaction response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
-      ["pi", new PassThroughEngine()],
+      ["pi", new PassThroughEngine("pi")],
+      ["claude", new PassThroughEngine("claude")],
     ])));
     const { executor, streamProcessor } = makeExecutor({ crossEngineInjector: injector });
 
@@ -485,7 +491,8 @@ describe("CE-15..17: cross-engine context injection", () => {
     appendMessage(db, null, conversationId, "assistant", null, "Copilot prior response");
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
-      ["copilot", new PassThroughEngine()],
+      ["copilot", new PassThroughEngine("copilot")],
+      ["claude", new PassThroughEngine("claude")],
     ])));
     const { executor, streamProcessor } = makeExecutor({ crossEngineInjector: injector });
 
@@ -496,6 +503,25 @@ describe("CE-15..17: cross-engine context injection", () => {
       ? prompt.slice(prompt.indexOf("<message_history>"), prompt.indexOf("</message_history>"))
       : "";
     expect(historySection).not.toContain("current user question");
+  });
+
+  it("CE-18: same engine type (pi→pi) → no <message_history> injected", async () => {
+    const { sessionId, conversationId } = seedChatSession(db, {
+      model: "pi/deepseek-chat",
+      lastEngineType: "pi-local",
+    });
+    appendMessage(db, null, conversationId, "assistant", null, "Pi-local assistant response");
+
+    const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
+      ["pi-local", new PassThroughEngine("pi")],
+      ["pi-deepseek", new PassThroughEngine("pi")],
+    ])));
+    const { executor, streamProcessor } = makeExecutor({ crossEngineInjector: injector });
+
+    await executor.execute(sessionId, conversationId, "question", "pi/deepseek-chat");
+
+    const prompt = streamProcessor.lastRun?.params.prompt ?? "";
+    expect(prompt).not.toContain("<message_history>");
   });
 });
 

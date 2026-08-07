@@ -4,7 +4,9 @@ Defines how the system detects engine switches mid-conversation and injects DB-b
 ## Requirements
 
 ### Requirement: CrossEngineContextInjector detects engine switches and injects DB history
-The system SHALL provide a `CrossEngineContextInjector` in `src/bun/conversation/cross-engine-context.ts`. The constructor SHALL accept a `Database` and an `EngineRegistry`. Before each execution, it SHALL compare `conversations.last_engine_type` with the target `QualifiedModelId.engineId`. If different and non-null, it SHALL fetch conversation messages from the last `compaction_summary` DB anchor (inclusive — the `compaction_summary` row itself SHALL be included in the fetched set) and return them as a `<message_history>` XML block prepended to the first user message of the new session. The system prompt SHALL NOT be modified, preserving its cacheability with providers that support prompt caching.
+The system SHALL provide a `CrossEngineContextInjector` in `src/bun/conversation/cross-engine-context.ts`. The constructor SHALL accept a `Database` and an `EngineRegistry`. Before each execution, it SHALL compare `conversations.last_engine_type` with the target engine. If different and non-null, and the source and target engines do NOT share the same engine `type`, it SHALL fetch conversation messages from the last `compaction_summary` DB anchor (inclusive — the `compaction_summary` row itself SHALL be included in the fetched set) and return them as a `<message_history>` XML block prepended to the first user message of the new session. The system prompt SHALL NOT be modified, preserving its cacheability with providers that support prompt caching.
+
+When `conversations.last_engine_type` differs from the target engine id but the source engine (resolved from `last_engine_type` via `EngineRegistry`) has the SAME `type` as the target engine, `prepareSwitch()` SHALL return `{ historyBlock: undefined }` — same-type engines share the same per-conversation session storage, so no context block is injected.
 
 The `prepareSwitch()` method signature SHALL be:
 ```
@@ -14,22 +16,27 @@ prepareSwitch(
   targetModelInfo: EngineModelInfo | undefined,
   workingDirectory: string,
   workspaceKey: string,
+  targetEngineType: EngineType,
   excludeBeforeMsgId?: number,
 ): Promise<PrepareResult>
 ```
-The `sourceEngine` parameter is removed; the injector resolves the source engine internally from `last_engine_type` via `EngineRegistry`. The optional `excludeBeforeMsgId` parameter, when provided, excludes messages with `id >= excludeBeforeMsgId` from the fetched history (preventing the in-flight user message from appearing in both the history block and the main prompt).
+The `sourceEngine` parameter is removed; the injector resolves the source engine internally from `last_engine_type` via `EngineRegistry`. The target engine's `type` is passed by the caller. The optional `excludeBeforeMsgId` parameter, when provided, excludes messages with `id >= excludeBeforeMsgId` from the fetched history (preventing the in-flight user message from appearing in both the history block and the main prompt).
 
 #### Scenario: Same engine — no injection
 - **WHEN** `last_engine_type` equals the target engine ID
 - **THEN** `prepareSwitch()` returns `{ historyBlock: undefined }` and no context block is added
 
+#### Scenario: Same engine type (different engine id) — no injection
+- **WHEN** `last_engine_type` is `"pi-local"` and the target engine is `"pi-deepseek"` (both are engine `type: pi`, sharing per-conversation session storage)
+- **THEN** `prepareSwitch()` returns `{ historyBlock: undefined }` and no context block is added
+
+#### Scenario: Different engine type triggers context injection
+- **WHEN** `last_engine_type` is `"pi"` (type `pi`) and target engine is `"copilot"` (type `copilot`)
+- **THEN** messages since (and including) the last `compaction_summary` anchor are formatted and returned as a `{ historyBlock: string }` result
+
 #### Scenario: First execution — no injection
 - **WHEN** `last_engine_type` is `null` (conversation never executed)
 - **THEN** `prepareSwitch()` returns `{ historyBlock: undefined }`
-
-#### Scenario: Engine switch triggers context injection
-- **WHEN** `last_engine_type` is `"pi"` and target engine is `"copilot"`
-- **THEN** messages since (and including) the last `compaction_summary` anchor are formatted and returned as a `{ historyBlock: string }` result
 
 #### Scenario: compaction_summary anchor row included in fetched messages
 - **WHEN** a `compaction_summary` message exists in the DB (e.g. from Pi background compaction)
@@ -46,13 +53,19 @@ The `sourceEngine` parameter is removed; the injector resolves the source engine
 ### Requirement: Pre-switch compaction when token usage exceeds threshold
 Before injecting context, the injector SHALL estimate token usage of the messages-to-inject against the target model's `contextWindow`. If usage exceeds 75%, the injector SHALL look up the source engine from `EngineRegistry` using `last_engine_type`. If that engine implements `compact?()`, it SHALL trigger compaction on the source engine first, then re-fetch messages from the new anchor. If the source engine has no `compact()` (e.g. Claude), it SHALL proceed without compaction and log a warning.
 
+When the source and target engines share the same engine `type` (and thus the transfer is skipped per the detection requirement above), the injector SHALL skip this pre-switch compaction entirely — the shared per-conversation session is preserved and the fresh session replays it, auto-compacting at its own thresholds.
+
 #### Scenario: Under threshold — no compaction
 - **WHEN** estimated tokens are below 75% of target model's contextWindow
 - **THEN** `compact()` is NOT called and injection proceeds immediately
 
 #### Scenario: Over threshold with compact-capable source engine
-- **WHEN** estimated tokens exceed 75% of target model's contextWindow AND source engine has `compact()`
+- **WHEN** estimated tokens exceed 75% of target model's contextWindow AND source engine has `compact()` AND engine types differ
 - **THEN** `compact()` is awaited, messages are re-fetched from the new anchor, and injection proceeds with the compacted history
+
+#### Scenario: Same engine type skips pre-switch compaction
+- **WHEN** the source and target engines share the same engine `type` (transfer skipped), even if context exceeds 75%
+- **THEN** no pre-switch `compact()` is called and no `<message_history>` block is injected
 
 #### Scenario: Over threshold with Claude as source (no compact)
 - **WHEN** estimated tokens exceed 75% AND source engine has no `compact()` method
@@ -177,3 +190,10 @@ The `CrossEngineContextInjector` SHALL internally resolve the source engine usin
 #### Scenario: Source engine null when no prior engine recorded
 - **WHEN** `conversations.last_engine_type` is `null`
 - **THEN** the injector finds no source engine, `prepareSwitch()` returns `{ historyBlock: undefined }`, and no compaction is attempted
+
+### Requirement: ExecutionEngine exposes an engine type
+The `ExecutionEngine` interface SHALL expose a `type` field identifying the engine family (`pi`, `claude`, `cursor`, `copilot`, `opencode`, `scripted`). Each engine implementation SHALL return its family type. The `CrossEngineContextInjector` SHALL use this `type` to detect when two engine entries share the same per-conversation session storage.
+
+#### Scenario: Engine exposes its type
+- **WHEN** `engine.type` is read on a `PiEngine` instance
+- **THEN** it returns `"pi"`

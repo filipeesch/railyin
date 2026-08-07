@@ -26,6 +26,7 @@ let wsRepo: WorkspaceRepository;
 let boardTools: BoardToolExecutor;
 
 class TestEngine implements ExecutionEngine {
+  readonly type = "scripted";
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "done" };
   }

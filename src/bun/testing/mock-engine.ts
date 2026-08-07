@@ -12,6 +12,7 @@ function delay(ms: number): Promise<void> {
 }
 
 export class MockExecutionEngine implements ExecutionEngine {
+  readonly type = "copilot";
   private readonly cancelled = new Set<number>();
 
   async *execute(params: ExecutionParams): AsyncIterable<EngineEvent> {

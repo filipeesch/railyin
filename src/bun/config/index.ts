@@ -191,8 +191,8 @@ export interface PiModelConfig {
   reasoning?: boolean;
   /** Whether the model supports tool calling. */
   tool_call?: boolean;
-  /** Reasoning field name used by the provider, or false when none. */
-  interleaved?: "reasoning" | "reasoning_content" | "reasoning_text" | boolean;
+  /** How the provider formats reasoning requests — maps to the Pi SDK `compat.thinkingFormat`. When omitted, the SDK auto-detects from the provider/baseUrl. */
+  thinkingFormat?: "openai" | "openrouter" | "deepseek" | "together" | "zai" | "qwen" | "chat-template" | "qwen-chat-template" | "string-thinking" | "ant-ling";
   /** Token limits for this model — maps to the Pi SDK model.contextWindow/maxTokens. */
   limit?: { context?: number; output?: number };
   /** Default per-request body params, deep-merged into every request. */
