@@ -282,7 +282,16 @@ export function estimateContextWarning(db: Database, taskId: number, contextWind
   return null;
 }
 
-export async function resolveModelContextWindow(_qualifiedModel: string): Promise<number> {
+export async function resolveModelContextWindow(qualifiedModel: string): Promise<number> {
+  // Resolve the model's real context window from its id where possible (e.g.
+  // Cursor models carry a context-qualified id / known catalog entry); fall
+  // back to a conservative default only when genuinely unknown. Without this,
+  // every model would show a misleading hardcoded 128k.
+  const { resolveModelContextWindow: resolveCursorWindow } = await import("../engine/cursor/model-context.ts");
+  if (qualifiedModel) {
+    const window = resolveCursorWindow(undefined, qualifiedModel);
+    if (window != null) return window;
+  }
   return 128_000;
 }
 

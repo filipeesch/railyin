@@ -503,4 +503,44 @@ describe("taskStore", () => {
     expect(store.taskIndex[20].worktreePath).toBe("/wt/1");
     expect(store.taskIndex[20].worktreeStatus).toBe("ready");
   });
+
+  it("T-SC-5: submitDecisions passes recordAsDecisions=false to API", async () => {
+    const store = useTaskStore();
+    const task = makeTask({ id: 1, boardId: 1, conversationId: 1 });
+    apiMock.mockResolvedValueOnce([task]);
+    await store.loadTasks(1);
+
+    apiMock.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await store.selectTask(1);
+
+    const userMessage = { id: 78, taskId: 1, conversationId: 1, type: "user", role: "user", content: "ans", metadata: null, createdAt: new Date().toISOString() };
+    apiMock.mockResolvedValueOnce({ message: userMessage, executionId: 1 });
+
+    await store.submitDecisions(1, [], undefined, false);
+
+    const submitCalls = apiMock.mock.calls.filter((c) => c[0] === "tasks.submitDecisions");
+    const call = submitCalls[submitCalls.length - 1];
+    expect(call).toBeDefined();
+    expect(call[1]).toEqual(expect.objectContaining({ recordAsDecisions: false }));
+  });
+
+  it("T-SC-6: submitDecisions defaults recordAsDecisions to true", async () => {
+    const store = useTaskStore();
+    const task = makeTask({ id: 1, boardId: 1, conversationId: 1 });
+    apiMock.mockResolvedValueOnce([task]);
+    await store.loadTasks(1);
+
+    apiMock.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await store.selectTask(1);
+
+    const userMessage = { id: 79, taskId: 1, conversationId: 1, type: "user", role: "user", content: "ans", metadata: null, createdAt: new Date().toISOString() };
+    apiMock.mockResolvedValueOnce({ message: userMessage, executionId: 1 });
+
+    await store.submitDecisions(1, []);
+
+    const submitCalls = apiMock.mock.calls.filter((c) => c[0] === "tasks.submitDecisions");
+    const call = submitCalls[submitCalls.length - 1];
+    expect(call).toBeDefined();
+    expect(call[1]).toEqual(expect.objectContaining({ recordAsDecisions: true }));
+  });
 });

@@ -405,3 +405,37 @@ describe("chatStore — C12: decision_request_prompt multiple appearances", () =
     expect(store.sessions[0].status).toBe("waiting_user");
   });
 });
+
+// ─── C-14/C-15: submitDecisions recordAsDecisions threading ───────────────────
+
+describe("chatStore — submitDecisions recordAsDecisions", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("C-14: submitDecisions passes recordAsDecisions=false to API", async () => {
+    const store = useChatStore();
+    store.sessions.push(makeChatSession({ id: 1, conversationId: 10 }));
+    store.activeChatSessionId = 1;
+
+    await store.submitDecisions(1, [], undefined, false);
+
+    const submitCalls = apiMock.mock.calls.filter((c) => c[0] === "chatSessions.submitDecisions");
+    const call = submitCalls[submitCalls.length - 1];
+    expect(call).toBeDefined();
+    expect(call[1]).toEqual(expect.objectContaining({ sessionId: 1, recordAsDecisions: false }));
+  });
+
+  it("C-15: submitDecisions defaults recordAsDecisions to true", async () => {
+    const store = useChatStore();
+    store.sessions.push(makeChatSession({ id: 1, conversationId: 10 }));
+    store.activeChatSessionId = 1;
+
+    await store.submitDecisions(1, []);
+
+    const submitCalls = apiMock.mock.calls.filter((c) => c[0] === "chatSessions.submitDecisions");
+    const call = submitCalls[submitCalls.length - 1];
+    expect(call).toBeDefined();
+    expect(call[1]).toEqual(expect.objectContaining({ sessionId: 1, recordAsDecisions: true }));
+  });
+});

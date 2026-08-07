@@ -68,8 +68,8 @@
         </div>
 
         <!-- Description panel or Other textarea -->
-        <div class="interview__desc-area" :class="{ 'interview__desc-area--other': focusedOption[qi] === '__other__' }">
-          <template v-if="focusedOption[qi] === '__other__'">
+        <div class="interview__desc-area" :class="{ 'interview__desc-area--other': isSelected(qi, q, '__other__') || focusedOption[qi] === '__other__' }">
+          <template v-if="isSelected(qi, q, '__other__') || focusedOption[qi] === '__other__'">
             <textarea
               v-model="otherValues[qi]"
               class="interview__textarea interview__textarea--other"
@@ -87,8 +87,8 @@
           </template>
         </div>
 
-        <!-- Notes (hidden when Other is focused) -->
-        <div v-if="focusedOption[qi] !== '__other__'" class="interview__notes">
+        <!-- Notes (hidden when Other is focused or selected) -->
+        <div v-if="focusedOption[qi] !== '__other__' && !isSelected(qi, q, '__other__')" class="interview__notes">
           <label class="interview__notes-label">Notes <span class="interview__notes-optional">(optional)</span></label>
           <textarea
             v-model="notesValues[qi]"
@@ -116,9 +116,15 @@
       />
     </div>
 
-    <button class="interview__submit" :disabled="!canSubmit" @click="submit">
-      Submit
-    </button>
+    <div class="interview__footer">
+      <label class="interview__record-toggle">
+        <input type="checkbox" v-model="recordAsDecisions" />
+        <span>Record as decisions</span>
+      </label>
+      <button class="interview__submit" :disabled="!canSubmit" @click="submit">
+        Submit
+      </button>
+    </div>
   </div>
 </template>
 
@@ -127,6 +133,13 @@ import { ref, computed, watch, nextTick } from "vue";
 import { Marked } from "marked";
 import mermaid from "mermaid";
 import type { DecisionRequestQuestion } from "@shared/rpc-types";
+import {
+  canSubmitDecisionRequest,
+  buildDecisionAnswers,
+  buildSubmissionText,
+  isOptionSelected as isOptionSelectedUtil,
+  type DecisionRequestState,
+} from "../utils/decisionRequest";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark" });
 
@@ -154,7 +167,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  submit: [payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string; notes?: string }>; generalNotes?: string }];
+  submit: [payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string; notes?: string }>; generalNotes?: string; recordAsDecisions?: boolean }];
 }>();
 
 const answered = computed(() => props.answeredText !== undefined);
@@ -177,6 +190,7 @@ const otherValues = ref<string[]>(props.questions.map(() => ""));
 const notesValues = ref<string[]>(props.questions.map(() => ""));
 const freetextValues = ref<string[]>(props.questions.map(() => ""));
 const generalNotes = ref("");
+const recordAsDecisions = ref(true);
 
 watch(
   () => props.questions,
@@ -188,6 +202,7 @@ watch(
     notesValues.value = newQuestions.map(() => "");
     freetextValues.value = newQuestions.map(() => "");
     generalNotes.value = "";
+    recordAsDecisions.value = true;
   },
 );
 
@@ -201,9 +216,18 @@ function descriptionFor(q: DecisionRequestQuestion, title: string): string {
   return q.options?.find((o) => o.title === title)?.description ?? "";
 }
 
+function formState(): DecisionRequestState {
+  return {
+    singleSelected: singleSelected.value,
+    multiSelected: multiSelected.value,
+    otherValues: otherValues.value,
+    freetextValues: freetextValues.value,
+    notesValues: notesValues.value,
+  };
+}
+
 function isSelected(qi: number, q: DecisionRequestQuestion, title: string): boolean {
-  if (q.type === "exclusive") return singleSelected.value[qi] === title;
-  return multiSelected.value[qi]?.includes(title) ?? false;
+  return isOptionSelectedUtil(q, title, formState(), qi);
 }
 
 function onRowClick(qi: number, q: DecisionRequestQuestion, title: string) {
@@ -224,73 +248,17 @@ function onCheckboxClick(qi: number, q: DecisionRequestQuestion, title: string) 
   }
 }
 
-const canSubmit = computed(() => {
-  return props.questions.every((q, qi) => {
-    if (q.type === "freetext") return (freetextValues.value[qi] ?? "").trim().length > 0;
-    if (q.type === "exclusive") {
-      const sel = singleSelected.value[qi];
-      if (!sel) return false;
-      if (sel === "__other__") return (otherValues.value[qi] ?? "").trim().length > 0;
-      return true;
-    }
-    // non_exclusive
-    const sel = multiSelected.value[qi] ?? [];
-    if (sel.length === 0) return false;
-    if (sel.includes("__other__")) return (otherValues.value[qi] ?? "").trim().length > 0;
-    return true;
-  });
-});
+const canSubmit = computed(() => canSubmitDecisionRequest(props.questions, formState()));
 
 function submit() {
   if (!canSubmit.value) return;
 
-  const parts: string[] = props.questions.map((q, qi) => {
-    let answer = "";
-    if (q.type === "freetext") {
-      answer = freetextValues.value[qi].trim();
-    } else if (q.type === "exclusive") {
-      const sel = singleSelected.value[qi];
-      answer = sel === "__other__" ? otherValues.value[qi].trim() : sel;
-    } else {
-      const sel = multiSelected.value[qi].map((v) =>
-        v === "__other__" ? otherValues.value[qi].trim() : v,
-      );
-      answer = sel.join(", ");
-    }
+  const state = formState();
+  const text = buildSubmissionText(props.questions, state, generalNotes.value);
+  const decisions = buildDecisionAnswers(props.questions, state);
+  const trimmedNotes = generalNotes.value.trim() || undefined;
 
-    const notes = q.type !== "freetext" && focusedOption.value[qi] !== "__other__"
-      ? (notesValues.value[qi] ?? "").trim()
-      : "";
-
-    let part = `Q: ${q.question}\nA: ${answer}`;
-    if (notes) part += `\nNotes: ${notes}`;
-    return part;
-  });
-
-  const decisions = props.questions.map((q, qi) => {
-    let answer = "";
-    if (q.type === "freetext") {
-      answer = freetextValues.value[qi].trim();
-    } else if (q.type === "exclusive") {
-      const sel = singleSelected.value[qi];
-      answer = sel === "__other__" ? otherValues.value[qi].trim() : sel;
-    } else {
-      const sel = multiSelected.value[qi].map((v) =>
-        v === "__other__" ? otherValues.value[qi].trim() : v,
-      );
-      answer = sel.join(", ");
-    }
-    const notes = q.type !== "freetext" && focusedOption.value[qi] !== "__other__"
-      ? (notesValues.value[qi] ?? "").trim() || undefined
-      : undefined;
-    return { question: q.question, answer, weight: q.weight ?? "medium", notes };
-  });
-
-  let text = parts.join("\n\n");
-  const trimmedNotes = generalNotes.value.trim();
-  if (trimmedNotes) text += `\n\n---\n\nGeneral notes: ${trimmedNotes}`;
-
-  emit("submit", { text, decisions, generalNotes: trimmedNotes || undefined });
+  emit("submit", { text, decisions, generalNotes: trimmedNotes, recordAsDecisions: recordAsDecisions.value });
 }
 </script>
 
@@ -519,6 +487,33 @@ function submit() {
   border-top: 1px solid var(--p-surface-200, #e2e8f0);
 }
 
+/* ── Footer / toggle ──────────────────────────────── */
+.interview__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--p-surface-200, #e2e8f0);
+}
+
+.interview__record-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--p-surface-600, #475569);
+  cursor: pointer;
+  user-select: none;
+}
+
+.interview__record-toggle input {
+  accent-color: var(--p-primary-color, #6366f1);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
 /* ── Submit ───────────────────────────────────────── */.interview__submit {
   align-self: flex-end;
   padding: 7px 20px;
@@ -590,5 +585,13 @@ html.dark-mode .interview__weight-badge--easy {
 
 html.dark-mode .interview__general-notes {
   border-top-color: var(--p-surface-600, #475569);
+}
+
+html.dark-mode .interview__footer {
+  border-top-color: var(--p-surface-600, #475569);
+}
+
+html.dark-mode .interview__record-toggle {
+  color: var(--p-surface-300, #cbd5e1);
 }
 </style>

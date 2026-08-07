@@ -61,4 +61,25 @@ describe("StreamEventEnricher", () => {
     const s = enricher.enrich("status_chunk");
     expect(s.blockId).toBe("100-status");
   });
+
+  test("committed reasoning reuses the streamed reasoning_chunk blockId", () => {
+    const chunk = enricher.enrich("reasoning_chunk");
+    const committed = enricher.enrich("reasoning");
+    expect(chunk.blockId).toBe("100-r1");
+    expect(committed.blockId).toBe("100-r1");
+  });
+
+  test("committed assistant reuses the streamed text_chunk blockId", () => {
+    const chunk = enricher.enrich("text_chunk");
+    const committed = enricher.enrich("assistant");
+    expect(chunk.blockId).toBe("100-t1");
+    expect(committed.blockId).toBe("100-t1");
+  });
+
+  test("tool_call resets the text block so committed assistant after it opens a new block", () => {
+    enricher.enrich("text_chunk");               // t1
+    enricher.enrich("tool_call", "call_abc");    // resets to null
+    const committed = enricher.enrich("assistant");
+    expect(committed.blockId).toBe("100-t2");
+  });
 });

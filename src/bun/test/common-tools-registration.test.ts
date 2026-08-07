@@ -136,7 +136,44 @@ describe("record_decision tool description enforcement", () => {
         const tool = COMMON_TOOL_DEFINITIONS.find(t => t.name === "record_decision");
         expect(tool!.description).toContain("update_decision");
     });
-});
+
+    it("CTR-D-6: record_decision description no longer mandates always-record after decision_request", () => {
+        const tool = COMMON_TOOL_DEFINITIONS.find(t => t.name === "record_decision");
+        expect(tool!.description).not.toContain("ALWAYS call this tool after every decision_request response");
+    });
+  });
+
+  describe("decision_request and note tool description checks", () => {
+    it("CTR-D-4: decision_request tool definition does not contain call record_decision mandate", () => {
+        const def = COMMON_TOOL_DEFINITIONS.find(t => t.name === "decision_request");
+        expect(def).toBeDefined();
+        expect(def!.description).not.toContain("call record_decision");
+        expect(def!.description).not.toContain("never skip this step");
+    });
+
+    it("CTR-D-5: decision_request tool definition still mentions weight, model_lean, answers_affect_followup", () => {
+        const def = COMMON_TOOL_DEFINITIONS.find(t => t.name === "decision_request");
+        expect(def!.description).toContain("weight");
+        expect(def!.description).toContain("model_lean");
+        expect(def!.description).toContain("answers_affect_followup");
+    });
+
+    it("CTR-D-7: create_note description contains EXPLICITLY asks", () => {
+        const tool = COMMON_TOOL_DEFINITIONS.find(t => t.name === "create_note");
+        expect(tool!.description).toContain("EXPLICITLY asks");
+    });
+
+    it("CTR-D-8: update_note description contains EXPLICITLY asks", () => {
+        const tool = COMMON_TOOL_DEFINITIONS.find(t => t.name === "update_note");
+        expect(tool!.description).toContain("EXPLICITLY asks");
+    });
+
+    it("CTR-D-9: create_note description still explains note scope and visibility", () => {
+        const tool = COMMON_TOOL_DEFINITIONS.find(t => t.name === "create_note");
+        expect(tool!.description).toContain("markdown note");
+        expect(tool!.description).toContain("Notes are visible");
+    });
+  });
 
 // ─── LSP tool registration (CR) ───────────────────────────────────────────────
 

@@ -987,6 +987,21 @@ describe("tasks.contextUsage — resolveContextWindow", () => {
     const result = await handlers["tasks.contextUsage"]({ taskId });
     expect(result.maxTokens).toBe(65_536);
   });
+
+  it("resolves a Cursor model's real window even with no orchestrator match (not 128k)", async () => {
+    const { taskId } = seedProjectAndTask(db, gitDir);
+    db.run("UPDATE conversations SET model = 'cursor/claude-sonnet-4-6' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
+
+    // Orchestrator returns a different model — the context-usage fallback must
+    // still resolve the Cursor window from the model id (200k) instead of 128k.
+    const orchestrator = makeMockOrchestrator([
+      { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
+    ]);
+    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
+
+    const result = await handlers["tasks.contextUsage"]({ taskId });
+    expect(result.maxTokens).toBe(200_000);
+  });
 });
 
 describe("models.listEnabled — Copilot Auto option", () => {
