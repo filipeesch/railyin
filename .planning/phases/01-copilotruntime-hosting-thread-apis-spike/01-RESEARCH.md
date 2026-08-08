@@ -373,19 +373,21 @@ await fetch(`http://127.0.0.1:PORT/api/copilotkit/agent/default/stop/t1`, { meth
 | A4 | `@copilotkit/vue@1.66.4` `useThreads` activation is gated on runtime-advertised capability flags — exact criteria not verified client-side this phase (D-10: not consumed) | State of the Art / D-08 | Phase 5 may need a capability-flag tweak; Phase 4 owns the thread contract anyway — no impact this phase |
 | A5 | Real-engine-independent claims (no API keys, no network) hold: ScriptedAgent + InMemoryAgentRunner need no external services | Environment Availability | If the runtime constructor eagerly initializes something network-bound — disproven by dist source; no network code found |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Does `GET /threads` + `GET /threads/events/:threadId` actually serve useful data for InMemoryAgentRunner in-process?**
+> All three open questions received planned dispositions in the phase plans; each is marked (RESOLVED) with its covering test.
+
+1. **Does `GET /threads` + `GET /threads/events/:threadId` actually serve useful data for InMemoryAgentRunner in-process?** — **(RESOLVED → covered by 01-02 Test 8:** the actual `/threads` + `/threads/events/:threadId` responses are recorded verbatim in the probe test output as D-08 evidence for the Phase 4 contract **)**
    - What we know: `handleListThreads` falls back to `runner.listThreads()` when `supportsLocalThreadEndpoints(runner)` is true; `listThreads()` returns `{id, name: null, agentId, organizationId: "", createdById: "", archived: false, createdAt, updatedAt}` sorted by `updatedAt` desc, **skipping threads with no historic runs** (verified in `in-memory.mjs`).
    - What's unclear: end-to-end behavior on the real server (empty list on fresh process; does events/:threadId stream?).
    - Recommendation: spike records the actual responses (D-08 evidence for the Phase 4 contract); no decision needed now.
 
-2. **Exact `server.timeout(req, 0)` semantics on bun 1.4.0 when the handler returns a `Response` built from a TransformStream.**
+2. **Exact `server.timeout(req, 0)` semantics on bun 1.4.0 when the handler returns a `Response` built from a TransformStream.** — **(RESOLVED → covered by 01-02 Test 4:** the HOST-02 >32s silence-survival test empirically proves the per-request override; fallback path documented if it fails **)**
    - What we know: Bun docs prescribe it for SSE (HOST-02); the runtime's SSE response is a standard `Response` (verified).
    - What's unclear: whether the override must be applied before handler invocation (we do it before delegating — Pitfall-free by construction).
    - Recommendation: HOST-02 test asserts stream survival across a >30s silence; if it fails, fallback = raise global `idleTimeout` and record in PROJECT.md (D-04 allows either, evidence wins).
 
-3. **Is `@copilotkit/vue@1.66.4` importable without React/other peer baggage?**
+3. **Is `@copilotkit/vue@1.66.4` importable without React/other peer baggage?** — **(RESOLVED → covered by 01-01 Task 2:** `bun add --exact` + `bun run build` + `bun run typecheck` install-time finding; D-10 keeps it unconsumed **)**
    - What we know: peer deps = `vue >= 3.3.0` only (verified via `npm view`); runtime deps include `katex`, `streamdown-vue`, `lucide-vue-next` (markdown-rendering deps, all Vue-native).
    - What's unclear: ESM/bundler quirks of the early-access SDK (D-10).
    - Recommendation: install-time finding only — `bun add` + typecheck; no consumption this phase.
@@ -425,7 +427,7 @@ await fetch(`http://127.0.0.1:PORT/api/copilotkit/agent/default/stop/t1`, { meth
 ### Phase Requirements → Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| HOST-01 | `GET /api/copilotkit/info` returns 200 JSON with `agents.default` + `mode: "sse"`; `POST .../agent/default/run` returns 200 `text/event-stream` with `RUN_STARTED` first frame; `.../stop/:threadId` returns `{stopped:true}` | integration (real server, `startServer()` fixture) | `bun test e2e/api/copilotkit/copilotkit.test.ts -x` | ❌ Wave 0 — new file |
+| HOST-01 | `GET /api/copilotkit/info` returns 200 JSON with `agents.default` + `mode: "sse"`; `POST .../agent/default/run` returns 200 `text/event-stream` with `RUN_STARTED` first frame; `.../stop/:threadId` returns `{stopped:true}` | integration (real server, `startServer()` fixture) | `bun test e2e/api/copilotkit/copilotkit.test.ts` | ❌ Wave 0 — new file |
 | HOST-01 | `POST .../run` with malformed body → 400 `{error:"Invalid request body", details}` | integration | same file | ❌ Wave 0 |
 | HOST-02 | Scripted silence >30s: SSE stream still alive after silence; events arrive after; stream closes with `RUN_FINISHED` | integration (real server; probe uses `server.timeout(req,0)` path) | same file | ❌ Wave 0 |
 | HOST-02 | Without the `server.timeout(req,0)` override, the stream dies at idleTimeout (negative control — documents the mitigation) | integration (optional; skip if slow) | same file | ❌ Wave 0 |
