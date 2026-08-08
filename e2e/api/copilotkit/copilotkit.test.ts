@@ -98,3 +98,79 @@ describe("CopilotRuntime mount (HOST-01)", () => {
         expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
     }, 10_000);
 });
+
+describe("CopilotRuntime expansion probes (HOST-02, D-06, T-1-04/05, D-08)", () => {
+    test("4: HOST-02 — stream survives a >30s agent silence (server.timeout(req,0) override)", async () => {
+        // silenceMs 32000 exceeds the global Bun idleTimeout of 30s. If the
+        // per-request override in src/bun/index.ts is missing, Bun kills this
+        // stream mid-silence and neither TEXT_MESSAGE_CONTENT nor RUN_FINISHED
+        // ever arrive. Accepted latency note: the >30s silence IS the HOST-02
+        // evidence, so this test inherently runs longer than the Nyquist
+        // guideline — the 60s per-test timeout is the planned accommodation.
+        const res = await postJson("/api/copilotkit/agent/default/run", runInput("t3", "r3", { script: "silence", silenceMs: 32000 }));
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe("text/event-stream");
+
+        const frames = parseSseFrames(await res.text());
+        expect(frames.some((f) => f.type === "TEXT_MESSAGE_CONTENT" && f.delta === "hello")).toBe(true);
+        expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
+    }, 60_000);
+
+    test("5: D-06 — connect on a never-run thread returns an empty SSE snapshot (zero frames)", async () => {
+        const res = await postJson("/api/copilotkit/agent/default/connect", runInput("never-run-1", "r-connect-1"));
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe("text/event-stream");
+        // Pitfall 6: InMemoryAgentRunner's ReplaySubject completes empty for a
+        // never-run thread — the verified contract, not a bug.
+        const frames = parseSseFrames(await res.text());
+        expect(frames).toHaveLength(0);
+    });
+
+    test("6: T-1-05 — malformed RunAgentInput returns 400 Invalid request body", async () => {
+        const res = await fetch(`${server.baseUrl}/api/copilotkit/agent/default/run`, {
+            method: "POST",
+            headers: { "content-type": "application/json", accept: "text/event-stream" },
+            body: "not-json{{{",
+        });
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body.error).toBe("Invalid request body");
+    });
+
+    test("7: T-1-04 — unknown copilotkit subpath returns the runtime's own 404, not the RPC router's", async () => {
+        const res = await fetch(`${server.baseUrl}/api/copilotkit/not-a-route`);
+        expect(res.status).toBe(404);
+        const body = (await res.json()) as Record<string, unknown>;
+        // The RPC router would answer "Unknown method: ..." — this proves the
+        // prefix mount owns /api/copilotkit/* (Pitfall 3).
+        expect(body.error).toBe("Not found");
+    });
+
+    test("8: D-08 — GET /threads lists the run thread; /threads/:threadId/events recorded as evidence", async () => {
+        // Order matters: test B ran on "t1" earlier in this file. The thread
+        // store is process-local (Pitfall 6) — same server, same process.
+        const res = await fetch(`${server.baseUrl}/api/copilotkit/threads`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { threads: { id: string }[]; nextCursor: string | null };
+        expect(Array.isArray(body.threads)).toBe(true);
+        expect(body.nextCursor).toBeNull();
+        expect(body.threads.some((t) => t.id === "t1")).toBe(true);
+
+        // Route-shape discovery (verified against fetch-router.mjs): 1.66.4
+        // matches `threads/<threadId>/events` (threadId at len-2, "events"
+        // LAST) — the research-assumed `/threads/events/:threadId` shape is a
+        // 404. Record the 404 as correction evidence, then assert the REAL
+        // route and log its body verbatim for the Phase 4 contract.
+        const assumed = await fetch(`${server.baseUrl}/api/copilotkit/threads/events/t1`);
+        const assumedBody = await assumed.text();
+        console.log(`[D-08 evidence] assumed GET /threads/events/t1 -> ${assumed.status} ${assumedBody.slice(0, 100)} (route is threads/:threadId/events)`);
+
+        const evRes = await fetch(`${server.baseUrl}/api/copilotkit/threads/t1/events`);
+        const evBody = await evRes.text();
+        console.log(`[D-08 evidence] GET /api/copilotkit/threads/t1/events -> ${evRes.status} ${evBody.slice(0, 200)}`);
+        expect(evRes.status).toBe(200);
+        const evParsed = JSON.parse(evBody) as { events: { type: string }[] };
+        expect(Array.isArray(evParsed.events)).toBe(true);
+        expect(evParsed.events[0].type).toBe("RUN_STARTED");
+    });
+});
