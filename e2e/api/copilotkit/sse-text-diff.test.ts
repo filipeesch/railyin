@@ -100,12 +100,18 @@ describe("SSE text diff vs the real server (D-07, Pattern 3)", () => {
         // Real side: raw SSE body captured in-test (no committed capture file
         // that could go stale). Fixture side: same scenario through the
         // fixture's body builder.
-        const realFrames = framesOf(await res.text());
-        const fixtureFrames = framesOf(buildQuickRunSseBody(requestInput));
+        const realBody = await res.text();
+        const fixtureBody = buildQuickRunSseBody(requestInput);
+        const realFrames = framesOf(realBody);
+        const fixtureFrames = framesOf(fixtureBody);
 
         // Byte-identical data: lines — catches framing drift (event:/id:
         // fields, key order, double newlines).
         expect(fixtureFrames).toEqual(realFrames);
+        // Full-text byte equality (strictly stronger than frame equality —
+        // also pins the trailing \n\n framing and separator counts).
+        expect(fixtureBody).toBe(realBody);
+        expect(realBody.endsWith("\n\n")).toBe(true);
 
         // Shared response headers.
         expect(res.headers.get("cache-control")).toBe(MOCK_AGUI_SSE_HEADERS["cache-control"]);
