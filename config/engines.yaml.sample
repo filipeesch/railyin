@@ -67,6 +67,10 @@ engines:
   #       base_url: http://localhost:1234/v1
   #       max_inflight: 2        # max concurrent requests (default: 8; use 1-2 for LM Studio)
   #       queue_timeout_ms: 60000  # queue wait timeout in ms (default: 60000)
+  #       timeout_ms: 600000    # per-request timeout in ms (default: 600000 = 10 min).
+  #                              # Local LLMs can take minutes to prefill a huge conversation,
+  #                              # so the SDK's 5-minute default can cause "524 status code"
+  #                              # (origin timeout) during compaction / summarization.
   #       # Note: for vLLM, max_inflight: 8 is a good default
   #       # Note: for Ollama, max_inflight: 4 is recommended
   #   harness:

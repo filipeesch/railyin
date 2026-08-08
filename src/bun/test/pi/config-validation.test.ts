@@ -169,4 +169,36 @@ describe("validatePiEngineConfig", () => {
     };
     expect(() => validatePiEngineConfig(config)).not.toThrow();
   });
+
+  test("CV-20: provider timeout_ms = 0 throws with message naming the field", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1", timeout_ms: 0 } },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow("timeout_ms");
+  });
+
+  test("CV-21: provider timeout_ms < 0 throws", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1", timeout_ms: -1 } },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow("timeout_ms");
+  });
+
+  test("CV-22: provider timeout_ms > 0 passes", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1", timeout_ms: 600_000 } },
+    };
+    expect(() => validatePiEngineConfig(config)).not.toThrow();
+  });
+
+  test("CV-23: provider timeout_ms omitted passes (all optional)", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1" } },
+    };
+    expect(() => validatePiEngineConfig(config)).not.toThrow();
+  });
 });

@@ -24,6 +24,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { EnvHttpProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from "undici";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { buildAllTools } from "./tools/index.ts";
@@ -68,6 +69,15 @@ export type SessionFactory = (options: SessionFactoryOptions) => Promise<AgentSe
 const PI_SESSIONS_DIR = join(homedir(), ".railyin", "pi-sessions");
 
 /**
+ * Default per-request timeout (ms) applied to the Pi SDK SettingsManager via
+ * httpIdleTimeoutMs. Local LLMs can take minutes to prefill a huge conversation,
+ * so the SDK's 5-minute default (300_000) can cause "524 status code" (origin
+ * timeout) during compaction / summarization. 10 minutes gives local models room
+ * without letting genuinely stuck requests hang indefinitely.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+
+/**
  * Production SessionFactory: creates a real Pi agent session using the SDK.
  * Reads session history from disk and connects to the configured LLM provider.
  */
@@ -106,6 +116,13 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
   }
   authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
 
+  // Per-request timeout passed to the Pi SDK SettingsManager (httpIdleTimeoutMs).
+  // Local LLMs can take minutes to prefill a huge conversation, so the SDK's
+  // 5-minute default (300_000) can cause "524 status code" (origin timeout)
+  // during compaction / summarization. Applies to ALL agent sessions, not just
+  // the in-memory compaction one. Default: 10 minutes (600_000 ms).
+  const requestTimeoutMs = config.providers?.[model.provider]?.timeout_ms ?? DEFAULT_REQUEST_TIMEOUT_MS;
+
   const { session } = await createAgentSession({
     cwd,
     agentDir,
@@ -116,6 +133,7 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
     resourceLoader,
     authStorage,
     settingsManager: SettingsManager.inMemory({
+      httpIdleTimeoutMs: requestTimeoutMs,
       compaction: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
     }),
   });
@@ -169,6 +187,30 @@ export class PiEngine implements ExecutionEngine {
     registry?: ProviderLimiterRegistry,
     modelConfigApplier?: PiModelConfigApplier,
   ) {
+    // The Pi SDK's per-request OpenAI-client timeout is raised per-session via
+    // the SettingsManager (httpIdleTimeoutMs = provider timeout_ms), but the
+    // underlying undici global dispatcher has its own independent
+    // bodyTimeout/headersTimeout that defaults to 5 minutes and would cut a
+    // stalled streaming body before the client timeout takes effect. The
+    // dispatcher is global process state, so drive it from the largest
+    // configured provider timeout_ms (falling back to the default) so no
+    // provider's stream is cut before its client timeout.
+    //
+    // The SDK's configureHttpDispatcher (dist/core/http-dispatcher.js) is not
+    // exposed by the package exports map, so replicate its behavior directly
+    // with undici: install an EnvHttpProxyAgent (respects HTTP_PROXY/
+    // HTTPS_PROXY) whose bodyTimeout/headersTimeout match the dispatcher
+    // timeout, and swap globalThis.fetch to undici's fetch bound to that
+    // dispatcher — the OpenAI SDK client captures globalThis.fetch at
+    // construction, so it must observe the new dispatcher.
+    const dispatcherTimeoutMs = Math.max(
+      DEFAULT_REQUEST_TIMEOUT_MS,
+      ...Object.values(config.providers ?? {}).map((p) => p.timeout_ms ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    );
+    setGlobalDispatcher(new EnvHttpProxyAgent({ bodyTimeout: dispatcherTimeoutMs, headersTimeout: dispatcherTimeoutMs }));
+    // undici's fetch type omits runtime-specific extensions (e.g. preconnect)
+    // that Railyin's global fetch type declares, so cast through unknown.
+    globalThis.fetch = undiciFetch as unknown as typeof globalThis.fetch;
     this.engineId = engineId;
     this.config = config;
     validatePiEngineConfig(config);
