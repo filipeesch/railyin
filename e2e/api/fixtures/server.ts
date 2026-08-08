@@ -29,6 +29,13 @@ export interface StartServerOptions {
      * so tests can read `mcp-tokens.json` directly from disk.
      */
     mcpConfig?: object;
+    /**
+     * When true, spawns the server with `RAILYN_COPILOTKIT_PROBE=1` so the
+     * composition root registers the ScriptedAgent probe agent under
+     * `/api/copilotkit/*`. Spike-only seam — the flag is never set by
+     * `bun run prod`, so the fake agent is never exposed there.
+     */
+    copilotkitProbe?: boolean;
 }
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
@@ -137,6 +144,9 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
         mkdirSync(dataDir, { recursive: true });
         writeFileSync(join(dataDir, "mcp.json"), JSON.stringify(options.mcpConfig, null, 2), "utf-8");
         extraEnv.RAILYN_DATA_DIR = dataDir;
+    }
+    if (options?.copilotkitProbe) {
+        extraEnv.RAILYN_COPILOTKIT_PROBE = "1";
     }
 
     const proc = spawn({
