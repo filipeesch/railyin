@@ -31,7 +31,11 @@ Railyin's hand-rolled chat stack (~8.2k lines: custom `StreamEvent` protocol, du
   3. Long SSE streams survive extended engine silences without mid-stream kills (Bun `idleTimeout` mitigated)
   4. Exact versions of `@ag-ui/core`, `@ag-ui/client`, `@copilotkit/runtime`, `@copilotkit/vue` are pinned; the fetch-native vs hono handler decision is recorded with evidence in PROJECT.md
   5. Mock runtime fixtures (mock-runtime/mock-agui) are validated against the real server and usable as the E2E foundation
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 01-01-PLAN.md — Pin the exact AG-UI/CopilotKit stack with a human-verified install gate and a pins lock test (HOST-03)
+- [ ] 01-02-PLAN.md — Mount CopilotRuntime in Bun.serve (fetch-native, /api/copilotkit/*, srv.timeout(req,0)) and prove run/connect/stop over SSE + silence survival (HOST-01, HOST-02)
+- [ ] 01-03-PLAN.md — Build + byte-diff-validate the MockAgui fixture foundation and record HOST-03 evidence in PROJECT.md (HOST-01, HOST-03)
 
 ### Phase 2: AG-UI Bridge & RailyinAgentRunner
 **Goal**: All five engines stream through one AG-UI boundary via the custom `RailyinAgentRunner`; conversations persist per-thread as JSONL with replay, run locking, and a complete tool-call lifecycle
@@ -130,7 +134,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CopilotRuntime Hosting & Thread APIs (Spike) | 0/TBD | Not started | - |
+| 1. CopilotRuntime Hosting & Thread APIs (Spike) | 0/3 | Not started | - |
 | 2. AG-UI Bridge & RailyinAgentRunner | 0/TBD | Not started | - |
 | 3. Decision Interrupts & Resume | 0/TBD | Not started | - |
 | 4. JSONL Persistence & Legacy Import | 0/TBD | Not started | - |
