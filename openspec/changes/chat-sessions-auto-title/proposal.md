@@ -28,3 +28,7 @@ A new `SessionTitleGenerator` service that, when a session still carries the pla
 - No config flag / opt-in gate (always-on).
 - No blocking of the user's first response (generation runs async).
 - No changes to task conversations — only standalone chat sessions.
+
+## Status / PR
+
+Draft proposal PR (proposal artifacts only, not yet implemented): https://github.com/filipeesch/railyin/pull/127
