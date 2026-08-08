@@ -19,6 +19,15 @@ export function validatePiEngineConfig(config: PiEngineConfig): void {
     );
   }
 
+  for (const [providerId, providerCfg] of Object.entries(config.providers ?? {})) {
+    const timeoutMs = providerCfg.timeout_ms;
+    if (timeoutMs != null && timeoutMs <= 0) {
+      throw new Error(
+        `Pi engine config: providers.${providerId}.timeout_ms must be > 0 ms, got: ${timeoutMs}`,
+      );
+    }
+  }
+
   const VALID_THINKING_FORMATS = new Set([
     "openai", "openrouter", "deepseek", "together", "zai", "qwen",
     "chat-template", "qwen-chat-template", "string-thinking", "ant-ling",

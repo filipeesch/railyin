@@ -35,6 +35,15 @@ You are a delegated subagent. Your task is provided in the user message.
 - Do NOT create, move, or edit board tasks, and do NOT record decisions — those belong to the parent. You may use todo tools to track your own work.
 - When done, produce a concise final summary of what you changed and any follow-up the parent should handle.`;
 
+/**
+ * Default per-request timeout (ms) applied to the Pi SDK SettingsManager via
+ * httpIdleTimeoutMs. Local LLMs can take minutes to prefill a huge conversation,
+ * so the SDK's 5-minute default (300_000) can cause "524 status code" (origin
+ * timeout) during compaction / summarization. Child (delegate) sessions inherit
+ * this so prefill/resume of huge conversations does not time out. Default: 10 min.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+
 export interface ChildSessionOptions {
   /** Unique job identifier, used only for debug logging. */
   jobId: string;
@@ -103,8 +112,16 @@ export const defaultChildSessionFactory: ChildSessionFactory = async (opts) => {
   }
   authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
 
+  // Per-request timeout passed to the Pi SDK SettingsManager (httpIdleTimeoutMs).
+  // Applies to ALL agent sessions (parent, child, compaction) so prefill of huge
+  // conversations does not hit the SDK's 5-minute "524" origin timeout. Default 10 min.
+  const requestTimeoutMs = config.providers?.[model.provider]?.timeout_ms ?? DEFAULT_REQUEST_TIMEOUT_MS;
+
   // Disable auto-compaction for child sessions — they're short-lived.
-  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
+  const settingsManager = SettingsManager.inMemory({
+    httpIdleTimeoutMs: requestTimeoutMs,
+    compaction: { enabled: false },
+  });
 
   const { session } = await createAgentSession({
     cwd,

@@ -68,6 +68,15 @@ export type SessionFactory = (options: SessionFactoryOptions) => Promise<AgentSe
 const PI_SESSIONS_DIR = join(homedir(), ".railyin", "pi-sessions");
 
 /**
+ * Default per-request timeout (ms) applied to the Pi SDK SettingsManager via
+ * httpIdleTimeoutMs. Local LLMs can take minutes to prefill a huge conversation,
+ * so the SDK's 5-minute default (300_000) can cause "524 status code" (origin
+ * timeout) during compaction / summarization. 10 minutes gives local models room
+ * without letting genuinely stuck requests hang indefinitely.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+
+/**
  * Production SessionFactory: creates a real Pi agent session using the SDK.
  * Reads session history from disk and connects to the configured LLM provider.
  */
@@ -106,6 +115,13 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
   }
   authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
 
+  // Per-request timeout passed to the Pi SDK SettingsManager (httpIdleTimeoutMs).
+  // Local LLMs can take minutes to prefill a huge conversation, so the SDK's
+  // 5-minute default (300_000) can cause "524 status code" (origin timeout)
+  // during compaction / summarization. Applies to ALL agent sessions, not just
+  // the in-memory compaction one. Default: 10 minutes (600_000 ms).
+  const requestTimeoutMs = config.providers?.[model.provider]?.timeout_ms ?? DEFAULT_REQUEST_TIMEOUT_MS;
+
   const { session } = await createAgentSession({
     cwd,
     agentDir,
@@ -116,6 +132,7 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
     resourceLoader,
     authStorage,
     settingsManager: SettingsManager.inMemory({
+      httpIdleTimeoutMs: requestTimeoutMs,
       compaction: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
     }),
   });

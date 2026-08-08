@@ -119,6 +119,15 @@ export interface PiProviderConfig {
    * rejected with a timeout error. Default: 60_000 (1 minute).
    */
   queue_timeout_ms?: number;
+  /**
+   * Per-request timeout in ms passed to the Pi SDK's SettingsManager
+   * (httpIdleTimeoutMs). Local LLMs can take minutes to prefill a huge
+   * conversation, so the SDK's 5-minute default (300_000) can cause
+   * "524 status code" (origin timeout) during compaction / summarization.
+   * Default: 600_000 (10 minutes). Applies to ALL agent sessions - prompt,
+   * tool, and compaction calls - not just the in-memory one.
+   */
+  timeout_ms?: number;
 }
 
 /** Harness-level config for the delegate fan-out tool. */
