@@ -51,10 +51,10 @@ The board + task card workflow with decision-request UX, powered by pluggable en
 - The current chat stack is ~8,200 lines of custom code (protocol, stores, UI) plus three chat tables; target adds ~800–1,000 lines (bridge/runner/import).
 - CopilotKit Vue SDK is early-access (June 2026); pin exact versions and wrap usage in thin local components.
 - No official JSONL runner exists in CopilotKit; custom runner extends `InMemoryAgentRunner` (documented extension pattern), ~150 L persistence + ~250 L bridge.
-- `@copilotkit/runtime` v2 exports hono/express/node handlers; hono chosen for Bun.serve integration.
+- `@copilotkit/runtime` v2 exports fetch-native + hono/express/node handlers; the fetch-native handler was chosen for the single-process Bun.serve mount (D-01 supersedes the earlier hono assumption).
 - `useThreads` on self-hosted runtime is a risk — fallback is our own thread-index list endpoint (we own the files).
 - Claude double-broadcast avoidance (`markClaudeExecution`) disappears — single translation path in the bridge.
-- E2E suite (55 Playwright specs) currently hand-mocks the custom protocol; must be reworked to mock `/api/copilotkit/*`.
+- E2E suite (55 Playwright specs) currently hand-mocks the custom protocol; must be reworked to mock `/api/copilotkit/*` — the `mock-agui` fixture foundation (e2e/ui/fixtures/mock-agui.ts) is validated byte-for-byte against the real server (D-07).
 
 ## Constraints
 
@@ -77,7 +77,7 @@ The board + task card workflow with decision-request UX, powered by pluggable en
 | Remove file_diff/code_review/transition_event/status/usage/compaction_summary | Feature trim; code review executor + FileStateCache + shell gate deleted | — Pending |
 | Thread = conversation (threadId = conversation.id); sessions = threads without taskId | Unified thread model for cards and standalone chat | — Pending |
 | Legacy-import button, not automatic migration | On-demand conversion; tables retained until imported | — Pending |
-| CopilotRuntime mounted in Bun.serve via hono handler | Single server, no port juggling | — Pending |
+| CopilotRuntime mounted in Bun.serve via fetch-native `createCopilotRuntimeHandler` (`@copilotkit/runtime/v2`) | Zero framework deps, Bun-native, reversible one-line swap to hono later (D-01); evidence: Phase 1 spike | Decided in Phase 1 — see footer evidence |
 | Board `/ws` stays for task.updated/code.ref/lsp; chat moves to CopilotKit connection | Board reactivity unchanged | — Pending |
 | Mermaid, workspace-scoped sidebar, long-thread virtualization deferred | Accepted trade-offs for v1 | — Pending |
 
@@ -98,5 +98,61 @@ This document evolves at phase transitions and milestone boundaries.
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
 
+## Phase 1 Spike Evidence (HOST-03) — 2026-08-08
+
+Spike-proven facts (probe server `startServer({ copilotkitProbe: true })`, `@copilotkit/runtime@1.66.4`; wire format verified `data: {json}\n\n` via `@ag-ui/encoder@0.0.57` `EventEncoder`).
+
+- **Exact pins:** `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder@0.0.57`, `@copilotkit/runtime` / `@copilotkit/vue@1.66.4` — exact (no caret), D-09.
+- **Handler decision:** fetch-native `createCopilotRuntimeHandler` mounted in the existing Bun.serve fetch handler under `/api/copilotkit/*` (multi-route mode, no CORS — same-origin D-03), dispatched BEFORE the `/api/*` RPC router. Zero framework deps; a swap to `createCopilotHonoHandler` later is a one-line composition-root change.
+- **idleTimeout configuration:** global `idleTimeout: 30` kept for the app; per-request `server.timeout(req, 0)` on `/api/copilotkit/*` — verified >32s agent-silence survival (HOST-02).
+- **Stop route shape:** `POST /api/copilotkit/agent/:agentId/stop/:threadId` (threadId in the path, multi-route mode) → `{stopped: true}`.
+- **1.66.4 thread-endpoint finding:** self-hosted `/info` advertises local thread endpoints (`threadEndpoints.list`/`inspect: true`, `mutations: false`); `GET /threads` serves `{threads, nextCursor: null}` via `runner.listThreads()`; mutations (`update|archive|subscribe`) remain 422 without Intelligence — supersedes the earlier "Intelligence-only" claim. Phase 4's thread-index contract (CHAT-08) must also use `GET /threads/:threadId/events` (the researched `threads/events/:threadId` shape 404s).
+- **Actual `/info` JSON (verbatim probe capture):**
+
+```json
+{
+  "version": "1.66.4",
+  "agents": {
+    "default": {
+      "name": "default",
+      "description": "Spike probe agent",
+      "className": "ScriptedAgent"
+    }
+  },
+  "audioFileTranscriptionEnabled": false,
+  "mode": "sse",
+  "threadEndpoints": {
+    "list": true,
+    "inspect": true,
+    "mutations": false,
+    "realtimeMetadata": false
+  },
+  "suggestions": true,
+  "a2uiEnabled": false,
+  "openGenerativeUIEnabled": false,
+  "telemetryDisabled": false
+}
+```
+
+- **Actual `GET /threads` response (verbatim probe capture):**
+
+```json
+{
+  "threads": [
+    {
+      "id": "t1",
+      "name": null,
+      "agentId": "default",
+      "organizationId": "",
+      "createdById": "",
+      "archived": false,
+      "createdAt": "2026-08-08T22:07:13.327Z",
+      "updatedAt": "2026-08-08T22:07:13.327Z"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
 ---
-*Last updated: 2026-08-08 after initialization*
+*Last updated: 2026-08-08 (Phase 1 spike evidence appended)*
