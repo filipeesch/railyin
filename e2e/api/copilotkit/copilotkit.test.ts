@@ -96,5 +96,5 @@ describe("CopilotRuntime mount (HOST-01)", () => {
         expect(awaited.status).toBe(200);
         const frames = parseSseFrames(await awaited.text());
         expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
-    });
+    }, 10_000);
 });

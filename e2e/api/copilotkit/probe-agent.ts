@@ -35,7 +35,7 @@ function delay(ms: number): Promise<void> {
  */
 export function buildQuickRunEvents(threadId: string, runId: string): AGUIEvent[] {
   return [
-    { type: EventType.RUN_STARTED, threadId, runId, input: {} },
+    { type: EventType.RUN_STARTED, threadId, runId },
     { type: EventType.TEXT_MESSAGE_START, messageId: "m1", role: "assistant" },
     { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "hello" },
     { type: EventType.TEXT_MESSAGE_END, messageId: "m1" },
@@ -53,8 +53,13 @@ export class ScriptedAgent extends AbstractAgent {
     super({ agentId: "default", description: "Spike probe agent" });
   }
 
-  run(input: RunAgentInput) {
-    return from(this.generateEvents(input));
+  run(input: RunAgentInput): ReturnType<AbstractAgent["run"]> {
+    // The base class's Observable type resolves to @ag-ui/client's NESTED
+    // rxjs@7.8.1, while `from()` here imports the top-level rxjs@7.8.2. The
+    // shapes are identical at runtime (verified end-to-end by the probe
+    // tests) but rxjs's Subscriber is invariant across package copies, so the
+    // cast bridges only the type-level gap.
+    return from(this.generateEvents(input)) as unknown as ReturnType<AbstractAgent["run"]>;
   }
 
   private async *generateEvents(input: RunAgentInput): AsyncGenerator<AGUIEvent> {
@@ -63,7 +68,7 @@ export class ScriptedAgent extends AbstractAgent {
     const script = forwarded.script ?? "quick";
     const silenceMs = forwarded.silenceMs ?? 0;
 
-    yield { type: EventType.RUN_STARTED, threadId, runId, input: {} };
+    yield { type: EventType.RUN_STARTED, threadId, runId };
     yield { type: EventType.TEXT_MESSAGE_START, messageId: "m1", role: "assistant" };
     yield { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "hello" };
     yield { type: EventType.TEXT_MESSAGE_END, messageId: "m1" };

@@ -32,6 +32,7 @@ import { Orchestrator } from "./engine/orchestrator.ts";
 import { EngineRegistry } from "./engine/engine-registry.ts";
 import { CopilotEngine } from "./engine/copilot/engine.ts";
 import { createDefaultCopilotSdkAdapter } from "./engine/copilot/session.ts";
+import { CopilotRuntime, createCopilotRuntimeHandler, type CopilotRuntimeOptions } from "@copilotkit/runtime/v2";
 import { ClaudeEngine } from "./engine/claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
@@ -241,6 +242,40 @@ const { RetentionJob } = await import("./jobs/retention-job.ts");
 const retentionJob = new RetentionJob(db);
 retentionJob.start();
 
+// ─── CopilotRuntime mount (HOST-01/02) ───────────────────────────────────────
+// AG-UI runtime mounted on the SAME Bun.serve origin under /api/copilotkit/*.
+// - D-01: fetch-native `createCopilotRuntimeHandler` (NOT hono — decision
+//   locked in phase planning; reversible one-line swap later).
+// - D-02: multi-route mode under the /api/copilotkit basePath.
+// - D-03: same-origin serving — NO cors option passed to the handler.
+// - The ScriptedAgent probe agent is registered ONLY when RAILYN_COPILOTKIT_PROBE=1
+//   (set by the e2e startServer({ copilotkitProbe }) fixture). `bun run prod`
+//   never loads the e2e/ module nor registers the fake agent — env-gate pattern
+//   mirroring RAILYN_TEST_EXECUTION_ENGINE above (T-1-03 mitigation). The
+//   dynamic import keeps the e2e/ tree out of the production module graph.
+const copilotProbeEnabled = process.env.RAILYN_COPILOTKIT_PROBE === "1";
+let scriptedAgent: unknown;
+if (copilotProbeEnabled) {
+  const probeModule = await import("../../e2e/api/copilotkit/probe-agent.ts");
+  scriptedAgent = probeModule.scriptedAgent;
+}
+// The runtime's AgentsConfig references its NESTED @ag-ui/client AbstractAgent
+// (nested rxjs@7.8.1), while the probe agent extends the top-level copy
+// (rxjs@7.8.2). Structurally identical at runtime — the probe tests prove the
+// round-trip end-to-end — but rxjs's Subscriber is invariant, so the types do
+// not unify. The cast bridges only that type-level gap; the agents map stays
+// empty in `bun run prod` (env gate above, T-1-03 mitigation).
+type CopilotAgents = CopilotRuntimeOptions["agents"];
+const copilotAgents = (copilotProbeEnabled && scriptedAgent
+  ? { default: scriptedAgent }
+  : {}) as unknown as CopilotAgents;
+const copilotRuntime = new CopilotRuntime({ agents: copilotAgents });
+const copilotHandler = createCopilotRuntimeHandler({
+  runtime: copilotRuntime,
+  basePath: "/api/copilotkit",
+  mode: "multi-route",
+});
+
 // ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
 
 const DIST_DIR = path.join(import.meta.dir, "../../dist");
@@ -301,6 +336,18 @@ const server = Bun.serve({
 
     if (req.method === "GET" && url.pathname === "/api/mcp/oauth/callback") {
       return handleMcpOAuthCallback(url, registryPool);
+    }
+
+    // /api/copilotkit/* — CopilotRuntime mount (HOST-01). MUST precede the
+    // POST /api/ RPC router below (Pitfall 3: the RPC router would 404 these
+    // paths). Deliberately NOT wrapped in the RPC try/catch — it JSON-encodes
+    // errors and would corrupt SSE streams. HOST-02: disable the per-request
+    // idle timeout for runtime paths only (SSE streams go quiet > global
+    // idleTimeout 30s during agent silences); the global idleTimeout stays for
+    // the rest of the app.
+    if (url.pathname.startsWith("/api/copilotkit/")) {
+      srv.timeout(req, 0);
+      return copilotHandler(req);
     }
 
     if (req.method === "POST" && url.pathname.startsWith("/api/")) {
