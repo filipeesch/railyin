@@ -187,21 +187,27 @@ export class PiEngine implements ExecutionEngine {
     registry?: ProviderLimiterRegistry,
     modelConfigApplier?: PiModelConfigApplier,
   ) {
-    // The Pi SDK's per-request OpenAI-client timeout is raised via the
-    // SettingsManager (httpIdleTimeoutMs), but the underlying undici global
-    // dispatcher has its own independent bodyTimeout/headersTimeout that
-    // defaults to 5 minutes and would cut a stalled streaming body before
-    // httpIdleTimeoutMs takes effect. Configure the dispatcher once (global
-    // process state) to match httpIdleTimeoutMs so both timeout layers hold.
+    // The Pi SDK's per-request OpenAI-client timeout is raised per-session via
+    // the SettingsManager (httpIdleTimeoutMs = provider timeout_ms), but the
+    // underlying undici global dispatcher has its own independent
+    // bodyTimeout/headersTimeout that defaults to 5 minutes and would cut a
+    // stalled streaming body before the client timeout takes effect. The
+    // dispatcher is global process state, so drive it from the largest
+    // configured provider timeout_ms (falling back to the default) so no
+    // provider's stream is cut before its client timeout.
     //
     // The SDK's configureHttpDispatcher (dist/core/http-dispatcher.js) is not
     // exposed by the package exports map, so replicate its behavior directly
     // with undici: install an EnvHttpProxyAgent (respects HTTP_PROXY/
-    // HTTPS_PROXY) whose bodyTimeout/headersTimeout match
-    // DEFAULT_REQUEST_TIMEOUT_MS, and swap globalThis.fetch to undici's fetch
-    // bound to that dispatcher — the OpenAI SDK client captures
-    // globalThis.fetch at construction, so it must observe the new dispatcher.
-    setGlobalDispatcher(new EnvHttpProxyAgent({ bodyTimeout: DEFAULT_REQUEST_TIMEOUT_MS, headersTimeout: DEFAULT_REQUEST_TIMEOUT_MS }));
+    // HTTPS_PROXY) whose bodyTimeout/headersTimeout match the dispatcher
+    // timeout, and swap globalThis.fetch to undici's fetch bound to that
+    // dispatcher — the OpenAI SDK client captures globalThis.fetch at
+    // construction, so it must observe the new dispatcher.
+    const dispatcherTimeoutMs = Math.max(
+      DEFAULT_REQUEST_TIMEOUT_MS,
+      ...Object.values(config.providers ?? {}).map((p) => p.timeout_ms ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    );
+    setGlobalDispatcher(new EnvHttpProxyAgent({ bodyTimeout: dispatcherTimeoutMs, headersTimeout: dispatcherTimeoutMs }));
     // undici's fetch type omits runtime-specific extensions (e.g. preconnect)
     // that Railyin's global fetch type declares, so cast through unknown.
     globalThis.fetch = undiciFetch as unknown as typeof globalThis.fetch;
