@@ -17,7 +17,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **CHAT-06**: User can use slash commands and `/prompt-name` refs with parity (ref must be the entire leading value)
 - [ ] **CHAT-07**: User can reopen a card or session and see its full conversation history, including across app restarts
 - [ ] **CHAT-08**: User can list and navigate thread conversations via Railyin's own thread-index endpoint (self-hosted; `useThreads` not usable)
-- [ ] **CHAT-09**: User can approve/reject a decision request as structured cards; the agent run genuinely pauses and resumes with the decision payload
+- [x] **CHAT-09**: User can approve/reject a decision request as structured cards; the agent run genuinely pauses and resumes with the decision payload
 
 ### Runner & Persistence (RUNR)
 
@@ -28,7 +28,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **RUNR-05**: Reconnect/reload replays the full conversation from the JSONL event log (not snapshots)
 - [x] **RUNR-06**: connect-before-run returns a valid empty conversation snapshot for unknown threads
 - [x] **RUNR-07**: Replayed tool calls synthesize `TOOL_CALL_RESULT` events so cards never show stale "running" state
-- [ ] **RUNR-08**: Runner emits `RUN_FINISHED` with `outcome: interrupt` + `RunAgentInput.resume[]` entries for decision requests (canonical AG-UI contract; not the deprecated `on_interrupt` event)
+- [x] **RUNR-08**: Runner emits `RUN_FINISHED` with `outcome: interrupt` + `RunAgentInput.resume[]` entries for decision requests (canonical AG-UI contract; not the deprecated `on_interrupt` event)
 
 ### Runtime & Hosting (HOST)
 
@@ -52,12 +52,12 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [ ] **UI-01**: Board chat UI is replaced with CopilotKit components (input, messages, streaming) preserving the existing board layout and conversation store contract for live stream blocks
 - [ ] **UI-02**: Domain tool renderers exist for shell output, file changes, and delegate task summaries (not raw JSON cards)
-- [ ] **UI-03**: Decision-request UX renders as interrupt cards with structured approve/reject and payload
+- [x] **UI-03**: Decision-request UX renders as interrupt cards with structured approve/reject and payload
 - [ ] **UI-04**: Board `/ws` reactivity (task.updated, code.ref, lsp) keeps working alongside the chat connection
 
 ### Verification (VERF)
 
-- [ ] **VERF-01**: Bridge + runner have unit tests with a fake engine (contract tests for events, interrupts, replay)
+- [x] **VERF-01**: Bridge + runner have unit tests with a fake engine (contract tests for events, interrupts, replay)
 - [ ] **VERF-02**: Playwright E2E suite is migrated onto the new mock fixture foundation (SSE/CopilotKit events mocked) and passes
 - [ ] **VERF-03**: Backend smoke tests and the 55 existing UI specs are green on the new stack before cleanup
 
@@ -114,7 +114,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CHAT-06 | Phase 5 | Pending |
 | CHAT-07 | Phase 5 | Pending |
 | CHAT-08 | Phase 4 | Pending |
-| CHAT-09 | Phase 3 | Pending |
+| CHAT-09 | Phase 3 | Complete |
 | RUNR-01 | Phase 2 | Complete |
 | RUNR-02 | Phase 2 | Complete |
 | RUNR-03 | Phase 2 | Complete |
@@ -122,7 +122,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RUNR-05 | Phase 2 | Complete |
 | RUNR-06 | Phase 2 | Complete |
 | RUNR-07 | Phase 2 | Complete |
-| RUNR-08 | Phase 3 | Pending |
+| RUNR-08 | Phase 3 | Complete |
 | HOST-01 | Phase 1 | Complete |
 | HOST-02 | Phase 1 | Complete |
 | HOST-03 | Phase 1 | Complete |
@@ -134,9 +134,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | IMPR-03 | Phase 5 | Pending |
 | UI-01 | Phase 5 | Pending |
 | UI-02 | Phase 5 | Pending |
-| UI-03 | Phase 3 | Pending |
+| UI-03 | Phase 3 | Complete |
 | UI-04 | Phase 5 | Pending |
-| VERF-01 | Phase 3 | Pending |
+| VERF-01 | Phase 3 | Complete |
 | VERF-02 | Phase 6 | Pending |
 | VERF-03 | Phase 6 | Pending |
 
