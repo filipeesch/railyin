@@ -270,9 +270,6 @@ describe("taskStore", () => {
       if (method === "tasks.transition") {
         return { task: updatedTask, executionId: 99 };
       }
-      if (method === "conversations.contextUsage") {
-        return { usedTokens: 0, maxTokens: 8192, fraction: 0 };
-      }
       if (method === "tasks.getChangedFiles") return [];
       if (method === "tasks.getGitStat") return null;
       return [];
@@ -349,7 +346,6 @@ describe("taskStore", () => {
     apiMock.mockImplementation((async (method: string) => {
       if (method === "tasks.list") return [running];
       if (method === "conversations.getMessages") return { messages: [], hasMore: false };
-      if (method === "conversations.contextUsage") return { usedTokens: 0, maxTokens: 8192, fraction: 0 };
       if (method === "tasks.getChangedFiles") return [];
       if (method === "tasks.getGitStat") return null;
       return [];
