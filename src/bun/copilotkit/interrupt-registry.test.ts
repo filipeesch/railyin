@@ -160,6 +160,35 @@ describe("interrupt-registry lazy rebuild (03-03 Task 2, A2/Open Question 1)", (
     }
   });
 
+  test("C3: WR-02 — an interrupt terminal WITHOUT a waiting_user row is NOT rebuilt (the decision was already resolved/dismissed)", () => {
+    const { dir, store, cleanup } = makeStore();
+    const db = initDb();
+    try {
+      // The JSONL ends with an interrupt terminal, but NO executions row is in
+      // 'waiting_user' — the durable liveness marker is absent, so the decision
+      // was already resumed or cancelled before the restart.
+      appendInterruptRun(store, "10", "int-1", "decision-10-2");
+      db.run("INSERT INTO conversations (id, task_id) VALUES (10, NULL)");
+      interruptRegistry.configure({ store });
+
+      expect(interruptRegistry.ensureOpen("10", db)).toBeNull();
+      // No entry was resurrected — a resume with the old id rejects cleanly
+      // (INVALID_INTERRUPT at the agent), never a duplicate delivery.
+      expect(interruptRegistry.get("10")).toBeUndefined();
+
+      // The row-presence path still rebuilds (C above) — guard only affects
+      // the stale case.
+      db.run(
+        "INSERT INTO executions (conversation_id, from_state, to_state, status) VALUES (10, 'backlog', 'plan', 'waiting_user')",
+      );
+      const entry = interruptRegistry.ensureOpen("10", db);
+      expect(entry?.interruptId).toBe("decision-10-2");
+    } finally {
+      db.close();
+      cleanup();
+    }
+  });
+
   test("D: ensureOpen returns null when nothing is rebuildable — no log, or a log without an interrupt terminal", () => {
     const { dir, store, cleanup } = makeStore();
     const db = initDb();

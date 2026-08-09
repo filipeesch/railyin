@@ -104,10 +104,21 @@ export function ensureOpen(threadId: string, db: Database): PendingInterrupt | n
     )
     .get(Number(threadId));
 
+  // WR-02: the waiting_user row is the ONLY durable "still pending" marker —
+  // stream-processor.ts writes it synchronously at decision_request time, and
+  // the only paths that finalize it are the resume branch (completed/cancelled).
+  // An interrupt terminal in the JSONL WITHOUT the row therefore means the
+  // decision was already resumed or dismissed: rebuilding here would resurrect
+  // a closed decision after a restart and re-deliver the answers to a client
+  // resuming with the old id (duplicate record_decision/update_decision side
+  // effects — the exact scenario the hidden instruction warns about). Return
+  // null → the resume rejects cleanly with INVALID_INTERRUPT (T-03-12).
+  if (!row) return null;
+
   const entry: PendingInterrupt = {
     interruptId,
     conversationId: Number(threadId),
-    executionId: row?.id ?? null,
+    executionId: row.id,
     payload,
     createdAt: Date.now(),
   };
