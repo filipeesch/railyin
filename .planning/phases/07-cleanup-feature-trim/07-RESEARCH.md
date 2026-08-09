@@ -377,27 +377,33 @@ opts?.onSessionStatusChange?.(conversationId);  // → notifier.notifyChatSessio
 
 **All inventory claims (Groups A-E, write call-sites, verbatim type quotes) are [VERIFIED] this session via Read/grep of the source files cited inline.**
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All four questions were resolved via blocking human checkpoints (07-01 A2, 07-02 A3) or recorded planner decisions; resolutions are also carried in PLAN frontmatter/checkpoint records.
 
 1. **Failure-toast replacement (A2)** — keep "Execution failed" toast via a new push type, or drop it (recommended)?
    - What we know: the toast only fires for taskId != null stream.error; chat already shows RUN_ERROR.
    - What's unclear: whether the user values the toast for background (non-chat) failures.
    - Recommendation: drop; revisit in v2. Planner should gate behind a `checkpoint:human-verify`.
+   - **RESOLVED: A2 `checkpoint:decision` (07-01 Task 3, blocking) decides drop vs new push type; Task 4 executes the outcome. Recommended: drop (notifications.onError → no-op; no App.vue toast wiring).**
 
 2. **opencode shell-approval behavior (A3)** — after removing waitForResume, does opencode auto-approve permission requests?
    - What we know: opencode engine:128-136 auto-approves when `shellState.shellAutoApprove` is set, else waits (hang today).
    - What's unclear: the intended security posture for shell commands under "decision_request is the only HITL".
    - Recommendation: auto-approve (matching the trim decision); human-checkpoint it.
+   - **RESOLVED: A3 `checkpoint:decision` (07-02 Task 2, blocking) chooses auto-approve vs deny; Task 3 implements the chosen posture. Recommended: auto-approve via the existing shellState.shellAutoApprove path.**
 
 3. **What happens to `model_raw_messages` writes** — stop them too (raw-message-buffer), or leave as inspection data?
    - What we know: only writer is makePersistCallback (engine/stream/stream-processor.ts:105-121); only reader is retention-job deletes; cursor/adapter.ts:64 mentions "later inspection" in a comment.
    - What's unclear: whether any diagnostics flow reads them.
    - Recommendation: stop the writes with the rest (D-04 lists the table with `?`); retention job keeps pruning old rows.
+   - **RESOLVED: stop the writes with the rest (planner decision, 07-01 Task 1) — makePersistCallback + raw-message-buffer die; retention job keeps pruning; table stays frozen.**
 
 4. **`conversations.getMessages` loading-gate fate** — SessionChatView's `messagesLoading` gate (SessionChatView.vue:56-77) depends on the RPC completing; with writes stopped, new sessions return empty.
    - What we know: the gate is a vestige; RailyinChat owns history via AG-UI connect.
    - What's unclear: whether to keep the RPC (frozen reads are allowed) or remove the gate + RPC entirely.
    - Recommendation: keep the RPC (frozen reads + smoke-test surface + old-history display), keep the gate, drop only the streaming layers of the store.
+   - **RESOLVED: keep `conversations.getMessages` + the loading gate (frozen reads + smoke surface); only the streaming layers are stripped (07-03 Task 2).**
 
 ## Environment Availability
 
