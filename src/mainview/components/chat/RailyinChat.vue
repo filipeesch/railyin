@@ -1,6 +1,28 @@
 <template>
   <div class="railyn-chat">
+    <!-- Loading: centered ProgressSpinner until the thread connect/replay
+         resolves (first MESSAGES_SNAPSHOT or connect finalize) — the legacy
+         .scv-loading pattern; no welcome-screen flash (welcome-screen=false
+         + explicit threadId, RESEARCH Pitfall 2). -->
+    <div v-if="!connected" class="railyn-chat__loading" data-testid="chat-loading">
+      <ProgressSpinner style="width: 32px; height: 32px" />
+    </div>
+
+    <!-- Error: RUN_ERROR terminal → inline error row + PrimeVue toast
+         ("Execution failed: {error}", legacy onStreamError parity). -->
+    <div v-else-if="runError" class="railyn-chat__error" data-testid="chat-error-row" role="alert">
+      <i class="pi pi-exclamation-circle" />
+      <span>Execution failed: {{ runError }}</span>
+    </div>
+
+    <!-- Empty: never-run thread (RUNR-06) — UI-SPEC copywriting contract. -->
+    <div v-else-if="empty" class="railyn-chat__empty" data-testid="chat-empty-state">
+      <h3 class="railyn-chat__empty-heading">No messages yet</h3>
+      <p class="railyn-chat__empty-body">Send a message to start, or type / to browse commands.</p>
+    </div>
+
     <CopilotChat
+      v-show="connected"
       class="railyn-chat"
       :thread-id="threadId"
       :input-tools-menu="toolsMenu"
@@ -46,9 +68,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useToast } from "primevue/usetoast";
 import Button from "primevue/button";
+import ProgressSpinner from "primevue/progressspinner";
 import {
   CopilotChat,
   CopilotChatInput,
@@ -115,6 +138,63 @@ function onStop() {
   stopRequested.value = true;
   agent.value?.abortRun();
 }
+
+// ─── Chat states (UI-SPEC chat-message-stream rows) ───────────────────────────
+// connected: first MESSAGES_SNAPSHOT (replay) or connect finalize (never-run
+// threads complete the connect with zero events — the core connectAgent
+// resolves with defaultValue, then onRunFinalized fires). The spinner shows
+// until this flips; CopilotChat stays MOUNTED the whole time (v-show) so its
+// internal connectAgent keeps running (hiding it with v-if would deadlock).
+const connected = ref(false);
+// Message count from the same agent clone CopilotChat renders — the empty
+// computed drives the never-run state (RUNR-06).
+const messageCount = ref(0);
+// RUN_ERROR message (RunErrorEvent.message) — inline row + toast, cleared on
+// the next run (onRunInitialized).
+const runError = ref<string | null>(null);
+
+const empty = computed(() => connected.value && messageCount.value === 0);
+
+let unsubscribe: (() => void) | null = null;
+watch(
+  agent,
+  (a) => {
+    unsubscribe?.();
+    unsubscribe = null;
+    if (!a) return;
+    const sub = a.subscribe({
+      onRunInitialized: () => {
+        stopRequested.value = false;
+        runError.value = null;
+      },
+      onRunErrorEvent: (params) => {
+        connected.value = true;
+        runError.value = params.event.message ?? "Run failed";
+      },
+      onMessagesSnapshotEvent: () => {
+        connected.value = true;
+      },
+      onRunFinalized: () => {
+        connected.value = true;
+      },
+      onMessagesChanged: (params) => {
+        messageCount.value = params.messages.length;
+      },
+    });
+    unsubscribe = sub.unsubscribe;
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => unsubscribe?.());
+
+// PrimeVue error toast mirroring the legacy onStreamError behavior
+// (App.vue:54-57 — summary "Execution failed", detail = error, life 6000).
+watch(runError, (err) => {
+  if (err) {
+    toast.add({ severity: "error", summary: "Execution failed", detail: err, life: 6000 });
+  }
+});
 </script>
 
 <!-- Non-scoped style block — the single home for ALL CopilotKit CSS overrides
@@ -133,6 +213,60 @@ function onStop() {
 .railyn-chat > .railyn-chat {
   flex: 1 1 0%;
   min-height: 0;
+}
+
+/* Loading row — centered ProgressSpinner (legacy .scv-loading pattern). */
+.railyn-chat__loading {
+  flex: 1 1 0%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Empty row — UI-SPEC copywriting contract (never-run thread, RUNR-06). */
+.railyn-chat__empty {
+  flex: 1 1 0%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  padding: 24px;
+}
+
+.railyn-chat__empty-heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--p-text-color);
+}
+
+.railyn-chat__empty-body {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--p-text-muted-color);
+}
+
+/* Error row — RUN_ERROR terminal (inline in the message area). */
+.railyn-chat__error {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 14px;
+  border: 1px solid var(--p-red-300, #fca5a5);
+  border-radius: 8px;
+  background: var(--p-red-50, #fef2f2);
+  color: var(--p-red-700, #b91c1c);
+  font-size: 0.85rem;
+}
+
+html.dark-mode .railyn-chat__error {
+  border-color: var(--p-red-800, #991b1b);
+  background: var(--p-red-950, #450a0a);
+  color: var(--p-red-300, #fca5a5);
 }
 
 .railyn-chat__input {

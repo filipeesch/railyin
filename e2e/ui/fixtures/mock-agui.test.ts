@@ -13,7 +13,7 @@
  */
 import { describe, test, expect } from "bun:test";
 import { EventType, type AGUIEvent } from "@ag-ui/core";
-import { MockAgui, buildConnectReplaySseBody } from "./mock-agui";
+import { MockAgui, buildConnectReplaySseBody, buildErrorRunSseBody } from "./mock-agui";
 
 /** Decode an EventEncoder-framed SSE body into its JSON event frames. */
 function decodeFrames(sseBody: string): AGUIEvent[] {
@@ -81,5 +81,43 @@ describe("buildConnectReplaySseBody", () => {
         expect(buildConnectReplaySseBody("t-flip")).toBe("");
         MockAgui.prototype.registerThread("t-flip");
         expect(buildConnectReplaySseBody("t-flip")).not.toBe("");
+    });
+});
+
+describe("buildErrorRunSseBody", () => {
+    // RunAgentInputSchema requires messages/tools/context arrays (05-01
+    // deviation: minimal inputs fail parse) — shared minimal valid input.
+    const validInput = { threadId: "t-err", runId: "r-err", messages: [], tools: [], context: [] };
+
+    test("sequence is RUN_STARTED → text events → terminal RUN_ERROR", () => {
+        const types = typesOf(buildErrorRunSseBody(validInput));
+
+        expect(types[0]).toBe(EventType.RUN_STARTED);
+        expect(types).toContain(EventType.TEXT_MESSAGE_START);
+        expect(types).toContain(EventType.TEXT_MESSAGE_CONTENT);
+        expect(types).toContain(EventType.TEXT_MESSAGE_END);
+        // RUN_ERROR is the terminal frame — the client's verifyEvents rejects
+        // any event after it, so nothing may follow.
+        expect(types[types.length - 1]).toBe(EventType.RUN_ERROR);
+        expect(types).not.toContain(EventType.RUN_FINISHED);
+    });
+
+    test("RUN_ERROR frame carries the 'simulated failure' message", () => {
+        const frames = decodeFrames(buildErrorRunSseBody(validInput));
+        const errorFrame = frames[frames.length - 1] as {
+            type: EventType.RUN_ERROR;
+            message: string;
+        };
+        expect(errorFrame.type).toBe(EventType.RUN_ERROR);
+        expect(errorFrame.message).toBe("simulated failure");
+    });
+
+    test("RUN_STARTED carries the parsed request input (runner patch parity)", () => {
+        const frames = decodeFrames(
+            buildErrorRunSseBody({ ...validInput, threadId: "t-err-in" }),
+        );
+        const started = frames[0] as { type: EventType.RUN_STARTED; input?: unknown };
+        expect(started.input).toBeDefined();
+        expect((started.input as { threadId?: string }).threadId).toBe("t-err-in");
     });
 });

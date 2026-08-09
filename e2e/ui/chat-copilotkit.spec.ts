@@ -55,8 +55,7 @@ async function submitChatMessage(page: Page, text: string): Promise<void> {
 
 // ─── Suite S — streaming & history (CHAT-01, CHAT-07) ─────────────────────────
 
-test.describe("S — CopilotKit streaming & history", () => {
-    test("S-1: submitted message streams the assistant text via /run (CHAT-01)", async ({ page, api }) => {
+test.describe("S — CopilotKit streaming & history", () => {    test("S-1: submitted message streams the assistant text via /run (CHAT-01)", async ({ page, api }) => {
         // Never-run thread (NOT registered with MockAgui): connect answers an
         // empty SSE body, so the ONLY source of the assistant "hello" text is
         // the /run stream — the streaming proof is unambiguous.
@@ -103,5 +102,48 @@ test.describe("S — CopilotKit streaming & history", () => {
         // the task's threadId (the CHAT-07 replay chain).
         expect(connectRequests.length).toBeGreaterThanOrEqual(2);
         expect(connectRequests).toContain(String(t.conversationId));
+    });
+});
+
+// ─── Suite E — empty & error states (RUNR-06, RUN_ERROR) ──────────────────────
+
+test.describe("E — chat states", () => {
+    test("E-1: never-run thread renders the empty state with the input enabled (RUNR-06)", async ({ page, api }) => {
+        const t = makeTask({ id: 103, conversationId: 103, title: "Empty Task" });
+        api.handle("tasks.list", () => [t]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+
+        // Connect resolves with an empty SSE body (thread NOT registered) →
+        // the UI-SPEC empty copy renders and the input stays usable.
+        const emptyState = page.locator('[data-testid="chat-empty-state"]');
+        await expect(emptyState).toBeVisible({ timeout: 10_000 });
+        await expect(emptyState).toContainText("No messages yet");
+        await expect(emptyState).toContainText("Send a message to start, or type / to browse commands.");
+        await expect(chatTextarea(page)).toBeEnabled();
+    });
+
+    test("E-2: RUN_ERROR renders an inline error row + toast; input re-enables", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 104, conversationId: 104, title: "Error Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "error"; // /run serves the RUN_ERROR-terminated SSE body
+
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
+
+        await submitChatMessage(page, "trigger the failure");
+
+        // Inline error row (RUN_ERROR terminal, message "simulated failure").
+        const errorRow = page.locator('[data-testid="chat-error-row"]');
+        await expect(errorRow).toBeVisible({ timeout: 10_000 });
+        await expect(errorRow).toContainText("Execution failed: simulated failure");
+
+        // PrimeVue error toast (legacy onStreamError parity).
+        await expect(page.locator(".p-toast")).toContainText("Execution failed", { timeout: 5_000 });
+
+        // The input re-enables after the failed run.
+        await expect(chatTextarea(page)).toBeEnabled();
     });
 });

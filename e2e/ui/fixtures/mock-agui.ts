@@ -79,6 +79,29 @@ export function buildQuickRunSseBody(requestInput: unknown): string {
 }
 
 /**
+ * Build the SSE body for the scripted ERROR run (plan 05-03 Task 2): the
+ * quick event sequence up to the assistant text message, then a terminal
+ * RUN_ERROR carrying "simulated failure" instead of RUN_FINISHED. Same
+ * EventEncoder + patchRunStartedInput path as buildQuickRunSseBody — the
+ * RUN_ERROR must be the LAST frame (the client's verifyEvents rejects any
+ * event after RUN_ERROR).
+ */
+export function buildErrorRunSseBody(requestInput: unknown): string {
+    const parsed = RunAgentInputSchema.parse(requestInput);
+    const encoder = new EventEncoder();
+    const events: AGUIEvent[] = [
+        { type: EventType.RUN_STARTED, threadId: parsed.threadId, runId: parsed.runId },
+        { type: EventType.TEXT_MESSAGE_START, messageId: "m1", role: "assistant" },
+        { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "hello" },
+        { type: EventType.TEXT_MESSAGE_END, messageId: "m1" },
+        { type: EventType.RUN_ERROR, message: "simulated failure" },
+    ];
+    return events
+        .map((event) => encoder.encode(patchRunStartedInput(event, parsed)))
+        .join("");
+}
+
+/**
  * Stable runId used for every connect replay — the replay is a synthetic
  * "replay run" framing the thread's historic events (RUNR-05).
  */
@@ -138,6 +161,14 @@ export function buildConnectReplaySseBody(threadId: string): string {
 export class MockAgui {
     private _page: Page;
 
+    /**
+     * Run script selection (plan 05-03 Task 2): "quick" (default) serves
+     * buildQuickRunSseBody; "error" serves buildErrorRunSseBody (a run whose
+     * SSE body ends with RUN_ERROR — the UI's error-state scenario). Connect
+     * replays are unaffected — script only shapes POST /run responses.
+     */
+    script: "quick" | "error" = "quick";
+
     constructor(page: Page) {
         this._page = page;
     }
@@ -170,7 +201,8 @@ export class MockAgui {
                     }
                 }
                 try {
-                    const sseBody = buildQuickRunSseBody(body);
+                    const sseBody =
+                        this.script === "error" ? buildErrorRunSseBody(body) : buildQuickRunSseBody(body);
                     await route.fulfill({
                         status: 200,
                         contentType: MOCK_AGUI_SSE_HEADERS["content-type"],
