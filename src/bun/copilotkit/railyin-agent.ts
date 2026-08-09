@@ -154,6 +154,16 @@ export class RailyinAgent extends AbstractAgent {
       return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
     }
 
+    // D-04 (CHAT-09 SC3): a pending decision interrupt blocks NEW input
+    // server-side. Runs WITHOUT resume[] are rejected with the advisory
+    // THREAD_BUSY code (e2e asserts the code — stays stable; the registry adds
+    // the precise message per research). The resume branch that bypasses this
+    // check occupies the same region (03-02 Task 3, before extractUserText).
+    if (!input.resume?.length && interruptRegistry.hasOpen(threadId)) {
+      emitRunError("A decision interrupt is pending for this thread", "THREAD_BUSY");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
     const content = extractUserText(input.messages);
     if (content == null) {
       emitRunError("No user text message in input", "NO_USER_MESSAGE");
@@ -278,10 +288,21 @@ export class RailyinAgent extends AbstractAgent {
             event.type === "done" ||
             event.type === "error" ||
             event.type === "ask_user" ||
-            event.type === "shell_approval"
+            event.type === "shell_approval" ||
+            event.type === "decision_request"
           ) {
             queueMicrotask(() => {
-              if (!terminalEmitted) guardedComplete();
+              if (terminalEmitted) return;
+              // Pitfall 5 (T-03-02): a decision_request that never reaches
+              // onRunEnd (non-standard coordinator / pause-path return) must
+              // still end with the interrupt terminal — the decision must not
+              // silently vanish into a plain RUN_FINISHED or wedge the stream.
+              if (capturedDecisionPayload != null) {
+                const id = interruptRegistry.register(conversationId, capturedDecisionPayload);
+                finishInterrupt(id);
+                return;
+              }
+              guardedComplete();
             });
           }
         },
