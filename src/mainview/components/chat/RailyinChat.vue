@@ -272,7 +272,7 @@ const toolsMenu = computed<ToolsMenuItem[]>(() => {
   return [];
 });
 
-// The legacy ChatEditor was the only command-fetch trigger; the Chat tab now
+// The legacy editor was the only command-fetch trigger; the Chat tab now
 // renders RailyinChat, so the wrapper primes the cache itself (fire-and-forget
 // — the ref updates reactively once the RPC resolves).
 watch(
@@ -552,7 +552,7 @@ html.dark-mode .railyn-chat__stopped-icon {
   color: inherit;
 }
 
-/* Markdown parity rules (ported from MessageBubble.vue:316-350 — blockquote,
+/* Markdown parity rules (ported from the legacy bubble — blockquote,
    table, hr, a). Token-driven only (--p-*): dark mode flips automatically,
    matching the legacy behavior. */
 .railyn-chat blockquote {
