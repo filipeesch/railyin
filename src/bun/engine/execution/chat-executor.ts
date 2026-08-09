@@ -30,7 +30,6 @@ export class ChatExecutor {
     private readonly slashCommandResolver: SlashCommandResolver,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
     private readonly boardTools?: IBoardToolExecutor,
-    private readonly onNewMessage?: (msg: ConversationMessage) => void,
   ) {}
 
   async execute(
@@ -105,14 +104,7 @@ export class ChatExecutor {
     // Pi engines silently failing when the engine id differs from the literal `pi`.
     if ((engine.type === "pi" || engineId === "pi") && !contextWindowOverride) {
       const errorContent = `Pi engine requires a context window to be configured for model '${effectiveModel}'. Go to Model Settings to configure it.`;
-      const errorMsgId = appendMessage(db, null, conversationId, "system", null, errorContent);
       db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
-      if (this.onNewMessage) {
-        const errorMsgRow = db
-          .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-          .get(errorMsgId)!;
-        this.onNewMessage(mapConversationMessage(errorMsgRow));
-      }
       const userMsgRow = db
         .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
         .get(msgId)!;

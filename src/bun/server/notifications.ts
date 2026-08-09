@@ -1,5 +1,5 @@
 import type { IBroadcastChannel } from "./broadcast-channel.ts";
-import type { Task, ConversationMessage, ChatSession } from "../../shared/rpc-types.ts";
+import type { Task, ChatSession } from "../../shared/rpc-types.ts";
 
 export class NotificationService {
   constructor(private readonly channel: IBroadcastChannel) {}
@@ -15,10 +15,6 @@ export class NotificationService {
 
   notifyTaskUpdated(task: Task): void {
     this.channel.broadcast({ type: "task.updated", payload: task });
-  }
-
-  notifyNewMessage(message: ConversationMessage): void {
-    this.channel.broadcast({ type: "message.new", payload: message });
   }
 
   notifyWorkflowReloaded(): void {

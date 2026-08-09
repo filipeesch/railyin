@@ -25,6 +25,7 @@ import { lspHandlers } from "./handlers/lsp.ts";
 import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mcpHandlers, handleMcpOAuthCallback } from "./handlers/mcp.ts";
 import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
+import { fetchChatSessionWithModel } from "./db/task-queries.ts";
 import { threadHandlers } from "./handlers/threads.ts";
 import { legacyImportHandlers } from "./handlers/legacy-import.ts";
 import { decisionHandlers } from "./handlers/decisions.ts";
@@ -54,7 +55,6 @@ import type { Task, ConversationMessage, ChatSession } from "../shared/rpc-types
 import { setupFileLogging } from "./server/file-logger.ts";
 import { BroadcastChannel } from "./server/broadcast-channel.ts";
 import { NotificationService } from "./server/notifications.ts";
-import { StreamEventProcessor } from "./server/stream-processor.ts";
 import { WebSocketHandler } from "./server/websocket.ts";
 import { createShutdownHandler } from "./server/shutdown.ts";
 import { ProjectResolver } from "./git/ProjectResolver.ts";
@@ -62,7 +62,7 @@ import { TaskGitContextRepository } from "./db/repositories/TaskGitContextReposi
 import { GitRepositoryManager } from "./git/GitRepositoryManager.ts";
 import { WorktreeManager } from "./git/WorktreeManager.ts";
 import type { ExecutionEngine } from "./engine/types.ts";
-import type { OnTaskUpdated, OnNewMessage } from "./engine/types.ts";
+import type { OnTaskUpdated } from "./engine/types.ts";
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 setupFileLogging();
@@ -139,31 +139,29 @@ registryPool.getGlobalRegistry().startAll().catch((err: unknown) => {
 
 const channel = new BroadcastChannel();
 const notifier = new NotificationService(channel);
-const streamProc = new StreamEventProcessor(channel, db);
 
 // ─── Engine factory map (composition root) ───────────────────────────────────
 
-type EngineFactory = (engineId: string, cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) => ExecutionEngine;
+type EngineFactory = (engineId: string, cfg: EngineConfig, onTaskUpdated: OnTaskUpdated) => ExecutionEngine;
 
 const engineFactories: Record<string, EngineFactory> = {
-  copilot: (_engineId, _cfg, onTaskUpdated, onNewMessage) =>
-    new CopilotEngine(onTaskUpdated, onNewMessage, createDefaultCopilotSdkAdapter()),
-  claude: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
-    new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
-  opencode: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
-    new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
-  cursor: (_engineId, cfg, onTaskUpdated, onNewMessage) => {
+  copilot: (_engineId, _cfg, onTaskUpdated) =>
+    new CopilotEngine(onTaskUpdated, createDefaultCopilotSdkAdapter()),
+  claude: (_engineId, cfg, onTaskUpdated) =>
+    new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, createDefaultClaudeSdkAdapter()),
+  opencode: (_engineId, cfg, onTaskUpdated) =>
+    new OpenCodeEngine(onTaskUpdated, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
+  cursor: (_engineId, cfg, onTaskUpdated) => {
     const cursorCfg = cfg as { api_key?: string };
     return new CursorEngine(
       onTaskUpdated,
-      onNewMessage,
       createDefaultCursorSdkAdapter({ apiKey: cursorCfg.api_key }),
     );
   },
-  pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
+  pi: (engineId, cfg, onTaskUpdated) => {
     const piCfg = cfg as PiEngineConfig;
     const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
-    return createPiEngine({ engineId, config: piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo });
+    return createPiEngine({ engineId, config: piCfg, onTaskUpdated, dialect, modelSettingsRepo });
   },
   scripted: () => new MockExecutionEngine(),
 };
@@ -172,7 +170,6 @@ function buildEngineInstances(
   engines: EngineEntry[],
   factories: Record<string, EngineFactory>,
   onTaskUpdated: OnTaskUpdated,
-  onNewMessage: OnNewMessage,
 ): Map<string, ExecutionEngine> {
   const map = new Map<string, ExecutionEngine>();
   for (const entry of engines) {
@@ -182,7 +179,7 @@ function buildEngineInstances(
       continue;
     }
     try {
-      map.set(entry.id, factory(entry.id, entry.config, onTaskUpdated, onNewMessage));
+      map.set(entry.id, factory(entry.id, entry.config, onTaskUpdated));
     } catch (err) {
       console.error(`[engine] Failed to construct engine '${entry.id}':`, err);
     }
@@ -226,22 +223,27 @@ if (injectedEngine) {
     uniqueEngines,
     engineFactories,
     notifier.notifyTaskUpdated.bind(notifier),
-    notifier.notifyNewMessage.bind(notifier),
   );
   engineRegistry = new EngineRegistry(instanceMap, getWorkspaceConfig);
 }
 
+// Session-status replacement push (07-01 Pitfall 2): consume() fires
+// onSessionStatusChange at every chat_sessions status write; this wrapper
+// broadcasts chatSession.updated so the sidebar flips running → idle without
+// the removed stream.event "done" push.
+const sessionStatusCb = (conversationId: number): void => {
+  const row = db.query<{ id: number }, [number]>(
+    "SELECT id FROM chat_sessions WHERE conversation_id = ?",
+  ).get(conversationId);
+  if (row) {
+    const session = fetchChatSessionWithModel(db, row.id);
+    if (session) notifier.notifyChatSessionUpdated(session);
+  }
+};
+
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo, registryPool)
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), wsRepo, sessionStatusCb, worktreeManager, modelSettingsRepo, registryPool)
   : null;
-
-if (orchestrator) {
-  orchestrator.setOnStreamEvent(streamProc.onStreamEvent.bind(streamProc));
-  // Late-bind: resolves the circular dependency (orchestrator needs streamProc, streamProc needs orchestrator)
-  streamProc.setMarkClaudeExecution((id) => orchestrator.markClaudeExecution(id));
-}
-
-streamProc.start();
 
 // ─── Start retention job ──────────────────────────────────────────────────────
 const { RetentionJob } = await import("./jobs/retention-job.ts");

@@ -2,7 +2,6 @@ import type { Database } from "bun:sqlite";
 import type { ConversationMessage, ModelParamValue } from "../../shared/rpc-types.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 import { mapConversationMessage } from "../db/mappers.ts";
-import { getStreamEventsByConversation, type PersistedStreamEvent } from "../db/stream-events.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import { runWithConfig } from "../config/index.ts";
@@ -45,13 +44,6 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       const hasMore = rows.length > limit;
       const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);
       return { messages, hasMore };
-    },
-
-    "conversations.getStreamEvents": async (params: {
-      conversationId: number;
-      afterSeq?: number;
-    }): Promise<PersistedStreamEvent[]> => {
-      return getStreamEventsByConversation(db, params.conversationId, params.afterSeq);
     },
 
     "conversations.contextUsage": async (params: {

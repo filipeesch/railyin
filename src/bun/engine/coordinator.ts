@@ -21,13 +21,10 @@ export interface ExecutionCoordinator {
     executeTransition(taskId: number, toState: string): Promise<{ task: Task; executionId: number | null }>;
     executeHumanTurn(taskId: number, content: string, attachments?: import("../../shared/rpc-types.ts").Attachment[], engineContent?: string, opts?: ChatTurnOpts): Promise<{ message: ConversationMessage; executionId: number }>;
     executeRetry(taskId: number): Promise<{ task: Task; executionId: number }>;
-    respondShellApprovalByExecution(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void>;
     executeCodeReview(taskId: number, manualEdits?: ManualEdit[]): Promise<{ message: ConversationMessage; executionId: number }>;
     executeChatTurn(sessionId: number, conversationId: number, content: string, model?: string, enabledMcpTools?: string[] | null, workspaceKey?: string, attachments?: import("../../shared/rpc-types.ts").Attachment[], engineContent?: string, opts?: ChatTurnOpts): Promise<{ message: ConversationMessage; executionId: number }>;
     cancel(executionId: number): void;
     listModels(workspaceKey?: string, engineType?: string): Promise<EngineModelInfo[]>;
-    compactTask(taskId: number): Promise<void>;
-    compactConversation(conversationId: number, workspaceKey?: string): Promise<void>;
     listCommands(taskId: number): Promise<CommandInfo[]>;
     shutdownNonNativeEngines?(options?: import("./types.ts").EngineShutdownOptions): Promise<void>;
 }

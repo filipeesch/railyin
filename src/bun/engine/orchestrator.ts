@@ -12,19 +12,15 @@
 import type {
   OnError,
   OnTaskUpdated,
-  OnNewMessage,
-  OnStreamEvent,
   EngineShutdownOptions,
   EngineModelInfo,
 } from "./types.ts";
 import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
-import { mapTask, mapConversationMessage } from "../db/mappers.ts";
+import { mapTask } from "../db/mappers.ts";
 import { fetchTaskWithModel } from "../db/task-queries.ts";
 import type { Database } from "bun:sqlite";
-import type { TaskRow, ConversationMessageRow } from "../db/row-types.ts";
 import { runWithConfig } from "../config/index.ts";
-import { getEffectiveWorkspacePath } from "../config/path-utils.ts";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
 import type { IWorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
@@ -39,8 +35,6 @@ import { HumanTurnExecutor } from "./execution/human-turn-executor.ts";
 import { RetryExecutor } from "./execution/retry-executor.ts";
 import { CodeReviewExecutor } from "./execution/code-review-executor.ts";
 import { ChatExecutor } from "./execution/chat-executor.ts";
-import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
-import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
@@ -65,20 +59,17 @@ export class Orchestrator implements ExecutionCoordinator {
   private readonly wsRepo: IWorkspaceRepository;
 
   private readonly onTaskUpdated: OnTaskUpdated;
-  private readonly onNewMessage: OnNewMessage;
-
-  setOnStreamEvent(cb: OnStreamEvent): void {
-    this.streamProcessor.setOnStreamEvent(cb);
-  }
+  /** Default chat_sessions status callback — wired into every chat/human turn so
+   * the session sidebar flips running → idle even when AG-UI callers pass no opts. */
+  private readonly sessionStatusCb: (conversationId: number) => void;
 
   constructor(
     db: Database,
     registry: EngineRegistry,
     onError: OnError,
     onTaskUpdated: OnTaskUpdated,
-    onNewMessage: OnNewMessage,
     wsRepo: IWorkspaceRepository,
-    onRawMessageEnqueued?: (item: RawMessageItem) => void,
+    onSessionStatusChange?: (conversationId: number) => void,
     worktreeManager?: WorktreeManager,
     modelSettingsRepo?: ModelSettingsRepository,
     registryPool?: McpRegistryPool,
@@ -86,11 +77,8 @@ export class Orchestrator implements ExecutionCoordinator {
     this.db = db;
     this.registry = registry;
     this.onTaskUpdated = onTaskUpdated;
-    this.onNewMessage = onNewMessage;
     this.wsRepo = wsRepo;
-
-    const rawBuffer = createRawMessageBuffer(db, { onEnqueue: onRawMessageEnqueued });
-    rawBuffer.start();
+    this.sessionStatusCb = onSessionStatusChange ?? (() => {});
 
     const boardTools = new BoardToolExecutor(db, wsRepo, worktreeManager);
 
@@ -128,14 +116,23 @@ export class Orchestrator implements ExecutionCoordinator {
       paramsEnricher,
     );
     this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, promptAssemblyService, slashCommandResolver, paramsEnricher);
-    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, onNewMessage, wsRepo, boardTools, promptAssemblyService);
-    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, crossEngineInjector, slashCommandResolver, paramsEnricher, boardTools, onNewMessage);
+    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools, promptAssemblyService);
+    this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, crossEngineInjector, slashCommandResolver, paramsEnricher, boardTools);
   }
 
   // ─── Execution dispatch ─────────────────────────────────────────────────────
 
   executeTransition(taskId: number, toState: string): Promise<{ task: Task; executionId: number | null }> {
     return this.transitionExecutor.execute(taskId, toState);
+  }
+
+  /**
+   * Merges the orchestrator-level session-status default into caller opts so the
+   * chatSession.updated push fires even when AG-UI callers pass no onSessionStatusChange.
+   */
+  private mergeSessionStatusOpts(opts?: import("./coordinator.ts").ChatTurnOpts): import("./coordinator.ts").ChatTurnOpts | undefined {
+    if (!opts) return { onSessionStatusChange: this.sessionStatusCb };
+    return { ...opts, onSessionStatusChange: opts.onSessionStatusChange ?? this.sessionStatusCb };
   }
 
   executeHumanTurn(
@@ -145,7 +142,7 @@ export class Orchestrator implements ExecutionCoordinator {
     engineContent?: string,
     opts?: import("./coordinator.ts").ChatTurnOpts,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
-    return this.humanTurnExecutor.execute(taskId, content, attachments, engineContent, opts);
+    return this.humanTurnExecutor.execute(taskId, content, attachments, engineContent, this.mergeSessionStatusOpts(opts));
   }
 
   executeRetry(taskId: number): Promise<{ task: Task; executionId: number }> {
@@ -172,14 +169,10 @@ export class Orchestrator implements ExecutionCoordinator {
     engineContent?: string,
     opts?: import("./coordinator.ts").ChatTurnOpts,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
-    return this.chatExecutor.execute(sessionId, conversationId, content, model, enabledMcpTools, workspaceKey, attachments, engineContent, opts);
+    return this.chatExecutor.execute(sessionId, conversationId, content, model, enabledMcpTools, workspaceKey, attachments, engineContent, this.mergeSessionStatusOpts(opts));
   }
 
   // ─── Cancellation ──────────────────────────────────────────────────────────
-
-  markClaudeExecution(executionId: number): void {
-    this.streamProcessor.markClaudeExecution(executionId);
-  }
 
   cancel(executionId: number): void {
     this.streamProcessor.abort(executionId);
@@ -265,92 +258,5 @@ export class Orchestrator implements ExecutionCoordinator {
 
   async shutdownNonNativeEngines(options: EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
     return this.registry.shutdown(options);
-  }
-
-  // ─── Shell approval ─────────────────────────────────────────────────────────
-
-  async respondShellApprovalByExecution(
-    executionId: number,
-    decision: "approve_once" | "approve_all" | "deny",
-  ): Promise<void> {
-    const db = this.db;
-
-    const execRow = db
-      .query<{ task_id: number | null; conversation_id: number | null; model: string | null }, [number]>(
-        `SELECT e.task_id, e.conversation_id, c.model
-         FROM executions e
-         LEFT JOIN conversations c ON c.id = e.conversation_id
-         WHERE e.id = ?`,
-      )
-      .get(executionId);
-
-    if (!execRow) return;
-
-    const { task_id: taskId, conversation_id: conversationId } = execRow;
-
-    const workspaceKey = taskId != null
-      ? this.wsRepo.getTaskWorkspaceKey(taskId)
-      : (db
-          .query<{ workspace_key: string }, [number]>(
-            "SELECT cs.workspace_key FROM chat_sessions cs WHERE cs.conversation_id = ?",
-          )
-          .get(conversationId ?? 0)?.workspace_key ?? getDefaultWorkspaceKey());
-
-    const engine = this.registry.resolveEngineForModel(workspaceKey, execRow.model);
-    await engine.resume(executionId, { type: "shell_approval", decision });
-
-    if (taskId != null) {
-      db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
-      db.run(
-        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
-        [executionId],
-      );
-      this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
-    } else if (conversationId != null) {
-      db.run("UPDATE chat_sessions SET status = 'running' WHERE conversation_id = ?", [conversationId]);
-      db.run(
-        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
-        [executionId],
-      );
-    }
-  }
-
-  async compactTask(taskId: number): Promise<void> {
-    const db = this.db;
-    const task = db.query<TaskRow & { conversation_model: string | null }, [number]>(
-      `SELECT t.*, c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?`,
-    ).get(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
-    const workspaceKey = this.wsRepo.getTaskWorkspaceKey(taskId);
-    const engine = this.registry.resolveEngineForModel(workspaceKey, task.conversation_model);
-    if (!engine.compact) {
-      throw new Error(`Engine for task ${taskId} does not support manual compaction`);
-    }
-    const workingDirectory = this.workdirResolver.resolve(task);
-    const conversationId = task.conversation_id ?? 0;
-    await engine.compact(taskId, conversationId, workingDirectory, workspaceKey);
-    const lastMsg = db.query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
-    if (lastMsg) {
-      this.onNewMessage(mapConversationMessage(lastMsg));
-    }
-  }
-
-  async compactConversation(conversationId: number, workspaceKey = getDefaultWorkspaceKey()): Promise<void> {
-    const config = getWorkspaceConfig(workspaceKey);
-    const conversationModel = (this.db.prepare("SELECT model FROM conversations WHERE id = ?").get(conversationId) as { model: string | null } | undefined)?.model;
-    const engine = this.registry.resolveEngineForModel(workspaceKey, conversationModel);
-    if (!engine.compact) {
-      throw new Error(`Engine for conversation ${conversationId} does not support manual compaction`);
-    }
-    const workingDirectory = getEffectiveWorkspacePath(config);
-    await engine.compact(null, conversationId, workingDirectory, workspaceKey);
-    const lastMsg = this.db.query<ConversationMessageRow, [number]>(
-      "SELECT * FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
-    if (lastMsg) {
-      this.onNewMessage(mapConversationMessage(lastMsg));
-    }
   }
 }

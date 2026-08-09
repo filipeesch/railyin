@@ -26,15 +26,7 @@ describe("NotificationService", () => {
     expect(calls).toEqual([{ type: "task.updated", payload: task }]);
   });
 
-  test("NS-3 — notifyNewMessage broadcasts message.new", () => {
-    const { channel, calls } = makeChannel();
-    const svc = new NotificationService(channel);
-    const message = { id: 99, content: "hello" } as any;
-    svc.notifyNewMessage(message);
-    expect(calls).toEqual([{ type: "message.new", payload: message }]);
-  });
-
-  test("NS-4 — notifyWorkflowReloaded broadcasts workflow.reloaded", () => {
+  test("NS-3 — notifyWorkflowReloaded broadcasts workflow.reloaded", () => {
     const { channel, calls } = makeChannel();
     const svc = new NotificationService(channel);
     svc.notifyWorkflowReloaded();

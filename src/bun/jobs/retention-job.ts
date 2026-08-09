@@ -1,5 +1,7 @@
 import type { Database } from "bun:sqlite";
-import type { WaitFn } from "../pipeline/write-buffer.ts";
+
+/** Relocated from the deleted pipeline batching module (07-01) — its only remaining importer. */
+export type WaitFn = (ms: number) => Promise<void>;
 
 const defaultWaitFn: WaitFn = (ms) => new Promise((r) => setTimeout(r, ms));
 

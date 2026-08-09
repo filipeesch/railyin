@@ -72,7 +72,6 @@ function makeOrchestrator(engine: ExecutionEngine): Orchestrator {
     makeTestRegistry(engine),
     noop,
     noop,
-    noop,
     new WorkspaceRepository(db),
   );
 }

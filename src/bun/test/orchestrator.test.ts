@@ -16,8 +16,8 @@ import { resetConfig, loadConfig } from "../config/index.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { Database } from "bun:sqlite";
-import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
+import type { Task } from "../../shared/rpc-types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent } from "../engine/types.ts";
 
 let db: Database;
 let gitDir: string;
@@ -26,9 +26,22 @@ let orchestrator: Orchestrator;
 
 function noop() { }
 
+/** Polls the executions table until the row reaches a terminal status (runNonNative is fire-and-forget). */
+async function waitForExecutionCompleted(executionId: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const row = db
+      .query<{ status: string | null }, [number]>("SELECT status FROM executions WHERE id = ?")
+      .get(executionId);
+    if (row?.status === "completed") return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`execution ${executionId} did not reach 'completed' within ${timeoutMs}ms`);
+}
+
 const tokens: string[] = [];
 const taskUpdates: Task[] = [];
-const newMessages: ConversationMessage[] = [];
+
 
 class TestEngine implements ExecutionEngine {
   readonly type = "scripted";
@@ -36,7 +49,7 @@ class TestEngine implements ExecutionEngine {
     yield { type: "token", content: "Done." };
     yield { type: "done" };
   }
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+  async resume(_executionId: number, _input: never): Promise<void> { }
   cancel(_executionId: number): void { }
   async listModels() {
     return [{ qualifiedId: "copilot/mock-model", displayName: "Mock Model", contextWindow: 128_000 }];
@@ -47,14 +60,12 @@ class TestEngine implements ExecutionEngine {
 function makeOrchestrator(): Orchestrator {
   tokens.length = 0;
   taskUpdates.length = 0;
-  newMessages.length = 0;
 
   return new Orchestrator(
     db,
     makeTestRegistry(new TestEngine()),
     noop,
     (task) => taskUpdates.push(task),
-    (msg) => newMessages.push(msg),
     new WorkspaceRepository(db),
   );
 }
@@ -172,20 +183,30 @@ describe("Orchestrator.executeTransition", () => {
 // ─── executeHumanTurn ────────────────────────────────────────────────────────
 
 describe("Orchestrator.executeHumanTurn", () => {
-  it("appends user + assistant messages to DB", async () => {
+  it("07-01 — completes the execution lifecycle and writes zero assistant rows (frozen tables)", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
 
-    let resolveDone!: () => void;
-    const donePromise = new Promise<void>((resolve) => (resolveDone = resolve));
+    const { executionId } = await orchestrator.executeHumanTurn(taskId, "What should I do first?");
 
-    orchestrator.setOnStreamEvent((event) => {
-      if (event.done) resolveDone();
-    });
+    // The DB lifecycle triad drives the board: execution completed, task completed.
+    await waitForExecutionCompleted(executionId);
+    const taskRow = db
+      .query<{ execution_state: string }, [number]>(
+        "SELECT execution_state FROM tasks WHERE id = ?",
+      )
+      .get(taskId);
+    expect(taskRow!.execution_state).toBe("completed");
 
-    await orchestrator.executeHumanTurn(taskId, "What should I do first?");
-    await donePromise;
+    const execRow = db
+      .query<{ status: string }, [number]>(
+        "SELECT status FROM executions WHERE id = ?",
+      )
+      .get(executionId);
+    expect(execRow!.status).toBe("completed");
 
+    // The user message is still written by the executor (appendMessage, excised in
+    // Task 4) — but consume() writes NO assistant rows anymore (07-01 zero-write).
     const userMsg = db
       .query<{ content: string }, [number]>(
         "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
@@ -198,7 +219,7 @@ describe("Orchestrator.executeHumanTurn", () => {
         "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'assistant' ORDER BY id DESC LIMIT 1",
       )
       .get(taskId);
-    expect(assistantMsg!.content.length).toBeGreaterThan(0);
+    expect(assistantMsg).toBeNull();
   });
 
   it("creates an execution record", async () => {
@@ -249,7 +270,7 @@ describe("Orchestrator.executeHumanTurn", () => {
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+      async resume(_executionId: number, _input: never): Promise<void> { }
       cancel(_executionId: number): void { }
       async listModels() { return []; }
       async listCommands() { return []; }
@@ -260,7 +281,6 @@ describe("Orchestrator.executeHumanTurn", () => {
       makeTestRegistry(new StubEngine()),
       noop,
       (task) => taskUpdates.push(task),
-      (msg) => newMessages.push(msg),
       new WorkspaceRepository(db),
     );
 
@@ -298,98 +318,6 @@ describe("Orchestrator.executeChatTurn", () => {
       .get(executionId);
 
     expect(row).toEqual({ task_id: null, conversation_id: conversationId });
-  });
-});
-
-describe("Orchestrator.respondShellApprovalByExecution", () => {
-  it("OSA-MODEL-1: shell approval push preserves task model", async () => {
-    class ApproveEngine implements ExecutionEngine {
-      readonly type = "scripted";
-      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
-        yield { type: "done" };
-      }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
-      cancel(_executionId: number): void {}
-      async listModels() { return []; }
-      async listCommands() { return []; }
-    }
-
-    const approvalOrchestrator = new Orchestrator(
-      db,
-      makeTestRegistry(new ApproveEngine()),
-      noop,
-      (task) => taskUpdates.push(task),
-      (msg) => newMessages.push(msg),
-      new WorkspaceRepository(db),
-    );
-
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'fake/fake' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-    db.run(
-      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'waiting_user', 1)",
-      [taskId],
-    );
-    const executionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
-    db.run("UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?", [executionId, taskId]);
-
-    await approvalOrchestrator.respondShellApprovalByExecution(executionId, "approve_once");
-
-    expect(taskUpdates.at(-1)?.model).toBe("fake/fake");
-  });
-
-  it("keeps waiting_user state when resume fails", async () => {
-    let seededExecutionId = 0;
-    class RejectingResumeEngine implements ExecutionEngine {
-      readonly type = "scripted";
-      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
-        yield { type: "done" };
-      }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {
-        throw new Error(`Execution ${seededExecutionId} is not waiting for resume input`);
-      }
-      cancel(_executionId: number): void { }
-      async listModels() { return []; }
-      async listCommands() { return []; }
-    }
-
-    const approvalOrchestrator = new Orchestrator(
-      db,
-      makeTestRegistry(new RejectingResumeEngine()),
-      noop,
-      (task) => taskUpdates.push(task),
-      (msg) => newMessages.push(msg),
-      new WorkspaceRepository(db),
-    );
-
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run(
-      "INSERT INTO executions (task_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, 'plan', 'plan', 'human-turn', 'waiting_user', 1)",
-      [taskId],
-    );
-    const executionId = db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!.id;
-    seededExecutionId = executionId;
-    db.run(
-      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?",
-      [executionId, taskId],
-    );
-
-    await expect(approvalOrchestrator.respondShellApprovalByExecution(executionId, "approve_once")).rejects.toThrow(
-      `Execution ${executionId} is not waiting for resume input`,
-    );
-
-    const taskRow = db
-      .query<{ execution_state: string; current_execution_id: number | null }, [number]>(
-        "SELECT execution_state, current_execution_id FROM tasks WHERE id = ?",
-      )
-      .get(taskId);
-    expect(taskRow).toEqual({ execution_state: "waiting_user", current_execution_id: executionId });
-
-    const execRow = db
-      .query<{ status: string; finished_at: string | null }, [number]>(
-        "SELECT status, finished_at FROM executions WHERE id = ?",
-      )
-      .get(executionId);
-    expect(execRow).toEqual({ status: "waiting_user", finished_at: null });
   });
 });
 
@@ -443,7 +371,7 @@ describe("Orchestrator.cancel", () => {
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+      async resume(_executionId: number, _input: never): Promise<void> { }
       cancel(_executionId: number): void { }
       async listModels() { return []; }
       async listCommands() { return []; }
@@ -454,7 +382,6 @@ describe("Orchestrator.cancel", () => {
       makeTestRegistry(new CancelStubEngine()),
       noop,
       (task) => taskUpdates.push(task),
-      (msg) => newMessages.push(msg),
       new WorkspaceRepository(db),
     );
 
@@ -515,7 +442,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+      async resume(_executionId: number, _input: never): Promise<void> { }
       cancel(_executionId: number): void { }
       async listModels() { return []; }
       async listCommands() { return []; }
@@ -527,7 +454,6 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
       makeTestRegistry(new ShutdownStubEngine()),
       noop,
       (task) => taskUpdates.push(task),
-      (msg) => newMessages.push(msg),
       new WorkspaceRepository(db),
     );
 
@@ -582,7 +508,7 @@ columns:
       capturedParams.push(params);
       yield { type: "done" };
     }
-    async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+    async resume(_executionId: number, _input: never): Promise<void> { }
     cancel(_executionId: number): void { }
     async listModels() {
       return [{ qualifiedId: "copilot/mock-model", displayName: "Mock", contextWindow: 128_000 }];
@@ -597,7 +523,6 @@ columns:
       makeTestRegistry(new CapturingEngine()),
       noop,
       (task) => taskUpdates.push(task),
-      (msg) => newMessages.push(msg),
       new WorkspaceRepository(db),
     );
   }

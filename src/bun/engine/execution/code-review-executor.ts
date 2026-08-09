@@ -11,7 +11,7 @@ import type { EngineRegistry } from "../engine-registry.ts";
 import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
-import type { OnTaskUpdated, OnNewMessage } from "../types.ts";
+import type { OnTaskUpdated } from "../types.ts";
 import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../../db/row-types.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
@@ -50,7 +50,6 @@ export class CodeReviewExecutor {
     private readonly workdirResolver: IWorkingDirectoryResolver,
     private readonly streamProcessor: StreamProcessor,
     private readonly onTaskUpdated: OnTaskUpdated,
-    private readonly onNewMessage: OnNewMessage,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
     private readonly promptAssemblyService: PromptAssemblyService,
@@ -159,10 +158,11 @@ export class CodeReviewExecutor {
     );
     this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
 
+    // Frozen-table read: the code_review row written by appendMessage above feeds
+    // the legacy { message, executionId } return contract (reworked in 07-01 Task 4).
     const reviewMsgRow = db
       .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
       .get(reviewMsgId)!;
-    this.onNewMessage(mapConversationMessage(reviewMsgRow));
 
     const signal = this.streamProcessor.createSignal(executionId);
 
