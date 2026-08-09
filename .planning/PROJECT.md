@@ -155,4 +155,4 @@ Spike-proven facts (probe server `startServer({ copilotkitProbe: true })`, `@cop
 ```
 
 ---
-*Last updated: 2026-08-09 (Phase 7 complete: cleanup & feature trim — milestone v1.0 complete)*
+*Last updated: 2026-08-09 after v1.0 milestone*
