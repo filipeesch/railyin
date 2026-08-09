@@ -10,7 +10,7 @@
  * the base runner cannot bleed a prior test's history into the hot-path probe.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { EventType, type RunAgentInput } from "@ag-ui/core";
@@ -119,7 +119,7 @@ describe("RailyinAgentRunner", () => {
       input: runInput("102", "wire-1", "hello"),
     };
 
-    const streamEvents = await collect(runner.run(request));
+    const streamEvents = await collect<BaseEvent>(runner.run(request));
     const fileEvents = store.read("102");
     expect(fileEvents).not.toBeNull();
     // Wire-exact: the log contains exactly what the client received.
@@ -134,13 +134,14 @@ describe("RailyinAgentRunner", () => {
   });
 
   test("3a: missing file → connect completes empty (RUNR-06)", async () => {
-    const events = await collect(runner.connect({ threadId: "9001" }));
+    const events = await collect<BaseEvent>(runner.connect({ threadId: "9001" }));
     expect(events).toEqual([]);
   });
 
   test("3b: empty file → connect completes empty", async () => {
+    mkdirSync(join(tmp.dir, "threads"), { recursive: true });
     writeFileSync(threadLogPath(tmp.dir, "9002"), "", "utf-8");
-    const events = await collect(runner.connect({ threadId: "9002" }));
+    const events = await collect<BaseEvent>(runner.connect({ threadId: "9002" }));
     expect(events).toEqual([]);
   });
 
@@ -148,7 +149,7 @@ describe("RailyinAgentRunner", () => {
     appendCompletedRun(store, "9003", "r1", "one");
     appendCompletedRun(store, "9003", "r2", "two");
 
-    const events = await collect(runner.connect({ threadId: "9003" }));
+    const events = await collect<BaseEvent>(runner.connect({ threadId: "9003" }));
     const types = events.map((e) => e.type);
     // Per-run boundary order preserved through compaction.
     const boundaries = types.filter((t) => t === EventType.RUN_STARTED || t === EventType.RUN_FINISHED);
@@ -171,13 +172,13 @@ describe("RailyinAgentRunner", () => {
     store.append("9004", ev(EventType.TOOL_CALL_ARGS, { toolCallId: "call_1", delta: "{}" }));
     // crash — no END/RESULT/terminal in the log
 
-    const events = await collect(runner.connect({ threadId: "9004" }));
+    const events = await collect<BaseEvent>(runner.connect({ threadId: "9004" }));
     expect(events.length).toBeGreaterThan(0);
     // finalizeRunEvents appends the INCOMPLETE_STREAM terminal.
     expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
     // No stale running tool card: the dangling call got a synthesized RESULT.
     const types = events.map((e) => e.type);
-    expect(types).toContain("TOOL_CALL_RESULT");
+    expect(types).toContain(EventType.TOOL_CALL_RESULT);
     expect((events.find((e) => e.type === "TOOL_CALL_RESULT") as { toolCallId?: string }).toolCallId).toBe("call_1");
   });
 
@@ -189,7 +190,7 @@ describe("RailyinAgentRunner", () => {
     store.append("9005", ev(EventType.RUN_ERROR, { message: "scripted failure", code: "ENGINE_ERROR" }));
     appendCompletedRun(store, "9005", "good-2", "good");
 
-    const events = await collect(runner.connect({ threadId: "9005" }));
+    const events = await collect<BaseEvent>(runner.connect({ threadId: "9005" }));
     const types = events.map((e) => e.type);
     // The later run's events are dropped entirely — nothing hydrates past a RUN_ERROR.
     expect(events.some((e) => (e as { delta?: string }).delta === "good")).toBe(false);
@@ -206,9 +207,9 @@ describe("RailyinAgentRunner", () => {
     store.append("9006", ev(EventType.TOOL_CALL_END, { toolCallId: "call_9" }));
     store.append("9006", ev(EventType.RUN_FINISHED, { threadId: "9006", runId: "dangle-1", result: null }));
 
-    const events = await collect(runner.connect({ threadId: "9006" }));
+    const events = await collect<BaseEvent>(runner.connect({ threadId: "9006" }));
     const types = events.map((e) => e.type);
-    expect(types).toContain("TOOL_CALL_RESULT");
+    expect(types).toContain(EventType.TOOL_CALL_RESULT);
     const result = events.find((e) => e.type === "TOOL_CALL_RESULT") as {
       toolCallId?: string;
       messageId?: string;
@@ -218,7 +219,7 @@ describe("RailyinAgentRunner", () => {
     expect(result.messageId).toBe("call_9-result");
     expect(result.content).toBe("");
     // The synthetic RESULT precedes the terminal — no stale running card.
-    expect(types.indexOf("TOOL_CALL_RESULT")).toBeLessThan(types.indexOf(EventType.RUN_FINISHED));
+    expect(types.indexOf(EventType.TOOL_CALL_RESULT)).toBeLessThan(types.indexOf(EventType.RUN_FINISHED));
   });
 
   test("5: hot path — after a run in this process, connect replays from the in-memory store (super.connect)", async () => {
@@ -233,10 +234,10 @@ describe("RailyinAgentRunner", () => {
       }),
       input: runInput("103", "hot-1"),
     };
-    const runEvents = await collect(runner.run(request));
+    const runEvents = await collect<BaseEvent>(runner.run(request));
     expect(runEvents.length).toBeGreaterThan(0);
 
-    const connected = await collect(runner.connect({ threadId: "103" }));
+    const connected = await collect<BaseEvent>(runner.connect({ threadId: "103" }));
     const types = connected.map((e) => e.type);
     expect(types[0]).toBe(EventType.RUN_STARTED);
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
