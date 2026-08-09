@@ -114,7 +114,6 @@ export class RetryExecutor {
         systemInstructions,
         this.workdirResolver.resolve(updatedRow),
         signal,
-        this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
         undefined,
         config.projects.find((p) => p.key === updatedRow.project_key)?.projectPath,

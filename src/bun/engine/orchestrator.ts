@@ -95,7 +95,7 @@ export class Orchestrator implements ExecutionCoordinator {
     const boardTools = new BoardToolExecutor(db, wsRepo, worktreeManager);
 
     this.streamProcessor = new StreamProcessor(
-      db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage,
+      db, () => {}, onError, onTaskUpdated,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );

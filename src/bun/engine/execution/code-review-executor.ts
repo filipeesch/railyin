@@ -193,7 +193,6 @@ export class CodeReviewExecutor {
         systemInstructions,
         this.workdirResolver.resolve(task),
         signal,
-        this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
         undefined,
         config.projects.find((p) => p.key === task.project_key)?.projectPath,

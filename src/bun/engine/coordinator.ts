@@ -7,6 +7,14 @@ import type { EngineModelInfo, CommandInfo, EngineEvent } from "./types.ts";
 export interface ChatTurnOpts {
   onEngineEvent?: (event: EngineEvent) => void;
   onRunEnd?: (outcome: "done" | "error" | "aborted" | "decision") => void;
+  /**
+   * Fired whenever consume() writes chat_sessions status for a standalone
+   * session (taskId == null) at a terminal path (done/error/abort/catch/
+   * decision). The orchestrator uses it to broadcast chatSession.updated —
+   * the replacement for the removed stream.event "done" push that previously
+   * flipped the session sidebar from running to idle.
+   */
+  onSessionStatusChange?: (conversationId: number) => void;
 }
 
 export interface ExecutionCoordinator {

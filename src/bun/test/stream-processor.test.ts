@@ -1,15 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
+import { initDb, seedChatSession, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
-import { WriteBuffer } from "../pipeline/write-buffer.ts";
-import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
-import type { ConversationMessage } from "../../shared/rpc-types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent } from "../engine/types.ts";
 import type { Database } from "bun:sqlite";
 
 function noop(..._args: unknown[]): void {}
-
-const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 
 let db: Database;
 let configCleanup: () => void;
@@ -17,7 +12,7 @@ let taskId: number;
 let conversationId: number;
 let executionId: number;
 
-function insertExecution(db: Database, tid: number, cid: number): number {
+function insertExecution(db: Database, tid: number | null, cid: number): number {
   db.run(
     "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (?, ?, 'plan', 'plan', 'human-turn', 'running', 1)",
     [tid, cid],
@@ -37,12 +32,31 @@ function makeParams(tid: number | null, cid: number, eid: number, signal?: Abort
   };
 }
 
+/** 07-01 ctor helper: (db, onToken, onError, onTaskUpdated[, onDeferredTransition, onPendingMessage]) */
+function makeProcessor(
+  overrides: {
+    onToken?: (t: number | null, c: number, e: number, tok: string, done: boolean, isReasoning?: boolean, isStatus?: boolean) => void;
+    onTaskUpdated?: (t: unknown) => void;
+    onDeferredTransition?: (taskId: number, toState: string) => void;
+    onPendingMessage?: (taskId: number, message: string) => void;
+  } = {},
+): StreamProcessor {
+  return new StreamProcessor(
+    db,
+    overrides.onToken ?? (noop as never),
+    noop as never,
+    (overrides.onTaskUpdated ?? noop) as never,
+    overrides.onDeferredTransition ?? (() => {}),
+    overrides.onPendingMessage ?? (() => {}),
+  );
+}
+
 class NoopEngine implements ExecutionEngine {
   readonly type = "scripted";
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "done" };
   }
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+  async resume(_executionId: number, _input: never): Promise<void> {}
   cancel(_executionId: number): void {}
   async listModels() { return []; }
   async listCommands() { return []; }
@@ -64,7 +78,7 @@ afterEach(() => {
 
 describe("StreamProcessor", () => {
   it("SP-1: createSignal / abort round-trip", () => {
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
+    const sp = makeProcessor();
     const signal = sp.createSignal(executionId);
     expect(signal.aborted).toBe(false);
     sp.abort(executionId);
@@ -72,7 +86,7 @@ describe("StreamProcessor", () => {
   });
 
   it("SP-2: abortControllers cleaned up after done, subsequent createSignal returns fresh signal", async () => {
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
+    const sp = makeProcessor();
     sp.createSignal(executionId);
 
     const engine = new NoopEngine();
@@ -87,7 +101,7 @@ describe("StreamProcessor", () => {
     expect(freshSignal.aborted).toBe(true);
   });
 
-  it("SP-3: token flush on cancel mid-stream", async () => {
+  it("SP-3: 07-01 — cancel mid-stream preserves the DB lifecycle triad (task waiting_user, execution cancelled) and writes zero conversation_messages", async () => {
     let resumeFn!: () => void;
     const paused = new Promise<void>(r => { resumeFn = r; });
     let tokenYieldedFn!: () => void;
@@ -101,13 +115,13 @@ describe("StreamProcessor", () => {
         await paused;
         yield { type: "done" };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      async resume(_executionId: number, _input: never): Promise<void> {}
       cancel(_executionId: number): void {}
       async listModels() { return []; }
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
+    const sp = makeProcessor();
     const signal = sp.createSignal(executionId);
     const params = makeParams(taskId, conversationId, executionId, signal);
     const engine = new PausableEngine();
@@ -120,15 +134,24 @@ describe("StreamProcessor", () => {
 
     await consumePromise;
 
-    const row = db.query<{ role: string; content: string; type: string }, [number]>(
-      "SELECT role, content, type FROM conversation_messages WHERE conversation_id = ? AND type = 'assistant'",
-    ).get(conversationId);
+    const execRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(executionId);
+    expect(execRow!.status).toBe("cancelled");
 
-    expect(row).not.toBeNull();
-    expect(row!.content).toContain("hello");
+    const taskRow = db.query<{ execution_state: string }, [number]>(
+      "SELECT execution_state FROM tasks WHERE id = ?",
+    ).get(taskId);
+    expect(taskRow!.execution_state).toBe("waiting_user");
+
+    // Frozen-table proof: no assistant message row was written on cancel.
+    const rows = db.query<{ type: string }, [number]>(
+      "SELECT type FROM conversation_messages WHERE conversation_id = ? AND type = 'assistant'",
+    ).all(conversationId);
+    expect(rows).toHaveLength(0);
   });
 
-  it("SP-4: reasoning flush on cancel mid-stream", async () => {
+  it("SP-4: 07-01 — cancel mid-reasoning likewise writes zero conversation_messages", async () => {
     let resumeFn!: () => void;
     const paused = new Promise<void>(r => { resumeFn = r; });
     let reasoningYieldedFn!: () => void;
@@ -142,13 +165,13 @@ describe("StreamProcessor", () => {
         await paused;
         yield { type: "done" };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      async resume(_executionId: number, _input: never): Promise<void> {}
       cancel(_executionId: number): void {}
       async listModels() { return []; }
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
+    const sp = makeProcessor();
     const signal = sp.createSignal(executionId);
     const params = makeParams(taskId, conversationId, executionId, signal);
     const engine = new PausableReasoningEngine();
@@ -161,12 +184,15 @@ describe("StreamProcessor", () => {
 
     await consumePromise;
 
-    const row = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'reasoning'",
-    ).get(conversationId);
+    const execRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(executionId);
+    expect(execRow!.status).toBe("cancelled");
 
-    expect(row).not.toBeNull();
-    expect(row!.content).toContain("thinking...");
+    const rows = db.query<{ type: string }, [number]>(
+      "SELECT type FROM conversation_messages WHERE conversation_id = ? AND type = 'reasoning'",
+    ).all(conversationId);
+    expect(rows).toHaveLength(0);
   });
 
   it("SP-5: fatal error sets execution status and task execution_state to failed", async () => {
@@ -175,13 +201,13 @@ describe("StreamProcessor", () => {
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "error", message: "boom", fatal: true };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      async resume(_executionId: number, _input: never): Promise<void> {}
       cancel(_executionId: number): void {}
       async listModels() { return []; }
       async listCommands() { return []; }
     }
 
-    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never, () => {});
+    const sp = makeProcessor();
     const engine = new FatalErrorEngine();
     const params = makeParams(taskId, conversationId, executionId);
 
@@ -198,46 +224,38 @@ describe("StreamProcessor", () => {
     expect(taskRow!.execution_state).toBe("failed");
   });
 
-  it("SP-6: onNewMessage called once with real DB id after assistant message flush", async () => {
+  it("SP-6: 07-01 — a token+done run completes the execution and writes zero conversation_messages rows", async () => {
     class TextEngine implements ExecutionEngine {
       readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "token", content: "hello world" };
         yield { type: "done" };
       }
-      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      async resume(_executionId: number, _input: never): Promise<void> {}
       cancel(_executionId: number): void {}
       async listModels() { return []; }
       async listCommands() { return []; }
     }
 
-    const newMessages: ConversationMessage[] = [];
-    const sp = new StreamProcessor(
-      db,
-      fakeRawBuffer,
-      noop as never,
-      noop as never,
-      noop as never,
-      (msg) => newMessages.push(msg),
-      () => {},
-    );
-
+    const sp = makeProcessor();
     await sp.consume(taskId, conversationId, executionId, new TextEngine().execute(makeParams(taskId, conversationId, executionId)));
 
-    expect(newMessages).toHaveLength(1);
-    expect(newMessages[0].content).toContain("hello world");
-    expect(typeof newMessages[0].id).toBe("number");
-    expect(newMessages[0].id).toBeGreaterThan(0);
+    const execRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(executionId);
+    expect(execRow!.status).toBe("completed");
+
+    const rows = db.query<{ type: string }, [number]>(
+      "SELECT type FROM conversation_messages WHERE conversation_id = ?",
+    ).all(conversationId);
+    expect(rows).toHaveLength(0);
   });
 
   it("SP-7: needs_column_prompt=1 triggers onDeferredTransition with (taskId, workflow_state) and clears flag", async () => {
     db.run("UPDATE tasks SET needs_column_prompt = 1, workflow_state = 'review' WHERE id = ?", [taskId]);
 
     let deferredArgs: [number, string] | null = null;
-    const sp = new StreamProcessor(
-      db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never,
-      (tid, state) => { deferredArgs = [tid, state]; },
-    );
+    const sp = makeProcessor({ onDeferredTransition: (tid, state) => { deferredArgs = [tid, state]; } });
 
     await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
 
@@ -251,11 +269,7 @@ describe("StreamProcessor", () => {
     db.run("INSERT INTO pending_messages (task_id, content) VALUES (?, ?)", [taskId, "world"]);
 
     const delivered: string[] = [];
-    const sp = new StreamProcessor(
-      db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never,
-      () => {},
-      (_tid, msg) => { delivered.push(msg); },
-    );
+    const sp = makeProcessor({ onPendingMessage: (_tid, msg) => { delivered.push(msg); } });
 
     await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
 
@@ -269,13 +283,11 @@ describe("StreamProcessor", () => {
     let pendingCalled = false;
     let taskUpdatedCalled = false;
 
-    const sp = new StreamProcessor(
-      db, fakeRawBuffer, noop as never, noop as never,
-      () => { taskUpdatedCalled = true; },
-      noop as never,
-      () => { deferredCalled = true; },
-      () => { pendingCalled = true; },
-    );
+    const sp = makeProcessor({
+      onTaskUpdated: () => { taskUpdatedCalled = true; },
+      onDeferredTransition: () => { deferredCalled = true; },
+      onPendingMessage: () => { pendingCalled = true; },
+    });
 
     await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
 
@@ -291,11 +303,10 @@ describe("StreamProcessor", () => {
     let deferredCalled = false;
     let pendingCalled = false;
 
-    const sp = new StreamProcessor(
-      db, fakeRawBuffer, noop as never, noop as never, noop as never, noop as never,
-      () => { deferredCalled = true; },
-      () => { pendingCalled = true; },
-    );
+    const sp = makeProcessor({
+      onDeferredTransition: () => { deferredCalled = true; },
+      onPendingMessage: () => { pendingCalled = true; },
+    });
 
     await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
 
@@ -313,12 +324,7 @@ describe("StreamProcessor", () => {
     );
 
     let capturedTask: import("../../shared/rpc-types.ts").Task | null = null;
-    const sp = new StreamProcessor(
-      db, fakeRawBuffer, noop as never, noop as never,
-      (task) => { capturedTask = task; },
-      noop as never,
-      () => {},
-    );
+    const sp = makeProcessor({ onTaskUpdated: (task) => { capturedTask = task as import("../../shared/rpc-types.ts").Task; } });
 
     await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
 
@@ -330,86 +336,68 @@ describe("StreamProcessor", () => {
 
   it("SP-GC-2: onTaskUpdated receives Task with null worktreePath when no task_git_context row exists", async () => {
     let capturedTask: import("../../shared/rpc-types.ts").Task | null = null;
-    const sp = new StreamProcessor(
-      db, fakeRawBuffer, noop as never, noop as never,
-      (task) => { capturedTask = task; },
-      noop as never,
-      () => {},
-    );
+    const sp = makeProcessor({ onTaskUpdated: (task) => { capturedTask = task as import("../../shared/rpc-types.ts").Task; } });
 
     await sp.consume(taskId, conversationId, executionId, new NoopEngine().execute(makeParams(taskId, conversationId, executionId)));
 
     expect(capturedTask).not.toBeNull();
     expect(capturedTask!.worktreePath).toBeNull();
   });
-});
 
-describe("SP-COMPACT: compaction_done content persistence", () => {
-  function makeSummaryEngine(events: EngineEvent[]): ExecutionEngine {
-    return {
-      type: "pi" as const,
+  it("SP-11: onSessionStatusChange fires on the done path for a session run (taskId == null)", async () => {
+    const { conversationId: sessionCid } = seedChatSession(db);
+    const sessionExecutionId = insertExecution(db, null, sessionCid);
+
+    const statusChanges: number[] = [];
+    const opts = { onSessionStatusChange: (cid: number) => statusChanges.push(cid) };
+
+    const sp = makeProcessor();
+    await sp.consume(null, sessionCid, sessionExecutionId, new NoopEngine().execute(makeParams(null, sessionCid, sessionExecutionId)), opts);
+
+    expect(statusChanges).toEqual([sessionCid]);
+
+    const sessRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM chat_sessions WHERE conversation_id = ?",
+    ).get(sessionCid);
+    expect(sessRow!.status).toBe("idle");
+
+    const execRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(sessionExecutionId);
+    expect(execRow!.status).toBe("completed");
+  });
+
+  it("SP-12: onSessionStatusChange fires on the decision path and chat_sessions becomes waiting_user", async () => {
+    const { conversationId: sessionCid } = seedChatSession(db);
+    const sessionExecutionId = insertExecution(db, null, sessionCid);
+
+    class DecisionEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
-        for (const e of events) yield e;
-      },
-      async resume() {},
-      cancel() {},
-      async listModels() { return []; },
-      async listCommands() { return []; },
-    };
-  }
+        yield { type: "decision_request", payload: "{}" };
+      }
+      async resume(_executionId: number, _input: never): Promise<void> {}
+      cancel(_executionId: number): void {}
+      async listModels() { return []; }
+      async listCommands() { return []; }
+    }
 
-  function makeProcessor(onMsg: (m: ConversationMessage) => void = noop) {
-    return new StreamProcessor(
-      db, fakeRawBuffer, noop as never, noop as never, noop as never, onMsg,
-      noop as never, noop as never,
-    );
-  }
+    const statusChanges: number[] = [];
+    const opts = { onSessionStatusChange: (cid: number) => statusChanges.push(cid) };
 
-  it("SP-COMPACT-1: compaction_done with summary → DB row has matching content", async () => {
     const sp = makeProcessor();
-    const engine = makeSummaryEngine([
-      { type: "compaction_done", summary: "Summarised 40 messages." },
-      { type: "done" },
-    ]);
-    await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
+    await sp.consume(null, sessionCid, sessionExecutionId, new DecisionEngine().execute(makeParams(null, sessionCid, sessionExecutionId)), opts);
 
-    const row = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
-    expect(row).toBeDefined();
-    expect(row!.content).toBe("Summarised 40 messages.");
-  });
+    expect(statusChanges).toEqual([sessionCid]);
 
-  it("SP-COMPACT-2: compaction_done without summary → DB row has empty content", async () => {
-    const sp = makeProcessor();
-    const engine = makeSummaryEngine([
-      { type: "compaction_done" },
-      { type: "done" },
-    ]);
-    await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
+    const sessRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM chat_sessions WHERE conversation_id = ?",
+    ).get(sessionCid);
+    expect(sessRow!.status).toBe("waiting_user");
 
-    const row = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
-    ).get(conversationId);
-    expect(row).toBeDefined();
-    expect(row!.content).toBe("");
-  });
-
-  it("SP-COMPACT-3: compaction_start then compaction_done → two rows in order", async () => {
-    const sp = makeProcessor();
-    const engine = makeSummaryEngine([
-      { type: "compaction_start" },
-      { type: "compaction_done", summary: "S" },
-      { type: "done" },
-    ]);
-    await sp.consume(taskId, conversationId, executionId, engine.execute(makeParams(taskId, conversationId, executionId)));
-
-    const rows = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND (type = 'compaction_summary' OR (type = 'system' AND content = 'Compacting conversation…')) ORDER BY id ASC",
-    ).all(conversationId);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]!.type).toBe("system");
-    expect(rows[1]!.type).toBe("compaction_summary");
-    expect(rows[1]!.content).toBe("S");
+    const execRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(sessionExecutionId);
+    expect(execRow!.status).toBe("waiting_user");
   });
 });

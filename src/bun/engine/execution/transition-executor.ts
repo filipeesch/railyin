@@ -154,7 +154,6 @@ export class TransitionExecutor {
         systemInstructions,
         workingDirectory,
         signal,
-        this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
         effectiveModel ?? undefined,
         config.projects.find((p) => p.key === task.project_key)?.projectPath,

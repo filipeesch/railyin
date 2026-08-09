@@ -4,7 +4,7 @@
  * Drives Orchestrator → ChatExecutor → StreamProcessor with a scripted engine
  * and asserts the optional `opts?: { onEngineEvent?, onRunEnd? }` threading:
  *
- *  1. onEngineEvent fires for EVERY raw EngineEvent in exact order (incl. usage/done)
+ *  1. onEngineEvent fires for EVERY raw EngineEvent in exact order
  *  2. executeChatTurn WITHOUT opts is byte-identical (no callbacks, DB statuses unchanged)
  *  3. onRunEnd fires at every terminal outcome: done / error / aborted / decision
  *
@@ -16,13 +16,14 @@ import { initDb, seedChatSession, seedProjectAndTask, setupTestConfig, makeTestR
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { Database } from "bun:sqlite";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent } from "../engine/types.ts";
 
 type RunOutcome = "done" | "error" | "aborted" | "decision";
 
 interface SeamOpts {
   onEngineEvent?: (e: EngineEvent) => void;
   onRunEnd?: (o: RunOutcome) => void;
+  onSessionStatusChange?: (conversationId: number) => void;
 }
 
 let db: Database;
@@ -55,7 +56,7 @@ class SeamEngine implements ExecutionEngine {
     }
   }
 
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {
+  async resume(_executionId: number, _input: never): Promise<void> {
     if (this.resumeThrows) throw new Error("engine session lost");
   }
   cancel(_executionId: number): void { }
@@ -113,13 +114,12 @@ afterEach(() => {
 });
 
 describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
-  it("1: onEngineEvent fires for every raw event in exact order, incl. usage and done", async () => {
+  it("1: onEngineEvent fires for every raw event in exact order, incl. done", async () => {
     orchestrator = makeOrchestrator(new SeamEngine([
       { type: "token", content: "hello" },
       { type: "reasoning", content: "thinking" },
       { type: "tool_start", name: "read_file", callId: "call_1", arguments: "{}" },
       { type: "tool_result", name: "read_file", callId: "call_1", result: "file contents" },
-      { type: "usage", inputTokens: 10, outputTokens: 5 },
       { type: "done" },
     ]));
     const { opts, seen, runEnd } = makeSeamOpts();
@@ -132,14 +132,13 @@ describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
 
     expect(seen.map((e) => e.type)).toEqual([
-      "token", "reasoning", "tool_start", "tool_result", "usage", "done",
+      "token", "reasoning", "tool_start", "tool_result", "done",
     ]);
   });
 
   it("2: without opts — no callbacks, no crash, DB statuses unchanged (done → idle/completed)", async () => {
     orchestrator = makeOrchestrator(new SeamEngine([
       { type: "token", content: "hello" },
-      { type: "usage", inputTokens: 10, outputTokens: 5 },
       { type: "done" },
     ]));
     const { sessionId, conversationId } = seedChatSession(db);
@@ -230,12 +229,14 @@ describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("decision");
   });
 
-  it("3e: WR-01 — decision_request persists accumulated assistant text to conversation_messages (no reload data loss)", async () => {
+  it("3e: 07-01 — decision_request (session run) fires onSessionStatusChange, sets chat_sessions waiting_user, and writes NOTHING to conversation_messages", async () => {
     orchestrator = makeOrchestrator(new SeamEngine([
       { type: "token", content: "I need your decision." },
       { type: "decision_request", payload: "{}" },
     ]));
     const { opts, runEnd } = makeSeamOpts();
+    const statusChanges: number[] = [];
+    opts.onSessionStatusChange = (cid) => statusChanges.push(cid);
     const { sessionId, conversationId } = seedChatSession(db);
 
     await orchestrator.executeChatTurn(
@@ -243,17 +244,63 @@ describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
     );
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("decision");
 
-    // The assistant text preceding the decision is persisted (WR-01) — before
-    // the fix only the live stream saw it and reload history dropped it.
-    const msgs = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? ORDER BY id",
+    // The session-status callback fired for this conversation (replacement for
+    // the message.new push that previously drove the sidebar's waiting_user).
+    expect(statusChanges).toEqual([conversationId]);
+
+    // chat_sessions moved to waiting_user (the new write replaces the push).
+    const sessRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM chat_sessions WHERE conversation_id = ?",
+    ).get(conversationId)!;
+    expect(sessRow.status).toBe("waiting_user");
+
+    // Frozen-table proof: the assistant text preceding the decision is NOT
+    // persisted anymore — zero conversation_messages writes during the run
+    // (the user message row is written by the executor before consume()).
+    const msgs = db.query<{ type: string }, [number]>(
+      "SELECT type FROM conversation_messages WHERE conversation_id = ?",
     ).all(conversationId);
-    const assistant = msgs.find((m) => m.type === "assistant" && m.content === "I need your decision.");
-    expect(assistant).toBeDefined();
-    const assistantIdx = msgs.findIndex((m) => m.type === "assistant" && m.content === "I need your decision.");
-    const decisionIdx = msgs.findIndex((m) => m.type === "decision_request_prompt");
-    expect(assistantIdx).toBeGreaterThan(-1);
-    expect(assistantIdx).toBeLessThan(decisionIdx);
+    const assistant = msgs.find((m) => m.type === "assistant");
+    expect(assistant).toBeUndefined();
+  });
+
+  it("4: onSessionStatusChange fires on the done path for a session run (taskId == null)", async () => {
+    orchestrator = makeOrchestrator(new SeamEngine([
+      { type: "token", content: "hi" },
+      { type: "done" },
+    ]));
+    const { opts, runEnd } = makeSeamOpts();
+    const statusChanges: number[] = [];
+    opts.onSessionStatusChange = (cid) => statusChanges.push(cid);
+    const { sessionId, conversationId } = seedChatSession(db);
+
+    await orchestrator.executeChatTurn(
+      sessionId, conversationId, "hello", undefined, null, undefined, undefined, undefined, opts,
+    );
+    expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
+
+    // consume() wrote chat_sessions 'idle' and fired the callback once.
+    expect(statusChanges).toEqual([conversationId]);
+    const sessRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM chat_sessions WHERE conversation_id = ?",
+    ).get(conversationId)!;
+    expect(sessRow.status).toBe("idle");
+  });
+
+  it("5: onSessionStatusChange does NOT fire for task-bound runs (no chat_sessions write)", async () => {
+    orchestrator = makeOrchestrator(new SeamEngine([
+      { type: "token", content: "hi" },
+      { type: "done" },
+    ]));
+    const { opts, runEnd } = makeSeamOpts();
+    const statusChanges: number[] = [];
+    opts.onSessionStatusChange = (cid) => statusChanges.push(cid);
+    const { taskId } = seedProjectAndTask(db, "/tmp/x");
+
+    await orchestrator.executeHumanTurn(taskId, "hello", undefined, undefined, opts);
+    expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
+
+    expect(statusChanges).toEqual([]);
   });
 });
 
@@ -264,7 +311,6 @@ describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
       { type: "reasoning", content: "thinking" },
       { type: "tool_start", name: "read_file", callId: "call_1", arguments: "{}" },
       { type: "tool_result", name: "read_file", callId: "call_1", result: "file contents" },
-      { type: "usage", inputTokens: 10, outputTokens: 5 },
       { type: "done" },
     ]));
     const { taskId } = seedProjectAndTask(db, "/tmp/x");
@@ -277,14 +323,13 @@ describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
 
     expect(seen.map((e) => e.type)).toEqual([
-      "token", "reasoning", "tool_start", "tool_result", "usage", "done",
+      "token", "reasoning", "tool_start", "tool_result", "done",
     ]);
   });
 
   it("2: absent opts — no callbacks, no crash, DB statuses unchanged (task 'running' → 'completed')", async () => {
     orchestrator = makeOrchestrator(new SeamEngine([
       { type: "token", content: "hello" },
-      { type: "usage", inputTokens: 10, outputTokens: 5 },
       { type: "done" },
     ]));
     const { taskId } = seedProjectAndTask(db, "/tmp/x");
@@ -313,7 +358,7 @@ describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
 
   it("3: fallback path — engine.resume() throws at resume time → new-execution fallback runNonNative still receives opts and streams events", async () => {
     orchestrator = makeOrchestrator(new SeamEngine(
-      [{ type: "token", content: "fallback" }, { type: "usage", inputTokens: 3, outputTokens: 1 }, { type: "done" }],
+      [{ type: "token", content: "fallback" }, { type: "done" }],
       false,
       true, // resume throws → engine session lost → new-execution fallback
     ));
@@ -339,7 +384,7 @@ describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
     // The fallback created a NEW execution (not the seeded one).
     expect(executionId).not.toBe(oldExecutionId);
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
-    expect(seen.map((e) => e.type)).toEqual(["token", "usage", "done"]);
+    expect(seen.map((e) => e.type)).toEqual(["token", "done"]);
 
     // The new execution completed; the old row was finalized as 'failed'.
     const newRow = db.query<{ status: string }, [number]>(
@@ -354,7 +399,7 @@ describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
 
   it("4: IN-03 — a row already finalized to 'completed' (decision resume) is not overwritten with 'failed' by the fallback", async () => {
     orchestrator = makeOrchestrator(new SeamEngine(
-      [{ type: "token", content: "fallback" }, { type: "usage", inputTokens: 3, outputTokens: 1 }, { type: "done" }],
+      [{ type: "token", content: "fallback" }, { type: "done" }],
       false,
       true, // resume throws → fallback path
     ));
@@ -381,7 +426,7 @@ describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
     // The fallback still created a NEW execution (the continuation works).
     expect(executionId).not.toBe(oldExecutionId);
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
-    expect(seen.map((e) => e.type)).toEqual(["token", "usage", "done"]);
+    expect(seen.map((e) => e.type)).toEqual(["token", "done"]);
 
     // The historical row keeps its truthful 'completed' terminal — the
     // fallback's failed update was a no-op (status filter).

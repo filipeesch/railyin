@@ -1,5 +1,5 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
-import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
+import type { Attachment, Task } from "../../shared/rpc-types.ts";
 import type { ModelParamValue, ModelSettingAxis } from "../../shared/rpc-types.ts";
 import type { SamplingPreset } from "../config/index.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
@@ -36,15 +36,8 @@ export type EngineEvent = (
     contentBlocks?: Array<Record<string, unknown>>;
     writtenFiles?: Array<import("../../shared/rpc-types.ts").FileDiffPayload>;
   }
-  | { type: "ask_user"; payload: string /* serialised AskUserPrompt JSON */ }
   | { type: "decision_request"; payload: string /* serialised DecisionRequestPayload JSON */ }
-  | { type: "shell_approval"; command: string; executionId: number }
-  | { type: "status"; message: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number; contextWindow?: number }
   | { type: "task_updated"; task: import("../../shared/rpc-types.ts").Task }
-  | { type: "new_message"; message: import("../../shared/rpc-types.ts").ConversationMessage }
-  | { type: "compaction_start" }
-  | { type: "compaction_done"; summary?: string }
   | { type: "done" }
   | { type: "error"; message: string; fatal?: boolean }
 ) & { isError?: boolean };
@@ -54,12 +47,6 @@ export type EngineEvent = (
 export type OnToken = (taskId: number | null, conversationId: number, executionId: number, token: string, done: boolean, isReasoning?: boolean, isStatus?: boolean) => void;
 export type OnError = (taskId: number | null, conversationId: number, executionId: number, error: string) => void;
 export type OnTaskUpdated = (task: Task) => void;
-export type OnNewMessage = (message: ConversationMessage) => void;
-export type OnStreamEvent = (event: StreamEvent) => void;
-
-export type EngineResumeInput =
-  | { type: "ask_user"; content: string }
-  | { type: "shell_approval"; decision: "approve_once" | "approve_all" | "deny" };
 
 export interface ExecutionParams {
   executionId: number;
@@ -84,12 +71,6 @@ export interface ExecutionParams {
 
   /** Workspace key for the task's workspace. Used by engines to load the correct workspace config (e.g. LSP servers). */
   workspaceKey?: string;
-  /**
-   * Optional sink for raw model events/messages (provider-native payloads).
-   * Used for debugging and incident forensics.
-   */
-  onRawModelMessage?: (message: RawModelMessage) => void;
-
   /**
    * MCP tool visibility filter for list_mcp_tools/invoke_mcp_tool.
    * null/undefined = no per-task/session override => all tools from running, enabled MCP
@@ -203,8 +184,14 @@ export interface ExecutionEngine {
 
   /**
    * Resume a previously paused execution with user input or a permission decision.
+   *
+   * The only live HITL resume channel is decision_request, which flows through
+   * the AG-UI bridge (executeChatTurn/executeHumanTurn via forwardedProps) —
+   * engine-level resume inputs were trimmed with ask_user/shell_approval
+   * (EngineResumeInput deleted). The parameter is kept for engine SDK
+   * compatibility and accepts no values.
    */
-  resume(executionId: number, input: EngineResumeInput): Promise<void>;
+  resume(executionId: number, input: never): Promise<void>;
 
   /**
    * Cancel an in-flight execution by executionId.
