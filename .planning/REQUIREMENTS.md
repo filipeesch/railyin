@@ -16,7 +16,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **CHAT-05**: User sees agent reasoning/thinking display (zero-config reasoning card, pi thinking routed through)
 - [ ] **CHAT-06**: User can use slash commands and `/prompt-name` refs with parity (ref must be the entire leading value)
 - [ ] **CHAT-07**: User can reopen a card or session and see its full conversation history, including across app restarts
-- [ ] **CHAT-08**: User can list and navigate thread conversations via Railyin's own thread-index endpoint (self-hosted; `useThreads` not usable)
+- [x] **CHAT-08**: User can list and navigate thread conversations via Railyin's own thread-index endpoint (self-hosted; `useThreads` not usable)
 - [x] **CHAT-09**: User can approve/reject a decision request as structured cards; the agent run genuinely pauses and resumes with the decision payload
 
 ### Runner & Persistence (RUNR)
@@ -44,8 +44,8 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Import & Migration (IMPR)
 
-- [ ] **IMPR-01**: User can trigger a legacy import button that converts old `conversation_messages`/`stream_events` rows into JSONL threads
-- [ ] **IMPR-02**: Old chat tables are frozen, not dropped; import is on-demand and idempotent
+- [x] **IMPR-01**: User can trigger a legacy import button that converts old `conversation_messages`/`stream_events` rows into JSONL threads
+- [x] **IMPR-02**: Old chat tables are frozen, not dropped; import is on-demand and idempotent
 - [ ] **IMPR-03**: Rollback is possible until the swap is proven — old chat stack code stays alive until the UI swap phase passes E2E
 
 ### Chat UI (UI)
@@ -113,7 +113,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CHAT-05 | Phase 5 | Pending |
 | CHAT-06 | Phase 5 | Pending |
 | CHAT-07 | Phase 5 | Pending |
-| CHAT-08 | Phase 4 | Pending |
+| CHAT-08 | Phase 4 | Complete |
 | CHAT-09 | Phase 3 | Complete |
 | RUNR-01 | Phase 2 | Complete |
 | RUNR-02 | Phase 2 | Complete |
@@ -129,8 +129,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BRDG-01 | Phase 2 | Complete |
 | BRDG-02 | Phase 2 | Complete |
 | BRDG-03 | Phase 2 | Complete |
-| IMPR-01 | Phase 4 | Pending |
-| IMPR-02 | Phase 4 | Pending |
+| IMPR-01 | Phase 4 | Complete |
+| IMPR-02 | Phase 4 | Complete |
 | IMPR-03 | Phase 5 | Pending |
 | UI-01 | Phase 5 | Pending |
 | UI-02 | Phase 5 | Pending |
