@@ -163,6 +163,21 @@ describe("buildDiffPayloadsFromArgs", () => {
     const payloads = buildDiffPayloadsFromArgs(JSON.stringify({ path: "/tmp/c.ts", content: "x\ny" }));
     expect(payloads).toEqual([{ operation: "write_file", path: "/tmp/c.ts", added: 2, removed: 0 }]);
   });
+
+  it("TCD-26: trailing newlines do not overcount diff stats (IN-04)", () => {
+    // "line1\nline2\n" is 2 lines, not 3.
+    const write = buildDiffPayloadsFromArgs({ path: "/tmp/t.ts", content: "line1\nline2\n" });
+    expect(write).toEqual([{ operation: "write_file", path: "/tmp/t.ts", added: 2, removed: 0 }]);
+    const edit = buildDiffPayloadsFromArgs({
+      path: "/tmp/t.ts",
+      old_string: "a\n",
+      new_string: "a\nb\n",
+    });
+    expect(edit).toEqual([{ operation: "edit_file", path: "/tmp/t.ts", added: 2, removed: 1 }]);
+    // Empty strings count zero lines.
+    const empty = buildDiffPayloadsFromArgs({ path: "/tmp/t.ts", content: "" });
+    expect(empty).toEqual([{ operation: "write_file", path: "/tmp/t.ts", added: 0, removed: 0 }]);
+  });
 });
 
 describe("CANONICAL_TOOL_SLOTS / slotForToolCall", () => {

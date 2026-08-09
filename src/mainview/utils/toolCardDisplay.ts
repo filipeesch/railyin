@@ -104,15 +104,24 @@ export function buildDiffPayloadsFromArgs(args: unknown): FileDiffPayload[] {
   if (isDiffPayload(a)) return [a as unknown as FileDiffPayload];
 
   if (typeof a.content === "string") {
-    const added = a.content.length === 0 ? 0 : a.content.split("\n").length;
-    return [{ operation: "write_file", path, added, removed: 0 }];
+    return [{ operation: "write_file", path, added: countLines(a.content), removed: 0 }];
   }
   if (typeof a.old_string === "string" || typeof a.new_string === "string") {
-    const removed = typeof a.old_string === "string" ? a.old_string.split("\n").length : 0;
-    const added = typeof a.new_string === "string" ? a.new_string.split("\n").length : 0;
+    const removed = typeof a.old_string === "string" ? countLines(a.old_string) : 0;
+    const added = typeof a.new_string === "string" ? countLines(a.new_string) : 0;
     return [{ operation: "edit_file", path, added, removed }];
   }
   return [{ operation: "write_file", path, added: 0, removed: 0 }];
+}
+
+/**
+ * Line count for a diff stat — IN-04: `content.split("\n").length` counts a
+ * trailing newline as an extra line ("line1\nline2\n" → 3). Trim one trailing
+ * newline before splitting; empty strings count zero.
+ */
+function countLines(text: string): number {
+  if (text.length === 0) return 0;
+  return text.replace(/\n$/, "").split("\n").length;
 }
 
 /** Parse a tool call's args into a plain object, tolerating JSON-string deltas. */
