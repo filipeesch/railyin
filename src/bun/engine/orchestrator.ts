@@ -143,8 +143,9 @@ export class Orchestrator implements ExecutionCoordinator {
     content: string,
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
     engineContent?: string,
+    opts?: import("./coordinator.ts").ChatTurnOpts,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
-    return this.humanTurnExecutor.execute(taskId, content, attachments, engineContent);
+    return this.humanTurnExecutor.execute(taskId, content, attachments, engineContent, opts);
   }
 
   executeRetry(taskId: number): Promise<{ task: Task; executionId: number }> {

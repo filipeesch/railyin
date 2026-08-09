@@ -22,6 +22,7 @@ import { PromptAssemblyService } from "./prompt-assembly-service.ts";
 import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 import { SlashCommandResolver } from "./slash-command-resolver.ts";
+import type { ChatTurnOpts } from "../coordinator.ts";
 
 
 export class HumanTurnExecutor {
@@ -49,6 +50,7 @@ export class HumanTurnExecutor {
     content: string,
     attachments?: Attachment[],
     engineContent?: string,
+    opts?: ChatTurnOpts,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = this.db;
     const task = db.query<TaskRow, [number]>(
@@ -165,7 +167,7 @@ export class HumanTurnExecutor {
               model: effectiveModel ?? "",
             })
           : fallbackBase;
-        this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel), execParams);
+        this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel), execParams, opts);
 
         const msgRow = db
           .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
@@ -271,7 +273,7 @@ export class HumanTurnExecutor {
           model: resolvedModel ?? "",
         })
       : baseParams;
-    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
+    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams, opts);
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
 
     const msgRow = db
