@@ -28,7 +28,7 @@ The board + task card workflow with decision-request UX, powered by pluggable en
 - ✓ Store chat history as per-thread JSONL files (`data/threads/{threadId}.jsonl`) via `RailyinAgentRunner` — Phase 2 (crash tolerance hardening in Phase 4)
 - ✓ Map board-card conversations and standalone chat sessions to CopilotKit threads (threadId = conversation.id) — Phase 2 (workspace-key resolver)
 - [ ] Provide a legacy-import button converting old `conversation_messages`/`stream_events` rows into threads; keep old tables intact for rollback (no drops)
-- [ ] Keep decision_request as the only human-in-the-loop UX via `on_interrupt` + resume; run pauses instead of ending
+- ✓ Keep decision_request as the only human-in-the-loop UX via canonical AG-UI interrupts (`RUN_FINISHED` interrupt outcome + `RunAgentInput.resume[]`) — Phase 3 (runs genuinely pause/resume; legacy on_interrupt rejected)
 - [ ] Replace tool-run rendering with CopilotKit's tool-call slots (default card covers generic tools; ported renderers for shell/file/delegate)
 - [ ] Remove features: file_diff, code_review, transition_event, status/status_chunk, usage display, compaction_summary, ask_user, shell_approval
 - [ ] Keep board reactivity on `/ws` (task.updated, code.ref, lsp) while chat push moves to the CopilotKit connection
@@ -155,4 +155,4 @@ Spike-proven facts (probe server `startServer({ copilotkitProbe: true })`, `@cop
 ```
 
 ---
-*Last updated: 2026-08-09 (Phase 2 complete: AG-UI bridge + RailyinAgentRunner + JSONL persistence)*
+*Last updated: 2026-08-09 (Phase 3 complete: decision interrupts & resume, canonical AG-UI)*
