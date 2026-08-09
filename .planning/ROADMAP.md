@@ -87,7 +87,7 @@ Plans:
   3. While an interrupt is pending, the user cannot send new input (enforced server-side and in the disabled chat input)
   4. Contract tests with a fake engine prove the full decision cycle — events, interrupt outcome, resume, and replay — end to end
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 Plans:
 **Wave 1**
 
@@ -99,7 +99,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 03-03-PLAN.md — Real-wire decision-cycle e2e (tests 11-17), replay shapes + registry lazy rebuild (post-restart resume), phase gate + 03-COVERAGE/03-VALIDATION close-out (RUNR-08, CHAT-09, UI-03, VERF-01)
+- [x] 03-03-PLAN.md — Real-wire decision-cycle e2e (tests 11-17), replay shapes + registry lazy rebuild (post-restart resume), phase gate + 03-COVERAGE/03-VALIDATION close-out (RUNR-08, CHAT-09, UI-03, VERF-01)
 
 **UI hint**: yes
 
@@ -188,7 +188,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. CopilotRuntime Hosting & Thread APIs (Spike) | 3/3 | Complete    | 2026-08-09 |
 | 2. AG-UI Bridge & RailyinAgentRunner | 3/3 | Complete    | 2026-08-09 |
-| 3. Decision Interrupts & Resume | 2/3 | In Progress|  |
+| 3. Decision Interrupts & Resume | 3/3 | In Progress|  |
 | 4. JSONL Persistence & Legacy Import | 0/TBD | Not started | - |
 | 5. Chat UI Replacement (Vue) | 0/TBD | Not started | - |
 | 6. E2E Migration & Verification | 0/TBD | Not started | - |
