@@ -1,4 +1,4 @@
-import type { ConversationMessage, StreamEvent, Task } from "../../../shared/rpc-types.ts";
+import type { Task } from "../../../shared/rpc-types.ts";
 
 export interface RecordedTokenEvent {
     taskId: number | null;
@@ -29,9 +29,7 @@ async function waitUntil(predicate: () => boolean, description: string, timeoutM
 export class CallbackRecorder {
     readonly tokenEvents: RecordedTokenEvent[] = [];
     readonly taskUpdates: Task[] = [];
-    readonly newMessages: ConversationMessage[] = [];
     readonly errors: RecordedErrorEvent[] = [];
-    readonly streamEvents: StreamEvent[] = [];
 
     recordToken = (
         taskId: number | null,
@@ -49,29 +47,9 @@ export class CallbackRecorder {
         this.taskUpdates.push(task);
     };
 
-    recordNewMessage = (message: ConversationMessage): void => {
-        this.newMessages.push(message);
-    };
-
     recordError = (taskId: number | null, conversationId: number, executionId: number, error: string): void => {
         this.errors.push({ taskId, conversationId, executionId, error });
     };
-
-    recordStreamEvent = (event: StreamEvent): void => {
-        this.streamEvents.push(event);
-    };
-
-    async waitForStreamDone(executionId: number, timeoutMs = 5_000): Promise<void> {
-        await waitUntil(
-            () => this.streamEvents.some((e) => e.executionId === executionId && e.type === "done"),
-            `stream done for execution ${executionId}`,
-            timeoutMs,
-        );
-    }
-
-    streamEventsForExecution(executionId: number): StreamEvent[] {
-        return this.streamEvents.filter((e) => e.executionId === executionId);
-    }
 
     async waitForTokenDone(executionId: number, timeoutMs = 5_000): Promise<void> {
         await waitUntil(
@@ -89,14 +67,6 @@ export class CallbackRecorder {
         );
     }
 
-    async waitForAnyStreamContent(executionId: number, timeoutMs = 5_000): Promise<void> {
-        await waitUntil(
-            () => this.streamEvents.some((e) => e.executionId === executionId && e.type === "text_chunk"),
-            `first text_chunk stream event for execution ${executionId}`,
-            timeoutMs,
-        );
-    }
-
     async waitForTaskState(taskId: number, state: string, timeoutMs = 5_000): Promise<Task> {
         await waitUntil(
             () => this.taskUpdates.some((task) => task.id === taskId && task.executionState === state),
@@ -106,15 +76,6 @@ export class CallbackRecorder {
         return this.taskUpdates.filter((task) => task.id === taskId && task.executionState === state).at(-1)!;
     }
 
-    async waitForMessage(taskId: number, type: ConversationMessage["type"], timeoutMs = 5_000): Promise<ConversationMessage> {
-        await waitUntil(
-            () => this.newMessages.some((message) => message.taskId === taskId && message.type === type),
-            `message ${type} for task ${taskId}`,
-            timeoutMs,
-        );
-        return this.newMessages.filter((message) => message.taskId === taskId && message.type === type).at(-1)!;
-    }
-
     async waitForError(executionId: number, timeoutMs = 5_000): Promise<RecordedErrorEvent> {
         await waitUntil(
             () => this.errors.some((error) => error.executionId === executionId),
@@ -122,14 +83,6 @@ export class CallbackRecorder {
             timeoutMs,
         );
         return this.errors.filter((error) => error.executionId === executionId).at(-1)!;
-    }
-
-    async waitUntilIpc(executionId: number, predicate: (events: StreamEvent[]) => boolean, timeoutMs = 5_000): Promise<void> {
-        await waitUntil(
-            () => predicate(this.streamEvents.filter((e) => e.executionId === executionId)),
-            `IPC condition for execution ${executionId}`,
-            timeoutMs,
-        );
     }
 
     async waitForStableTokenCount(executionId: number, stableMs = 75, timeoutMs = 2_000): Promise<number> {

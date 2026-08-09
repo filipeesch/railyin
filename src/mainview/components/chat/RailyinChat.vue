@@ -11,7 +11,7 @@
     </div>
 
     <!-- Error: RUN_ERROR terminal → inline error row + PrimeVue toast
-         ("Execution failed: {error}", legacy onStreamError parity). -->
+         ("Execution failed: {error}", legacy error-toast parity). -->
     <div v-else-if="runError" class="railyn-chat__error" data-testid="chat-error-row" role="alert">
       <i class="pi pi-exclamation-circle" />
       <span>Execution failed: {{ runError }}</span>
@@ -358,7 +358,7 @@ watch(
 
 onUnmounted(() => unsubscribe?.());
 
-// PrimeVue error toast mirroring the legacy onStreamError behavior
+// PrimeVue error toast mirroring the legacy error-toast behavior
 // (App.vue:54-57 — summary "Execution failed", detail = error, life 6000).
 // This is ALSO the resume-failure UX (unresolved UI-SPEC assumption): a
 // rejected resume (expired/unknown interruptId → INVALID_PAYLOAD error

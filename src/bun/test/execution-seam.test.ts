@@ -245,7 +245,7 @@ describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("decision");
 
     // The session-status callback fired for this conversation (replacement for
-    // the message.new push that previously drove the sidebar's waiting_user).
+    // the legacy new-message push that previously drove the sidebar's waiting_user).
     expect(statusChanges).toEqual([conversationId]);
 
     // chat_sessions moved to waiting_user (the new write replaces the push).

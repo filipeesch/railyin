@@ -1,4 +1,4 @@
-import type { AIProvider, AIMessage, AITurnResult, AICallOptions, AIToolCall, StreamEvent } from "./types.ts";
+import type { AIProvider, AIMessage, AITurnResult, AICallOptions, AIToolCall, AIEvent } from "./types.ts";
 
 // ─── FakeStep — scripted stream events ───────────────────────────────────────
 
@@ -91,7 +91,7 @@ export class FakeAIProvider implements AIProvider {
     this.delayMs = delayMs;
   }
 
-  async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
+  async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<AIEvent> {
     // Mirror real fetch behaviour: throw immediately if signal is already aborted.
     if (options.signal?.aborted) {
       throw new DOMException("The user aborted a request.", "AbortError");

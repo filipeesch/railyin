@@ -7,15 +7,14 @@
  *
  *   // Push a server event to the browser
  *   ws.push({ type: "task.updated", payload: task });
- *   ws.pushStreamEvent(event);
- *   ws.pushDone(taskId, executionId);
+ *   ws.pushChatSessionUpdated(session);
  *
  *   // Wait until the browser sends a message (e.g. after connecting)
  *   const msg = await ws.nextMessage();
  */
 
 import type { Page } from "@playwright/test";
-import type { PushMessage, StreamEvent, ChatSession } from "@shared/rpc-types";
+import type { PushMessage, ChatSession } from "@shared/rpc-types";
 
 export class WsMock {
     private _page: Page;
@@ -55,53 +54,9 @@ export class WsMock {
         }
     }
 
-    /** Convenience: push a stream.event message. */
-    pushStreamEvent(event: StreamEvent): void {
-        this.push({ type: "stream.event", payload: event });
-    }
-
-    /** Convenience: push a `done` stream event to close out a fake execution. */
-    pushDone(taskId: number, executionId: number, seq = 999, conversationId: number | null = taskId): void {
-        this.pushStreamEvent({
-            taskId,
-            conversationId: conversationId ?? undefined,
-            executionId,
-            seq,
-            blockId: `${executionId}-done`,
-            type: "done",
-            content: "",
-            metadata: null,
-            parentBlockId: null,
-            subagentId: null,
-            done: true,
-        });
-    }
-
-    /** Convenience: push a `done` stream event for a chat session (no taskId). */
-    pushSessionDone(conversationId: number, executionId: number, seq = 999): void {
-        this.pushStreamEvent({
-            taskId: null,
-            conversationId,
-            executionId,
-            seq,
-            blockId: `${executionId}-done`,
-            type: "done",
-            content: "",
-            metadata: null,
-            parentBlockId: null,
-            subagentId: null,
-            done: true,
-        });
-    }
-
     /** Convenience: push a chatSession.updated event. */
     pushChatSessionUpdated(session: ChatSession): void {
         this.push({ type: "chatSession.updated", payload: session });
-    }
-
-    /** Convenience: push a `message.new` push event (simulates server broadcasting a new message). */
-    pushNewMessage(message: import("@shared/rpc-types").ConversationMessage): void {
-        this.push({ type: "message.new", payload: message });
     }
 
     /**

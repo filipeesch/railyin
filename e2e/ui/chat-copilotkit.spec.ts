@@ -145,7 +145,7 @@ test.describe("E — chat states", () => {
         await expect(errorRow).toBeVisible({ timeout: 10_000 });
         await expect(errorRow).toContainText("Execution failed: simulated failure");
 
-        // PrimeVue error toast (legacy onStreamError parity).
+        // PrimeVue error toast (legacy error-toast parity).
         await expect(page.locator(".p-toast")).toContainText("Execution failed", { timeout: 5_000 });
 
         // The input re-enables after the failed run.

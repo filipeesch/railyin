@@ -614,43 +614,6 @@ export interface LspDetectedLanguage {
   installOptions: LspInstallOption[];
 }
 
-// ─── Unified stream event (new pipeline) ─────────────────────────────────────
-
-export type StreamEventType =
-  | "text_chunk"       // live token — not persisted
-  | "reasoning_chunk"  // live reasoning token — not persisted
-  | "status_chunk"     // ephemeral status — not persisted
-  | "user"             // persisted: user message
-  | "assistant"        // persisted: finalized assistant text
-  | "reasoning"        // persisted: finalized reasoning block
-  | "tool_call"        // persisted: tool call
-  | "tool_result"      // persisted: tool result
-  | "file_diff"        // persisted: file diff
-  | "system"           // persisted: system/error message
-  | "usage"            // ephemeral: context usage update — not persisted
-  | "done";            // terminal event — closes all state for this execution
-
-export interface StreamEvent {
-  taskId: number | null;
-  conversationId: number;
-  executionId: number;
-  seq: number;
-  blockId: string;
-  type: StreamEventType;
-  content: string;
-  metadata: string | null;
-  parentBlockId?: string | null;
-  subagentId: string | null;
-  done: boolean;
-}
-
-export interface StreamError {
-  taskId: number | null;
-  conversationId: number;
-  executionId: number;
-  error: string;
-}
-
 // ─── RPC schema ──────────────────────────────────────────────────────────────
 // RailynAPI maps every method name to its { params, response } types.
 // Used by api() in rpc.ts for type-safe fetch calls.
@@ -1190,10 +1153,7 @@ export type RailynAPI = {
 // ─── Push message types (WebSocket server → browser) ─────────────────────────
 
 export type PushMessage =
-  | { type: "stream.event"; payload: StreamEvent }
-  | { type: "stream.error"; payload: StreamError }
   | { type: "task.updated"; payload: Task }
-  | { type: "message.new"; payload: ConversationMessage }
   | { type: "workflow.reloaded"; payload: Record<string, never> }
   | { type: "code.ref"; payload: CodeRef }
   | { type: "chatSession.updated"; payload: ChatSession }

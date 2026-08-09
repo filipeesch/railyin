@@ -84,8 +84,8 @@ export function createBackendRpcRuntime(options: {
 
     const recorder = new CallbackRecorder();
 
-    // The StreamEvent IPC/DB dual-channel simulation was removed in 07-01 —
-    // the /ws stream push and stream_events writes died with the protocol.
+    // The old event IPC/DB dual-channel simulation was removed in 07-01 —
+    // the /ws push and stream_events writes died with the protocol.
 
     const engine = options.createEngine({
         onTaskUpdated: recorder.recordTaskUpdate,

@@ -9,7 +9,7 @@ const makeChannel = () => {
 };
 
 describe("NotificationService", () => {
-  test("NS-1 — onError is a no-op (A2: stream.error push dropped)", () => {
+  test("NS-1 — onError is a no-op (A2: legacy error push dropped)", () => {
     const { channel, calls } = makeChannel();
     const svc = new NotificationService(channel);
     svc.onError(42, 7, 3, "boom");

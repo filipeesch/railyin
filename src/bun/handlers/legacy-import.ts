@@ -4,7 +4,7 @@
  * `legacyImport.run` converts frozen `conversation_messages` rows into
  * per-thread JSONL logs (threadId = conversations.id) and returns an
  * ImportSummary. Thin delegation to runLegacyImport — the conversations.ts
- * "handler delegates to module fn" pattern (getStreamEventsByConversation
+ * "handler delegates to module fn" pattern (the stream-events feed
  * precedent). SELECT-only w.r.t. legacy tables (IMPR-02, D-08); idempotent
  * via the store's existence marker (D-07).
  */

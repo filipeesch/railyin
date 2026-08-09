@@ -6,7 +6,7 @@
  *   T-28/30/31/35 + T-37 → S-1 quick script (streaming text)
  *   T-29/32           → C-2 reasoning script ([data-message-id="r1"])
  *
- * The mkEvent helper, StreamEvent-typed builders, ws.pushStreamEvent, and the
+ * The mkEvent helper, stream-typed builders, the legacy push helpers, and the
  * legacy `.msg__bubble.streaming` / `.rb` selectors are deleted with the
  * legacy pipeline machinery.
  *

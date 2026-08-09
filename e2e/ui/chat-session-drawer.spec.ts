@@ -272,6 +272,27 @@ test.describe("CD-C — Streaming and execution state", () => {
         await expect(page.locator(".session-chat-view .scv-status-tag[data-status='running']")).toBeVisible({ timeout: 2_000 });
     });
 
+    test("CD-C-1b: session drawer status flips running → idle via the chatSession.updated push with no stream event", async ({ page, api, ws }) => {
+        // VALIDATION.md wave-0 item: the chatSession.updated push is the ONLY
+        // channel that flips the sidebar/drawer status after the stream
+        // protocol died — the backend fires it on run completion
+        // (onSessionStatusChange → notifier.notifyChatSessionUpdated).
+        const session = makeChatSession({ id: 4201, status: "idle" });
+        api.returns("chatSessions.list", [session]);
+        stubSessionMessages(api, session.conversationId, []);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        // running → idle via two chatSession.updated pushes (no legacy stream push)
+        ws.pushChatSessionUpdated({ ...session, status: "running" });
+        await expect(page.locator(".session-chat-view .scv-status-tag[data-status='running']")).toBeVisible({ timeout: 2_000 });
+
+        ws.pushChatSessionUpdated({ ...session, status: "idle" });
+        await expect(page.locator(".session-chat-view .scv-status-tag[data-status='idle']")).toBeVisible({ timeout: 2_000 });
+        await expect(page.locator(".session-chat-view .scv-status-tag[data-status='running']")).not.toBeVisible();
+    });
+
     test("CD-C-2: the run completes and the chat returns to the idle state", async ({ page, api }) => {
         const session = makeChatSession({ id: 421 });
         api.returns("chatSessions.list", [session]);

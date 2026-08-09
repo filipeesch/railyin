@@ -230,7 +230,7 @@ if (injectedEngine) {
 // Session-status replacement push (07-01 Pitfall 2): consume() fires
 // onSessionStatusChange at every chat_sessions status write; this wrapper
 // broadcasts chatSession.updated so the sidebar flips running → idle without
-// the removed stream.event "done" push.
+// the removed legacy "done" push.
 const sessionStatusCb = (conversationId: number): void => {
   const row = db.query<{ id: number }, [number]>(
     "SELECT id FROM chat_sessions WHERE conversation_id = ?",

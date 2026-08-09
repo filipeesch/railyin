@@ -10,22 +10,22 @@
 import { describe, it, expect } from "vitest";
 import { retryStream, retryTurn, ProviderError } from "../ai/retry.ts";
 import { noopLogger } from "../logger.ts";
-import type { AIProvider, AIMessage, AICallOptions, AITurnResult, StreamEvent } from "../ai/types.ts";
+import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIEvent } from "../ai/types.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const MESSAGES: AIMessage[] = [{ role: "user", content: "Hello" }];
 
-/** Collect all events from an AsyncIterable<StreamEvent> into an array. */
-async function collect(gen: AsyncIterable<StreamEvent>): Promise<StreamEvent[]> {
-  const events: StreamEvent[] = [];
+/** Collect all events from an AsyncIterable<AIEvent> into an array. */
+async function collect(gen: AsyncIterable<AIEvent>): Promise<AIEvent[]> {
+  const events: AIEvent[] = [];
   for await (const e of gen) events.push(e);
   return events;
 }
 
 /** A fake AIProvider whose stream() and turn() are set per-call via callbacks. */
 function makeFakeProvider(
-  streamFactory: (callNum: number, opts?: AICallOptions) => AsyncIterable<StreamEvent>,
+  streamFactory: (callNum: number, opts?: AICallOptions) => AsyncIterable<AIEvent>,
   turnFactory: (callNum: number) => Promise<AITurnResult>,
 ): AIProvider & { streamCalls: number; turnCalls: number } {
   let streamCalls = 0;
@@ -44,7 +44,7 @@ function makeFakeProvider(
 }
 
 /** Create an async generator that yields canned events. */
-async function* eventsGen(events: StreamEvent[]): AsyncIterable<StreamEvent> {
+async function* eventsGen(events: AIEvent[]): AsyncIterable<AIEvent> {
   for (const e of events) yield e;
 }
 
@@ -56,8 +56,8 @@ async function* eventsGen(events: StreamEvent[]): AsyncIterable<StreamEvent> {
 async function* stallingWithSignal(
   stallMs: number,
   signal?: AbortSignal,
-  events: StreamEvent[] = [],
-): AsyncIterable<StreamEvent> {
+  events: AIEvent[] = [],
+): AsyncIterable<AIEvent> {
   if (signal?.aborted) throw signal.reason;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, stallMs);
@@ -76,7 +76,7 @@ async function* stallingWithSignal(
 }
 
 /** Create an async generator that throws the given error. */
-async function* throwingGen(err: unknown): AsyncIterable<StreamEvent> {
+async function* throwingGen(err: unknown): AsyncIterable<AIEvent> {
   throw err;
   yield { type: "done" }; // unreachable, satisfies TypeScript
 }
@@ -250,7 +250,7 @@ describe("retryStream — watchdog behaviour (8.2)", () => {
 
   it("watchdog does not fire when events arrive before timeout", async () => {
     // Stream yields tokens quickly; watchdog at 200ms should never fire
-    async function* fastStream(): AsyncIterable<StreamEvent> {
+    async function* fastStream(): AsyncIterable<AIEvent> {
       yield { type: "token", content: "fast" };
       await new Promise((r) => setTimeout(r, 10));
       yield { type: "token", content: " tokens" };

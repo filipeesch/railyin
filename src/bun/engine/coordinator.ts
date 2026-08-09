@@ -11,7 +11,7 @@ export interface ChatTurnOpts {
    * Fired whenever consume() writes chat_sessions status for a standalone
    * session (taskId == null) at a terminal path (done/error/abort/catch/
    * decision). The orchestrator uses it to broadcast chatSession.updated —
-   * the replacement for the removed stream.event "done" push that previously
+   * the replacement for the removed legacy "done" push that previously
    * flipped the session sidebar from running to idle.
    */
   onSessionStatusChange?: (conversationId: number) => void;

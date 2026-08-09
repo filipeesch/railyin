@@ -45,7 +45,7 @@ export type AITurnResult =
   | { type: "tool_calls"; calls: AIToolCall[]; usage?: UsageStats };
 
 // Yielded by stream() — unified streaming events covering tokens and tool calls
-export type StreamEvent =
+export type AIEvent =
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
   | { type: "tool_calls"; calls: AIToolCall[] }
@@ -87,7 +87,7 @@ export interface AIProvider {
    * calls in the same SSE stream. Tools are always passed so the model is
    * never switched out of tool-aware mode between rounds.
    */
-  stream(messages: AIMessage[], options?: AICallOptions): AsyncIterable<StreamEvent>;
+  stream(messages: AIMessage[], options?: AICallOptions): AsyncIterable<AIEvent>;
   /**
    * Non-streaming turn with tool support — retained for sub-agent use only.
    * Returns either the assistant's final text or a list of tool calls.

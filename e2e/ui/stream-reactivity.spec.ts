@@ -1,8 +1,8 @@
 /**
  * stream-reactivity.spec.ts — migrated onto the agui fixture (plan 06-04).
  *
- * The legacy ws.pushStreamEvent floods, hand-rolled StreamEvent builders,
- * `.conv-body` scroll asserts, and writtenFiles seeds are GONE. Live intents
+ * The legacy push floods, hand-rolled stream builders, `.conv-body` scroll
+ * asserts, and writtenFiles seeds are GONE. Live intents
  * stream from the canonical fixture scripts (quick / toolcall); ordered
  * history intents use registerHistory (the 06-01 multi-message knob);
  * autoscroll intents assert the CopilotChat scroll container

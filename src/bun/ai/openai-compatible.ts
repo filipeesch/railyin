@@ -1,4 +1,4 @@
-import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, StreamEvent, UsageStats } from "./types.ts";
+import type { AIProvider, AIMessage, AICallOptions, AITurnResult, AIToolCall, AIEvent, UsageStats } from "./types.ts";
 import { ProviderError } from "./retry.ts";
 
 export class OpenAICompatibleProvider implements AIProvider {
@@ -82,7 +82,7 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   // ─── Unified streaming (text tokens + tool calls in same SSE stream) ─────────
 
-  async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
+  async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<AIEvent> {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: messages.map(toWireMessage),

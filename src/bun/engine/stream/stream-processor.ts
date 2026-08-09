@@ -21,7 +21,7 @@ import { fetchTaskWithModel } from "../../db/task-queries.ts";
  * AG-UI). It drives the DB lifecycle triad (tasks.execution_state /
  * chat_sessions.status / executions.status) and the AG-UI bridge tap
  * (opts.onEngineEvent) — the legacy write paths (conversation_messages via
- * ConvMessageBuffer, stream_events via onStreamEvent, model_raw_messages via
+ * ConvMessageBuffer, stream_events via the old event hook, model_raw_messages via
  * rawBuffer) were excised in 07-01: runs write zero rows to the frozen chat
  * tables (D-05).
  */
@@ -198,9 +198,9 @@ export class StreamProcessor {
 
           case "decision_request": {
             // The only live HITL channel. For standalone sessions (taskId == null)
-            // the chat_sessions 'waiting_user' write replaces the message.new
+            // the chat_sessions 'waiting_user' write replaces the legacy new-message
             // push that previously drove the sidebar state (stores/chat.ts
-            // onChatNewMessage); the session-status callback fires so the
+            // onChatSessionUpdated); the session-status callback fires so the
             // orchestrator broadcasts chatSession.updated.
             if (taskId != null) {
               db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);

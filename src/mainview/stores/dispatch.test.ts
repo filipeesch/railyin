@@ -2,8 +2,8 @@
  * dispatch.test.ts — Multi-store dispatch tests for the kept /ws pushes
  *
  * Verifies the App.vue wiring of the kept push types (task.updated,
- * chatSession.updated) delivers to the right store handlers. The stream-event
- * and message.new dispatch coverage died with the protocol trim (07-03).
+ * chatSession.updated) delivers to the right store handlers. The custom
+ * protocol dispatch coverage died with the protocol trim (07-03).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";

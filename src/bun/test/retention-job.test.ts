@@ -23,7 +23,7 @@ function countRaw(db: Database): number {
   return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM model_raw_messages").get()!.n;
 }
 
-function countStreamEvents(db: Database): number {
+function countStoredEvents(db: Database): number {
   return db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM stream_events").get()!.n;
 }
 
@@ -98,12 +98,12 @@ describe("RetentionJob — RJ-2: stream_events pruning", () => {
       [conversationId, executionId],
     );
 
-    expect(countStreamEvents(db)).toBe(2);
+    expect(countStoredEvents(db)).toBe(2);
 
     const job = new RetentionJob(db);
     job.runNow();
 
-    expect(countStreamEvents(db)).toBe(1);
+    expect(countStoredEvents(db)).toBe(1);
     const row = db.query<{ content: string }, []>("SELECT content FROM stream_events").get()!;
     expect(row.content).toBe("recent");
   });
@@ -252,7 +252,7 @@ describe("RetentionJob — RJ-5: archived chat session hard-delete", () => {
     job.runNow();
 
     expect(countChatSessions(db)).toBe(0);
-    expect(countStreamEvents(db)).toBe(0);
+    expect(countStoredEvents(db)).toBe(0);
   });
 
   it("RJ-5f: explicitly deletes executions linked to hard-deleted sessions", () => {

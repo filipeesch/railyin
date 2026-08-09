@@ -4,8 +4,8 @@ import type { BackendRpcRuntime } from "./backend-rpc-runtime.ts";
 /**
  * Shared engine RPC scenarios (post-07-01 contract).
  *
- * The custom StreamEvent IPC/DB dual-channel died in 07-01: runs write zero rows
- * to conversation_messages / stream_events and the recorder's streamEvents feed
+ * The custom event IPC/DB dual-channel died in 07-01: runs write zero rows
+ * to conversation_messages / stream_events and the recorder's event feed
  * is gone. Completion is asserted via the DB lifecycle triad (executions.status
  * + tasks.execution_state) — the same polling the smoke suite uses.
  */

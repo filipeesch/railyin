@@ -248,7 +248,7 @@ test.describe("T-K — replay without an active run", () => {
 
         // No active /run — the connect replay re-pends the interrupt outcome
         // (IN-07 / D-08), delivering the decision prompt like a persisted
-        // message.new would on the legacy stack.
+        // push would on the legacy stack.
         const decisionCard = page.locator('[data-testid="decision-card"]');
         await expect(decisionCard).toBeVisible({ timeout: 10_000 });
         await expect(decisionCard).toContainText("Should I apply the changes to src/auth.ts?");
@@ -521,10 +521,10 @@ test.describe("T-F — answered read-only state", () => {
     });
 });
 
-// ─── T-G: Interview prompt followed by streaming — answered detection ─────────
+// ─── T-G: Interview prompt answered — read-only detection ────────────────────
 
-test.describe("T-G — answered detection with streaming", () => {
-    test("T-G: interview prompt is read-only after assistant starts streaming", async ({ page, api, ws, task }) => {
+test.describe("T-G — answered detection", () => {
+    test("T-G: answered interview prompt stays read-only", async ({ page, api, task }) => {
         const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: 6002 });
         // id must be greater than promptMsg.id so sort order is preserved (prompt first, reply second)
         const userReply = makeUserMessage(task.id, "A: SQLite", { id: promptMsg.id + 1 });
@@ -535,23 +535,6 @@ test.describe("T-G — answered detection with streaming", () => {
         await openTaskDrawer(page, task.id);
 
         // Verify read-only — form hidden because answered
-        await expect(page.locator(".interview")).not.toBeVisible();
-
-        // Push a streaming event — should not un-answer the interview
-        ws.pushStreamEvent({
-            taskId: task.id,
-            executionId: 9001,
-            seq: 0,
-            blockId: "9001-text",
-            type: "text_chunk",
-            content: "Proceeding with SQLite...",
-            metadata: null,
-            parentBlockId: null,
-            subagentId: null,
-            done: false,
-        });
-
-        // Still read-only — form still hidden after streaming event
         await expect(page.locator(".interview")).not.toBeVisible();
         await expect(page.locator(".interview__submit")).not.toBeVisible();
     });
