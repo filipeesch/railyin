@@ -12,7 +12,7 @@
  * the chain itself is real — no stubs beyond the engine.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { initDb, seedChatSession, setupTestConfig, makeTestRegistry } from "./helpers.ts";
+import { initDb, seedChatSession, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 import { Orchestrator } from "../engine/orchestrator.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import type { Database } from "bun:sqlite";
@@ -37,6 +37,7 @@ class SeamEngine implements ExecutionEngine {
   constructor(
     private readonly events: EngineEvent[],
     private readonly parkUntilAborted = false,
+    private readonly resumeThrows = false,
   ) { }
 
   async *execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
@@ -54,7 +55,9 @@ class SeamEngine implements ExecutionEngine {
     }
   }
 
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {
+    if (this.resumeThrows) throw new Error("engine session lost");
+  }
   cancel(_executionId: number): void { }
   async listModels() {
     return [{ qualifiedId: "copilot/mock-model", displayName: "Mock Model", contextWindow: 128_000, enabled: true }];
@@ -225,5 +228,101 @@ describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
       sessionId, conversationId, "hello", undefined, null, undefined, undefined, undefined, opts,
     );
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("decision");
+  });
+});
+
+describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
+  it("1: fresh-turn path — opts fires onEngineEvent for every raw event in exact order and onRunEnd('done') at completion", async () => {
+    orchestrator = makeOrchestrator(new SeamEngine([
+      { type: "token", content: "hello" },
+      { type: "reasoning", content: "thinking" },
+      { type: "tool_start", name: "read_file", callId: "call_1", arguments: "{}" },
+      { type: "tool_result", name: "read_file", callId: "call_1", result: "file contents" },
+      { type: "usage", inputTokens: 10, outputTokens: 5 },
+      { type: "done" },
+    ]));
+    const { taskId } = seedProjectAndTask(db, "/tmp/x");
+    const { opts, seen, runEnd } = makeSeamOpts();
+
+    const { executionId } = await orchestrator.executeHumanTurn(
+      taskId, "hello", undefined, undefined, opts,
+    );
+    expect(executionId).toBeGreaterThan(0);
+    expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
+
+    expect(seen.map((e) => e.type)).toEqual([
+      "token", "reasoning", "tool_start", "tool_result", "usage", "done",
+    ]);
+  });
+
+  it("2: absent opts — no callbacks, no crash, DB statuses unchanged (task 'running' → 'completed')", async () => {
+    orchestrator = makeOrchestrator(new SeamEngine([
+      { type: "token", content: "hello" },
+      { type: "usage", inputTokens: 10, outputTokens: 5 },
+      { type: "done" },
+    ]));
+    const { taskId } = seedProjectAndTask(db, "/tmp/x");
+
+    const { executionId } = await orchestrator.executeHumanTurn(taskId, "hello");
+    expect(executionId).toBeGreaterThan(0);
+
+    // Stream completes asynchronously — poll the DB.
+    await waitFor(() => {
+      const row = db.query<{ status: string }, [number]>(
+        "SELECT status FROM executions WHERE id = ?",
+      ).get(executionId);
+      return row?.status === "completed";
+    });
+
+    const execRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(executionId)!;
+    expect(execRow.status).toBe("completed");
+
+    const taskRow = db.query<{ execution_state: string }, [number]>(
+      "SELECT execution_state FROM tasks WHERE id = ?",
+    ).get(taskId)!;
+    expect(taskRow.execution_state).toBe("completed");
+  });
+
+  it("3: fallback path — engine.resume() throws at resume time → new-execution fallback runNonNative still receives opts and streams events", async () => {
+    orchestrator = makeOrchestrator(new SeamEngine(
+      [{ type: "token", content: "fallback" }, { type: "usage", inputTokens: 3, outputTokens: 1 }, { type: "done" }],
+      false,
+      true, // resume throws → engine session lost → new-execution fallback
+    ));
+    const { taskId, conversationId } = seedProjectAndTask(db, "/tmp/x");
+
+    // Seed the resume-time state: task parked at waiting_user with a live
+    // execution row (the decision-paused state the resume branch produces).
+    db.run(
+      "INSERT INTO executions (task_id, conversation_id, from_state, to_state, status) VALUES (?, ?, 'plan', 'plan', 'waiting_user')",
+      [taskId, conversationId],
+    );
+    const oldExecutionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?",
+      [oldExecutionId, taskId],
+    );
+
+    const { opts, seen, runEnd } = makeSeamOpts();
+    const { executionId } = await orchestrator.executeHumanTurn(
+      taskId, "hello", undefined, undefined, opts,
+    );
+
+    // The fallback created a NEW execution (not the seeded one).
+    expect(executionId).not.toBe(oldExecutionId);
+    expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
+    expect(seen.map((e) => e.type)).toEqual(["token", "usage", "done"]);
+
+    // The new execution completed; the old row was finalized as 'failed'.
+    const newRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(executionId)!;
+    expect(newRow.status).toBe("completed");
+    const oldRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(oldExecutionId)!;
+    expect(oldRow.status).toBe("failed");
   });
 });
