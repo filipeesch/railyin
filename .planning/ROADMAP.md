@@ -178,11 +178,11 @@ Plans:
   2. All 55 existing specs pass against the new mocks, alongside the new chat and board specs
   3. Backend smoke tests (`e2e/api`) and the bridge/runner unit suites pass on the new stack
 
-**Plans**: 7 plans
+**Plans**: 1/7 plans executed
 Plans:
 **Wave 1**
 
-- [ ] 06-01-PLAN.md — Mock foundation: multi-message history knob + registerHistory + self-tests; chat-surface helpers extraction; tracer spec conversation-stream-state migration (VERF-02)
+- [x] 06-01-PLAN.md — Mock foundation: multi-message history knob + registerHistory + self-tests; chat-surface helpers extraction; tracer spec conversation-stream-state migration (VERF-02)
 - [ ] 06-02-PLAN.md — Retire 11 removed-feature spec files (queue/model/sampling/compaction/draft/pagination/MCP/transition) behind blocking human checkpoints + code-server CS-D-1..5 in-file (VERF-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -237,5 +237,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 3. Decision Interrupts & Resume | 3/3 | Complete    | 2026-08-09 |
 | 4. JSONL Persistence & Legacy Import | 3/3 | Complete    | 2026-08-09 |
 | 5. Chat UI Replacement (Vue) | 5/5 | Complete    | 2026-08-09 |
-| 6. E2E Migration & Verification | 0/TBD | Not started | - |
+| 6. E2E Migration & Verification | 1/7 | In Progress|  |
 | 7. Cleanup & Feature Trim | 0/TBD | Not started | - |
