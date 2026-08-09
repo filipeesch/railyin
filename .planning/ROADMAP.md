@@ -178,7 +178,7 @@ Plans:
   2. All 55 existing specs pass against the new mocks, alongside the new chat and board specs
   3. Backend smoke tests (`e2e/api`) and the bridge/runner unit suites pass on the new stack
 
-**Plans**: 2/7 plans executed
+**Plans**: 6/7 plans executed
 Plans:
 **Wave 1**
 
@@ -187,10 +187,10 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 06-03-PLAN.md — Migrate streaming core: chat.spec (12), delegate-rendering (5, serial dropped), conversation-body (reasoning/tools) (VERF-02)
-- [ ] 06-04-PLAN.md — Migrate tool/stream family: tool-rendering (13), stream-reactivity, timeline-pipeline (VERF-02)
-- [ ] 06-05-PLAN.md — Migrate session/interview family: chat-session-drawer (19), interview-me (23, interrupt pattern) (VERF-02)
-- [ ] 06-06-PLAN.md — Migrate input/edge family: autocomplete, cursor, task-drawer, extended-chat — red surface to zero (VERF-02)
+- [x] 06-03-PLAN.md — Migrate streaming core: chat.spec (12), delegate-rendering (5, serial dropped), conversation-body (reasoning/tools) (VERF-02)
+- [x] 06-04-PLAN.md — Migrate tool/stream family: tool-rendering (13), stream-reactivity, timeline-pipeline (VERF-02)
+- [x] 06-05-PLAN.md — Migrate session/interview family: chat-session-drawer (19), interview-me (23, interrupt pattern) (VERF-02)
+- [x] 06-06-PLAN.md — Migrate input/edge family: autocomplete, cursor, task-drawer, extended-chat — red surface to zero (VERF-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -237,5 +237,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 3. Decision Interrupts & Resume | 3/3 | Complete    | 2026-08-09 |
 | 4. JSONL Persistence & Legacy Import | 3/3 | Complete    | 2026-08-09 |
 | 5. Chat UI Replacement (Vue) | 5/5 | Complete    | 2026-08-09 |
-| 6. E2E Migration & Verification | 2/7 | In Progress|  |
+| 6. E2E Migration & Verification | 6/7 | In Progress|  |
 | 7. Cleanup & Feature Trim | 0/TBD | Not started | - |
