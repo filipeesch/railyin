@@ -7,11 +7,12 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { EventType, type RunAgentInput } from "@ag-ui/core";
 import type { BaseEvent } from "@ag-ui/client";
-import { initDb, seedChatSession } from "../test/helpers.ts";
+import { initDb, seedChatSession, seedProjectAndTask } from "../test/helpers.ts";
+import { getDefaultWorkspaceKey } from "../workspace-context.ts";
 import type { Database } from "bun:sqlite";
 import type { EngineEvent } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
-import { RailyinAgent } from "./railyin-agent.ts";
+import { RailyinAgent, resolveWorkspaceKey } from "./railyin-agent.ts";
 
 /** Collect a run's events by subscribing to the agent's observable. */
 function collectRun(agent: RailyinAgent, input: RunAgentInput): Promise<BaseEvent[]> {
@@ -40,6 +41,7 @@ function runInput(threadId: string, text = "hello"): RunAgentInput {
 let db: Database;
 let fakeCoordinator: ExecutionCoordinator;
 let cancelCalls: number[];
+let capturedWorkspaceKey: string | null;
 let capturedOpts: { onEngineEvent?: (e: EngineEvent) => void; onRunEnd?: (o: "done" | "error" | "aborted" | "decision") => void } | undefined;
 
 function makeAgent(conversationId: number): RailyinAgent {
@@ -49,6 +51,7 @@ function makeAgent(conversationId: number): RailyinAgent {
 beforeEach(() => {
   db = initDb();
   cancelCalls = [];
+  capturedWorkspaceKey = null;
   capturedOpts = undefined;
   fakeCoordinator = {
     executeTransition: async () => { throw new Error("not implemented"); },
@@ -56,7 +59,8 @@ beforeEach(() => {
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
     respondShellApprovalByExecution: async () => { throw new Error("not implemented"); },
-    executeChatTurn: async (_sessionId, _conversationId, _content, _model, _mcp, _ws, _att, _ec, opts) => {
+    executeChatTurn: async (_sessionId, _conversationId, _content, _model, _mcp, ws, _att, _ec, opts) => {
+      capturedWorkspaceKey = ws ?? null;
       capturedOpts = opts;
       // Drive the scripted sequence synchronously, then end the run.
       if (opts) {
@@ -194,5 +198,101 @@ describe("RailyinAgent", () => {
     const events = await collectRun(agent, runInput("../../etc/passwd", "hello"));
     expect(executeChatTurnCalls).toBe(0);
     expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
+  });
+
+  test("7: resolver task-linked branch — board.workspace_key wins over default (RUNR-03)", async () => {
+    const { conversationId } = seedProjectAndTask(db, "/tmp/x", { workspaceKey: "ws-task" });
+    const agent = makeAgent(conversationId);
+
+    const events = await collectRun(agent, runInput(String(conversationId), "hello"));
+    expect(capturedWorkspaceKey).toBe("ws-task");
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+
+  test("8: resolver session branch — chat_sessions.workspace_key wins for standalone conversations (RUNR-03)", async () => {
+    const { conversationId } = seedChatSession(db, { workspaceKey: "ws-session" });
+    const agent = makeAgent(conversationId);
+
+    const events = await collectRun(agent, runInput(String(conversationId), "hello"));
+    expect(capturedWorkspaceKey).toBe("ws-session");
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+
+  test("9: resolver default branch — neither task nor session → getDefaultWorkspaceKey() (RUNR-03)", async () => {
+    // Bare conversation: no task row, no chat_sessions row.
+    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
+    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    const agent = makeAgent(conversationId);
+
+    const events = await collectRun(agent, runInput(String(conversationId), "hello"));
+    expect(capturedWorkspaceKey).toBe(getDefaultWorkspaceKey());
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+
+  test("10: advisory cross-path lock — active executions row → RUN_ERROR THREAD_BUSY without executeChatTurn; completed row never blocks (RUNR-04)", async () => {
+    const { conversationId } = seedChatSession(db);
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    agent.orchestrator = fakeCoordinator;
+
+    // 'running' row → rejected before any executor work.
+    db.run(
+      "INSERT INTO executions (conversation_id, from_state, to_state, status) VALUES (?, 'backlog', 'plan', 'running')",
+      [conversationId],
+    );
+    const events = await collectRun(agent, runInput(String(conversationId), "hello"));
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[0].type).toBe(EventType.RUN_STARTED);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
+    expect(events[events.length - 1]).toMatchObject({ code: "THREAD_BUSY" });
+
+    // 'waiting_user' row also rejects.
+    db.run("DELETE FROM executions");
+    db.run(
+      "INSERT INTO executions (conversation_id, from_state, to_state, status) VALUES (?, 'plan', 'done', 'waiting_user')",
+      [conversationId],
+    );
+    const events2 = await collectRun(agent, runInput(String(conversationId), "hello"));
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events2[events2.length - 1]).toMatchObject({ code: "THREAD_BUSY" });
+
+    // 'completed' row → never blocks; the run proceeds normally.
+    db.run("DELETE FROM executions");
+    db.run(
+      "INSERT INTO executions (conversation_id, from_state, to_state, status) VALUES (?, 'backlog', 'done', 'completed')",
+      [conversationId],
+    );
+    const events3 = await collectRun(agent, runInput(String(conversationId), "hello"));
+    expect(executeChatTurnCalls).toBe(1);
+    expect(events3[events3.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+
+  test("11: unknown conversation — resolver returns null; run() → RUN_ERROR THREAD_NOT_FOUND, executeChatTurn never called (T-02-15)", async () => {
+    expect(resolveWorkspaceKey(db, 999_999)).toBeNull();
+
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, _opts) => {
+        executeChatTurnCalls += 1;
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    const agent = makeAgent(999_999);
+    agent.orchestrator = fakeCoordinator;
+
+    const events = await collectRun(agent, runInput("999999", "hello"));
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[0].type).toBe(EventType.RUN_STARTED);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
+    expect(events[events.length - 1]).toMatchObject({ code: "THREAD_NOT_FOUND" });
   });
 });
