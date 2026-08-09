@@ -337,6 +337,28 @@ const allHandlers = {
 
 const wsHandler = new WebSocketHandler(channel, getPtySession);
 
+/**
+ * WR-03: same-origin gate for the unauthenticated AG-UI execution mount
+ * (/api/copilotkit/*). The mount drives REAL engines — including their
+ * shell/bash tools — from an attacker-chosen prompt, so a cross-origin
+ * browser POST (DNS rebinding / CSRF) must never reach it. Browsers send
+ * `Origin` on every POST (same- AND cross-origin): a mismatch with the
+ * server's own Host is rejected with 403. Requests WITHOUT an Origin header
+ * (curl, native clients, Node fetch, same-origin EventSource GETs) pass —
+ * this is a local single-user app and the header is only meaningful for
+ * browser-originated requests.
+ */
+function isSameOriginRequest(req: Request, url: URL): boolean {
+  const origin = req.headers.get("origin");
+  if (origin == null) return true; // non-browser client — nothing to verify
+  try {
+    const originUrl = new URL(origin);
+    return originUrl.host === (req.headers.get("host") ?? url.host);
+  } catch {
+    return false; // unparseable Origin (e.g. "null" from sandboxed frames) → reject
+  }
+}
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: serverPort,
@@ -370,6 +392,14 @@ const server = Bun.serve({
     // idleTimeout 30s during agent silences); the global idleTimeout stays for
     // the rest of the app.
     if (url.pathname.startsWith("/api/copilotkit/")) {
+      // WR-03: reject cross-origin browser requests before they reach the
+      // runtime (403, not SSE) — see isSameOriginRequest above.
+      if (!isSameOriginRequest(req, url)) {
+        return new Response(JSON.stringify({ error: "Cross-origin request rejected" }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        });
+      }
       srv.timeout(req, 0);
       return copilotHandler(req);
     }

@@ -182,6 +182,44 @@ describe("RailyinAgent run path (RUNR-01, D-12)", () => {
         const frames = parseSseFrames(await res.text());
         expect(frames[frames.length - 1].type).toBe("RUN_ERROR");
     });
+
+    test("g: cross-origin POST to the AG-UI mount → 403, no engine execution (WR-03)", async () => {
+        // A hostile page (DNS-rebinding / CSRF) would POST with ITS OWN
+        // Origin — the mount must reject before any engine work starts.
+        const session = await server.request("chatSessions.create", { title: "r-cc" });
+        const threadId = String(session.conversationId);
+        const res = await fetch(`${server.baseUrl}/api/copilotkit/agent/default/run`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                accept: "text/event-stream",
+                origin: "https://evil.example.com",
+            },
+            body: JSON.stringify(runInput(threadId, "run-cc", "hello")),
+        });
+        expect(res.status).toBe(403);
+        // Never an SSE stream — the body is the plain JSON rejection.
+        expect((await res.text()).includes("Cross-origin")).toBe(true);
+    });
+
+    test("h: same-origin POST (Origin matching Host) passes the guard (WR-03)", async () => {
+        const session = await server.request("chatSessions.create", { title: "r-co" });
+        const threadId = String(session.conversationId);
+        const host = new URL(server.baseUrl).host; // 127.0.0.1:PORT
+        const res = await fetch(`${server.baseUrl}/api/copilotkit/agent/default/run`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                accept: "text/event-stream",
+                origin: `http://${host}`,
+            },
+            body: JSON.stringify(runInput(threadId, "run-co", "hello")),
+        });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe("text/event-stream");
+        const frames = parseSseFrames(await res.text());
+        expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
+    });
 });
 
 describe("RailyinAgentRunner durability (RUNR-02/04/05/06/07)", () => {
