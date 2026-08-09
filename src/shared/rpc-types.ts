@@ -98,14 +98,8 @@ export type MessageType =
   | "system"
   | "tool_call"
   | "tool_result"
-  | "transition_event"
-  | "ask_user_prompt"
   | "decision_request_prompt"
-  | "file_diff"
-  | "reasoning"
-  | "compaction_summary"
-  | "code_review"
-  | "status";
+  | "reasoning";
 
 /** One JSONL-backed thread as surfaced by the thread-index RPC (CHAT-08, D-01). */
 export interface ThreadSummary {
@@ -741,10 +735,6 @@ export type RailynAPI = {
     params: { conversationId?: number; taskId?: number; beforeMessageId?: number; limit?: number };
     response: { messages: ConversationMessage[]; hasMore: boolean };
   };
-  "conversations.contextUsage": {
-    params: { conversationId: number };
-    response: { usedTokens: number; maxTokens: number; fraction: number };
-  };
   "conversations.setSamplingPreset": {
     params: { conversationId: number; presetName: string | null };
     response: Record<string, never>;
@@ -770,18 +760,6 @@ export type RailynAPI = {
   "models.setContextWindow": {
     params: { workspaceKey?: string; qualifiedModelId: string; contextWindow: number | null };
     response: Record<string, never>;
-  };
-
-  // Context usage
-  "tasks.contextUsage": {
-    params: { taskId: number };
-    response: { usedTokens: number; maxTokens: number; fraction: number };
-  };
-
-  // Conversation compaction
-  "tasks.compact": {
-    params: { taskId: number };
-    response: void;
   };
 
   // Task management
@@ -916,10 +894,6 @@ export type RailynAPI = {
   "tasks.setShellAutoApprove": {
     params: { taskId: number; enabled: boolean };
     response: Task;
-  };
-  "executions.respondShellApproval": {
-    params: { executionId: number; decision: "approve_once" | "approve_all" | "deny" };
-    response: { ok: boolean };
   };
   "chatSessions.setShellAutoApprove": {
     params: { sessionId: number; enabled: boolean };
@@ -1056,10 +1030,6 @@ export type RailynAPI = {
     response: { messages: ConversationMessage[]; hasMore: boolean };
   };
   "chatSessions.cancel": {
-    params: { sessionId: number };
-    response: void;
-  };
-  "chatSessions.compact": {
     params: { sessionId: number };
     response: void;
   };
