@@ -25,6 +25,16 @@ export interface TranslateState {
   textSeq: number;
   reasoningSeq: number;
   toolSeq: number;
+  /**
+   * Per-call seq assigned at START time and consumed at RESULT time (CR-01).
+   * Keyed by `${parentCallId}\u0000${callId}` (mirror of stream-processor's
+   * childCallKey) — subagent_start uses an empty parentCallId prefix. Without
+   * this, a single shared counter breaks when subagent and child tool events
+   * interleave or when parallel children resolve out of order: the RESULT
+   * would read the counter AFTER another start incremented it, producing a
+   * tool id that was never started (verifyEvents rejects those).
+   */
+  toolSeqByCall: Map<string, number>;
   /** toolCallIds of open tool calls (namespaced ids when parentCallId set). */
   openToolCallIds: string[];
   /** True when the current token block is open; closed on any non-token boundary. */
@@ -40,6 +50,7 @@ export function createTranslateState(threadId: string, runId: string): Translate
     textSeq: 0,
     reasoningSeq: 1,
     toolSeq: 0,
+    toolSeqByCall: new Map(),
     openToolCallIds: [],
     textOpen: false,
     reasoningOpen: false,
@@ -58,13 +69,38 @@ function toolResult(toolCallId: string, content: string): BaseEvent {
 }
 
 /** Namespaced id for child/internal tool calls (Pitfall 6, mirror of
- * stream-processor.ts:313-319). */
+ * stream-processor.ts:313-319). The per-call seq is stored at START time and
+ * consumed at RESULT time so interleaved/parallel children resolve back to
+ * THEIR OWN id (CR-01); the shared counter is only consulted when no entry
+ * exists (a start without a stored seq — e.g. the very first occurrence). */
 function resolveToolCallId(event: Extract<EngineEvent, { type: "tool_start" | "tool_result" }>, state: TranslateState): string {
   if (event.parentCallId) {
     const callId = event.callId ?? `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    return `${event.parentCallId}::${callId}::${++state.toolSeq}`;
+    const key = `${event.parentCallId}\u0000${callId}`;
+    let seq = state.toolSeqByCall.get(key);
+    if (seq === undefined) {
+      seq = ++state.toolSeq;
+      state.toolSeqByCall.set(key, seq);
+    }
+    return `${event.parentCallId}::${callId}::${seq}`;
   }
   return event.callId ?? `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+/** The stored per-call seq for a result event, consumed (deleted) so a LATER
+ * reuse of the same raw callId gets a fresh id. Falls back to the current
+ * counter value when no start was seen (result without start). */
+function consumeCallSeq(event: Extract<EngineEvent, { type: "tool_result" }>, state: TranslateState): number {
+  if (!event.parentCallId) return state.toolSeq;
+  const key = `${event.parentCallId}\u0000${event.callId ?? ""}`;
+  const seq = state.toolSeqByCall.get(key);
+  if (seq !== undefined) state.toolSeqByCall.delete(key);
+  return seq ?? state.toolSeq;
+}
+
+/** Per-call seq key for a subagent (no parentCallId — empty prefix). */
+function subagentKey(callId: string): string {
+  return `\u0000${callId}`;
 }
 
 /**
@@ -145,24 +181,51 @@ export function translateEngineEvent(event: EngineEvent, state: TranslateState):
 
     case "tool_result": {
       if (event.isInternal && !event.parentCallId) return [];
+      // IN-04: close open blocks with their END events (atomic with the
+      // close) — same shape as the tool_start branch — so no unterminated
+      // message block survives on the wire.
+      const out: BaseEvent[] = [];
       if (state.textOpen) {
+        out.push({ type: EventType.TEXT_MESSAGE_END, messageId: `${state.runId}-text-${state.textSeq}` });
         state.textOpen = false;
       }
       if (state.reasoningOpen) {
+        out.push({ type: EventType.REASONING_MESSAGE_END, messageId: `${state.runId}-reasoning-${state.reasoningSeq}` });
         state.reasoningOpen = false;
       }
+      // CR-01: reuse the seq stored at tool_start (consumed here) so the
+      // result matches the id the client saw STARTed.
       const toolCallId = event.parentCallId
-        ? `${event.parentCallId}::${event.callId ?? ""}::${state.toolSeq}`
+        ? `${event.parentCallId}::${event.callId ?? ""}::${consumeCallSeq(event, state)}`
         : (event.callId ?? "");
       // Remove from open set (match by namespaced id when parentCallId set).
       const idx = state.openToolCallIds.lastIndexOf(toolCallId);
       if (idx !== -1) state.openToolCallIds.splice(idx, 1);
-      return [toolResult(toolCallId, event.result)];
+      out.push(toolResult(toolCallId, event.result));
+      return out;
     }
 
     case "subagent_start": {
       const out: BaseEvent[] = [];
-      const toolCallId = `${event.callId}::${++state.toolSeq}`;
+      // IN-04: a subagent boundary is a non-token boundary — close open
+      // blocks before opening the tool-call pair.
+      if (state.textOpen) {
+        out.push({ type: EventType.TEXT_MESSAGE_END, messageId: `${state.runId}-text-${state.textSeq}` });
+        state.textOpen = false;
+      }
+      if (state.reasoningOpen) {
+        out.push({ type: EventType.REASONING_MESSAGE_END, messageId: `${state.runId}-reasoning-${state.reasoningSeq}` });
+        state.reasoningOpen = false;
+      }
+      // CR-01: the subagent's own seq is stored under its own key so child
+      // tool events interleaved between start and stop cannot shift it.
+      const key = subagentKey(event.callId);
+      let seq = state.toolSeqByCall.get(key);
+      if (seq === undefined) {
+        seq = ++state.toolSeq;
+        state.toolSeqByCall.set(key, seq);
+      }
+      const toolCallId = `${event.callId}::${seq}`;
       state.openToolCallIds.push(toolCallId);
       out.push(
         { type: EventType.TOOL_CALL_START, toolCallId, toolCallName: "subagent" },
@@ -173,10 +236,23 @@ export function translateEngineEvent(event: EngineEvent, state: TranslateState):
     }
 
     case "subagent_stop": {
-      const toolCallId = `${event.callId}::${state.toolSeq}`;
+      const out: BaseEvent[] = [];
+      if (state.textOpen) {
+        out.push({ type: EventType.TEXT_MESSAGE_END, messageId: `${state.runId}-text-${state.textSeq}` });
+        state.textOpen = false;
+      }
+      if (state.reasoningOpen) {
+        out.push({ type: EventType.REASONING_MESSAGE_END, messageId: `${state.runId}-reasoning-${state.reasoningSeq}` });
+        state.reasoningOpen = false;
+      }
+      const key = subagentKey(event.callId);
+      const seq = state.toolSeqByCall.get(key);
+      if (seq !== undefined) state.toolSeqByCall.delete(key);
+      const toolCallId = `${event.callId}::${seq ?? state.toolSeq}`;
       const idx = state.openToolCallIds.lastIndexOf(toolCallId);
       if (idx !== -1) state.openToolCallIds.splice(idx, 1);
-      return [toolResult(toolCallId, "")];
+      out.push(toolResult(toolCallId, ""));
+      return out;
     }
 
     // Terminal-causing engine events close any open text/reasoning blocks:

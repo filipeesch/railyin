@@ -201,6 +201,98 @@ describe("event-bridge: tool family (BRDG-03)", () => {
     expect(result.content).toBe("");
     expect(result.messageId).toBe(`${(out[0] as unknown as { toolCallId: string }).toolCallId}-result`);
   });
+
+  test("subagent with an interleaved child tool call — subagent id resolves back to its START (CR-01)", () => {
+    const state = createTranslateState("1", "run-1");
+    const out: BaseEvent[] = [];
+    out.push(...translateEngineEvent({ type: "subagent_start", callId: "sa-1", intent: "inspect", prompt: "do x" }, state));
+    // Child events interleave between subagent_start and subagent_stop — the
+    // normal subagent-with-tools flow (copilot/events.ts emits parentCallId).
+    out.push(...translateEngineEvent({
+      type: "tool_start", name: "bash", callId: "c0", parentCallId: "sa-1",
+      arguments: "{}", isInternal: true,
+    }, state));
+    out.push(...translateEngineEvent({
+      type: "tool_result", name: "bash", callId: "c0", parentCallId: "sa-1",
+      result: "out", isInternal: true,
+    }, state));
+    out.push(...translateEngineEvent({ type: "subagent_stop", callId: "sa-1" }, state));
+
+    assertValid(out);
+    expect(types(out)).toEqual([
+      "TOOL_CALL_START",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_END",
+      "TOOL_CALL_START",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_END",
+      "TOOL_CALL_RESULT",
+      "TOOL_CALL_RESULT",
+    ]);
+    const subStart = out[0] as unknown as { toolCallId: string };
+    const childStart = out[3] as unknown as { toolCallId: string };
+    const childResult = out[6] as unknown as { toolCallId: string };
+    const subResult = out[7] as unknown as { toolCallId: string };
+    expect(subStart.toolCallId).toBe("sa-1::1");
+    expect(childStart.toolCallId).toBe("sa-1::c0::2");
+    expect(childResult.toolCallId).toBe("sa-1::c0::2");
+    // CR-01: the stop resolves to the id the client saw STARTed — no
+    // phantom id that was never started, and the started id is not left
+    // dangling for a synthesized second result.
+    expect(subResult.toolCallId).toBe("sa-1::1");
+    expect(subResult.toolCallId).toBe(subStart.toolCallId);
+  });
+
+  test("two parallel children with interleaved results resolve to their OWN ids (CR-01)", () => {
+    const state = createTranslateState("1", "run-1");
+    const out: BaseEvent[] = [];
+    out.push(...translateEngineEvent({
+      type: "tool_start", name: "bash", callId: "A", parentCallId: "p1",
+      arguments: "{}", isInternal: true,
+    }, state));
+    out.push(...translateEngineEvent({
+      type: "tool_start", name: "bash", callId: "B", parentCallId: "p1",
+      arguments: "{}", isInternal: true,
+    }, state));
+    // Results arrive in the OPPOSITE order of the starts.
+    out.push(...translateEngineEvent({
+      type: "tool_result", name: "bash", callId: "A", parentCallId: "p1",
+      result: "a", isInternal: true,
+    }, state));
+    out.push(...translateEngineEvent({
+      type: "tool_result", name: "bash", callId: "B", parentCallId: "p1",
+      result: "b", isInternal: true,
+    }, state));
+
+    assertValid(out);
+    const aStart = out[0] as unknown as { toolCallId: string };
+    const bStart = out[3] as unknown as { toolCallId: string };
+    const aResult = out[6] as unknown as { toolCallId: string };
+    const bResult = out[7] as unknown as { toolCallId: string };
+    expect(aStart.toolCallId).toBe("p1::A::1");
+    expect(bStart.toolCallId).toBe("p1::B::2");
+    expect(aResult.toolCallId).toBe("p1::A::1");
+    expect(bResult.toolCallId).toBe("p1::B::2");
+  });
+
+  test("nested subagents (subagent inside subagent) resolve independently (CR-01)", () => {
+    const state = createTranslateState("1", "run-1");
+    const out: BaseEvent[] = [];
+    out.push(...translateEngineEvent({ type: "subagent_start", callId: "outer", intent: "a", prompt: "p" }, state));
+    out.push(...translateEngineEvent({ type: "subagent_start", callId: "inner", intent: "b", prompt: "q" }, state));
+    out.push(...translateEngineEvent({ type: "subagent_stop", callId: "inner" }, state));
+    out.push(...translateEngineEvent({ type: "subagent_stop", callId: "outer" }, state));
+
+    assertValid(out);
+    const outerStart = out[0] as unknown as { toolCallId: string };
+    const innerStart = out[3] as unknown as { toolCallId: string };
+    const innerResult = out[6] as unknown as { toolCallId: string };
+    const outerResult = out[7] as unknown as { toolCallId: string };
+    expect(outerStart.toolCallId).toBe("outer::1");
+    expect(innerStart.toolCallId).toBe("inner::2");
+    expect(innerResult.toolCallId).toBe("inner::2");
+    expect(outerResult.toolCallId).toBe("outer::1");
+  });
 });
 
 describe("event-bridge: ignored families (BRDG-01 — no double-broadcast)", () => {
