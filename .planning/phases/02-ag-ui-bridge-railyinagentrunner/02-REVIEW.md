@@ -27,7 +27,7 @@ findings:
   warning: 4
   info: 4
   total: 9
-status: issues_found
+status: clean
 ---
 
 # Phase 2: Code Review Report
