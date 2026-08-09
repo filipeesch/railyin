@@ -34,6 +34,8 @@ import { CopilotEngine } from "./engine/copilot/engine.ts";
 import { createDefaultCopilotSdkAdapter } from "./engine/copilot/session.ts";
 import { CopilotRuntime, createCopilotRuntimeHandler, type CopilotRuntimeOptions } from "@copilotkit/runtime/v2";
 import { RailyinAgent } from "./copilotkit/railyin-agent.ts";
+import { JsonlStore } from "./copilotkit/jsonl-store.ts";
+import { RailyinAgentRunner } from "./copilotkit/railyin-runner.ts";
 import { ClaudeEngine } from "./engine/claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
@@ -263,8 +265,6 @@ if (copilotProbeEnabled) {
 // D-12: when the probe is disabled AND the orchestrator exists (config loaded
 // cleanly), register RailyinAgent — the real AG-UI bridge. The probe gate is
 // checked FIRST (Pitfall 9): `bun run prod` never loads the e2e probe module.
-// The runner stays the base InMemoryAgentRunner in this plan — RailyinAgentRunner
-// (persistence) swaps in during 02-02.
 let railyinAgent: unknown = null;
 if (!copilotProbeEnabled && orchestrator) {
   railyinAgent = new RailyinAgent(db, orchestrator);
@@ -282,7 +282,18 @@ const copilotAgents = (copilotProbeEnabled && scriptedAgent
   : railyinAgent
     ? { default: railyinAgent }
     : {}) as unknown as CopilotAgents;
-const copilotRuntime = new CopilotRuntime({ agents: copilotAgents });
+// 02-02 (D-12 runner swap, RUNR-02): the durable RailyinAgentRunner persists
+// every wire event to `data/threads/{threadId}.jsonl` and replays cold
+// connects from the log. The runner is used ONLY in the non-probe path —
+// probe mode keeps the base InMemoryAgentRunner so ScriptedAgent wire text
+// stays byte-identical (probe threadIds like "t1" are non-numeric and must
+// never reach the JSONL store).
+const jsonlStore = new JsonlStore(getDataDir());
+const railyinRunner = !copilotProbeEnabled ? new RailyinAgentRunner(jsonlStore) : undefined;
+const copilotRuntime = new CopilotRuntime({
+  agents: copilotAgents,
+  ...(railyinRunner ? { runner: railyinRunner } : {}),
+});
 const copilotHandler = createCopilotRuntimeHandler({
   runtime: copilotRuntime,
   basePath: "/api/copilotkit",

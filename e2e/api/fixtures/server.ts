@@ -36,6 +36,15 @@ export interface StartServerOptions {
      * `bun run prod`, so the fake agent is never exposed there.
      */
     copilotkitProbe?: boolean;
+    /**
+     * When provided, `RAILYN_DATA_DIR` is set to this path (created if
+     * missing) instead of the mcpConfig-derived dir, and `shutdown()` skips
+     * deleting the runtime dir — the CALLER owns cleanup. Contract: the dir
+     * must outlive a single server, so a restart-replay e2e can spawn two
+     * servers over the SAME durable data dir (the mcpConfig-derived dir is
+     * deleted at shutdown and cannot survive a restart).
+     */
+    dataDir?: string;
 }
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
@@ -144,6 +153,17 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
         mkdirSync(dataDir, { recursive: true });
         writeFileSync(join(dataDir, "mcp.json"), JSON.stringify(options.mcpConfig, null, 2), "utf-8");
         extraEnv.RAILYN_DATA_DIR = dataDir;
+    }
+    // A caller-supplied durable dataDir overrides the mcpConfig-derived one
+    // (survives shutdown; the caller owns cleanup of BOTH this dir and the
+    // runtime dir, since shutdown() skips rmSync when this option is set).
+    if (options?.dataDir) {
+        dataDir = options.dataDir;
+        mkdirSync(dataDir, { recursive: true });
+        extraEnv.RAILYN_DATA_DIR = dataDir;
+        if (options?.mcpConfig !== undefined) {
+            writeFileSync(join(dataDir, "mcp.json"), JSON.stringify(options.mcpConfig, null, 2), "utf-8");
+        }
     }
     if (options?.copilotkitProbe) {
         extraEnv.RAILYN_COPILOTKIT_PROBE = "1";
@@ -265,7 +285,12 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
             await fetch(`${debugUrl}/shutdown`).catch(() => { });
             await proc.exited;
         } finally {
-            rmSync(runtimeDir, { recursive: true, force: true });
+            // With a caller-supplied dataDir, the caller owns cleanup — the
+            // restart-replay e2e needs the durable dir to survive this
+            // shutdown and live on into the next spawned server.
+            if (!options?.dataDir) {
+                rmSync(runtimeDir, { recursive: true, force: true });
+            }
         }
     }
 

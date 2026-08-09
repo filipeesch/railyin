@@ -11,12 +11,17 @@
  * (the runtime mount is the documented exception).
  */
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { startServer, type TestServer } from "../fixtures/server";
 
 let server: TestServer;
 
 beforeAll(async () => {
-    server = await startServer({}); // no copilotkitProbe — the REAL agent registers
+    // mcpConfig: {} populates server.dataDir (RAILYN_DATA_DIR) so the
+    // durability tests can assert the JSONL log on disk (RUNR-02).
+    server = await startServer({ mcpConfig: {} });
 }, 20_000);
 
 afterAll(async () => {
@@ -28,6 +33,15 @@ afterAll(async () => {
 /** Raw fetch helper for AG-UI endpoints (not part of RailynAPI). */
 function postJson(path: string, body: unknown) {
     return fetch(`${server.baseUrl}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify(body),
+    });
+}
+
+/** postJson against an arbitrary server (for the restart-replay test). */
+function postJsonOn(baseUrl: string, path: string, body: unknown) {
+    return fetch(`${baseUrl}${path}`, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "text/event-stream" },
         body: JSON.stringify(body),
@@ -168,4 +182,93 @@ describe("RailyinAgent run path (RUNR-01, D-12)", () => {
         const frames = parseSseFrames(await res.text());
         expect(frames[frames.length - 1].type).toBe("RUN_ERROR");
     });
+});
+
+describe("RailyinAgentRunner durability (RUNR-02/04/05/06/07)", () => {
+    test("7: runs persist to data/threads/{conversationId}.jsonl — RUN_STARTED (with input) first, RUN_FINISHED last (RUNR-02)", async () => {
+        const session = await server.request("chatSessions.create", { title: "d1" });
+        const threadId = String(session.conversationId);
+
+        const res = await postJson("/api/copilotkit/agent/default/run", runInput(threadId, "run-7", "__SCRIPT_TOOLS__"));
+        expect(res.status).toBe(200);
+        const frames = parseSseFrames(await res.text());
+        expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
+
+        const logPath = join(server.dataDir, "threads", `${threadId}.jsonl`);
+        expect(existsSync(logPath)).toBe(true);
+        const lines = readFileSync(logPath, "utf-8").trim().split("\n");
+        const first = JSON.parse(lines[0]);
+        const last = JSON.parse(lines[lines.length - 1]);
+        expect(first.type).toBe("RUN_STARTED");
+        // The persisted user turn matches the wire.
+        expect(first.input?.messages?.some((m: { role: string }) => m.role === "user")).toBe(true);
+        expect(last.type).toBe("RUN_FINISHED");
+    });
+
+    test("8: connect on a never-run thread → 200 SSE, zero frames (RUNR-06)", async () => {
+        const session = await server.request("chatSessions.create", { title: "d2" });
+        const threadId = String(session.conversationId); // created but never run
+
+        const res = await postJson("/api/copilotkit/agent/default/connect", runInput(threadId, "run-connect-8", "hello"));
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe("text/event-stream");
+        const frames = parseSseFrames(await res.text());
+        expect(frames).toHaveLength(0);
+    });
+
+    test("9: second concurrent run on the same thread → 200 + EMPTY body, never a 500 (RUNR-04, Pitfall 2)", async () => {
+        const session = await server.request("chatSessions.create", { title: "d3" });
+        const threadId = String(session.conversationId);
+
+        // Fire the slow run and do NOT await the body — it stays in flight.
+        const first = postJson("/api/copilotkit/agent/default/run", runInput(threadId, "run-9a", "__SCRIPT_SLOW__"));
+        // Let the first run pass dispatch and sit in its 2s pause.
+        await new Promise((r) => setTimeout(r, 400));
+
+        const second = await postJson("/api/copilotkit/agent/default/run", runInput(threadId, "run-9b", "hello"));
+        expect(second.status).toBe(200);
+        // Pitfall 2: the runner's synchronous throw surfaces as 200 + empty
+        // SSE body — never a 500 status.
+        const frames = parseSseFrames(await second.text());
+        expect(frames).toHaveLength(0);
+
+        // Close the first stream cleanly.
+        const firstRes = await first;
+        const firstFrames = parseSseFrames(await firstRes.text());
+        expect(firstFrames[firstFrames.length - 1].type).toBe("RUN_FINISHED");
+    }, 20_000);
+
+    test("10: restart replay — same dataDir across two servers replays the log with completed tool calls (RUNR-05/07)", async () => {
+        const durableDir = mkdtempSync(join(tmpdir(), "railyn-durable-"));
+        try {
+            // Server A: run a tool-calling conversation into the durable dir.
+            const serverA = await startServer({ mcpConfig: {}, dataDir: durableDir });
+            const session = await serverA.request("chatSessions.create", { title: "d4" });
+            const threadId = String(session.conversationId);
+            const runRes = await postJsonOn(serverA.baseUrl, "/api/copilotkit/agent/default/run", runInput(threadId, "run-10", "__SCRIPT_TOOLS__"));
+            expect(runRes.status).toBe(200);
+            const runFrames = parseSseFrames(await runRes.text());
+            expect(runFrames[runFrames.length - 1].type).toBe("RUN_FINISHED");
+            await serverA.shutdown();
+
+            // Server B: a FRESH process over the SAME durable data dir — the
+            // in-memory store is empty, so connect replays the JSONL (the
+            // #3553 cold-start fix).
+            const serverB = await startServer({ mcpConfig: {}, dataDir: durableDir });
+            try {
+                const connectRes = await postJsonOn(serverB.baseUrl, "/api/copilotkit/agent/default/connect", runInput(threadId, "run-connect-10", "hello"));
+                expect(connectRes.status).toBe(200);
+                const frames = parseSseFrames(await connectRes.text());
+                expect(frames.length).toBeGreaterThan(0);
+                expect(frames[0].type).toBe("RUN_STARTED");
+                expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
+                // Completed tool call on replay — no stale running card.
+                expect(frames.some((f) => f.type === "TOOL_CALL_RESULT")).toBe(true);
+            } finally {
+                await serverB.shutdown();
+            }
+        } finally {
+            rmSync(durableDir, { recursive: true, force: true });
+        }
+    }, 30_000);
 });

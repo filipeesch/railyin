@@ -116,8 +116,31 @@ export class RailyinAgentRunner extends InMemoryAgentRunner {
     // types do not unify (same bridge the probe/agent use).
     const persisted = (super.run(request) as unknown as Observable<BaseEvent>).pipe(
       tap({
-        next: (event) => this.store.append(request.threadId, event),
-        complete: () => this.store.endRun(request.threadId),
+        next: (event) => {
+          // NEVER let a persistence failure break the client's stream: the
+          // agent already rejects non-numeric threadIds with RUN_ERROR before
+          // any side effect (T-02-01, 02-01), and the store's sanitization is
+          // the second defense line — a rejected append must not interrupt
+          // the event flow downstream (the RUN_ERROR wire contract survives).
+          try {
+            this.store.append(request.threadId, event);
+          } catch (err) {
+            console.warn(
+              `[railyin-runner] Failed to persist event for thread ${request.threadId}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+        },
+        complete: () => {
+          try {
+            this.store.endRun(request.threadId);
+          } catch (err) {
+            console.warn(
+              `[railyin-runner] Failed to endRun for thread ${request.threadId}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+        },
       }),
     );
     return persisted as unknown as RunnerRun;
