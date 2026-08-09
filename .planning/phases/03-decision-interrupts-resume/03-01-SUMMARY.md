@@ -189,6 +189,12 @@ None - no external service configuration required.
 - Mock-engine Phase B (resume continuation) + e2e decision cycle land in 03-02 Task 3 / 03-03
 - No blockers
 
+## Self-Check: PASSED
+
+- Files verified on disk: `src/bun/copilotkit/interrupt-registry.ts`, `src/bun/copilotkit/interrupt-registry.test.ts`, `.planning/phases/03-decision-interrupts-resume/03-01-SUMMARY.md`
+- Commits verified: `7ed68027` (Task 1 RED), `21404fa6` (Task 1 GREEN), `9e7a853f` (Task 2), `8d6b3d99` (Task 3 RED), `357ec95d` (Task 3 GREEN), `b72fff61` (docs)
+- Plan-level verification green: `bun test src/bun/copilotkit` 67 pass, `bun test e2e/api/copilotkit/copilotkit.test.ts` 8 pass, `bun run typecheck` clean
+
 ---
 *Phase: 03-decision-interrupts-resume*
 *Completed: 2026-08-09*
