@@ -68,8 +68,14 @@ export class HumanTurnExecutor {
     if (task.execution_state === "waiting_user" && task.current_execution_id != null) {
       const msgId = appendMessage(db, taskId, conversationId, "user", "user", content);
       db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+      // IN-03: status-filtered optimistic flip — the AG-UI resume branch
+      // finalizes the old decision execution row to 'completed' BEFORE calling
+      // this executor; the flip must NOT resurrect it to 'running' (which
+      // would both clobber the truthful terminal and block the advisory lock
+      // forever). It applies only when the row is still genuinely
+      // 'waiting_user' (ask_user/shell_approval pauses).
       db.run(
-        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ?",
+        "UPDATE executions SET status = 'running', finished_at = NULL WHERE id = ? AND status = 'waiting_user'",
         [task.current_execution_id],
       );
       this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
@@ -85,10 +91,12 @@ export class HumanTurnExecutor {
         // IN-03: status-filtered — the AG-UI resume branch finalizes the old
         // decision execution row to 'completed' BEFORE delivery; this fallback
         // must NOT overwrite that truthful terminal with 'failed' (the
-        // continuation still runs as a new execution). The update only applies
-        // when the row is still genuinely 'waiting_user'.
+        // continuation still runs as a new execution). The optimistic flip
+        // above left a genuinely-waiting row as 'running', so the update
+        // targets that state; a pre-finalized row ('completed') is never
+        // touched.
         db.run(
-          "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = 'Engine session lost; restarted as new execution' WHERE id = ? AND status = 'waiting_user'",
+          "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = 'Engine session lost; restarted as new execution' WHERE id = ? AND status = 'running'",
           [task.current_execution_id],
         );
         db.run(
