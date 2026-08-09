@@ -78,6 +78,21 @@
       <template #tool-call-subagent="{ name, args, status, result, toolCall }">
         <DelegateSummaryRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
       </template>
+
+      <!-- #interrupt slot (D-06, Phase 3 contract): the ported decision card.
+           Slot props { event, interrupt, interrupts, result, resolve, cancel }
+           (verified in the installed bundle). DecisionInterrupt emits the
+           buildResumePayload shape (non-empty answers — INVALID_PAYLOAD
+           otherwise, event-bridge.ts:380-422) and RailyinChat forwards it
+           verbatim to resolve(). -->
+      <template #interrupt="{ interrupt, result, resolve, cancel }">
+        <DecisionInterrupt
+          :interrupt="interrupt"
+          :result="result"
+          @submit="(p) => resolve(p)"
+          @cancel="() => cancel()"
+        />
+      </template>
       <template
         #input="{
           modelValue,
@@ -88,6 +103,22 @@
           onStop: slotOnStop,
         }"
       >
+        <!-- Capture the input bridge at render time so toolsMenu actions can
+             insert slash text via CopilotChat's own updater (CHAT-06). -->
+        {{ rememberInputUpdater(onUpdateModelValue) }}
+        <!-- "Stopped" marker (CHAT-04, D-08): pure client state — aborted and
+             done runs are byte-identical on the wire (RUN_FINISHED with no
+             outcome, event-bridge.ts:318-328), so the label renders while
+             stopRequested && the run is no longer running, and is cleared on
+             the next submit (onRunInitialized). -->
+        <div
+          v-if="stopRequested && !isRunning"
+          class="railyn-chat__stopped"
+          data-testid="chat-stopped"
+        >
+          <i class="pi pi-stop-circle railyn-chat__stopped-icon" />
+          <span>Stopped</span>
+        </div>
         <div class="railyn-chat__input" data-testid="chat-input">
           <CopilotChatInput
             :model-value="modelValue"
@@ -133,6 +164,7 @@ import { getCommandsRef, getCommandsRefForWorkspace, toToolsMenu } from "../../c
 import ShellOutputRenderer from "./tool-call-renderers/ShellOutputRenderer.vue";
 import FileChangesRenderer from "./tool-call-renderers/FileChangesRenderer.vue";
 import DelegateSummaryRenderer from "./tool-call-renderers/DelegateSummaryRenderer.vue";
+import DecisionInterrupt from "./DecisionInterrupt.vue";
 
 /**
  * RailyinChat.vue — the SINGLE CopilotKit surface (D-01). Owns the pinned
@@ -172,11 +204,25 @@ const { agent } = useAgent({ agentId: "default", threadId: () => props.threadId 
 // ─── toolsMenu (CHAT-06, D-07) ────────────────────────────────────────────────
 // Card scope → getCommandsRef(taskId); session scope → workspaceKey path.
 // toToolsMenu returns [] for zero commands → the menu affordance is hidden.
+// The insert callback writes the slash text into the input via CopilotChat's
+// own updater (captured at render time in the #input slot) — the command
+// becomes the leading value (AGENTS.md prompt-ref convention).
+const inputUpdater = ref<((value: string) => void) | null>(null);
+
+/** Slot-render-time capture; returns "" so nothing renders. */
+function rememberInputUpdater(update: (value: string) => void): string {
+  inputUpdater.value = update;
+  return "";
+}
+
 const toolsMenu = computed<ToolsMenuItem[]>(() => {
   const scope = props.commandsScope;
+  const insert = (slashText: string) => {
+    inputUpdater.value?.(slashText);
+  };
   if (!scope) return [];
-  if (scope.taskId != null) return toToolsMenu(getCommandsRef(scope.taskId).value);
-  if (scope.workspaceKey) return toToolsMenu(getCommandsRefForWorkspace(scope.workspaceKey).value);
+  if (scope.taskId != null) return toToolsMenu(getCommandsRef(scope.taskId).value, insert);
+  if (scope.workspaceKey) return toToolsMenu(getCommandsRefForWorkspace(scope.workspaceKey).value, insert);
   return [];
 });
 
@@ -242,6 +288,11 @@ onUnmounted(() => unsubscribe?.());
 
 // PrimeVue error toast mirroring the legacy onStreamError behavior
 // (App.vue:54-57 — summary "Execution failed", detail = error, life 6000).
+// This is ALSO the resume-failure UX (unresolved UI-SPEC assumption): a
+// rejected resume (expired/unknown interruptId → INVALID_PAYLOAD error
+// terminal, Phase 3 D-05) surfaces here while the agent's interrupt state
+// persists — useInterrupt keeps hasInterrupt true, so the decision card
+// stays open for re-answer (acceptable v1 behavior).
 watch(runError, (err) => {
   if (err) {
     toast.add({ severity: "error", summary: "Execution failed", detail: err, life: 6000 });
@@ -326,6 +377,37 @@ html.dark-mode .railyn-chat__error {
   align-items: center;
   gap: 8px;
   padding: 0 12px 12px;
+}
+
+/* "Stopped" marker (CHAT-04 backstop row): a quiet chip above the input,
+   near the last partial assistant message. Client state only (D-08) — the
+   wire cannot distinguish aborted runs from done runs. */
+.railyn-chat__stopped {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 12px 8px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--p-surface-500, #64748b);
+  background: var(--p-surface-100, #f1f5f9);
+  align-self: flex-start;
+}
+
+.railyn-chat__stopped-icon {
+  font-size: 0.7rem;
+  color: var(--p-surface-400, #94a3b8);
+}
+
+html.dark-mode .railyn-chat__stopped {
+  color: var(--p-surface-300, #cbd5e1);
+  background: var(--p-surface-800, #1e293b);
+}
+
+html.dark-mode .railyn-chat__stopped-icon {
+  color: var(--p-surface-500, #64748b);
 }
 
 /* Markdown parity rules (ported from ConversationBody.vue:608-627) */

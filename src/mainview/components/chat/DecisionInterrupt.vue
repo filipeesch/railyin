@@ -138,7 +138,7 @@ import {
   buildResumePayload,
   isOptionSelected as isOptionSelectedUtil,
   type DecisionRequestState,
-} from "../utils/decisionRequest";
+} from "../../utils/decisionRequest";
 
 /**
  * DecisionInterrupt — the `#interrupt` slot renderer (D-06, Phase 3 contract).
