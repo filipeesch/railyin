@@ -1,5 +1,7 @@
 <template>
-  <div class="railyn-chat">
+  <!-- IN-01: the title prop (task title / session title from both callers)
+       becomes the region's accessible name. -->
+  <div class="railyn-chat" role="region" :aria-label="title">
     <!-- Loading: centered ProgressSpinner until the thread connect/replay
          resolves (first MESSAGES_SNAPSHOT or connect finalize) — the legacy
          .scv-loading pattern; no welcome-screen flash (welcome-screen=false
