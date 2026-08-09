@@ -417,11 +417,13 @@ test.describe("E — Auto-scroll", () => {
 
         // A run streams below the fold — the reading position must not drift.
         // Poll until the streamed tail settles (WR-05, the E-1/E-7 pattern).
+        // NOTE: scrollTopBefore crosses the browser boundary via the evaluate
+        // arg — closures are not serialized into locator.evaluate callbacks.
         await submitChatMessage(page, "stream below the fold");
         await expect(chat).toContainText("stream below the fold", { timeout: 10_000 });
         await expect.poll(() => agui.runInputs.length).toBe(1);
         await expect
-            .poll(() => scroll.evaluate((el) => Math.abs(el.scrollTop - scrollTopBefore)), { timeout: 3_000 })
+            .poll(() => scroll.evaluate((el, baseline) => Math.abs(el.scrollTop - baseline), scrollTopBefore), { timeout: 3_000 })
             .toBeLessThanOrEqual(5);
     });
 
