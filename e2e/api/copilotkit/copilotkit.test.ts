@@ -81,14 +81,22 @@ describe("CopilotRuntime mount (HOST-01)", () => {
     test("C: POST stop/:threadId during a silence run returns {stopped:true}", async () => {
         // Fire the run but do not await the body — the agent pauses for 5s.
         const runRes = postJson("/api/copilotkit/agent/default/run", runInput("t2", "r2", { script: "silence", silenceMs: 5000 }));
-        // Give the run ~800ms to start streaming, then stop it mid-silence.
-        await new Promise((resolve) => setTimeout(resolve, 800));
+
+        // Synchronize on observable state (WR-01): retry the stop until the
+        // runner reports an active run — no fixed-sleep timing dependence. The
+        // run stays active for silenceMs (5s), so a bounded retry always lands
+        // mid-run on a healthy server.
+        const deadline = Date.now() + 4000;
+        let stopBody: Record<string, unknown> = { stopped: false };
+        while (Date.now() < deadline && stopBody.stopped !== true) {
+            const stopRes = await fetch(`${server.baseUrl}/api/copilotkit/agent/default/stop/t2`, { method: "POST" });
+            expect(stopRes.status).toBe(200);
+            stopBody = (await stopRes.json()) as Record<string, unknown>;
+            if (stopBody.stopped !== true) await new Promise((resolve) => setTimeout(resolve, 100));
+        }
 
         // Verified route (research Pitfall 4): threadId lives in the PATH for
         // multi-route mode — POST /agent/:agentId/stop/:threadId.
-        const stopRes = await fetch(`${server.baseUrl}/api/copilotkit/agent/default/stop/t2`, { method: "POST" });
-        expect(stopRes.status).toBe(200);
-        const stopBody = (await stopRes.json()) as Record<string, unknown>;
         expect(stopBody.stopped).toBe(true);
 
         // The stream still completes cleanly once the silence elapses.
