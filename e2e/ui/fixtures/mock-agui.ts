@@ -214,18 +214,16 @@ export function buildReasoningRunSseBody(requestInput: unknown): string {
  * DecisionRequestPayload with two exclusive questions. The decision card
  * renders via the #interrupt slot; the resume POST /run carries the answers.
  */
-export function buildInterruptRunSseBody(requestInput: unknown): string {
-    const parsed = RunAgentInputSchema.parse(requestInput);
-    const encoder = new EventEncoder();
-    const events: AGUIEvent[] = [
-        { type: EventType.RUN_STARTED, threadId: parsed.threadId, runId: parsed.runId },
+export function buildInterruptRunEvents(threadId: string, runId: string): AGUIEvent[] {
+    return [
+        { type: EventType.RUN_STARTED, threadId, runId },
         { type: EventType.TEXT_MESSAGE_START, messageId: "m1", role: "assistant" },
         { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "What do you think?" },
         { type: EventType.TEXT_MESSAGE_END, messageId: "m1" },
         {
             type: EventType.RUN_FINISHED,
-            threadId: parsed.threadId,
-            runId: parsed.runId,
+            threadId,
+            runId,
             outcome: {
                 type: "interrupt",
                 interrupts: [
@@ -239,7 +237,12 @@ export function buildInterruptRunSseBody(requestInput: unknown): string {
             },
         },
     ];
-    return events
+}
+
+export function buildInterruptRunSseBody(requestInput: unknown): string {
+    const parsed = RunAgentInputSchema.parse(requestInput);
+    const encoder = new EventEncoder();
+    return buildInterruptRunEvents(parsed.threadId, parsed.runId)
         .map((event) => encoder.encode(patchRunStartedInput(event, parsed)))
         .join("");
 }
@@ -308,18 +311,26 @@ export function buildConnectReplaySseBody(
         forwardedProps: { script },
     });
     const encoder = new EventEncoder();
-    // buildQuickRunEvents / buildToolCallRunEvents already end with
-    // RUN_FINISHED; the connect replay must expose a SINGLE terminal event
-    // AFTER the snapshot (the client's verifyEvents rejects any event after
-    // RUN_FINISHED), so the historic run's terminal is dropped and the replay
-    // appends its own.
-    const historic = (script === "toolcall" ? buildToolCallRunEvents(threadId, REPLAY_RUN_ID) : buildQuickRunEvents(threadId, REPLAY_RUN_ID)).filter(
-        (event) => event.type !== EventType.RUN_FINISHED,
-    );
+    // buildQuickRunEvents / buildToolCallRunEvents / buildInterruptRunEvents
+    // already end with RUN_FINISHED; the connect replay must expose a SINGLE
+    // terminal event AFTER the snapshot (the client's verifyEvents rejects
+    // any event after RUN_FINISHED), so the historic run's terminal is
+    // dropped and the replay appends its own — EXCEPT the interrupt variant,
+    // whose RUN_FINISHED carries the interrupt outcome the client needs to
+    // re-pend the decision card (IN-07 / D-08): that terminal becomes the
+    // replay's final frame and the snapshot sits before it.
+    const interruptReplay = script === "interrupt";
+    const interruptRunEvents = interruptReplay ? buildInterruptRunEvents(threadId, REPLAY_RUN_ID) : null;
+    const historic = (
+        script === "toolcall"
+            ? buildToolCallRunEvents(threadId, REPLAY_RUN_ID)
+            : interruptRunEvents ?? buildQuickRunEvents(threadId, REPLAY_RUN_ID)
+    ).filter((event) => event.type !== EventType.RUN_FINISHED);
     // Tool-call replay snapshot (RUNR-07 / D-05): the assistant message pairs
     // its toolCall with the ToolMessage, so the client's slot resolution
     // derives status "complete" — a reopened thread never shows a stale
-    // "running" card.
+    // "running" card. The interrupt replay snapshots the assistant text that
+    // preceded the interrupt outcome.
     const snapshotMessages =
         script === "toolcall"
             ? [
@@ -331,14 +342,18 @@ export function buildConnectReplaySseBody(
                   },
                   { id: "t1", role: "tool", toolCallId: "tc-bash", content: "total 8" },
               ]
-            : [{ id: "m1", role: "assistant", content: "hello" }];
+            : interruptReplay
+              ? [{ id: "m1", role: "assistant", content: "What do you think?" }]
+              : [{ id: "m1", role: "assistant", content: "hello" }];
     const replayEvents: AGUIEvent[] = [
         ...historic,
         {
             type: EventType.MESSAGES_SNAPSHOT,
             messages: snapshotMessages,
         },
-        { type: EventType.RUN_FINISHED, threadId, runId: REPLAY_RUN_ID, result: null },
+        interruptRunEvents
+            ? interruptRunEvents[interruptRunEvents.length - 1]
+            : { type: EventType.RUN_FINISHED, threadId, runId: REPLAY_RUN_ID, result: null },
     ];
     return replayEvents
         .map((event) => encoder.encode(patchRunStartedInput(event, parsed)))
@@ -354,8 +369,9 @@ export class MockAgui {
      * body; "toolcall" / "reasoning" / "interrupt" serve their variant
      * bodies; "slow" delays the /run fulfill with a terminal-less body so the
      * stop scenario can click mid-run. Connect replays use the quick
-     * sequence, except script === "toolcall" which replays the tool-call
-     * sequence + completed snapshot (RUNR-07).
+     * sequence, except script === "toolcall" (tool-call sequence + completed
+     * snapshot, RUNR-07) and script === "interrupt" (interrupt outcome
+     * terminal so the decision card re-pends on reopen, IN-07 / D-08).
      */
     script: RunScript = "quick";
 

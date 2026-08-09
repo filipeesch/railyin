@@ -266,3 +266,30 @@ describe("buildConnectReplaySseBody toolcall script (plan 05-04, RUNR-07)", () =
         expect(snapshot!.messages).toEqual([{ id: "m1", role: "assistant", content: "hello" }]);
     });
 });
+
+describe("buildConnectReplaySseBody interrupt script (IN-07, D-08)", () => {
+    test("registered thread + script 'interrupt' ends with the RUN_FINISHED interrupt outcome as the single terminal", () => {
+        const known = new Set(["t-replay-interrupt"]);
+        const frames = decodeFrames(buildConnectReplaySseBody("t-replay-interrupt", "interrupt", known));
+
+        const terminal = frames[frames.length - 1] as {
+            type: EventType.RUN_FINISHED;
+            outcome?: { type: string; interrupts?: Array<{ id: string }> };
+        };
+        // The terminal carries the interrupt outcome (the client re-pends the
+        // decision card from it) — a plain result:null terminal would not.
+        expect(terminal.type).toBe(EventType.RUN_FINISHED);
+        expect(terminal.outcome?.type).toBe("interrupt");
+        expect(terminal.outcome?.interrupts?.[0]?.id).toBe("decision-interrupt-1");
+        // Single terminal, snapshot before it.
+        const types = frames.map((f) => f.type);
+        expect(types.filter((t) => t === EventType.RUN_FINISHED)).toHaveLength(1);
+        expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
+        expect(types.indexOf(EventType.MESSAGES_SNAPSHOT)).toBeLessThan(types.length - 1);
+        // Snapshot references the assistant text preceding the interrupt.
+        const snapshot = frames.find((f) => f.type === EventType.MESSAGES_SNAPSHOT) as
+            | { type: EventType.MESSAGES_SNAPSHOT; messages: Array<{ id: string; role: string; content?: string }> }
+            | undefined;
+        expect(snapshot!.messages).toEqual([{ id: "m1", role: "assistant", content: "What do you think?" }]);
+    });
+});

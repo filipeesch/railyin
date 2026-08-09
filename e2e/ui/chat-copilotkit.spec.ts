@@ -347,6 +347,42 @@ test.describe("C — stop, reasoning, slash, decision", () => {
         expect(resume[0].status).toBe("resolved");
         expect(resume[0].payload.answers?.length).toBeGreaterThan(0);
     });
+
+    test("C-5: resolved interrupt renders the 'Decision recorded' summary on reopen (D-08, WR-01)", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 305, conversationId: 305, title: "Decision Replay Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "interrupt";
+        agui.registerThread(String(t.conversationId));
+
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
+
+        // Answer the decision; submit. The resume run completes NORMALLY
+        // (quick script — like the real server, whose follow-up run finishes
+        // with success and clears the clone's pending interrupts), so the
+        // card disappears after submit.
+        const decisionCard = page.locator('[data-testid="decision-card"]');
+        await expect(decisionCard).toBeVisible({ timeout: 10_000 });
+        await decisionCard.locator(".di__option", { hasText: "Yes, apply them" }).click();
+        await decisionCard.locator(".di__option", { hasText: "Fail loudly" }).click();
+        agui.script = "quick";
+        await page.locator('[data-testid="decision-submit"]').click();
+        await expect(decisionCard).not.toBeVisible({ timeout: 10_000 });
+
+        // Reopen: the connect replay (script "interrupt") re-pends the
+        // interrupt outcome; the bridge handler replays the recorded outcome
+        // as the collapsed summary (WR-01 — the previously dead D-08 branch
+        // is now reachable). The recorded outcome is SPA-session scoped, so
+        // this exact flow renders the summary instead of the pending card.
+        await page.keyboard.press("Escape");
+        await expect(page.locator(".task-detail")).not.toBeVisible({ timeout: 3_000 });
+        agui.script = "interrupt";
+        await openTaskDrawer(page, t.id);
+        const replayedCard = page.locator('[data-testid="decision-card"]');
+        await expect(replayedCard).toContainText("Decision recorded", { timeout: 10_000 });
+        await expect(replayedCard).toContainText("2 answers recorded");
+    });
 });
 
 // ─── Suite L — chat thread sidebar (ChatThreadSidebar) ────────────────────────
