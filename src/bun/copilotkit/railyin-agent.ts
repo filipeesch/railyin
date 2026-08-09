@@ -187,6 +187,14 @@ export class RailyinAgent extends AbstractAgent {
     ): void => {
       if (terminalEmitted) return;
       terminalEmitted = true;
+      // WR-01: the abort path (stream-processor's flush + onRunEnd("aborted"))
+      // never emits a closing done engine event, so open TEXT_MESSAGE /
+      // REASONING blocks are still active here. Close them with their END
+      // events BEFORE the terminal — verifyEvents rejects a terminal while a
+      // message is still active, and a spec-compliant client would leave a
+      // dangling text bubble.
+      const closers = translateEngineEvent({ type: "done" }, state);
+      for (const ev of closers) subject.next(ev);
       // D-09/A5: no dangling tool calls in the persisted log — synthesize
       // missing results BEFORE the terminal. synthesizedEvents returns the
       // full list (accumulated + tail); the accumulated part was already

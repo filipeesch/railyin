@@ -163,6 +163,69 @@ describe("RailyinAgent", () => {
     expect(types.filter((t) => t === EventType.RUN_ERROR)).toHaveLength(0);
   });
 
+  test("4a: abort mid-token closes open text/reasoning blocks BEFORE the terminal (WR-01)", async () => {
+    const { conversationId } = seedChatSession(db);
+    // stream-processor's abort path flushes accumulators and calls
+    // onRunEnd("aborted") WITHOUT a closing done engine event — the text
+    // block is still open when finish() runs.
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        capturedOpts = opts;
+        if (opts) {
+          opts.onEngineEvent?.({ type: "token", content: "partial" });
+          opts.onEngineEvent?.({ type: "reasoning", content: "think" });
+          opts.onRunEnd?.("aborted");
+        }
+        return { message: { id: 1 } as never, executionId: 42 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+    const types = events.map((e) => e.type);
+
+    // Both END events must precede the terminal — no active message when
+    // RUN_FINISHED is emitted (verifyEvents contract).
+    const textEnd = types.indexOf("TEXT_MESSAGE_END");
+    const reasoningEnd = types.indexOf("REASONING_MESSAGE_END");
+    const finished = types.lastIndexOf(EventType.RUN_FINISHED);
+    expect(textEnd).toBeGreaterThan(-1);
+    expect(reasoningEnd).toBeGreaterThan(-1);
+    expect(textEnd).toBeLessThan(finished);
+    expect(reasoningEnd).toBeLessThan(finished);
+    expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
+  });
+
+  test("4b: abort with an open tool call synthesizes its RESULT before the terminal (WR-01 + D-09)", async () => {
+    const { conversationId } = seedChatSession(db);
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        capturedOpts = opts;
+        if (opts) {
+          opts.onEngineEvent?.({ type: "token", content: "partial" });
+          opts.onEngineEvent?.({ type: "tool_start", name: "bash", callId: "call_1", arguments: "{}" });
+          // abort — no tool_result, no done
+          opts.onRunEnd?.("aborted");
+        }
+        return { message: { id: 1 } as never, executionId: 43 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+    const types = events.map((e) => e.type);
+
+    const textEnd = types.indexOf("TEXT_MESSAGE_END");
+    const resultIdx = types.indexOf("TOOL_CALL_RESULT");
+    const finished = types.lastIndexOf(EventType.RUN_FINISHED);
+    expect(textEnd).toBeGreaterThan(-1);
+    expect(resultIdx).toBeGreaterThan(-1);
+    // END + synthesized RESULT both precede the terminal.
+    expect(textEnd).toBeLessThan(finished);
+    expect(resultIdx).toBeLessThan(finished);
+    expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
+  });
+
   test("5: unknown conversation → RUN_ERROR without calling executeChatTurn", async () => {
     const agent = makeAgent(999_999); // no such conversation
     let executeChatTurnCalls = 0;
