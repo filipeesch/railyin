@@ -261,6 +261,14 @@ retentionJob.start();
 //   never loads the e2e/ module nor registers the fake agent — env-gate pattern
 //   mirroring RAILYN_TEST_EXECUTION_ENGINE above (T-1-03 mitigation). The
 //   dynamic import keeps the e2e/ tree out of the production module graph.
+// D-06: the legacy import path is retired behind RAILYN_LEGACY_IMPORT=1 —
+// `legacyImport.run` is registered ONLY when the flag is set (mirrors the
+// copilotProbeEnabled env-gate pattern above; `bun run prod` never sets it).
+// The import module + its frozen-table reads stay available for a future
+// migration, but the RPC is absent by default (404 over the wire, never an
+// erroring handler). The frontend's visibility channel is the unconditional
+// `legacyImport.enabled` RPC registered by legacyImportHandlers.
+const legacyImportEnabled = process.env.RAILYN_LEGACY_IMPORT === "1";
 const copilotProbeEnabled = process.env.RAILYN_COPILOTKIT_PROBE === "1";
 let scriptedAgent: unknown;
 if (copilotProbeEnabled) {
@@ -342,7 +350,7 @@ const allHandlers = {
   }),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
   ...threadHandlers(db, jsonlStore),
-  ...legacyImportHandlers(db, jsonlStore),
+  ...legacyImportHandlers(db, jsonlStore, legacyImportEnabled),
   ...decisionHandlers(db),
   ...noteHandlers(db),
   ...configHandlers(),

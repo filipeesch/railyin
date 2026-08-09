@@ -105,6 +105,10 @@ export const test = base.extend<Fixtures>({
             .returns("chatSessions.markRead", undefined)
             .returns("chatSessions.cancel", undefined)
             .returns("chatSessions.sendMessage", { executionId: -1, message: null })
+            // Legacy import (D-06): retired by default — enabled=false hides
+            // the import button; tests override via api.returns to exercise
+            // the enabled flow.
+            .returns("legacyImport.enabled", { enabled: false })
             // Workspace management endpoints
             .returns("workspace.update", {})
             .returns("workspace.create", { key: "new-workspace", name: "New Workspace" })

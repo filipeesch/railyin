@@ -37,6 +37,14 @@ export interface StartServerOptions {
      */
     copilotkitProbe?: boolean;
     /**
+     * When true, spawns the server with `RAILYN_LEGACY_IMPORT=1` so the
+     * composition root registers the `legacyImport.run` RPC (D-06 retirement
+     * gate). Off by default — without the flag the RPC is absent (404) and
+     * `legacyImport.enabled` returns `{ enabled: false }`; `bun run prod`
+     * never sets it.
+     */
+    legacyImport?: boolean;
+    /**
      * When provided, `RAILYN_DATA_DIR` is set to this path (created if
      * missing) instead of the mcpConfig-derived dir, and `shutdown()` skips
      * deleting the runtime dir — the CALLER owns cleanup. Contract: the dir
@@ -183,6 +191,9 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
     }
     if (options?.copilotkitProbe) {
         extraEnv.RAILYN_COPILOTKIT_PROBE = "1";
+    }
+    if (options?.legacyImport) {
+        extraEnv.RAILYN_LEGACY_IMPORT = "1";
     }
 
     const proc = spawn({

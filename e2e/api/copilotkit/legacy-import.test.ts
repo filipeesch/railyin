@@ -2,8 +2,10 @@
  * legacy-import.test.ts — real-wire legacy import e2e (IMPR-01, D-06/D-07/D-08).
  *
  * Spawns the REAL server with a durable dataDir + durable DB (startServer
- * fixture contract — durable DB at join(dataDir, "railyn.db")), seeds legacy
- * `conversations`/`conversation_messages` rows via bun:sqlite, triggers
+ * fixture contract — durable DB at join(dataDir, "railyn.db")) and the
+ * `legacyImport` option (RAILYN_LEGACY_IMPORT=1 — the D-06 gate that
+ * registers `legacyImport.run`; without it the RPC is absent/404), seeds
+ * legacy `conversations`/`conversation_messages` rows via bun:sqlite, triggers
  * `legacyImport.run` over the RPC wire, and asserts the resulting JSONL log
  * on disk: RUN_STARTED-with-input first, RUN_FINISHED last, naive-UTC
  * timestamps normalized (Pitfall 1), frozen legacy row counts (IMPR-02/D-08),
@@ -90,7 +92,7 @@ function runInput(threadId: string, runId: string, text: string) {
 describe("legacyImport.run (IMPR-01, D-06/D-07/D-08)", () => {
     test("1: seeded legacy rows import over the wire — JSONL shape, frozen counts, idempotent re-run, threads.list, no .tmp residue", async () => {
         const dataDir = mkdtempSync(join(tmpdir(), "railyn-import-e2e-"));
-        const server: TestServer = await startServer({ dataDir, durableDb: true });
+        const server: TestServer = await startServer({ dataDir, durableDb: true, legacyImport: true });
         try {
             const dbPath = join(dataDir, "railyn.db");
             const threadId = seedLegacyConversation(dbPath);
@@ -140,7 +142,7 @@ describe("legacyImport.run (IMPR-01, D-06/D-07/D-08)", () => {
         const durableDir = mkdtempSync(join(tmpdir(), "railyn-import-durable-"));
         try {
             // Server A: seed + import over the real wire.
-            const serverA: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+            const serverA: TestServer = await startServer({ dataDir: durableDir, durableDb: true, legacyImport: true });
             let threadId: string;
             try {
                 threadId = seedLegacyConversation(join(durableDir, "railyn.db"));
@@ -153,7 +155,7 @@ describe("legacyImport.run (IMPR-01, D-06/D-07/D-08)", () => {
             // Server B: a FRESH process over the SAME dataDir — the in-memory
             // thread store is empty, so connect cold-replays the imported JSONL
             // (index rebuilt from the log — criterion 5 for imported data).
-            const serverB: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+            const serverB: TestServer = await startServer({ dataDir: durableDir, durableDb: true, legacyImport: true });
             try {
                 const res = await postJsonOn(
                     serverB.baseUrl,
@@ -185,7 +187,7 @@ describe("crash tolerance (criterion 5)", () => {
             // Server A: seed + import, then simulate a runner that died mid-append
             // (assumption A1): a truncated JSON line with NO trailing newline at
             // the very end of the log — the tolerant reader must skip it.
-            const serverA: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+            const serverA: TestServer = await startServer({ dataDir: durableDir, durableDb: true, legacyImport: true });
             let threadId: string;
             try {
                 threadId = seedLegacyConversation(join(durableDir, "railyn.db"));
@@ -210,7 +212,7 @@ describe("crash tolerance (criterion 5)", () => {
             // Server B: a FRESH process over the SAME dataDir — cold connect must
             // replay the COMPLETE imported lines and skip the partial tail
             // (half 2 of criterion 5 — tolerant read across a restart).
-            const serverB: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+            const serverB: TestServer = await startServer({ dataDir: durableDir, durableDb: true, legacyImport: true });
             try {
                 const res = await postJsonOn(
                     serverB.baseUrl,
@@ -247,7 +249,7 @@ describe("crash tolerance (criterion 5)", () => {
 
     test("B: a *.jsonl.tmp crash artifact is invisible — list() omits it, the imported entry is unchanged, and re-import still skips via the FINAL file marker", async () => {
         const durableDir = mkdtempSync(join(tmpdir(), "railyn-crash-b-"));
-        const server: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+        const server: TestServer = await startServer({ dataDir: durableDir, durableDb: true, legacyImport: true });
         try {
             const threadId = seedLegacyConversation(join(durableDir, "railyn.db"));
             const summary = await server.request("legacyImport.run", {});
@@ -281,7 +283,7 @@ describe("crash tolerance (criterion 5)", () => {
         // Self-contained (WR-05): creates its own crash artifact — a final file
         // with a partial tail — instead of reusing another test's side effects.
         const durableDir = mkdtempSync(join(tmpdir(), "railyn-crash-c-"));
-        const serverC: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+        const serverC: TestServer = await startServer({ dataDir: durableDir, durableDb: true, legacyImport: true });
         try {
             const threadId = seedLegacyConversation(join(durableDir, "railyn.db"));
             const first = await serverC.request("legacyImport.run", {});

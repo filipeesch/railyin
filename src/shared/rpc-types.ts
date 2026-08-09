@@ -1041,10 +1041,17 @@ export type RailynAPI = {
   };
   // Legacy import (IMPR-01, D-06) — converts frozen conversation_messages
   // rows into JSONL threads; idempotent (D-07), SELECT-only w.r.t. legacy
-  // tables (IMPR-02, D-08)
+  // tables (IMPR-02, D-08). `legacyImport.run` is registered ONLY when the
+  // server was started with RAILYN_LEGACY_IMPORT=1 (absent → 404); the
+  // unconditional `legacyImport.enabled` is the frontend visibility channel
+  // that hides the import button when the flag is off.
   "legacyImport.run": {
     params: Record<string, never>;
     response: ImportSummary;
+  };
+  "legacyImport.enabled": {
+    params: Record<string, never>;
+    response: { enabled: boolean };
   };
   "mcp.getStatus": {
     params: Record<string, never>;

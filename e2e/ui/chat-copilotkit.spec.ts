@@ -426,12 +426,23 @@ test.describe("L — chat thread sidebar", () => {
         await expect(page.locator(".session-chat-view")).toBeVisible({ timeout: 5_000 });
     });
 
-    test("L-3: Legacy Import triggers legacyImport.run; success, idempotent and failure toasts", async ({ page, api }) => {
+    test("L-3: Legacy Import hidden by default (D-06); with legacyImport.enabled true it triggers legacyImport.run — success, idempotent and failure toasts", async ({ page, api }) => {
+        // (a) Retired-by-default branch: the fixture's legacyImport.enabled
+        // mock returns false (D-06 gate), so the import button must NOT be
+        // rendered — no 404-driven UI, no affordance without the flag.
+        await page.goto("/");
+        await openSidebar(page);
+        await expect(page.locator('[data-testid="legacy-import-btn"]')).toHaveCount(0);
+
+        // (b) Enabled branch: mock legacyImport.enabled → true and reload so
+        // the sidebar re-fetches the flag on mount — the button is visible
+        // and the full run flow works (IMPR-01/02).
+        api.returns("legacyImport.enabled", { enabled: true });
         const importCalls = api.capture("legacyImport.run", {
             total: 3, imported: 3, skipped: 0, failed: 0, errors: [],
         });
 
-        await page.goto("/");
+        await page.reload();
         await openSidebar(page);
 
         const importBtn = page.locator('[data-testid="legacy-import-btn"]');

@@ -32,8 +32,11 @@
     </div>
 
     <!-- Legacy Import action (IMPR-01): spinner while running, completion
-         toast, idempotent info toast, failure toast with error detail. -->
-    <div class="chat-sidebar__actions">
+         toast, idempotent info toast, failure toast with error detail.
+         D-06 retirement: the button renders only when the server reports
+         legacyImport.enabled (RAILYN_LEGACY_IMPORT=1) — hidden by default;
+         visibility is NEVER driven from a 404. -->
+    <div v-if="legacyImportEnabled" class="chat-sidebar__actions">
       <Button
         label="Import legacy chats"
         icon="pi pi-download"
@@ -126,7 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
 import Button from "primevue/button";
 import InputText from "primevue/inputtext";
 import { useToast } from "primevue/usetoast";
@@ -271,6 +274,22 @@ function cancelRename() {
 // legacyImport.run is server-side idempotent (existence marker, D-07) and
 // SELECT-only w.r.t. frozen legacy tables (IMPR-02). The button stays
 // re-runnable on every outcome — the toasts carry the state.
+//
+// D-06 retirement: the button is hidden unless the server reports the
+// legacyImport.enabled flag (RAILYN_LEGACY_IMPORT=1). Fetched once on mount;
+// any failure defaults to hidden (fail-closed — no import affordance when
+// the flag cannot be confirmed). The toasts below serve the enabled case.
+
+const legacyImportEnabled = ref(false);
+
+onMounted(async () => {
+  try {
+    const status = await api("legacyImport.enabled", {});
+    legacyImportEnabled.value = status.enabled;
+  } catch {
+    legacyImportEnabled.value = false;
+  }
+});
 
 const importing = ref(false);
 
