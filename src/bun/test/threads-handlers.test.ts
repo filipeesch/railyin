@@ -81,9 +81,10 @@ describe("threads.list handler", () => {
     expect(entry.kind).toBe("session");
     expect(entry.name).toBeNull();
 
-    // Timestamps are file-derived (birthtime/mtime) — same computation as the handler.
+    // Timestamps are file-derived (birthtime/mtime, birthtime 0 → mtime) —
+    // same computation as the handler.
     const st = statSync(threadLogPath(tmp.dir, threadId));
-    expect(entry.createdAt).toBe(new Date(st.birthtimeMs ?? st.mtimeMs).toISOString());
+    expect(entry.createdAt).toBe(new Date(st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs).toISOString());
     expect(entry.updatedAt).toBe(new Date(st.mtimeMs).toISOString());
   });
 

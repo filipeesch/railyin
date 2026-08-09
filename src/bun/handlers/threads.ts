@@ -62,8 +62,11 @@ export function threadHandlers(db: Database, store: JsonlStore) {
         const row = byId.get(f.threadId);
         const kind: ThreadSummary["kind"] = row && row.task_id != null ? "card" : "session";
         const name = kind === "card" ? (row?.task_title ?? null) : (row?.session_title ?? null);
+        // birthtime may report 0 on filesystems without birthtime support —
+        // treat it as absent and fall back to mtime (never 1970-01-01).
+        const birthtime = f.birthtimeMs > 0 ? f.birthtimeMs : f.mtimeMs;
         const createdAt =
-          toIso(row?.task_created) ?? toIso(row?.session_created) ?? new Date(f.birthtimeMs ?? f.mtimeMs).toISOString();
+          toIso(row?.task_created) ?? toIso(row?.session_created) ?? new Date(birthtime).toISOString();
         const updatedAt = toIso(row?.session_activity) ?? new Date(f.mtimeMs).toISOString();
         return { threadId: f.threadId, name, kind, createdAt, updatedAt };
       });
