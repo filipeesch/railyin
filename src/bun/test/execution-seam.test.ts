@@ -351,4 +351,43 @@ describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
     ).get(oldExecutionId)!;
     expect(oldRow.status).toBe("failed");
   });
+
+  it("4: IN-03 — a row already finalized to 'completed' (decision resume) is not overwritten with 'failed' by the fallback", async () => {
+    orchestrator = makeOrchestrator(new SeamEngine(
+      [{ type: "token", content: "fallback" }, { type: "usage", inputTokens: 3, outputTokens: 1 }, { type: "done" }],
+      false,
+      true, // resume throws → fallback path
+    ));
+    const { taskId, conversationId } = seedProjectAndTask(db, "/tmp/x");
+
+    // Decision-resume state: the AG-UI resume branch already finalized the old
+    // waiting_user row to 'completed' BEFORE calling executeHumanTurn; the
+    // task is still parked at waiting_user (the branch does not touch it).
+    db.run(
+      "INSERT INTO executions (task_id, conversation_id, from_state, to_state, status) VALUES (?, ?, 'plan', 'plan', 'completed')",
+      [taskId, conversationId],
+    );
+    const oldExecutionId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+    db.run(
+      "UPDATE tasks SET execution_state = 'waiting_user', current_execution_id = ? WHERE id = ?",
+      [oldExecutionId, taskId],
+    );
+
+    const { opts, seen, runEnd } = makeSeamOpts();
+    const { executionId } = await orchestrator.executeHumanTurn(
+      taskId, "hello", undefined, undefined, opts,
+    );
+
+    // The fallback still created a NEW execution (the continuation works).
+    expect(executionId).not.toBe(oldExecutionId);
+    expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("done");
+    expect(seen.map((e) => e.type)).toEqual(["token", "usage", "done"]);
+
+    // The historical row keeps its truthful 'completed' terminal — the
+    // fallback's failed update was a no-op (status filter).
+    const oldRow = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(oldExecutionId)!;
+    expect(oldRow.status).toBe("completed");
+  });
 });

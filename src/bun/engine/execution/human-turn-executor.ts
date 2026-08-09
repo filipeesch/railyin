@@ -82,8 +82,13 @@ export class HumanTurnExecutor {
         return { message: mapConversationMessage(msgRow), executionId: task.current_execution_id };
       } catch {
         // Roll back optimistic state writes — engine session lost; restart as new execution
+        // IN-03: status-filtered — the AG-UI resume branch finalizes the old
+        // decision execution row to 'completed' BEFORE delivery; this fallback
+        // must NOT overwrite that truthful terminal with 'failed' (the
+        // continuation still runs as a new execution). The update only applies
+        // when the row is still genuinely 'waiting_user'.
         db.run(
-          "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = 'Engine session lost; restarted as new execution' WHERE id = ?",
+          "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = 'Engine session lost; restarted as new execution' WHERE id = ? AND status = 'waiting_user'",
           [task.current_execution_id],
         );
         db.run(
