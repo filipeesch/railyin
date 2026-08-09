@@ -159,7 +159,7 @@ describe("useCommandsCache", () => {
 
   describe("workspaceKey scope", () => {
     it("CMD-1: fetches with { workspaceKey } params and populates its own ref", async () => {
-      mockApiFn = vi.fn(async (_m, args) => (args.workspaceKey === "ws-a" ? [CMD_A] : [CMD_B]));
+      mockApiFn = vi.fn(async (_m, args) => ((args as { workspaceKey?: string }).workspaceKey === "ws-a" ? [CMD_A] : [CMD_B]));
       const result = await getCommandsForWorkspace("ws-a");
       expect(result).toEqual([CMD_A]);
       expect(mockApiFn).toHaveBeenCalledWith("engine.listCommands", { workspaceKey: "ws-a" });
@@ -168,7 +168,7 @@ describe("useCommandsCache", () => {
     });
 
     it("CMD-2: task and workspace scopes cache independently", async () => {
-      mockApiFn = vi.fn(async (_m, args) => (args.taskId === 1 ? [CMD_A] : [CMD_B]));
+      mockApiFn = vi.fn(async (_m, args) => ((args as { taskId?: number }).taskId === 1 ? [CMD_A] : [CMD_B]));
       await getCommands(1);
       await getCommandsForWorkspace("ws-a");
 
@@ -184,7 +184,7 @@ describe("useCommandsCache", () => {
     });
 
     it("CMD-3: different workspace keys do not share cache entries", async () => {
-      mockApiFn = vi.fn(async (_m, args) => (args.workspaceKey === "ws-a" ? [CMD_A] : [CMD_B]));
+      mockApiFn = vi.fn(async (_m, args) => ((args as { workspaceKey?: string }).workspaceKey === "ws-a" ? [CMD_A] : [CMD_B]));
       await getCommandsForWorkspace("ws-a");
       await getCommandsForWorkspace("ws-b");
       expect(getCommandsRefForWorkspace("ws-a").value).toEqual([CMD_A]);
