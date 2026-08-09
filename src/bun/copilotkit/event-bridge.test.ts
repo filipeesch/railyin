@@ -8,11 +8,15 @@ import { EventSchemas } from "@ag-ui/core";
 import type { BaseEvent } from "@ag-ui/client";
 import type { EngineEvent } from "../engine/types.ts";
 import {
+  buildDecisionSubmission,
+} from "../conversation/decision-submission.ts";
+import {
   buildInterruptOutcome,
   createTranslateState,
   translateEngineEvent,
   synthesizeMissingToolResults,
   terminalEvent,
+  translateResumeToSubmission,
   type TranslateState,
 } from "./event-bridge.ts";
 
@@ -453,5 +457,54 @@ describe("event-bridge: interrupt outcome (RUNR-08 — canonical AG-UI interrupt
     }).outcome;
     expect(outcome.interrupts[0].message).toBe("A decision is required.");
     expect(outcome.interrupts[0].metadata).toBeUndefined();
+  });
+});
+
+describe("event-bridge: resume translation (D-07 — resume payload → decision-submission)", () => {
+  test("1: valid payload delegates to buildDecisionSubmission — byte-identical output, no re-formatting (Don't Hand-Roll row 3)", () => {
+    const answers = [{ question: "Q?", answer: "A", weight: "medium" as const }];
+    const payload = {
+      decision: "approved",
+      answers,
+      generalNotes: "n",
+      recordAsDecisions: true,
+    };
+    const result = translateResumeToSubmission(payload);
+    expect(result).not.toBeNull();
+    // Delegation assertion: the output is EXACTLY what buildDecisionSubmission
+    // produces for the same inputs — proof the Q/A pairs are never re-formatted.
+    const expected = buildDecisionSubmission(answers, "n", true);
+    expect(result).toEqual(expected);
+    expect(result!.userContent).toContain("**Q [MEDIUM]:** Q?");
+    expect(result!.userContent).toContain("**A:** A");
+    // engineContent = userContent + the hidden record_decision instruction.
+    expect(result!.engineContent.startsWith(result!.userContent)).toBe(true);
+    expect(result!.engineContent).toContain("record_decision");
+  });
+
+  test("2: no answers (missing or empty array) → null", () => {
+    expect(translateResumeToSubmission({ decision: "approved" })).toBeNull();
+    expect(translateResumeToSubmission({ decision: "approved", answers: [] })).toBeNull();
+  });
+
+  test("3: malformed payloads (null / string / array) → null, no throw", () => {
+    expect(translateResumeToSubmission(null)).toBeNull();
+    expect(translateResumeToSubmission("nope")).toBeNull();
+    expect(translateResumeToSubmission([{ question: "Q", answer: "A" }])).toBeNull();
+    expect(translateResumeToSubmission(undefined)).toBeNull();
+  });
+
+  test("4: recordAsDecisions false → engineContent carries the NO_RECORD variant (no record_decision text)", () => {
+    const answers = [{ question: "Q?", answer: "A" }];
+    const result = translateResumeToSubmission({
+      decision: "rejected",
+      answers,
+      recordAsDecisions: false,
+    });
+    expect(result).not.toBeNull();
+    const expected = buildDecisionSubmission(answers, undefined, false);
+    expect(result).toEqual(expected);
+    expect(result!.engineContent).toContain("Do NOT call record_decision");
+    expect(result!.engineContent).not.toContain("record_decision(question");
   });
 });
