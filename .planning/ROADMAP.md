@@ -63,7 +63,16 @@ Plans:
   4. Connecting to a thread that never ran returns an empty conversation snapshot instead of an error
   5. Starting a second concurrent run on the same thread is rejected with a clear error
 
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+**Wave 1**
+
+- [ ] 02-01-PLAN.md — RailyinAgent run path: execution seam (onEngineEvent/onRunEnd through executeChatTurn), pure event-bridge, D-12 registration + mock-engine scenarios + real-wire run tests (BRDG-01, BRDG-02, BRDG-03, RUNR-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 02-02-PLAN.md — Durable runner: jsonl-store (sanitized, tolerant), RailyinAgentRunner (pipe-tap persist, hot/cold/never-run connect, replay shapes), runner wiring + persistence/replay/lock e2e (RUNR-02, RUNR-03, RUNR-04, RUNR-05, RUNR-06, RUNR-07)
+- [ ] 02-03-PLAN.md — Production hardening: workspace-key resolver, advisory cross-path lock, rxjs pin, full-suite phase gate + COVERAGE.md/VALIDATION.md close-out (BRDG-01, RUNR-03, RUNR-04)
 
 ### Phase 3: Decision Interrupts & Resume
 
@@ -165,7 +174,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CopilotRuntime Hosting & Thread APIs (Spike) | 3/3 | Complete    | 2026-08-09 |
-| 2. AG-UI Bridge & RailyinAgentRunner | 0/TBD | Not started | - |
+| 2. AG-UI Bridge & RailyinAgentRunner | 0/3 | Not started | - |
 | 3. Decision Interrupts & Resume | 0/TBD | Not started | - |
 | 4. JSONL Persistence & Legacy Import | 0/TBD | Not started | - |
 | 5. Chat UI Replacement (Vue) | 0/TBD | Not started | - |
