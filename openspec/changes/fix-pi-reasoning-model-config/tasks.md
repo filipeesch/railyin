@@ -27,8 +27,8 @@
 ## 6. Verification
 
 - [x] 6.1 Run `bun test src/bun --timeout 20000` (or the pi-focused subset) — all existing and new tests pass. (Full backend 2279 + pi 306 green; API smoke 39 green; Playwright 696 green, S-D5 pre-existing/flaky.)
-- [ ] 6.2 Live-verify: start Railyin from this branch, open a chat with `pi-local/vllm/deepseek-v4-flash` set to Mode=max, send a reasoning-seeking prompt, and confirm (a) a reasoning bubble streams, (b) `stream_events` row(s) with type `reasoning` persist, (c) the assistant message no longer leads with inline "Let me think…". (Requires the user's engines.yaml migrated to the `thinking:`+`options.reasoning_effort` shape — see 7.5.)
-- [ ] 6.3 Repeat a smoke run for Mode=none (thinking off) to confirm no reasoning bubble and no regression.
+- [x] 6.2 Live-verify: user ran the "reasoning tests" chat (conv 759) with Mode=None/Normal/Max. DB verification (stream_events + model_raw_messages) confirmed: None → single inline text block (thinking disabled, no reasoning event) ✅; Normal → empty content + separate reasoning block + `reasoning` stream event (thinking enabled) ✅; Max → empty content + separate reasoning block (thinking enabled) ✅. engines.yaml was migrated to the `thinking:`+`options.reasoning_effort` shape (7.5).
+- [x] 6.3 Mode=none smoke: execution 6823 (None) produced NO reasoning stream event and reasoning inline as text — no reasoning bubble, no regression. Confirmed.
 
 ## 7. Direct-injection reasoning architecture (decision #1953 — supersedes the map-derivation plan)
 

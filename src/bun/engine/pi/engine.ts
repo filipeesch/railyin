@@ -11,7 +11,7 @@ import type {
 } from "../types.ts";
 import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
 import type { ModelSettingAxis, ModelParamValue } from "../../../shared/rpc-types.ts";
-import { derivePiModelAxes, derivePiModelSettings, nativeModelIdFor, resolvePiModelConfig } from "./model-config.ts";
+import { nativeModelIdFor, resolvePiModelConfig } from "./model-config.ts";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";

@@ -85,7 +85,7 @@ Concretely, `PiModelConfigApplier.applyToSession`:
 - Reads the selected variant's `options` and `thinking`.
 - Maps `thinking: true` → `thinking: { type: "enabled" }`, `thinking: false` → `{ type: "disabled" }` in the merged request body (guarded: only when the variant declares `thinking`).
 - **Stops stripping** `reasoning_effort`/`reasoningEffort` from `options` — they now pass through verbatim (this reverses prior D1 "SDK owns the effort key").
-- Sets `session.agent.state.thinkingLevel` to a non-"off" sentinel when a variant declares any reasoning-independent flag? **No** — the wire reasoning is fully driven by injected `options`/`thinking`; `thinkingLevel` no longer needs to encode provider reasoning. It is left at its default; the injected `thinking:{type:enabled}` in `onPayload` overrides the SDK's disabled default.
+- Sets `session.agent.state.thinkingLevel` only as a simple **reasoning on/off sentinel** (for child/inherited sessions): `"high"` when the selected variant enables reasoning (`thinking: true` or a non-`none` effort), `"off"` otherwise; the model's `thinking_level` config is the fallback when no Mode is selected. The wire reasoning is fully driven by the injected `options`/`thinking`, and `onPayload` overrides the SDK's default `thinking:{type:disabled}`.
 
 **Rationale (honest trade-off):** fully explicit, model-agnostic reasoning kwargs; no Pi canonical-level space, no clamping, no map. Cost: reverses D1/D2 (SDK-owns-effort / no-map) from the original openspec change, and touches the Pi config type, validation, applier, builder, sample config, and tests. The `requiresReasoningContentOnAssistantMessages` coherence flag (D3) is `compat`-level and independent of `thinkingLevel`, so it is unaffected.
 
@@ -108,8 +108,4 @@ Concretely, `PiModelConfigApplier.applyToSession`:
 
 ## Open Questions
 
-- None blocking. (The direct-injection design removes the earlier "off/high/xhigh mapping" question entirely — wire value = what's in `options`.)
-
-## Open Questions
-
-- None blocking. (Minor: whether to reuse `QualifiedModelId` directly or add the small helper — resolved in favor of the helper for DRY.)
+- None blocking. (The direct-injection design removes the earlier "off/high/xhigh mapping" question entirely — wire value = what's in `options`. The native-id helper (D2) is used in favor of a public `QualifiedModelId` API.)
