@@ -110,7 +110,10 @@ test.describe("CS-B — overlay lifecycle", () => {
     // Overlay should appear
     await expect(page.locator(".code-server-overlay")).toBeVisible({ timeout: 5_000 });
 
-    expect(startCalled).toBe(true);
+    // The overlay renders while the request is in flight — the mock handler
+    // sets startCalled only when Playwright's route dispatch executes, so
+    // poll instead of asserting a boolean that can lag the overlay (WR-06).
+    await expect.poll(() => startCalled, { timeout: 3_000 }).toBe(true);
   });
 
   test("CS-B-2: overlay shows loading spinner while status is 'starting'", async ({ page, api }) => {
@@ -196,7 +199,9 @@ test.describe("CS-B — overlay lifecycle", () => {
     await stopBtn.click();
 
     await expect(page.locator(".code-server-overlay")).not.toBeVisible({ timeout: 3_000 });
-    expect(stopCalled).toBe(true);
+    // Same race as CS-B-1: the handler flag is set by the route dispatch —
+    // poll for it (WR-06).
+    await expect.poll(() => stopCalled, { timeout: 3_000 }).toBe(true);
   });
 
   test("CS-B-6: overlay shows task title in header", async ({ page, api }) => {
