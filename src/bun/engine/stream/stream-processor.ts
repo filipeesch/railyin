@@ -88,6 +88,10 @@ export class StreamProcessor {
     opts?: import("../coordinator.ts").ChatTurnOpts,
   ): Promise<void> {
     const db = this.db;
+    // WR-02: set when the done event finalized the run in-loop. The post-loop
+    // uses it to distinguish "generator ended after a terminal" from
+    // "generator ended WITHOUT any terminal" (the wedge case).
+    let sawDoneEvent = false;
 
     try {
       const abortController = this.abortControllers.get(executionId) ?? (() => {
@@ -160,6 +164,7 @@ export class StreamProcessor {
           }
 
           case "done": {
+            sawDoneEvent = true;
             if (taskId != null) {
               db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
             } else {
@@ -241,6 +246,26 @@ export class StreamProcessor {
         );
         this.onToken(taskId, conversationId, executionId, "", true);
         opts?.onRunEnd?.("aborted");
+      } else if (!sawDoneEvent) {
+        // WR-02: a stream that ended WITHOUT a done event — and without abort
+        // (e.g. the Pi engine's fatal:false error followed by end-of-stream) —
+        // never wrote a terminal. Without this guard the DB triad stays
+        // 'running' with finished_at NULL forever: the task card spins, and
+        // the agent's advisory lock rejects every future run for the
+        // conversation with THREAD_BUSY. Finalize exactly like the done case
+        // (completed + terminal events) so the run can never wedge.
+        if (taskId != null) {
+          db.run("UPDATE tasks SET execution_state = 'completed' WHERE id = ?", [taskId]);
+        } else {
+          db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+          opts?.onSessionStatusChange?.(conversationId);
+        }
+        db.run(
+          "UPDATE executions SET status = 'completed', finished_at = datetime('now') WHERE id = ?",
+          [executionId],
+        );
+        this.onToken(taskId, conversationId, executionId, "", true);
+        opts?.onRunEnd?.("done");
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
