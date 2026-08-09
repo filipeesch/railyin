@@ -54,3 +54,7 @@ playwright-report/
 test-results/
 .stryker-tmp/
 stryker.log
+
+# Test runtime residue (e2e server fixture dataDir contract: shutdown skips
+# runtime-dir cleanup — caller owns it; never commit)
+.runtime/
