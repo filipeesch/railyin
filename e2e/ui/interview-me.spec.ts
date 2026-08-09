@@ -467,39 +467,39 @@ test.describe("T-P — Record as decisions toggle", () => {
 
 test.describe("T-B — non_exclusive question submit (A6 gap)", () => {
     test("T-B: clicking checkbox enables submit", async ({ page, task, agui }) => {
-        test.skip(); // A6 gap: fixture interrupt payload is exclusive-only — see file header
+        test.skip("A6 gap: mock-agui interrupt payload is exclusive-only");
     });
 
     test("T-B2: clicking checkbox directly also enables submit", async ({ page, task, agui }) => {
-        test.skip(); // A6 gap: fixture interrupt payload is exclusive-only — see file header
+        test.skip("A6 gap: mock-agui interrupt payload is exclusive-only");
     });
 
     test("T-B3: clicking a row in non_exclusive shows description preview but does NOT toggle checkbox", async ({ page, task, agui }) => {
-        test.skip(); // A6 gap: fixture interrupt payload is exclusive-only — see file header
+        test.skip("A6 gap: mock-agui interrupt payload is exclusive-only");
     });
 
     test("T-B4: clicking a row then clicking its checkbox in non_exclusive enables submit", async ({ page, task, agui }) => {
-        test.skip(); // A6 gap: fixture interrupt payload is exclusive-only — see file header
+        test.skip("A6 gap: mock-agui interrupt payload is exclusive-only");
     });
 });
 
 test.describe("T-C — freetext question submit (A6 gap)", () => {
     test("T-C: typing in freetext textarea enables submit", async ({ page, task, agui }) => {
-        test.skip(); // A6 gap: fixture interrupt payload is exclusive-only — see file header
+        test.skip("A6 gap: mock-agui interrupt payload is exclusive-only");
     });
 
     test("T-C2: clearing freetext after typing disables submit again", async ({ page, task, agui }) => {
-        test.skip(); // A6 gap: fixture interrupt payload is exclusive-only — see file header
+        test.skip("A6 gap: mock-agui interrupt payload is exclusive-only");
     });
 });
 
 test.describe("T-Q — multiselect Other textarea (A6 gap)", () => {
     test("T-Q1: clicking Other checkbox directly shows Other textarea and enables submit when filled", async ({ page, task, agui }) => {
-        test.skip(); // A6 gap: fixture interrupt payload is exclusive-only — see file header
+        test.skip("A6 gap: mock-agui interrupt payload is exclusive-only");
     });
 
     test("T-Q2: Other checked but text empty keeps submit disabled", async ({ page, task, agui }) => {
-        test.skip(); // A6 gap: fixture interrupt payload is exclusive-only — see file header
+        test.skip("A6 gap: mock-agui interrupt payload is exclusive-only");
     });
 });
 
