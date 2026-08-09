@@ -28,9 +28,9 @@
 import { ref, computed } from "vue";
 import type { CopilotChatToolCallRenderSlotProps } from "@copilotkit/vue/v2";
 import type { FileDiffPayload } from "@shared/rpc-types";
-import { useToolResultDisplay } from "../../composables/useToolResultDisplay";
-import { formatToolSubject } from "../../utils/toolCallDisplay";
-import { computeDiffStats, toolStatusToIcon, isErrorResult, buildDiffPayloadsFromArgs } from "../../utils/toolCardDisplay";
+import { useToolResultDisplay } from "../../../composables/useToolResultDisplay";
+import { formatToolSubject } from "../../../utils/toolCallDisplay";
+import { computeDiffStats, toolStatusToIcon, isErrorResult, buildDiffPayloadsFromArgs } from "../../../utils/toolCardDisplay";
 import FileDiff from "../../FileDiff.vue";
 import ReadView from "../../ReadView.vue";
 

@@ -33,8 +33,8 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import type { CopilotChatToolCallRenderSlotProps } from "@copilotkit/vue/v2";
-import { useMarkdown } from "../../composables/useMarkdown";
-import { toolStatusToIcon, isErrorResult } from "../../utils/toolCardDisplay";
+import { useMarkdown } from "../../../composables/useMarkdown";
+import { toolStatusToIcon, isErrorResult } from "../../../utils/toolCardDisplay";
 
 /**
  * DelegateSummaryRenderer — port of the legacy SubagentBlock (SubagentBlock.vue)

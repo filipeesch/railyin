@@ -29,6 +29,55 @@
       :welcome-screen="false"
       @stop="onStop"
     >
+      <!-- Named #tool-call-<name> slots for the canonical domain families
+           (CHAT-03, D-04): bash/run/run_in_terminal → ShellOutputRenderer;
+           read/write/edit/patch families → FileChangesRenderer (which
+           dispatches ReadView vs FileDiff on the name); subagent →
+           DelegateSummaryRenderer. Slot names MUST be exactly
+           `tool-call-${toolCallName}` (template-literal slot type). NO
+           generic #tool-call slot — it would short-circuit
+           useDefaultRenderTool for every tool (RESEARCH anti-pattern).
+           Each slot passes the full CopilotChatToolCallRenderSlotProps
+           passthrough so the renderers can build tool-card-{id} test ids. -->
+      <template #tool-call-bash="{ name, args, status, result, toolCall }">
+        <ShellOutputRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-run="{ name, args, status, result, toolCall }">
+        <ShellOutputRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-run_in_terminal="{ name, args, status, result, toolCall }">
+        <ShellOutputRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-read="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-read_file="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-view="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-write="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-write_file="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-create="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-edit="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-multiedit="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-apply_patch="{ name, args, status, result, toolCall }">
+        <FileChangesRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
+      <template #tool-call-subagent="{ name, args, status, result, toolCall }">
+        <DelegateSummaryRenderer :name="name" :args="args" :status="status" :result="result" :tool-call="toolCall" />
+      </template>
       <template
         #input="{
           modelValue,
@@ -81,6 +130,9 @@ import {
 } from "@copilotkit/vue/v2";
 import type { ToolsMenuItem } from "@copilotkit/vue/v2";
 import { getCommandsRef, getCommandsRefForWorkspace, toToolsMenu } from "../../composables/useCommandsCache";
+import ShellOutputRenderer from "./tool-call-renderers/ShellOutputRenderer.vue";
+import FileChangesRenderer from "./tool-call-renderers/FileChangesRenderer.vue";
+import DelegateSummaryRenderer from "./tool-call-renderers/DelegateSummaryRenderer.vue";
 
 /**
  * RailyinChat.vue — the SINGLE CopilotKit surface (D-01). Owns the pinned

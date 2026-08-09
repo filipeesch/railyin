@@ -209,10 +209,13 @@ describe("RailyinChat named tool-call slots (05-04, Pitfall 1 guard)", () => {
   function declaredToolCallSlotNames(): Set<string> {
     const fs = require("node:fs");
     const source = fs.readFileSync(new URL("../components/chat/RailyinChat.vue", import.meta.url), "utf8");
-    const template = source.match(/<template>([\s\S]*?)<\/template>/);
-    expect(template).not.toBeNull();
+    // The template section is everything between the root <template> opening
+    // and the <script> block (inner <template #slot> blocks end with their own
+    // </template>, so a naive non-greedy match would stop at the first one).
+    const section = source.match(/<template>([\s\S]*?)<script/);
+    expect(section).not.toBeNull();
     const names = new Set<string>();
-    for (const match of template![1].matchAll(/#tool-call-([A-Za-z0-9_]+)/g)) {
+    for (const match of section![1].matchAll(/#tool-call-([A-Za-z0-9_]+)/g)) {
       names.add(match[1]);
     }
     return names;
@@ -228,11 +231,13 @@ describe("RailyinChat named tool-call slots (05-04, Pitfall 1 guard)", () => {
   it("TCD-25: RailyinChat declares NO generic #tool-call slot (D-04 anti-pattern)", () => {
     const fs = require("node:fs");
     const source = fs.readFileSync(new URL("../components/chat/RailyinChat.vue", import.meta.url), "utf8");
-    const template = source.match(/<template>([\s\S]*?)<\/template>/);
-    expect(template).not.toBeNull();
+    const section = source.match(/<template>([\s\S]*?)<script/);
+    expect(section).not.toBeNull();
+    // Strip HTML comments — prose inside <!-- --> is documentation, not a slot.
+    const markup = section![1].replace(/<!--[\s\S]*?-->/g, "");
     // A bare `#tool-call` (not followed by `-`) would short-circuit
     // useDefaultRenderTool for every tool — forbidden (RESEARCH Anti-Patterns).
-    const bare = [...template![1].matchAll(/#tool-call(?!-)/g)];
+    const bare = [...markup.matchAll(/#tool-call(?!-)/g)];
     expect(bare).toHaveLength(0);
   });
 });

@@ -18,9 +18,9 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import type { CopilotChatToolCallRenderSlotProps } from "@copilotkit/vue/v2";
-import { useToolResultDisplay } from "../../composables/useToolResultDisplay";
-import { formatToolSubject } from "../../utils/toolCallDisplay";
-import { truncateToolOutput, toolStatusToIcon, isErrorResult } from "../../utils/toolCardDisplay";
+import { useToolResultDisplay } from "../../../composables/useToolResultDisplay";
+import { formatToolSubject } from "../../../utils/toolCallDisplay";
+import { truncateToolOutput, toolStatusToIcon, isErrorResult } from "../../../utils/toolCardDisplay";
 
 /**
  * ShellOutputRenderer — port of the legacy ToolCallBlock output branch
