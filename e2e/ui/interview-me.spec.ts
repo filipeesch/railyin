@@ -41,19 +41,24 @@ import type { ConversationMessage } from "@shared/rpc-types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-let _msgId = 5000;
-
 function messagePage(messages: ConversationMessage[]) {
     return { messages, hasMore: false };
 }
 
+/**
+ * IN-03: explicit literal ids — the module-level auto-increment counter was
+ * shared mutable state across every test in the file (any future
+ * parallelization or reordering would silently shift ids). Callers MUST pass
+ * a unique literal id; the reply message pins itself to promptMsg.id + 1 for
+ * sort order, so per-test distinctness is guaranteed by the literals.
+ */
 function makeInterviewPrompt(
     taskId: number,
     payload: { questions: object[]; context?: string },
-    overrides?: Partial<ConversationMessage>,
+    overrides: Partial<ConversationMessage> & { id: number },
 ): ConversationMessage {
     return {
-        id: _msgId++,
+        id: overrides.id,
         taskId,
         conversationId: taskId,
         type: "decision_request_prompt",
@@ -502,7 +507,7 @@ test.describe("T-Q — multiselect Other textarea (A6 gap)", () => {
 
 test.describe("T-F — answered read-only state", () => {
     test("T-F: interview prompt followed by user message renders in read-only mode", async ({ page, api, task }) => {
-        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: 6001 });
         // id must be greater than promptMsg.id so sort order is preserved (prompt first, reply second)
         const userReply = makeUserMessage(task.id, "A: PostgreSQL", { id: promptMsg.id + 1 });
         api.handle("conversations.getMessages", () => messagePage([promptMsg, userReply]));
@@ -520,7 +525,7 @@ test.describe("T-F — answered read-only state", () => {
 
 test.describe("T-G — answered detection with streaming", () => {
     test("T-G: interview prompt is read-only after assistant starts streaming", async ({ page, api, ws, task }) => {
-        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: 6002 });
         // id must be greater than promptMsg.id so sort order is preserved (prompt first, reply second)
         const userReply = makeUserMessage(task.id, "A: SQLite", { id: promptMsg.id + 1 });
         // Pre-seed: the interview was answered before we open the drawer
