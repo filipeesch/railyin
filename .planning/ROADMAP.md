@@ -209,11 +209,11 @@ Plans:
   3. `git grep` shows zero references to the custom StreamEvent protocol and deleted modules; build and all suites stay green after deletion
   4. Legacy import is retired behind a flag once imports are complete
 
-**Plans**: 5 plans
+**Plans**: 1/5 plans executed
 Plans:
 **Wave 1**
 
-- [ ] 07-01-PLAN.md — consume() surgical rewrite (tracer): zero writes to frozen tables, engine-type trim, session-status push, executor excision + {executionId} contract, smoke rework (D-05, D-03)
+- [x] 07-01-PLAN.md — consume() surgical rewrite (tracer): zero writes to frozen tables, engine-type trim, session-status push, executor excision + {executionId} contract, smoke rework (D-05, D-03)
 - [ ] 07-02-PLAN.md — Engine emitter trims: claude gate/cache deletion, writtenFiles removal, opencode shell posture (A3), copilot/cursor emitters, event-bridge drop-list (D-02 engine side)
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -255,4 +255,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. JSONL Persistence & Legacy Import | 3/3 | Complete    | 2026-08-09 |
 | 5. Chat UI Replacement (Vue) | 5/5 | Complete    | 2026-08-09 |
 | 6. E2E Migration & Verification | 8/7 | Complete    | 2026-08-09 |
-| 7. Cleanup & Feature Trim | 0/TBD | Not started | - |
+| 7. Cleanup & Feature Trim | 1/5 | In Progress|  |
