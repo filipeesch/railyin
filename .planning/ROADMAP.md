@@ -178,7 +178,23 @@ Plans:
   2. All 55 existing specs pass against the new mocks, alongside the new chat and board specs
   3. Backend smoke tests (`e2e/api`) and the bridge/runner unit suites pass on the new stack
 
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+**Wave 1**
+
+- [ ] 06-01-PLAN.md — Mock foundation: multi-message history knob + registerHistory + self-tests; chat-surface helpers extraction; tracer spec conversation-stream-state migration (VERF-02)
+- [ ] 06-02-PLAN.md — Retire 11 removed-feature spec files (queue/model/sampling/compaction/draft/pagination/MCP/transition) behind blocking human checkpoints + code-server CS-D-1..5 in-file (VERF-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 06-03-PLAN.md — Migrate streaming core: chat.spec (12), delegate-rendering (5, serial dropped), conversation-body (reasoning/tools) (VERF-02)
+- [ ] 06-04-PLAN.md — Migrate tool/stream family: tool-rendering (13), stream-reactivity, timeline-pipeline (VERF-02)
+- [ ] 06-05-PLAN.md — Migrate session/interview family: chat-session-drawer (19), interview-me (23, interrupt pattern) (VERF-02)
+- [ ] 06-06-PLAN.md — Migrate input/edge family: autocomplete, cursor, task-drawer, extended-chat — red surface to zero (VERF-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 06-07-PLAN.md — D-05 full-suite gate (build + all Playwright + e2e/api + src/bun + typecheck + mock-agui) + COVERAGE/VALIDATION close-out (VERF-02, VERF-03)
 
 ### Phase 7: Cleanup & Feature Trim
 
