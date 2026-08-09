@@ -3,10 +3,6 @@ import type { ConversationMessage, ModelParamValue } from "../../shared/rpc-type
 import type { ConversationMessageRow } from "../db/row-types.ts";
 import { mapConversationMessage } from "../db/mappers.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
-import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../workspace-context.ts";
-import { runWithConfig } from "../config/index.ts";
-import { resolveContextWindow } from "../context-usage.ts";
-import { ContextEstimator } from "../conversation/context-estimator.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 
 export function conversationHandlers(db: Database, orchestrator: ExecutionCoordinator | null, modelSettingsRepo?: ModelSettingsRepository) {
@@ -44,37 +40,6 @@ export function conversationHandlers(db: Database, orchestrator: ExecutionCoordi
       const hasMore = rows.length > limit;
       const messages = rows.slice(0, limit).reverse().map(mapConversationMessage);
       return { messages, hasMore };
-    },
-
-    "conversations.contextUsage": async (params: {
-      conversationId: number;
-    }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
-      const row = db.query<{
-        conversation_model: string | null;
-        task_workspace_key: string | null;
-        session_workspace_key: string | null;
-      }, [number]>(
-        `SELECT 
-           c.model AS conversation_model,
-           b.workspace_key AS task_workspace_key, 
-           cs.workspace_key AS session_workspace_key 
-         FROM conversations c
-         LEFT JOIN tasks t ON t.conversation_id = c.id
-         LEFT JOIN boards b ON b.id = t.board_id
-         LEFT JOIN chat_sessions cs ON cs.conversation_id = c.id
-         WHERE c.id = ?`,
-      ).get(params.conversationId);
-
-      const workspaceKey = row?.task_workspace_key ?? row?.session_workspace_key ?? getDefaultWorkspaceKey();
-      const workspaceConfig = getWorkspaceConfig(workspaceKey);
-      
-      // Model resolution: conversation.model (centralized storage for both tasks and chat sessions)
-      const configuredModel = row?.conversation_model ?? workspaceConfig.workspace.default_model ?? null;
-      const maxTokens = configuredModel 
-        ? await runWithConfig(workspaceConfig, async () => resolveContextWindow(configuredModel, workspaceKey, orchestrator, modelSettingsRepo)) 
-        : 128_000;
-      
-      return new ContextEstimator(db).estimate(params.conversationId, maxTokens);
     },
 
     "conversations.setSamplingPreset": async (params: {

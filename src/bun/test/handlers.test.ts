@@ -5,7 +5,6 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
-import { SqliteModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { taskGitHandlers } from "../handlers/task-git.ts";
 import { WorktreeManager } from "../git/WorktreeManager.ts";
@@ -577,26 +576,6 @@ describe("conversations handlers", () => {
     expect(result.messages.map((message) => message.content)).toEqual(["hello", "hi there"]);
     expect(result.messages.every((message) => message.conversationId === conversationId)).toBe(true);
   });
-
-  it("computes context usage for session conversations without a task", async () => {
-    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
-    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run(
-      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
-      [conversationId],
-    );
-    db.run(
-      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (NULL, ?, 'user', 'user', ?)",
-      [conversationId, "session message"],
-    );
-
-    const handlers = conversationHandlers(db, null);
-    const usage = await handlers["conversations.contextUsage"]({ conversationId });
-
-    expect(usage.maxTokens).toBe(128_000);
-    expect(usage.usedTokens).toBeGreaterThan(0);
-    expect(usage.fraction).toBeGreaterThan(0);
-  });
 });
 
 describe("chat session parity handlers", () => {
@@ -871,9 +850,7 @@ describe("prepareMessageForEngine — AR unit tests", () => {
   });
 });
 
-// ─── resolveContextWindow (via tasks.contextUsage) ────────────────────────────
-// Tests the engine-agnostic context window resolution introduced in task 1.1.
-// resolveContextWindow is private; tested through the tasks.contextUsage handler.
+// ─── resolveContextWindow mock orchestrator (models.listEnabled tests) ─────────
 
 function makeMockOrchestrator(models: Array<{ qualifiedId: string | null; contextWindow?: number }>): ExecutionCoordinator {
   return {
@@ -891,95 +868,6 @@ function makeMockOrchestrator(models: Array<{ qualifiedId: string | null; contex
     listCommands: async () => [],
   };
 }
-
-describe("tasks.contextUsage — resolveContextWindow", () => {
-  it("uses contextWindow from orchestrator.listModels() when model is found", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/claude-sonnet-4.6' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "copilot/claude-sonnet-4.6", contextWindow: 200_000 },
-    ]);
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(200_000);
-  });
-
-  it("falls back to 128_000 when orchestrator returns no matching model", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/unknown-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    // Orchestrator returns a different model — no match
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
-    ]);
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    // No matching model in orchestrator; resolveModelContextWindow also won't find
-    // a provider for "copilot" in the test config — final fallback is 128_000.
-    expect(result.maxTokens).toBe(128_000);
-  });
-
-  it("falls back to 128_000 when no model is set on the task", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    const handlers = taskHandlers(db, wsRepo, null, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(128_000);
-  });
-
-  it("uses contextWindow = null entry but still falls back to 128_000", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/claude-opus' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    // Model found but contextWindow is null/undefined
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "copilot/claude-opus", contextWindow: undefined },
-    ]);
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(128_000);
-  });
-
-  it("DB override from modelSettingsRepo wins over orchestrator-reported value", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'pi-local/lmstudio/qwen/qwen3-27b' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    // Orchestrator reports 32_768 for this model
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "pi-local/lmstudio/qwen/qwen3-27b", contextWindow: 32_768 },
-    ]);
-
-    // User overrode it to 65_536 via the Models screen
-    const repo = new SqliteModelSettingsRepository(db);
-    repo.setContextWindow("default", "pi-local/lmstudio/qwen/qwen3-27b", 65_536);
-
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager, repo);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(65_536);
-  });
-
-  it("resolves a Cursor model's real window even with no orchestrator match (not 128k)", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'cursor/claude-sonnet-4-6' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    // Orchestrator returns a different model — the context-usage fallback must
-    // still resolve the Cursor window from the model id (200k) instead of 128k.
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
-    ]);
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(200_000);
-  });
-});
 
 describe("models.listEnabled — Copilot Auto option", () => {
   it("always returns Auto first with null id", async () => {

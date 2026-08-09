@@ -5,10 +5,8 @@ import { mapTask } from "../db/mappers.ts";
 import { fetchTaskWithModel } from "../db/task-queries.ts";
 import {
   estimateContextWarning,
-  estimateContextUsage,
 } from "../conversation/context.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
-import { runWithConfig } from "../config/index.ts";
 import type { WorktreeManager } from "../git/WorktreeManager.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
@@ -349,25 +347,6 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const updated = fetchTaskWithModel(db, params.taskId);
       if (!updated) throw new Error(`Task ${params.taskId} not found after model update`);
       return updated;
-    },
-
-    // ─── tasks.contextUsage ──────────────────────────────────────────────────
-    "tasks.contextUsage": async (params: { taskId: number }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
-
-      const task = db
-        .query<{ conversation_model: string | null }, [number]>(
-          "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?",
-        )
-        .get(params.taskId);
-      const taskModel = task?.conversation_model ?? null;
-      const workspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
-      const workspaceConfig = getWorkspaceConfig(workspaceKey);
-      const maxTokens = await runWithConfig(workspaceConfig, async () => (
-        taskModel
-          ? resolveContextWindow(taskModel, workspaceKey, orchestrator, modelSettingsRepo)
-          : Promise.resolve(128_000)
-      ));
-      return estimateContextUsage(db, params.taskId, maxTokens);
     },
 
     // ─── tasks.cancel ────────────────────────────────────────────────────────

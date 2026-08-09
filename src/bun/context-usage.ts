@@ -1,6 +1,4 @@
-import type { Database } from "bun:sqlite";
 import { resolveModelContextWindow } from "./conversation/context.ts";
-import { ContextEstimator } from "./conversation/context-estimator.ts";
 import type { ExecutionCoordinator } from "./engine/coordinator.ts";
 import type { ModelSettingsRepository } from "./db/repositories/model-settings-repository.ts";
 
@@ -31,12 +29,4 @@ export async function resolveContextWindow(
   } catch {
     return 128_000;
   }
-}
-
-export function estimateConversationContextUsage(
-  db: Database,
-  conversationId: number,
-  maxTokens: number,
-): { usedTokens: number; maxTokens: number; fraction: number } {
-  return new ContextEstimator(db).estimate(conversationId, maxTokens);
 }

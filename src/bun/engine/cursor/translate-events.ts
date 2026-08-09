@@ -49,7 +49,7 @@ export interface StructuredResult {
  * Handles:
  *   - Shell: extracts stdout/stderr into detailedResult
  *   - Edit/Write: surfaces the diff text as detailedResult (the file-diff
- *     extraction was trimmed with the file_diff EngineEvent surface — the
+ *     extraction was trimmed with the EngineEvent surface — the
  *     renderer derives diffs from tool ARGS via buildDiffPayloadsFromArgs)
  *   - Delete: handles empty result gracefully
  *   - Read: passes through content as detailedResult
