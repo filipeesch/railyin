@@ -33,6 +33,7 @@ import { EngineRegistry } from "./engine/engine-registry.ts";
 import { CopilotEngine } from "./engine/copilot/engine.ts";
 import { createDefaultCopilotSdkAdapter } from "./engine/copilot/session.ts";
 import { CopilotRuntime, createCopilotRuntimeHandler, type CopilotRuntimeOptions } from "@copilotkit/runtime/v2";
+import { RailyinAgent } from "./copilotkit/railyin-agent.ts";
 import { ClaudeEngine } from "./engine/claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
@@ -266,7 +267,6 @@ if (copilotProbeEnabled) {
 // (persistence) swaps in during 02-02.
 let railyinAgent: unknown = null;
 if (!copilotProbeEnabled && orchestrator) {
-  const { RailyinAgent } = await import("./copilotkit/railyin-agent.ts");
   railyinAgent = new RailyinAgent(db, orchestrator);
 }
 // The runtime's AgentsConfig references its NESTED @ag-ui/client AbstractAgent
