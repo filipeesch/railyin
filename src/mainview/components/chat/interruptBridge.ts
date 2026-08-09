@@ -25,3 +25,32 @@ export interface InterruptBridgeState {
 
 /** Written by the bridge (inside the provider tree); read by RailyinChat. */
 export const interruptBridgeState = ref<InterruptBridgeState | null>(null);
+
+// ─── Recorded interrupt outcomes (WR-01, D-08 replay) ─────────────────────────
+// The SDK only populates the #interrupt slot's `result` from a custom
+// useInterrupt `handler` return value — and the handler runs the moment an
+// interrupt appears, so it cannot tell a fresh interrupt from a replayed
+// (already-answered) one. RailyinChat records the outcome here when the user
+// submits/cancels; the bridge's handler replays it as the collapsed
+// "Decision recorded" summary on thread reopen (D-08). Session-scoped: a full
+// page reload clears the registry, so a reopened thread then shows the
+// pending card again (documented WR-01 trade-off).
+export interface RecordedInterruptOutcome {
+  status: "resolved" | "cancelled";
+  payload?: unknown;
+  answeredAt: string;
+}
+
+const recordedOutcomes = new Map<string, RecordedInterruptOutcome>();
+
+export function recordInterruptOutcome(
+  interruptId: string,
+  status: "resolved" | "cancelled",
+  payload?: unknown,
+): void {
+  recordedOutcomes.set(interruptId, { status, payload, answeredAt: new Date().toISOString() });
+}
+
+export function getRecordedInterruptOutcome(interruptId: string): RecordedInterruptOutcome | undefined {
+  return recordedOutcomes.get(interruptId);
+}

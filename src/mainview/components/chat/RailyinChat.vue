@@ -84,13 +84,15 @@
            (verified in the installed bundle). DecisionInterrupt emits the
            buildResumePayload shape (non-empty answers — INVALID_PAYLOAD
            otherwise, event-bridge.ts:380-422) and RailyinChat forwards it
-           verbatim to resolve(). -->
+           verbatim to resolve(). The wrappers also record the outcome in the
+           interrupt bridge registry so the D-08 thread-reopen replay can
+           render the collapsed "Decision recorded" summary (WR-01). -->
       <template #interrupt="{ interrupt, result, resolve, cancel }">
         <DecisionInterrupt
           :interrupt="interrupt"
           :result="result"
-          @submit="(p) => resolve(p)"
-          @cancel="() => cancel()"
+          @submit="(p) => onInterruptSubmit(interrupt, p, resolve)"
+          @cancel="() => onInterruptCancel(interrupt, cancel)"
         />
       </template>
       <template
@@ -175,7 +177,8 @@ import FileChangesRenderer from "./tool-call-renderers/FileChangesRenderer.vue";
 import DelegateSummaryRenderer from "./tool-call-renderers/DelegateSummaryRenderer.vue";
 import DecisionInterrupt from "./DecisionInterrupt.vue";
 import InterruptBridge from "./InterruptBridge.vue";
-import { interruptBridgeState } from "./interruptBridge";
+import { interruptBridgeState, recordInterruptOutcome } from "./interruptBridge";
+import type { Interrupt, RunAgentResult } from "@ag-ui/client";
 
 /**
  * RailyinChat.vue — the SINGLE CopilotKit surface (D-01). Owns the pinned
@@ -208,6 +211,34 @@ useDefaultRenderTool();
 // InterruptBridge rendered in the #input slot; this module-scoped handoff
 // reads its hasInterrupt for the input disable (CHAT-09 c3).
 const hasInterrupt = computed(() => interruptBridgeState.value?.hasInterrupt.value ?? false);
+
+// ─── Interrupt outcome recording (WR-01, D-08 replay) ─────────────────────────
+// Record the resolved/cancelled outcome keyed by interrupt id before calling
+// the slot's resolve/cancel; the bridge's useInterrupt handler replays it as
+// the "Decision recorded" summary when the thread reopens (the SDK only
+// populates the slot `result` from a custom handler, and fresh interrupts
+// must stay interactive — see interruptBridge.ts).
+function onInterruptSubmit(
+  interrupt: Interrupt | null | undefined,
+  payload: {
+    decision: "approved";
+    answers: Array<{ question: string; answer: string; weight: string; notes?: string }>;
+    generalNotes?: string;
+    recordAsDecisions: boolean;
+  },
+  resolve: (payload?: unknown, interruptId?: string) => Promise<RunAgentResult | void>,
+) {
+  if (interrupt) recordInterruptOutcome(interrupt.id, "resolved", payload);
+  resolve(payload);
+}
+
+function onInterruptCancel(
+  interrupt: Interrupt | null | undefined,
+  cancel: (interruptId?: string) => Promise<RunAgentResult | void>,
+) {
+  if (interrupt) recordInterruptOutcome(interrupt.id, "cancelled");
+  cancel();
+}
 
 // Same hook CopilotChat uses internally with the same args — resolves to the
 // SAME per-thread agent clone (WeakMap-cached), so subscribing here observes
