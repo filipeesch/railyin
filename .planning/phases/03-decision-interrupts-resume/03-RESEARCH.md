@@ -425,7 +425,7 @@ export function buildDecisionSubmission(answers: DecisionAnswer[], generalNotes?
 | A5 | `expiresAt` omitted for v1 (discretion) | Code Examples | Low — client-side `isInterruptExpired` then never expires; no expiry needed for decisions per CONTEXT |
 | A6 | `executeHumanTurn` gains an optional `opts?: ChatTurnOpts` param (additive: coordinator.ts, orchestrator.ts, human-turn-executor.ts, passing opts into `runNonNative`) so task-linked resume runs can stream AG-UI events | Pattern 3 | Medium — if rejected as too invasive, the resume branch can always use `executeChatTurn` (works for task-linked conversations too, but loses same-execution engine resume for tasks) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Post-restart pending interrupts: rebuild or reject?**
    - What we know: the DB `waiting_user` row persists (block stays enforced, D-04 durable); the registry is in-memory; the client replays the decision card from JSONL and will send a resume with the persisted interruptId.
