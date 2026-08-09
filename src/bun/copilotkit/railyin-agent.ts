@@ -31,6 +31,7 @@ import {
   type TranslateState,
 } from "./event-bridge.ts";
 import * as interruptRegistry from "./interrupt-registry.ts";
+import type { PendingInterrupt } from "./interrupt-registry.ts";
 
 /** Last user text message (string content or text part) — the chat turn body. */
 function extractUserText(messages: RunAgentInput["messages"]): string | null {
@@ -107,6 +108,25 @@ export class RailyinAgent extends AbstractAgent {
       // executeChatTurn hasn't resolved yet — cancel as soon as it does.
       run.abortRequested = true;
     }
+  }
+
+  /**
+   * The durable executionId of a paused decision for a thread: the registry
+   * entry's attached id when present, else the executions `waiting_user` row —
+   * the durable truth written synchronously by stream-processor at
+   * decision_request time. The registry's executionId is attached from the
+   * executeChatTurn .then hook, which resolves AFTER the interrupt terminal
+   * reaches the client — a machine-fast resume can fire before it lands, and
+   * the row finalize (cancelled/completed) must not depend on that race.
+   */
+  private resolveDecisionExecutionId(conversationId: number, entry: PendingInterrupt): number | null {
+    if (entry.executionId != null) return entry.executionId;
+    const row = this.db
+      .query<{ id: number }, [number]>(
+        "SELECT id FROM executions WHERE conversation_id = ? AND status = 'waiting_user' LIMIT 1",
+      )
+      .get(conversationId);
+    return row?.id ?? null;
   }
 
   run(input: RunAgentInput): ReturnType<AbstractAgent["run"]> {
@@ -248,10 +268,14 @@ export class RailyinAgent extends AbstractAgent {
       // NO engine call: the rejection/dismissal delivers nothing (v1).
       if (entry.status === "cancelled") {
         interruptRegistry.clear(threadId);
-        if (open.executionId != null) {
+        // The durable executionId (registry attach can race the resume — see
+        // resolveDecisionExecutionId): finalize the waiting_user row so the
+        // thread never wedges (Pitfall 2).
+        const execId = this.resolveDecisionExecutionId(conversationId, open);
+        if (execId != null) {
           this.db.run(
             "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ? AND status = 'waiting_user'",
-            [open.executionId],
+            [execId],
           );
         }
         subject.next(terminalEvent(threadId, runId, "done"));
@@ -276,11 +300,13 @@ export class RailyinAgent extends AbstractAgent {
       // Pitfall 2: finalize the OLD orphaned 'waiting_user' execution row
       // BEFORE delivery — stream-processor.ts:494-506 is its only writer and no
       // existing code closes it; the advisory lock would otherwise wedge the
-      // thread forever after the resume.
-      if (open.executionId != null) {
+      // thread forever after the resume. The id resolves durably (registry
+      // attach can race the resume — see resolveDecisionExecutionId).
+      const finalizeId = this.resolveDecisionExecutionId(conversationId, open);
+      if (finalizeId != null) {
         this.db.run(
           "UPDATE executions SET status = 'completed', finished_at = datetime('now') WHERE id = ? AND status = 'waiting_user'",
-          [open.executionId],
+          [finalizeId],
         );
       }
 

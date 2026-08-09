@@ -1036,4 +1036,41 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
     // with a proper payload (Pitfall 8: clear only after delivery starts).
     expect(interruptRegistry.hasOpen(threadId)).toBe(true);
   });
+
+  test("R9: machine-fast resume race — a registry entry WITHOUT the attached executionId still finalizes the waiting_user row via the DB fallback (03-03 e2e 15/13)", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    // The interrupt terminal reached the client but the executeChatTurn .then
+    // hook has NOT run yet (the real-wire race e2e test 15 exposes): the entry
+    // is registered with executionId null — resolveDecisionExecutionId must
+    // fall back to the durable waiting_user row.
+    const interruptId = interruptRegistry.register(conversationId, DECISION_PAYLOAD);
+    seedWaitingUserRow(conversationId, 42);
+
+    setResumeChatFake();
+    const agent = makeAgent(conversationId);
+
+    // Cancelled resume: the row finalizes 'cancelled' via the DB lookup — the
+    // thread stays usable afterward (no wedge).
+    const cancelEvents = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "cancelled" }]),
+    );
+    expect(cancelEvents[cancelEvents.length - 1].type).toBe(EventType.RUN_FINISHED);
+    expect(interruptRegistry.hasOpen(threadId)).toBe(false);
+    const row = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(42)!;
+    expect(row.status).toBe("cancelled");
+
+    // Resolved resume: the old waiting_user row finalizes 'completed' BEFORE
+    // delivery even though the registry never attached the executionId.
+    const interruptId2 = interruptRegistry.register(conversationId, DECISION_PAYLOAD);
+    seedWaitingUserRow(conversationId, 43);
+    const resumeEvents = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId: interruptId2, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(resumeEvents[resumeEvents.length - 1].type).toBe(EventType.RUN_FINISHED);
+    const row2 = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(43)!;
+    expect(row2.status).toBe("completed");
+  });
 });
