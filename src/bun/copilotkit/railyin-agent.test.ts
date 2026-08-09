@@ -5,7 +5,7 @@
  * order, and exactly one terminal LAST (Pitfall 3).
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { EventType, type RunAgentInput } from "@ag-ui/core";
+import { EventSchemas, EventType, type RunAgentInput } from "@ag-ui/core";
 import type { BaseEvent } from "@ag-ui/client";
 import { initDb, seedChatSession, seedProjectAndTask } from "../test/helpers.ts";
 import { getDefaultWorkspaceKey } from "../workspace-context.ts";
@@ -13,6 +13,7 @@ import type { Database } from "bun:sqlite";
 import type { EngineEvent } from "../engine/types.ts";
 import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import { RailyinAgent, resolveWorkspaceKey } from "./railyin-agent.ts";
+import * as interruptRegistry from "./interrupt-registry.ts";
 
 /** Collect a run's events by subscribing to the agent's observable. */
 function collectRun(agent: RailyinAgent, input: RunAgentInput): Promise<BaseEvent[]> {
@@ -38,6 +39,33 @@ function runInput(threadId: string, text = "hello"): RunAgentInput {
   };
 }
 
+/** Serialized DecisionRequestPayload used by the decision-cycle fakes. */
+const DECISION_PAYLOAD = JSON.stringify({
+  context: "mock context",
+  questions: [{ question: "Q1", type: "exclusive", options: [{ title: "A", description: "" }] }],
+});
+
+/**
+ * Decision-cycle fake: drives onEngineEvent(token) →
+ * onEngineEvent(decision_request) → onRunEnd("decision") synchronously inside
+ * executeChatTurn, then resolves with executionId 42 (Pitfall 3 — the id is
+ * minted while run.executionId is still null).
+ */
+function setDecisionCycleFake(): void {
+  fakeCoordinator = {
+    ...fakeCoordinator,
+    executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+      capturedOpts = opts;
+      if (opts) {
+        opts.onEngineEvent?.({ type: "token", content: "I need your decision." });
+        opts.onEngineEvent?.({ type: "decision_request", payload: DECISION_PAYLOAD });
+        opts.onRunEnd?.("decision");
+      }
+      return { message: { id: 1 } as never, executionId: 42 };
+    },
+  };
+}
+
 let db: Database;
 let fakeCoordinator: ExecutionCoordinator;
 let cancelCalls: number[];
@@ -50,6 +78,8 @@ function makeAgent(conversationId: number): RailyinAgent {
 
 beforeEach(() => {
   db = initDb();
+  // Module-level registry — reset between tests (Pattern 6: no cross-test leakage).
+  interruptRegistry.reset();
   cancelCalls = [];
   capturedWorkspaceKey = null;
   capturedOpts = undefined;
@@ -446,5 +476,116 @@ describe("RailyinAgent", () => {
     expect(events[0].type).toBe(EventType.RUN_STARTED);
     expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
     expect(events[events.length - 1]).toMatchObject({ code: "THREAD_NOT_FOUND" });
+  });
+
+  test("12: decision_request ends the run with RUN_FINISHED outcome.interrupt — RUN_STARTED first, text block, terminal LAST, never a RUN_ERROR (D-01/D-06)", async () => {
+    const { conversationId } = seedChatSession(db);
+    setDecisionCycleFake();
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+
+    const types = events.map((e) => e.type);
+    expect(types[0]).toBe(EventType.RUN_STARTED);
+    expect(types[1]).toBe("TEXT_MESSAGE_START");
+    expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
+    // Exactly one terminal; the interrupt is a NORMAL completion (D-03).
+    expect(types.filter((t) => t === EventType.RUN_FINISHED || t === EventType.RUN_ERROR)).toHaveLength(1);
+    expect(types).not.toContain(EventType.RUN_ERROR);
+
+    const terminal = events[events.length - 1] as unknown as {
+      outcome?: { type: string; interrupts?: Array<{ id: string; reason: string; message?: string; metadata?: unknown }> };
+    };
+    expect(terminal.outcome?.type).toBe("interrupt");
+    const interrupt = terminal.outcome?.interrupts?.[0];
+    expect(interrupt?.reason).toBe("decision_request");
+    expect(interrupt?.id).toMatch(/^decision-\d+-\d+$/);
+    expect(interrupt?.message).toBe("mock context");
+    expect(interrupt?.metadata).toEqual(JSON.parse(DECISION_PAYLOAD));
+  });
+
+  test("13: the interrupt terminal zod-parses via EventSchemas (RUNR-08 — installed schemas ARE the contract)", async () => {
+    const { conversationId } = seedChatSession(db);
+    setDecisionCycleFake();
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+
+    for (const event of events) {
+      const parsed = EventSchemas.safeParse(event);
+      expect(parsed.success).toBe(true);
+    }
+    const terminal = events[events.length - 1] as unknown as { outcome?: { type: string } };
+    expect(terminal.outcome?.type).toBe("interrupt");
+  });
+
+  test("14: registry lifecycle — hasOpen true after the cycle; per-thread seq mints decision-<conv>-1/-2 (Pitfall 3/A3)", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    setDecisionCycleFake();
+    const agent = makeAgent(conversationId);
+
+    const events1 = await collectRun(agent, runInput(threadId));
+    expect(interruptRegistry.hasOpen(threadId)).toBe(true);
+    const id1 = (events1[events1.length - 1] as unknown as { outcome: { interrupts: Array<{ id: string }> } }).outcome.interrupts[0].id;
+    expect(id1).toBe(`decision-${conversationId}-1`);
+
+    // clear removes the entry but KEEPS the per-thread seq — next batch mints -2.
+    interruptRegistry.clear(threadId);
+    const events2 = await collectRun(agent, runInput(threadId));
+    const id2 = (events2[events2.length - 1] as unknown as { outcome: { interrupts: Array<{ id: string }> } }).outcome.interrupts[0].id;
+    expect(id2).toBe(`decision-${conversationId}-2`);
+
+    // A second thread mints its own seq from 1.
+    const { conversationId: conversation2 } = seedChatSession(db);
+    const agent2 = makeAgent(conversation2);
+    const events3 = await collectRun(agent2, runInput(String(conversation2)));
+    const id3 = (events3[events3.length - 1] as unknown as { outcome: { interrupts: Array<{ id: string }> } }).outcome.interrupts[0].id;
+    expect(id3).toBe(`decision-${conversation2}-1`);
+  });
+
+  test("15: interrupt id is executionId-independent; updateExecutionId runs after executeChatTurn resolves (Pitfall 3)", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    setDecisionCycleFake();
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(threadId));
+
+    // The fake drives onRunEnd synchronously — executionId is still null when
+    // the id is minted; the id must not be executionId-derived.
+    const terminal = events[events.length - 1] as unknown as { outcome: { interrupts: Array<{ id: string }> } };
+    const id = terminal.outcome.interrupts[0].id;
+    expect(id).toMatch(/^decision-\d+-\d+$/);
+    expect(id).not.toContain("undefined");
+
+    // The .then hook attaches the resolved executionId to the registry entry.
+    expect(interruptRegistry.get(threadId)?.executionId).toBe(42);
+    expect(interruptRegistry.get(threadId)?.payload).toBe(DECISION_PAYLOAD);
+  });
+
+  test("16: malformed decision_request payload → metadata undefined + message fallback, still wire-valid (T-03-01)", async () => {
+    const { conversationId } = seedChatSession(db);
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        capturedOpts = opts;
+        if (opts) {
+          opts.onEngineEvent?.({ type: "token", content: "I need your decision." });
+          opts.onEngineEvent?.({ type: "decision_request", payload: "not-json{{{" });
+          opts.onRunEnd?.("decision");
+        }
+        return { message: { id: 1 } as never, executionId: 42 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+    const terminal = events[events.length - 1] as unknown as {
+      outcome: { type: string; interrupts: Array<{ metadata?: unknown; message?: string }> };
+    };
+    expect(terminal.outcome.type).toBe("interrupt");
+    expect(terminal.outcome.interrupts[0].metadata).toBeUndefined();
+    expect(terminal.outcome.interrupts[0].message).toBe("A decision is required.");
+    const parsed = EventSchemas.safeParse(events[events.length - 1]);
+    expect(parsed.success).toBe(true);
   });
 });
