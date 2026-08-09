@@ -25,6 +25,7 @@ import { lspHandlers } from "./handlers/lsp.ts";
 import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mcpHandlers, handleMcpOAuthCallback } from "./handlers/mcp.ts";
 import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
+import { threadHandlers } from "./handlers/threads.ts";
 import { decisionHandlers } from "./handlers/decisions.ts";
 import { noteHandlers } from "./handlers/notes.ts";
 import { configHandlers } from "./handlers/config.ts";
@@ -337,6 +338,7 @@ const allHandlers = {
     },
   }),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
+  ...threadHandlers(db, jsonlStore),
   ...decisionHandlers(db),
   ...noteHandlers(db),
   ...configHandlers(),

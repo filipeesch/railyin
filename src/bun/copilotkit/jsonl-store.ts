@@ -12,10 +12,11 @@
  * and containment-checks the resolved path BEFORE any filesystem use
  * (security V5/V8, T-02-07).
  *
- * Phase 2 scope: basic append + tolerant read. Crash tolerance (buffered
- * writer, atomic index, event ids) is deliberately Phase 4 per CONTEXT.md.
+ * Phase 4 scope: crash tolerance + index rebuild from the log — `list()`
+ * scans the threads dir (THREAD_ID_RE-filtered) so the log IS the index
+ * (D-04/D-05); decoy entries are skipped, never thrown at.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
 import { dirname, join, resolve, sep } from "path";
 import type { BaseEvent } from "@ag-ui/client";
 
@@ -80,6 +81,33 @@ export class JsonlStore {
   exists(threadId: string): boolean {
     this.assertThreadId(threadId);
     return existsSync(threadLogPath(this.dataDir, threadId));
+  }
+
+  /**
+   * Index rebuild from the log (D-04/D-05): scan the threads dir, filter
+   * entries through THREAD_ID_RE BEFORE any path use (V8 gate — a raw
+   * filename is never interpolated into a path), and return the thread set
+   * sorted by mtime descending. Non-conforming files (`{id}.jsonl.tmp`,
+   * `{id}.meta.json`, non-numeric names) are SKIPPED, never thrown at; a
+   * missing threads dir yields []; per-entry stat failures are tolerated so
+   * one broken file cannot 500 the whole listing (T-04-04).
+   */
+  list(): Array<{ threadId: string; mtimeMs: number; birthtimeMs: number; size: number }> {
+    const dir = join(this.dataDir, "threads");
+    if (!existsSync(dir)) return [];
+    const entries: Array<{ threadId: string; mtimeMs: number; birthtimeMs: number; size: number }> = [];
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".jsonl")) continue;
+      const threadId = name.slice(0, -6);
+      if (!THREAD_ID_RE.test(threadId)) continue;
+      try {
+        const st = statSync(join(dir, name));
+        entries.push({ threadId, mtimeMs: st.mtimeMs, birthtimeMs: st.birthtimeMs, size: st.size });
+      } catch {
+        console.warn(`[jsonl-store] Skipping unreadable entry ${name} in ${dir}`);
+      }
+    }
+    return entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
   }
 
   /**

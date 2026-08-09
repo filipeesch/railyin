@@ -107,6 +107,19 @@ export type MessageType =
   | "code_review"
   | "status";
 
+/** One JSONL-backed thread as surfaced by the thread-index RPC (CHAT-08, D-01). */
+export interface ThreadSummary {
+  threadId: string;
+  /** Display name: tasks.title for card threads, chat_sessions.title for sessions; null when unknown (orphan file). */
+  name: string | null;
+  /** "card" = task conversation (conversations.task_id set); "session" = standalone chat session. */
+  kind: "card" | "session";
+  /** ISO string — tasks.created_at / chat_sessions.created_at, falling back to file birthtime/mtime. */
+  createdAt: string;
+  /** ISO string — chat_sessions.last_activity_at, falling back to file mtime. */
+  updatedAt: string;
+}
+
 export interface ModelInfo {
   id: string | null;
   displayName?: string;
@@ -1080,6 +1093,12 @@ export type RailynAPI = {
   "chatSessions.compact": {
     params: { sessionId: number };
     response: void;
+  };
+
+  // Thread index (JSONL-backed — the log IS the index; D-01/D-04/D-05)
+  "threads.list": {
+    params: Record<string, never>;
+    response: ThreadSummary[];
   };
   "mcp.getStatus": {
     params: Record<string, never>;
