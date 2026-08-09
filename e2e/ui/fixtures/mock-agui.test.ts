@@ -10,8 +10,12 @@
  *                        the client's verifyEvents rejects any event after
  *                        RUN_FINISHED, so the snapshot sits before it)
  *   never-run thread   → empty SSE body (RUNR-06)
+ *
+ * WR-05: the registry is per-MockAgui-instance (no module-global state) —
+ * the builder takes the registry as an explicit argument.
  */
 import { describe, test, expect } from "bun:test";
+import type { Page } from "@playwright/test";
 import { EventType, type AGUIEvent } from "@ag-ui/core";
 import { MockAgui, buildConnectReplaySseBody, buildErrorRunSseBody, buildToolCallRunSseBody, buildReasoningRunSseBody, buildInterruptRunSseBody, buildSlowRunSseBody } from "./mock-agui";
 
@@ -31,8 +35,8 @@ function typesOf(sseBody: string): EventType[] {
 
 describe("buildConnectReplaySseBody", () => {
     test("registered thread: replay body decodes to valid AGUIEvent JSON frames", () => {
-        MockAgui.prototype.registerThread("t-valid");
-        const body = buildConnectReplaySseBody("t-valid");
+        const known = new Set(["t-valid"]);
+        const body = buildConnectReplaySseBody("t-valid", "quick", known);
 
         const frames = decodeFrames(body);
         expect(frames.length).toBeGreaterThan(0);
@@ -46,8 +50,8 @@ describe("buildConnectReplaySseBody", () => {
     });
 
     test("registered thread: canonical sequence RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED in order", () => {
-        MockAgui.prototype.registerThread("t-seq");
-        const types = typesOf(buildConnectReplaySseBody("t-seq"));
+        const known = new Set(["t-seq"]);
+        const types = typesOf(buildConnectReplaySseBody("t-seq", "quick", known));
 
         expect(types[0]).toBe(EventType.RUN_STARTED);
         const snapshotIdx = types.indexOf(EventType.MESSAGES_SNAPSHOT);
@@ -62,8 +66,8 @@ describe("buildConnectReplaySseBody", () => {
     });
 
     test("MESSAGES_SNAPSHOT payload references the replayed 'hello' message", () => {
-        MockAgui.prototype.registerThread("t-msg");
-        const frames = decodeFrames(buildConnectReplaySseBody("t-msg"));
+        const known = new Set(["t-msg"]);
+        const frames = decodeFrames(buildConnectReplaySseBody("t-msg", "quick", known));
 
         const snapshot = frames.find((f) => f.type === EventType.MESSAGES_SNAPSHOT) as
             | { type: EventType.MESSAGES_SNAPSHOT; messages: Array<{ id: string; role: string; content?: string }> }
@@ -77,10 +81,20 @@ describe("buildConnectReplaySseBody", () => {
     });
 
     test("registerThread flips the empty → replay path for the same threadId", () => {
+        const known = new Set<string>();
         // Not registered yet — never-run semantics.
-        expect(buildConnectReplaySseBody("t-flip")).toBe("");
-        MockAgui.prototype.registerThread("t-flip");
-        expect(buildConnectReplaySseBody("t-flip")).not.toBe("");
+        expect(buildConnectReplaySseBody("t-flip", "quick", known)).toBe("");
+        known.add("t-flip");
+        expect(buildConnectReplaySseBody("t-flip", "quick", known)).not.toBe("");
+    });
+
+    test("WR-05: a registered threadId on one instance never leaks into another instance", () => {
+        const a = new MockAgui(null as unknown as Page);
+        const b = new MockAgui(null as unknown as Page);
+        a.registerThread("t-iso");
+        // Instance A replays; instance B still answers with the empty body.
+        expect(buildConnectReplaySseBody("t-iso", "quick", a.knownThreadIds)).not.toBe("");
+        expect(buildConnectReplaySseBody("t-iso", "quick", b.knownThreadIds)).toBe("");
     });
 });
 
@@ -228,8 +242,8 @@ describe("buildSlowRunSseBody (plan 05-04)", () => {
 
 describe("buildConnectReplaySseBody toolcall script (plan 05-04, RUNR-07)", () => {
     test("registered thread + script 'toolcall' replays a snapshot pairing toolCall with its ToolMessage (completed state)", () => {
-        MockAgui.prototype.registerThread("t-replay-tc");
-        const frames = decodeFrames(buildConnectReplaySseBody("t-replay-tc", "toolcall"));
+        const known = new Set(["t-replay-tc"]);
+        const frames = decodeFrames(buildConnectReplaySseBody("t-replay-tc", "toolcall", known));
 
         const snapshot = frames.find((f) => f.type === EventType.MESSAGES_SNAPSHOT) as
             | { type: EventType.MESSAGES_SNAPSHOT; messages: Array<{ id: string; role: string; content?: string; toolCalls?: Array<{ id: string }> }> }
@@ -244,8 +258,8 @@ describe("buildConnectReplaySseBody toolcall script (plan 05-04, RUNR-07)", () =
     });
 
     test("default script replay stays quick (backward compatible)", () => {
-        MockAgui.prototype.registerThread("t-replay-quick");
-        const frames = decodeFrames(buildConnectReplaySseBody("t-replay-quick"));
+        const known = new Set(["t-replay-quick"]);
+        const frames = decodeFrames(buildConnectReplaySseBody("t-replay-quick", "quick", known));
         const snapshot = frames.find((f) => f.type === EventType.MESSAGES_SNAPSHOT) as
             | { type: EventType.MESSAGES_SNAPSHOT; messages: Array<{ id: string; role: string; content?: string }> }
             | undefined;

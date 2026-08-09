@@ -274,8 +274,12 @@ export function buildSlowRunSseBody(requestInput: unknown): string {
  * via MockAgui.registerThread(). A thread NOT in this set has never run —
  * connect answers with an empty SSE body, mirroring the real runner's
  * never-run path (RUNR-06: base runner completes empty for unknown threads).
+ *
+ * WR-05: the registry lives on the MockAgui INSTANCE (created fresh per test
+ * by the auto-use `agui` fixture) — a module-level registry accumulated
+ * registerThread() calls across every test in a Playwright worker, silently
+ * breaking the empty-body contract for reused threadIds.
  */
-const knownThreadIds = new Set<string>();
 
 /**
  * Build the SSE body for a connect request (CHAT-07 history replay, RUNR-05):
@@ -285,9 +289,13 @@ const knownThreadIds = new Set<string>();
  * the same EventEncoder + patchRunStartedInput path as buildQuickRunSseBody —
  * never hand-rolled frames.
  *
- * A never-run thread (not in the registry) yields an EMPTY body (RUNR-06).
+ * A never-run thread (not in `knownThreadIds`) yields an EMPTY body (RUNR-06).
  */
-export function buildConnectReplaySseBody(threadId: string, script: RunScript = "quick"): string {
+export function buildConnectReplaySseBody(
+  threadId: string,
+  script: RunScript = "quick",
+  knownThreadIds: ReadonlySet<string> = new Set(),
+): string {
     if (!knownThreadIds.has(threadId)) {
         return "";
     }
@@ -360,6 +368,14 @@ export class MockAgui {
     /** ThreadIds captured from POST /agent/:agentId/stop/:threadId (CHAT-04). */
     stopRequests: string[] = [];
 
+    /**
+     * Per-instance thread registry (WR-05): registerThread() only affects
+     * THIS fixture instance — the auto-use fixture creates one MockAgui per
+     * test, so cross-test state can never leak into another test's connect
+     * replay.
+     */
+    readonly knownThreadIds = new Set<string>();
+
     constructor(page: Page) {
         this._page = page;
     }
@@ -369,7 +385,7 @@ export class MockAgui {
      * (RUNR-06: threads never registered answer connect with an empty body).
      */
     registerThread(threadId: string): this {
-        knownThreadIds.add(threadId);
+        this.knownThreadIds.add(threadId);
         return this;
     }
 
@@ -461,7 +477,7 @@ export class MockAgui {
                     status: 200,
                     contentType: MOCK_AGUI_SSE_HEADERS["content-type"],
                     headers: { "cache-control": MOCK_AGUI_SSE_HEADERS["cache-control"] },
-                    body: buildConnectReplaySseBody(threadId, this.script),
+                    body: buildConnectReplaySseBody(threadId, this.script, this.knownThreadIds),
                 });
                 return;
             }
