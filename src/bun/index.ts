@@ -503,14 +503,3 @@ if (process.env.RAILYN_DEBUG) {
   Bun.write(path.join(getTmpDir(), "railyn-debug.port"), String(debugServer.port)).catch(() => { });
   console.log(`DEBUG_PORT=${debugServer.port}`);
 }
-
-// ─── Config error: push to connected clients ──────────────────────────────────
-if (configError) {
-  setTimeout(() => {
-    notifier.broadcastConfigError({
-      taskId: -1,
-      executionId: -1,
-      error: `Config error: ${configError}`,
-    });
-  }, 2000);
-}

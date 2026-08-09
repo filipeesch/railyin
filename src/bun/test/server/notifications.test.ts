@@ -38,12 +38,4 @@ describe("NotificationService", () => {
     svc.notifyChatSessionUpdated(session);
     expect(calls).toEqual([{ type: "chatSession.updated", payload: session }]);
   });
-
-  test("NS-6 — broadcastConfigError broadcasts config.error", () => {
-    const { channel, calls } = makeChannel();
-    const svc = new NotificationService(channel);
-    const details = { reason: "invalid yaml" };
-    svc.broadcastConfigError(details);
-    expect(calls).toEqual([{ type: "config.error", payload: details }]);
-  });
 });

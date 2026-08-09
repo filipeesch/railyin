@@ -30,8 +30,4 @@ export class NotificationService {
   notifyChatSessionUpdated(session: ChatSession): void {
     this.channel.broadcast({ type: "chatSession.updated", payload: session });
   }
-
-  broadcastConfigError(details: object): void {
-    this.channel.broadcast({ type: "config.error", payload: details });
-  }
 }
