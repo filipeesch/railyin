@@ -334,6 +334,48 @@ describe("buildThreadLog — message→event mapping (IMPR-01, Pattern 3)", () =
         const { events } = buildThreadLog("7", rows);
         assertLifecycleValid(events);
     });
+
+    test("9: trailing system rows are NOT dropped — they attach to the last run's input (WR-04)", () => {
+        // The real-world case: "Execution failed" error markers appended by
+        // appendMessage(type: "system") AFTER the last assistant reply.
+        const rows = [
+            row({ id: 1, type: "user", role: "user", content: "go" }),
+            row({ id: 2, type: "assistant", role: "assistant", content: "ok" }),
+            row({ id: 3, type: "system", role: "system", content: "Execution failed" }),
+        ];
+        const { events } = buildThreadLog("7", rows);
+        const starts = events.filter((e) => e.type === EventType.RUN_STARTED) as unknown as {
+            input: { messages: { id: string; role: string; content: string }[] };
+        }[];
+        expect(starts).toHaveLength(1);
+        expect(starts[0].input.messages).toEqual([
+            { id: "legacy-3", role: "system", content: "Execution failed" },
+            { id: "legacy-1", role: "user", content: "go" },
+        ]);
+        assertLifecycleValid(events);
+    });
+
+    test("10: mid-conversation system rows attach to the NEXT run's input, not the previous one (WR-04)", () => {
+        const rows = [
+            row({ id: 1, type: "user", role: "user", content: "turn 1" }),
+            row({ id: 2, type: "assistant", role: "assistant", content: "ok" }),
+            row({ id: 3, type: "system", role: "system", content: "mid-run note" }),
+            row({ id: 4, type: "user", role: "user", content: "turn 2" }),
+        ];
+        const { events } = buildThreadLog("7", rows);
+        const starts = events.filter((e) => e.type === EventType.RUN_STARTED) as unknown as {
+            input: { messages: { id: string; role: string; content: string }[] };
+        }[];
+        expect(starts).toHaveLength(2);
+        // Run 1 does NOT inherit the mid-run row...
+        expect(starts[0].input.messages).toEqual([{ id: "legacy-1", role: "user", content: "turn 1" }]);
+        // ...it precedes run 2's user turn instead.
+        expect(starts[1].input.messages).toEqual([
+            { id: "legacy-3", role: "system", content: "mid-run note" },
+            { id: "legacy-4", role: "user", content: "turn 2" },
+        ]);
+        assertLifecycleValid(events);
+    });
 });
 
 describe("runLegacyImport — idempotency + atomicity (D-07, Pitfall 5)", () => {

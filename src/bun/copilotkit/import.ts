@@ -104,38 +104,74 @@ function parseToolResult(content: string): { toolUseId: string; content: string 
 /**
  * Map legacy message rows to AG-UI events (Pattern 3): one synthetic run per
  * user message (`runId = import-${threadId}-${n}`), system rows attached to
- * the FIRST run's input, RUN_STARTED-with-input first and RUN_FINISHED
- * {result: null} last per run. Pure — no DB, no fs, no I/O.
+ * a run's input — leading rows to the FIRST run's input, rows arriving while
+ * a run is open to the NEXT run's input, and rows still pending when the
+ * last run closes (trailing "execution failed"-style markers) to THAT run's
+ * input (WR-04 — never silently dropped). RUN_STARTED-with-input first and
+ * RUN_FINISHED {result: null} last per run. A conversation with only system
+ * rows (no user message) forms no run and is skipped by the caller. Pure —
+ * no DB, no fs, no I/O.
  */
 export function buildThreadLog(threadId: string, rows: ConversationMessageRow[]): BuildThreadLogResult {
     const events: BaseEvent[] = [];
     let malformed = 0;
 
     let runIndex = 0;
-    let runId = "";
     let textSeq = 0;
     let reasoningSeq = 0;
     let openToolCallIds = new Set<string>();
-    // System rows collected until the first user message opens run 1.
+    // System rows awaiting attachment: leading rows (before any user message)
+    // attach to run 1's input; rows arriving while a run is open attach to the
+    // NEXT run's input (they precede that run's user turn chronologically);
+    // rows still pending when the last run closes (trailing markers) attach to
+    // that run's input (WR-04).
     const pendingSystem: Array<{ id: string; content: string }> = [];
     let lastTimestamp: number | undefined;
 
-    /** Close the current run: synthesize dangling tool results (Pitfall 6),
-     * then the single terminal. */
-    function closeRun(): void {
-        if (!runId) return;
+    // The run currently being built. Its body events are buffered and the
+    // whole run is emitted by closeRun(), so RUN_STARTED's input can include
+    // system rows that arrive before the run closes (WR-04).
+    let openRun: {
+        runId: string;
+        inputSystems: Array<{ id: string; role: "system"; content: string }>;
+        userMessage: { id: string; role: "user"; content: string };
+        body: BaseEvent[];
+        timestamp?: number;
+    } | null = null;
+
+    /** Close the current run: fold any still-pending system rows into its
+     * input when this is the final close (WR-04), synthesize dangling tool
+     * results (Pitfall 6), then the single terminal. */
+    function closeRun(final = false): void {
+        if (!openRun) return;
+        if (final && pendingSystem.length > 0) {
+            // Trailing system rows — there is no next run to inherit them, so
+            // attach them to THIS run's input instead of dropping them.
+            for (const s of pendingSystem) {
+                openRun.inputSystems.push({ id: s.id, role: "system", content: s.content });
+            }
+            pendingSystem.length = 0;
+        }
         for (const toolCallId of [...openToolCallIds]) {
-            events.push(toolResultEvent(toolCallId, "", lastTimestamp));
+            openRun.body.push(toolResultEvent(toolCallId, "", lastTimestamp));
         }
         openToolCallIds.clear();
         events.push({
+            type: EventType.RUN_STARTED,
+            threadId,
+            runId: openRun.runId,
+            input: { threadId, runId: openRun.runId, state: null, messages: [...openRun.inputSystems, openRun.userMessage] },
+            ...(openRun.timestamp !== undefined ? { timestamp: openRun.timestamp } : {}),
+        });
+        events.push(...openRun.body);
+        events.push({
             type: EventType.RUN_FINISHED,
             threadId,
-            runId,
+            runId: openRun.runId,
             result: null,
             ...(lastTimestamp !== undefined ? { timestamp: lastTimestamp } : {}),
         });
-        runId = "";
+        openRun = null;
     }
 
     for (const row of rows) {
@@ -146,36 +182,39 @@ export function buildThreadLog(threadId: string, rows: ConversationMessageRow[])
             case "user": {
                 closeRun();
                 runIndex += 1;
-                runId = `import-${threadId}-${runIndex}`;
                 textSeq = 0;
                 reasoningSeq = 0;
-                const messages: Array<{ id: string; role: "system" | "user"; content: string }> = [];
+                // Snapshot the system rows seen so far into THIS run's input;
+                // rows arriving while this run is open attach to the next
+                // run's input instead (they precede its user turn).
+                const inputSystems: Array<{ id: string; role: "system"; content: string }> = [];
                 for (const s of pendingSystem) {
-                    messages.push({ id: s.id, role: "system", content: s.content });
+                    inputSystems.push({ id: s.id, role: "system", content: s.content });
                 }
                 pendingSystem.length = 0;
-                messages.push({ id: `legacy-${row.id}`, role: "user", content: row.content });
-                events.push({
-                    type: EventType.RUN_STARTED,
-                    threadId,
-                    runId,
-                    input: { threadId, runId, state: null, messages },
+                openRun = {
+                    runId: `import-${threadId}-${runIndex}`,
+                    inputSystems,
+                    userMessage: { id: `legacy-${row.id}`, role: "user", content: row.content },
+                    body: [],
                     ...(timestamp !== undefined ? { timestamp } : {}),
-                });
+                };
                 break;
             }
 
             case "system": {
-                // Attach to the FIRST run's input (e.g. task-description seed).
+                // Leading rows → run 1's input; rows while a run is open →
+                // the NEXT run's input; rows pending at the final closeRun →
+                // the last run's input (WR-04 — never silently dropped).
                 pendingSystem.push({ id: `legacy-${row.id}`, content: row.content });
                 break;
             }
 
             case "assistant": {
-                if (!runId || !row.content) break; // no open run / empty content → no TEXT block
+                if (!openRun || !row.content) break; // no open run / empty content → no TEXT block
                 textSeq += 1;
-                const messageId = `${runId}-text-${textSeq}`;
-                events.push(
+                const messageId = `${openRun.runId}-text-${textSeq}`;
+                openRun.body.push(
                     { type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant", ...(timestamp !== undefined ? { timestamp } : {}) },
                     { type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: row.content, ...(timestamp !== undefined ? { timestamp } : {}) },
                     { type: EventType.TEXT_MESSAGE_END, messageId, ...(timestamp !== undefined ? { timestamp } : {}) },
@@ -184,10 +223,10 @@ export function buildThreadLog(threadId: string, rows: ConversationMessageRow[])
             }
 
             case "reasoning": {
-                if (!runId || !row.content) break;
+                if (!openRun || !row.content) break;
                 reasoningSeq += 1;
-                const messageId = `${runId}-reasoning-${reasoningSeq}`;
-                events.push(
+                const messageId = `${openRun.runId}-reasoning-${reasoningSeq}`;
+                openRun.body.push(
                     { type: EventType.REASONING_MESSAGE_START, messageId, role: "reasoning", ...(timestamp !== undefined ? { timestamp } : {}) },
                     { type: EventType.REASONING_MESSAGE_CONTENT, messageId, delta: row.content, ...(timestamp !== undefined ? { timestamp } : {}) },
                     { type: EventType.REASONING_MESSAGE_END, messageId, ...(timestamp !== undefined ? { timestamp } : {}) },
@@ -196,15 +235,15 @@ export function buildThreadLog(threadId: string, rows: ConversationMessageRow[])
             }
 
             case "tool_call": {
-                if (!runId) break;
+                if (!openRun) break;
                 const parsed = parseToolCall(row.content);
                 if (!parsed) {
                     malformed += 1; // T-04-06: skip + count, never crash the loop
                     break;
                 }
-                const toolCallId = `${runId}-${parsed.id}`; // Pitfall 4: per-run namespacing
+                const toolCallId = `${openRun.runId}-${parsed.id}`; // Pitfall 4: per-run namespacing
                 openToolCallIds.add(toolCallId);
-                events.push(
+                openRun.body.push(
                     { type: EventType.TOOL_CALL_START, toolCallId, toolCallName: parsed.name, ...(timestamp !== undefined ? { timestamp } : {}) },
                     { type: EventType.TOOL_CALL_ARGS, toolCallId, delta: parsed.arguments, ...(timestamp !== undefined ? { timestamp } : {}) },
                     { type: EventType.TOOL_CALL_END, toolCallId, ...(timestamp !== undefined ? { timestamp } : {}) },
@@ -213,16 +252,16 @@ export function buildThreadLog(threadId: string, rows: ConversationMessageRow[])
             }
 
             case "tool_result": {
-                if (!runId) break;
+                if (!openRun) break;
                 const parsed = parseToolResult(row.content);
                 if (!parsed) {
                     malformed += 1;
                     break;
                 }
-                const toolCallId = `${runId}-${parsed.toolUseId}`;
+                const toolCallId = `${openRun.runId}-${parsed.toolUseId}`;
                 if (!openToolCallIds.has(toolCallId)) break; // orphan (no START this run) — skip defensively
                 openToolCallIds.delete(toolCallId);
-                events.push(toolResultEvent(toolCallId, parsed.content, timestamp));
+                openRun.body.push(toolResultEvent(toolCallId, parsed.content, timestamp));
                 break;
             }
 
@@ -232,7 +271,7 @@ export function buildThreadLog(threadId: string, rows: ConversationMessageRow[])
             }
         }
     }
-    closeRun();
+    closeRun(true); // final: trailing system rows attach to the last run (WR-04)
     return { events, malformed };
 }
 
