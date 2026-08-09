@@ -652,8 +652,6 @@ export interface StreamError {
 }
 
 // ─── RPC schema ──────────────────────────────────────────────────────────────
-
-// ─── RPC schema ──────────────────────────────────────────────────────────────
 // RailynAPI maps every method name to its { params, response } types.
 // Used by api() in rpc.ts for type-safe fetch calls.
 
