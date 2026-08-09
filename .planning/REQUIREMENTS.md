@@ -58,8 +58,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Verification (VERF)
 
 - [x] **VERF-01**: Bridge + runner have unit tests with a fake engine (contract tests for events, interrupts, replay)
-- [ ] **VERF-02**: Playwright E2E suite is migrated onto the new mock fixture foundation (SSE/CopilotKit events mocked) and passes
-- [ ] **VERF-03**: Backend smoke tests and the 55 existing UI specs are green on the new stack before cleanup
+- [x] **VERF-02**: Playwright E2E suite is migrated onto the new mock fixture foundation (SSE/CopilotKit events mocked) and passes
+- [x] **VERF-03**: Backend smoke tests and the 55 existing UI specs are green on the new stack before cleanup
 
 ## v2 Requirements
 
@@ -137,8 +137,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UI-03 | Phase 3 | Complete |
 | UI-04 | Phase 5 | Complete |
 | VERF-01 | Phase 3 | Complete |
-| VERF-02 | Phase 6 | Pending |
-| VERF-03 | Phase 6 | Pending |
+| VERF-02 | Phase 6 | Complete |
+| VERF-03 | Phase 6 | Complete |
 
 **Coverage:**
 
