@@ -198,3 +198,41 @@ describe("CANONICAL_TOOL_SLOTS / slotForToolCall", () => {
     expect(slotForToolCall("record_decision")).toBeNull();
   });
 });
+
+describe("RailyinChat named tool-call slots (05-04, Pitfall 1 guard)", () => {
+  // Reads RailyinChat.vue's template and collects the declared
+  // `#tool-call-<name>` slot names. The template-literal slot type is
+  // `tool-call-${string}` (CopilotChatToolCallsView.vue.d.ts) — a future
+  // engine tool name added to CANONICAL_TOOL_SLOTS without a matching slot
+  // here silently falls through to the default card; these tests make that a
+  // hard failure instead (05-04 acceptance criteria, RESEARCH Pitfall 1).
+  function declaredToolCallSlotNames(): Set<string> {
+    const fs = require("node:fs");
+    const source = fs.readFileSync(new URL("../components/chat/RailyinChat.vue", import.meta.url), "utf8");
+    const template = source.match(/<template>([\s\S]*?)<\/template>/);
+    expect(template).not.toBeNull();
+    const names = new Set<string>();
+    for (const match of template![1].matchAll(/#tool-call-([A-Za-z0-9_]+)/g)) {
+      names.add(match[1]);
+    }
+    return names;
+  }
+
+  it("TCD-24: RailyinChat declares a #tool-call-<name> slot for EVERY canonical family name", () => {
+    const declared = declaredToolCallSlotNames();
+    for (const name of Object.keys(CANONICAL_TOOL_SLOTS)) {
+      expect(declared.has(name), `RailyinChat is missing the #tool-call-${name} slot`).toBe(true);
+    }
+  });
+
+  it("TCD-25: RailyinChat declares NO generic #tool-call slot (D-04 anti-pattern)", () => {
+    const fs = require("node:fs");
+    const source = fs.readFileSync(new URL("../components/chat/RailyinChat.vue", import.meta.url), "utf8");
+    const template = source.match(/<template>([\s\S]*?)<\/template>/);
+    expect(template).not.toBeNull();
+    // A bare `#tool-call` (not followed by `-`) would short-circuit
+    // useDefaultRenderTool for every tool — forbidden (RESEARCH Anti-Patterns).
+    const bare = [...template![1].matchAll(/#tool-call(?!-)/g)];
+    expect(bare).toHaveLength(0);
+  });
+});
