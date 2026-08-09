@@ -17,7 +17,7 @@ Railyin's hand-rolled chat stack (~8.2k lines: custom `StreamEvent` protocol, du
 - [x] **Phase 4: JSONL Persistence & Legacy Import** - Crash-tolerant store, thread-index endpoint, idempotent legacy import over frozen tables (completed 2026-08-09)
 - [x] **Phase 5: Chat UI Replacement (Vue)** - Big-bang swap to CopilotChat + slots; streaming, tool cards, reasoning, slash commands, history; board /ws intact (completed 2026-08-09)
 - [x] **Phase 6: E2E Migration & Verification** - Migrate the 55 Playwright specs onto the new mock fixture foundation; all suites green on the new stack (completed 2026-08-09)
-- [ ] **Phase 7: Cleanup & Feature Trim** - Delete the old chat stack and trimmed features; freeze old tables; zero custom-protocol references
+- [x] **Phase 7: Cleanup & Feature Trim** - Delete the old chat stack and trimmed features; freeze old tables; zero custom-protocol references (completed 2026-08-09)
 
 ## Phase Details
 
@@ -255,4 +255,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. JSONL Persistence & Legacy Import | 3/3 | Complete    | 2026-08-09 |
 | 5. Chat UI Replacement (Vue) | 5/5 | Complete    | 2026-08-09 |
 | 6. E2E Migration & Verification | 8/7 | Complete    | 2026-08-09 |
-| 7. Cleanup & Feature Trim | 5/5 | In Progress|  |
+| 7. Cleanup & Feature Trim | 5/5 | Complete    | 2026-08-09 |
