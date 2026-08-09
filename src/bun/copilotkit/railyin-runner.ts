@@ -152,25 +152,37 @@ export class RailyinAgentRunner extends InMemoryAgentRunner {
     if (this.getThreadEvents(request.threadId).length > 0) {
       return super.connect(request);
     }
-    // 2. COLD: fresh process, durable log exists — replay the JSONL event log
-    // (RUNR-05 — the #3553 cold-start fix).
-    if (this.store.exists(request.threadId)) {
-      const raw = this.store.read(request.threadId) ?? [];
-      // Pitfall 4 safe default: nothing hydrates past a RUN_ERROR.
-      const firstError = raw.findIndex((e) => e.type === EventType.RUN_ERROR);
-      const events = firstError !== -1 ? raw.slice(0, firstError) : raw;
-      if (events.length > 0) {
-        // Completes the last run when it lacks a terminal (appends closers +
-        // terminal); early-returns when a terminal exists (research A5).
-        finalizeRunEvents(events);
+    try {
+      // 2. COLD: fresh process, durable log exists — replay the JSONL event log
+      // (RUNR-05 — the #3553 cold-start fix).
+      if (this.store.exists(request.threadId)) {
+        const raw = this.store.read(request.threadId) ?? [];
+        // Pitfall 4 safe default: nothing hydrates past a RUN_ERROR.
+        const firstError = raw.findIndex((e) => e.type === EventType.RUN_ERROR);
+        const events = firstError !== -1 ? raw.slice(0, firstError) : raw;
+        if (events.length > 0) {
+          // Completes the last run when it lacks a terminal (appends closers +
+          // terminal); early-returns when a terminal exists (research A5).
+          finalizeRunEvents(events);
+        }
+        // RUNR-07: no stale running tool cards on replay.
+        completeOpenToolCalls(events);
+        const compacted = compactEvents(events);
+        const subject = new ReplaySubject<BaseEvent>(Infinity);
+        for (const event of compacted) subject.next(event);
+        subject.complete();
+        return subject.asObservable() as unknown as RunnerConnect;
       }
-      // RUNR-07: no stale running tool cards on replay.
-      completeOpenToolCalls(events);
-      const compacted = compactEvents(events);
-      const subject = new ReplaySubject<BaseEvent>(Infinity);
-      for (const event of compacted) subject.next(event);
-      subject.complete();
-      return subject.asObservable() as unknown as RunnerConnect;
+    } catch (err) {
+      // WR-04: the store's assertThreadId THROWS on malformed threadIds
+      // (non-numeric / traversal). The run path rejects those cleanly with
+      // RUN_ERROR + THREAD_NOT_FOUND and no side effect (T-02-01); the cold
+      // connect path must not turn them into a 500 — fall through to the base
+      // runner, which completes empty for unknown threads (RUNR-06).
+      console.warn(
+        `[railyin-runner] connect failed for thread ${request.threadId}, completing empty:`,
+        err instanceof Error ? err.message : err,
+      );
     }
     // 3. NEVER-RUN: no store, no file — base completes empty (RUNR-06;
     // Phase 1 test 5 contract).

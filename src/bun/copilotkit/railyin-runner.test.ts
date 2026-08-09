@@ -145,6 +145,16 @@ describe("RailyinAgentRunner", () => {
     expect(events).toEqual([]);
   });
 
+  test("3b2: malformed (non-numeric) threadId → connect completes empty, never a throw/500 (WR-04)", async () => {
+    // The run path rejects non-numeric/traversal ids with RUN_ERROR and no
+    // side effect (T-02-01); the cold connect path must not propagate the
+    // store's assertThreadId throw as a server error.
+    for (const badId of ["../../etc/passwd", "not-a-number", "1/2"]) {
+      const events = await collect<BaseEvent>(runner.connect({ threadId: badId }));
+      expect(events).toEqual([]);
+    }
+  });
+
   test("3c: N completed runs → replayed in per-run boundaries (RUN_STARTED..RUN_FINISHED × 2)", async () => {
     appendCompletedRun(store, "9003", "r1", "one");
     appendCompletedRun(store, "9003", "r2", "two");
