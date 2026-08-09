@@ -458,6 +458,20 @@ describe("event-bridge: interrupt outcome (RUNR-08 — canonical AG-UI interrupt
     expect(outcome.interrupts[0].message).toBe("A decision is required.");
     expect(outcome.interrupts[0].metadata).toBeUndefined();
   });
+
+  test("buildInterruptOutcome — WR-07: payload parses to a NON-object (number/boolean/array) → no schema-invalid metadata, still wire-valid", () => {
+    // InterruptSchema declares metadata: z.record(z.any()) — numbers/arrays
+    // would fail client-side zod validation and error the stream.
+    for (const payload of ["42", "true", '["a","b"]', '"str"', "null"]) {
+      const event = buildInterruptOutcome("1", "run-1", payload, "decision-1-1");
+      assertValid([event]); // wire-valid — the client never chokes
+      const outcome = (event as unknown as {
+        outcome: { interrupts: Array<{ metadata?: unknown; message?: string }> };
+      }).outcome;
+      expect(outcome.interrupts[0].metadata).toBeUndefined();
+      expect(outcome.interrupts[0].message).toBe("A decision is required.");
+    }
+  });
 });
 
 describe("event-bridge: resume translation (D-07 — resume payload → decision-submission)", () => {

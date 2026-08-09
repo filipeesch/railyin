@@ -347,7 +347,15 @@ export function buildInterruptOutcome(
 ): BaseEvent {
   let parsed: DecisionRequestPayload | null = null;
   try {
-    parsed = JSON.parse(payload) as DecisionRequestPayload;
+    const raw = JSON.parse(payload) as unknown;
+    // WR-07: InterruptSchema declares `metadata: z.record(z.any())` — a
+    // payload that PARSES but to a non-object (number/boolean/string/array/
+    // null) would produce schema-invalid metadata and error the client's zod
+    // validation. Only plain objects qualify; anything else falls through to
+    // the message fallback with metadata omitted.
+    if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+      parsed = raw as DecisionRequestPayload;
+    }
   } catch {
     /* keep null — metadata optional */
   }
