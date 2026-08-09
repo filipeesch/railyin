@@ -106,6 +106,10 @@
         <!-- Capture the input bridge at render time so toolsMenu actions can
              insert slash text via CopilotChat's own updater (CHAT-06). -->
         {{ rememberInputUpdater(onUpdateModelValue) }}
+        <!-- useInterrupt must live inside CopilotChat's configuration-provider
+             tree to resolve the per-thread clone — this invisible component
+             does that (its hasInterrupt feeds the input :disabled). -->
+        <InterruptBridge />
         <!-- "Stopped" marker (CHAT-04, D-08): pure client state — aborted and
              done runs are byte-identical on the wire (RUN_FINISHED with no
              outcome, event-bridge.ts:318-328), so the label renders while
@@ -157,14 +161,21 @@ import {
   CopilotChatInput,
   useAgent,
   useDefaultRenderTool,
-  useInterrupt,
 } from "@copilotkit/vue/v2";
 import type { ToolsMenuItem } from "@copilotkit/vue/v2";
-import { getCommandsRef, getCommandsRefForWorkspace, toToolsMenu } from "../../composables/useCommandsCache";
+import {
+  getCommands,
+  getCommandsForWorkspace,
+  getCommandsRef,
+  getCommandsRefForWorkspace,
+  toToolsMenu,
+} from "../../composables/useCommandsCache";
 import ShellOutputRenderer from "./tool-call-renderers/ShellOutputRenderer.vue";
 import FileChangesRenderer from "./tool-call-renderers/FileChangesRenderer.vue";
 import DelegateSummaryRenderer from "./tool-call-renderers/DelegateSummaryRenderer.vue";
 import DecisionInterrupt from "./DecisionInterrupt.vue";
+import InterruptBridge from "./InterruptBridge.vue";
+import { interruptBridgeState } from "./interruptBridge";
 
 /**
  * RailyinChat.vue — the SINGLE CopilotKit surface (D-01). Owns the pinned
@@ -192,9 +203,11 @@ const toast = useToast();
 useDefaultRenderTool();
 
 // Publishes the pending decision interrupt into the core → #interrupt slot
-// (Phase 3 contract). hasInterrupt disables the input while a decision is
-// pending (CHAT-09 c3).
-const { hasInterrupt } = useInterrupt();
+// (Phase 3 contract). The hook MUST run inside CopilotChat's provider tree
+// (where it resolves the per-thread agent clone) — hence the invisible
+// InterruptBridge rendered in the #input slot; this module-scoped handoff
+// reads its hasInterrupt for the input disable (CHAT-09 c3).
+const hasInterrupt = computed(() => interruptBridgeState.value?.hasInterrupt.value ?? false);
 
 // Same hook CopilotChat uses internally with the same args — resolves to the
 // SAME per-thread agent clone (WeakMap-cached), so subscribing here observes
@@ -225,6 +238,19 @@ const toolsMenu = computed<ToolsMenuItem[]>(() => {
   if (scope.workspaceKey) return toToolsMenu(getCommandsRefForWorkspace(scope.workspaceKey).value, insert);
   return [];
 });
+
+// The legacy ChatEditor was the only command-fetch trigger; the Chat tab now
+// renders RailyinChat, so the wrapper primes the cache itself (fire-and-forget
+// — the ref updates reactively once the RPC resolves).
+watch(
+  () => props.commandsScope,
+  (scope) => {
+    if (!scope) return;
+    if (scope.taskId != null) void getCommands(scope.taskId);
+    else if (scope.workspaceKey) void getCommandsForWorkspace(scope.workspaceKey);
+  },
+  { immediate: true },
+);
 
 // ─── Stop (D-08) ───────────────────────────────────────────────────────────────
 // The wire emits aborted runs as plain RUN_FINISHED { result: null } —
@@ -377,6 +403,18 @@ html.dark-mode .railyn-chat__error {
   align-items: center;
   gap: 8px;
   padding: 0 12px 12px;
+  /* The #input slot renders inside CopilotKit's bottom-pinned overlay
+     (copilot-input-overlay, cpk:pointer-events-none) — custom children must
+     re-enable pointer events or clicks fall through to the scroll view. */
+  pointer-events: auto;
+}
+
+/* CopilotChatInput inside the flex row must take the remaining width — as a
+   plain flex item its content-collapsed shell (cpk:w-full of an auto-width
+   parent) would squish the input to the add-button column (32px). */
+.railyn-chat__input > [data-testid="copilot-chat-input-container"] {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* "Stopped" marker (CHAT-04 backstop row): a quiet chip above the input,
@@ -394,6 +432,7 @@ html.dark-mode .railyn-chat__error {
   color: var(--p-surface-500, #64748b);
   background: var(--p-surface-100, #f1f5f9);
   align-self: flex-start;
+  pointer-events: auto;
 }
 
 .railyn-chat__stopped-icon {
