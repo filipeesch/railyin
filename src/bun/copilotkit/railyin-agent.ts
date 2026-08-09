@@ -44,6 +44,32 @@ function extractUserText(messages: RunAgentInput["messages"]): string | null {
   return null;
 }
 
+/**
+ * resolveWorkspaceKey — per-conversation workspace resolution (RUNR-03,
+ * research Open Question 3). Mirrors conversations.ts:64-76: task-linked
+ * conversations resolve through tasks → boards.workspace_key; standalone
+ * sessions through chat_sessions.workspace_key; otherwise the default
+ * workspace key. Returns null ONLY when the conversation does not exist —
+ * that null distinguishes "unknown conversation" from "known with default
+ * key" (T-02-15).
+ */
+export function resolveWorkspaceKey(db: Database, conversationId: number): string | null {
+  const row = db
+    .query<{ task_workspace_key: string | null; session_workspace_key: string | null }, [number]>(
+      `SELECT 
+         b.workspace_key AS task_workspace_key, 
+         cs.workspace_key AS session_workspace_key 
+       FROM conversations c
+       LEFT JOIN tasks t ON t.conversation_id = c.id
+       LEFT JOIN boards b ON b.id = t.board_id
+       LEFT JOIN chat_sessions cs ON cs.conversation_id = c.id
+       WHERE c.id = ?`,
+    )
+    .get(conversationId);
+  if (!row) return null;
+  return row.task_workspace_key ?? row.session_workspace_key ?? getDefaultWorkspaceKey();
+}
+
 interface ActiveRun {
   executionId: number | null;
   abortRequested: boolean;
@@ -121,6 +147,21 @@ export class RailyinAgent extends AbstractAgent {
       return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
     }
 
+    // Advisory cross-path lock (RUNR-04, research Open Question 2): reject a
+    // run while ANOTHER execution (e.g. a board transition) is active on the
+    // same conversation. Layering: the runner lock still fires FIRST for
+    // same-thread AG-UI concurrency (200 + empty body — e2e unchanged); this
+    // check only catches cross-path cases. 'completed'/'failed' rows never
+    // block (status filter). One indexed lookup, no policy machinery —
+    // queue-vs-reject stays reject for v1.
+    const active = this.db
+      .query("SELECT 1 FROM executions WHERE conversation_id = ? AND status IN ('running','waiting_user')")
+      .get(conversationId);
+    if (active) {
+      emitRunError("Thread already has an active execution", "THREAD_BUSY");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
     // RUN_STARTED FIRST, WITH input — the runner only patches when input is
     // absent, so the persisted user turn matches the wire (State of the Art).
     subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
@@ -156,7 +197,15 @@ export class RailyinAgent extends AbstractAgent {
       subject.complete();
     };
 
-    const workspaceKey = getDefaultWorkspaceKey();
+    // RUNR-03: per-conversation workspace resolution (task → chat_sessions →
+    // default, mirroring conversations.ts:64-76). The conversation existence
+    // check above already rejected unknown threads; a null here (defensive
+    // contract layer, T-02-15) routes through the same THREAD_NOT_FOUND path.
+    const workspaceKey = resolveWorkspaceKey(this.db, conversationId);
+    if (workspaceKey == null) {
+      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
     // sessionId 0 per research A3 (ignored by ChatExecutor); model/mcpTools
     // undefined — the executor resolves conversations.model via EngineRegistry (D-10).
     void this.orchestrator
