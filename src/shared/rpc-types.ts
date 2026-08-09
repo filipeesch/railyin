@@ -253,31 +253,6 @@ export interface TransitionInstructionDetail {
   sourceRef?: string;
 }
 
-export interface TransitionEventMetadata {
-  from?: string | null;
-  to: string;
-  instructionDetail?: TransitionInstructionDetail;
-}
-
-// ─── Ask user prompt types ───────────────────────────────────────────────────
-
-export interface AskUserOption {
-  label: string;
-  description?: string;
-  recommended?: boolean;
-  preview?: string;
-}
-
-export interface AskUserQuestion {
-  question: string;
-  selection_mode: "single" | "multi";
-  options: AskUserOption[];
-}
-
-export interface AskUserPromptContent {
-  questions: AskUserQuestion[];
-}
-
 // ─── Decision request prompt types ───────────────────────────────────────────
 
 export interface DecisionRequestOption {

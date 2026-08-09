@@ -7,14 +7,6 @@ import type { IBoardToolExecutor } from "../workflow/tools/board-tool-executor.t
 import type { McpClientRegistry } from "../mcp/registry.ts";
 
 
-// ─── AskUser option ───────────────────────────────────────────────────────────
-
-export interface AskUserOption {
-  label: string;
-  description?: string;
-  recommended?: boolean;
-}
-
 // ─── EngineEvent — emitted by any engine implementation ──────────────────────
 
 export type EngineEvent = (
