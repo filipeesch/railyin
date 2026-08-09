@@ -142,4 +142,6 @@ export const test = base.extend<Fixtures>({
 });
 
 export { expect };
-export { openTaskDrawer, sendMessage, openSidebar, openSessionDrawer, typeInSessionEditor, openSessionNotesTab, chatTextarea, submitChatMessage, collectConnectRequests } from "./helpers";
+// sendMessage / typeInSessionEditor were removed with the dead CodeMirror
+// surface (IN-01 — see helpers.ts).
+export { openTaskDrawer, openSidebar, openSessionDrawer, openSessionNotesTab, chatTextarea, submitChatMessage, collectConnectRequests } from "./helpers";
