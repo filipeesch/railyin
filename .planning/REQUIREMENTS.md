@@ -32,9 +32,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Runtime & Hosting (HOST)
 
-- [ ] **HOST-01**: CopilotRuntime is mounted inside the existing Bun.serve server (single origin, self-hosted, no extra server process)
-- [ ] **HOST-02**: Long SSE streams survive extended agent silences (Bun `idleTimeout` tuned; no mid-stream kills)
-- [ ] **HOST-03**: Runtime handler choice (fetch-native vs hono) is resolved with evidence and matches the pinned stack
+- [x] **HOST-01**: CopilotRuntime is mounted inside the existing Bun.serve server (single origin, self-hosted, no extra server process)
+- [x] **HOST-02**: Long SSE streams survive extended agent silences (Bun `idleTimeout` tuned; no mid-stream kills)
+- [x] **HOST-03**: Runtime handler choice (fetch-native vs hono) is resolved with evidence and matches the pinned stack
 
 ### Bridge (BRDG)
 
@@ -123,9 +123,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RUNR-06 | Phase 2 | Pending |
 | RUNR-07 | Phase 2 | Pending |
 | RUNR-08 | Phase 3 | Pending |
-| HOST-01 | Phase 1 | Pending |
-| HOST-02 | Phase 1 | Pending |
-| HOST-03 | Phase 1 | Pending |
+| HOST-01 | Phase 1 | Complete |
+| HOST-02 | Phase 1 | Complete |
+| HOST-03 | Phase 1 | Complete |
 | BRDG-01 | Phase 2 | Pending |
 | BRDG-02 | Phase 2 | Pending |
 | BRDG-03 | Phase 2 | Pending |
@@ -141,6 +141,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VERF-03 | Phase 6 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 33 total
 - Mapped to phases: 33
 - Unmapped: 0 ✓
