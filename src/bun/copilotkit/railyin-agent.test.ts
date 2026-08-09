@@ -226,6 +226,75 @@ describe("RailyinAgent", () => {
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
   });
 
+  test("4c: async engine stream ending without a terminal completes with RUN_FINISHED (WR-02, no wedge)", async () => {
+    const { conversationId } = seedChatSession(db);
+    // Real-engine shape: events dispatch ASYNCHRONOUSLY (after executeChatTurn
+    // resolves) and the stream ends without a terminal — the Pi engine's
+    // non-fatal-error-then-return path. The old dispatch-scoped guard never
+    // fired here, wedging the thread ("Thread already running" forever).
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        capturedOpts = opts;
+        setTimeout(() => {
+          opts?.onEngineEvent?.({ type: "token", content: "Hi" });
+          // stream ends — no onRunEnd, no done event (fatal:false error).
+          opts?.onEngineEvent?.({ type: "error", message: "transient", fatal: false });
+        }, 10);
+        return { message: { id: 1 } as never, executionId: 42 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+
+    const types = events.map((e) => e.type);
+    expect(types[0]).toBe(EventType.RUN_STARTED);
+    expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
+    // The async text block is closed before the terminal (WR-01 shape).
+    const textEnd = types.indexOf("TEXT_MESSAGE_END");
+    expect(textEnd).toBeGreaterThan(-1);
+    expect(textEnd).toBeLessThan(types.lastIndexOf(EventType.RUN_FINISHED));
+  });
+
+  test("4d: async ask_user pause (engine returns, no onRunEnd) completes with RUN_FINISHED (WR-02)", async () => {
+    const { conversationId } = seedChatSession(db);
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        capturedOpts = opts;
+        setTimeout(() => {
+          opts?.onEngineEvent?.({ type: "token", content: "Hi" });
+          // pause-path return: ask_user is the last event, no onRunEnd.
+          opts?.onEngineEvent?.({ type: "ask_user", payload: "{}" });
+        }, 10);
+        return { message: { id: 1 } as never, executionId: 44 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+    const types = events.map((e) => e.type);
+    expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
+    expect(types.filter((t) => t === EventType.RUN_ERROR)).toHaveLength(0);
+  });
+
+  test("4e: Pi pre-flight failure (executionId -1, no events) completes with RUN_FINISHED (WR-02)", async () => {
+    const { conversationId } = seedChatSession(db);
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async () => {
+        // chat-executor's Pi pre-flight fail-fast: no events, no onRunEnd.
+        return { message: { id: 1 } as never, executionId: -1 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+
+    expect(events[0].type).toBe(EventType.RUN_STARTED);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+    // Exactly one terminal, never a hang.
+    expect(events.filter((e) => e.type === EventType.RUN_FINISHED || e.type === EventType.RUN_ERROR)).toHaveLength(1);
+  });
+
   test("5: unknown conversation → RUN_ERROR without calling executeChatTurn", async () => {
     const agent = makeAgent(999_999); // no such conversation
     let executeChatTurnCalls = 0;

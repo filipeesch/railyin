@@ -116,7 +116,11 @@ export class RailyinAgent extends AbstractAgent {
     const accumulated: BaseEvent[] = [];
     let terminalEmitted = false;
     let lastEngineError: string | null = null;
-    let eventsDuringDispatch = false;
+    // WR-02: any engine event seen since run start (NOT "during the
+    // synchronous dispatch tick") — real engines dispatch asynchronously, so
+    // a dispatch-scoped flag is dead code for them and lets streams that end
+    // without a terminal wedge the thread forever.
+    let anyEventSeen = false;
     const run: ActiveRun = { executionId: null, abortRequested: false };
     this.activeRun = run;
 
@@ -219,11 +223,32 @@ export class RailyinAgent extends AbstractAgent {
     void this.orchestrator
       .executeChatTurn(0, conversationId, content, undefined, null, workspaceKey, undefined, undefined, {
         onEngineEvent: (event: EngineEvent) => {
-          eventsDuringDispatch = true;
+          anyEventSeen = true;
           if (event.type === "error") lastEngineError = event.message;
           const translated = translateEngineEvent(event, state);
           accumulated.push(...translated);
           for (const ev of translated) subject.next(ev);
+          // WR-02: async completion guard. A stream that ends WITHOUT a
+          // terminal (non-fatal error + end-of-stream — the Pi engine's
+          // fatal:false path — or an ask_user/shell_approval pause whose
+          // generator returns instead of parking on resume) would otherwise
+          // leave the subject uncompleted and the runner lock held forever.
+          // stream-processor calls onRunEnd SYNCHRONOUSLY right after
+          // terminal-causing events; if it didn't (no terminal arrived), the
+          // microtask below closes the stream so the client still gets a
+          // terminal. For `done`/fatal `error`/`decision_request` the
+          // synchronous onRunEnd sets terminalEmitted first, making this a
+          // no-op.
+          if (
+            event.type === "done" ||
+            event.type === "error" ||
+            event.type === "ask_user" ||
+            event.type === "shell_approval"
+          ) {
+            queueMicrotask(() => {
+              if (!terminalEmitted) guardedComplete();
+            });
+          }
         },
         onRunEnd: (outcome) => {
           if (outcome === "error") {
@@ -235,16 +260,19 @@ export class RailyinAgent extends AbstractAgent {
       })
       .then(({ executionId }) => {
         run.executionId = executionId;
+        // WR-02: the Pi pre-flight fail-fast path (chat-executor.ts) returns
+        // executionId -1 with NO events and NO onRunEnd — no execution was
+        // started and nothing will ever emit. Complete the stream so the
+        // client gets RUN_FINISHED instead of hanging on the SSE forever
+        // (the runtime mount deliberately disables the idle timeout).
+        if (executionId === -1) {
+          guardedComplete();
+          return;
+        }
         if (run.abortRequested) {
           this.orchestrator.cancel(executionId);
           return;
         }
-        // Completion guard trigger: a scripted/pause-style engine that produced
-        // events during the synchronous dispatch and ended without onRunEnd
-        // (e.g. ask_user/shell_approval pause paths) must still close the
-        // stream. Real engines yield after the dispatch settles (network/delay),
-        // so eventsDuringDispatch stays false for live runs — conservative.
-        if (eventsDuringDispatch && !terminalEmitted) guardedComplete();
       })
       .catch((err) => {
         finish("error", {
