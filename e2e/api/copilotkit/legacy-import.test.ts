@@ -13,7 +13,7 @@
  */
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type TestServer } from "../fixtures/server";
@@ -174,6 +174,126 @@ describe("legacyImport.run (IMPR-01, D-06/D-07/D-08)", () => {
             }
         } finally {
             rmSync(durableDir, { recursive: true, force: true });
+        }
+    }, 30_000);
+});
+
+describe("crash tolerance (criterion 5)", () => {
+    // Test A leaves its durable dir here so Test C can re-import over the SAME
+    // crash artifact (the plan's "after the simulated crash (Test A's partial
+    // tail)" — tests within a file run sequentially in bun:test).
+    let crashDurableDir: string;
+
+    test("A: a partial trailing line (interrupted append, A1) neither hides the thread from the index nor breaks cold replay — the complete lines replay, the partial line is skipped", async () => {
+        crashDurableDir = mkdtempSync(join(tmpdir(), "railyn-crash-a-"));
+        try {
+            // Server A: seed + import, then simulate a runner that died mid-append
+            // (assumption A1): a truncated JSON line with NO trailing newline at
+            // the very end of the log — the tolerant reader must skip it.
+            const serverA: TestServer = await startServer({ dataDir: crashDurableDir, durableDb: true });
+            let threadId: string;
+            try {
+                threadId = seedLegacyConversation(join(crashDurableDir, "railyn.db"));
+                const summary = await serverA.request("legacyImport.run", {});
+                expect(summary.imported).toBe(1);
+
+                appendFileSync(
+                    join(crashDurableDir, "threads", `${threadId}.jsonl`),
+                    '{"type":"RUN_STARTED","threadId":',
+                    "utf-8",
+                );
+
+                // Half 1 of criterion 5 — the index rebuilds from the log: the
+                // corrupted thread STILL lists (list() is content-agnostic and
+                // THREAD_ID_RE-filtered; a bad tail cannot hide the file).
+                const threads = await serverA.request("threads.list", {});
+                expect(threads.some((t) => t.threadId === threadId)).toBe(true);
+            } finally {
+                await serverA.shutdown();
+            }
+
+            // Server B: a FRESH process over the SAME dataDir — cold connect must
+            // replay the COMPLETE imported lines and skip the partial tail
+            // (half 2 of criterion 5 — tolerant read across a restart).
+            const serverB: TestServer = await startServer({ dataDir: crashDurableDir, durableDb: true });
+            try {
+                const res = await postJsonOn(
+                    serverB.baseUrl,
+                    "/api/copilotkit/agent/default/connect",
+                    runInput(threadId, "run-connect-crash", "hello"),
+                );
+                expect(res.status).toBe(200);
+                const frames = parseSseFrames(await res.text());
+                expect(frames.length).toBeGreaterThan(0);
+                const started = frames[0] as {
+                    type: string;
+                    input?: { messages: Array<{ role: string; content: string }> };
+                };
+                expect(started.type).toBe("RUN_STARTED");
+                // The COMPLETE lines replayed: the imported user turn is present,
+                // and the truncated tail contributed no frame (parseSseFrames
+                // would have failed on a malformed one).
+                expect(
+                    started.input?.messages?.some((m) => m.role === "user" && m.content === "fix the build"),
+                ).toBe(true);
+                expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
+
+                // The fresh server also lists the thread — the index rebuilt from
+                // the corrupted log on disk.
+                const threads = await serverB.request("threads.list", {});
+                expect(threads.some((t) => t.threadId === threadId)).toBe(true);
+            } finally {
+                await serverB.shutdown();
+            }
+        } finally {
+            // Cleanup deferred to Test C, which re-imports over this same dir.
+        }
+    }, 30_000);
+
+    test("B: a *.jsonl.tmp crash artifact is invisible — list() omits it, the imported entry is unchanged, and re-import still skips via the FINAL file marker", async () => {
+        const durableDir = mkdtempSync(join(tmpdir(), "railyn-crash-b-"));
+        const server: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+        try {
+            const threadId = seedLegacyConversation(join(durableDir, "railyn.db"));
+            const summary = await server.request("legacyImport.run", {});
+            expect(summary.imported).toBe(1);
+
+            // A crashed whole-file import (Pattern 2) leaves its write at
+            // {id}.jsonl.tmp — the decoy next to the real thread file.
+            writeFileSync(
+                join(durableDir, "threads", `${threadId}.jsonl.tmp`),
+                '{"type":"RUN_STARTED","threadId":1}\n',
+                "utf-8",
+            );
+
+            // list() skips the decoy by construction (THREAD_ID_RE + .jsonl
+            // filter) — the list is exactly the imported thread, unchanged.
+            const threads = await server.request("threads.list", {});
+            expect(threads).toHaveLength(1);
+            expect(threads[0].threadId).toBe(threadId);
+
+            // exists() semantics unchanged: the FINAL file, not the .tmp, is the
+            // D-07 marker — the re-import still reports the thread as skipped.
+            const second = await server.request("legacyImport.run", {});
+            expect(second).toEqual({ total: 1, imported: 0, skipped: 1, failed: 0, errors: [] });
+        } finally {
+            await server.shutdown();
+            rmSync(durableDir, { recursive: true, force: true });
+        }
+    }, 30_000);
+
+    test("C: re-import after the simulated crash (Test A's partial tail) stays skipped — the crash artifact cannot fool the D-07 marker", async () => {
+        // Reuses Test A's durable dir: the final file (present but with a partial
+        // tail) is still the honest idempotency marker, and a re-import writes
+        // nothing (no .tmp residue from the re-run either).
+        const serverC: TestServer = await startServer({ dataDir: crashDurableDir, durableDb: true });
+        try {
+            const summary = await serverC.request("legacyImport.run", {});
+            expect(summary).toEqual({ total: 1, imported: 0, skipped: 1, failed: 0, errors: [] });
+            expect(readdirSync(join(crashDurableDir, "threads")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+        } finally {
+            await serverC.shutdown();
+            rmSync(crashDurableDir, { recursive: true, force: true });
         }
     }, 30_000);
 });
