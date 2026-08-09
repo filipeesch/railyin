@@ -16,13 +16,12 @@ import { CopilotKitProvider } from "@copilotkit/vue/v2";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
-import { onStreamError, onStreamEventMessage, onTaskUpdated, onNewMessage, onCodeRef, onChatSessionUpdated, onWsReconnect } from "./rpc";
+import { onTaskUpdated, onCodeRef, onChatSessionUpdated, onWsReconnect } from "./rpc";
 import { useSessionSyncHandler } from "./composables/useSessionSyncHandler";import { useBoardSyncHandler } from "./composables/useBoardSyncHandler";
 import { getTaskActivityToast } from "./task-activity";
 import { useCodeServerStore } from "./stores/codeServer";
 import { useChatStore } from "./stores/chat";
 import { useDrawerStore } from "./stores/drawer";
-import { useConversationStore } from "./stores/conversation";
 
 const router = useRouter();
 const toast = useToast();
@@ -32,7 +31,6 @@ const taskStore = useTaskStore();
 const codeServerStore = useCodeServerStore();
 const chatStore = useChatStore();
 const drawerStore = useDrawerStore();
-const conversationStore = useConversationStore();
 
 function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) {
   if (!activity) return;
@@ -45,33 +43,11 @@ function toastForActivity(activity: ReturnType<typeof taskStore.onTaskUpdated>) 
 }
 
 onMounted(async () => {
-  // Register IPC push handlers from Bun
-  onStreamError((payload) => {
-    // Surface config errors (taskId === -1 is a sentinel)
-    if (payload.taskId === -1) {
-      toast.add({ severity: "error", summary: "Config Error", detail: payload.error, life: 0 });
-      router.push("/setup");
-      return;
-    }
-    conversationStore.onStreamError(payload);
-    if (payload.taskId != null) {
-      toast.add({ severity: "warn", summary: "Execution failed", detail: payload.error, life: 6000 });
-    }
-  });
-
-  onStreamEventMessage((event) => {
-    conversationStore.onStreamEvent(event);
-    taskStore.onTaskStreamEvent(event);
-    chatStore.onChatStreamEvent(event);
-  });
-
+  // Register IPC push handlers from Bun (kept pushes per A2: the custom
+  // stream protocol handlers were removed in 07-03; failures surface via
+  // RUN_ERROR + board execution_state='failed').
   onTaskUpdated((task) => {
     toastForActivity(taskStore.onTaskUpdated(task));
-  });
-
-  onNewMessage((message) => {
-    conversationStore.onNewMessage(message);
-    chatStore.onChatNewMessage(message);
   });
 
   onCodeRef((ref) => {

@@ -6,8 +6,23 @@ vi.mock("../rpc", () => ({
   api: (...args: Parameters<typeof apiMock>) => apiMock(...args),
 }));
 
+// Shared-singleton workspace mock (module-level so the chat store and the tests
+// observe the SAME activeWorkspaceKey). Without it, task.test.ts's ./workspace
+// mock (which lacks activeWorkspaceKey) leaks into this file when both run in
+// one process, silently filtering every session out.
+const workspaceState = {
+  activeWorkspaceKey: null as string | null,
+  availableModels: [] as unknown[],
+  allProviderModels: [] as unknown[],
+  loadEnabledModels: vi.fn(),
+  loadAllModels: vi.fn(),
+  setModelEnabled: vi.fn(),
+};
+vi.mock("./workspace", () => ({
+  useWorkspaceStore: () => workspaceState,
+}));
+
 const { useChatStore } = await import("./chat");
-const { useConversationStore } = await import("./conversation");
 const { useWorkspaceStore } = await import("./workspace");
 
 function makeChatSession(overrides: Partial<import("@shared/rpc-types").ChatSession> = {}): import("@shared/rpc-types").ChatSession {
@@ -27,27 +42,6 @@ function makeChatSession(overrides: Partial<import("@shared/rpc-types").ChatSess
     shellAutoApprove: false,
     approvedCommands: [],
     modelParams: [],
-    ...overrides,
-  };
-}
-
-function makeStreamEvent(
-  conversationId: number,
-  type: import("@shared/rpc-types").StreamEventType,
-  overrides: Partial<import("@shared/rpc-types").StreamEvent> = {},
-): import("@shared/rpc-types").StreamEvent {
-  return {
-    taskId: null,
-    conversationId,
-    executionId: 1,
-    seq: 1,
-    blockId: `block-1`,
-    type,
-    content: "content",
-    metadata: null,
-    parentBlockId: null,
-    subagentId: null,
-    done: false,
     ...overrides,
   };
 }
@@ -77,86 +71,6 @@ describe("chatStore", () => {
 
     expect(store.unreadSessionIds).toBe(setRef); // same Set instance
     expect(store.unreadSessionIds.has(42)).toBe(false);
-  });
-
-  it("C3: onChatNewMessage only marks unread for non-active session", () => {
-    const store = useChatStore();
-    const convStore = useConversationStore();
-
-    // Register two sessions
-    const session1 = makeChatSession({ id: 1, conversationId: 10 });
-    const session2 = makeChatSession({ id: 2, conversationId: 20 });
-    store.onChatSessionUpdated(session1);
-    store.onChatSessionUpdated(session2);
-
-    // Set session 1 as active
-    convStore.setActiveConversation(10);
-
-    // Message for active conversation (conv 10) — should NOT mark unread
-    store.onChatNewMessage({
-      id: 1,
-      taskId: null,
-      conversationId: 10,
-      type: "assistant",
-      role: "assistant",
-      content: "hi",
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    });
-    expect(store.unreadSessionIds.has(1)).toBe(false);
-
-    // Message for inactive conversation (conv 20) — should mark unread
-    store.onChatNewMessage({
-      id: 2,
-      taskId: null,
-      conversationId: 20,
-      type: "assistant",
-      role: "assistant",
-      content: "hi",
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    });
-    expect(store.unreadSessionIds.has(2)).toBe(true);
-  });
-
-  it("C4: onChatStreamEvent updates marks unread for correct non-active session", () => {
-    const store = useChatStore();
-    const convStore = useConversationStore();
-
-    const session = makeChatSession({ id: 5, conversationId: 50 });
-    store.onChatSessionUpdated(session);
-
-    // Keep conv 99 active so conv 50 is background
-    convStore.setActiveConversation(99);
-
-    store.onChatStreamEvent(
-      makeStreamEvent(50, "assistant", { taskId: null }),
-    );
-
-    expect(store.unreadSessionIds.has(5)).toBe(true);
-  });
-
-  it("C5: onChatNewMessage — user message for active session does not mark unread", () => {
-    const store = useChatStore();
-    const convStore = useConversationStore();
-
-    const session = makeChatSession({ id: 3, conversationId: 30 });
-    store.onChatSessionUpdated(session);
-    convStore.setActiveConversation(30);
-
-    store.onChatNewMessage({
-      id: 10,
-      taskId: null,
-      conversationId: 30,
-      type: "user",
-      role: "user",
-      content: "hello",
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    });
-
-    // user messages don't trigger unread
-    expect(store.unreadSessionIds.has(3)).toBe(false);
   });
 
   it("C6: unreadSessionIds Set identity preserved across multiple mark/clear cycles", () => {
@@ -222,6 +136,33 @@ describe("chatStore — workspace filter", () => {
 
     store.onChatSessionUpdated(makeChatSession({ id: 32, model: null }));
     expect(store.sessions[0]?.model).toBeNull();
+  });
+
+  it("C13: onChatSessionUpdated marks unread for non-active session when status is idle/waiting_user", () => {
+    // Replacement for the removed onChatNewMessage unread path: the
+    // chatSession.updated push now carries the terminal/waiting status.
+    const store = useChatStore();
+    const wsStore = useWorkspaceStore();
+    wsStore.activeWorkspaceKey = null;
+
+    store.onChatSessionUpdated(makeChatSession({ id: 1, conversationId: 10, status: "running", lastReadAt: null }));
+    expect(store.unreadSessionIds.has(1)).toBe(false);
+
+    // Running → idle push for a non-active session with no lastReadAt → unread
+    store.onChatSessionUpdated(makeChatSession({ id: 1, conversationId: 10, status: "idle", lastReadAt: null }));
+    expect(store.unreadSessionIds.has(1)).toBe(true);
+  });
+
+  it("C14: onChatSessionUpdated does not mark unread for the active session", () => {
+    const store = useChatStore();
+    const wsStore = useWorkspaceStore();
+    wsStore.activeWorkspaceKey = null;
+
+    store.onChatSessionUpdated(makeChatSession({ id: 5, conversationId: 50, status: "running", lastReadAt: null }));
+    store.activeChatSessionId = 5;
+
+    store.onChatSessionUpdated(makeChatSession({ id: 5, conversationId: 50, status: "idle", lastReadAt: null }));
+    expect(store.unreadSessionIds.has(5)).toBe(false);
   });
 });
 
@@ -295,114 +236,6 @@ describe("chatStore — rapid key changes", () => {
     store.onChatSessionUpdated(makeChatSession({ id: 101, workspaceKey: "ws-3" }));
     expect(store.sessions).toHaveLength(1);
     expect(store.sessions[0].id).toBe(101);
-  });
-});
-
-// ─── C10: decision_request_prompt message → chatStore status becomes waiting_user ──
-
-describe("chatStore — C10: decision_request_prompt sets session status", () => {
-  it("C10: decision_request_prompt message updates session status to waiting_user", () => {
-    const store = useChatStore();
-    store.sessions = [];
-
-    // Directly add a session to bypass workspace filtering
-    store.sessions.push(makeChatSession({ id: 1, status: "idle", conversationId: 1 }));
-    expect(store.sessions[0].status).toBe("idle");
-
-    // decision_request_prompt message arrives
-    store.onChatNewMessage({
-      id: 100,
-      taskId: null,
-      conversationId: 1,
-      type: "decision_request_prompt",
-      role: null,
-      content: "decision_request_prompt",
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Session status becomes waiting_user
-    const session = store.sessions.find((s) => s.id === 1);
-    expect(session!.status).toBe("waiting_user");
-  });
-});
-
-// ─── C11: decision_request_prompt message → session marked as unread if not active ──
-
-describe("chatStore — C11: decision_request_prompt marks unread for non-active session", () => {
-  it("C11: decision_request_prompt marks non-active session as unread", () => {
-    const store = useChatStore();
-    store.sessions = [];
-
-    // Directly add sessions to bypass workspace filtering
-    store.sessions.push(makeChatSession({ id: 1, status: "idle", lastReadAt: null, conversationId: 1 }));
-    store.sessions.push(makeChatSession({ id: 2, status: "idle", lastReadAt: null, conversationId: 2 }));
-    store.activeChatSessionId = 2;
-
-    // decision_request_prompt for session 1 (non-active)
-    store.onChatNewMessage({
-      id: 100,
-      taskId: null,
-      conversationId: 1,
-      type: "decision_request_prompt",
-      role: null,
-      content: "decision_request_prompt",
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Session 1 status becomes waiting_user
-    const session1 = store.sessions.find((s) => s.id === 1);
-    expect(session1!.status).toBe("waiting_user");
-  });
-});
-
-// ─── C12: decision_request_prompt appearing multiple times — correct state management ──
-
-describe("chatStore — C12: decision_request_prompt multiple appearances", () => {
-  it("C12: multiple decision_request_prompt messages keep status as waiting_user", () => {
-    const store = useChatStore();
-    store.sessions = [];
-
-    // Directly add session with conversationId matching the message
-    const session = makeChatSession({ id: 1, status: "idle", conversationId: 1 });
-    store.sessions.push(session);
-
-    // Verify session was added
-    expect(store.sessions.length).toBe(1);
-    expect(store.sessions[0].id).toBe(1);
-
-    // First decision_request_prompt
-    store.onChatNewMessage({
-      id: 100,
-      taskId: null,
-      conversationId: 1,
-      type: "decision_request_prompt",
-      role: null,
-      content: "First request",
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Session status should be waiting_user
-    const updatedSession = store.sessions.find((s) => s.id === 1);
-    expect(updatedSession).toBeDefined();
-    expect(updatedSession!.status).toBe("waiting_user");
-
-    // Second decision_request_prompt
-    store.onChatNewMessage({
-      id: 101,
-      taskId: null,
-      conversationId: 1,
-      type: "decision_request_prompt",
-      role: null,
-      content: "Second request",
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Status should still be waiting_user (not reset or error)
-    expect(store.sessions[0].status).toBe("waiting_user");
   });
 });
 

@@ -3,23 +3,15 @@ import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
 import { useWorkspaceStore } from "./workspace";
-import type { ChatSession, ConversationMessage, StreamEvent } from "@shared/rpc-types";
+import type { ChatSession } from "@shared/rpc-types";
 import { useConversationStore } from "./conversation";
-import { type QueuedMessage, type QueueState, emptyQueueState } from "./queue-types";
-import { useDraftStore } from "./draft";
 
 export const useChatStore = defineStore("chat", () => {
   const conversationStore = useConversationStore();
   const workspaceStore = useWorkspaceStore();
-  const draftStore = useDraftStore();
   const sessions = ref<ChatSession[]>([]);
   const activeChatSessionId = ref<number | null>(null);
   const unreadSessionIds = ref(new Set<number>());
-
-  // ─── Queue state ──────────────────────────────────────────────────────────
-  const sessionQueues = ref<Record<number, QueueState>>({});
-  // Track sessions where the user explicitly cancelled — suppress queue drain on those transitions
-  const suppressDrainIds = new Set<number>();
 
   const activeSession = computed(() =>
     activeChatSessionId.value != null
@@ -45,7 +37,6 @@ export const useChatStore = defineStore("chat", () => {
     if (activeKey !== null && session.workspaceKey !== activeKey) return;
 
     const idx = sessions.value.findIndex(s => s.id === session.id);
-    const previous = idx !== -1 ? sessions.value[idx] : null;
     if (idx !== -1) {
       sessions.value[idx] = session;
     } else {
@@ -58,53 +49,6 @@ export const useChatStore = defineStore("chat", () => {
     // Mark unread if not active and the session is awaiting attention (idle = execution just finished, waiting_user = needs user input)
     if (session.id !== activeChatSessionId.value && (session.status === 'idle' || session.status === 'waiting_user') && session.lastReadAt == null) {
       markUnread(session.id);
-    }
-    // Drain queue when session transitions from running to idle (natural completion only)
-    if (previous?.status === "running" && session.status === "idle") {
-      if (suppressDrainIds.has(session.id)) {
-        suppressDrainIds.delete(session.id);
-      } else {
-        drainSessionQueue(session.id);
-      }
-    }
-  }
-
-  function onChatStreamEvent(event: StreamEvent): void {
-    if (event.taskId != null || event.conversationId == null) return;
-    const sessionId = sessionIdForConversation(event.conversationId);
-    if (sessionId == null) return;
-
-    if (event.type === "done") {
-      // Route through onChatSessionUpdated so the drain guard fires (backend
-      // never broadcasts chatSession.updated on natural completion).
-      const session = sessions.value.find(s => s.id === sessionId);
-      if (session) {
-        onChatSessionUpdated({ ...session, status: "idle" });
-      }
-    }
-
-    if (
-      event.conversationId !== conversationStore.activeConversationId &&
-      (event.type === "assistant" || event.type === "reasoning" || event.type === "system" || event.type === "file_diff")
-    ) {
-      markUnread(sessionId);
-    }
-  }
-
-  function onChatNewMessage(message: ConversationMessage): void {
-    if (message.taskId != null) return;
-    const sessionId = sessionIdForConversation(message.conversationId);
-    if (sessionId == null) return;
-
-    if (message.type === "ask_user_prompt" || message.type === "decision_request_prompt") {
-      updateSession(sessionId, { status: "waiting_user" });
-    }
-
-    if (
-      message.conversationId !== conversationStore.activeConversationId &&
-      (message.type === "assistant" || message.type === "reasoning" || message.type === "system" || message.type === "file_diff")
-    ) {
-      markUnread(sessionId);
     }
   }
 
@@ -154,7 +98,6 @@ export const useChatStore = defineStore("chat", () => {
       drawerStore.openForSession(sessionId, session.conversationId);
       conversationStore.setActiveConversation(session.conversationId);
       await conversationStore.loadMessages({ conversationId: session.conversationId });
-      await conversationStore.fetchContextUsage({ conversationId: session.conversationId });
     }
     // Mark read on backend
     api("chatSessions.markRead", { sessionId }).catch(() => {});
@@ -168,13 +111,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function cancelSession(sessionId: number) {
-    suppressDrainIds.add(sessionId);
-    try {
-      await api("chatSessions.cancel", { sessionId });
-    } catch (err) {
-      suppressDrainIds.delete(sessionId);
-      throw err;
-    }
+    await api("chatSessions.cancel", { sessionId });
   }
 
   async function sendMessage(content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[], model?: string | null) {
@@ -187,8 +124,9 @@ export const useChatStore = defineStore("chat", () => {
       lastActivityAt: now,
       lastReadAt: now,
     });
-    // The API returns only { messageId, executionId } — the full message arrives
-    // via the WebSocket message.new push event and is appended by conversationStore.onNewMessage.
+    // The API returns { messageId, executionId }; the assistant reply surfaces
+    // via the AG-UI/JSONL flow (RailyinChat history) and the session status via
+    // the chatSession.updated push.
     await api("chatSessions.sendMessage", {
       sessionId: activeChatSessionId.value,
       content,
@@ -220,8 +158,6 @@ export const useChatStore = defineStore("chat", () => {
     if (idx !== -1) {
       sessions.value[idx] = { ...sessions.value[idx], status: 'archived' };
     }
-    delete sessionQueues.value[sessionId];
-    draftStore.clear(`session:${sessionId}`);
     if (activeChatSessionId.value === sessionId) {
       closeSession();
     }
@@ -237,67 +173,6 @@ export const useChatStore = defineStore("chat", () => {
 
   function hasUnread(sessionId: number): boolean {
     return unreadSessionIds.value.has(sessionId);
-  }
-
-  // ─── Queue actions ────────────────────────────────────────────────────────
-
-  function enqueueMessage(sessionId: number, msg: QueuedMessage) {
-    if (!sessionQueues.value[sessionId]) sessionQueues.value[sessionId] = emptyQueueState();
-    sessionQueues.value[sessionId].items.push(msg);
-  }
-
-  function dequeueMessage(sessionId: number, msgId: string) {
-    const queue = sessionQueues.value[sessionId];
-    if (!queue) return;
-    queue.items = queue.items.filter((i) => i.id !== msgId);
-    if (queue.editingId === msgId) queue.editingId = null;
-  }
-
-  function startEdit(sessionId: number, msgId: string) {
-    if (!sessionQueues.value[sessionId]) return;
-    sessionQueues.value[sessionId].editingId = msgId;
-  }
-
-  function confirmEdit(sessionId: number, msgId: string, text: string, engineText: string, attachments: import("@shared/rpc-types").Attachment[]) {
-    const queue = sessionQueues.value[sessionId];
-    if (!queue) return;
-    const idx = queue.items.findIndex((i) => i.id === msgId);
-    if (idx !== -1) {
-      queue.items[idx] = { ...queue.items[idx], text, engineText, attachments };
-    }
-    queue.editingId = null;
-  }
-
-  function cancelEdit(sessionId: number) {
-    const queue = sessionQueues.value[sessionId];
-    if (!queue) return;
-    queue.editingId = null;
-  }
-
-  /** Atomically clears the queue and returns combined payload, or null if empty. */
-  function takeQueue(sessionId: number): { text: string; engineText: string; attachments: import("@shared/rpc-types").Attachment[] } | null {
-    const queue = sessionQueues.value[sessionId];
-    if (!queue || queue.items.length === 0) return null;
-    const items = [...queue.items];
-    sessionQueues.value[sessionId] = emptyQueueState();
-    return {
-      text: items.map((i) => i.text).join("\n\n---\n\n"),
-      engineText: items.map((i) => i.engineText).join("\n\n---\n\n"),
-      attachments: items.flatMap((i) => i.attachments),
-    };
-  }
-
-  async function drainSessionQueue(sessionId: number) {
-    const payload = takeQueue(sessionId);
-    if (!payload) return;
-    const session = sessions.value.find(s => s.id === sessionId);
-    if (!session) return;
-    await api("chatSessions.sendMessage", {
-      sessionId,
-      content: payload.text,
-      engineContent: payload.engineText,
-      attachments: payload.attachments.length ? payload.attachments : undefined,
-    });
   }
 
   return {
@@ -318,15 +193,5 @@ export const useChatStore = defineStore("chat", () => {
     markUnread,
     clearUnread,
     onChatSessionUpdated,
-    onChatStreamEvent,
-    onChatNewMessage,
-    // Queue
-    sessionQueues,
-    enqueueMessage,
-    dequeueMessage,
-    startEdit,
-    confirmEdit,
-    cancelEdit,
-    takeQueue,
   };
 });

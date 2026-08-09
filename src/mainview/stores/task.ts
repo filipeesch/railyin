@@ -2,17 +2,14 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../rpc";
 import { useDrawerStore } from "./drawer";
-import type { Task, ConversationMessage, StreamEvent, GitNumstat, ModelParamValue } from "@shared/rpc-types";
+import type { Task, GitNumstat, ModelParamValue } from "@shared/rpc-types";
 import { classifyTaskActivity, workspaceHasUnreadTasks, type TaskActivityEvent } from "../workspace-helpers";
 import { useConversationStore } from "./conversation";
 import { useWorkspaceStore } from "./workspace";
-import { type QueuedMessage, type QueueState, emptyQueueState } from "./queue-types";
-import { useDraftStore } from "./draft";
 
 export const useTaskStore = defineStore("task", () => {
   const conversationStore = useConversationStore();
   const workspaceStore = useWorkspaceStore();
-  const draftStore = useDraftStore();
 
   // All tasks keyed by boardId
   const tasksByBoard = ref<Record<number, Task[]>>({});
@@ -23,9 +20,6 @@ export const useTaskStore = defineStore("task", () => {
   const activeTaskId = ref<number | null>(null);
 
   const loading = ref(false);
-
-  // ─── Queue state ──────────────────────────────────────────────────────────
-  const taskQueues = ref<Record<number, QueueState>>({});
 
   const activeTask = computed(() => {
     return activeTaskId.value != null ? taskIndex.value[activeTaskId.value] ?? null : null;
@@ -185,7 +179,6 @@ export const useTaskStore = defineStore("task", () => {
     const task = taskIndex.value[taskId];
     if (task) conversationStore.setActiveConversation(task.conversationId);
     await loadMessages(taskId);
-    fetchContextUsage(taskId);
   }
 
   function closeTask() {
@@ -209,17 +202,6 @@ export const useTaskStore = defineStore("task", () => {
       activeTaskId.value !== task.id
     ) {
       markTaskUnread(task.id);
-    }
-    // Refresh context usage when the active task finishes an execution
-    if (
-      task.id === activeTaskId.value &&
-      task.executionState !== "running"
-    ) {
-      fetchContextUsage(task.id);
-    }
-    // Drain queue when task transitions from running to completed (natural finish only)
-    if (previous?.executionState === "running" && task.executionState === "completed") {
-      drainQueue(task.id);
     }
     return activity;
   }
@@ -245,14 +227,6 @@ export const useTaskStore = defineStore("task", () => {
 
   async function setModelEnabled(qualifiedModelId: string, enabled: boolean, workspaceKey?: string) {
     await workspaceStore.setModelEnabled(qualifiedModelId, enabled, workspaceKey);
-  }
-
-  // ─── Fetch context usage for active task ──────────────────────────────────
-
-  async function fetchContextUsage(taskId: number) {
-    const task = taskIndex.value[taskId];
-    if (!task) return;
-    await conversationStore.fetchContextUsage({ conversationId: task.conversationId });
   }
 
   // ─── Set model on task ────────────────────────────────────────────────────
@@ -315,9 +289,7 @@ export const useTaskStore = defineStore("task", () => {
       conversationStore.setActiveConversation(null);
     }
     delete taskIndex.value[taskId];
-    delete taskQueues.value[taskId];
     clearTaskUnread(taskId);
-    draftStore.clear(`task:${taskId}`);
     return { warning: result.warning };
   }
 
@@ -345,12 +317,6 @@ export const useTaskStore = defineStore("task", () => {
   }
 
   // ─── Compact conversation ─────────────────────────────────────────────────
-
-  async function compactTask(taskId: number) {
-    await api("tasks.compact", { taskId });
-    await loadMessages(taskId);
-    await fetchContextUsage(taskId);
-  }
 
   async function getGitStat(taskId: number): Promise<GitNumstat | null> {
     return api("tasks.getGitStat", { taskId });
@@ -383,72 +349,6 @@ export const useTaskStore = defineStore("task", () => {
     taskIndex.value[updated.id] = updated;
   }
 
-  // ─── Queue actions ────────────────────────────────────────────────────────
-
-  function enqueueMessage(taskId: number, msg: QueuedMessage) {
-    if (!taskQueues.value[taskId]) taskQueues.value[taskId] = emptyQueueState();
-    taskQueues.value[taskId].items.push(msg);
-  }
-
-  function dequeueMessage(taskId: number, msgId: string) {
-    const queue = taskQueues.value[taskId];
-    if (!queue) return;
-    queue.items = queue.items.filter((i) => i.id !== msgId);
-    if (queue.editingId === msgId) queue.editingId = null;
-  }
-
-  function startEdit(taskId: number, msgId: string) {
-    if (!taskQueues.value[taskId]) return;
-    taskQueues.value[taskId].editingId = msgId;
-  }
-
-  function confirmEdit(taskId: number, msgId: string, text: string, engineText: string, attachments: import("@shared/rpc-types").Attachment[]) {
-    const queue = taskQueues.value[taskId];
-    if (!queue) return;
-    const idx = queue.items.findIndex((i) => i.id === msgId);
-    if (idx !== -1) {
-      queue.items[idx] = { ...queue.items[idx], text, engineText, attachments };
-    }
-    queue.editingId = null;
-  }
-
-  function cancelEdit(taskId: number) {
-    const queue = taskQueues.value[taskId];
-    if (!queue) return;
-    queue.editingId = null;
-  }
-
-  /** Atomically clears the queue and returns the combined payload, or null if empty. */
-  function takeQueue(taskId: number): { text: string; engineText: string; attachments: import("@shared/rpc-types").Attachment[] } | null {
-    const queue = taskQueues.value[taskId];
-    if (!queue || queue.items.length === 0) return null;
-    const items = [...queue.items];
-    taskQueues.value[taskId] = emptyQueueState();
-    return {
-      text: items.map((i) => i.text).join("\n\n---\n\n"),
-      engineText: items.map((i) => i.engineText).join("\n\n---\n\n"),
-      attachments: items.flatMap((i) => i.attachments),
-    };
-  }
-
-  async function drainQueue(taskId: number) {
-    const payload = takeQueue(taskId);
-    if (!payload) return;
-    await sendMessage(taskId, payload.text, payload.engineText, payload.attachments.length ? payload.attachments : undefined);
-  }
-
-  function onTaskStreamEvent(event: StreamEvent): void {
-    if (event.taskId == null) return;
-    // Fallback drain: fire when stream ends in case task.updated arrives with
-    // unexpected prior state (e.g. WS reconnect missed the running broadcast).
-    if (event.type === "done") {
-      const task = taskIndex.value[event.taskId];
-      if (task?.executionState === "running") {
-        drainQueue(event.taskId);
-      }
-    }
-  }
-
   return {
     tasksByBoard,
     activeTaskId,
@@ -475,8 +375,6 @@ export const useTaskStore = defineStore("task", () => {
     loadEnabledModels,
     loadAllModels,
     setModelEnabled,
-    fetchContextUsage,
-    compactTask,
     setModel,
     setSamplingPreset,
     setModelParams,
@@ -488,14 +386,5 @@ export const useTaskStore = defineStore("task", () => {
     hasUnread,
     workspaceHasUnread,
     onTaskUpdated,
-    onTaskStreamEvent,
-    // Queue
-    taskQueues,
-    enqueueMessage,
-    dequeueMessage,
-    startEdit,
-    confirmEdit,
-    cancelEdit,
-    takeQueue,
   };
 });

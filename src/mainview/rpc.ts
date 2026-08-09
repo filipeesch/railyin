@@ -4,11 +4,12 @@
  * api(method, params) — POST /api/<method> with JSON body, returns typed response.
  *
  * WebSocket push: the WS connection to /ws receives server-sent events
- * (stream.event, stream.error, task.updated, message.new, workflow.reloaded, ...).
- * The connection reconnects automatically with exponential backoff.
+ * (task.updated, workflow.reloaded, code.ref, chatSession.updated,
+ * lsp.install.line, ...). The connection reconnects automatically with
+ * exponential backoff.
  */
 
-import type { RailynAPI, PushMessage, StreamError, StreamEvent, Task, ConversationMessage, CodeRef, ChatSession } from "@shared/rpc-types";
+import type { RailynAPI, PushMessage, Task, CodeRef, ChatSession } from "@shared/rpc-types";
 
 // ─── Server base URL ──────────────────────────────────────────────────────────
 // In dev and production the frontend is served by the same Bun server,
@@ -38,10 +39,7 @@ export async function api<M extends keyof RailynAPI>(
 
 // ─── Push callbacks (registered lazily from App.vue) ─────────────────────────
 
-let _onStreamError: (payload: StreamError) => void = () => { };
-let _onStreamEvent: (payload: StreamEvent) => void = () => { };
 let _onTaskUpdated: (task: Task) => void = () => { };
-let _onNewMessage: (message: ConversationMessage) => void = () => { };
 let _onWorkflowReloaded: () => void = () => { };
 let _onCodeRef: (ref: CodeRef) => void = () => { };
 let _onChatSessionUpdated: (session: ChatSession) => void = () => { };
@@ -50,10 +48,7 @@ let _onWsReconnect: (() => void) | null = null;
 // Per-token install line listeners — keyed by token, auto-cleaned when unregistered
 const _installLineListeners = new Map<string, (line: string) => void>();
 
-export function onStreamError(cb: (payload: StreamError) => void) { _onStreamError = cb; }
-export function onStreamEventMessage(cb: (payload: StreamEvent) => void) { _onStreamEvent = cb; }
 export function onTaskUpdated(cb: (task: Task) => void) { _onTaskUpdated = cb; }
-export function onNewMessage(cb: (message: ConversationMessage) => void) { _onNewMessage = cb; }
 export function onWorkflowReloaded(cb: () => void) { _onWorkflowReloaded = cb; }
 export function onCodeRef(cb: (ref: CodeRef) => void) { _onCodeRef = cb; }
 export function onChatSessionUpdated(cb: (session: ChatSession) => void) { _onChatSessionUpdated = cb; }
@@ -88,10 +83,7 @@ function connectWs(): void {
       return;
     }
     switch (msg.type) {
-      case "stream.error": _onStreamError(msg.payload); break;
-      case "stream.event": _onStreamEvent(msg.payload); break;
       case "task.updated": _onTaskUpdated(msg.payload); break;
-      case "message.new": _onNewMessage(msg.payload); break;
       case "workflow.reloaded": _onWorkflowReloaded(); break;
       case "code.ref": _onCodeRef(msg.payload); break;
       case "chatSession.updated": _onChatSessionUpdated(msg.payload); break;

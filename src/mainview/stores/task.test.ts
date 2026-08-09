@@ -173,35 +173,6 @@ describe("taskStore", () => {
     expect(store.unreadTaskIds.has(99)).toBe(false);
   });
 
-  it("T-A: onTaskStreamEvent file_diff does NOT mark task unread (unread fires only on terminal execution state)", async () => {
-    const store = useTaskStore();
-    const conversationStore = useConversationStore();
-    const task1 = makeTask({ id: 1, boardId: 1, conversationId: 1 });
-    const task2 = makeTask({ id: 2, boardId: 1, conversationId: 2 });
-    apiMock.mockResolvedValueOnce([task1, task2]);
-    await store.loadTasks(1);
-
-    conversationStore.setActiveConversation(1);
-
-    store.onTaskStreamEvent({
-      taskId: 2,
-      conversationId: 2,
-      executionId: 1,
-      seq: 0,
-      blockId: "b1",
-      type: "file_diff",
-      content: "",
-      metadata: null,
-      subagentId: null,
-      done: false,
-    });
-
-    expect(store.hasUnread(2)).toBe(false);
-    expect(store.hasUnread(1)).toBe(false);
-  });
-
-
-
   it("T9: deleteTask removes the task from tasksByBoard", async () => {
     const store = useTaskStore();
     const task = makeTask({ id: 7, boardId: 3 });
@@ -391,17 +362,6 @@ describe("taskStore", () => {
     // Active task should NOT get the unread dot
     expect(store.unreadTaskIds.has(14)).toBe(false);
   });
-
-  it("T15: onTaskStreamEvent does NOT mark unread on 'done' stream event", async () => {    const store = useTaskStore();
-    const running = makeTask({ id: 15, boardId: 1, executionState: "running" });
-    apiMock.mockResolvedValueOnce([running]);
-    await store.loadTasks(1);
-
-    store.onTaskStreamEvent({ type: "done", taskId: 15, executionId: 42 } as Parameters<typeof store.onTaskStreamEvent>[0]);
-
-    expect(store.unreadTaskIds.has(15)).toBe(false);
-  });
-
 
   it("T-SC-1: sendMessage calls the RPC with { executionId } and touches neither conversationStore nor a response message", async () => {
     const store = useTaskStore();
