@@ -118,9 +118,9 @@ describe("event-bridge: tool family (BRDG-03)", () => {
       "TOOL_CALL_END",
       "TOOL_CALL_RESULT",
     ]);
-    const start = out[0] as { toolCallId: string; toolCallName: string };
-    const args = out[1] as { toolCallId: string; delta: string };
-    const result = out[3] as { messageId: string; toolCallId: string; content: string; role: string };
+    const start = out[0] as unknown as { toolCallId: string; toolCallName: string };
+    const args = out[1] as unknown as { toolCallId: string; delta: string };
+    const result = out[3] as unknown as { messageId: string; toolCallId: string; content: string; role: string };
     expect(start.toolCallId).toBe("call_1");
     expect(start.toolCallName).toBe("read_file");
     expect(args.delta).toBe('{"path":"a.txt"}');
@@ -143,20 +143,40 @@ describe("event-bridge: tool family (BRDG-03)", () => {
     }, state));
 
     assertValid(out);
-    const start = out[0] as { toolCallId: string };
-    const result = out[3] as { toolCallId: string };
+    const start = out[0] as unknown as { toolCallId: string };
+    const result = out[3] as unknown as { toolCallId: string };
     expect(start.toolCallId).toBe("parent-1::call_0::1");
     expect(result.toolCallId).toBe("parent-1::call_0::1"); // result resolves the namespaced id
-    // No duplicate toolCallId within the run
-    const ids = out.map((e) => (e as { toolCallId?: string }).toolCallId).filter(Boolean);
-    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("sequential child calls reusing the same raw callId get distinct namespaced ids (Pitfall 6)", () => {
+    const state = createTranslateState("1", "run-1");
+    const childStart = (): BaseEvent[] => translateEngineEvent({
+      type: "tool_start", name: "bash", callId: "call_0", parentCallId: "parent-1",
+      arguments: "{}", isInternal: true,
+    }, state);
+    const childResult = (): BaseEvent[] => translateEngineEvent({
+      type: "tool_result", name: "bash", callId: "call_0", parentCallId: "parent-1",
+      result: "out", isInternal: true,
+    }, state);
+
+    const first: BaseEvent[] = [...childStart(), ...childResult()];
+    const second: BaseEvent[] = [...childStart(), ...childResult()];
+    assertValid([...first, ...second]);
+
+    const firstId = (first[0] as unknown as { toolCallId: string }).toolCallId;
+    const secondId = (second[0] as unknown as { toolCallId: string }).toolCallId;
+    expect(firstId).toBe("parent-1::call_0::1");
+    expect(secondId).toBe("parent-1::call_0::2");
+    // Each call's lifecycle (START/ARGS/END/RESULT) shares one id; the two calls differ.
+    expect(firstId).not.toBe(secondId);
   });
 
   test("tool_start without callId gets a generated id", () => {
     const state = createTranslateState("1", "run-1");
     const out = translateEngineEvent({ type: "tool_start", name: "bash", arguments: "{}" }, state);
     assertValid(out);
-    const start = out[0] as { toolCallId: string };
+    const start = out[0] as unknown as { toolCallId: string };
     expect(start.toolCallId).toMatch(/^call_/);
   });
 
@@ -173,13 +193,13 @@ describe("event-bridge: tool family (BRDG-03)", () => {
       "TOOL_CALL_END",
       "TOOL_CALL_RESULT",
     ]);
-    const start = out[0] as { toolCallName: string };
+    const start = out[0] as unknown as { toolCallName: string };
     expect(start.toolCallName).toBe("subagent");
-    const args = out[1] as { delta: string };
+    const args = out[1] as unknown as { delta: string };
     expect(JSON.parse(args.delta)).toEqual({ intent: "inspect", prompt: "do x" });
-    const result = out[3] as { content: string; messageId: string };
+    const result = out[3] as unknown as { content: string; messageId: string };
     expect(result.content).toBe("");
-    expect(result.messageId).toBe(`${(out[0] as { toolCallId: string }).toolCallId}-result`);
+    expect(result.messageId).toBe(`${(out[0] as unknown as { toolCallId: string }).toolCallId}-result`);
   });
 });
 
@@ -247,12 +267,13 @@ describe("event-bridge: D-09 synthesis (no dangling tool calls before terminal)"
       "TOOL_CALL_END",
       "TOOL_CALL_RESULT",
     ]);
-    const result = finalized[3] as { messageId: string; toolCallId: string; content: string };
+    const result = finalized[3] as unknown as { messageId: string; toolCallId: string; content: string };
     expect(result.toolCallId).toBe("call_1");
     expect(result.messageId).toBe("call_1-result");
     expect(result.content).toBe("");
-    // State is drained — a second pass is a no-op.
-    expect(synthesizeMissingToolResults(state, finalized)).toEqual([]);
+    // State is drained — a second pass appends nothing new.
+    const secondPass = synthesizeMissingToolResults(state, finalized);
+    expect(secondPass).toEqual(finalized);
   });
 
   test("synthesis skips completed tool calls", () => {
@@ -265,7 +286,8 @@ describe("event-bridge: D-09 synthesis (no dangling tool calls before terminal)"
       type: "tool_result", name: "read_file", callId: "call_1", result: "x",
     }, state));
 
-    expect(synthesizeMissingToolResults(state, mapped)).toEqual([]);
+    // Nothing open → returned unchanged, nothing appended.
+    expect(synthesizeMissingToolResults(state, mapped)).toEqual(mapped);
   });
 
   test("dangling child tool calls are synthesized with their namespaced ids", () => {
@@ -278,7 +300,7 @@ describe("event-bridge: D-09 synthesis (no dangling tool calls before terminal)"
 
     const finalized = synthesizeMissingToolResults(state, mapped);
     assertValid(finalized);
-    const result = finalized[finalized.length - 1] as { toolCallId: string };
+    const result = finalized[finalized.length - 1] as unknown as unknown as { toolCallId: string };
     expect(result.toolCallId).toBe("parent-1::call_0::1");
   });
 });
