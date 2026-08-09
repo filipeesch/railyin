@@ -36,6 +36,7 @@ import { CopilotRuntime, createCopilotRuntimeHandler, type CopilotRuntimeOptions
 import { RailyinAgent } from "./copilotkit/railyin-agent.ts";
 import { JsonlStore } from "./copilotkit/jsonl-store.ts";
 import { RailyinAgentRunner } from "./copilotkit/railyin-runner.ts";
+import * as interruptRegistry from "./copilotkit/interrupt-registry.ts";
 import { ClaudeEngine } from "./engine/claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
@@ -289,6 +290,12 @@ const copilotAgents = (copilotProbeEnabled && scriptedAgent
 // stays byte-identical (probe threadIds like "t1" are non-numeric and must
 // never reach the JSONL store).
 const jsonlStore = new JsonlStore(getDataDir());
+// 03-03 (A2): give the module-level interrupt registry the durable store so a
+// fresh process can lazily rebuild a pending decision from the thread's JSONL
+// tail + the waiting_user executions row (post-restart resume — old-stack
+// parity). Gated to the non-probe path: probe threadIds ("t1") are non-numeric
+// and must never reach the store's validation.
+if (!copilotProbeEnabled) interruptRegistry.configure({ store: jsonlStore });
 const railyinRunner = !copilotProbeEnabled ? new RailyinAgentRunner(jsonlStore) : undefined;
 const copilotRuntime = new CopilotRuntime({
   agents: copilotAgents,

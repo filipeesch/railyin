@@ -245,7 +245,13 @@ export class RailyinAgent extends AbstractAgent {
     // BEFORE the advisory lock (Pitfall 1 — the pending decision left a
     // 'waiting_user' row that would reject the resume itself with THREAD_BUSY).
     if (input.resume?.length) {
-      const open = interruptRegistry.get(threadId);
+      // Hot path first (03-03 Task 2, A2): on a FRESH process the module-level
+      // registry is empty — lazily rebuild the pending interrupt from the
+      // thread's JSONL tail + the waiting_user executions row so a decision
+      // paused before a restart stays answerable (old-stack parity). The
+      // D-04 hasOpen/block path and the hot path stay on get().
+      let open: PendingInterrupt | null | undefined = interruptRegistry.get(threadId);
+      if (!open) open = interruptRegistry.ensureOpen(threadId, this.db);
       const openIds = open ? [open.interruptId] : []; // v1: one interrupt per batch (D-02)
       const addressed = new Set(input.resume.map((r) => r.interruptId));
       // D-05: all-or-nothing — every resume id must be an OPEN interrupt for
