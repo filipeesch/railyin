@@ -145,12 +145,12 @@ Plans:
   4. User can use slash commands and `/prompt-name` refs at parity (ref must be the entire leading value), and reopen any card or session to see full conversation history across app restarts
   5. Board `/ws` reactivity (task.updated, code.ref, lsp) keeps working alongside the chat connection, and the old chat stack code remains intact for rollback until E2E passes
 
-**Plans**: 5 plans planned
+**Plans**: 2/5 plans executed
 Plans:
 **Wave 1**
 
-- [ ] 05-01-PLAN.md — MockAgui /connect + /stop routes + agui fixture wiring (Wave 0 scaffold for all chat specs; CHAT-01, CHAT-07)
-- [ ] 05-02-PLAN.md — New chat building blocks: domain tool renderers (shell/file/delegate), DecisionInterrupt card + resume payload mapper, workspaceKey commands path + toToolsMenu (UI-02, CHAT-06, D-04/D-06/D-07)
+- [x] 05-01-PLAN.md — MockAgui /connect + /stop routes + agui fixture wiring (Wave 0 scaffold for all chat specs; CHAT-01, CHAT-07)
+- [x] 05-02-PLAN.md — New chat building blocks: domain tool renderers (shell/file/delegate), DecisionInterrupt card + resume payload mapper, workspaceKey commands path + toToolsMenu (UI-02, CHAT-06, D-04/D-06/D-07)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -163,6 +163,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [ ] 05-05-PLAN.md — ChatThreadSidebar + BoardView swap, SessionChatView swap, markdown parity CSS, phase gate (UI-04, IMPR-03, CHAT-02)
+
 **UI hint**: yes
 
 ### Phase 6: E2E Migration & Verification
@@ -219,6 +220,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 2. AG-UI Bridge & RailyinAgentRunner | 3/3 | Complete    | 2026-08-09 |
 | 3. Decision Interrupts & Resume | 3/3 | Complete    | 2026-08-09 |
 | 4. JSONL Persistence & Legacy Import | 3/3 | Complete    | 2026-08-09 |
-| 5. Chat UI Replacement (Vue) | 0/TBD | Not started | - |
+| 5. Chat UI Replacement (Vue) | 2/5 | In Progress|  |
 | 6. E2E Migration & Verification | 0/TBD | Not started | - |
 | 7. Cleanup & Feature Trim | 0/TBD | Not started | - |
