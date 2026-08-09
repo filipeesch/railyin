@@ -145,7 +145,24 @@ Plans:
   4. User can use slash commands and `/prompt-name` refs at parity (ref must be the entire leading value), and reopen any card or session to see full conversation history across app restarts
   5. Board `/ws` reactivity (task.updated, code.ref, lsp) keeps working alongside the chat connection, and the old chat stack code remains intact for rollback until E2E passes
 
-**Plans**: TBD
+**Plans**: 5 plans planned
+Plans:
+**Wave 1**
+
+- [ ] 05-01-PLAN.md — MockAgui /connect + /stop routes + agui fixture wiring (Wave 0 scaffold for all chat specs; CHAT-01, CHAT-07)
+- [ ] 05-02-PLAN.md — New chat building blocks: domain tool renderers (shell/file/delegate), DecisionInterrupt card + resume payload mapper, workspaceKey commands path + toToolsMenu (UI-02, CHAT-06, D-04/D-06/D-07)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 05-03-PLAN.md — RailyinChat tracer: CopilotKitProvider + styles.css + wrapper core + TaskChatView swap + streaming/history/empty/error specs (CHAT-01, CHAT-07, UI-01)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 05-04-PLAN.md — RailyinChat expansion: canonical tool-call slots, stop + "Stopped" label, reasoning, slash toolsMenu, #interrupt slot + behavior e2e scenarios (CHAT-03, CHAT-04, CHAT-05, CHAT-06, UI-02)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 05-05-PLAN.md — ChatThreadSidebar + BoardView swap, SessionChatView swap, markdown parity CSS, phase gate (UI-04, IMPR-03, CHAT-02)
 **UI hint**: yes
 
 ### Phase 6: E2E Migration & Verification
