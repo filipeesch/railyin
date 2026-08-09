@@ -483,20 +483,16 @@ export class RailyinAgent extends AbstractAgent {
           for (const ev of translated) subject.next(ev);
           // WR-02: async completion guard. A stream that ends WITHOUT a
           // terminal (non-fatal error + end-of-stream — the Pi engine's
-          // fatal:false path — or an ask_user/shell_approval pause whose
-          // generator returns instead of parking on resume) would otherwise
-          // leave the subject uncompleted and the runner lock held forever.
-          // stream-processor calls onRunEnd SYNCHRONOUSLY right after
-          // terminal-causing events; if it didn't (no terminal arrived), the
-          // microtask below closes the stream so the client still gets a
-          // terminal. For `done`/fatal `error`/`decision_request` the
-          // synchronous onRunEnd sets terminalEmitted first, making this a
-          // no-op.
+          // fatal:false path) would otherwise leave the subject uncompleted
+          // and the runner lock held forever. stream-processor calls onRunEnd
+          // SYNCHRONOUSLY right after terminal-causing events; if it didn't
+          // (no terminal arrived), the microtask below closes the stream so
+          // the client still gets a terminal. For `done`/fatal `error`/
+          // `decision_request` the synchronous onRunEnd sets terminalEmitted
+          // first, making this a no-op.
           if (
             event.type === "done" ||
             event.type === "error" ||
-            event.type === "ask_user" ||
-            event.type === "shell_approval" ||
             event.type === "decision_request"
           ) {
             queueMicrotask(() => {

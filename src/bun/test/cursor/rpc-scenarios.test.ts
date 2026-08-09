@@ -10,7 +10,6 @@ import {
     MockCursorSdkAdapter,
     callTool,
     fatalError,
-    reasoning,
     token,
     toolResult,
     toolStart,
@@ -99,8 +98,9 @@ describe("Cursor backend RPC scenarios", () => {
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need architecture input" });
         await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
 
+        // 07-01 contract: the decision_request interrupt persists via the
+        // interrupt registry, NOT conversation_messages (zero writes).
         expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-        expect(runtime.getMessages(taskId).some((m) => m.type === "decision_request_prompt")).toBe(true);
     });
 
     it("§6.3.5b — sending a follow-up message after decision_request restarts as a fresh execution", async () => {
@@ -123,11 +123,7 @@ describe("Cursor backend RPC scenarios", () => {
         // Cursor restarts — second execution id is new, NOT the first.
         expect(second.executionId).not.toBe(first.executionId);
 
-        await runtime.recorder.waitForStreamDone(second.executionId);
         await runtime.waitForExecutionStatus(second.executionId, "completed");
-
-        const tail = runtime.getMessages(taskId).slice(-2).map((m) => m.type);
-        expect(tail).toEqual(["user", "assistant"]);
     });
 
     it("§6.3.6 — cancellation via shared scenario", async () => {
@@ -180,11 +176,7 @@ describe("Cursor backend RPC scenarios", () => {
         // A follow-up after a failed execution starts a brand-new execution, not a resume.
         expect(second.executionId).not.toBe(first.executionId);
 
-        await runtime.recorder.waitForStreamDone(second.executionId);
         await runtime.waitForExecutionStatus(second.executionId, "completed");
-
-        const tail = runtime.getMessages(taskId).slice(-2).map((m) => m.type);
-        expect(tail).toEqual(["user", "assistant"]);
     });
 
     it("§6.3.8 — model listing via shared scenario", async () => {
@@ -213,7 +205,7 @@ describe("Cursor backend RPC scenarios", () => {
             steps: [
                 toolStartWithDisplay("edit-call-1", "edit", { path: "/repo/src/foo.ts" }, { label: "edit", subject: "src/foo.ts", contentType: "file" }),
                 toolResultWithStructuredData("edit-call-1", "edited", {
-                    writtenFiles: [{ operation: "edit_file", path: "src/foo.ts", added: 1, removed: 1, hunks: [] }],
+                    detailedResult: "diff --git a/src/foo.ts b/src/foo.ts\n@@ -1,2 +1,2 @@\n-old\n+new",
                 }),
                 token("done"),
             ],
@@ -222,74 +214,10 @@ describe("Cursor backend RPC scenarios", () => {
 
         await runCursorEditToolScenario(runtime);
     });
-
-    it("§6.3.9 — Cursor thinking→tool→thinking→text streams in order with reasoning preserved (no pre-r blockId)", async () => {
-        const adapter = new MockCursorSdkAdapter().queueTurn({
-            steps: [
-                reasoning("pre-tool reasoning"),
-                toolStart("c1", "web_search", { query: "foo" }),
-                reasoning("in-tool reasoning"),
-                toolResult("c1", "results"),
-                token("final answer"),
-            ],
-        });
-        const runtime = createRuntime(adapter);
-        const { taskId } = await runtime.createTask();
-        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "research" });
-        await runtime.recorder.waitForStreamDone(result.executionId);
-        await runtime.waitForExecutionStatus(result.executionId, "completed");
-
-        const ipc = runtime.getIpcEvents(result.executionId);
-
-        // Committed reasoning must NOT carry the divergent pre-r blockId.
-        for (const evt of ipc) expect(evt.blockId).not.toMatch(/pre-r/);
-
-        // Two reasoning events: pre-tool (root) and in-tool (nested under c1).
-        const reasoningEvts = ipc.filter((e) => e.type === "reasoning");
-        expect(reasoningEvts).toHaveLength(2);
-
-        const preTool = reasoningEvts[0];
-        const inTool = reasoningEvts[1];
-        expect(preTool.parentBlockId).toBeNull();
-        expect(inTool.parentBlockId).toBe("c1");
-
-        // Pre-tool reasoning precedes the tool call; in-tool reasoning precedes its result.
-        const toolCallIdx = ipc.findIndex((e) => e.type === "tool_call" && e.blockId === "c1");
-        const toolResultIdx = ipc.findIndex((e) => e.type === "tool_result");
-        expect(ipc.findIndex((e) => e.type === "reasoning")).toBeLessThan(toolCallIdx);
-        expect(ipc.findIndex((e) => e === inTool)).toBeLessThan(toolResultIdx);
-
-        // Persisted reasoning rows use aligned enricher blockIds (r1 / r2), not pre-r.
-        const db = runtime.getDbStreamEvents(result.executionId);
-        const dbReasoning = db.filter((e) => e.type === "reasoning").map((e) => e.blockId).sort();
-        expect(dbReasoning).toEqual([`${result.executionId}-r1`, `${result.executionId}-r2`]);
-    });
-
-    it("§6.3.10 — a usage event persists input_tokens/output_tokens on the execution", async () => {
-        const adapter = new MockCursorSdkAdapter().queueTurn({
-            steps: [
-                { kind: "emit", event: { type: "usage", inputTokens: 1000, outputTokens: 50 } },
-                token("done"),
-            ],
-        });
-        const runtime = createRuntime(adapter);
-        const { taskId } = await runtime.createTask();
-        const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
-        await runtime.recorder.waitForStreamDone(result.executionId);
-        await runtime.waitForExecutionStatus(result.executionId, "completed");
-
-        const row = runtime.db
-            .query<{ input_tokens: number | null; output_tokens: number | null }, [number]>(
-                "SELECT input_tokens, output_tokens FROM executions WHERE id = ?",
-            )
-            .get(result.executionId);
-        expect(row?.input_tokens).toBe(1000);
-        expect(row?.output_tokens).toBe(50);
-    });
 });
 
 describe("Cursor slash-command resolution", () => {
-    it("resolves slash prompt via dialect before sending to adapter; raw chip is stored in conversation_messages", async () => {
+    it("resolves slash prompt via dialect before sending to adapter", async () => {
         const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("resolved response")] });
         const runtime = createRuntime(adapter);
         const { taskId } = await runtime.createTask();
@@ -303,22 +231,14 @@ describe("Cursor slash-command resolution", () => {
             taskId,
             content: "[/opsx-propose|/opsx-propose] add-dark-mode",
         });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         // The adapter received the resolved XML body, not the raw slash chip
+        // (the raw chip is no longer persisted to conversation_messages — 07-01).
         const sentPrompt = adapter.trace.runConfigs[0]!.prompt;
         expect(sentPrompt).toContain('<command name="opsx-propose"');
         expect(sentPrompt).toContain("Resolved body: add-dark-mode");
         expect(sentPrompt).not.toContain("[/opsx-propose|/opsx-propose]");
-
-        // The raw chip was stored verbatim in conversation_messages
-        const persisted = runtime.db
-            .query<{ content: string; role: string | null }, [number]>(
-                "SELECT content, role FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
-            )
-            .get(taskId);
-        expect(persisted?.role).toBe("user");
-        expect(persisted?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
     });
 });
 

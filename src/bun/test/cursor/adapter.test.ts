@@ -3,11 +3,9 @@ import type { EngineEvent } from "@bun/engine/types";
 import type { SDKCustomTool } from "@cursor/sdk";
 import {
   MockCursorSdkAdapter,
-  askUser,
   callTool,
   fatalError,
   reasoning,
-  statusMessage,
   token,
   toolResult,
   toolStart,
@@ -38,15 +36,14 @@ describe("MockCursorSdkAdapter", () => {
     expect(await collect(adapter)).toEqual([{ type: "done" }]);
   });
 
-  it("emits token, reasoning, and status steps in order", async () => {
+  it("emits token and reasoning steps in order", async () => {
     const adapter = new MockCursorSdkAdapter().queueTurn({
-      steps: [reasoning("plan"), token("Hello"), token(" world"), statusMessage("ready")],
+      steps: [reasoning("plan"), token("Hello"), token(" world")],
     });
     expect(await collect(adapter)).toEqual([
       { type: "reasoning", content: "plan" },
       { type: "token", content: "Hello" },
       { type: "token", content: " world" },
-      { type: "status", message: "ready" },
       { type: "done" },
     ]);
   });
@@ -169,20 +166,6 @@ describe("MockCursorSdkAdapter", () => {
     it("returns no slash commands", async () => {
       const adapter = new MockCursorSdkAdapter();
       expect(await adapter.listCommands("/tmp")).toEqual([]);
-    });
-  });
-
-  describe("askUser step", () => {
-    it("emits an ask_user event with the supplied payload", async () => {
-      const adapter = new MockCursorSdkAdapter().queueTurn({
-        steps: [token("Need input"), askUser('{"question":"clarify"}')],
-      });
-      const events = await collect(adapter);
-      expect(events).toEqual([
-        { type: "token", content: "Need input" },
-        { type: "ask_user", payload: '{"question":"clarify"}' },
-        { type: "done" },
-      ]);
     });
   });
 

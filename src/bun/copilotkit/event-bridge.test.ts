@@ -304,14 +304,7 @@ describe("event-bridge: ignored families (BRDG-01 — no double-broadcast)", () 
   test("board-only and control events produce no AG-UI events", () => {
     const state = createTranslateState("1", "run-1");
     const ignored: EngineEvent[] = [
-      { type: "status", message: "working" },
-      { type: "usage", inputTokens: 1, outputTokens: 2 },
       { type: "task_updated", task: { id: 1 } as never },
-      { type: "new_message", message: { id: 1 } as never },
-      { type: "compaction_start" },
-      { type: "compaction_done", summary: "s" },
-      { type: "ask_user", payload: "{}" },
-      { type: "shell_approval", command: "ls", executionId: 1 },
       { type: "decision_request", payload: "{}" },
     ];
     for (const event of ignored) {

@@ -276,15 +276,11 @@ export function translateEngineEvent(event: EngineEvent, state: TranslateState):
     }
 
     // Board /ws path is UNCHANGED (BRDG-01) — the bridge ignores these; the
-    // terminal is emitted by the agent via terminalEvent().
-    case "usage":
-    case "status":
+    // terminal is emitted by the agent via terminalEvent(). task_updated is
+    // board-lifecycle (pushed via the /ws task.updated channel, not AG-UI);
+    // decision_request returns [] because interrupts flow through the
+    // module-level registry — do not "fix" it.
     case "task_updated":
-    case "new_message":
-    case "compaction_start":
-    case "compaction_done":
-    case "ask_user":
-    case "shell_approval":
     case "decision_request":
       return [];
   }

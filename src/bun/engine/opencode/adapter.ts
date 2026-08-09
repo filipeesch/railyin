@@ -6,7 +6,7 @@ import { createOpencodeServer } from "@opencode-ai/sdk/v2/server";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { McpContextEntry, OpenCodeMcpServer } from "./mcp-server.ts";
 import { startOpenCodeMcpServer } from "./mcp-server.ts";
-import { translatePart, translatePermissionAsked, translateSessionError, translateSessionStatus } from "./event-translator.ts";
+import { translatePart, translateSessionError } from "./event-translator.ts";
 import { mapAttachments } from "./attachment-mapper.ts";
 import type { TextPartInput, FilePartInput } from "@opencode-ai/sdk/v2";
 
@@ -66,8 +66,10 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
       onRawEvent,
     } = params;
 
-    // Side-channel for events injected by the MCP server (e.g. ask_user from decision_request).
-    // Uses a wake-up signal so the event loop can unblock even when no SSE events arrive.
+    // Side-channel for decision_request interrupts injected by the MCP server
+    // (suspend-loop tools like decision_request hold their HTTP response open).
+    // Uses a wake-up signal so the event loop can unblock even when no SSE
+    // events arrive.
     const sideEvents: EngineEvent[] = [];
     let pendingWakeUp = false;
     let wakeUpResolve: (() => void) | null = null;
@@ -85,8 +87,10 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
       commonToolContext,
       executionId,
       pendingQuestion: null,
+      // The MCP suspend path (decision_request) surfaces as a decision_request
+      // engine event — the only HITL channel (ask_user was trimmed).
       onAskUser: (payload: string) => {
-        sideEvents.push({ type: "ask_user" as const, payload });
+        sideEvents.push({ type: "decision_request", payload });
         triggerWakeUp();
       },
     });
@@ -134,7 +138,7 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
         let nextSse = sseIter.next();
 
         while (true) {
-          // Drain any side-channel events (e.g. ask_user from MCP) before processing SSE
+          // Drain any side-channel events (e.g. decision_request from MCP) before processing SSE
           while (sideEvents.length > 0) {
             yield sideEvents.shift()!;
           }
@@ -152,15 +156,20 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
 
           onRawEvent?.(sanitizeForLogging(event as Record<string, unknown>));
 
-          // Store permission info so respondPermission() can call permission.reply() later
+          // Store permission info so respondPermission() can call permission.reply() later.
+          // A3 posture: reply deterministically via onPermissionAsked (auto-approve
+          // when shellAutoApprove is set, deny otherwise) — never wait for a resume
+          // that no UI can answer.
           if (event.type === "permission.asked" && event.properties.sessionID === sessionId) {
             this.pendingPermissions.set(executionId, {
               requestId: event.properties.id,
               sessionId: event.properties.sessionID,
             });
+            const decision = params.onPermissionAsked ? await params.onPermissionAsked(executionId) : "deny";
+            await this.respondPermission(executionId, decision);
           }
 
-          const engineEvents = translateEvent(event, sessionId, executionId);
+          const engineEvents = translateEvent(event, sessionId);
           for (const e of engineEvents) {
             yield e;
           }
@@ -176,7 +185,8 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
         yield { type: "done" };
       }
     } finally {
-      // Resolve any pending ask_user so the MCP HTTP response isn't left open
+      // Resolve any pending decision_request long-poll so the MCP HTTP response
+      // isn't left open (the interrupt is answered by a new turn, not this run).
       const entry = this.contextMap.get(conversationId);
       if (entry?.pendingQuestion) {
         entry.pendingQuestion.resolve("cancelled");
@@ -191,17 +201,6 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     // Cancellation is handled via the AbortSignal passed to run().
     // The signal triggers client.session.abort() when aborted.
     void executionId;
-  }
-
-  async respondAskUser(executionId: number, content: string): Promise<void> {
-    for (const entry of this.contextMap.values()) {
-      if (entry.executionId === executionId && entry.pendingQuestion) {
-        entry.pendingQuestion.resolve(content);
-        entry.pendingQuestion = null;
-        return;
-      }
-    }
-    throw new Error(`No pending ask_user for execution ${executionId}`);
   }
 
   async respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void> {
@@ -322,22 +321,13 @@ function mapEngineConfig(config: OpenCodeEngineConfig): OpenCodeConfig {
 }
 
 /** Translate an OpenCode event to zero or more EngineEvents, filtering by sessionId. */
-function translateEvent(event: OpenCodeEvent, sessionId: string, executionId: number): EngineEvent[] {
+function translateEvent(event: OpenCodeEvent, sessionId: string): EngineEvent[] {
   if (event.type === "message.part.updated" && event.properties.sessionID === sessionId) {
     return translatePart(event.properties.part);
   }
 
-  if (event.type === "permission.asked" && event.properties.sessionID === sessionId) {
-    return [translatePermissionAsked(event, executionId)];
-  }
-
   if (event.type === "session.error" && (event.properties.sessionID == null || event.properties.sessionID === sessionId)) {
     return [translateSessionError(event)];
-  }
-
-  if (event.type === "session.status" && event.properties.sessionID === sessionId) {
-    const e = translateSessionStatus(event);
-    return e ? [e] : [];
   }
 
   return [];

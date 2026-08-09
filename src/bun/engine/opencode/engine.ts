@@ -3,12 +3,11 @@ import type {
   ExecutionParams,
   EngineEvent,
   EngineModelInfo,
-  EngineResumeInput,
   CommandInfo,
   OnTaskUpdated,
   OnNewMessage,
 } from "../types.ts";
-import type { OpenCodeSdkAdapter } from "./types.ts";
+import type { OpenCodeSdkAdapter, PermissionDecision } from "./types.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
@@ -22,10 +21,6 @@ export class OpenCodeEngine implements ExecutionEngine {
   private readonly sdkAdapter: OpenCodeSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
   private readonly shellApprovalRepo: ShellApprovalRepository;
-  private readonly pendingResumes = new Map<number, {
-    resolve: (input: EngineResumeInput) => void;
-    reject: (error: Error) => void;
-  }>();
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
@@ -67,6 +62,16 @@ export class OpenCodeEngine implements ExecutionEngine {
     const shellScope: ShellApprovalScope = params.taskId != null
       ? { kind: "task", taskId: params.taskId }
       : { kind: "chat", conversationId: params.conversationId };
+
+    // A3 posture: permission requests are answered deterministically — auto-approve
+    // when shellAutoApprove is configured (tasks.setShellAutoApprove / workspace
+    // shell_auto_approve), deny otherwise. NEVER wait: no UI can answer a
+    // permission request (decision_request is the only HITL channel). The reply
+    // happens in the adapter at permission.asked time via this callback.
+    const onPermissionAsked = async (_executionId: number): Promise<PermissionDecision> => {
+      const shellState = this.shellApprovalRepo.getState(shellScope);
+      return shellState.shellAutoApprove ? "approve_all" : "deny";
+    };
 
     const taskBlock = taskContext
       ? [`## Task`, `**Title:** ${taskContext.title}`, ...(taskContext.description ? [`**Description:** ${taskContext.description}`] : [])].join("\n")
@@ -124,53 +129,23 @@ export class OpenCodeEngine implements ExecutionEngine {
         signal,
         commonToolContext,
         onRawEvent,
+        onPermissionAsked,
       })) {
-        if (event.type === "shell_approval") {
-          const shellState = this.shellApprovalRepo.getState(shellScope);
-          if (shellState.shellAutoApprove) {
-            await this.sdkAdapter.respondPermission(executionId, "approve_all");
-            continue;
-          }
-          yield event;
-          try {
-            await this.waitForResume(executionId, { type: "shell_approval" }, signal);
-          } catch {
-            return;
-          }
-          continue;
-        }
-
         yield event;
       }
     } finally {
-      this.pendingResumes.delete(executionId);
+      // no per-execution resume state to clean up (ask_user/shell_approval trimmed)
     }
   }
 
-  async resume(executionId: number, input: EngineResumeInput): Promise<void> {
-    if (input.type === "ask_user") {
-      // Route through the adapter: resolves the MCP long-poll HTTP response so OpenCode
-      // can continue the agent loop. Throws if no pending ask_user (e.g. after restart),
-      // which causes human-turn-executor to create a fresh execution.
-      await this.sdkAdapter.respondAskUser(executionId, input.content);
-      return;
-    }
-    // shell_approval: unblock the in-engine waitForResume AND reply to OpenCode's permission request
-    const pending = this.pendingResumes.get(executionId);
-    if (!pending) {
-      throw new Error(`Execution ${executionId} is not waiting for resume input`);
-    }
-    this.pendingResumes.delete(executionId);
-    pending.resolve(input);
-    await this.sdkAdapter.respondPermission(executionId, input.decision);
+  async resume(_executionId: number, _input: never): Promise<void> {
+    // All engine-level resume channels were trimmed with ask_user/shell_approval
+    // (EngineResumeInput deleted). Decision interrupts resume via a NEW turn —
+    // executeChatTurn/executeHumanTurn deliver the answer as engineContent —
+    // never through engine.resume().
   }
 
   cancel(executionId: number): void {
-    const pending = this.pendingResumes.get(executionId);
-    if (pending) {
-      this.pendingResumes.delete(executionId);
-      pending.reject(new Error(`Execution ${executionId} cancelled`));
-    }
     void this.sdkAdapter.cancel(executionId).catch(() => {});
   }
 
@@ -215,35 +190,5 @@ export class OpenCodeEngine implements ExecutionEngine {
 
   async shutdown(): Promise<void> {
     await this.sdkAdapter.shutdown();
-  }
-
-  private waitForResume(
-    executionId: number,
-    _request: { type: "ask_user" | "shell_approval" },
-    signal?: AbortSignal,
-  ): Promise<EngineResumeInput> {
-    return new Promise<EngineResumeInput>((resolve, reject) => {
-      const existing = this.pendingResumes.get(executionId);
-      if (existing) {
-        reject(new Error(`Execution ${executionId} is already waiting for resume input`));
-        return;
-      }
-
-      const cleanup = () => {
-        signal?.removeEventListener("abort", onAbort);
-        this.pendingResumes.delete(executionId);
-      };
-
-      const onAbort = () => {
-        cleanup();
-        reject(new Error(`Execution ${executionId} aborted while waiting for input`));
-      };
-
-      signal?.addEventListener("abort", onAbort, { once: true });
-      this.pendingResumes.set(executionId, {
-        resolve: (input) => { cleanup(); resolve(input); },
-        reject: (error) => { cleanup(); reject(error); },
-      });
-    });
   }
 }

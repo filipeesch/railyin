@@ -100,9 +100,9 @@ describe("InProcessCursorAdapter.run", () => {
     const agent = makeFakeAgent(run);
     const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
 
+    // status messages are informational — not translated (status display trimmed, 07-02)
     expect(await collect(adapter)).toEqual([
       { type: "token", content: "Hello" },
-      { type: "status", message: "RUNNING" },
       { type: "done" },
     ]);
   });
@@ -297,7 +297,6 @@ describe("InProcessCursorAdapter stall watchdog", () => {
 
     expect(await collect(adapter)).toEqual([
       { type: "token", content: "Hello" },
-      { type: "status", message: "RUNNING" },
       { type: "done" },
     ]);
   });
@@ -563,45 +562,6 @@ describe("InProcessCursorAdapter.listCommands", () => {
     const agent = makeFakeAgent(run);
     const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
     expect(await adapter.listCommands("/tmp")).toEqual([]);
-  });
-});
-
-describe("InProcessCursorAdapter.usage", () => {
-  it("emits a usage EngineEvent from RunResult.usage after wait()", async () => {
-    const run = makeFakeRun({
-      waitResult: {
-        id: "run-1",
-        status: "finished",
-        usage: {
-          inputTokens: 12_345,
-          outputTokens: 678,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-          totalTokens: 13_023,
-        },
-      },
-    });
-    const agent = makeFakeAgent(run);
-    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
-
-    const events = await collect(adapter, baseConfig({ model: "claude-sonnet-4-6" }));
-    expect(events).toContainEqual({
-      type: "usage",
-      inputTokens: 12_345,
-      outputTokens: 678,
-      contextWindow: 200_000, // resolved from the model id for the gauge's stream-event path
-    });
-    // The terminal done sentinel is still emitted after usage.
-    expect(events.at(-1)).toEqual({ type: "done" });
-  });
-
-  it("does not emit a usage event when RunResult.usage is absent", async () => {
-    const run = makeFakeRun({ waitResult: { id: "run-1", status: "finished" } });
-    const agent = makeFakeAgent(run);
-    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
-
-    const events = await collect(adapter);
-    expect(events.some((e) => e.type === "usage")).toBe(false);
   });
 });
 

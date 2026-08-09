@@ -11,7 +11,6 @@ import { FakeMcpClient } from "./support/fake-mcp-client.ts";
 import {
     MockCopilotSdkAdapter,
     MockCopilotSession,
-    askUser,
     done,
     reasoning,
     token,
@@ -19,13 +18,10 @@ import {
     toolResultWithOptions,
     toolStart,
     toolStartWithOptions,
-    usage,
     waitForAbort,
     toolCall,
 } from "./support/copilot-sdk-mock.ts";
 import {
-    runAskUserScenario,
-    runAskUserResumeScenario,
     runCancellationScenario,
     runFatalFailureScenario,
     runMcpDiscoveryScenario,
@@ -71,7 +67,7 @@ describe("Copilot backend RPC scenarios", () => {
         const adapter = new MockCopilotSdkAdapter();
         adapter
             .queueResumeFailure(new Error("missing session"))
-            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Hello"), token(" world"), usage(10, 20), done()] }))
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Hello"), token(" world"), done()] }))
             .queueResumeSuccess(new MockCopilotSession().queueTurn({ steps: [token("Reply one"), done()] }))
             .queueResumeSuccess(new MockCopilotSession().queueTurn({ steps: [token("Reply two"), done()] }));
         const runtime = createCopilotRuntime(adapter);
@@ -96,32 +92,14 @@ describe("Copilot backend RPC scenarios", () => {
         await runToolFailureScenario(runtime);
     });
 
-    it("covers ask-user suspension and cancellation via shared scenarios", async () => {
+    it("covers cancellation via shared scenario", async () => {
         const adapter = new MockCopilotSdkAdapter();
         adapter
             .queueResumeFailure(new Error("missing session"))
-            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Need input"), askUser('{"question":"Need input"}')] }))
-            .queueResumeSuccess(new MockCopilotSession().queueTurn({ steps: [token("streaming"), waitForAbort()] }));
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("streaming"), waitForAbort()] }));
         const runtime = createCopilotRuntime(adapter);
 
-        await runAskUserScenario(runtime);
         await runCancellationScenario(runtime);
-    });
-
-    it("resumes the same execution after ask-user input", async () => {
-        const adapter = new MockCopilotSdkAdapter();
-        adapter
-            .queueResumeFailure(new Error("missing session"))
-            .queueCreateSuccess(
-                new MockCopilotSession()
-                    .queueTurn({ steps: [askUser('{"questions":[{"question":"Need input","selection_mode":"single","options":[]}]}')] })
-                    .queueTurn({ steps: [token("Resumed successfully"), done()] }),
-            );
-        const runtime = createCopilotRuntime(adapter);
-
-        await runAskUserResumeScenario(runtime);
-        expect(adapter.trace.createCalls).toHaveLength(1);
-        expect(adapter.trace.resumeCalls).toHaveLength(1);
     });
 
     it("covers fatal failures and model listing via shared scenarios", async () => {
@@ -152,7 +130,7 @@ describe("Copilot backend RPC scenarios", () => {
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Resume existing" });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         expect(adapter.trace.resumeCalls).toHaveLength(1);
         expect(adapter.trace.createCalls).toHaveLength(0);
@@ -167,7 +145,7 @@ describe("Copilot backend RPC scenarios", () => {
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Create fallback" });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         expect(adapter.trace.resumeCalls).toHaveLength(1);
         expect(adapter.trace.createCalls).toHaveLength(1);
@@ -215,9 +193,11 @@ describe("Copilot backend RPC scenarios", () => {
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need architecture input" });
 
+        // 07-01 contract: the decision_request interrupt persists via the
+        // interrupt registry, NOT conversation_messages (zero writes). The
+        // observable RPC state is the waiting_user lifecycle.
         await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
         expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-        expect(runtime.getMessages(taskId).some((message) => message.type === "decision_request_prompt")).toBe(true);
     });
 
     it("stores raw slash prompts while executing the resolved prompt body", async () => {
@@ -237,21 +217,16 @@ describe("Copilot backend RPC scenarios", () => {
             taskId,
             content: "[/opsx-propose|/opsx-propose] add-dark-mode",
         });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         // Task starts in 'plan' workflow_state (stage_instructions: "You are a planning assistant."),
         // prepended to userContent on the first human turn (never-injected-yet policy).
         expect(session.prompts).toEqual([
           '<active_directive>\nYou are a planning assistant.\n\nThis directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n</active_directive>\n\n<command name="opsx-propose" args="add-dark-mode">\nResolved body: add-dark-mode\n</command>',
         ]);
-        const persisted = runtime.db
-            .query<{ content: string; role: string | null; metadata: string | null }, [number]>(
-                "SELECT content, role, metadata FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
-            )
-            .get(taskId);
-        expect(persisted?.role).toBe("user");
-        expect(persisted?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
-        expect(persisted?.metadata).toBeNull();
+        // 07-01 contract: the raw slash chip is no longer persisted to
+        // conversation_messages (zero writes during runs) — the resolved
+        // prompt body above is the only channel.
     });
 
     it("sends uploaded text attachments to Copilot as same-turn selections", async () => {
@@ -272,7 +247,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: Buffer.from("# hi\n\nbody").toString("base64"),
             }],
         });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         expect(session.sentMessages).toHaveLength(1);
         expect(session.sentMessages[0]?.attachments).toEqual([{
@@ -308,7 +283,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: `@file:${filePath}`,
             }],
         });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         // Task starts in 'plan' workflow_state (stage_instructions: "You are a planning assistant."),
         // prepended to userContent on the first human turn (never-injected-yet policy).
@@ -341,7 +316,7 @@ describe("Copilot backend RPC scenarios", () => {
 
         // First turn — no attachment
         const result1 = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "hello" });
-        await runtime.recorder.waitForStreamDone(result1.executionId);
+        await runtime.waitForExecutionStatus(result1.executionId, "completed");
 
         const filePath = join(runtime.gitDir, "note.md");
         writeFileSync(filePath, "# Note\nsome content\n", "utf8");
@@ -356,7 +331,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: `@file:${filePath}`,
             }],
         });
-        await runtime.recorder.waitForStreamDone(result2.executionId);
+        await runtime.waitForExecutionStatus(result2.executionId, "completed");
 
         expect(session.sentMessages).toHaveLength(2);
         const secondAtt = session.sentMessages[1]?.attachments?.[0];
@@ -387,7 +362,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: "@file:config.ts",
             }],
         });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         const att = session.sentMessages[0]?.attachments?.[0];
         expect(att?.type).toBe("selection");
@@ -415,7 +390,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: Buffer.from("# Hello\n\nworld").toString("base64"),
             }],
         });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         expect(session.sentMessages).toHaveLength(1);
         const att = session.sentMessages[0]?.attachments?.[0];
@@ -444,7 +419,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: Buffer.from('{"key":"value"}').toString("base64"),
             }],
         });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         const att = session.sentMessages[0]?.attachments?.[0];
         expect(att?.type).toBe("selection");
@@ -475,7 +450,7 @@ describe("Copilot backend RPC scenarios", () => {
                 data: `@file:${filePath}:L2-L4`,
             }],
         });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         const att = session.sentMessages[0]?.attachments?.[0];
         expect(att?.type).toBe("selection");
@@ -506,34 +481,21 @@ describe("Copilot backend RPC scenarios", () => {
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Show me the result" });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
+        // 07-01 contract: tool events are no longer persisted to
+        // conversation_messages (zero writes during runs) — the run completing
+        // with both internal (copilot_plan, filtered) and external
+        // (run_command with rich result) tools is the observable outcome.
         const persistedTools = runtime.db
-            .query<{ type: string; content: string }, [number]>(
-                "SELECT type, content FROM conversation_messages WHERE task_id = ? AND type IN ('tool_call', 'tool_result') ORDER BY id ASC",
+            .query<{ type: string }, [number]>(
+                "SELECT type FROM conversation_messages WHERE task_id = ? AND type IN ('tool_call', 'tool_result') ORDER BY id ASC",
             )
             .all(taskId);
-        expect(persistedTools).toHaveLength(2);
-        expect(persistedTools.map((row) => row.type)).toEqual(["tool_call", "tool_result"]);
-
-        const toolCall = JSON.parse(persistedTools[0]!.content) as {
-            function?: { name?: string; arguments?: string };
-        };
-        expect(toolCall.function?.name).toBe("run_command");
-
-        const toolResultPayload = JSON.parse(persistedTools[1]!.content) as {
-            content?: string;
-            detailedContent?: string;
-            contents?: Array<Record<string, unknown>>;
-            is_error?: boolean;
-        };
-        expect(toolResultPayload.is_error).toBe(false);
-        expect(toolResultPayload.content).toBe("");
-        expect(toolResultPayload.detailedContent).toContain("@@ -1 +1 @@");
-        expect(toolResultPayload.contents).toEqual([{ type: "text", text: "Applied patch to app.ts" }]);
+        expect(persistedTools).toHaveLength(0);
     });
 
-    it("emits structured writtenFiles and file_diff events for create/edit/apply_patch flows", async () => {
+    it("emits structured tool results for create/edit/apply_patch flows", async () => {
         const adapter = new MockCopilotSdkAdapter();
         adapter
             .queueResumeFailure(new Error("missing session"))
@@ -553,44 +515,18 @@ describe("Copilot backend RPC scenarios", () => {
         const { taskId } = await runtime.createTask();
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Edit files" });
-        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
 
+        // 07-01/07-02: writtenFiles was trimmed from tool_result AND tool events
+        // are no longer persisted to conversation_messages (zero writes during
+        // runs) — the renderer derives diffs from tool ARGS (buildDiffPayloadsFromArgs).
         const toolResults = runtime.db
-            .query<{ content: string }, [number]>(
-                "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'tool_result' ORDER BY id ASC",
+            .query<{ type: string }, [number]>(
+                "SELECT type FROM conversation_messages WHERE task_id = ? AND type = 'tool_result' ORDER BY id ASC",
             )
-            .all(taskId)
-            .map((row) => JSON.parse(row.content) as { writtenFiles?: Array<{ operation: string; path: string }> });
+            .all(taskId);
 
-        expect(toolResults).toHaveLength(3);
-        expect(toolResults[0]?.writtenFiles?.[0]).toEqual({
-            operation: "write_file",
-            path: "src/new-file.ts",
-            added: 0,
-            removed: 0,
-        });
-        expect(toolResults[1]?.writtenFiles?.[0]).toEqual({
-            operation: "edit_file",
-            path: "src/new-file.ts",
-            added: 0,
-            removed: 0,
-        });
-        expect(toolResults[2]?.writtenFiles?.map((f) => `${f.operation}:${f.path}`)).toEqual([
-            "write_file:src/added.ts",
-            "patch_file:src/new-file.ts",
-        ]);
-
-        const fileDiffs = runtime.getDbStreamEvents(result.executionId)
-            .filter((event) => event.type === "file_diff")
-            .map((event) => JSON.parse(event.content) as { operation: string; path: string; added?: number; removed?: number });
-
-        expect(fileDiffs.map((diff) => `${diff.operation}:${diff.path}`)).toEqual([
-            "write_file:src/new-file.ts",
-            "edit_file:src/new-file.ts",
-            "write_file:src/added.ts",
-            "patch_file:src/new-file.ts",
-        ]);
-        expect(fileDiffs.every((diff) => typeof diff.added === "number" && typeof diff.removed === "number")).toBe(true);
+        expect(toolResults).toHaveLength(0);
     });
 });
 
@@ -706,8 +642,13 @@ describe("Copilot lease timeout fixes (Bug B + Bug C)", () => {
 
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
 
-        // Wait until the stream is actually in-flight (live text_chunk emitted on first token).
-        await runtime.waitFor(() => runtime.getIpcEvents(result.executionId).some((e) => e.type === "text_chunk"));
+        // Wait until the stream is actually in-flight: the engine's per-event
+        // lease touch proves at least one stream event was processed (the
+        // stream-event IPC/token feeds aren't wired to the recorder post-07-01).
+        await runtime.waitFor(
+            () => adapter.trace.touchLeaseCalls.filter((c) => c.state === "running").length >= 2,
+            "in-flight copilot stream",
+        );
 
         const sdkSessionId = copilotSessionIdForConversation(taskId, conversationId);
         await adapter.triggerBeforeEvict(sdkSessionId);

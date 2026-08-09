@@ -16,7 +16,7 @@
 
 import type { EngineEvent } from "@bun/engine/types";
 import type { CursorRunConfig, CursorSdkAdapter, CursorSdkModelInfo } from "@bun/engine/cursor/adapter";
-import type { ToolCallDisplay, FileDiffPayload } from "@shared/rpc-types";
+import type { ToolCallDisplay } from "@shared/rpc-types";
 
 export type CursorMockStep =
   | { kind: "emit"; event: EngineEvent }
@@ -173,14 +173,6 @@ export function toolResult(callId: string, result: string, success = true): Curs
   };
 }
 
-export function statusMessage(message: string): CursorMockStep {
-  return { kind: "emit", event: { type: "status", message } };
-}
-
-export function askUser(payload = '{"question":"Need input"}'): CursorMockStep {
-  return { kind: "emit", event: { type: "ask_user", payload } };
-}
-
 export function callTool(toolName: string, args: unknown = {}): CursorMockStep {
   return { kind: "callTool", toolName, args };
 }
@@ -218,15 +210,15 @@ export function toolStartWithDisplay(
 }
 
 /**
- * Emit a tool_result event with structured data (detailedResult, writtenFiles).
- * Useful for testing that the UI renders shell stdout and edit diffs correctly.
+ * Emit a tool_result event with structured data (detailedResult).
+ * Useful for testing that the UI renders shell stdout and edit diffs correctly
+ * (writtenFiles was trimmed with the file_diff EngineEvent surface — 07-02).
  */
 export function toolResultWithStructuredData(
   callId: string,
   result: string,
   options?: {
     detailedResult?: string;
-    writtenFiles?: FileDiffPayload[];
     success?: boolean;
   },
 ): CursorMockStep {
@@ -239,7 +231,6 @@ export function toolResultWithStructuredData(
       callId,
       isError: options?.success === false,
       detailedResult: options?.detailedResult,
-      writtenFiles: options?.writtenFiles,
     },
   };
 }

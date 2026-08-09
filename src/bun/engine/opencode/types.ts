@@ -1,5 +1,7 @@
-import type { EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, CommonToolContext } from "../types.ts";
+import type { EngineEvent, EngineModelInfo, CommandInfo, CommonToolContext } from "../types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
+
+export type PermissionDecision = "approve_once" | "approve_all" | "deny";
 
 export interface OpenCodeRunParams {
   executionId: number;
@@ -13,6 +15,13 @@ export interface OpenCodeRunParams {
   signal: AbortSignal;
   commonToolContext: CommonToolContext;
   onRawEvent?: (event: Record<string, unknown>) => void;
+  /**
+   * A3 posture: called when OpenCode asks for a permission (e.g. bash). Must
+   * return a deterministic decision — auto-approve when shellAutoApprove is
+   * configured, deny otherwise. NEVER waits: no UI can answer a permission
+   * request (decision_request is the only HITL channel).
+   */
+  onPermissionAsked?: (executionId: number) => Promise<PermissionDecision>;
 }
 
 export interface OpenCodeSdkAdapter {
@@ -24,14 +33,9 @@ export interface OpenCodeSdkAdapter {
   compact(sessionId: string, workingDirectory: string): Promise<void>;
   shutdown(): Promise<void>;
   /**
-   * Resolve a pending ask_user question: sends the user's answer back through
-   * the MCP long-poll HTTP response so OpenCode can continue the agent loop.
-   * Throws if no ask_user is pending for this executionId (e.g. after server restart).
-   */
-  respondAskUser(executionId: number, content: string): Promise<void>;
-  /**
-   * Reply to a pending OpenCode permission request so the agent loop can continue.
-   * Must be called after engine.resume() resolves the in-memory shell_approval promise.
+   * Reply to a pending OpenCode permission request so the agent loop can
+   * continue. The decision comes from the A3 onPermissionAsked callback — the
+   * engine never waits for a permission reply.
    */
   respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void>;
 }

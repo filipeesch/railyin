@@ -79,27 +79,6 @@ export async function runFatalFailureScenario(runtime: BackendRpcRuntime): Promi
 }
 
 /**
- * @deprecated ask_user was trimmed in 07-01 (EngineEvent union member removed).
- * Retained only because the copilot/opencode suites (07-02 Task 3) still import
- * these exports; Task 3 deletes them together with their callers.
- */
-export async function runAskUserScenario(runtime: BackendRpcRuntime): Promise<void> {
-    const { taskId } = await runtime.createTask();
-    await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need clarification" });
-    await runtime.waitForTaskState(taskId, "waiting_user");
-}
-
-/**
- * @deprecated ask_user was trimmed in 07-01. See runAskUserScenario.
- */
-export async function runAskUserResumeScenario(runtime: BackendRpcRuntime): Promise<void> {
-    const { taskId } = await runtime.createTask();
-    const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need clarification" });
-    await runtime.waitForExecutionStatus(first.executionId, "waiting_user");
-    await runtime.waitForTaskState(taskId, "waiting_user");
-}
-
-/**
  * Full-loop MCP discovery scenario (dynamic-mcp-discovery, mcp-tool-discovery/spec.md):
  * scripts a turn where the model calls list_mcp_servers → list_mcp_tools → invoke_mcp_tool
  * in sequence, backed by a FakeMcpClient-driven McpClientRegistry injected into the runtime's
