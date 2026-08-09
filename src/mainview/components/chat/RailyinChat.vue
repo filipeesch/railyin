@@ -455,6 +455,10 @@ html.dark-mode .railyn-chat__stopped-icon {
   line-height: 1.6;
 }
 
+.railyn-chat p:last-child {
+  margin-bottom: 0;
+}
+
 .railyn-chat h1,
 .railyn-chat h2,
 .railyn-chat h3,
@@ -466,8 +470,8 @@ html.dark-mode .railyn-chat__stopped-icon {
 
 .railyn-chat ul,
 .railyn-chat ol {
-  margin: 0.3em 0 0.6em;
-  padding-left: 1.4em;
+  margin: 0.4em 0 0.6em 1.4em;
+  padding: 0;
 }
 
 .railyn-chat li {
@@ -481,6 +485,8 @@ html.dark-mode .railyn-chat__stopped-icon {
   border-radius: 8px;
   padding: 12px 14px;
   overflow-x: auto;
+  overflow-y: auto;
+  max-height: 320px; /* UI-SPEC overflow row: pre blocks get max-height + internal scroll */
   margin: 0.6em 0;
   font-size: 0.8rem;
   line-height: 1.5;
@@ -497,5 +503,47 @@ html.dark-mode .railyn-chat__stopped-icon {
 .railyn-chat pre code {
   background: none;
   padding: 0;
+  color: inherit;
+}
+
+/* Markdown parity rules (ported from MessageBubble.vue:316-350 — blockquote,
+   table, hr, a). Token-driven only (--p-*): dark mode flips automatically,
+   matching the legacy behavior. */
+.railyn-chat blockquote {
+  border-left: 3px solid var(--p-content-border-color);
+  margin: 0.5em 0;
+  padding: 2px 0 2px 12px;
+  color: var(--p-text-muted-color, #94a3b8);
+  font-style: italic;
+}
+
+.railyn-chat table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.6em 0;
+  font-size: 0.82rem;
+}
+
+.railyn-chat th,
+.railyn-chat td {
+  border: 1px solid var(--p-content-border-color);
+  padding: 5px 10px;
+  text-align: left;
+}
+
+.railyn-chat th {
+  background: var(--p-content-hover-background);
+  font-weight: 600;
+}
+
+.railyn-chat hr {
+  border: none;
+  border-top: 1px solid var(--p-content-border-color);
+  margin: 0.8em 0;
+}
+
+.railyn-chat a {
+  color: var(--p-primary-color, #6366f1);
+  text-decoration: underline;
 }
 </style>
