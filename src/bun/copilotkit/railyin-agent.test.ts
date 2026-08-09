@@ -1077,4 +1077,31 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
     const row2 = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(43)!;
     expect(row2.status).toBe("completed");
   });
+
+  test("R10: WR-03 — Pi pre-flight fail-fast on a resume (executionId -1, no events) completes with RUN_FINISHED, never hangs", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    const interruptId = await openPendingDecision(conversationId);
+
+    // chat-executor's Pi pre-flight shape: no events, no onRunEnd, -1.
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async () => ({ message: { id: 1 } as never, executionId: -1 }),
+    };
+    const agent = makeAgent(conversationId);
+    agent.orchestrator = fakeCoordinator;
+
+    const events = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    // The stream completes — exactly one terminal, never a hang (the runtime
+    // mount disables the idle timeout, so an unguarded resume would wedge SSE).
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+    expect(events.filter((e) => e.type === EventType.RUN_FINISHED || e.type === EventType.RUN_ERROR)).toHaveLength(1);
+    expect(events.filter((e) => e.type === EventType.RUN_STARTED)).toHaveLength(1);
+    // No execution started, so the decision stays pending — the resume is
+    // retryable once the engine config is fixed (WR-03 keeps the entry open).
+    expect(interruptRegistry.hasOpen(threadId)).toBe(true);
+  });
 });

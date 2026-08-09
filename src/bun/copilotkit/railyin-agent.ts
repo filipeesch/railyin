@@ -380,6 +380,17 @@ export class RailyinAgent extends AbstractAgent {
       delivery
         .then(({ executionId }) => {
           run.executionId = executionId;
+          // WR-03: the Pi pre-flight fail-fast path (chat-executor.ts) returns
+          // executionId -1 with NO events and NO onRunEnd — no execution was
+          // started and nothing will ever emit. Complete the stream so the
+          // client gets RUN_FINISHED instead of hanging on the SSE forever
+          // (the runtime mount deliberately disables the idle timeout). The
+          // registry entry stays open: the decision is still pending and the
+          // resume stays retryable once the engine config is fixed.
+          if (executionId === -1) {
+            guardedComplete();
+            return;
+          }
           // Pitfall 8: clear the registry entry ONLY after delivery started —
           // a duplicate resume now fails with INVALID_INTERRUPT (the second
           // run finds no open entry).
