@@ -329,7 +329,11 @@ test.describe("CD-C — Streaming and execution state", () => {
         const stopped = page.locator('.session-chat-view [data-testid="chat-stopped"]');
         await expect(stopped).toBeVisible({ timeout: 10_000 });
         await expect(stopped).toContainText("Stopped");
-        expect(agui.stopRequests).toContain(String(session.conversationId));
+        // The /stop POST is recorded by the route handler asynchronously —
+        // poll instead of racing the marker render (IN-02).
+        await expect
+            .poll(() => agui.stopRequests.includes(String(session.conversationId)), { timeout: 3_000 })
+            .toBe(true);
     });
 
     test("CD-C-5: the live /run stream renders in the session conversation body", async ({ page, api }) => {
@@ -721,9 +725,12 @@ test.describe("CD-J — action execution", () => {
         await stopBtn.click();
 
         // The /stop round-trip hit the fixture for this thread (the legacy
-        // chatSessions.cancel flow is replaced by the AG-UI abort path).
+        // chatSessions.cancel flow is replaced by the AG-UI abort path). The
+        // POST is recorded by the route handler asynchronously — poll (IN-02).
         await expect(page.locator('.session-chat-view [data-testid="chat-stopped"]')).toBeVisible({ timeout: 10_000 });
-        expect(agui.stopRequests).toContain(String(session.conversationId));
+        await expect
+            .poll(() => agui.stopRequests.includes(String(session.conversationId)), { timeout: 3_000 })
+            .toBe(true);
     });
 
     test("CD-J-2: clicking archive calls chatSessions.archive and closes the drawer", async ({ page, api }) => {

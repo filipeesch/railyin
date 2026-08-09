@@ -152,8 +152,12 @@ test.describe("N — execution state in the UI", () => {
         await expect(stopped).toBeVisible({ timeout: 10_000 });
         await expect(stopped).toContainText("Stopped");
 
-        // The /stop round-trip hit the fixture for this thread.
-        expect(agui.stopRequests).toContain(String(t.conversationId));
+        // The /stop round-trip hit the fixture for this thread. The POST is
+        // recorded when the Playwright route handler executes — poll for it
+        // instead of racing the marker render (IN-02).
+        await expect
+            .poll(() => agui.stopRequests.includes(String(t.conversationId)), { timeout: 3_000 })
+            .toBe(true);
     });
 
     test("N-7: task card gets .exec-completed after streaming ends", async ({ page, api, ws }) => {

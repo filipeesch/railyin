@@ -45,8 +45,11 @@ test.describe("P — Execution cancellation", () => {
         await expect(stopBtn).not.toBeVisible({ timeout: 5_000 });
 
         // The /stop round-trip hit the fixture for this thread (deterministic
-        // assertion, not timing).
-        expect(agui.stopRequests).toContain(String(t.conversationId));
+        // assertion, not timing). The POST is recorded by the route handler
+        // asynchronously — poll for it (IN-02).
+        await expect
+            .poll(() => agui.stopRequests.includes(String(t.conversationId)), { timeout: 3_000 })
+            .toBe(true);
     });
 
     test("P-13: cancel transitions execution to waiting_user", async ({ page, api, ws, agui }) => {
@@ -69,7 +72,9 @@ test.describe("P — Execution cancellation", () => {
         const stopped = page.locator('[data-testid="chat-stopped"]');
         await expect(stopped).toBeVisible({ timeout: 10_000 });
         await expect(stopped).toContainText("Stopped");
-        expect(agui.stopRequests).toContain(String(t.conversationId));
+        await expect
+            .poll(() => agui.stopRequests.includes(String(t.conversationId)), { timeout: 3_000 })
+            .toBe(true);
 
         // The task card reflects the cancelled execution (board surface —
         // ws-driven task.updated, untouched by the chat swap).
