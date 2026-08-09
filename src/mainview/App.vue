@@ -1,7 +1,9 @@
 <template>
   <div class="railyn-app">
-    <Toast position="top-right" />
-    <RouterView />
+    <CopilotKitProvider runtime-url="/api/copilotkit">
+      <Toast position="top-right" />
+      <RouterView />
+    </CopilotKitProvider>
   </div>
 </template>
 
@@ -10,6 +12,7 @@ import { onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import Toast from "primevue/toast";
+import { CopilotKitProvider } from "@copilotkit/vue/v2";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useBoardStore } from "./stores/board";
 import { useTaskStore } from "./stores/task";
