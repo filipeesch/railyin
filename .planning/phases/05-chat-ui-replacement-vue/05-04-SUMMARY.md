@@ -235,3 +235,9 @@ None - no external service configuration required.
 
 *Phase: 05-chat-ui-replacement-vue*
 *Completed: 2026-08-09*
+
+## Self-Check: PASSED
+
+- All key files exist on disk (verified via `[ -f ]`): RailyinChat.vue, InterruptBridge.vue, interruptBridge.ts, toolCardDisplay.test.ts, chat-copilotkit.spec.ts, mock-agui.ts, 05-04-SUMMARY.md
+- All task commits present in git log: 11501719 (Task 1 RED), a9fa7dc9 (Task 1 GREEN), 9f50fee4 (Task 2), 7b803fc6 (Task 3), docs commit (this SUMMARY)
+- Wave gate: `bun run build` green; `npx playwright test e2e/ui/chat-copilotkit.spec.ts` 11/11; `bun test e2e/ui/fixtures/mock-agui.test.ts` 17/17; `bun run typecheck` clean; `board.spec.ts` 34/34 (no layout regression); full-dir `bun test src/mainview` at documented pre-existing baseline (154 pass / 85 fail, deferred-items.md)
