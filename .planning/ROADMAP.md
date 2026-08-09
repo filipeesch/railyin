@@ -145,7 +145,7 @@ Plans:
   4. User can use slash commands and `/prompt-name` refs at parity (ref must be the entire leading value), and reopen any card or session to see full conversation history across app restarts
   5. Board `/ws` reactivity (task.updated, code.ref, lsp) keeps working alongside the chat connection, and the old chat stack code remains intact for rollback until E2E passes
 
-**Plans**: 2/5 plans executed
+**Plans**: 3/5 plans executed
 Plans:
 **Wave 1**
 
@@ -154,7 +154,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 05-03-PLAN.md — RailyinChat tracer: CopilotKitProvider + styles.css + wrapper core + TaskChatView swap + streaming/history/empty/error specs (CHAT-01, CHAT-07, UI-01)
+- [x] 05-03-PLAN.md — RailyinChat tracer: CopilotKitProvider + styles.css + wrapper core + TaskChatView swap + streaming/history/empty/error specs (CHAT-01, CHAT-07, UI-01)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -220,6 +220,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 2. AG-UI Bridge & RailyinAgentRunner | 3/3 | Complete    | 2026-08-09 |
 | 3. Decision Interrupts & Resume | 3/3 | Complete    | 2026-08-09 |
 | 4. JSONL Persistence & Legacy Import | 3/3 | Complete    | 2026-08-09 |
-| 5. Chat UI Replacement (Vue) | 2/5 | In Progress|  |
+| 5. Chat UI Replacement (Vue) | 3/5 | In Progress|  |
 | 6. E2E Migration & Verification | 0/TBD | Not started | - |
 | 7. Cleanup & Feature Trim | 0/TBD | Not started | - |
