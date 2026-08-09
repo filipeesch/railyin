@@ -209,7 +209,7 @@ Plans:
   3. `git grep` shows zero references to the custom StreamEvent protocol and deleted modules; build and all suites stay green after deletion
   4. Legacy import is retired behind a flag once imports are complete
 
-**Plans**: 4/5 plans executed
+**Plans**: 5/5 plans executed
 Plans:
 **Wave 1**
 
@@ -226,7 +226,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 07-05-PLAN.md — Import retirement behind RAILYN_LEGACY_IMPORT (D-06), full D-07 gate, VALIDATION/COVERAGE close-out
+- [x] 07-05-PLAN.md — Import retirement behind RAILYN_LEGACY_IMPORT (D-06), full D-07 gate, VALIDATION/COVERAGE close-out
 
 ## Coverage
 
@@ -255,4 +255,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. JSONL Persistence & Legacy Import | 3/3 | Complete    | 2026-08-09 |
 | 5. Chat UI Replacement (Vue) | 5/5 | Complete    | 2026-08-09 |
 | 6. E2E Migration & Verification | 8/7 | Complete    | 2026-08-09 |
-| 7. Cleanup & Feature Trim | 4/5 | In Progress|  |
+| 7. Cleanup & Feature Trim | 5/5 | In Progress|  |
