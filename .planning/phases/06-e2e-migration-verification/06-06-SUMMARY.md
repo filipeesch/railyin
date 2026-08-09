@@ -210,3 +210,9 @@ None - no external service configuration required.
 ---
 *Phase: 06-e2e-migration-verification*
 *Completed: 2026-08-09*
+
+## Self-Check: PASSED
+
+- SUMMARY.md exists on disk: FOUND
+- Task commits: f0d5d410 (autocomplete), 82ce1805 (cursor+task-drawer), c4a3931d (extended-chat) — all FOUND in git log
+- Metadata commit: af430c1d (docs) — FOUND
