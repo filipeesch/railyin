@@ -450,8 +450,9 @@ test.describe("CD-D — waiting_user states", () => {
         await input.fill("New Title");
         await input.press("Enter");
 
-        await page.waitForTimeout(300);
-        expect(renameCalled).toBe(true);
+        // The rename RPC is recorded asynchronously by the route handler —
+        // poll for it instead of a fixed settle window (WR-04, Pitfall 5).
+        await expect.poll(() => renameCalled, { timeout: 3_000 }).toBe(true);
     });
 });
 
@@ -647,7 +648,9 @@ test.describe("CD-I — Edge cases", () => {
         await input.fill("");
         await input.press("Enter");
 
-        await page.waitForTimeout(300);
+        // Bound the negative window — a (buggy) late rename call must have
+        // time to arrive before asserting absence (WR-04).
+        await page.waitForTimeout(500);
         expect(renameCalls).toHaveLength(0);
 
         // Original title should still be displayed
