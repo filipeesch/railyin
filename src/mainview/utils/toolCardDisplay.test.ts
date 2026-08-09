@@ -4,6 +4,8 @@ import {
   truncateToolOutput,
   computeDiffStats,
   toolStatusToIcon,
+  isErrorResult,
+  buildDiffPayloadsFromArgs,
   CANONICAL_TOOL_SLOTS,
   slotForToolCall,
 } from "./toolCardDisplay";
@@ -95,8 +97,68 @@ describe("toolStatusToIcon", () => {
   });
 });
 
+describe("isErrorResult", () => {
+  it("TCD-13: undefined/empty result is not an error", () => {
+    expect(isErrorResult(undefined)).toBe(false);
+    expect(isErrorResult("")).toBe(false);
+  });
+
+  it("TCD-14: JSON with isError:true flags an error", () => {
+    expect(isErrorResult(JSON.stringify({ isError: true, message: "boom" }))).toBe(true);
+  });
+
+  it("TCD-15: JSON with a non-empty error field flags an error", () => {
+    expect(isErrorResult(JSON.stringify({ error: "command not found" }))).toBe(true);
+    expect(isErrorResult(JSON.stringify({ error: "" }))).toBe(false);
+  });
+
+  it("TCD-16: JSON with success:false or error-ish status flags an error", () => {
+    expect(isErrorResult(JSON.stringify({ success: false }))).toBe(true);
+    expect(isErrorResult(JSON.stringify({ status: "failed" }))).toBe(true);
+    expect(isErrorResult(JSON.stringify({ status: "complete" }))).toBe(false);
+  });
+
+  it("TCD-17: plain output text is not an error unless it starts with an error marker", () => {
+    expect(isErrorResult("everything went fine")).toBe(false);
+    expect(isErrorResult("Error: command exited with 1")).toBe(true);
+    expect(isErrorResult("exit code 1")).toBe(true);
+  });
+});
+
+describe("buildDiffPayloadsFromArgs", () => {
+  it("TCD-18: write_file args with content derive a write payload with added line count", () => {
+    const payloads = buildDiffPayloadsFromArgs({ path: "/tmp/a.ts", content: "l1\nl2\nl3" });
+    expect(payloads).toEqual([{ operation: "write_file", path: "/tmp/a.ts", added: 3, removed: 0 }]);
+  });
+
+  it("TCD-19: edit args with old/new strings derive added/removed counts", () => {
+    const payloads = buildDiffPayloadsFromArgs({
+      file_path: "/tmp/a.ts",
+      old_string: "a\nb",
+      new_string: "a\nb\nc",
+    });
+    expect(payloads).toEqual([{ operation: "edit_file", path: "/tmp/a.ts", added: 3, removed: 2 }]);
+  });
+
+  it("TCD-20: diff-shaped args pass through as payloads", () => {
+    const raw = { path: "/tmp/a.ts", operation: "rename_file", to_path: "/tmp/b.ts", added: 0, removed: 0 };
+    expect(buildDiffPayloadsFromArgs(raw)).toEqual([raw]);
+  });
+
+  it("TCD-21: empty / pathless args yield no payloads", () => {
+    expect(buildDiffPayloadsFromArgs(undefined)).toEqual([]);
+    expect(buildDiffPayloadsFromArgs({})).toEqual([]);
+    expect(buildDiffPayloadsFromArgs("not json or path")).toEqual([]);
+  });
+
+  it("TCD-22: string args parse as JSON", () => {
+    const payloads = buildDiffPayloadsFromArgs(JSON.stringify({ path: "/tmp/c.ts", content: "x\ny" }));
+    expect(payloads).toEqual([{ operation: "write_file", path: "/tmp/c.ts", added: 2, removed: 0 }]);
+  });
+});
+
 describe("CANONICAL_TOOL_SLOTS / slotForToolCall", () => {
-  it("TCD-13: canonical families mirror the tool-display list", () => {
+  it("TCD-23: canonical families mirror the tool-display list", () => {
     expect(CANONICAL_TOOL_SLOTS).toEqual({
       bash: "shell",
       run: "shell",
