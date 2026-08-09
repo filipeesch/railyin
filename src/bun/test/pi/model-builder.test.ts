@@ -156,4 +156,41 @@ describe("PiModelBuilder", () => {
     };
     expect(model.compat?.thinkingFormat).toBeUndefined();
   });
+
+  test("MB-14: openrouter + deepseek model sets requiresReasoningContentOnAssistantMessages", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { openrouter: { base_url: "https://openrouter.ai/api/v1" } },
+      models: {
+        "deepseek/deepseek-v4-flash": {
+          thinkingFormat: "openrouter",
+        },
+      },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/openrouter/deepseek/deepseek-v4-flash", 128_000) as unknown as {
+      compat?: { thinkingFormat?: string; requiresReasoningContentOnAssistantMessages?: boolean };
+    };
+    expect(model.compat?.thinkingFormat).toBe("openrouter");
+    expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+  });
+
+  test("MB-15: openrouter + non-deepseek model does NOT set requiresReasoningContentOnAssistantMessages", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { openrouter: { base_url: "https://openrouter.ai/api/v1" } },
+      models: {
+        "z-ai/glm-5": {
+          thinkingFormat: "openrouter",
+        },
+      },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/openrouter/z-ai/glm-5", 128_000) as unknown as {
+      compat?: { thinkingFormat?: string; requiresReasoningContentOnAssistantMessages?: boolean };
+    };
+    expect(model.compat?.thinkingFormat).toBe("openrouter");
+    expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
+  });
+
 });
