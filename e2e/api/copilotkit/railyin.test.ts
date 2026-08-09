@@ -69,6 +69,27 @@ function runInput(threadId: string, runId: string, text: string) {
     };
 }
 
+/**
+ * Schema-valid RESUME-run input (RunAgentInput.resume[]): history-only messages
+ * (the run's user turn is the decision text — NOT a new prompt) plus the
+ * canonical resume array `{ interruptId, status, payload }` (D-01/D-02).
+ */
+function resumeInput(threadId: string, runId: string, resume: { interruptId: string; status: string; payload?: unknown }[]) {
+    return {
+        threadId,
+        runId,
+        tools: [],
+        context: [],
+        forwardedProps: {},
+        state: [],
+        messages: [
+            { id: "a1", role: "assistant", content: "I need your decision." },
+            { id: "u1", role: "user", content: "history" },
+        ],
+        resume,
+    };
+}
+
 describe("RailyinAgent run path (RUNR-01, D-12)", () => {
     test("a: chat turn on threadId=conversation.id streams RUN_STARTED (with input) first, RUN_FINISHED last", async () => {
         const session = await server.request("chatSessions.create", { title: "r1" });
@@ -309,4 +330,150 @@ describe("RailyinAgentRunner durability (RUNR-02/04/05/06/07)", () => {
             rmSync(durableDir, { recursive: true, force: true });
         }
     }, 30_000);
+});
+
+describe("decision cycle (RUNR-08, CHAT-09, D-09)", () => {
+    /**
+     * Run __SCRIPT_DECISION__ on a fresh thread and return the interrupt id from
+     * the LAST frame — each test owns its thread and self-contained lifecycle.
+     */
+    async function openDecision(threadId: string, runId: string): Promise<string> {
+        const res = await postJson("/api/copilotkit/agent/default/run", runInput(threadId, runId, "__SCRIPT_DECISION__"));
+        expect(res.status).toBe(200);
+        const frames = parseSseFrames(await res.text());
+        const last = frames[frames.length - 1] as {
+            type?: string;
+            outcome?: { type?: string; interrupts?: { id?: string }[] };
+        };
+        expect(last.type).toBe("RUN_FINISHED");
+        expect(last.outcome?.type).toBe("interrupt");
+        const id = last.outcome?.interrupts?.[0]?.id;
+        expect(id).toMatch(/^decision-\d+-\d+$/);
+        return id!;
+    }
+
+    test("11: __SCRIPT_DECISION__ ends with RUN_FINISHED outcome.interrupt — the run genuinely pauses (D-03)", async () => {
+        const session = await server.request("chatSessions.create", { title: "dc1" });
+        const threadId = String(session.conversationId);
+
+        const res = await postJson("/api/copilotkit/agent/default/run", runInput(threadId, "run-11", "__SCRIPT_DECISION__"));
+        expect(res.status).toBe(200);
+        const frames = parseSseFrames(await res.text());
+
+        // The interrupt frame is the FINAL frame — the run ended at the decision,
+        // never a RUN_ERROR (D-03: a normal completion, not a failure).
+        const last = frames[frames.length - 1] as {
+            type?: string;
+            outcome?: { type?: string; interrupts?: { reason?: string; id?: string; message?: string; metadata?: unknown }[] };
+        };
+        expect(last.type).toBe("RUN_FINISHED");
+        expect(frames.some((f) => f.type === "RUN_ERROR")).toBe(false);
+        expect(last.outcome?.type).toBe("interrupt");
+
+        const interrupt = last.outcome!.interrupts![0];
+        expect(interrupt.reason).toBe("decision_request");
+        expect(interrupt.id).toMatch(/^decision-\d+-\d+$/);
+        expect(interrupt.message).toBe("mock context");
+        // metadata carries the parsed DecisionRequestPayload — the Phase 5 card data (UI-03).
+        const md = interrupt.metadata as { context?: string; questions?: unknown[] };
+        expect(md.context).toBe("mock context");
+        expect(Array.isArray(md.questions)).toBe(true);
+    });
+
+    test("12: plain run while a decision is pending → RUN_ERROR THREAD_BUSY (D-04)", async () => {
+        const session = await server.request("chatSessions.create", { title: "dc2" });
+        const threadId = String(session.conversationId);
+        await openDecision(threadId, "run-12a");
+
+        const res = await postJson("/api/copilotkit/agent/default/run", runInput(threadId, "run-12b", "hello"));
+        expect(res.status).toBe(200);
+        const frames = parseSseFrames(await res.text());
+        expect(frames[frames.length - 1].type).toBe("RUN_ERROR");
+        expect(frames[frames.length - 1]).toMatchObject({ code: "THREAD_BUSY" });
+    });
+
+    test("13: resume with a translated payload streams continuation frames and persists input.resume to JSONL (CHAT-09 SC2)", async () => {
+        const session = await server.request("chatSessions.create", { title: "dc3" });
+        const threadId = String(session.conversationId);
+        const interruptId = await openDecision(threadId, "run-13a");
+
+        const res = await postJson("/api/copilotkit/agent/default/run", resumeInput(threadId, "run-13b", [
+            {
+                interruptId,
+                status: "resolved",
+                payload: {
+                    decision: "approved",
+                    answers: [{ question: "Choose __DECISION_OPTION__", answer: "A", weight: "medium" }],
+                },
+            },
+        ]));
+        expect(res.status).toBe(200);
+        const frames = parseSseFrames(await res.text());
+        // Continuation: the engine received the translated decision (Phase B script
+        // fires only when the formatted question reached the engine's prompt).
+        expect(frames.some((f) => f.type === "TEXT_MESSAGE_CONTENT" && f.delta === "Decision received, continuing.")).toBe(true);
+        expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
+
+        // The resume run's RUN_STARTED with input.resume[] is persisted on disk (RUNR-08).
+        const logPath = join(server.dataDir, "threads", `${threadId}.jsonl`);
+        const lines = readFileSync(logPath, "utf-8").trim().split("\n");
+        const started = lines
+            .map((l) => JSON.parse(l))
+            .find((e) => e.type === "RUN_STARTED" && e.runId === "run-13b") as {
+                input?: { resume?: { interruptId?: string }[] };
+            };
+        expect(started?.input?.resume?.[0]?.interruptId).toBe(interruptId);
+    });
+
+    test("14: resume with an unknown interruptId → RUN_ERROR INVALID_INTERRUPT (D-05)", async () => {
+        const session = await server.request("chatSessions.create", { title: "dc4" });
+        const threadId = String(session.conversationId);
+
+        const res = await postJson("/api/copilotkit/agent/default/run", resumeInput(threadId, "run-14", [
+            { interruptId: "decision-999999-1", status: "resolved", payload: { decision: "approved", answers: [{ question: "Q", answer: "A" }] } },
+        ]));
+        expect(res.status).toBe(200);
+        const frames = parseSseFrames(await res.text());
+        expect(frames[frames.length - 1].type).toBe("RUN_ERROR");
+        expect(frames[frames.length - 1]).toMatchObject({ code: "INVALID_INTERRUPT" });
+    });
+
+    test("15: cancelled resume completes plainly and the thread stays usable (A4)", async () => {
+        const session = await server.request("chatSessions.create", { title: "dc5" });
+        const threadId = String(session.conversationId);
+        const interruptId = await openDecision(threadId, "run-15a");
+
+        const cancelRes = await postJson("/api/copilotkit/agent/default/run", resumeInput(threadId, "run-15b", [
+            { interruptId, status: "cancelled" },
+        ]));
+        expect(cancelRes.status).toBe(200);
+        const cancelFrames = parseSseFrames(await cancelRes.text());
+        // Plain RUN_FINISHED with NO continuation text — the dismissal delivers nothing.
+        expect(cancelFrames[cancelFrames.length - 1].type).toBe("RUN_FINISHED");
+        expect(cancelFrames.some((f) => f.type === "TEXT_MESSAGE_CONTENT")).toBe(false);
+
+        // The thread is not wedged: a subsequent plain run succeeds.
+        const nextRes = await postJson("/api/copilotkit/agent/default/run", runInput(threadId, "run-15c", "hello"));
+        expect(nextRes.status).toBe(200);
+        const nextFrames = parseSseFrames(await nextRes.text());
+        expect(nextFrames[nextFrames.length - 1].type).toBe("RUN_FINISHED");
+        expect(nextFrames.some((f) => f.type === "RUN_ERROR")).toBe(false);
+    });
+
+    test("16: forwardedProps.command.resume is inert — never resumes while pending (D-01, Pitfall 6)", async () => {
+        const session = await server.request("chatSessions.create", { title: "dc6" });
+        const threadId = String(session.conversationId);
+        await openDecision(threadId, "run-16a");
+
+        // The legacy channel must do NOTHING: a run carrying forwardedProps.command.resume
+        // but NO resume[] is still a plain run → blocked by the pending interrupt.
+        const res = await postJson("/api/copilotkit/agent/default/run", {
+            ...runInput(threadId, "run-16b", "hello"),
+            forwardedProps: { command: { resume: "x" } },
+        });
+        expect(res.status).toBe(200);
+        const frames = parseSseFrames(await res.text());
+        expect(frames[frames.length - 1].type).toBe("RUN_ERROR");
+        expect(frames[frames.length - 1]).toMatchObject({ code: "THREAD_BUSY" });
+    });
 });
