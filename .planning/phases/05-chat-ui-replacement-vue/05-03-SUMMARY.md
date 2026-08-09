@@ -217,3 +217,9 @@ None - no external service configuration required.
 
 *Phase: 05-chat-ui-replacement-vue*
 *Completed: 2026-08-09*
+
+## Self-Check: PASSED
+
+- All key files exist on disk (verified via `[ -f ]`): RailyinChat.vue, chat-copilotkit.spec.ts, 05-03-SUMMARY.md
+- All task commits present in git log: bd578bd0 (Task 1 tracer), e23734f7 (Task 2 states), f1915ace (docs: complete plan)
+- Wave gate: `bun run build` green; `chat-copilotkit.spec.ts` 4/4; `board.spec.ts` 34/34 (no layout regression from styles.css — Pitfall 4); `bun run typecheck` clean; unit suites 74 pass (mock-agui 8, toolCardDisplay/decisionRequest/useCommandsCache 66); full-dir `bun test src/mainview` at documented pre-existing baseline (deferred-items.md)
