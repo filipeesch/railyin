@@ -406,7 +406,7 @@ const menu = computed<ToolsMenuItem[]>(() =>
 | A7 | UI-SPEC unresolved rows are planner must-have assumptions: queue dropped (input disabled while running), resume-failure = toast + card stays open, CSS override depth = RailyinChat single surface + visual diff, args reveal at END only | Constraints | Each has an explicit UI-SPEC planner instruction to lift into must_haves |
 | A8 | The unread/status dots in ChatThreadSidebar are enriched from the legacy `chatSessions.list` (still live) for session threads; card threads show no unread dot in v1 | Pitfall 6 | If a backend `ThreadSummary` extension is preferred instead, it's a small Phase 4/5 follow-up RPC change — decide in planning |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **ChatThreadSidebar data source for status/unread dots (UI-SPEC contract vs ThreadSummary shape)**
    - What we know: `threads.list` → `ThreadSummary {threadId, name, kind, createdAt, updatedAt}` (no status/unread); legacy `chatSessions.list` has status/lastReadAt and keeps working (tables frozen, not dropped); legacy ChatSidebar renders exactly the session list.
