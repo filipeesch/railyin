@@ -21,6 +21,7 @@ import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 import { SlashCommandResolver } from "./slash-command-resolver.ts";
 import type { ChatTurnOpts } from "../coordinator.ts";
+import type { BoardRunLogger } from "../../copilotkit/board-run-logger.ts";
 
 
 export class HumanTurnExecutor {
@@ -41,7 +42,21 @@ export class HumanTurnExecutor {
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
+    /** WR-01: taps RPC-driven task turns (no AG-UI run) into the AG-UI/JSONL flow. */
+    private readonly boardRunLogger?: BoardRunLogger,
   ) {}
+
+  /**
+   * WR-01: RPC-driven task turns (tasks.sendMessage / tasks.submitDecisions)
+   * carry no onEngineEvent tap, so their output would reach nothing. Merge the
+   * board-run logger's tap into caller opts UNLESS the caller already owns the
+   * tap (AG-UI runs — the RailyinAgent always passes onEngineEvent). Caller
+   * opts (e.g. mergeSessionStatusOpts' onSessionStatusChange) are preserved.
+   */
+  private withBoardRunOpts(opts: ChatTurnOpts | undefined, conversationId: number, executionId: number): ChatTurnOpts | undefined {
+    if (opts?.onEngineEvent || !this.boardRunLogger) return opts;
+    return { ...opts, ...this.boardRunLogger.buildOpts(conversationId, executionId) };
+  }
 
   async execute(
     taskId: number,
@@ -162,7 +177,7 @@ export class HumanTurnExecutor {
             model: effectiveModel ?? "",
           })
         : fallbackBase;
-      this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel), execParams, opts);
+      this.streamProcessor.runNonNative(taskId, conversationId, newExecutionId, this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel), execParams, this.withBoardRunOpts(opts, conversationId, newExecutionId));
 
       return { executionId: newExecutionId };
     }
@@ -261,7 +276,7 @@ export class HumanTurnExecutor {
           model: resolvedModel ?? "",
         })
       : baseParams;
-    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams, opts);
+    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams, this.withBoardRunOpts(opts, conversationId, executionId));
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
 
     return { executionId };

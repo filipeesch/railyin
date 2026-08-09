@@ -17,6 +17,7 @@ import type { ModelSettingsRepository } from "../../db/repositories/model-settin
 import { QualifiedModelId } from "../qualified-model-id";
 import { PromptAssemblyService } from "./prompt-assembly-service.ts";
 import type { PromptFilterContext } from "./custom-prompt-injector.ts";
+import type { BoardRunLogger } from "../../copilotkit/board-run-logger.ts";
 
 type DecisionRow = {
   hunk_hash: string;
@@ -52,6 +53,8 @@ export class CodeReviewExecutor {
     private readonly boardTools: IBoardToolExecutor,
     private readonly promptAssemblyService: PromptAssemblyService,
     private readonly modelSettingsRepo?: ModelSettingsRepository,
+    /** WR-01: taps board-driven runs' engine events into the AG-UI/JSONL flow. */
+    private readonly boardRunLogger?: BoardRunLogger,
   ) {}
 
   async execute(
@@ -191,7 +194,10 @@ export class CodeReviewExecutor {
       onSoftCancel: () => this.streamProcessor.abort(executionId),
       ...(this.modelSettingsRepo && conversationModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, conversationModel) ?? undefined } : {}),
     };
-    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
+    // WR-01: board-driven runs have no AG-UI run in flight — the logger's tap
+    // translates engine events into AG-UI events and appends them to the
+    // conversation's JSONL thread so the task-drawer chat shows the output.
+    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams, this.boardRunLogger?.buildOpts(conversationId, executionId));
 
     return { executionId };
   }

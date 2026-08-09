@@ -19,6 +19,7 @@ import { PromptAssemblyService } from "./prompt-assembly-service.ts";
 import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 import { SlashCommandResolver } from "./slash-command-resolver.ts";
+import type { BoardRunLogger } from "../../copilotkit/board-run-logger.ts";
 
 
 export class TransitionExecutor {
@@ -37,6 +38,8 @@ export class TransitionExecutor {
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
+    /** WR-01: taps board-driven runs' engine events into the AG-UI/JSONL flow. */
+    private readonly boardRunLogger?: BoardRunLogger,
   ) {}
 
   async execute(
@@ -164,7 +167,10 @@ export class TransitionExecutor {
         })
       : baseParams;
 
-    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
+    // WR-01: board-driven runs have no AG-UI run in flight — the logger's tap
+    // translates engine events into AG-UI events and appends them to the
+    // conversation's JSONL thread so the task-drawer chat shows the output.
+    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams, this.boardRunLogger?.buildOpts(conversationId, executionId));
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
     return { task: fetchTaskWithModel(db, taskId)!, executionId };
   }

@@ -39,6 +39,7 @@ import { PromptAssemblyService } from "./execution/prompt-assembly-service.ts";
 import { SlashCommandResolver } from "./execution/slash-command-resolver.ts";
 import { ExecutionParamsEnricher } from "./execution/execution-params-enricher.ts";
 import type { McpRegistryPool } from "../mcp/registry-pool.ts";
+import type { BoardRunLogger } from "../copilotkit/board-run-logger.ts";
 
 export class Orchestrator implements ExecutionCoordinator {
   private readonly db: Database;
@@ -68,6 +69,8 @@ export class Orchestrator implements ExecutionCoordinator {
     worktreeManager?: WorktreeManager,
     modelSettingsRepo?: ModelSettingsRepository,
     registryPool?: McpRegistryPool,
+    /** WR-01: board-driven runs' AG-UI/JSONL tap (transitions/retries/code-review/RPC turns). */
+    boardRunLogger?: BoardRunLogger,
   ) {
     this.db = db;
     this.registry = registry;
@@ -99,6 +102,7 @@ export class Orchestrator implements ExecutionCoordinator {
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
       paramsEnricher,
+      boardRunLogger,
     );
     this.humanTurnExecutor = new HumanTurnExecutor(
       db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools,
@@ -109,9 +113,10 @@ export class Orchestrator implements ExecutionCoordinator {
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
       paramsEnricher,
+      boardRunLogger,
     );
-    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, promptAssemblyService, slashCommandResolver, paramsEnricher);
-    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools, promptAssemblyService);
+    this.retryExecutor = new RetryExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, wsRepo, boardTools, promptAssemblyService, slashCommandResolver, paramsEnricher, boardRunLogger);
+    this.codeReviewExecutor = new CodeReviewExecutor(db, registry, this.paramsBuilder, this.workdirResolver, this.streamProcessor, onTaskUpdated, wsRepo, boardTools, promptAssemblyService, undefined, boardRunLogger);
     this.chatExecutor = new ChatExecutor(db, registry, this.paramsBuilder, this.streamProcessor, this.workdirResolver, customPromptInjector, crossEngineInjector, slashCommandResolver, paramsEnricher, boardTools);
   }
 

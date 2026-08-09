@@ -38,6 +38,7 @@ import { createDefaultCopilotSdkAdapter } from "./engine/copilot/session.ts";
 import { CopilotRuntime, createCopilotRuntimeHandler, type CopilotRuntimeOptions } from "@copilotkit/runtime/v2";
 import { RailyinAgent } from "./copilotkit/railyin-agent.ts";
 import { JsonlStore } from "./copilotkit/jsonl-store.ts";
+import { BoardRunLogger } from "./copilotkit/board-run-logger.ts";
 import { RailyinAgentRunner } from "./copilotkit/railyin-runner.ts";
 import * as interruptRegistry from "./copilotkit/interrupt-registry.ts";
 import { ClaudeEngine } from "./engine/claude/engine.ts";
@@ -241,8 +242,17 @@ const sessionStatusCb = (conversationId: number): void => {
   }
 };
 
+// ─── Durable AG-UI thread log (D-05, RUNR-02) ─────────────────────────────────
+// Created BEFORE the orchestrator: board-driven runs (WR-01) append their
+// translated AG-UI events to the same per-thread JSONL the runner persists, so
+// the task-drawer chat shows board-run output. Gated off the injected mock
+// engine used by e2e — test servers run without RAILYN_DATA_DIR and must not
+// write board-run logs into the developer's real ~/.railyn/threads dir.
+const jsonlStore = new JsonlStore(getDataDir());
+const boardRunLogger = injectedEngine ? undefined : new BoardRunLogger(jsonlStore);
+
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), wsRepo, sessionStatusCb, worktreeManager, modelSettingsRepo, registryPool)
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), wsRepo, sessionStatusCb, worktreeManager, modelSettingsRepo, registryPool, boardRunLogger)
   : null;
 
 // ─── Start retention job ──────────────────────────────────────────────────────
@@ -301,7 +311,6 @@ const copilotAgents = (copilotProbeEnabled && scriptedAgent
 // probe mode keeps the base InMemoryAgentRunner so ScriptedAgent wire text
 // stays byte-identical (probe threadIds like "t1" are non-numeric and must
 // never reach the JSONL store).
-const jsonlStore = new JsonlStore(getDataDir());
 // 03-03 (A2): give the module-level interrupt registry the durable store so a
 // fresh process can lazily rebuild a pending decision from the thread's JSONL
 // tail + the waiting_user executions row (post-restart resume — old-stack
