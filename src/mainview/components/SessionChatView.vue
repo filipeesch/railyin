@@ -101,13 +101,13 @@ import Tag from "primevue/tag";
 import Button from "primevue/button";
 import InputText from "primevue/inputtext";
 import ProgressSpinner from "primevue/progressspinner";
+import { useToast } from "primevue/usetoast";
 import RailyinChat from "./chat/RailyinChat.vue";
 import DecisionsPanel from "./DecisionsPanel.vue";
 import NotesPanel from "./NotesPanel.vue";
 import { useChatStore } from "../stores/chat";
 import { useDrawerStore } from "../stores/drawer";
 import { useConversationStore } from "../stores/conversation";
-import { api } from "../rpc";
 
 const props = defineProps<{
   sessionId: number;
@@ -116,6 +116,7 @@ const props = defineProps<{
 const chatStore = useChatStore();
 const drawerStore = useDrawerStore();
 const conversationStore = useConversationStore();
+const toast = useToast();
 
 const session = computed(() => chatStore.activeSession);
 
@@ -152,9 +153,16 @@ async function commitTitle() {
   const newTitle = titleDraft.value.trim();
   if (!session.value || !newTitle || newTitle === session.value.title) return;
   try {
-    await api("chatSessions.rename", { sessionId: session.value.id, title: newTitle });
+    // IN-06: use the same access path as ChatThreadSidebar (chatStore) —
+    // the direct api() call bypassed the store and failed silently.
+    await chatStore.renameSession(session.value.id, newTitle);
   } catch (err) {
-    console.error("Failed to rename session", err);
+    toast.add({
+      severity: "error",
+      summary: "Rename failed",
+      detail: err instanceof Error ? err.message : String(err),
+      life: 6000,
+    });
   }
 }
 
