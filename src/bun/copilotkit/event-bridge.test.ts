@@ -8,6 +8,7 @@ import { EventSchemas } from "@ag-ui/core";
 import type { BaseEvent } from "@ag-ui/client";
 import type { EngineEvent } from "../engine/types.ts";
 import {
+  buildInterruptOutcome,
   createTranslateState,
   translateEngineEvent,
   synthesizeMissingToolResults,
@@ -405,5 +406,52 @@ describe("event-bridge: state isolation", () => {
     const b = translateEngineEvent({ type: "token", content: "y" }, s2);
     expect(a[0]).toMatchObject({ messageId: "run-a-text-1" });
     expect(b[0]).toMatchObject({ messageId: "run-b-text-1" });
+  });
+});
+
+describe("event-bridge: interrupt outcome (RUNR-08 — canonical AG-UI interrupt terminal, D-01/D-02)", () => {
+  test("buildInterruptOutcome — valid payload: RUN_FINISHED + outcome.interrupt, message/metadata from payload (UI-03 event contract)", () => {
+    const payload = JSON.stringify({
+      context: "mock context",
+      questions: [{ question: "Q1", type: "exclusive", options: [{ title: "A", description: "" }] }],
+    });
+    const event = buildInterruptOutcome("1", "run-1", payload, "decision-1-1");
+    assertValid([event]);
+
+    expect(event).toMatchObject({ type: "RUN_FINISHED", threadId: "1", runId: "run-1" });
+    const outcome = (event as unknown as {
+      outcome: { type: string; interrupts: Array<{ id: string; reason: string; message?: string; metadata?: unknown }> };
+    }).outcome;
+    expect(outcome.type).toBe("interrupt");
+    expect(outcome.interrupts).toHaveLength(1);
+    const interrupt = outcome.interrupts[0];
+    expect(interrupt.id).toBe("decision-1-1");
+    expect(interrupt.reason).toBe("decision_request");
+    expect(interrupt.message).toBe("mock context");
+    // metadata carries the parsed DecisionRequestPayload — the Phase 5 card data.
+    expect(interrupt.metadata).toEqual(JSON.parse(payload));
+  });
+
+  test("buildInterruptOutcome — malformed payload: metadata undefined + message fallback, still wire-valid (T-03-01)", () => {
+    const event = buildInterruptOutcome("1", "run-1", "not-json{{{", "decision-1-1");
+    assertValid([event]);
+
+    const outcome = (event as unknown as {
+      outcome: { interrupts: Array<{ metadata?: unknown; message?: string }> };
+    }).outcome;
+    const interrupt = outcome.interrupts[0];
+    expect(interrupt.metadata).toBeUndefined();
+    expect(interrupt.message).toBe("A decision is required.");
+  });
+
+  test("buildInterruptOutcome — empty payload string parses as null → fallback message, no metadata", () => {
+    const event = buildInterruptOutcome("1", "run-1", "", "decision-1-1");
+    assertValid([event]);
+
+    const outcome = (event as unknown as {
+      outcome: { interrupts: Array<{ metadata?: unknown; message?: string }> };
+    }).outcome;
+    expect(outcome.interrupts[0].message).toBe("A decision is required.");
+    expect(outcome.interrupts[0].metadata).toBeUndefined();
   });
 });
