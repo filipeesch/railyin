@@ -588,4 +588,66 @@ describe("RailyinAgent", () => {
     const parsed = EventSchemas.safeParse(events[events.length - 1]);
     expect(parsed.success).toBe(true);
   });
+
+  test("17: D-04 — an open pending interrupt blocks a non-resume run with THREAD_BUSY + precise message; executeChatTurn never called", async () => {
+    const { conversationId } = seedChatSession(db);
+    interruptRegistry.register(conversationId, DECISION_PAYLOAD); // open pending interrupt
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    agent.orchestrator = fakeCoordinator;
+
+    const events = await collectRun(agent, runInput(String(conversationId)));
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[0].type).toBe(EventType.RUN_STARTED);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
+    expect(events[events.length - 1]).toMatchObject({
+      code: "THREAD_BUSY",
+      message: "A decision interrupt is pending for this thread",
+    });
+  });
+
+  test("18: D-04 — no open entry → the run proceeds normally (RUN_FINISHED, no RUN_ERROR)", async () => {
+    const { conversationId } = seedChatSession(db);
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+    expect(events.filter((e) => e.type === EventType.RUN_ERROR)).toHaveLength(0);
+  });
+
+  test("19: Pitfall 5 — decision_request without onRunEnd still ends with the interrupt terminal, never a plain RUN_FINISHED or RUN_ERROR", async () => {
+    const { conversationId } = seedChatSession(db);
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        capturedOpts = opts;
+        if (opts) {
+          opts.onEngineEvent?.({ type: "token", content: "I need your decision." });
+          opts.onEngineEvent?.({ type: "decision_request", payload: DECISION_PAYLOAD });
+          // NO onRunEnd — non-standard coordinator / pause-path return.
+        }
+        return { message: { id: 1 } as never, executionId: 42 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(agent, runInput(String(conversationId)));
+
+    expect(events.filter((e) => e.type === EventType.RUN_ERROR)).toHaveLength(0);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+    const terminal = events[events.length - 1] as unknown as {
+      outcome?: { type: string; interrupts?: Array<{ id: string; reason: string; message?: string }> };
+    };
+    expect(terminal.outcome?.type).toBe("interrupt");
+    expect(terminal.outcome?.interrupts?.[0]?.reason).toBe("decision_request");
+    expect(terminal.outcome?.interrupts?.[0]?.message).toBe("mock context");
+    // The decision is registered as pending — resumable, not swallowed.
+    expect(interruptRegistry.hasOpen(String(conversationId))).toBe(true);
+  });
 });
